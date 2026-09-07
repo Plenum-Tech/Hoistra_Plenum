@@ -17,6 +17,7 @@ how the meter reading arrives, and whether attribution is measured or inferred.
 """
 from __future__ import annotations
 
+import json
 from statistics import median
 from typing import Any
 from uuid import UUID
@@ -201,6 +202,31 @@ def _int(value: Any) -> int | None:
     return int(round(v)) if v is not None else None
 
 
+def parse_use_mix(value: Any) -> list[dict[str, Any]]:
+    """sites.use_mix (JSONB or its text) -> [{"use": str, "pct": number}]; invalid -> []."""
+    if value is None:
+        return []
+    data = value
+    if isinstance(value, str):
+        try:
+            data = json.loads(value)
+        except ValueError:
+            return []
+    if isinstance(data, dict):
+        data = [{"use": k, "pct": v} for k, v in data.items()]
+    out: list[dict[str, Any]] = []
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, dict):
+            use, pct = item.get("use") or item.get("name"), _num(item.get("pct") or item.get("share"))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            use, pct = item[0], _num(item[1])
+        else:
+            continue
+        if use and pct is not None:
+            out.append({"use": str(use), "pct": round(pct, 1)})
+    return out
+
+
 def shape_building_row(
     site: dict[str, Any],
     *,
@@ -219,10 +245,18 @@ def shape_building_row(
     key = str(site.get("key") or "").strip()
     floors = _int(site.get("floors"))
     gfa = _num(site.get("gfa_sqm"))
-    cc = country_code_for(site.get("country"))
-    pack = BENCHMARK_PACKS.get(cc or "", _FALLBACK_PACK)
+    cc = country_code_for(site.get("country_code") or site.get("country"))
+    pack = dict(BENCHMARK_PACKS.get(cc or "", _FALLBACK_PACK))
+    # A standard recorded on the site row overrides the country default (a building can be
+    # scored under a scheme its market does not mandate, e.g. a voluntary rating).
+    if site.get("benchmark_standard"):
+        pack["standard"] = site["benchmark_standard"]
+        pack["standing"] = site.get("benchmark_standing") or pack["standing"]
+        pack["standing_note"] = site.get("benchmark_standing_note") or pack["standing_note"]
+    use_type = site.get("use_type") or site.get("site_type")
+    use_mix = parse_use_mix(site.get("use_mix")) or ([{"use": str(use_type), "pct": 100.0}] if use_type else [])
 
-    building_type = (profile or {}).get("building_type") or tm46_type_for(site.get("site_type"))
+    building_type = (profile or {}).get("building_type") or tm46_type_for(use_type)
     gia = (profile or {}).get("gia_m2")
     gia = float(gia) if gia is not None else None
 
@@ -236,28 +270,55 @@ def shape_building_row(
         deviation = _num(snapshot.get("deviation_pct"))
         if bench is not None:
             bench_source = "eui_snapshot"
-    # A numeric TM46 figure is only a benchmark where TM46 is the market's standard.
-    if bench is None and pack["numeric_source"] == "tm46":
-        if profile and profile.get("tm46_electricity_benchmark") is not None:
-            bench = _num(profile.get("tm46_electricity_benchmark"))
-            bench_source = "energy_profile"
-        elif building_type:
-            bench = tm46_benchmark(building_type, "electricity")
-            bench_source = "tm46_by_site_type" if bench is not None else None
+    # Benchmark precedence: the figure the EUI snapshot was compared against, then the TM46
+    # figure on the building's energy profile, then a value recorded on the site row, and
+    # only last a TM46 category default matched from the site's use. A recorded figure is a
+    # fact about this building; the category default is not. TM46 numbers are only used
+    # where TM46 is the market's standard.
+    tm46_market = pack["numeric_source"] == "tm46"
+    if bench is None and tm46_market and profile and profile.get("tm46_electricity_benchmark") is not None:
+        bench = _num(profile.get("tm46_electricity_benchmark"))
+        bench_source = "energy_profile"
+    if bench is None and _num(site.get("benchmark_kwh_per_m2")) is not None:
+        bench = _num(site.get("benchmark_kwh_per_m2"))
+        bench_source = "sites_recorded"
+    if bench is None and tm46_market and building_type:
+        bench = tm46_benchmark(building_type, "electricity")
+        bench_source = "tm46_by_site_type" if bench is not None else None
+
+    # EUI: computed from meter readings when there is a snapshot, else the recorded value.
+    eui_source = "eui_snapshot" if eui is not None else None
+    if eui is None and _num(site.get("eui_kwh_per_m2")) is not None:
+        eui = _num(site.get("eui_kwh_per_m2"))
+        eui_source = "sites_recorded"
     if deviation is None and eui is not None and bench:
         deviation = round(100.0 * (eui - bench) / bench, 2)
 
     met = metering_for(meters or [])
+    if not meters and (site.get("metering_route") or site.get("metering_granularity")):
+        gran = str(site.get("metering_granularity") or "building-level").lower()
+        met = {
+            "metering_route": site.get("metering_route"),
+            "metering_granularity": gran,
+            "metering_inferred": gran != "sub-metered",
+            "meters_active": 0,
+            "meters_sub": 0,
+            "meters_simulated": False,
+            "metering_source": "sites_recorded",
+        }
+    else:
+        met["metering_source"] = "energy_meters" if meters else None
+    hoist_score = _int(site.get("hoist_score"))
 
     present = {
-        "name": bool(site.get("name")),
-        "country": bool(site.get("country")),
+        "name": bool(site.get("building_name") or site.get("name")),
+        "country": bool(site.get("country") or site.get("country_code")),
         "region": bool(site.get("region") or site.get("city")),
-        "site_type": bool(site.get("site_type")),
+        "site_type": bool(use_type),
         "floors": floors is not None,
         "gfa_sqm": gfa is not None or gia is not None,
         "energy_profile": profile is not None,
-        "meters": met["meters_active"] > 0,
+        "meters": met["meters_active"] > 0 or bool(met.get("metering_route")),
         "eui": eui is not None,
     }
     missing = [f for f in COMPLETENESS_FIELDS if not present[f]]
@@ -267,15 +328,19 @@ def shape_building_row(
         "site_key": key or (str(site_uuid) if site_uuid else None),
         "site_uuid": str(site_uuid) if site_uuid else None,
         "site_ref": None if site_uuid and key == str(site_uuid) else (key or None),
-        "name": site.get("name") or site.get("code") or key,
-        "code": site.get("code"),
-        "country": site.get("country"),
+        "name": site.get("building_name") or site.get("name") or site.get("code") or key,
+        "site_name": site.get("name"),
+        "building_name": site.get("building_name"),
+        "code": site.get("building_code") or site.get("code"),
+        "country": site.get("country") or site.get("country_code"),
         "country_code": cc,
         "city": site.get("city"),
         "region": site.get("region") or site.get("city"),
         "postcode": site.get("postcode"),
         "status": site.get("status"),
         "site_type": site.get("site_type"),
+        "use_type": use_type,
+        "use_mix": use_mix,
         "floors": floors,
         "gfa_sqm": gfa if gfa is not None else gia,
         "gfa_source": "sites" if gfa is not None else ("energy_profile" if gia is not None else None),
@@ -283,6 +348,7 @@ def shape_building_row(
         "has_energy_profile": profile is not None,
         "gia_m2": gia,
         "eui_kwh_per_m2": round(eui, 2) if eui is not None else None,
+        "eui_source": eui_source,
         "eui_period_start": (snapshot or {}).get("period_start"),
         "eui_period_end": (snapshot or {}).get("period_end"),
         "eui_meter_type": (snapshot or {}).get("meter_type"),
@@ -293,6 +359,7 @@ def shape_building_row(
         "benchmark_source": bench_source,
         "benchmark_comparables": None,
         "deviation_pct": round(deviation, 1) if deviation is not None else None,
+        "hoist_score": hoist_score,
         "record_completeness_pct": completeness,
         "completeness_missing": missing,
     }
@@ -350,12 +417,27 @@ async def _load_site_rows(session: AsyncSession, *, limit: int) -> list[dict[str
         "code": _pick(cols, "site_code", "code", "site_ref"),
         "country": _pick(cols, "country", "country_code"),
         "city": _pick(cols, "city", "town"),
-        "region": _pick(cols, "region", "state", "province", "emirate"),
+        "region": _pick(cols, "state", "region", "province", "emirate"),
         "postcode": _pick(cols, "postcode", "postal_code", "zip"),
         "status": _pick(cols, "status"),
         "site_type": _pick(cols, "site_type", "building_type", "use_type", "property_type"),
         "floors": _pick(cols, "floors", "floor_count", "num_floors", "storeys"),
         "gfa_sqm": _pick(cols, "gfa_sqm", "gia_m2", "floor_area_sqm", "gross_floor_area", "area_sqm"),
+        # Building-table columns added by migrations/sites_building_table_columns.sql. Each is
+        # the RECORDED value on the site; computed figures from meters/snapshots win over them.
+        "building_name": _pick(cols, "building_name"),
+        "building_code": _pick(cols, "building_code"),
+        "country_code": _pick(cols, "country_code"),
+        "use_type": _pick(cols, "use_type"),
+        "use_mix": _pick(cols, "use_mix"),
+        "metering_route": _pick(cols, "metering_route"),
+        "metering_granularity": _pick(cols, "metering_granularity"),
+        "benchmark_standard": _pick(cols, "benchmark_standard"),
+        "benchmark_standing": _pick(cols, "benchmark_standing"),
+        "benchmark_standing_note": _pick(cols, "benchmark_standing_note"),
+        "eui_kwh_per_m2": _pick(cols, "eui_kwh_per_m2"),
+        "benchmark_kwh_per_m2": _pick(cols, "benchmark_kwh_per_m2"),
+        "hoist_score": _pick(cols, "hoist_score"),
     }
     select_parts = [f"{c}::text AS {alias}" for alias, c in wanted.items() if c]
     order = wanted["name"]

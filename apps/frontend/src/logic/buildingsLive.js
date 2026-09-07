@@ -36,8 +36,12 @@ function countryOf(row) {
 // Pure: API row → the seed's building shape (plus live-only provenance fields).
 export function shapeLiveBuilding(r, i) {
   const cc = countryOf(r);
-  const use = r.site_type ? titleCase(r.site_type) : (r.building_type ? titleCase(r.building_type) : "—");
+  const use = r.use_type ? titleCase(r.use_type) : r.site_type ? titleCase(r.site_type) : (r.building_type ? titleCase(r.building_type) : "—");
   const gran = r.metering_granularity || "none";
+  // Floor-area split from sites.use_mix; a single recorded use is a 100% bar.
+  const mix = Array.isArray(r.use_mix) && r.use_mix.length
+    ? r.use_mix.map((m) => [titleCase(m.use), Math.round(Number(m.pct) || 0)])
+    : [[use, 100]];
   return {
     live: true,
     key: r.site_key || r.site_uuid || String(i),
@@ -60,9 +64,13 @@ export function shapeLiveBuilding(r, i) {
     stdStanding: r.benchmark_standing || null,
     stdNote: r.benchmark_standing_note || (PACKS[cc] ? PACKS[cc].note : "no regulation pack"),
     stdTone: STANDING_TONE[r.benchmark_standing] || (PACKS[cc] ? PACKS[cc].tone : "dormant"),
-    hoist: typeof r.record_completeness_pct === "number" ? r.record_completeness_pct : null,
+    // Hoist Score as recorded on the site; record completeness stays available for the tooltip.
+    hoist: typeof r.hoist_score === "number" ? r.hoist_score : null,
+    completeness: typeof r.record_completeness_pct === "number" ? r.record_completeness_pct : null,
     missing: r.completeness_missing || [],
-    mix: [[use, 100]],
+    euiSource: r.eui_source || null,
+    meteringSource: r.metering_source || null,
+    mix: mix,
     route: r.metering_route || (gran === "none" ? "No meter on record" : "Meter on record · route not stated"),
     gran: gran === "sub-metered" ? "sub-metered" : gran === "none" ? "none" : "building-level",
     metersActive: r.meters_active || 0,
@@ -121,6 +129,7 @@ export const buildingsLiveMethods = {
       : b.benchSource === "eui_snapshot" ? "Benchmark recorded with the EUI snapshot"
       : b.benchSource === "energy_profile" ? "TM46 figure on the building's energy profile"
       : b.benchSource === "tm46_by_site_type" ? "TM46 category matched from the site's recorded use — a default, not a survey"
+      : b.benchSource === "sites_recorded" ? "Recorded on the site row"
       : std;
     return {
       id: b.id, name: b.name, use: b.use,
@@ -128,7 +137,7 @@ export const buildingsLiveMethods = {
       area: b.area,
       flag: pack.flag, country: pack.name, state: b.state,
       eui: hasEui ? Math.round(b.euiN) + " kWh/m²" : "—",
-      euiTip: hasEui ? (b.euiPeriod ? "Annualised from " + b.euiPeriod : "annualised EUI") : "No EUI: no meter reading or no floor area on record",
+      euiTip: hasEui ? (b.euiSource === "sites_recorded" ? "Recorded on the site row (no meter feed yet) — not a computed reading" : b.euiPeriod ? "Annualised from meter readings, " + b.euiPeriod : "annualised EUI") : "No EUI: no meter reading and nothing recorded on the site",
       bench: hasBench ? Math.round(b.benchN) + " kWh/m²" : "—",
       benchTip: benchTip,
       delta: deltaN === null ? "—" : (deltaN > 0 ? "+" : "") + Math.round(deltaN) + "%",
@@ -138,7 +147,7 @@ export const buildingsLiveMethods = {
       route: b.route,
       routeGran: gran === "sub-metered" ? "sub-metered" + (b.metersSimulated ? " · simulated feed" : "") : gran === "none" ? "no meter · nothing inferred" : "building-level · inferred" + (b.metersSimulated ? " · simulated feed" : ""),
       routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-dormant)",
-      routeTip: b.route + " · " + gran + (b.metersActive ? " · " + b.metersActive + " active meter" + (b.metersActive === 1 ? "" : "s") : ""),
+      routeTip: b.route + " · " + gran + (b.metersActive ? " · " + b.metersActive + " active meter" + (b.metersActive === 1 ? "" : "s") : "") + (b.meteringSource === "sites_recorded" ? " · as recorded on the site" : ""),
       mixText: b.mix.length > 1 ? b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ") : "single use",
       mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · "),
       mix: b.mix.map((m) => {
@@ -146,7 +155,9 @@ export const buildingsLiveMethods = {
         return { pct: m[1] + "%", color: t.color, hatch: t.hatch || "none", border: "0", tip: m[0] + " — " + m[1] + "% of floor area" };
       }),
       score: hoist === null ? "—" : String(hoist),
-      scoreTip: b.live ? (b.missing && b.missing.length ? "Record completeness — missing: " + b.missing.join(", ") : "Record completeness — every field on record") : "Hoist Score",
+      scoreTip: b.live
+        ? "Hoist Score" + (hoist === null ? " not recorded on the site" : "") + (typeof b.completeness === "number" ? " · record completeness " + b.completeness + "%" + (b.missing && b.missing.length ? " — missing: " + b.missing.join(", ") : "") : "")
+        : "Hoist Score",
       euiColor: !hasEui ? "var(--color-neutral-500)" : over ? "var(--st-risk)" : "var(--st-ok)",
       scoreColor: hoist === null ? "var(--color-neutral-500)" : hoist >= 80 ? "var(--st-ok)" : hoist >= 65 ? "var(--st-warn)" : "var(--st-risk)",
       click: () => this.flash(b.name + " — " + (typeof b.floors === "number" ? b.floors + " floors, " : "") + b.area + (b.live ? " · " + (b.missing.length ? b.missing.length + " fields missing on the record" : "record complete") : ", floor-level use table keyed on floor ID."))

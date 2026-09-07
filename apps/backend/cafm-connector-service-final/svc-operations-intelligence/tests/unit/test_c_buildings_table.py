@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from src.engines.energy.buildings import (
     apply_rolling_benchmarks,
+    parse_use_mix,
     country_code_for,
     metering_for,
     shape_building_row,
@@ -114,3 +115,40 @@ def test_rolling_benchmark_for_market_without_standard():
     lone = shape_building_row(_site(key="D-2", country="UAE", site_type="Hospital"), profile=None, snapshot=None, meters=[])
     apply_rolling_benchmarks([lone] + rows)
     assert lone["benchmark_kwh_per_m2"] is None
+
+
+def test_recorded_site_columns_fill_in_and_are_labelled():
+    site = _site(
+        building_name="Bishopsgate Tower (recorded)", building_code="BT-1", country_code="UK",
+        use_type="Commercial",
+        use_mix='[{"use":"Commercial","pct":92},{"use":"Retail","pct":8}]',
+        metering_route="HH data collector · LoA", metering_granularity="sub-metered",
+        benchmark_standard="CIBSE TM46", benchmark_standing="guidance", benchmark_standing_note="guidance · EPC E law",
+        eui_kwh_per_m2="214", benchmark_kwh_per_m2="215", hoist_score="88",
+    )
+    row = shape_building_row(site, profile=None, snapshot=None, meters=[])
+    assert row["name"] == "Bishopsgate Tower (recorded)" and row["code"] == "BT-1"
+    assert row["use_mix"] == [{"use": "Commercial", "pct": 92.0}, {"use": "Retail", "pct": 8.0}]
+    assert row["eui_kwh_per_m2"] == 214.0 and row["eui_source"] == "sites_recorded"
+    assert row["benchmark_kwh_per_m2"] == 215.0 and row["benchmark_source"] == "sites_recorded"
+    assert row["deviation_pct"] == -0.5
+    assert row["metering_route"] == "HH data collector · LoA" and row["metering_granularity"] == "sub-metered"
+    assert row["metering_inferred"] is False and row["metering_source"] == "sites_recorded"
+    assert row["hoist_score"] == 88
+    assert row["completeness_missing"] == ["energy_profile"]
+
+
+def test_computed_figures_beat_recorded_ones():
+    site = _site(eui_kwh_per_m2="999", benchmark_kwh_per_m2="999", metering_route="stale", metering_granularity="building-level")
+    snap = {"eui_kwh_per_m2": 214.0, "benchmark_kwh_per_m2": 215.0, "deviation_pct": -0.47}
+    row = shape_building_row(site, profile=None, snapshot=snap, meters=[{"dcc_device_id": "D", "is_sub_meter": True, "raw_metadata": {}}, {"mpan": "1", "is_sub_meter": True, "raw_metadata": {}}])
+    assert row["eui_kwh_per_m2"] == 214.0 and row["eui_source"] == "eui_snapshot"
+    assert row["benchmark_source"] == "eui_snapshot"
+    assert row["metering_source"] == "energy_meters" and row["metering_granularity"] == "sub-metered"
+
+
+def test_parse_use_mix_shapes():
+    assert parse_use_mix(None) == []
+    assert parse_use_mix("not json") == []
+    assert parse_use_mix([["Retail", 100]]) == [{"use": "Retail", "pct": 100.0}]
+    assert parse_use_mix({"Office": 60, "Retail": 40}) == [{"use": "Office", "pct": 60.0}, {"use": "Retail", "pct": 40.0}]
