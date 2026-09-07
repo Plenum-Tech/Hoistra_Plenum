@@ -1,0 +1,54 @@
+# pm_rules.yaml
+# EL-5.CONSTRAIN hard rules for PM Agent
+# Date math always beats AI vote — no exceptions.
+# Known state: 6 time-based PMs + 1 meter PM (generator 1000hr).
+
+rules:
+  - name: time_based_pm_overdue
+    description: >
+      Time-based PM (trigger_type='t') where due_date < today →
+      pm_status = overdue. Date arithmetic wins over AI classification.
+    conditions:
+      - type: any_row_where
+        field: trigger_type
+        operator: eq
+        value: "t"
+      - type: any_row_where
+        field: is_overdue
+        operator: eq
+        value: true
+    action:
+      set_status: overdue
+
+  - name: meter_based_no_reading_due_soon
+    description: >
+      Meter-based PM (trigger_type='m') with no meter reading available →
+      pm_status = due_soon (fail-safe — never allow 'ok' without a reading).
+    conditions:
+      - type: any_row_where
+        field: trigger_type
+        operator: eq
+        value: "m"
+      - type: any_row_where
+        field: meter_reading
+        operator: is_null
+        value: null
+    action:
+      set_status: due_soon
+
+  - name: generator_meter_zero_stock_critical
+    description: >
+      Generator 1000hr meter PM with MOTOR-8HP stock at 0 →
+      pm_status = overdue + human review. Critical safety item.
+    conditions:
+      - type: any_row_where
+        field: trigger_type
+        operator: eq
+        value: "m"
+      - type: any_row_where
+        field: linked_part_stock
+        operator: eq
+        value: 0
+    action:
+      set_status: overdue
+      requires_human_review: true

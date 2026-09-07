@@ -1,0 +1,369 @@
+"""Energy Intelligence API — Feature C."""
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...db import get_session
+from ...engines.energy import anomalies as anom_svc
+from ...engines.energy import condition as cond_svc
+from ...engines.energy import eui as eui_svc
+from ...engines.energy import meters as meter_svc
+from ...engines.energy import occupancy as occ_svc
+from ...engines.energy import reports as report_svc
+from ...models.energy import EnergyMonthlyReport
+from ...shared import approvals as approvals_svc
+from ..schemas.energy import (
+    AnomalyActionRequest,
+    AnomalyScanRequest,
+    BuildingProfileRequest,
+    ConditionDeduceRequest,
+    ConditionFromVectorsRequest,
+    CrossRefRequest,
+    EuiComputeRequest,
+    MeterPullRequest,
+    MeterUpsertRequest,
+    MonthlyReportRequest,
+    OccupancyLogRequest,
+    QueueDecisionRequest,
+    ReadingsIngestRequest,
+)
+
+router = APIRouter(prefix="/api/energy", tags=["energy-intelligence"])
+
+
+@router.post("/meters")
+async def upsert_meter(body: MeterUpsertRequest, session: AsyncSession = Depends(get_session)):
+    return await meter_svc.upsert_meter(session, body.model_dump(exclude_none=True))
+
+
+@router.get("/meters")
+async def list_meters(
+    organization_id: UUID | None = None,
+    site_id: UUID | None = None,
+    limit: int = Query(100, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await meter_svc.list_meters(
+        session, organization_id=organization_id, site_id=site_id, limit=limit
+    )
+    return {"ok": True, "count": len(rows), "meters": rows}
+
+
+@router.post("/meters/pull")
+async def pull_meter(body: MeterPullRequest, session: AsyncSession = Depends(get_session)):
+    """Pull half-hourly readings from DCC (MPAN) / gas (MPRN) API for a window."""
+    return await meter_svc.pull_and_ingest_meter(
+        session,
+        meter_id=body.meter_id,
+        window_start=body.window_start,
+        window_end=body.window_end,
+        organization_id=body.organization_id,
+    )
+
+
+@router.post("/readings/ingest")
+async def ingest_readings(body: ReadingsIngestRequest, session: AsyncSession = Depends(get_session)):
+    return await meter_svc.ingest_readings(
+        session,
+        meter_id=body.meter_id,
+        readings=body.readings,
+        organization_id=body.organization_id,
+        source=body.source,
+        detect_gaps=body.detect_gaps,
+    )
+
+
+@router.post("/readings/ingest/csv")
+async def ingest_readings_csv(
+    file: UploadFile = File(...),
+    meter_id: UUID | None = Form(None),
+    organization_id: UUID | None = Form(None),
+    source: str = Form("csv"),
+    detect_gaps: bool = Form(True),
+    session: AsyncSession = Depends(get_session),
+):
+    """Half-hourly smart-meter CSV → MeterReading (+ auto-create meter from MPAN/MPRN)."""
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    return await meter_svc.ingest_readings_csv(
+        session,
+        csv_text=text,
+        meter_id=meter_id,
+        organization_id=organization_id,
+        source=source,
+        detect_gaps=detect_gaps,
+    )
+
+
+@router.get("/meters/{meter_id}/readings")
+async def list_meter_readings(
+    meter_id: UUID,
+    limit: int = Query(2000, le=5000),
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await meter_svc.list_readings(
+        session,
+        meter_id=meter_id,
+        limit=limit,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    return {"ok": True, "count": len(rows), "readings": rows}
+
+
+@router.get("/gaps")
+async def list_meter_gaps(
+    meter_id: UUID | None = None,
+    status: str | None = Query("open"),
+    limit: int = Query(100, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await meter_svc.list_gaps(
+        session, meter_id=meter_id, status=status, limit=limit
+    )
+    return {"ok": True, "count": len(rows), "gaps": rows}
+
+
+@router.post("/gaps/process-retries")
+async def process_gap_retries(session: AsyncSession = Depends(get_session)):
+    return await meter_svc.process_gap_retries(session)
+
+
+@router.post("/buildings/profile")
+async def building_profile(body: BuildingProfileRequest, session: AsyncSession = Depends(get_session)):
+    return await eui_svc.upsert_building_profile(
+        session,
+        site_id=body.site_id,
+        gia_m2=body.gia_m2,
+        building_type=body.building_type,
+        organization_id=body.organization_id,
+    )
+
+
+@router.get("/tm46")
+async def list_tm46():
+    return {"ok": True, **eui_svc.load_tm46()}
+
+
+@router.post("/eui/compute")
+async def compute_eui(body: EuiComputeRequest, session: AsyncSession = Depends(get_session)):
+    return await eui_svc.compute_site_eui(
+        session,
+        site_id=body.site_id,
+        period_start=body.period_start,
+        period_end=body.period_end,
+        meter_type=body.meter_type,
+        organization_id=body.organization_id,
+    )
+
+
+@router.post("/condition/deduce")
+async def deduce_condition(body: ConditionDeduceRequest, session: AsyncSession = Depends(get_session)):
+    if body.from_vectors or not (body.report_text or "").strip():
+        return await cond_svc.deduce_condition_from_vector_layer(
+            session,
+            asset_id=body.asset_id,
+            asset_code=body.asset_code,
+            organization_id=body.organization_id,
+            write_to_asset=body.write_to_asset,
+            auto_cross_ref=body.auto_cross_ref,
+        )
+    return await cond_svc.deduce_and_write_condition(
+        session,
+        asset_id=body.asset_id,
+        report_text=body.report_text or "",
+        source_report_ref=body.source_report_ref,
+        asset_code=body.asset_code,
+        organization_id=body.organization_id,
+        write_to_asset=body.write_to_asset,
+        auto_cross_ref=body.auto_cross_ref,
+    )
+
+
+@router.post("/condition/deduce-from-vectors")
+async def deduce_from_vectors(
+    body: ConditionFromVectorsRequest, session: AsyncSession = Depends(get_session)
+):
+    return await cond_svc.deduce_condition_from_vector_layer(
+        session,
+        asset_id=body.asset_id,
+        asset_code=body.asset_code,
+        organization_id=body.organization_id,
+        write_to_asset=body.write_to_asset,
+        auto_cross_ref=body.auto_cross_ref,
+    )
+
+
+@router.post("/recommendations/cross-ref")
+async def cross_ref(body: CrossRefRequest, session: AsyncSession = Depends(get_session)):
+    return await cond_svc.cross_reference_condition_consumption(
+        session,
+        asset_id=body.asset_id,
+        organization_id=body.organization_id,
+        days=body.days,
+    )
+
+
+@router.post("/occupancy/log")
+async def log_occupancy(body: OccupancyLogRequest, session: AsyncSession = Depends(get_session)):
+    return await occ_svc.log_occupancy_change(
+        session,
+        site_id=body.site_id,
+        occupancy_state=body.occupancy_state,
+        changed_at=body.changed_at,
+        notes=body.notes,
+        organization_id=body.organization_id,
+        source=body.source,
+    )
+
+
+@router.post("/simulator/tick")
+async def simulator_tick(session: AsyncSession = Depends(get_session)):
+    """Run one half-hourly simulation step now, instead of waiting for the cron."""
+    from ...engines.energy.simulator import simulate_half_hour
+
+    return await simulate_half_hour(session)
+
+
+@router.post("/simulator/enable")
+async def simulator_enable(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Flag a meter for the demo feed: {"meter_id": ..., "enabled": true, "base_kwh": 40}.
+
+    Opt-in per meter and stored on the meter itself, so which data is simulated is a
+    property of the meter rather than a setting somewhere else that a reader has to know
+    about to interpret what they are looking at.
+    """
+    from sqlalchemy import select as _select
+
+    from ...models.energy import EnergyMeter
+
+    mid = body.get("meter_id")
+    if not mid:
+        return {"ok": False, "error": "meter_id required"}
+    meter = (
+        await session.execute(_select(EnergyMeter).where(EnergyMeter.id == UUID(str(mid))))
+    ).scalar_one_or_none()
+    if meter is None:
+        return {"ok": False, "error": "meter_not_found"}
+    meta = dict(meter.raw_metadata or {})
+    meta["simulate"] = bool(body.get("enabled", True))
+    if body.get("base_kwh") is not None:
+        meta["sim_base_kwh"] = float(body["base_kwh"])
+    meter.raw_metadata = meta
+    await session.commit()
+    return {"ok": True, "meter_id": str(meter.id), "simulate": meta["simulate"],
+            "sim_base_kwh": meta.get("sim_base_kwh")}
+
+
+@router.post("/anomalies/scan")
+async def scan_anomalies(body: AnomalyScanRequest, session: AsyncSession = Depends(get_session)):
+    return await anom_svc.scan_meter_anomalies(
+        session, meter_id=body.meter_id, organization_id=body.organization_id
+    )
+
+
+@router.post("/anomalies/scan-all")
+async def scan_all_anomalies(
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+
+
+@router.get("/anomalies")
+async def list_anomalies(
+    status: str | None = "open",
+    organization_id: UUID | None = None,
+    limit: int = Query(100, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await anom_svc.list_anomalies(
+        session, status=status, organization_id=organization_id, limit=limit
+    )
+    return {"ok": True, "count": len(rows), "anomalies": rows}
+
+
+@router.post("/anomalies/{anomaly_id}/act")
+async def act_anomaly(
+    anomaly_id: UUID,
+    body: AnomalyActionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    return await anom_svc.act_on_anomaly(
+        session, anomaly_id, action=body.action, reason=body.reason
+    )
+
+
+@router.post("/reports/monthly")
+async def monthly_report(body: MonthlyReportRequest, session: AsyncSession = Depends(get_session)):
+    return await report_svc.generate_monthly_energy_report(
+        session,
+        site_id=body.site_id,
+        report_month=body.report_month,
+        organization_id=body.organization_id,
+        export_pdf=body.export_pdf,
+    )
+
+
+@router.get("/reports/{report_id}/pdf")
+async def download_report_pdf(report_id: UUID, session: AsyncSession = Depends(get_session)):
+    row = await session.get(EnergyMonthlyReport, report_id)
+    if not row or not row.pdf_blob_url:
+        raise HTTPException(status_code=404, detail="pdf_not_found")
+    url = row.pdf_blob_url
+    if url.startswith("http://") or url.startswith("https://"):
+        return RedirectResponse(url)
+    path = Path(url)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="pdf_file_missing")
+    return FileResponse(path, media_type="application/pdf", filename=path.name)
+
+
+@router.get("/saved-space/summary")
+async def saved_space(organization_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+    return await report_svc.saved_space_summary(session, organization_id=organization_id)
+
+
+@router.get("/approvals")
+async def list_approvals(
+    status: str = "pending",
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    items = await approvals_svc.list_queue(
+        session, source_feature="C", status=status, organization_id=organization_id
+    )
+    return {
+        "ok": True,
+        "count": len(items),
+        "items": [approvals_svc.queue_item_to_dict(i) for i in items],
+    }
+
+
+@router.post("/approvals/{item_id}/decide")
+async def decide_approval(
+    item_id: UUID,
+    body: QueueDecisionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    return await approvals_svc.decide_queue_item(
+        session,
+        item_id,
+        decision=body.decision,
+        pm_notes=body.pm_notes,
+        prepare_email_handoff=body.prepare_email_handoff,
+    )

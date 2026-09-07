@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_agent_determinism.py -v --tb=short)",
+      "Bash(python -m pytest --tb=short -q)",
+      "Bash(grep -n \"import.*eval_layer\\\\|from.*eval_layer\" /c/Users/Lenovo/Downloads/cafm-connector-service-final/svc-ingestion/src/agents/*.py)",
+      "Bash(wc -l /c/Users/Lenovo/Downloads/cafm-connector-service-final/svc-ingestion/src/data_agents/rules/*.yaml)",
+      "Bash(python -m pytest tests/test_orchestrator.py -v --tb=short)",
+      "Bash(python3 -:*)",
+      "Bash(python -m pytest svc-query/tests/test_document_generator.py -v --tb=short)",
+      "Bash(python -m pytest svc-ingestion/tests/ svc-query/tests/ -v --tb=short -q)",
+      "Bash(python -m pytest svc-ingestion/tests/ svc-query/tests/ --import-mode=importlib -q)",
+      "Bash(python -m pytest svc-ingestion/tests/ -q)",
+      "Bash(python -m pytest svc-query/tests/ -q)",
+      "Read(//c/Users/Lenovo/Downloads/files/db_ready/**)",
+      "Read(//c/Users/Lenovo/Downloads/Facilities-20220108T172755Z-001/**)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3:*)",
+      "Bash(python tests/run_ingestion_tests.py)",
+      "Bash(python -c \":*)",
+      "Bash(curl -s --max-time 5 http://localhost:8001/health)",
+      "Bash(curl -s --max-time 10 http://localhost:8001/health)",
+      "Bash(xargs grep:*)",
+      "Read(//mnt/c/Users/Lenovo/Downloads/cafm-connector-service-final/svc-ingestion/src/shared/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Lenovo\\Downloads\\cafm-connector-service-final"
+    ]
+  }
+}

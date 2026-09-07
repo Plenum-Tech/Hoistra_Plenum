@@ -1,0 +1,4 @@
+vendor_id,vendor_name,vendor_code,status,block_state,trade,organization_id
+00000000-0000-0000-0000-0000000000a1,Apex Mechanical Services Ltd,APEX-MECH,active,Clear,Mechanical / HVAC,00000000-0000-0000-0000-0000000000b1
+00000000-0000-0000-0000-0000000000a2,BrightSpark Electrical Ltd,BRIGHT-ELEC,active,Clear,Electrical,00000000-0000-0000-0000-0000000000b1
+00000000-0000-0000-0000-0000000000a3,SafeLift Engineering Ltd,SAFELIFT,active,Blocked,Lifts / LOLER,00000000-0000-0000-0000-0000000000b1

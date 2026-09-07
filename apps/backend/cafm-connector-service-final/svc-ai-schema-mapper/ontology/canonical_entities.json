@@ -1,0 +1,226 @@
+{
+  "$schema": "udr-canonical-entities/v1",
+  "description": "FM/Property-Management canonical target entities for the UDR. Single source of truth for the target schema, table/column mapping, hierarchy detection and RAG-chunk generation. Aligns 1:1 with migrations/udr_phase1_schema.sql and plenum_cafm.",
+  "hierarchy_order": ["organization", "location", "site", "building", "floor", "space", "asset", "work_order", "resource", "vendor"],
+  "entities": [
+    {
+      "entity": "organization", "canonical_table": "organizations", "hierarchy_level": "org", "primary_key": "id",
+      "description": "Platform tenant / property-management company. Root of the hierarchy.",
+      "aliases": ["org", "company", "client", "account", "tenant org"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key", "sample_values": []},
+        {"name": "name", "datatype": "string", "classification": "standard", "sample_values": ["Thornfield Portfolio", "Acme FM"], "aliases": ["org name", "company name"]}
+      ]
+    },
+    {
+      "entity": "location", "canonical_table": "locations", "hierarchy_level": "location", "primary_key": "id",
+      "description": "Geographic / portfolio grouping that contains sites.",
+      "aliases": ["region", "portfolio", "area", "cluster"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "location_code", "datatype": "string", "classification": "standard", "sample_values": ["LOC-001", "NORTH"], "aliases": ["region code", "portfolio code"]},
+        {"name": "location_name", "datatype": "string", "classification": "standard", "sample_values": ["North Region", "London Portfolio"]}
+      ]
+    },
+    {
+      "entity": "site", "canonical_table": "sites", "hierarchy_level": "site", "primary_key": "id",
+      "description": "A physical site/property under a location.",
+      "aliases": ["property", "facility", "building site", "premises", "estate"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "site_code", "datatype": "string", "classification": "standard", "sample_values": ["SITE-0201", "C0201"], "aliases": ["property code", "facility code", "site ref", "site_ref", "site_id"]},
+        {"name": "site_name", "datatype": "string", "classification": "standard", "sample_values": ["OfficeCampus 001", "Tower 002"], "aliases": ["property name", "building name"]},
+        {"name": "city", "datatype": "string", "classification": "standard", "sample_values": ["Sharjah", "Ajman", "Abu Dhabi"]},
+        {"name": "postcode", "datatype": "string", "classification": "shared_attribute", "sample_values": ["AB1 2CD"], "aliases": ["post code", "zip", "zip code"]},
+        {"name": "country", "datatype": "string", "classification": "standard", "sample_values": ["UAE"]},
+        {"name": "gfa_sqm", "datatype": "number", "classification": "standard", "sample_values": [10158, 63140], "aliases": ["gfa", "gross floor area", "area sqm"]},
+        {"name": "handover_date", "datatype": "date", "classification": "standard", "sample_values": ["2024-03-15"], "aliases": ["handover", "ho date", "completion date"]}
+      ]
+    },
+    {
+      "entity": "space", "canonical_table": "spaces", "hierarchy_level": "space", "primary_key": "id",
+      "description": "A tenant-occupiable unit / area within a site or building.",
+      "aliases": ["unit", "room", "area", "suite", "lettable unit"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "space_code", "datatype": "string", "classification": "standard", "sample_values": ["U-101"], "aliases": ["unit code", "room number"]},
+        {"name": "space_type", "datatype": "string", "classification": "standard", "sample_values": ["unit", "common", "plant_room", "retail"]},
+        {"name": "area_sqm", "datatype": "number", "classification": "standard", "sample_values": [85.5]}
+      ]
+    },
+    {
+      "entity": "asset", "canonical_table": "assets", "hierarchy_level": "asset", "primary_key": "id",
+      "description": "A maintainable piece of equipment (HVAC, lift, pump, generator, etc.).",
+      "aliases": ["equipment", "plant", "equip", "machine", "asset register", "fixed asset"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "asset_code", "datatype": "string", "classification": "standard", "sample_values": ["MOB-AHU-001", "AST-4471"], "aliases": ["asset id", "asset_id", "equipment number", "equip#", "equipment_id", "tag", "asset tag", "asset ref"]},
+        {"name": "asset_name", "datatype": "string", "classification": "standard", "sample_values": ["AHU North Wing"], "aliases": ["equipment name", "asset description", "description"]},
+        {"name": "site_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "sites", "aliases": ["site code", "site_code", "location", "building"]},
+        {"name": "asset_type_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "asset_types", "aliases": ["asset type", "category", "equipment type", "asset class"]},
+        {"name": "manufacturer_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "manufacturers", "aliases": ["make", "asset_make", "manufacturer", "brand", "oem"]},
+        {"name": "serial_number", "datatype": "string", "classification": "shared_attribute", "sample_values": ["SN-99213"], "aliases": ["serial", "serial no"]},
+        {"name": "installation_date", "datatype": "date", "classification": "standard", "sample_values": ["2021-06-01"], "aliases": ["install_date", "install date", "commission date"]}
+      ]
+    },
+    {
+      "entity": "asset_type", "canonical_table": "asset_types", "hierarchy_level": "reference", "is_reference_table": true, "primary_key": "id",
+      "description": "Reference table for equipment classes. Auto-created when an asset 'type/category' is only a shared attribute (Test-1/Test-2 remediation).",
+      "aliases": ["asset category", "equipment class", "asset class"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "asset_type", "datatype": "string", "classification": "primary_key", "sample_values": ["Air Handler", "Chiller", "Lift", "Generator", "Pump"], "aliases": ["type", "category"]}
+      ]
+    },
+    {
+      "entity": "manufacturer", "canonical_table": "manufacturers", "hierarchy_level": "reference", "is_reference_table": true, "primary_key": "id",
+      "description": "Reference table for equipment makes. Canonical example of the shared-attribute -> reference-table promotion (asset_make 'Siemens 012').",
+      "aliases": ["make", "oem", "brand", "asset_make"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "manufacturer_name", "datatype": "string", "classification": "primary_key", "sample_values": ["Siemens 012", "Bosch Series C", "Honeywell Env-3"], "aliases": ["make", "manufacturer", "asset_make"]},
+        {"name": "manufacturer_country", "datatype": "string", "classification": "standard", "sample_values": ["Germany"]},
+        {"name": "support_email", "datatype": "string", "classification": "standard", "sample_values": ["support@siemens.com"]}
+      ]
+    },
+    {
+      "entity": "work_order", "canonical_table": "work_orders", "hierarchy_level": "work_order", "primary_key": "id",
+      "description": "A maintenance job raised against an asset.",
+      "aliases": ["wo", "job", "ticket", "task", "service request", "maintenance order", "order", "work request", "work log", "work_tasks"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "workorder_ref", "datatype": "string", "classification": "standard", "sample_values": ["WO-0001", "WONUM-55231"], "aliases": ["wo number", "wo_number", "wonum", "work order id", "wo_id", "job number", "ticket id"]},
+        {"name": "asset_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "assets", "aliases": ["asset code", "asset_id", "equipment"]},
+        {"name": "site_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "sites", "aliases": ["site ref", "site_ref", "site_code"]},
+        {"name": "vendor_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "vendors", "aliases": ["contractor", "supplier"]},
+        {"name": "priority", "datatype": "string", "classification": "standard", "sample_values": ["P1", "P2", "URGENT", "High"], "aliases": ["wo_priority", "priority_level", "severity"]},
+        {"name": "status", "datatype": "string", "classification": "standard", "sample_values": ["Open", "Closed", "In Progress"], "aliases": ["wo_status", "state"]},
+        {"name": "work_type", "datatype": "string", "classification": "standard", "sample_values": ["reactive", "planned", "ppm"], "aliases": ["wo_type", "maintenance_type", "job type"]},
+        {"name": "raised_date", "datatype": "date", "classification": "standard", "sample_values": ["2024-01-15"], "aliases": ["created date", "open date", "reported date"]}
+      ]
+    },
+    {
+      "entity": "resource", "canonical_table": "resources", "hierarchy_level": "resource", "primary_key": "id",
+      "description": "Labour / manpower / skill allocated to work orders.",
+      "aliases": ["labour", "manpower", "technician", "craft", "operative", "engineer", "wo_labour"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "resource_code", "datatype": "string", "classification": "standard", "sample_values": ["RES-12"], "aliases": ["labour id", "craft_code", "employee id"]},
+        {"name": "skill_type", "datatype": "string", "classification": "standard", "sample_values": ["Electrical", "Mechanical", "HVAC"], "aliases": ["craft", "craft_code", "trade", "discipline"]},
+        {"name": "vendor_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "vendors"},
+        {"name": "contract_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "contracts", "aliases": ["contract_id", "contract ref"]}
+      ]
+    },
+    {
+      "entity": "vendor", "canonical_table": "vendors", "hierarchy_level": "vendor", "primary_key": "id",
+      "description": "Contractor / supplier organisation.",
+      "aliases": ["contractor", "supplier", "service provider", "company", "subcontractor"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "vendor_code", "datatype": "string", "classification": "standard", "sample_values": ["VEN-007"], "aliases": ["vendor id", "vendor_id", "supplier code"]},
+        {"name": "vendor_name", "datatype": "string", "classification": "standard", "sample_values": ["Apex Lifts", "TechCool"], "aliases": ["supplier name", "contractor name"]},
+        {"name": "postcode", "datatype": "string", "classification": "shared_attribute", "sample_values": ["AB1 2CD"], "aliases": ["post code", "zip"]}
+      ]
+    },
+    {
+      "entity": "contract", "canonical_table": "contracts", "hierarchy_level": "reference", "is_reference_table": true, "primary_key": "id",
+      "description": "Reference table for vendor contracts. Auto-created when contract_id overlaps across tables without a reference table (Test 2 example).",
+      "aliases": ["agreement", "sla", "contract ref"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "contract_ref", "datatype": "string", "classification": "primary_key", "sample_values": ["CON-2024-11"], "aliases": ["contract_id", "contract ref", "agreement no"]},
+        {"name": "vendor_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "vendors"}
+      ]
+    },
+    {
+      "entity": "spare_part", "canonical_table": "spare_parts", "hierarchy_level": "spares", "primary_key": "id",
+      "description": "Inventory item / spare part used on work orders.",
+      "aliases": ["part", "material", "item", "stock", "inventory", "wo_parts", "spares"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "part_number", "datatype": "string", "classification": "standard", "sample_values": ["MOTOR-8HP", "GEN-SVC-001"], "aliases": ["part_code", "item_ref", "item code", "material number", "sku"]},
+        {"name": "part_name", "datatype": "string", "classification": "standard", "sample_values": ["8HP Motor"], "aliases": ["item description", "material description"]},
+        {"name": "manufacturer_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "manufacturers"}
+      ]
+    },
+    {
+      "entity": "compliance_certificate", "canonical_table": "compliance_certificates", "hierarchy_level": "compliance", "primary_key": "id",
+      "description": "Statutory / compliance certificate linked to an asset and a duty holder. Drives expiry tracking and statutory alerts.",
+      "aliases": ["certificate", "cert", "compliance doc", "statutory certificate", "inspection certificate"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "certificate_ref", "datatype": "string", "classification": "standard", "sample_values": ["CERT-LOLER-4471"]},
+        {"name": "cert_type", "datatype": "string", "classification": "standard", "sample_values": ["gas_safety", "EICR", "LOLER", "legionella_L8", "fire"], "aliases": ["certificate type", "compliance type"]},
+        {"name": "asset_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "assets"},
+        {"name": "duty_holder_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "duty_holders", "aliases": ["responsible person"]},
+        {"name": "expiry_date", "datatype": "date", "classification": "standard", "sample_values": ["2026-12-31"], "aliases": ["expiry", "valid until", "expiration date"]}
+      ]
+    },
+    {
+      "entity": "duty_holder", "canonical_table": "duty_holders", "hierarchy_level": "compliance", "primary_key": "id",
+      "description": "Person accountable for a compliance obligation (Responsible Person).",
+      "aliases": ["responsible person", "accountable person", "rp"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "name", "datatype": "string", "classification": "standard", "sample_values": ["Khalid Al Rashid"]},
+        {"name": "role", "datatype": "string", "classification": "standard", "sample_values": ["Responsible Person"]}
+      ]
+    },
+    {
+      "entity": "meter", "canonical_table": "meters", "hierarchy_level": "energy", "primary_key": "id",
+      "description": "Energy / utility meter attached to an asset or site.",
+      "aliases": ["utility meter", "submeter", "energy meter"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "meter_code", "datatype": "string", "classification": "standard", "sample_values": ["MTR-ELEC-01"], "aliases": ["meter id", "meter ref"]},
+        {"name": "meter_type", "datatype": "string", "classification": "standard", "sample_values": ["electricity", "water", "gas", "btu"]},
+        {"name": "asset_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "assets"}
+      ]
+    },
+    {
+      "entity": "meter_reading", "canonical_table": "meter_readings", "hierarchy_level": "energy", "primary_key": "id",
+      "description": "A reading captured from a meter.",
+      "aliases": ["reading", "consumption", "utility reading"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "meter_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "meters"},
+        {"name": "reading_value", "datatype": "number", "classification": "standard", "sample_values": [10421.5], "aliases": ["value", "consumption", "kwh"]},
+        {"name": "reading_date", "datatype": "datetime", "classification": "standard", "sample_values": ["2024-02-01T00:00:00"]}
+      ]
+    },
+    {
+      "entity": "tenant", "canonical_table": "tenants", "hierarchy_level": "tenant", "primary_key": "id",
+      "description": "An occupier / tenant of one or more spaces.",
+      "aliases": ["occupier", "lessee", "customer"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "tenant_code", "datatype": "string", "classification": "standard", "sample_values": ["TEN-44"]},
+        {"name": "tenant_name", "datatype": "string", "classification": "standard", "sample_values": ["Acme Retail Ltd"], "aliases": ["occupier name", "lessee name"]}
+      ]
+    },
+    {
+      "entity": "lease", "canonical_table": "leases", "hierarchy_level": "tenant", "primary_key": "id",
+      "description": "A lease agreement linking a tenant to a space.",
+      "aliases": ["tenancy", "rental agreement", "occupancy agreement"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "lease_ref", "datatype": "string", "classification": "standard", "sample_values": ["LSE-2023-12"]},
+        {"name": "tenant_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "tenants"},
+        {"name": "space_id", "datatype": "uuid", "classification": "foreign_key", "references_table": "spaces"},
+        {"name": "rent_amount", "datatype": "number", "classification": "standard", "sample_values": [120000]}
+      ]
+    },
+    {
+      "entity": "document_chunk", "canonical_table": "document_chunks", "hierarchy_level": "documents", "primary_key": "id",
+      "description": "Layer-2 vector store. Each chunk is anchored to a structured entity via that entity's PRIMARY KEY only (Test 1).",
+      "aliases": ["chunk", "vector chunk", "embedding"],
+      "standard_columns": [
+        {"name": "id", "datatype": "uuid", "classification": "primary_key"},
+        {"name": "source_entity_type", "datatype": "string", "classification": "standard", "sample_values": ["asset", "manufacturer", "site"]},
+        {"name": "source_entity_id", "datatype": "string", "classification": "foreign_key", "references_table": "(dynamic by source_entity_type)", "sample_values": ["MOB-AHU-001"]},
+        {"name": "document_type", "datatype": "string", "classification": "standard", "sample_values": ["warranty", "inspection report", "lease", "certificate"]},
+        {"name": "page_reference", "datatype": "string", "classification": "standard", "sample_values": ["p. 12"]}
+      ]
+    }
+  ]
+}

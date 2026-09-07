@@ -1,0 +1,291 @@
+{
+  "$schema": "udr-rag-manifest/v1",
+  "chunk_count": 25,
+  "chunks": [
+    {
+      "chunk_key": "entity__organization",
+      "concept": "entity",
+      "entity": "organization",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__organization.md"
+    },
+    {
+      "chunk_key": "entity__location",
+      "concept": "entity",
+      "entity": "location",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__location.md"
+    },
+    {
+      "chunk_key": "entity__site",
+      "concept": "entity",
+      "entity": "site",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__site.md"
+    },
+    {
+      "chunk_key": "entity__space",
+      "concept": "entity",
+      "entity": "space",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__space.md"
+    },
+    {
+      "chunk_key": "entity__asset",
+      "concept": "entity",
+      "entity": "asset",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__asset.md"
+    },
+    {
+      "chunk_key": "entity__asset_type",
+      "concept": "entity",
+      "entity": "asset_type",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__asset_type.md"
+    },
+    {
+      "chunk_key": "entity__manufacturer",
+      "concept": "entity",
+      "entity": "manufacturer",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__manufacturer.md"
+    },
+    {
+      "chunk_key": "entity__work_order",
+      "concept": "entity",
+      "entity": "work_order",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__work_order.md"
+    },
+    {
+      "chunk_key": "entity__resource",
+      "concept": "entity",
+      "entity": "resource",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__resource.md"
+    },
+    {
+      "chunk_key": "entity__vendor",
+      "concept": "entity",
+      "entity": "vendor",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__vendor.md"
+    },
+    {
+      "chunk_key": "entity__contract",
+      "concept": "entity",
+      "entity": "contract",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__contract.md"
+    },
+    {
+      "chunk_key": "entity__spare_part",
+      "concept": "entity",
+      "entity": "spare_part",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__spare_part.md"
+    },
+    {
+      "chunk_key": "entity__compliance_certificate",
+      "concept": "entity",
+      "entity": "compliance_certificate",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__compliance_certificate.md"
+    },
+    {
+      "chunk_key": "entity__duty_holder",
+      "concept": "entity",
+      "entity": "duty_holder",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__duty_holder.md"
+    },
+    {
+      "chunk_key": "entity__meter",
+      "concept": "entity",
+      "entity": "meter",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__meter.md"
+    },
+    {
+      "chunk_key": "entity__meter_reading",
+      "concept": "entity",
+      "entity": "meter_reading",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__meter_reading.md"
+    },
+    {
+      "chunk_key": "entity__tenant",
+      "concept": "entity",
+      "entity": "tenant",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__tenant.md"
+    },
+    {
+      "chunk_key": "entity__lease",
+      "concept": "entity",
+      "entity": "lease",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__lease.md"
+    },
+    {
+      "chunk_key": "entity__document_chunk",
+      "concept": "entity",
+      "entity": "document_chunk",
+      "intent_tags": [
+        "table_mapping",
+        "column_mapping",
+        "entity_resolution",
+        "fk_detection"
+      ],
+      "file": "rag/chunks/entity__document_chunk.md"
+    },
+    {
+      "chunk_key": "concept__table_mapping",
+      "concept": "table_mapping",
+      "entity": null,
+      "intent_tags": [
+        "table_mapping"
+      ],
+      "file": "rag/chunks/concept__table_mapping.md"
+    },
+    {
+      "chunk_key": "concept__column_mapping",
+      "concept": "column_mapping",
+      "entity": null,
+      "intent_tags": [
+        "column_mapping"
+      ],
+      "file": "rag/chunks/concept__column_mapping.md"
+    },
+    {
+      "chunk_key": "concept__hierarchy_detection",
+      "concept": "hierarchy_detection",
+      "entity": null,
+      "intent_tags": [
+        "hierarchy_detection"
+      ],
+      "file": "rag/chunks/concept__hierarchy_detection.md"
+    },
+    {
+      "chunk_key": "concept__fk_detection",
+      "concept": "fk_detection",
+      "entity": null,
+      "intent_tags": [
+        "fk_detection",
+        "foreign_key"
+      ],
+      "file": "rag/chunks/concept__fk_detection.md"
+    },
+    {
+      "chunk_key": "concept__entity_resolution",
+      "concept": "entity_resolution",
+      "entity": null,
+      "intent_tags": [
+        "entity_resolution",
+        "chunk_anchoring"
+      ],
+      "file": "rag/chunks/concept__entity_resolution.md"
+    },
+    {
+      "chunk_key": "concept__normalization",
+      "concept": "normalization",
+      "entity": null,
+      "intent_tags": [
+        "normalization",
+        "cross_system"
+      ],
+      "file": "rag/chunks/concept__normalization.md"
+    }
+  ]
+}

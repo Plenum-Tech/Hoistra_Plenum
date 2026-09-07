@@ -1,0 +1,95 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cafm
+      POSTGRES_PASSWORD: cafm
+      POSTGRES_DB: cafm_connectors
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafm -d cafm_connectors"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: cafm-dev-token
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: cafm-dev-token
+      SECRETS_BACKEND: env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../src:/app/src
+      - qr_codes:/tmp/cafm_qr
+    command: uvicorn cafm_connector.api.app:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: cafm-dev-token
+      SECRETS_BACKEND: env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../src:/app/src
+      - qr_codes:/tmp/cafm_qr
+    command: arq cafm_connector.jobs.worker.WorkerSettings
+
+volumes:
+  postgres_data:
+  redis_data:
+  qr_codes:

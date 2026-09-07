@@ -1,0 +1,56 @@
+{% block system %}
+You are a CAFM compliance and certification data specialist.
+Extract structured certification and regulatory data from compliance certificates.
+Return ONLY valid JSON — no markdown, no explanation.
+Accuracy is critical: this data is used for regulatory audit trails.
+{% endblock %}
+
+{% block user %}
+Extract all compliance and certification data from the following document.
+
+Document: {{ source_filename }}
+{% if pass_number and total_passes %}
+MULTI-PASS EXTRACTION — Pass {{ pass_number }} of {{ total_passes }}.
+{% if pass_number == 1 %}Focus on completeness: extract every field present.{% endif %}
+{% if pass_number == 2 %}Focus on accuracy: verify each field against the document text.{% endif %}
+{% if pass_number == 3 %}Focus on consistency: confirm your values match passes 1 and 2; flag any disagreements.{% endif %}
+{% endif %}
+{% if retry_context %}Correct this error from the previous attempt: {{ retry_context }}{% endif %}
+{% if previous_contradictions %}
+Contradictions to resolve from earlier passes:
+{% for issue in previous_contradictions %}- {{ issue }}
+{% endfor %}
+{% endif %}
+
+Return a JSON object with EXACTLY this structure:
+
+{
+  "certificate_type": "string or null",
+  "certificate_number": "string or null",
+  "issuing_authority": "string or null",
+  "issued_date": "YYYY-MM-DD or null",
+  "expiry_date": "YYYY-MM-DD or null",
+  "asset_code": "string or null",
+  "asset_description": "string or null",
+  "site_location": "string or null",
+  "scope": "what the certificate covers",
+  "standard_reference": "e.g. ISO 9001, NFPA 72",
+  "inspector_name": "string or null",
+  "inspector_qualification": "string or null",
+  "result": "Pass | Fail | Conditional | null",
+  "conditions": ["any conditions or remedial actions required"],
+  "next_inspection_due": "YYYY-MM-DD or null",
+  "confidence_per_field": {
+    "certificate_number": "high | medium | low",
+    "expiry_date": "high | medium | low",
+    "result": "high | medium | low"
+  }
+}
+
+Rules:
+- Dates MUST be in YYYY-MM-DD format — convert any other format.
+- result: "Pass" if certificate confirms compliance, "Fail" if non-compliant, "Conditional" if passed with conditions.
+- conditions: list all remedial requirements or conditions attached to the certificate.
+- All key fields (certificate_number, expiry_date, result) must have confidence_per_field entries.
+- Use null for fields not found; use [] for empty conditions.
+{% endblock %}

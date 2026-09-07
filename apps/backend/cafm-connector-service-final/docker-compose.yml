@@ -1,0 +1,535 @@
+# docker-compose.yml  (REPO ROOT — single orchestration file for the full platform)
+# Run from repo root: docker compose up
+#
+# Services:
+#   Infrastructure:  postgres, redis, vault
+#   Observability:   tempo, prometheus, grafana
+#   Applications:    api (cafm-connector-service), worker, svc-ingestion, svc-query,
+#                    svc-ai-schema-mapper, svc-ai-schema-mapper-worker,
+#                    svc-work-order-management
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cafm
+      POSTGRES_PASSWORD: cafm
+      POSTGRES_DB: cafm_connectors
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafm -d cafm_connectors"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: cafm-dev-token
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+    command: server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Observability stack ───────────────────────────────────────────────────
+
+  tempo:
+    image: grafana/tempo:2.4.2
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP API (Grafana datasource queries here)
+      - "4317:4317"   # OTLP gRPC receiver (services export spans here)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/ready | grep -q 'Prometheus' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: cafm-dev
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      tempo:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+
+  # ── cafm-connector-service (existing) ────────────────────────────────────
+
+  api:
+    build:
+      context: ./cafm-connector-service
+      dockerfile: docker/Dockerfile
+    env_file: ./cafm-connector-service/docker/.env
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: cafm-dev-token
+      SECRETS_BACKEND: env
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-connector-service
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./cafm-connector-service/src:/app/src
+      - ./shared-lib:/app/shared-lib
+      - qr_codes:/tmp/cafm_qr
+    command: >
+      bash -c "pip install -q -e /app/shared-lib &&
+               uvicorn cafm_connector.api.app:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build:
+      context: ./cafm-connector-service
+      dockerfile: docker/Dockerfile
+    env_file: ./cafm-connector-service/docker/.env
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: cafm-dev-token
+      SECRETS_BACKEND: env
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-connector-service
+      ENVIRONMENT: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./cafm-connector-service/src:/app/src
+      - ./shared-lib:/app/shared-lib
+      - qr_codes:/tmp/cafm_qr
+    command: >
+      bash -c "pip install -q -e /app/shared-lib &&
+               arq cafm_connector.jobs.worker.WorkerSettings"
+
+  # ── table-editor (standalone table-editor service) ───────────────────────
+  # Local:  http://localhost:8005/table-editor/docs  (TABLE_EDITOR_STANDALONE_MOUNT=1)
+  # If your gateway strips /table-editor, set TABLE_EDITOR_STANDALONE_MOUNT=0 and use :8005/docs
+
+  table-editor:
+    build:
+      context: ./cafm-connector-service
+      dockerfile: docker/Dockerfile
+    env_file: ./cafm-connector-service/docker/.env
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      ENVIRONMENT: development
+      TABLE_EDITOR_STANDALONE_MOUNT: "1"
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./cafm-connector-service/src:/app/src
+      - ./shared-lib:/app/shared-lib
+    command: >
+      bash -c "pip install -q -e /app/shared-lib &&
+               uvicorn cafm_connector.api.routes.plenum_cafm.table_customizer:app --host 0.0.0.0 --port 8005 --reload"
+
+  # ── svc-ingestion (new — Sprint 2) ───────────────────────────────────────
+
+  svc-ingestion:
+    build:
+      context: .
+      dockerfile: svc-ingestion/Dockerfile
+    environment:
+      DB_URL: ${DB_URL}
+      REDIS_URL: ${REDIS_URL}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-ingestion-service
+      ENVIRONMENT: development
+      DEBUG: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./svc-ingestion/src:/app/src
+      - ./shared-lib:/app/shared-lib
+
+  # ── svc-query (new — Sprint 2) ────────────────────────────────────────────
+
+  svc-query:
+    build:
+      context: .
+      dockerfile: svc-query/Dockerfile
+    environment:
+      DB_URL: ${DB_URL}
+      REDIS_URL: ${REDIS_URL}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-query-service
+      ENVIRONMENT: development
+      DEBUG: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./svc-query/src:/app/src
+      - ./shared-lib:/app/shared-lib
+
+  # ── svc-ai-schema-mapper (new — Sprint 2) ────────────────────────────────
+
+  svc-ai-schema-mapper:
+    build:
+      context: .
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      DB_URL: ${DB_URL}
+      REDIS_URL: ${REDIS_URL}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-schema-mapper-service
+      ENVIRONMENT: development
+      DEBUG: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_TRACING: "true"
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+      FIIX_ENABLED: "true"
+      FIIX_SUBDOMAIN: ${FIIX_SUBDOMAIN}
+      FIIX_APP_KEY: ${FIIX_APP_KEY}
+      FIIX_ACCESS_KEY: ${FIIX_ACCESS_KEY}
+      FIIX_SECRET_KEY: ${FIIX_SECRET_KEY}
+      FIIX_TIMEOUT: ${FIIX_TIMEOUT}
+      # ── doc-rag integration ──────────────────────────────────────────
+      USE_SQLITE_DEV: "false"
+      UPLOAD_DIR: /app/data/doc_rag_uploads
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./svc-ai-schema-mapper/src:/app/src
+      - ./shared-lib:/app/shared-lib
+      - ./doc-rag-main:/app/doc_rag
+
+  # ── svc-ai-schema-mapper-worker (ARQ background job consumer) ───────────────
+  # Consumes run_schema_mapping / resume_schema_mapping / run_migration etc.
+  # from Azure Redis.  Shares the same image / env as svc-ai-schema-mapper.
+
+  svc-ai-schema-mapper-worker:
+    build:
+      context: .
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      DB_URL: ${DB_URL}
+      REDIS_URL: ${REDIS_URL}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: cafm-schema-mapper-worker
+      ENVIRONMENT: development
+      DEBUG: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_TRACING: "true"
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+      FIIX_ENABLED: "true"
+      FIIX_SUBDOMAIN: ${FIIX_SUBDOMAIN}
+      FIIX_APP_KEY: ${FIIX_APP_KEY}
+      FIIX_ACCESS_KEY: ${FIIX_ACCESS_KEY}
+      FIIX_SECRET_KEY: ${FIIX_SECRET_KEY}
+      FIIX_TIMEOUT: ${FIIX_TIMEOUT}
+      USE_SQLITE_DEV: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./svc-ai-schema-mapper/src:/app/src
+      - ./shared-lib:/app/shared-lib
+      - ./doc-rag-main:/app/doc_rag
+    command: arq src.worker.WorkerSettings
+    restart: unless-stopped
+
+  # ── doc-rag (document RAG service) ──────────────────────────────────────────
+
+  doc-rag:
+    build:
+      context: ./doc-rag-main
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      USE_SQLITE_DEV: "false"
+      DB_URL: postgresql+psycopg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent?sslmode=require
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_PDF_MODEL: claude-sonnet-4-6
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      UPLOAD_DIR: /app/data/uploads
+      # Store original uploaded documents in Azure Blob for view/download.
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+    ports:
+      - "8004:8000"
+    volumes:
+      - ./doc-rag-main:/app
+      - doc_rag_uploads:/app/data/uploads
+    command: >
+      sh -c "python -m scripts.init_db &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    restart: unless-stopped
+
+  # ── svc-operations-intelligence (Compliance Engine A1–A5 — port 8009) ────────
+
+  svc-operations-intelligence:
+    build:
+      context: ./svc-operations-intelligence
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      EMAIL_DRY_RUN: "true"
+      AUTO_SEED_UK_PACK: "true"
+      AUTO_MIGRATE_ON_STARTUP: "true"
+      DEFAULT_PM_EMAIL: ${DEFAULT_PM_EMAIL:-pm@example.com}
+      SENIOR_PM_EMAIL: ${SENIOR_PM_EMAIL:-senior.pm@example.com}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: svc-operations-intelligence
+      ENVIRONMENT: development
+      DEBUG: "false"
+    ports:
+      - "8009:8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./svc-operations-intelligence/src:/app/src
+      - ./svc-operations-intelligence/migrations:/app/migrations
+    command: uvicorn src.app:app --host 0.0.0.0 --port 8009 --reload
+    restart: unless-stopped
+
+  svc-operations-intelligence-worker:
+    build:
+      context: ./svc-operations-intelligence
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      REDIS_URL: redis://redis:6379/0
+      EMAIL_DRY_RUN: "true"
+      AUTO_SEED_UK_PACK: "false"
+      AUTO_MIGRATE_ON_STARTUP: "false"
+      COMPLIANCE_SCAN_HOUR_LOCAL: "2"
+      ENVIRONMENT: development
+    depends_on:
+      redis:
+        condition: service_healthy
+      svc-operations-intelligence:
+        condition: service_started
+    volumes:
+      - ./svc-operations-intelligence/src:/app/src
+    command: arq src.worker.WorkerSettings
+    restart: unless-stopped
+
+  # ── svc-work-order-management ────────────────────────────────────────────────
+
+  svc-work-order-management:
+    build:
+      context: ./svc-work-order-management
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OUTLOOK_ACCESS_TOKEN: ${OUTLOOK_ACCESS_TOKEN:-}
+      OUTLOOK_USER_EMAIL: ${OUTLOOK_USER_EMAIL:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: svc-work-order-management
+      ENVIRONMENT: development
+    ports:
+      - "8007:8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./svc-work-order-management/src:/app/src
+    command: uvicorn src.app:app --host 0.0.0.0 --port 8007 --reload
+    restart: unless-stopped
+
+  # ── svc-udr (Universal Database Reader — port 8006) ─────────────────────────
+
+  svc-udr:
+    build:
+      context: ./svc-udr
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      MAX_QUERY_ROWS: "500"
+      MAX_AGENT_ITERATIONS: "10"
+      DEBUG: "false"
+    ports:
+      - "8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./svc-udr/src:/app/src
+    command: uvicorn src.app:app --host 0.0.0.0 --port 8006 --reload
+    restart: unless-stopped
+
+  # ── svc-deepagents (Main AI Orchestration — port 8008) ──────────────────────
+
+  svc-deepagents:
+    build:
+      context: ./svc-deepagents
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      UDR_BASE_URL: http://svc-udr:8006
+      WO_MANAGEMENT_BASE_URL: http://svc-work-order-management:8007
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
+      DOC_RAG_BASE_URL: http://doc-rag:8000
+      MIGRATION_BASE_URL: http://svc-ai-schema-mapper:8000
+      PORT: 8008
+      DEBUG: "false"
+    ports:
+      - "8008:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      svc-udr:
+        condition: service_started
+      svc-work-order-management:
+        condition: service_started
+      svc-operations-intelligence:
+        condition: service_started
+      doc-rag:
+        condition: service_started
+      svc-ai-schema-mapper:
+        condition: service_started
+    volumes:
+      - ./svc-deepagents/src:/app/src
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8008 --reload
+    restart: unless-stopped
+
+  # ── svc-ai-schema-mapper-ui (React frontend — Sprint 2) ─────────────────────
+
+  svc-ai-schema-mapper-ui:
+    build:
+      context: ./svc-ai-schema-mapper-ui
+      dockerfile: Dockerfile
+    ports:
+      - "3001:80"
+    depends_on:
+      - svc-ai-schema-mapper
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
+  qr_codes:
+  doc_rag_uploads:

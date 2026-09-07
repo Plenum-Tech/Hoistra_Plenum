@@ -1,0 +1,318 @@
+{
+  "version": "1.0",
+  "source_system": "Maximo",
+  "customer_id": null,
+  "description": "IBM Maximo asset inventory mapping template",
+  "canonical_fields": {
+    "asset_id": "Unique identifier for asset (Primary Key)",
+    "asset_code": "Human-readable asset code or tag",
+    "asset_name": "Display name or description of asset",
+    "asset_description": "Detailed description of asset",
+    "asset_type": "Category of asset (pump, motor, fan, compressor, etc.)",
+    "location_id": "Foreign key to location table",
+    "location_code": "Physical location code",
+    "location_name": "Physical location name",
+    "location_description": "Site location details (building, room, facility)",
+    "facility_address": "Street address of facility",
+    "facility_city": "City where facility is located",
+    "facility_state": "State/province of facility",
+    "facility_postal_code": "Postal code of facility",
+    "facility_country": "Country of facility",
+    "department_id": "Foreign key to department table",
+    "department_name": "Department or division name",
+    "serial_number": "Manufacturer serial number",
+    "manufacturer_name": "Equipment manufacturer",
+    "model_number": "Equipment model or part number",
+    "acquisition_date": "Asset purchase or acquisition date",
+    "condition_status": "Operational status (good, fair, poor)",
+    "last_maintenance_date": "Date of last service or maintenance"
+  },
+  "vendor_aliases": {
+    "asset_id": [
+      "ASSET_ID",
+      "AssetID",
+      "asset_number",
+      "asset_no",
+      "ASSETID"
+    ],
+    "asset_code": [
+      "Asset Code",
+      "ASSET_CODE",
+      "AssetCode",
+      "asset_tag",
+      "asset_code_id",
+      "ASSETCODE"
+    ],
+    "asset_name": [
+      "Asset Name",
+      "ASSET_NAME",
+      "AssetName",
+      "name"
+    ],
+    "asset_description": [
+      "Asset Description",
+      "description",
+      "DESCRIPTION"
+    ],
+    "asset_type": [
+      "Category",
+      "ASSET_TYPE",
+      "AssetType",
+      "category",
+      "CATEGORY",
+      "asset_category"
+    ],
+    "location_code": [
+      "Location Code",
+      "LOCATION_CODE",
+      "LocationCode",
+      "location_cd",
+      "LOC_CODE"
+    ],
+    "location_name": [
+      "Location Name",
+      "LOCATION_NAME",
+      "LocationName",
+      "location_nm",
+      "LOC_NAME"
+    ],
+    "location_description": [
+      "LOCATION",
+      "Location",
+      "loc",
+      "LOCATION_DESCRIPTION",
+      "location_desc"
+    ],
+    "facility_address": [
+      "Facility Street Address",
+      "FACILITY_STREET_ADDRESS",
+      "street_address",
+      "address"
+    ],
+    "facility_city": [
+      "Facility City",
+      "FACILITY_CITY",
+      "city"
+    ],
+    "facility_state": [
+      "Facility Province",
+      "FACILITY_PROVINCE",
+      "Facility State",
+      "FACILITY_STATE",
+      "state_province",
+      "province",
+      "state"
+    ],
+    "facility_postal_code": [
+      "Facility Postal Code",
+      "FACILITY_POSTAL_CODE",
+      "postal_code",
+      "zip_code"
+    ],
+    "facility_country": [
+      "Facility Country",
+      "FACILITY_COUNTRY",
+      "country"
+    ],
+    "department_name": [
+      "Charge Department Code",
+      "User or Personnel Code",
+      "DEPARTMENT",
+      "Department",
+      "CHARGE_DEPARTMENT_CODE",
+      "dept",
+      "division",
+      "DEPARTMENT_NAME",
+      "DEPT"
+    ],
+    "serial_number": [
+      "Serial Number",
+      "SERIAL",
+      "Serial",
+      "serial_num",
+      "sn",
+      "SERIAL_NUMBER",
+      "serial_number",
+      "SN"
+    ],
+    "manufacturer_name": [
+      "Supplier/Manufacturer Name",
+      "Make",
+      "MANUFACTURER",
+      "Manufacturer",
+      "Supplier Name",
+      "mfg",
+      "brand",
+      "MANUFACTURER_NAME",
+      "MFG"
+    ],
+    "model_number": [
+      "Model",
+      "Supplier/Manufacturer Number",
+      "MODEL",
+      "model_num",
+      "model_name",
+      "MODEL_NUMBER",
+      "MODEL_NAME",
+      "part_number"
+    ],
+    "acquisition_date": [
+      "ACQUISITION_DATE",
+      "PURCHASE_DATE",
+      "acquired_date",
+      "purchase_date",
+      "date_acquired",
+      "acquisition_date",
+      "PURCHASE_DT",
+      "INSTALLED_DATE"
+    ],
+    "condition_status": [
+      "CONDITION",
+      "Condition",
+      "status",
+      "asset_status",
+      "operational_status",
+      "CONDITION_STATUS",
+      "STATUS"
+    ],
+    "last_maintenance_date": [
+      "LAST_MAINTENANCE",
+      "last_service_date",
+      "last_maint_date",
+      "maintenance_date",
+      "LAST_MAINTENANCE_DATE",
+      "last_maintenance_date",
+      "LAST_SERVICE_DATE"
+    ]
+  },
+  "regex_patterns": {
+    "asset_code": {
+      "patterns": [
+        "^asset.?code$"
+      ],
+      "confidence": 0.88,
+      "description": "Match asset code fields"
+    },
+    "location_code": {
+      "patterns": [
+        "^location.?code$"
+      ],
+      "confidence": 0.90,
+      "description": "Match location code fields"
+    },
+    "location_name": {
+      "patterns": [
+        "^location.?name$"
+      ],
+      "confidence": 0.90,
+      "description": "Match location name fields"
+    },
+    "facility_address": {
+      "patterns": [
+        "^facility.?street",
+        "^facility.?address"
+      ],
+      "confidence": 0.90,
+      "description": "Match facility address fields"
+    },
+    "facility_city": {
+      "patterns": [
+        "^facility.?city$"
+      ],
+      "confidence": 0.90,
+      "description": "Match facility city fields"
+    },
+    "facility_state": {
+      "patterns": [
+        "^facility.?(?:province|state)$"
+      ],
+      "confidence": 0.90,
+      "description": "Match facility state/province fields"
+    },
+    "facility_postal_code": {
+      "patterns": [
+        "^facility.?(?:postal|zip)",
+        "^postal"
+      ],
+      "confidence": 0.90,
+      "description": "Match postal code fields"
+    },
+    "facility_country": {
+      "patterns": [
+        "^facility.?country$",
+        "^country$"
+      ],
+      "confidence": 0.90,
+      "description": "Match country fields"
+    },
+    "serial_number": {
+      "patterns": [
+        "^serial"
+      ],
+      "confidence": 0.9,
+      "description": "Match serial number fields"
+    },
+    "manufacturer_name": {
+      "patterns": [
+        "^manufacturer",
+        "^mfg"
+      ],
+      "confidence": 0.85,
+      "description": "Match manufacturer fields"
+    },
+    "model_number": {
+      "patterns": [
+        "^model"
+      ],
+      "confidence": 0.85,
+      "description": "Match model fields"
+    }
+  },
+  "custom_transformations": {
+    "facility_address": {
+      "type": "concat",
+      "fields": [
+        "facility_street_address",
+        "facility_city",
+        "facility_state"
+      ],
+      "separator": ", ",
+      "description": "Combine address components into full facility address"
+    },
+    "condition_status": {
+      "type": "map",
+      "values": {
+        "1": "good",
+        "2": "fair",
+        "3": "poor",
+        "G": "good",
+        "F": "fair",
+        "P": "poor",
+        "A": "good",
+        "S": "good",
+        "I": "poor"
+      },
+      "description": "Map Maximo condition codes to standard values"
+    }
+  },
+  "excluded_fields": [
+    "internal_id",
+    "system_notes",
+    "audit_timestamp",
+    "created_date",
+    "modified_date",
+    "internal_field"
+  ],
+  "confidence_overrides": {
+    "asset_id": 0.99,
+    "asset_code": 0.95,
+    "asset_name": 0.9,
+    "location_code": 0.92,
+    "location_name": 0.92,
+    "facility_address": 0.90,
+    "facility_city": 0.90,
+    "facility_state": 0.90,
+    "facility_postal_code": 0.90,
+    "facility_country": 0.90
+  }
+}

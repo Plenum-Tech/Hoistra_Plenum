@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  - job_name: "cafm-connector-service"
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+
+  - job_name: "cafm-ingestion-service"
+    static_configs:
+      - targets: ["svc-ingestion:8001"]
+    metrics_path: /metrics
+
+  - job_name: "cafm-query-service"
+    static_configs:
+      - targets: ["svc-query:8002"]
+    metrics_path: /metrics
+
+  - job_name: "tempo"
+    static_configs:
+      - targets: ["tempo:3200"]
+    metrics_path: /metrics

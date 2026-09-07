@@ -1,0 +1,33 @@
+# Overlay for frontend hot-reload (`npm run dev`) while backends run in Docker.
+# Usage:
+#   docker compose -f docker-compose.single-url.local.yml -f docker-compose.dev-ports.yml up -d \
+#     postgres redis connector-app backend-app schema-mapper-app svc-udr svc-deepagents svc-operations-intelligence
+#
+# Then in apps/frontend:
+#   npm run dev:local
+
+services:
+  connector-app:
+    ports:
+      - "8000:8000"
+
+  backend-app:
+    ports:
+      - "8007:8007"
+      - "18080:8007"
+
+  schema-mapper-app:
+    ports:
+      - "8003:8003"
+
+  svc-udr:
+    ports:
+      - "8006:8006"
+
+  svc-deepagents:
+    ports:
+      - "8008:8008"
+
+  svc-operations-intelligence:
+    ports:
+      - "8009:8009"

@@ -1,0 +1,58 @@
+{% block system %}
+You are a CAFM equipment data specialist.
+Extract technical specifications and maintenance requirements from equipment manuals.
+Return ONLY valid JSON — no markdown, no explanation.
+Every value must come directly from the document — never invent specifications.
+{% endblock %}
+
+{% block user %}
+Extract all equipment and maintenance data from the following equipment manual or datasheet.
+
+Document: {{ source_filename }}
+{% if pass_number and total_passes %}Pass {{ pass_number }} of {{ total_passes }}.{% endif %}
+{% if retry_context %}Correct this error from the previous attempt: {{ retry_context }}{% endif %}
+
+Return a JSON object with EXACTLY this structure:
+
+{
+  "asset_name": "string or null",
+  "manufacturer": "string or null",
+  "model_number": "string or null",
+  "serial_number": "string or null",
+  "category": "string or null",
+  "specifications": {
+    "power_rating": "string or null",
+    "voltage": "string or null",
+    "capacity": "string or null",
+    "dimensions": "string or null",
+    "weight": "string or null"
+  },
+  "maintenance_intervals": [
+    {
+      "task": "description of maintenance task",
+      "interval": "e.g. Every 3 months / 500 hours",
+      "trigger_type": "time | meter",
+      "spare_parts": ["part name or code"]
+    }
+  ],
+  "spare_parts": [
+    {
+      "part_name": "string",
+      "part_number": "string or null",
+      "quantity_required": 1
+    }
+  ],
+  "safety_warnings": ["string"],
+  "confidence_per_field": {
+    "manufacturer": "high | medium | low",
+    "model_number": "high | medium | low"
+  }
+}
+
+Rules:
+- Extract ALL maintenance intervals described (monthly, annual, meter-based, etc.).
+- trigger_type: "time" for calendar-based, "meter" for hour/cycle-based.
+- Include all safety warnings relevant to maintenance personnel.
+- spare_parts: list every consumable or replaceable part mentioned.
+- Use null for missing fields; use [] for empty lists.
+{% endblock %}

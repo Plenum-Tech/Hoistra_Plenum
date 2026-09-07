@@ -1,0 +1,13 @@
+required_tokens:
+  - acs
+  - competency
+  - gas
+issuing_body_tokens:
+  - gas safe
+  - eusr
+  - cata
+required_field_hints:
+  - engineer
+  - card
+  - expiry
+notes: ACS gas card

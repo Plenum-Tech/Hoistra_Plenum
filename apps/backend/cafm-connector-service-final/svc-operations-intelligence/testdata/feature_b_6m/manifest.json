@@ -1,0 +1,74 @@
+{
+  "feature": "B",
+  "name": "contract_performance_6m",
+  "generated_at": "2026-08-25T11:07:48.497561+00:00",
+  "organization_id": "00000000-0000-0000-0000-0000000000b1",
+  "score_months": [
+    "2026-02-01",
+    "2026-03-01",
+    "2026-04-01",
+    "2026-05-01",
+    "2026-06-01",
+    "2026-07-01"
+  ],
+  "vendors": [
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+      "vendor_name": "Apex Mechanical Services Ltd",
+      "vendor_code": "APEX-MECH",
+      "block_state": "Clear",
+      "trade": "Mechanical / HVAC",
+      "contract_ref": "FM-APEX-2026-01"
+    },
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a2",
+      "vendor_name": "BrightSpark Electrical Ltd",
+      "vendor_code": "BRIGHT-ELEC",
+      "block_state": "Clear",
+      "trade": "Electrical",
+      "contract_ref": "FM-BRIGHT-2026-01"
+    },
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+      "vendor_name": "SafeLift Engineering Ltd",
+      "vendor_code": "SAFELIFT",
+      "block_state": "Blocked",
+      "trade": "Lifts / LOLER",
+      "contract_ref": "FM-SAFELIFT-2026-01",
+      "blocked_from_month": "2026-05-01"
+    }
+  ],
+  "counts": {
+    "vendors": 3,
+    "accreditations": 7,
+    "contracts": 3,
+    "assets": 15,
+    "work_orders": 559,
+    "work_orders_reactive": 504,
+    "work_orders_ppm": 55,
+    "ppm_visits": 60,
+    "invoices": 36,
+    "invoice_lines": 360,
+    "score_batches": 12,
+    "scorecard_requests": 12
+  },
+  "test_scenarios": [
+    "B1 confirmed SLA params + defaults labelling",
+    "B1 asset criticality L1/L2/L3 with one unapproved \u2192 L2",
+    "B2 Apex strong SLA vs Bright mid vs SafeLift weak",
+    "B2 SafeLift block_state=Blocked \u2192 overall score capped at 60",
+    "B2 cost variance >15% on 3+ jobs \u2192 Approvals alert",
+    "B2 PPM \u00b17 day compliance mix",
+    "B3 matched vs flagged invoice lines; flags >\u00a3500 for adversary",
+    "B3 admin-editable weights in vendor_score_weight_config"
+  ],
+  "load_order": [
+    "1. Ensure org + vendors exist (vendors.json)",
+    "2. PUT /api/contract-performance/admin/weights",
+    "3. POST /contracts/ingest + /contracts/{id}/confirm per contract",
+    "4. POST /asset-criticality (+ approve)",
+    "5. POST /score/work-orders per score_batches/*.json",
+    "6. POST /invoices/verify per invoices/*.json",
+    "7. POST /scorecards/monthly per scorecard_requests.json"
+  ]
+}

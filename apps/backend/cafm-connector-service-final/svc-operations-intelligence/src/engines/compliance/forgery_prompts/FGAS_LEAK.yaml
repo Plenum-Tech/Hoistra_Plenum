@@ -1,0 +1,12 @@
+required_tokens:
+  - f-gas
+  - leak check
+  - fluorinated
+issuing_body_tokens:
+  - refcom
+  - acrib
+required_field_hints:
+  - charge
+  - leak
+  - certificate
+notes: F-Gas leak check

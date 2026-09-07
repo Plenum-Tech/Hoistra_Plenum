@@ -1,0 +1,11 @@
+required_tokens:
+  - air conditioning
+  - tm44
+issuing_body_tokens:
+  - cibse
+  - gov.uk
+required_field_hints:
+  - inspection
+  - system
+  - valid
+notes: Air conditioning inspection (TM44)

@@ -1,0 +1,1527 @@
+{
+  "pack_id": "UAE-COMPLIANCE-v1.0",
+  "country_code": "UAE",
+  "pack_version": "1.0",
+  "description": "UAE statutory FM compliance pack (federal UAE Fire Code + Dubai Municipality / DCD / DEWA / ESMA).",
+  "source_docx": null,
+  "type_counts": {
+    "building": 28,
+    "vendor": 17,
+    "total": 45
+  },
+  "verification_registers": [],
+  "certificate_types": [
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "EARTHING_LPS",
+      "certificate_type_name": "Earthing & Lightning Protection System Test Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Electrical",
+      "regulation_reference": "IEC 62305; BS 7430; DEWA/ADDC standards",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed electrical contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Test date",
+          "Earth electrode resistance (ohm)",
+          "LPS continuity",
+          "Bonding check",
+          "Pass/Fail",
+          "Remedial actions",
+          "Engineer name",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Test date | Earth electrode resistance (ohm) | LPS continuity | Bonding check | Pass/Fail | Remedial actions | Engineer name | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ELECTRICAL_SAFETY",
+      "certificate_type_name": "Electrical Installation Safety Inspection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Electrical",
+      "regulation_reference": "DEWA/ADDC/FEWA Regulations for Electrical Installations; IEC 60364; UAE Fire Code",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed electrical contractor / distribution company",
+      "required_contractor_accreditation": "Distribution company approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Client/site",
+          "Inspection date",
+          "Inspector name/licence",
+          "Scope/limitations",
+          "Insulation/continuity/earth loop results",
+          "Observations (C1/C2/C3)",
+          "Overall (Satisfactory/Unsatisfactory)",
+          "Next inspection due",
+          "Signature"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Client/site | Inspection date | Inspector name/licence | Scope/limitations | Insulation/continuity/earth loop results | Observations (C1/C2/C3) | Overall (Satisfactory/Unsatisfactory) | Next inspection due | Signature"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "THERMOGRAPHY",
+      "certificate_type_name": "Electrical Thermographic (Infrared) Survey Report",
+      "certificate_scope": "Building",
+      "trade_category": "Electrical",
+      "regulation_reference": "DEWA/ADDC standards; NFPA 70B; insurer requirement",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Certified thermographer / electrical contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Survey date",
+          "Thermographer name/level",
+          "Panels/boards surveyed",
+          "Hotspots found (delta-T)",
+          "Severity classification",
+          "Recommended actions",
+          "Next survey due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Survey date | Thermographer name/level | Panels/boards surveyed | Hotspots found (delta-T) | Severity classification | Recommended actions | Next survey due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "GREEN_BUILDING",
+      "certificate_type_name": "Green Building / Energy Efficiency Compliance Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Energy",
+      "regulation_reference": "UAE Green Building Regulations & Specifications; Estidama/Al Sa'fat (emirate-level)",
+      "regulation_url": null,
+      "frequency_months": null,
+      "issuing_body": "Municipality / green building authority",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Building/project",
+          "Rating scheme",
+          "Certificate reference",
+          "Assessment date",
+          "Rating achieved",
+          "Energy/water performance",
+          "Recommendations",
+          "Assessor/accreditation",
+          "Valid until"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Building/project | Rating scheme | Certificate reference | Assessment date | Rating achieved | Energy/water performance | Recommendations | Assessor/accreditation | Valid until"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "KITCHEN_SUPPRESSION",
+      "certificate_type_name": "Commercial Kitchen Hood Fire Suppression System Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; UL 300; NFPA 96",
+      "regulation_url": null,
+      "frequency_months": 6,
+      "issuing_body": "Civil Defence approved contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site/kitchen",
+          "System type",
+          "Service date",
+          "Nozzle/cylinder check",
+          "Fusible link replacement",
+          "Manual pull test",
+          "Pass/Fail",
+          "Technician name",
+          "Next service due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site/kitchen | System type | Service date | Nozzle/cylinder check | Fusible link replacement | Manual pull test | Pass/Fail | Technician name | Next service due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "EMERGENCY_LIGHTING",
+      "certificate_type_name": "Emergency Lighting & Exit Signage Test Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; BS 5266",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed electrical/fire systems contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Test date",
+          "Test type (functional/duration)",
+          "Luminaire/sign count",
+          "Duration achieved",
+          "Failures",
+          "Pass/Fail",
+          "Remedial actions",
+          "Technician name",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Test date | Test type (functional/duration) | Luminaire/sign count | Duration achieved | Failures | Pass/Fail | Remedial actions | Technician name | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_ALARM_TEST",
+      "certificate_type_name": "Fire Alarm & Detection System Test Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice (Chapter 8); NFPA 72",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence approved fire systems contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site address",
+          "System type/panel model",
+          "Panel ID",
+          "Test date",
+          "Engineer name/CD ID",
+          "Zones/devices tested",
+          "Faults found",
+          "Connection to Hassantuk/monitoring",
+          "Remedial actions",
+          "Client sign-off",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site address | System type/panel model | Panel ID | Test date | Engineer name/CD ID | Zones/devices tested | Faults found | Connection to Hassantuk/monitoring | Remedial actions | Client sign-off | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_DOOR",
+      "certificate_type_name": "Fire Door & Passive Fire Protection Inspection Report",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice (Chapter 1 - passive protection)",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Approved fire protection contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Building",
+          "Door ID/location",
+          "Inspection date",
+          "Gap/seal condition",
+          "Closer function",
+          "Signage",
+          "Fire stopping condition",
+          "Pass/Refer/Fail",
+          "Priority",
+          "Inspector name",
+          "Next inspection due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Building | Door ID/location | Inspection date | Gap/seal condition | Closer function | Signage | Fire stopping condition | Pass/Refer/Fail | Priority | Inspector name | Next inspection due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_AMC",
+      "certificate_type_name": "Fire & Life Safety Systems Annual Maintenance Contract Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "Ministerial Resolution No. 505 of 2012 (Annual Maintenance Contract)",
+      "regulation_url": "https://www.moi.gov.ae/en/eservices/eservice.174.aspx",
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence licensed maintenance company",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": "https://www.moi.gov.ae/en/eservices/eservice.174.aspx",
+      "key_fields_schema": {
+        "optional": [
+          "Building/site",
+          "AMC contract number",
+          "Contractor name/CD licence no.",
+          "Systems covered (alarm, sprinkler, pump, extinguishers, lighting)",
+          "Contract start",
+          "Contract end",
+          "Test frequency",
+          "Signatory",
+          "Next renewal due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Building/site | AMC contract number | Contractor name/CD licence no. | Systems covered (alarm, sprinkler, pump, extinguishers, lighting) | Contract start | Contract end | Test frequency | Signatory | Next renewal due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_PUMP",
+      "certificate_type_name": "Fire Pump Performance Test Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; NFPA 20/25",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence approved contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Pump make/model/serial",
+          "Rated flow/head",
+          "Test date",
+          "Churn/rated/peak readings",
+          "Diesel/electric driver check",
+          "Deficiencies",
+          "Corrective actions",
+          "Engineer name",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Pump make/model/serial | Rated flow/head | Test date | Churn/rated/peak readings | Diesel/electric driver check | Deficiencies | Corrective actions | Engineer name | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_EXTINGUISHER",
+      "certificate_type_name": "Portable Fire Extinguisher Maintenance Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; BS EN 3",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence approved contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Extinguisher register (type/location/serial)",
+          "Service date",
+          "Pressure/weight check",
+          "Refill/replacement",
+          "Pass/Fail",
+          "Technician name",
+          "Next service due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Extinguisher register (type/location/serial) | Service date | Pressure/weight check | Refill/replacement | Pass/Fail | Technician name | Next service due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_SAFETY_CERT",
+      "certificate_type_name": "Preventive Fire Safety Requirements Certificate (Shahadat Al-Salama)",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; Ministerial Resolution No. 505 of 2012",
+      "regulation_url": "https://u.ae/en/information-and-services/justice-safety-and-the-law/fire-safety",
+      "frequency_months": 12,
+      "issuing_body": "General Directorate of Civil Defence",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": "https://www.moi.gov.ae/en/eservices/eservice.174.aspx",
+      "key_fields_schema": {
+        "optional": [
+          "Building name/address",
+          "Makani/plot number",
+          "Civil Defence file number",
+          "Occupancy classification",
+          "Inspection date",
+          "Deficiencies (major/minor)",
+          "Corrective actions",
+          "Preventive safety status (Pass/Fail)",
+          "Officer name/rank",
+          "Next renewal due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Building name/address | Makani/plot number | Civil Defence file number | Occupancy classification | Inspection date | Deficiencies (major/minor) | Corrective actions | Preventive safety status (Pass/Fail) | Officer name/rank | Next renewal due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "SPRINKLER_TEST",
+      "certificate_type_name": "Sprinkler / Fixed Firefighting System Test Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "UAE Fire and Life Safety Code of Practice; NFPA 25",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence approved contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "System type",
+          "Test date",
+          "Inspector name/CD ID",
+          "Pressure test result",
+          "Flow/alarm test",
+          "Control valve status",
+          "Deficiencies",
+          "Corrective actions",
+          "Next inspection due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | System type | Test date | Inspector name/CD ID | Pressure test result | Flow/alarm test | Control valve status | Deficiencies | Corrective actions | Next inspection due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "LPG_GAS_SAFETY",
+      "certificate_type_name": "LPG / Gas System Safety Inspection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Gas",
+      "regulation_reference": "UAE Fire and Life Safety Code (Chapter 12 - LPG); ESMA/MOIAT gas regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Civil Defence / municipality approved gas contractor",
+      "required_contractor_accreditation": "Civil Defence approved contractor",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Gas system description",
+          "Inspection date",
+          "Leak/pressure test",
+          "Ventilation/detection check",
+          "Cylinder/tank condition",
+          "Safe to use (Yes/No)",
+          "Remedial actions",
+          "Engineer name",
+          "Next check due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Gas system description | Inspection date | Leak/pressure test | Ventilation/detection check | Cylinder/tank condition | Safe to use (Yes/No) | Remedial actions | Engineer name | Next check due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "RISK_ASSESSMENT",
+      "certificate_type_name": "General Risk Assessment Register",
+      "certificate_scope": "Building",
+      "trade_category": "H&S",
+      "regulation_reference": "OSH regulations; Federal Decree-Law No. 33 of 2021",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Employer / competent HSE person",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Activity/task",
+          "Hazard",
+          "Who might be harmed",
+          "Existing controls",
+          "Likelihood",
+          "Severity",
+          "Risk rating",
+          "Additional controls",
+          "Responsible person",
+          "Target date",
+          "Assessor",
+          "Review date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Activity/task | Hazard | Who might be harmed | Existing controls | Likelihood | Severity | Risk rating | Additional controls | Responsible person | Target date | Assessor | Review date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "HSE_POLICY",
+      "certificate_type_name": "Occupational Health & Safety Policy Statement",
+      "certificate_scope": "Building",
+      "trade_category": "H&S",
+      "regulation_reference": "Federal Decree-Law No. 33 of 2021 (Labour Law); OSH regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Employer / property operator",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Organisation name",
+          "Policy statement",
+          "Signed by (name, title, date)",
+          "Responsibilities",
+          "Arrangements",
+          "Distribution list",
+          "Version",
+          "Review date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Organisation name | Policy statement | Signed by (name, title, date) | Responsibilities | Arrangements | Distribution list | Version | Review date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "PUBLIC_LIABILITY",
+      "certificate_type_name": "Public / Third-Party Liability Insurance Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "H&S",
+      "regulation_reference": "Contractual / municipality requirement",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed insurer",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Insured name",
+          "Policy number",
+          "Insurer name/authorisation",
+          "Period of insurance (from/to)",
+          "Limit of indemnity",
+          "Territorial limits",
+          "Compliance statement",
+          "Date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Insured name | Policy number | Insurer name/authorisation | Period of insurance (from/to) | Limit of indemnity | Territorial limits | Compliance statement | Date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "WORKMEN_INSURANCE",
+      "certificate_type_name": "Workmen's Compensation / Employees Insurance Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "H&S",
+      "regulation_reference": "Federal Decree-Law No. 33 of 2021 (Labour Law); mandatory employee insurance",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed insurer",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Insured name",
+          "Policy number",
+          "Insurer name/authorisation",
+          "Period of insurance (from/to)",
+          "Coverage/indemnity",
+          "Number of employees covered",
+          "Compliance statement",
+          "Date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Insured name | Policy number | Insurer name/authorisation | Period of insurance (from/to) | Coverage/indemnity | Number of employees covered | Compliance statement | Date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "DUCT_CLEANING",
+      "certificate_type_name": "HVAC Duct Cleaning Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "HVAC",
+      "regulation_reference": "Municipality Indoor Air Quality guidelines (e.g. DM-HSD-GU119-IAQ); NADCA ACR",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Municipality-approved HVAC/duct cleaning company",
+      "required_contractor_accreditation": "Municipality technical services permit",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "System/AHU reference",
+          "Cleaning date",
+          "Method (NADCA)",
+          "Pre/post condition",
+          "Coil/filter cleaning",
+          "Photographs ref",
+          "Technician name/ASCS",
+          "Next cleaning due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | System/AHU reference | Cleaning date | Method (NADCA) | Pre/post condition | Coil/filter cleaning | Photographs ref | Technician name/ASCS | Next cleaning due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "IAQ_TEST",
+      "certificate_type_name": "Indoor Air Quality Test Report",
+      "certificate_scope": "Building",
+      "trade_category": "HVAC",
+      "regulation_reference": "Municipality Indoor Air Quality guidelines (DM-HSD-GU119-IAQ); OSHAD/OSH",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Accredited IAQ testing provider",
+      "required_contractor_accreditation": "EIAC / ENAS accreditation (ISO 17025)",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Test date",
+          "Locations sampled",
+          "CO2/CO/PM2.5/PM10/TVOC/formaldehyde",
+          "Temperature/humidity",
+          "Bacterial/fungal counts",
+          "Pass/Fail vs limits",
+          "Assessor/lab",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Test date | Locations sampled | CO2/CO/PM2.5/PM10/TVOC/formaldehyde | Temperature/humidity | Bacterial/fungal counts | Pass/Fail vs limits | Assessor/lab | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "REFRIGERANT_LOG",
+      "certificate_type_name": "Refrigerant Handling & Leak Check Log",
+      "certificate_scope": "Building",
+      "trade_category": "HVAC/F-Gas",
+      "regulation_reference": "Montreal Protocol; MOIAT/ESMA refrigerant controls; Municipality ODS circular",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Registered refrigerant handling contractor",
+      "required_contractor_accreditation": "MOIAT/ESMA registration",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Equipment ID",
+          "Refrigerant type",
+          "Charge (kg)",
+          "Check date",
+          "Leak detection method",
+          "Leaks found (Yes/No)",
+          "Repair action",
+          "Recovered/added (kg)",
+          "Technician/company registration",
+          "Next check due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Equipment ID | Refrigerant type | Charge (kg) | Check date | Leak detection method | Leaks found (Yes/No) | Repair action | Recovered/added (kg) | Technician/company registration | Next check due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "LIFT_INSPECTION",
+      "certificate_type_name": "Lift & Escalator Third-Party Inspection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Lifts",
+      "regulation_reference": "EN 81 / ASME A17.1; UAE Fire and Life Safety Code; Municipality lift regulations",
+      "regulation_url": null,
+      "frequency_months": 6,
+      "issuing_body": "EIAC/ENAS-accredited inspection body",
+      "required_contractor_accreditation": "EIAC / ENAS accreditation (ISO 17020)",
+      "verification_url": "https://eiac.gov.ae/",
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Lift/escalator ID/serial",
+          "Type",
+          "SWL (persons/kg)",
+          "Exam date",
+          "Parts examined",
+          "Defects/observations",
+          "Immediate danger (Yes/No)",
+          "Fit for use (Yes/No)",
+          "Competent person/body",
+          "Next exam due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Lift/escalator ID/serial | Type | SWL (persons/kg) | Exam date | Parts examined | Defects/observations | Immediate danger (Yes/No) | Fit for use (Yes/No) | Competent person/body | Next exam due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "PEST_CONTROL",
+      "certificate_type_name": "Pest Control Treatment Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Pest Control",
+      "regulation_reference": "Municipality public health / pest control regulations",
+      "regulation_url": null,
+      "frequency_months": 3,
+      "issuing_body": "Municipality-approved pest control company",
+      "required_contractor_accreditation": "Municipality pest control permit",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Treatment date",
+          "Target pests",
+          "Chemicals used/dilution",
+          "Areas treated",
+          "Technician name/permit",
+          "Warranty/next visit",
+          "Recommendations",
+          "Next treatment due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Treatment date | Target pests | Chemicals used/dilution | Areas treated | Technician name/permit | Warranty/next visit | Recommendations | Next treatment due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "PRESSURE_VESSEL",
+      "certificate_type_name": "Pressure Vessel / Air Receiver Inspection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Pressure Systems",
+      "regulation_reference": "ASME BPVC / PED 2014/68/EU; third-party inspection",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "EIAC/ENAS-accredited inspection body",
+      "required_contractor_accreditation": "EIAC / ENAS accreditation (ISO 17020)",
+      "verification_url": "https://eiac.gov.ae/",
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Vessel ID/serial",
+          "MAWP (bar)",
+          "Design temperature",
+          "Fluid",
+          "Exam date",
+          "Exam type (external/internal/hydraulic)",
+          "Defects",
+          "Safe operating limits",
+          "Competent person/body",
+          "Next exam due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Vessel ID/serial | MAWP (bar) | Design temperature | Fluid | Exam date | Exam type (external/internal/hydraulic) | Defects | Safe operating limits | Competent person/body | Next exam due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "CCTV_COMPLIANCE",
+      "certificate_type_name": "CCTV / Security System Compliance Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Security",
+      "regulation_reference": "Federal video surveillance regulation; security regulator standards",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Approved security systems company",
+      "required_contractor_accreditation": "Security regulator approval",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "System description",
+          "Camera/DVR inventory",
+          "Commission/audit date",
+          "Retention period compliance",
+          "Coverage compliance",
+          "Deficiencies",
+          "Approved installer",
+          "Next audit due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | System description | Camera/DVR inventory | Commission/audit date | Retention period compliance | Coverage compliance | Deficiencies | Approved installer | Next audit due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "COOLING_TOWER",
+      "certificate_type_name": "Cooling Tower Cleaning & Legionella Control Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Water",
+      "regulation_reference": "Municipality public health guidance; HSG274 (reference); GSO standards",
+      "regulation_url": null,
+      "frequency_months": 6,
+      "issuing_body": "Approved water treatment / hygiene contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Cooling tower ID",
+          "Service date",
+          "Cleaning/disinfection performed",
+          "Dip slide/legionella result",
+          "Biocide dosing",
+          "Corrective actions",
+          "Technician name",
+          "Next service due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Cooling tower ID | Service date | Cleaning/disinfection performed | Dip slide/legionella result | Biocide dosing | Corrective actions | Technician name | Next service due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "WATER_QUALITY",
+      "certificate_type_name": "Potable Water Quality / Legionella Test Report",
+      "certificate_scope": "Building",
+      "trade_category": "Water",
+      "regulation_reference": "Municipality drinking water quality standards; WHO/GSO guidance",
+      "regulation_url": null,
+      "frequency_months": 6,
+      "issuing_body": "Accredited water testing laboratory",
+      "required_contractor_accreditation": "EIAC / ENAS accreditation (ISO 17025)",
+      "verification_url": "https://eiac.gov.ae/",
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Sample date",
+          "Sample points",
+          "Microbiological results",
+          "Legionella count (CFU/L)",
+          "Chemical parameters",
+          "Chlorine residual",
+          "Pass/Fail vs standard",
+          "Analyst/lab",
+          "Next test due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Sample date | Sample points | Microbiological results | Legionella count (CFU/L) | Chemical parameters | Chlorine residual | Pass/Fail vs standard | Analyst/lab | Next test due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "WATER_TANK_CLEANING",
+      "certificate_type_name": "Water Tank Cleaning & Disinfection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Water",
+      "regulation_reference": "Municipality Public Health Regulations (potable water storage)",
+      "regulation_url": null,
+      "frequency_months": 6,
+      "issuing_body": "Municipality-approved water tank cleaning company",
+      "required_contractor_accreditation": "Municipality water tank cleaning permit",
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Site",
+          "Tank ID/location",
+          "Capacity (litres)",
+          "Cleaning date",
+          "Disinfectant used/concentration",
+          "Chlorine residual (mg/L)",
+          "Water clarity",
+          "Sample taken (Yes/No)",
+          "Lab result",
+          "Technician name",
+          "Next cleaning due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Site | Tank ID/location | Capacity (litres) | Cleaning date | Disinfectant used/concentration | Chlorine residual (mg/L) | Water clarity | Sample taken (Yes/No) | Lab result | Technician name | Next cleaning due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ASBESTOS_REMOVAL",
+      "certificate_type_name": "Asbestos / Hazardous Material Removal Permit",
+      "certificate_scope": "Vendor",
+      "trade_category": "Asbestos",
+      "regulation_reference": "MOCCAE hazardous materials regulations; Municipality environmental permit",
+      "regulation_url": null,
+      "frequency_months": null,
+      "issuing_body": "Municipality / MOCCAE",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Permit number",
+          "Project/site",
+          "Scope of works",
+          "Disposal route",
+          "Issue date",
+          "Expiry/validity",
+          "Conditions"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Permit number | Project/site | Scope of works | Disposal route | Issue date | Expiry/validity | Conditions"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ELEC_CONTRACTOR",
+      "certificate_type_name": "Approved Electrical Contractor Registration (DEWA/ADDC/FEWA)",
+      "certificate_scope": "Vendor",
+      "trade_category": "Electrical",
+      "regulation_reference": "DEWA/ADDC/FEWA contractor registration regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Distribution company (DEWA/ADDC/FEWA)",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://www.dewa.gov.ae/en/consultant-and-contractor",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Registration/enrolment no.",
+          "Distribution authority",
+          "Categories/grade",
+          "Qualified supervisor",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Registration/enrolment no. | Distribution authority | Categories/grade | Qualified supervisor | Issue date | Expiry date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "CD_APPROVED_CONTRACTOR",
+      "certificate_type_name": "Civil Defence Approved Contractor Certificate (Fire)",
+      "certificate_scope": "Vendor",
+      "trade_category": "Fire",
+      "regulation_reference": "Ministerial Resolution No. 505 of 2012; UAE Fire and Life Safety Code",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "General Directorate of Civil Defence",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://www.moi.gov.ae/en/eservices/eservice.174.aspx",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Trade licence no.",
+          "Civil Defence approval no.",
+          "Categories of work",
+          "Approved engineers",
+          "Issue date",
+          "Expiry date",
+          "Conditions"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Trade licence no. | Civil Defence approval no. | Categories of work | Approved engineers | Issue date | Expiry date | Conditions"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "FIRE_TECH_CERT",
+      "certificate_type_name": "Fire Systems Technician Competency Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "Fire",
+      "regulation_reference": "Civil Defence competency scheme; UAE Fire and Life Safety Code",
+      "regulation_url": null,
+      "frequency_months": 24,
+      "issuing_body": "Civil Defence approved training provider",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Technician name/photo",
+          "ID/Civil Defence card no.",
+          "Company",
+          "Competency scope",
+          "Issue date",
+          "Expiry"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Technician name/photo | ID/Civil Defence card no. | Company | Competency scope | Issue date | Expiry"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "CONTRACTOR_LIABILITY",
+      "certificate_type_name": "Contractor Public / Professional Liability Insurance Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "Contractual / regulatory requirement",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed insurer",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Insured (contractor) name",
+          "Policy number",
+          "Insurer name/authorisation",
+          "Period of insurance (from/to)",
+          "Limit of indemnity",
+          "Scope",
+          "Date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Insured (contractor) name | Policy number | Insurer name/authorisation | Period of insurance (from/to) | Limit of indemnity | Scope | Date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "INSPECTION_BODY_EIAC",
+      "certificate_type_name": "EIAC / ENAS Inspection Body Accreditation (ISO/IEC 17020)",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "EIAC Law No. 27 of 2015; ISO/IEC 17020:2012",
+      "regulation_url": null,
+      "frequency_months": 48,
+      "issuing_body": "Emirates International Accreditation Centre (EIAC) / ENAS",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://eiac.gov.ae/find-accredited-bodies/",
+      "key_fields_schema": {
+        "optional": [
+          "Organisation name",
+          "Accreditation number",
+          "Scope (inspection fields)",
+          "Standard (ISO/IEC 17020)",
+          "Accreditation date",
+          "Expiry",
+          "Surveillance schedule"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Organisation name | Accreditation number | Scope (inspection fields) | Standard (ISO/IEC 17020) | Accreditation date | Expiry | Surveillance schedule"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "EQM",
+      "certificate_type_name": "Emirates Quality Mark (EQM) Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "MOIAT Emirates Quality Mark scheme",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "Ministry of Industry & Advanced Technology (MOIAT)",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://www.moiat.gov.ae/",
+      "key_fields_schema": {
+        "optional": [
+          "Company/product",
+          "EQM certificate number",
+          "Product/scope",
+          "Standard(s)",
+          "Issue date",
+          "Expiry date",
+          "Conditions"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company/product | EQM certificate number | Product/scope | Standard(s) | Issue date | Expiry date | Conditions"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ISO_14001",
+      "certificate_type_name": "ISO 14001:2015 Environmental Management Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "ISO 14001:2015",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "Accredited certification body (EIAC/IAF)",
+      "required_contractor_accreditation": "EIAC / IAF accreditation (ISO 17021)",
+      "verification_url": "https://eiac.gov.ae/find-accredited-bodies/",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Certificate number",
+          "Scope",
+          "Standard",
+          "Certification body",
+          "Issue date",
+          "Expiry date",
+          "Surveillance due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Certificate number | Scope | Standard | Certification body | Issue date | Expiry date | Surveillance due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ISO_45001",
+      "certificate_type_name": "ISO 45001:2018 Occupational H&S Management Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "ISO 45001:2018",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "Accredited certification body (EIAC/IAF)",
+      "required_contractor_accreditation": "EIAC / IAF accreditation (ISO 17021)",
+      "verification_url": "https://eiac.gov.ae/find-accredited-bodies/",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Certificate number",
+          "Scope",
+          "Standard",
+          "Certification body",
+          "Issue date",
+          "Expiry date",
+          "Surveillance due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Certificate number | Scope | Standard | Certification body | Issue date | Expiry date | Surveillance due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "ISO_9001",
+      "certificate_type_name": "ISO 9001:2015 Quality Management Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "ISO 9001:2015",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "Accredited certification body (EIAC/IAF)",
+      "required_contractor_accreditation": "EIAC / IAF accreditation (ISO 17021)",
+      "verification_url": "https://eiac.gov.ae/find-accredited-bodies/",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Certificate number",
+          "Scope",
+          "Standard",
+          "Certification body",
+          "Issue date",
+          "Expiry date",
+          "Surveillance due"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Certificate number | Scope | Standard | Certification body | Issue date | Expiry date | Surveillance due"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "TRADE_LICENCE",
+      "certificate_type_name": "Valid Commercial Trade Licence",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "Department of Economic Development / free zone authority licensing",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Department of Economic Development (DED) / free zone authority",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company legal name",
+          "Trade licence number",
+          "Legal form",
+          "Licensed activities",
+          "Issue date",
+          "Expiry date",
+          "Responsible manager"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company legal name | Trade licence number | Legal form | Licensed activities | Issue date | Expiry date | Responsible manager"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "HVAC_CONTRACTOR",
+      "certificate_type_name": "Municipality-Approved HVAC / Duct Cleaning Company Permit",
+      "certificate_scope": "Vendor",
+      "trade_category": "HVAC",
+      "regulation_reference": "Municipality technical services / IAQ regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Municipality",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Permit number",
+          "Approved categories",
+          "Certified staff (NADCA/ASCS)",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Permit number | Approved categories | Certified staff (NADCA/ASCS) | Issue date | Expiry date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "REFRIGERANT_HANDLER",
+      "certificate_type_name": "Refrigerant Handling Company Registration (MOIAT/ESMA)",
+      "certificate_scope": "Vendor",
+      "trade_category": "HVAC/F-Gas",
+      "regulation_reference": "MOIAT/ESMA refrigerant regulations; Montreal Protocol",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Ministry of Industry & Advanced Technology (MOIAT/ESMA)",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://www.moiat.gov.ae/",
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Registration number",
+          "Refrigerants covered",
+          "Certified technicians",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Registration number | Refrigerants covered | Certified technicians | Issue date | Expiry date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "LIFT_MAINT_APPROVAL",
+      "certificate_type_name": "Approved Lift Maintenance Company Registration",
+      "certificate_scope": "Vendor",
+      "trade_category": "Lifts",
+      "regulation_reference": "Municipality lift maintenance registration; EN 81",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Municipality",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Registration no.",
+          "Approved brands/scope",
+          "Competent persons",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Registration no. | Approved brands/scope | Competent persons | Issue date | Expiry date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "PEST_COMPANY_PERMIT",
+      "certificate_type_name": "Municipality-Approved Pest Control Company Permit",
+      "certificate_scope": "Vendor",
+      "trade_category": "Pest Control",
+      "regulation_reference": "Municipality public health / pesticide regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Municipality (Public Health Dept.)",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Permit number",
+          "Approved pesticides",
+          "Certified applicators",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Permit number | Approved pesticides | Certified applicators | Issue date | Expiry date"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "SECURITY_COMPANY_LICENCE",
+      "certificate_type_name": "Private Security Company Licence",
+      "certificate_scope": "Vendor",
+      "trade_category": "Security",
+      "regulation_reference": "Federal / emirate private security services regulation",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Security services regulatory authority",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Licence number",
+          "Approved services",
+          "Number of licensed guards",
+          "Issue date",
+          "Expiry date",
+          "Conditions"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Licence number | Approved services | Number of licensed guards | Issue date | Expiry date | Conditions"
+      }
+    },
+    {
+      "pack_id": "UAE-COMPLIANCE-v1.0",
+      "country_code": "UAE",
+      "pack_version": "1.0",
+      "certificate_type_code": "TANK_CLEANING_APPROVAL",
+      "certificate_type_name": "Municipality-Approved Water Tank Cleaning Company Permit",
+      "certificate_scope": "Vendor",
+      "trade_category": "Water",
+      "regulation_reference": "Municipality Public Health (potable water storage) regulations",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Municipality (Public Health / Food Safety Dept.)",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "optional": [
+          "Company name",
+          "Permit number",
+          "Approved scope",
+          "Trained technicians",
+          "Approved disinfectants",
+          "Issue date",
+          "Expiry date"
+        ],
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "source_key_fields": "Company name | Permit number | Approved scope | Trained technicians | Approved disinfectants | Issue date | Expiry date"
+      }
+    }
+  ]
+}

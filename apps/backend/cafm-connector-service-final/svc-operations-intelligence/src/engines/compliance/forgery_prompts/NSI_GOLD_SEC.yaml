@@ -1,0 +1,11 @@
+required_tokens:
+  - nsi
+  - nacoss
+  - security
+issuing_body_tokens:
+  - nsi
+required_field_hints:
+  - gold
+  - approved
+  - security
+notes: NSI Gold security

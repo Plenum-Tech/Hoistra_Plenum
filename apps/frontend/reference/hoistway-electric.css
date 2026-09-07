@@ -1,0 +1,139 @@
+/* Hoistway — Electric. Two accents, two inks, status untouched.
+   Vibrancy lives in surface: a solid orange block, a cobalt data line, and
+   tabular numbers set large. Not in scattered icons and badges.
+   Accent ratio ~10%, split between orange and cobalt. */
+
+:root {
+  --h-page: #FAFAF7;
+  --h-panel: #F2F1EC;
+  --h-rule: #E4E2DA;
+
+  /* Two inks. The third neutral is gone — higher contrast reads sharper than
+     any amount of colour. */
+  --h-ink: #0F0F0D;
+  --h-ink-2: #5C5A54;
+
+  /* Act on this. */
+  --h-orange: #FF4A00;
+  --h-orange-tint: #FFE9E0;
+  --h-orange-ink: #0F0F0D;   /* 5.0:1 on the orange block; white is 3.5:1 */
+
+  /* This is live. This is data. Charts, active states, selected rows, links. */
+  --h-cobalt: #1B4DFF;
+  --h-cobalt-deep: #1339CC;  /* 6.6:1 on page — the step that carries small type */
+  --h-cobalt-tint: #E8ECFF;
+  --h-cobalt-ink: #FFFFFF;   /* 6.0:1 on the cobalt block */
+
+  /* Status — desaturated RAG, untouched, sacred. */
+  --h-critical: #B3261E;
+  --h-risk: #C77700;
+  --h-healthy: #2E7D4F;
+  --h-dormant: #5C5A54;
+  /* Same hues one stop down, used only where a status label is under 12px. */
+  --h-critical-ink: #96201A;
+  --h-risk-ink: #8A5300;
+  --h-healthy-ink: #256540;
+  --h-critical-tint: #FBEAE8;
+  --h-risk-tint: #FDF2E2;
+  --h-healthy-tint: #E7F1EB;
+
+  --h-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --h-shadow: 0 1px 2px rgba(15, 15, 13, 0.05), 0 0 0 1px rgba(15, 15, 13, 0.06);
+  --h-shadow-lift: 0 3px 14px rgba(15, 15, 13, 0.09), 0 0 0 1px rgba(15, 15, 13, 0.07);
+  --h-shadow-deep: 0 14px 44px rgba(15, 15, 13, 0.18), 0 0 0 1px rgba(15, 15, 13, 0.07);
+  --h-scrim: rgba(15, 15, 13, 0.4);
+}
+
+:root[data-theme="dark"] {
+  --h-page: #16150F;
+  --h-panel: #201E17;
+  --h-rule: #332F25;
+  --h-ink: #FAFAF7;
+  --h-ink-2: #A8A497;
+
+  --h-orange: #FF5C1A;
+  --h-orange-tint: #2E1610;
+  --h-orange-ink: #0F0F0D;
+
+  --h-cobalt: #4C79FF;
+  --h-cobalt-deep: #8AA5FF;
+  --h-cobalt-tint: #121A38;
+  --h-cobalt-ink: #0F0F0D;
+
+  --h-critical: #F0564A;
+  --h-risk: #E9A23B;
+  --h-healthy: #4FBF7D;
+  --h-dormant: #A8A497;
+  --h-critical-ink: #F0564A;
+  --h-risk-ink: #E9A23B;
+  --h-healthy-ink: #4FBF7D;
+  --h-critical-tint: #34201C;
+  --h-risk-tint: #322710;
+  --h-healthy-tint: #16301F;
+
+  --h-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(250, 250, 247, 0.06);
+  --h-shadow-lift: 0 3px 14px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(250, 250, 247, 0.07);
+  --h-shadow-deep: 0 14px 44px rgba(0, 0, 0, 0.66), 0 0 0 1px rgba(250, 250, 247, 0.08);
+  --h-scrim: rgba(0, 0, 0, 0.66);
+}
+
+html, body {
+  margin: 0;
+  background: var(--h-page);
+  color: var(--h-ink);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--h-cobalt-deep); text-decoration: none; }
+a:hover { color: var(--h-cobalt); }
+*:focus-visible { outline: 2px solid var(--h-cobalt); outline-offset: 2px; }
+::selection { background: var(--h-cobalt-tint); color: var(--h-cobalt-deep); }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--h-rule); border-radius: 6px; }
+
+/* Tabular numbers, set large. This is the brightness. */
+.h-fig {
+  font-family: var(--h-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 0.92;
+}
+
+.h-btn {
+  font-size: 12.5px;
+  padding: 9px 17px;
+  border-radius: 3px;
+  border: 1px solid var(--h-rule);
+  background: transparent;
+  color: var(--h-ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.h-btn:hover { border-color: var(--h-ink); }
+.h-act { background: var(--h-orange); border-color: var(--h-orange); color: var(--h-orange-ink); }
+.h-act:hover { background: #E63F00; border-color: #E63F00; color: var(--h-orange-ink); }
+.h-live { background: var(--h-cobalt); border-color: var(--h-cobalt); color: var(--h-cobalt-ink); }
+.h-live:hover { background: var(--h-cobalt-deep); border-color: var(--h-cobalt-deep); color: var(--h-cobalt-ink); }
+
+/* On the orange block, secondary actions invert to the block's own ink. */
+.h-on-orange { border-color: rgba(15, 15, 13, 0.32); color: var(--h-orange-ink); }
+.h-on-orange:hover { border-color: var(--h-orange-ink); background: rgba(15, 15, 13, 0.07); }
+
+/* The hero input sits on the orange block, so its placeholder cannot inherit the
+   UA grey (1.37:1 on #FF4A00). 0.68 alpha of the block's own ink is ~4.5:1;
+   anything lighter drops below it. */
+.h-hero-input::placeholder { color: rgba(15, 15, 13, 0.68); opacity: 1; }
+
+.h-tab { width: 100%; border-collapse: collapse; }
+.h-tab th {
+  font-size: 10px; font-weight: 400; letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--h-ink-2); text-align: left; padding: 0 12px 9px; border-bottom: 1px solid var(--h-ink);
+}
+.h-tab td { padding: 13px 12px; border-bottom: 1px solid var(--h-rule); font-size: 13px; }
+.h-tab tbody tr { cursor: pointer; }
+.h-tab tbody tr:hover { background: var(--h-cobalt-tint); }
+.h-tab tbody tr:hover td:first-child { box-shadow: inset 2px 0 0 var(--h-cobalt); }
+
+@keyframes hUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }

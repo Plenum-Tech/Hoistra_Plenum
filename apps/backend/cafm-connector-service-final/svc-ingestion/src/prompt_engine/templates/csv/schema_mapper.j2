@@ -1,0 +1,57 @@
+{% block system %}
+You are a CAFM data schema mapping specialist.
+Map CSV column headers to canonical CAFM field names with high precision.
+Return ONLY valid JSON — no markdown, no explanation.
+{% endblock %}
+
+{% block user %}
+Map the column headers from this CSV file to canonical CAFM field names.
+
+File: {{ source_filename }}
+
+Raw headers:
+{{ headers | join(', ') }}
+
+{% if sample_rows %}
+Sample rows ({{ sample_rows | length }} rows shown):
+{% for row in sample_rows[:5] %}{{ row }}
+{% endfor %}
+{% endif %}
+
+Canonical CAFM field registry:
+  Assets:        asset_code, asset_name, category, location_code, make, model, serial
+  Work Orders:   wo_code, wo_priority, wo_status, wo_type, maintenance_type
+  Scheduled PM:  sm_code, trigger_type, schedule_interval, sm_priority
+  Parts:         part_code, stock_on_hand, minimum_allowed_stock, supplier, bom_group_name
+  Users:         user_full_name, user_title, user_name, reports_to
+  Inspections:   inspector_name, inspection_date, inspection_location, finding_type, risk_level
+
+Known client file → entity type hints:
+  assets.csv → assets
+  parts.csv → spare_parts (part_code, stock_on_hand, minimum_allowed_stock)
+  work_orders.csv → work_orders
+  scheduled_pm.csv → maintenance_plans (sm_code, trigger_type)
+  task_groups.csv → work_order_tasks
+  users.csv → users
+
+Return a JSON object:
+{
+  "mapping": {
+    "raw_header": "canonical_field_name"
+  },
+  "unmatched": ["headers with no canonical match"],
+  "entity_type": "assets | spare_parts | work_orders | maintenance_plans | users | unknown",
+  "confidence_per_column": {
+    "raw_header": 0.95
+  },
+  "overall_confidence": 0.90
+}
+
+Rules:
+- Map every raw header to the single best canonical field.
+- Confidence scoring: 1.0 exact, 0.9 clear synonym, 0.7 probable, < 0.6 = add to unmatched.
+- overall_confidence: weighted average of confidence scores across all columns.
+- unmatched: include any header with confidence < 0.6 — these go to raw_metadata JSONB.
+- Use the sample rows to resolve ambiguous headers (e.g. "Code" → asset_code if values look like MOB-AHU-001).
+- entity_type: the CAFM entity that best describes ALL the data (one entity type per file).
+{% endblock %}

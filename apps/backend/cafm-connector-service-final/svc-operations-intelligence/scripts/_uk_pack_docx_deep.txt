@@ -1,0 +1,750 @@
+
+### HOW TO READ EACH CERTIFICATE CARD
+
+##### SECTION 1: BUILDING-LEVEL CERTIFICATES — Property Manager Responsibility
+
+### A. FIRE SAFETY
+
+==== CARD 1 [Building] Fire Risk Assessment (FRA) ====
+Regulation
+Regulatory Reform (Fire Safety) Order 2005 (SI 2005/1541)
+Responsible party
+Responsible Person (property manager or building manager)
+Frequency
+Annual review minimum; after significant material change; no fixed statutory expiry
+Issuing body
+Qualified fire risk assessor — IFSM, IFE, FPA, or BAFE SP205 membership recommended
+Key fields
+Building address | Date | Assessor name and qualification | Scope | Significant findings | Persons at risk | Existing precautions | Action plan (High / Medium / Low priority) | Completion dates | Review date | Assessor signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE fire risk assessment template   |   HSE fire safety guidance for workplaces   |   PAS 79-1:2020 scope (BSI)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE fire risk assessment template   |   HSE fire safety guidance for workplaces   |   PAS 79-1:2020 scope (BSI)
+
+==== CARD 2 [Building] Fire Alarm System Service Certificate ====
+Regulation
+BS 5839-1:2017; Regulatory Reform (Fire Safety) Order 2005
+Responsible party
+FM contractor (specialist); PM holds certificate
+Frequency
+Quarterly inspection; 6-monthly or annual full service per BS 5839-1
+Issuing body
+BAFE SP203-1 registered firm or NSI/SSAIB-approved company
+Key fields
+Site address | System type/grade | Panel ID | Date | Engineer name/BAFE no. | Zones tested | Faults (C1/C2) | Remedial actions | Client signature | Next service due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  FIA model forms (Fire Industry Association)  Registration required — free   |   BAFE SP203-1 scheme guidance   |   BS 5839-1 scope (BSI)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  FIA model forms (Fire Industry Association)  Registration required — free   |   BAFE SP203-1 scheme guidance   |   BS 5839-1 scope (BSI)
+
+==== CARD 3 [Building] Emergency Lighting Test Certificate ====
+Regulation
+BS 5266-1:2011; BS EN 50172; FSO 2005
+Responsible party
+PM or delegated to FM contractor
+Frequency
+Monthly flick test (self-test log); Annual 3-hour duration test
+Issuing body
+NICEIC/NAPIT-registered electrician or specialist fire systems firm
+Key fields
+Site | Test date | Test type (monthly/annual) | Luminaire count | Duration achieved | Failures | Pass/Fail | Remedial actions | Next test due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET / NICEIC emergency lighting guidance   |   BSI BS 5266-1 scope   |   FieldRocket emergency lighting log template
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET / NICEIC emergency lighting guidance   |   BSI BS 5266-1 scope   |   FieldRocket emergency lighting log template
+
+==== CARD 4 [Building] Sprinkler / Suppression System Annual Test Certificate ====
+Regulation
+BS EN 12845; LPC Rules; FSO 2005
+Responsible party
+PM — FM contractor facilitates specialist inspection
+Frequency
+Quarterly checks; Annual main test; 5-yearly full trip test
+Issuing body
+BAFE SP101 / LPS 1048-registered suppression contractor
+Key fields
+Site | System type | Date | Inspector name/BAFE no. | Pressure test | Flow switch test | Control valve positions | Deficiencies | Corrective actions | Next inspection
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE SP101 scheme (suppression systems)   |   FPA guidance on sprinkler testing   |   BS EN 12845 scope (BSI)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE SP101 scheme (suppression systems)   |   FPA guidance on sprinkler testing   |   BS EN 12845 scope (BSI)
+
+==== CARD 5 [Building] Fire Door Inspection Report ====
+Regulation
+Building Safety Act 2022 (HRBs); BS 8214:2016; FSO 2005
+Responsible party
+PM / Accountable Person — mandatory for HRBs 11m+ under BSA 2022
+Frequency
+HRBs: quarterly (communal doors), annual (flat entrance doors). Other commercial: annual
+Issuing body
+Certificated inspector — BWF-CERTIFIRE, BM TRADA Q-Mark, or FDIS trained
+Key fields
+Building | Door ID/location | Inspector cert no. | Date | Gap measurements | Seal condition | Closer function | Hold-open device | Signage | Ironmongery | Pass/Refer/Fail | Priority (Urgent/Routine)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BWF-CERTIFIRE fire door inspection guidance   |   FDIS (Fire Door Inspection Scheme)   |   BSA 2022 — fire door duties (GOV.UK)   |   BS 8214:2016 scope (BSI)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BWF-CERTIFIRE fire door inspection guidance   |   FDIS (Fire Door Inspection Scheme)   |   BSA 2022 — fire door duties (GOV.UK)   |   BS 8214:2016 scope (BSI)
+
+### B. ELECTRICAL
+
+==== CARD 6 [Building] Electrical Installation Condition Report (EICR) ====
+Regulation
+Electricity at Work Regulations 1989 (SI 1989/635); BS 7671:2018+A4:2026
+Responsible party
+PM / building owner — every 5 years commercial; on change of occupancy
+Issuing body
+NICEIC Approved Contractor / NAPIT / ECA member firm
+Key fields
+Client name/address | Inspector name, qualification, NICEIC/NAPIT no. | Inspection date | Scope/limitations | Observations: C1 (danger) / C2 (potentially dangerous) / C3 (improvement) / FI (further investigation) | Overall: Satisfactory / Unsatisfactory | Next inspection due | Signatures
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET official EICR model form (BS 7671:2018+A4:2026) — free PDF   |   Real sample EICR (commercial office, Hawkesworth)   |   FieldRocket free EICR PDF template
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET official EICR model form (BS 7671:2018+A4:2026) — free PDF   |   Real sample EICR (commercial office, Hawkesworth)   |   FieldRocket free EICR PDF template
+
+==== CARD 7 [Building] Electrical Installation Certificate (EIC) — new/modified installations ====
+Regulation
+BS 7671:2018+A4:2026; Building Regulations Part P
+Responsible party
+Issuing electrical contractor; held by PM
+Frequency
+On completion of any new or significantly altered electrical installation
+Issuing body
+NICEIC / NAPIT / ECA-registered contractor
+Key fields
+Client | Description of installation | Design/construction/inspection signatures | Circuit schedule | Test results (insulation resistance, continuity, earth fault loop impedance, RCD test times) | Date | Contractor NICEIC/NAPIT no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET official EIC model form (BS 7671:2018+A4:2026) — free PDF   |   All IET model forms — all certificates in one PDF
+SAMPLE FORMAT / OFFICIAL TEMPLATE  IET official EIC model form (BS 7671:2018+A4:2026) — free PDF   |   All IET model forms — all certificates in one PDF
+
+==== CARD 8 [Building] Portable Appliance Testing (PAT) Register ====
+Regulation
+Electricity at Work Regulations 1989; IET Code of Practice for In-Service Inspection
+Responsible party
+PM for landlord-supplied appliances; tenant for their own equipment
+Frequency
+Risk-based — annually for most commercial environments
+Issuing body
+Competent person with City & Guilds 2377 or equivalent
+Key fields
+Asset ID | Description | Location | Serial no. | Test date | Earth continuity (Ω) | Insulation resistance (MΩ) | Pass/Fail/Withdrawn | Next test due | Tester name and signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE PAT testing guidance and requirements   |   IET Code of Practice for In-Service Inspection (overview)   |   FieldRocket PAT certificate template
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE PAT testing guidance and requirements   |   IET Code of Practice for In-Service Inspection (overview)   |   FieldRocket PAT certificate template
+
+### C. GAS SAFETY
+
+==== CARD 9 [Building] Gas Safety Certificate — Commercial (CP17) ====
+Regulation
+Gas Safety (Installation and Use) Regulations 1998 (SI 1998/2451)
+HSE minimum fields
+HSE: what a gas safety record must contain
+Responsible party
+PM / building owner — must hold current certificate; criminal offence to lapse
+Frequency
+Annual — must not lapse
+Issuing body
+Gas Safe registered engineer (mandatory by law)
+Key fields
+Property address | Appliance description/location | Gas Safe registration no. | Date | Inlet pressure (mbar) | Heat input (kW) | Burner pressure | Flue flow test | CO/CO2 readings | Safety device operation | Safe to use: Yes/No | Remedial actions | Engineer signature | Next check due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — minimum legal requirements for gas safety records   |   FieldRocket free CP12 PDF template (fillable)   |   Gas Engineer Software — free fillable CP12 online   |   Gas Safe Register — verify engineers
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — minimum legal requirements for gas safety records   |   FieldRocket free CP12 PDF template (fillable)   |   Gas Engineer Software — free fillable CP12 online   |   Gas Safe Register — verify engineers
+
+==== CARD 10 [Building] Boiler Service Record ====
+Regulation
+Gas Safety Regulations 1998; Manufacturer maintenance requirements
+Responsible party
+PM — typically part of PPM contract
+Frequency
+Annual minimum; some manufacturers require 6-monthly
+Issuing body
+Gas Safe registered engineer
+Key fields
+Boiler make/model/serial no. | Location | Service date | Tasks completed | Parts replaced | Combustion analysis (CO, CO2, flue temp, efficiency %) | Fault codes cleared | Gas Safe no. | Engineer signature | Next service due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — service record guidance   |   Gas Engineer Software — boiler service record template   |   HSE gas safety records overview
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — service record guidance   |   Gas Engineer Software — boiler service record template   |   HSE gas safety records overview
+
+### D. WATER SYSTEMS & LEGIONELLA
+
+==== CARD 11 [Building] Legionella Risk Assessment ====
+Regulation
+ACOP L8 (4th ed); COSHH 2002 (SI 2002/2677)
+HSG274
+HSE Technical Guidance Parts 1-3
+Responsible party
+PM / duty holder — responsible for commissioning and acting on findings
+Frequency
+Every 2 years or after significant system change or incident
+Issuing body
+Competent assessor — LCA registered company strongly recommended
+Key fields
+Site | Date | Assessor name/LCA no. | Water system description | Risk rating (High/Medium/Low) | Population at risk | Significant hazards | Control measures | Recommended actions | Responsible person | Monitoring scheme | Review date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — Legionella risk assessment guidance   |   HSG274 Part 2 — cooling towers, evaporative condensers (HSE)   |   LCA — find a registered assessor   |   HSE ACOP L8 — Legionnaires disease (overview)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — Legionella risk assessment guidance   |   HSG274 Part 2 — cooling towers, evaporative condensers (HSE)   |   LCA — find a registered assessor   |   HSE ACOP L8 — Legionnaires disease (overview)
+
+==== CARD 12 [Building] Legionella Monitoring Log / Water Treatment Records ====
+Regulation
+ACOP L8; HSG274; COSHH 2002
+Responsible party
+PM — records kept minimum 5 years
+Frequency
+Monthly temperature monitoring; Weekly flushing; Treatment dosing as scheme requires
+Issuing body
+Water treatment contractor or trained in-house person
+Key fields
+Date | Outlet reference | Temperature reading (°C) | Target met Y/N | Flushing duration | Biocide dose/concentration | Chlorine residual (mg/L) | Technician name/signature | Corrective action | Next date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE L8 logbook guidance   |   WMSoc — water management monitoring log templates   |   FieldRocket — legionella log template   |   HSG274 Part 2 — monitoring frequency guidance (HSE)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE L8 logbook guidance   |   WMSoc — water management monitoring log templates   |   FieldRocket — legionella log template   |   HSG274 Part 2 — monitoring frequency guidance (HSE)
+
+==== CARD 13 [Building] Cold Water Storage Tank Inspection Certificate ====
+Regulation
+ACOP L8; Water Supply (Water Fittings) Regulations 1999 (SI 1999/1148)
+Responsible party
+PM — annual inspection minimum
+Frequency
+Annual visual inspection; full clean and disinfection every 1-2 years per risk assessment
+Issuing body
+LCA-registered water hygiene company
+Key fields
+Site | Tank ID/location | Capacity (litres) | Inspection date | Lid/screen/valve condition | Water clarity | Debris/sediment | Lining condition | Insulation | Temperature (°C) | Sample taken Y/N | Chlorination Y/N | Remedial actions | Technician signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE L8 — cold water systems guidance   |   LCA — cold water tank inspection best practice   |   HSG274 Part 2 — storage tanks (HSE)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE L8 — cold water systems guidance   |   LCA — cold water tank inspection best practice   |   HSG274 Part 2 — storage tanks (HSE)
+
+### E. PRESSURE SYSTEMS
+
+==== CARD 14 [Building] Written Scheme of Examination (WSE) & Pressure Vessel Inspection Certificate ====
+Regulation
+Pressure Systems Safety Regulations 2000 (SI 2000/128)
+HSE Guidance
+HSG261; PSSR ACOP guidance
+Responsible party
+PM / building owner — must have WSE in place before operating any relevant pressure system
+Frequency
+As defined in WSE — typically 12-26 months for heating and hot water vessels
+Issuing body
+Competent person — Allianz Engineering, Lloyd's Register, Bureau Veritas, TÜV SÜD
+Key fields
+Site | System description | Vessel ID/serial no. | MAWP (bar) | Design temperature | Fluid | Last exam date | Exam type (external/internal/hydraulic) | Defects found | Safe operating limits | Next exam due | Competent person name/body/signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — PSSR inspection and examination guidance   |   HSE — Written Scheme of Examination guidance   |   Allianz Engineering — pressure systems services (sample context)   |   HSE PSSR 2000 full text
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — PSSR inspection and examination guidance   |   HSE — Written Scheme of Examination guidance   |   Allianz Engineering — pressure systems services (sample context)   |   HSE PSSR 2000 full text
+
+### F. LIFTS & LIFTING EQUIPMENT (LOLER)
+
+==== CARD 15 [Building] LOLER Thorough Examination Report — Passenger / Goods Lift ====
+Regulation
+Lifting Operations and Lifting Equipment Regulations 1998 (SI 1998/2307)
+HSE Guidance
+L113 ACOP; HSE LOLER thorough examination guidance
+Responsible party
+PM / building owner — every 6 months for passenger lifts
+Frequency
+6 months (lifts carrying persons); 12 months (goods lifts)
+Issuing body
+Competent person — typically insurance-based inspection body (Allianz, Bureau Veritas, Lloyd's Register, TÜV SÜD)
+Key fields
+Site | Lift ID/serial no. | Lift type | SWL (persons/kg) | Exam date | Parts examined (ropes, sheaves, buffers, safety gear, car, doors, electrics, overload) | Defects/observations | Immediate danger Y/N | Remedy before next use Y/N | Next exam due | Competent person name/employer/qualification/signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LEEA thorough examination report template (LOLER Schedule 1 compliant)   |   LolerFlow — free LOLER report templates (PDF & Word)   |   HSE — what a LOLER report must contain (Schedule 1)   |   HSE LOLER thorough examination guidance (INDG422)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LEEA thorough examination report template (LOLER Schedule 1 compliant)   |   LolerFlow — free LOLER report templates (PDF & Word)   |   HSE — what a LOLER report must contain (Schedule 1)   |   HSE LOLER thorough examination guidance (INDG422)
+
+### G. ASBESTOS
+
+==== CARD 16 [Building] Asbestos Management Survey Report ====
+Regulation
+Control of Asbestos Regulations 2012 (SI 2012/632); HSG264
+HSE Guidance
+HSG264 — Asbestos: The survey guide
+Responsible party
+PM / duty holder — statutory duty to manage asbestos in all pre-2000 buildings
+Frequency
+One-off survey with annual management plan review
+Issuing body
+UKAS-accredited surveying organisation; individual with P402 competency
+Key fields
+Client/site | Survey type | Date | Surveyor name/UKAS no./P402 cert | Areas surveyed | ACM reference | Location | Material type | Sample ref | Condition | Surface treatment | Risk score | Management recommendation | Analyst name/UKAS no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — asbestos management survey guidance (HSG264)   |   HSE — sample asbestos register template   |   UKAS — find an accredited asbestos surveying organisation   |   BOHS P402 qualification (surveyor competency)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — asbestos management survey guidance (HSG264)   |   HSE — sample asbestos register template   |   UKAS — find an accredited asbestos surveying organisation   |   BOHS P402 qualification (surveyor competency)
+
+==== CARD 17 [Building] Asbestos Register (Living Document) ====
+Regulation
+Control of Asbestos Regulations 2012 (Regulation 4)
+Responsible party
+PM — must maintain and make available to anyone liable to disturb ACMs
+Frequency
+Continuously maintained; updated after any disturbance or reinspection
+Issuing body
+PM maintains; populated from survey reports
+Key fields
+Building address | ACM reference | Floor/area/room | Material description | Quantity | Condition (current) | Risk score | Management action | Survey reference | Last reinspection | Reinspection frequency | Action completed Y/N | Date | Notes
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — asbestos register template (downloadable)   |   HSE — managing asbestos in buildings guidance   |   Control of Asbestos Regulations 2012 Regulation 4 full text
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — asbestos register template (downloadable)   |   HSE — managing asbestos in buildings guidance   |   Control of Asbestos Regulations 2012 Regulation 4 full text
+
+### H. ENERGY & ENVIRONMENTAL
+
+==== CARD 18 [Building] Energy Performance Certificate (EPC) ====
+Regulation
+Energy Performance of Buildings Regulations 2012 (SI 2012/3118); MEES 2015
+MEES
+Minimum Energy Efficiency Standards (England and Wales) Regulations 2015
+Responsible party
+Building owner — required on construction, sale, or letting
+Frequency
+Valid 10 years; current at every letting; MEES minimum EPC E (2023), proposed B by 2030
+Issuing body
+Accredited Energy Assessor registered on CIBSE or Elmhurst scheme
+Key fields
+Property address | EPC ref no. | Assessment date | Expiry date | Asset rating (A-G) and score | Typical energy cost | Main heating fuel | Building type/area | CO2 emissions rating | Primary energy use (kWh/m²/year) | Improvement recommendations | Assessor name and accreditation no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Find energy certificate — GOV.UK EPC register (live sample certificates)   |   MHCLG — sample commercial EPC (PDF)   |   Elmhurst Energy — EPC accreditation and sample formats   |   MEES compliance guidance (GOV.UK)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Find energy certificate — GOV.UK EPC register (live sample certificates)   |   MHCLG — sample commercial EPC (PDF)   |   Elmhurst Energy — EPC accreditation and sample formats   |   MEES compliance guidance (GOV.UK)
+
+==== CARD 19 [Building] Air Conditioning Inspection Report (TM44) ====
+Regulation
+Energy Performance of Buildings Regulations 2012 — Article 12; SI 2012/3118
+Responsible party
+Building owner / PM — mandatory for AC >12kW effective rated output
+Frequency
+Every 5 years
+Issuing body
+CIBSE-registered Energy Assessor (Level 3 or 4 Non-Domestic)
+Key fields
+Property | Inspection date | Inspector name/CIBSE no. | AC system inventory (type, make, model, age, refrigerant, rated output) | Maintenance history | Controls assessment | Sizing assessment | Efficiency observations | Recommended measures | Certificate ref | Next inspection due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  CIBSE TM44 — inspection of air conditioning systems (official)   |   GOV.UK — AC inspection requirements guidance   |   Elmhurst — TM44 assessment guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  CIBSE TM44 — inspection of air conditioning systems (official)   |   GOV.UK — AC inspection requirements guidance   |   Elmhurst — TM44 assessment guidance
+
+==== CARD 20 [Building] Display Energy Certificate (DEC) — Public Buildings ====
+Regulation
+Energy Performance of Buildings Regulations 2012 (public buildings >250m²)
+Responsible party
+Occupying organisation of a public building
+Frequency
+Operational rating: annual; Advisory report: every 7 years
+Issuing body
+Accredited Energy Assessor
+Key fields
+Property | DEC reference | Annual operational rating (A-G) | CO2 emissions (kg/m²/year) | Energy use breakdown | Benchmark comparison | Year of construction | Floor area | Assessor name/accreditation no. | Advisory report reference | Valid until
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Find a non-domestic energy certificate — GOV.UK DEC register   |   GOV.UK DEC guidance for public bodies   |   CIBSE — DEC assessor guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Find a non-domestic energy certificate — GOV.UK DEC register   |   GOV.UK DEC guidance for public bodies   |   CIBSE — DEC assessor guidance
+
+==== CARD 21 [Building] ESOS Assessment Evidence Pack ====
+Regulation
+Energy Savings Opportunity Scheme Regulations 2014 (SI 2014/1643)
+Responsible party
+Organisation — applies to large undertakings (250+ employees or £44M+ turnover and £38M+ balance sheet)
+Frequency
+Every 4 years (Phase 3 deadline: December 2023)
+Issuing body
+ESOS Lead Assessor registered with CIBSE, Energy Institute, or IEMA
+Key fields
+Organisation name | Companies House no. | ESOS notification reference | Phase | Compliance date | Lead assessor name/registration body | Energy audits completed (buildings, transport, industrial) | Total energy consumption (kWh by vector) | Opportunities identified | Estimated savings | Board director sign-off | Environment Agency notification reference
+SAMPLE FORMAT / OFFICIAL TEMPLATE  GOV.UK — ESOS official guidance and compliance templates   |   ESOS notification portal — Environment Agency   |   Energy Institute — ESOS assessor register
+SAMPLE FORMAT / OFFICIAL TEMPLATE  GOV.UK — ESOS official guidance and compliance templates   |   ESOS notification portal — Environment Agency   |   Energy Institute — ESOS assessor register
+
+### I. REFRIGERANTS (F-GAS)
+
+==== CARD 22 [Building] F-Gas Leak Check Certificate / Refrigerant Log ====
+Regulation
+UK F-Gas Regulations 2022 (retained from EU 517/2014); SI 2015/310 as amended
+GOV.UK Guidance
+F-Gas guidance for engineers and refrigeration businesses
+Responsible party
+Building owner / PM — operator obligations under F-Gas Regulations
+Frequency
+<5 tCO2e: annual; 5-50t: 6-monthly; >50t: 3-monthly; >500t: 3-monthly with ALD system
+Issuing body
+REFCOM-registered company; F-Gas certified technician (City & Guilds 2079)
+Key fields
+Site | Equipment ID | Refrigerant type | Charge quantity (kg) | CO2e (tCO2e) | Check date | Leak detection method | Leaks found Y/N | Leak location | Repair action | Post-repair check result | Refrigerant added (kg) | Recovered (kg) | Company cert no. | Technician cert no. | Signature | Next check due
+SAMPLE FORMAT / OFFICIAL TEMPLATE  GOV.UK — F-Gas regulations guidance for engineers   |   REFCOM — F-Gas documents and record-keeping forms   |   DEFRA — F-Gas log book requirements   |   FieldRocket — F-Gas service record template
+SAMPLE FORMAT / OFFICIAL TEMPLATE  GOV.UK — F-Gas regulations guidance for engineers   |   REFCOM — F-Gas documents and record-keeping forms   |   DEFRA — F-Gas log book requirements   |   FieldRocket — F-Gas service record template
+
+### J. HEALTH & SAFETY DOCUMENTATION
+
+==== CARD 23 [Building] Health & Safety Policy Statement ====
+Regulation
+Health and Safety at Work etc. Act 1974 (Section 2(3))
+Responsible party
+PM company as employer — mandatory for 5+ employees
+Frequency
+Annual review or following significant change
+Key fields
+Organisation name | Policy statement | Signed by (name, title, date) | Organisation structure | Responsibilities | Arrangements | Distribution list | Version | Review date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — health and safety policy template (free download)   |   GOV.UK — H&S policy guidance for employers   |   CIPD — policy template guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — health and safety policy template (free download)   |   GOV.UK — H&S policy guidance for employers   |   CIPD — policy template guidance
+
+==== CARD 24 [Building] General Risk Assessment Register ====
+Regulation
+Management of H&S at Work Regulations 1999 (SI 1999/3242); HSWA 1974
+Responsible party
+PM — written risk assessments mandatory for 5+ employees
+Frequency
+Annual review; immediately after incident or significant change
+Key fields
+Activity/task | Hazard | Who might be harmed | Existing controls | Likelihood (1-5) | Severity (1-5) | Risk rating | Additional controls | Responsible person | Target date | Completion date | Residual risk | Assessor name | Date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — risk assessment template and examples (free download)   |   HSE — 5 steps to risk assessment guidance   |   HSE — risk assessment examples by sector
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — risk assessment template and examples (free download)   |   HSE — 5 steps to risk assessment guidance   |   HSE — risk assessment examples by sector
+
+==== CARD 25 [Building] Employers' Liability Insurance Certificate ====
+Regulation
+Employers' Liability (Compulsory Insurance) Act 1969
+Responsible party
+Every employer — must hold and display; lapse is criminal offence (£2,500/day fine)
+Frequency
+Annual renewal
+Key fields
+Insured name | Policy number | Insurer name and FCA authorisation | Period of insurance (from/to) | Minimum indemnity (statutory minimum £5M) | Compliance statement | Insurer signature | Date | Instruction to display prominently
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — employers liability insurance guidance   |   HSE — employers liability insurance guidance   |   FCA register — verify insurer authorisation
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — employers liability insurance guidance   |   HSE — employers liability insurance guidance   |   FCA register — verify insurer authorisation
+
+### K. BUILDING SAFETY ACT 2022 — HRBs 18m+ or 7+ storeys
+
+==== CARD 26 [Building] Higher-Risk Building (HRB) Registration Certificate ====
+Regulation
+Building Safety Act 2022; HRB Registration Regulations 2023 (SI 2023/270)
+BSR
+Building Safety Regulator — HRB registration guidance
+Responsible party
+Principal Accountable Person (PAP) — mandatory for all occupied HRBs since April 2024
+Frequency
+One-off registration; annual confirmation. Failure to register = criminal offence
+Issuing body
+Building Safety Regulator (BSR) — operated by HSE
+Key fields
+Unique Building Identifier (UBI) | Building name/address | PAP name/organisation | Building Manager name/contact | Number of floors | Height (m) | Number of residential units | Registration date | BSR reference | Compliance status
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BSR — register a higher-risk building (GOV.UK)   |   HSE Building Safety Regulator — registration portal   |   Building Safety Act 2022 — full text
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BSR — register a higher-risk building (GOV.UK)   |   HSE Building Safety Regulator — registration portal   |   Building Safety Act 2022 — full text
+
+==== CARD 27 [Building] Building Safety Case Report ====
+Regulation
+Building Safety Act 2022 (Sections 76-87); SI 2023/999
+BSR
+Safety case report — what to include (HSE)
+Responsible party
+Principal Accountable Person — must demonstrate building is safe and risks managed
+Frequency
+Living document — updated on significant change; submitted at registration and on BSR request
+Key fields
+Building description/UBI | Structural fire safety assessment | Fire safety measures | Structural integrity evidence | Golden Thread information register | Safety management system | Residents engagement strategy | Identified risks and controls | PAP contact | Date/version
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BSR — safety case report guidance and what to include   |   GOV.UK — Building Safety Act explanatory notes   |   MHCLG — Golden Thread guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BSR — safety case report guidance and what to include   |   GOV.UK — Building Safety Act explanatory notes   |   MHCLG — Golden Thread guidance
+
+##### SECTION 2: VENDOR & CONTRACTOR CERTIFICATES — By Trade Specialisation
+
+### A. GAS CONTRACTORS
+
+==== CARD 28 [Vendor] Gas Safe Registration Certificate (Company) ====
+Regulation
+Gas Safety (Installation and Use) Regulations 1998 (SI 1998/2451)
+Issuing body
+Gas Safe Register (appointed by HSE as official registration body)
+Frequency
+Annual renewal — unregistered gas work is a criminal offence
+Key fields
+Company name/trading name | Registered address | Gas Safe registration no. | Categories of work authorised | Expiry date | Conditions | Authorised signatories
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — check a registration (live)   |   Gas Safe Register — registration and renewal   |   HSE — Gas Safe guidance for businesses
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — check a registration (live)   |   Gas Safe Register — registration and renewal   |   HSE — Gas Safe guidance for businesses
+
+==== CARD 29 [Vendor] ACS Individual Competency Card (Gas Engineer) ====
+Regulation
+Gas Safety Regulations 1998; ACOP supporting competency framework
+Issuing body
+CATA / NACS / EUSR (certification bodies)
+Frequency
+5-year renewal; engineer must carry card on all gas work
+Key fields
+Engineer name/photo | Gas Safe card no. | Company | ACS competency codes (CCN1=core, CENWAT=central heating, CKR1=commercial kitchens) | Issue date | Expiry
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — check engineer registration (live card verification)   |   EUSR — ACS assessment registration   |   Gas Safe — engineer card categories explained
+SAMPLE FORMAT / OFFICIAL TEMPLATE  Gas Safe Register — check engineer registration (live card verification)   |   EUSR — ACS assessment registration   |   Gas Safe — engineer card categories explained
+
+### B. ELECTRICAL CONTRACTORS
+
+==== CARD 30 [Vendor] NICEIC Approved Contractor Certificate ====
+Regulation
+Electricity at Work Regulations 1989; BS 7671
+Issuing body
+NICEIC (National Inspection Council for Electrical Installation Contracting)
+Frequency
+Annual assessment and renewal
+Key fields
+Company name | NICEIC roll number | Registration categories | Qualified Supervisor name/qualification | Assessment date | Expiry date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NICEIC — find and verify an approved contractor (live)   |   NICEIC — approved contractor scheme overview   |   NICEIC sample approval certificate (contractor portal)
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NICEIC — find and verify an approved contractor (live)   |   NICEIC — approved contractor scheme overview   |   NICEIC sample approval certificate (contractor portal)
+
+==== CARD 31 [Vendor] NAPIT Registration Certificate ====
+Regulation
+Electricity at Work Regulations 1989; Building Regulations Part P
+Issuing body
+NAPIT (National Association of Professional Inspectors and Testers)
+Frequency
+Annual
+Key fields
+Company name | NAPIT member number | Competencies | Approved Inspector name | Issue date | Expiry
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NAPIT — find a member (live verification)   |   NAPIT — membership categories and scheme
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NAPIT — find a member (live verification)   |   NAPIT — membership categories and scheme
+
+==== CARD 32 [Vendor] City & Guilds 2382 — BS 7671 18th Edition Certificate ====
+Regulation
+BS 7671:2018+A4:2026 (18th Edition Wiring Regulations)
+Issuing body
+City & Guilds / EAL / BTEC
+Frequency
+Refreshed on each edition update (typically 5 years)
+Key fields
+Candidate name | Centre no. | Candidate no. | Qualification title (2382-22) | Units passed | Date | Certificate no. | Awarding body signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  City & Guilds 2382-22 — qualification overview and sample format   |   IET — 18th Edition wiring regulations and forms
+SAMPLE FORMAT / OFFICIAL TEMPLATE  City & Guilds 2382-22 — qualification overview and sample format   |   IET — 18th Edition wiring regulations and forms
+
+### C. FIRE PROTECTION CONTRACTORS
+
+==== CARD 33 [Vendor] BAFE SP203-1 Registration Certificate ====
+Regulation
+FSO 2005; BS 5839-1; BAFE scheme
+Issuing body
+BAFE (British Approvals for Fire Equipment)
+Frequency
+Annual audit; 3-year full reassessment
+Key fields
+Company name | BAFE registration no. | Scope (design/installation/commissioning/maintenance) | Scheme (SP203-1) | Audit date | Expiry date | Certification body
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE — find a company (live verification)   |   BAFE SP203-1 scheme guidance and registration pack
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE — find a company (live verification)   |   BAFE SP203-1 scheme guidance and registration pack
+
+==== CARD 34 [Vendor] NSI Gold Certificate — Fire & Security Systems ====
+Regulation
+FSO 2005; BS 5839-1; BS EN 54
+Issuing body
+NSI (National Security Inspectorate)
+Frequency
+Annual audit
+Key fields
+Company name | NSI number | Activities (fire alarm design, installation, maintenance) | Grade (Gold/Silver) | Expiry date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NSI — find an approved company (live)   |   NSI Gold scheme overview
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NSI — find an approved company (live)   |   NSI Gold scheme overview
+
+==== CARD 35 [Vendor] BAFE SP101 — Fixed Gaseous Suppression Systems ====
+Regulation
+FSO 2005; BS EN 15004
+Issuing body
+BAFE / LPS 1048 (BRE Global)
+Frequency
+Annual
+Key fields
+Company name | Registration no. | Systems covered (CO2, FM200, Inergen, Novec 1230) | Expiry date | Issuing body
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE SP101 scheme — registration and requirements   |   BAFE — find SP101-registered companies
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BAFE SP101 scheme — registration and requirements   |   BAFE — find SP101-registered companies
+
+### D. LIFT & VERTICAL TRANSPORTATION CONTRACTORS
+
+==== CARD 36 [Vendor] LEIA Membership Certificate ====
+Regulation
+LOLER 1998; PSSR 2000; Machinery Directive (retained UK law)
+Issuing body
+LEIA (Lift and Escalator Industry Association)
+Frequency
+Annual membership
+Key fields
+Company name | LEIA member number | Category (installer/maintainer/repair/manufacturer) | Membership grade | Expiry date | Assessed to LEIA Code of Practice
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LEIA — find a member company (live)   |   LEIA Code of Practice — overview
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LEIA — find a member company (live)   |   LEIA Code of Practice — overview
+
+==== CARD 37 [Vendor] LOLER Competent Person / Inspection Body Authorisation ====
+Regulation
+LOLER 1998 (Regulation 9)
+Issuing body
+Inspection bodies: Allianz Engineering, Bureau Veritas, Lloyd's Register, TÜV SÜD, SGS
+Key fields
+Inspector name | Employer/inspection body | Authorisation scope (lift type, SWL range) | LOLER competency reference | Issue date | Authorised signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — competent persons for LOLER examinations   |   Allianz Engineering — lift and lifting equipment inspection   |   Bureau Veritas — LOLER inspection services
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — competent persons for LOLER examinations   |   Allianz Engineering — lift and lifting equipment inspection   |   Bureau Veritas — LOLER inspection services
+
+### E. ASBESTOS CONTRACTORS
+
+==== CARD 38 [Vendor] HSE Asbestos Removal Licence (Licensed Contractor) ====
+Regulation
+Control of Asbestos Regulations 2012 (Regulation 8)
+Issuing body
+Health and Safety Executive (HSE) — issued per company
+Frequency
+3-year licence renewal
+Key fields
+Company name/address | Licence number | Licence holder | Scope | Conditions | Issue date | Expiry date | HSE signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — licensed asbestos contractor database (live verification)   |   HSE — how to get an asbestos licence   |   CAR 2012 Regulation 8 — licence requirements
+SAMPLE FORMAT / OFFICIAL TEMPLATE  HSE — licensed asbestos contractor database (live verification)   |   HSE — how to get an asbestos licence   |   CAR 2012 Regulation 8 — licence requirements
+
+==== CARD 39 [Vendor] UKAS Accreditation Certificate — Asbestos Surveying & Testing ====
+Regulation
+CAR 2012; ISO 17020 (inspection) / ISO 17025 (testing)
+Issuing body
+UKAS (United Kingdom Accreditation Service)
+Frequency
+4-year cycle; annual surveillance
+Key fields
+Organisation name | UKAS accreditation no. | Scope (fibre counting, bulk analysis, air sampling, survey) | Standard (ISO 17020/17025) | Accreditation date | Expiry | Assessment schedule
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find an accredited organisation (live verification)   |   UKAS — asbestos testing and inspection accreditation schemes
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find an accredited organisation (live verification)   |   UKAS — asbestos testing and inspection accreditation schemes
+
+==== CARD 40 [Vendor] Individual Asbestos Competency — P402 / P403 / P404 ====
+Regulation
+CAR 2012; HSG264
+Issuing body
+BOHS (British Occupational Hygiene Society) / RSPH
+Key fields
+Candidate name | Module (P402/P403/P404) | Date | Certificate no. | BOHS/RSPH membership no. | Issuing body signature
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BOHS P400 series qualifications — P402/P403/P404 overview   |   RSPH — asbestos qualifications   |   HSE — asbestos surveyor competency requirements
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BOHS P400 series qualifications — P402/P403/P404 overview   |   RSPH — asbestos qualifications   |   HSE — asbestos surveyor competency requirements
+
+### F. WATER HYGIENE & LEGIONELLA CONTRACTORS
+
+==== CARD 41 [Vendor] Legionella Control Association (LCA) Registration Certificate ====
+Regulation
+ACOP L8; COSHH 2002
+Issuing body
+LCA (Legionella Control Association)
+Frequency
+Annual assessment and renewal
+Key fields
+Company name | LCA registration no. | Scope (risk assessment/water treatment/tank cleaning/cooling tower cleaning) | Assessment date | Expiry date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LCA — find a registered member company (live)   |   LCA — scheme requirements and registration pack
+SAMPLE FORMAT / OFFICIAL TEMPLATE  LCA — find a registered member company (live)   |   LCA — scheme requirements and registration pack
+
+==== CARD 42 [Vendor] BTEC/BOHS Legionella Competency Certificate ====
+Regulation
+ACOP L8 — requires competent persons for risk assessment and water management
+Issuing body
+BOHS / Edexcel BTEC / WMSoc
+Key fields
+Candidate name | Award title | Level | Units completed | Date | Certificate no. | Awarding body | Registration no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BOHS — W3 Award in Legionella Control for Responsible Persons   |   WMSoc — legionella qualifications   |   HSE — legionella training and competency guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BOHS — W3 Award in Legionella Control for Responsible Persons   |   WMSoc — legionella qualifications   |   HSE — legionella training and competency guidance
+
+### G. HVAC & REFRIGERATION CONTRACTORS (F-GAS)
+
+==== CARD 43 [Vendor] F-Gas Company Certificate (REFCOM Registration) ====
+Regulation
+UK F-Gas Regulations 2022; SI 2015/310
+Issuing body
+REFCOM (Register of Companies Competent to Handle Refrigerants)
+Frequency
+Annual — must remain current
+Key fields
+Company name | REFCOM registration no. | Activities (installation/maintenance/leak checking/recovery) | Nominated technician names/cert nos. | Registration date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  REFCOM — search for registered companies (live verification)   |   REFCOM — registration requirements and documents   |   GOV.UK — F-Gas company obligations guidance
+SAMPLE FORMAT / OFFICIAL TEMPLATE  REFCOM — search for registered companies (live verification)   |   REFCOM — registration requirements and documents   |   GOV.UK — F-Gas company obligations guidance
+
+==== CARD 44 [Vendor] Individual F-Gas Technician Certificate — City & Guilds 2079 ====
+Regulation
+UK F-Gas Regulations 2022 — mandatory for anyone handling fluorinated refrigerants
+Issuing body
+City & Guilds / ACRIB (Air Conditioning and Refrigeration Industry Board)
+Categories
+Category I: All equipment | Category II: Stationary <3kg | Category III: Hermetically sealed <6kg | Category IV: Recovery only
+Key fields
+Candidate name | Certificate no. | Category (I/II/III/IV) | Refrigerants covered | Date of award | City & Guilds/ACRIB reference
+SAMPLE FORMAT / OFFICIAL TEMPLATE  City & Guilds 2079 — qualification and sample certificate format   |   ACRIB — F-Gas certification for technicians   |   REFCOM — verify individual technician certification
+SAMPLE FORMAT / OFFICIAL TEMPLATE  City & Guilds 2079 — qualification and sample certificate format   |   ACRIB — F-Gas certification for technicians   |   REFCOM — verify individual technician certification
+
+### H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS
+
+==== CARD 45 [Vendor] CHAS Premium Plus / SSIP Certificate ====
+Regulation
+Health and Safety at Work Act 1974; CDM Regulations 2015
+Issuing body
+CHAS / Constructionline / SafeContractor / SMAS / Acclaim (all SSIP mutual recognition)
+Frequency
+Annual renewal
+Key fields
+Company name | SSIP member scheme | Certificate level | Scope of works assessed | Assessment date | Expiry date | Assessor body
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SSIP portal — find a certified member (live verification)   |   CHAS — verify membership and certificate   |   CDM Regulations 2015 — full text
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SSIP portal — find a certified member (live verification)   |   CHAS — verify membership and certificate   |   CDM Regulations 2015 — full text
+
+==== CARD 46 [Vendor] ISO 9001:2015 Quality Management Certificate ====
+Standard
+ISO 9001:2015
+Issuing body
+UKAS-accredited certification body (BSI, Bureau Veritas, NQA, SGS, Intertek)
+Frequency
+3-year cycle; annual surveillance audits
+Key fields
+Organisation name | Certificate no. | Scope | Certification body | Date of initial cert | Current cycle start | Expiry date | Issuing signatory | UKAS accreditation no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find a UKAS-accredited certification body for ISO 9001   |   BSI — ISO 9001 certification and sample certificate   |   ISO 9001:2015 standard overview
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find a UKAS-accredited certification body for ISO 9001   |   BSI — ISO 9001 certification and sample certificate   |   ISO 9001:2015 standard overview
+
+==== CARD 47 [Vendor] ISO 14001:2015 Environmental Management Certificate ====
+Standard
+ISO 14001:2015
+Issuing body
+UKAS-accredited certification body
+Frequency
+3-year cycle; annual surveillance
+Key fields
+Organisation name | Certificate no. | Scope | Sites covered | Certification body | UKAS no. | Expiry date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find a UKAS-accredited ISO 14001 certifier   |   BSI — ISO 14001 certification   |   ISO 14001:2015 standard overview
+SAMPLE FORMAT / OFFICIAL TEMPLATE  UKAS — find a UKAS-accredited ISO 14001 certifier   |   BSI — ISO 14001 certification   |   ISO 14001:2015 standard overview
+
+==== CARD 48 [Vendor] Contractors' Employers' Liability Insurance Certificate ====
+Regulation
+Employers' Liability (Compulsory Insurance) Act 1969
+Frequency
+Annual — PM must check annually for every contractor
+Key fields
+Insured name | Policy no. | Insurer name/FCA no. | Period | Minimum indemnity (£5M statutory minimum) | Date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — employers liability certificate guidance   |   HSE — EL insurance certificate requirements (HSE40)   |   FCA register — verify insurer
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — employers liability certificate guidance   |   HSE — EL insurance certificate requirements (HSE40)   |   FCA register — verify insurer
+
+==== CARD 49 [Vendor] Contractors' Public Liability Insurance Certificate ====
+Note
+No statutory minimum but contractually mandatory in all FM contracts. Standard: £10M minimum for FM.
+Frequency
+Annual — verify at contract renewal and annually during contract
+Key fields
+Insured name | Policy no. | Insurer | Period | Indemnity limit per occurrence | Currency statement | Date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — public liability insurance guidance   |   FCA register — verify insurer authorisation
+SAMPLE FORMAT / OFFICIAL TEMPLATE  ABI — public liability insurance guidance   |   FCA register — verify insurer authorisation
+
+### I. SECURITY CONTRACTORS
+
+==== CARD 50 [Vendor] SIA Approved Contractor Scheme (ACS) Certificate ====
+Regulation
+Private Security Industry Act 2001
+Issuing body
+Security Industry Authority (SIA)
+Frequency
+Annual audit; ACS accreditation reviewed every 3 years
+Key fields
+Company name | ACS score (%) | Activities covered (Manned Guarding/Door Supervision/CCTV/Cash and Valuables) | Audit date | Certificate expiry | SIA reference no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SIA — ACS register search (live verification)   |   SIA — ACS scheme overview and requirements   |   Private Security Industry Act 2001 — full text
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SIA — ACS register search (live verification)   |   SIA — ACS scheme overview and requirements   |   Private Security Industry Act 2001 — full text
+
+==== CARD 51 [Vendor] Individual SIA Licence ====
+Regulation
+Private Security Industry Act 2001 — mandatory for all frontline security operatives
+Issuing body
+SIA
+Frequency
+3-year renewal; must be carried on duty at all times
+Key fields
+Name/photo | Licence no. | Activity (Door Supervisor/Security Guard/CCTV Operator/Close Protection) | Issue date | Expiry | SIA logo
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SIA — licence check (live verification)   |   SIA — apply for a licence   |   SIA — sample licence card description
+SAMPLE FORMAT / OFFICIAL TEMPLATE  SIA — licence check (live verification)   |   SIA — apply for a licence   |   SIA — sample licence card description
+
+==== CARD 52 [Vendor] NSI Gold Certificate — Security Systems (NACOSS Gold) ====
+Regulation
+BS EN 50131 (intruder); BS EN 62676 (CCTV); BS EN 60839 (access control)
+Issuing body
+NSI (National Security Inspectorate)
+Frequency
+Annual audit
+Key fields
+Company name | NSI NACOSS Gold no. | Scope (intruder alarm/CCTV/access control) | Grade (Gold) | Expiry date
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NSI — find a Gold-approved company (live)   |   NSI Gold NACOSS scheme — requirements
+SAMPLE FORMAT / OFFICIAL TEMPLATE  NSI — find a Gold-approved company (live)   |   NSI Gold NACOSS scheme — requirements
+
+### J. PEST CONTROL CONTRACTORS
+
+==== CARD 53 [Vendor] BPCA Corporate Membership Certificate ====
+Regulation
+Plant Protection Products (Sustainable Use) Regulations 2012
+Issuing body
+BPCA (British Pest Control Association)
+Frequency
+Annual
+Key fields
+Company name | BPCA member no. | Category (full/associate member) | Expiry date | Audited to BPCA Code of Practice
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BPCA — find a pest controller (live verification)   |   BPCA — membership requirements and code of practice
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BPCA — find a pest controller (live verification)   |   BPCA — membership requirements and code of practice
+
+==== CARD 54 [Vendor] Individual Pesticide Application Certificate — PA1 + PA2 / PA6 ====
+Regulation
+Plant Protection Products (Sustainable Use) Regulations 2012
+Issuing body
+Lantra Awards / City & Guilds / BASIS PROMPT register
+Frequency
+Certificate of Competence valid 5 years; CPD renewal via BASIS PROMPT
+Modules
+PA1: Foundation (mandatory for all) | PA2: Pedestrian applicator | PA6: Hand-held applicator — most common for urban pest control FM
+Key fields
+Name | Modules held | Certificate of Competence no. | Issuing body | Issue date | Expiry date | BASIS PROMPT registration no.
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BASIS PROMPT — register search (live verification)   |   Lantra Awards — PA1/PA2/PA6 qualification overview   |   HSE — pesticide application certificate requirements
+SAMPLE FORMAT / OFFICIAL TEMPLATE  BASIS PROMPT — register search (live verification)   |   Lantra Awards — PA1/PA2/PA6 qualification overview   |   HSE — pesticide application certificate requirements

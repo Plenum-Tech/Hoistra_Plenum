@@ -1,0 +1,10 @@
+required_tokens:
+  - niceic
+issuing_body_tokens:
+  - niceic
+  - certsure
+required_field_hints:
+  - enrolment
+  - contractor
+  - valid
+notes: NICEIC approved contractor

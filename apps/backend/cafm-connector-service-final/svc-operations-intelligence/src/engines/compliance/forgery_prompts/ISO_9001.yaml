@@ -1,0 +1,10 @@
+required_tokens:
+  - iso 9001
+  - quality
+issuing_body_tokens:
+  - ukas
+required_field_hints:
+  - certificate
+  - accredited
+  - expiry
+notes: ISO 9001

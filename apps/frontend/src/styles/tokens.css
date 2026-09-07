@@ -1,0 +1,161 @@
+/* Hoistway — the warm-paper token layer.
+   Loaded AFTER the Nocturne stylesheet: it keeps Nocturne's structure (Inter,
+   0.70x density, 8px radii, accent-as-exception, three ink levels) and replaces
+   every colour token with the Hoistway scheme.
+
+   One warm neutral, one accent, four status colours.
+   Target ratio: ~70% warm neutral, 20% ink, 7% status, 3% accent.
+
+   NOTE ON THE RAMP DIRECTION: Nocturne runs on a dark ground, so its
+   --color-neutral-100 is the lightest step. Hoistway runs on paper, so the ramp
+   is inverted here — 100 is the darkest ink, 900 the lightest paper fill. Every
+   var() reference in the pages therefore keeps its intended visual weight
+   without the markup changing. Ink is held to three levels only. */
+
+:root {
+  /* The ground — lifted. The page goes near-white and panels go pure white, so
+     surfaces separate by value instead of sitting at one flat tone. Warmth now
+     lives in the rules and the ink rather than in the fills. */
+  --color-bg: #FEFDFB;
+  --color-surface: #FFFFFF;
+  --color-divider: #E7E4DB;
+  --color-rule-strong: #D9D5C9;
+
+  /* The ink — three levels, never pure black. Every level clears 4.5:1 on both
+     the page and the panel, so information-bearing copy can sit on any of them.
+     #8E8B82 (the original tertiary) measures 3.0:1 at small sizes, so it is held
+     back for decoration only and the tertiary step is set one stop darker. */
+  --color-text: #1A1A18;
+  --color-neutral-100: #1A1A18;  /* primary   — 15.6:1 */
+  --color-neutral-200: #1A1A18;
+  --color-neutral-300: #5C5A54;  /* secondary — 6.1:1 */
+  --color-neutral-400: #5C5A54;
+  --color-neutral-500: #6E6B63;  /* tertiary  — 4.9:1 */
+  --color-neutral-600: #6E6B63;
+  --color-ink-decorative: #8E8B82; /* reserved: disabled states, never type */
+  --color-neutral-700: #CFCCC2;  /* faint separators */
+  --color-neutral-800: #E7E4DB;  /* chip and rule fills */
+  --color-neutral-900: #F4F2EC;  /* the quietest fill — bar tracks, hovers */
+
+  /* The accent — hi-vis orange. One thing only: the live, the actionable,
+     the primary button. 300 is the step that carries small text on paper. */
+  --color-accent: #FF5A1F;
+  --color-accent-300: #FF5A1F;
+  --color-accent-400: #FF5A1F;
+  --color-accent-500: #FF5A1F;
+  --color-accent-600: #E64A0F;
+  --color-accent-700: #FFB59A;
+  --color-accent-800: #FFD6C6;
+  --color-accent-900: #FFEDE6;
+  /* Dark ink on the hi-vis fill — 5.6:1, and literally how hazard signage is
+     printed. Fixed across both themes because the accent stays bright in both. */
+  --accent-ink: #FAFAF7;
+
+  /* Mono scheme — the second accent role resolves to the same colour. */
+  --color-accent-2: #FF5A1F;
+  --color-accent-2-300: #FF5A1F;
+  --color-accent-2-700: #FFB59A;
+  --color-accent-2-900: #FFEDE6;
+
+  /* Status — separate from brand, and sacred. Never decorative.
+     Chroma raised a full stop from the desaturated set: unmistakably RAG at a
+     glance, and every one still clears 4.5:1 on the page AND on its own tint,
+     so a status colour can carry an 11px pill label. */
+  --st-risk: #FF5A1F;
+  --st-warn: #FF5A1F;  /* the single electric orange — same value as the accent */
+  --st-ok: #15703A;
+  --st-dormant: #5E5B54;
+  --st-risk-bg: #FFEDE6;
+  --st-warn-bg: #FFEDE6;
+  --st-ok-bg: #E6F5EB;
+  --st-dormant-bg: #F2F0EA;
+
+  /* Safety yellow, in reserve as a marker fill only — the way someone marks up
+     a drawing. Never as type. */
+  --marker: #FFD400;
+  --marker-tint: rgba(255, 212, 0, 0.18);
+
+  /* Elevation on paper: an edge and a warm ambient shade, nothing stacked.
+     Slightly firmer now that panels are white on a near-white page. */
+  --shadow-sm: 0 1px 2px rgba(26, 26, 24, 0.05), 0 0 0 1px rgba(26, 26, 24, 0.07);
+  --shadow-md: 0 3px 12px rgba(26, 26, 24, 0.08), 0 0 0 1px rgba(26, 26, 24, 0.08);
+  --shadow-lg: 0 12px 38px rgba(26, 26, 24, 0.15), 0 0 0 1px rgba(26, 26, 24, 0.08);
+  --scrim: rgba(26, 26, 24, 0.34);
+}
+
+/* True dark for the plant room and the night shift — not a mid-grey.
+   Same accent; status brightens to hold up against the darker ground. */
+:root[data-theme="dark"] {
+  --color-bg: #16150F;
+  --color-surface: #201E17;
+  --color-divider: #322F25;
+  --color-rule-strong: #453F31;
+
+  --color-text: #F2F1EC;
+  --color-neutral-100: #F7F6F1;
+  --color-neutral-200: #EAE8E0;
+  --color-neutral-300: #BDBAAE;
+  --color-neutral-400: #A8A497;
+  --color-neutral-500: #9C998F;
+  --color-neutral-600: #9C998F;
+  --color-ink-decorative: #7E7B71;
+  --color-neutral-700: #4A473C;
+  --color-neutral-800: #322F25;
+  --color-neutral-900: #26241C;
+
+  --color-accent: #FF6A33;
+  --color-accent-300: #FF6A33;
+  --color-accent-400: #FF6A33;
+  --color-accent-500: #FF6A33;
+  --color-accent-600: #E85A22;
+  --color-accent-700: #7C3A1C;
+  --color-accent-800: #4A2313;
+  --color-accent-900: #2E1A10;
+
+  --color-accent-2: #FF6A33;
+  --color-accent-2-300: #FF6A33;
+  --color-accent-2-700: #7C3A1C;
+  --color-accent-2-900: #2E1A10;
+  --accent-ink: #FAFAF7;
+
+  --st-risk: #FF6A33;
+  --st-warn: #FF6A33;
+  --st-ok: #4FBF7D;
+  --st-dormant: #8E8B82;
+  --st-risk-bg: #2E1A10;
+  --st-warn-bg: #2E1A10;
+  --st-ok-bg: #16301F;
+  --st-dormant-bg: #26241C;
+
+  --marker: #FFD400;
+  --marker-tint: rgba(255, 212, 0, 0.14);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(247, 246, 241, 0.05);
+  --shadow-md: 0 2px 10px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(247, 246, 241, 0.06);
+  --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(247, 246, 241, 0.07);
+  --scrim: rgba(0, 0, 0, 0.62);
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The one place the accent is allowed to fill: the primary action. */
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--accent-ink);
+}
+.btn-primary:hover { background: var(--color-accent-400); border-color: var(--color-accent-400); color: var(--accent-ink); }
+.btn-primary:active { background: var(--color-accent-600); border-color: var(--color-accent-600); color: var(--accent-ink); }
+
+.btn-secondary, .btn-ghost { color: var(--color-text); }
+.btn-secondary:hover, .btn-ghost:hover { background: var(--color-accent-900); border-color: var(--color-accent-700); }
+
+.table th { color: var(--color-neutral-500); }
+.table tbody tr { border-color: var(--color-divider); }
+
+::selection { background: var(--color-accent-900); color: var(--color-accent-300); }
+*:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }

@@ -1,0 +1,12 @@
+{
+  "organization_id": "00000000-0000-0000-0000-0000000000b1",
+  "sla_response_pct": 25,
+  "sla_completion_pct": 25,
+  "first_fix_pct": 20,
+  "recall_pct": 15,
+  "accreditation_pct": 15,
+  "blocked_score_cap": 60,
+  "cost_variance_alert_pct": 15,
+  "cost_variance_job_count": 3,
+  "invoice_flag_adversary_gbp": 500
+}

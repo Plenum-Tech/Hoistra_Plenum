@@ -1,0 +1,11 @@
+required_tokens:
+  - asbestos
+  - licence
+  - licensed
+issuing_body_tokens:
+  - hse
+required_field_hints:
+  - licence number
+  - expiry
+  - contractor
+notes: HSE asbestos licence

@@ -1,0 +1,447 @@
+{
+  "pack_id": "US-COMPLIANCE-v1.0",
+  "country_code": "US",
+  "pack_version": "1.0",
+  "description": "US statutory FM compliance pack (NFPA / ASME / EPA / OSHA + state licensing & insurance).",
+  "source_docx": null,
+  "type_counts": {
+    "building": 11,
+    "vendor": 7,
+    "total": 18
+  },
+  "verification_registers": [],
+  "certificate_types": [
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_FIRE_ALARM_NFPA72",
+      "certificate_type_name": "Fire Alarm System Inspection & Testing (NFPA 72)",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "NFPA 72 National Fire Alarm and Signaling Code",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed fire alarm contractor",
+      "required_contractor_accreditation": "NICET Fire Alarm",
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_SPRINKLER_NFPA25",
+      "certificate_type_name": "Water-Based Fire Sprinkler Inspection (NFPA 25)",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "NFPA 25 Inspection, Testing and Maintenance of Water-Based Fire Protection Systems",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed sprinkler contractor",
+      "required_contractor_accreditation": "NICET Water-Based Systems",
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_FIRE_EXT_NFPA10",
+      "certificate_type_name": "Portable Fire Extinguisher Annual Maintenance (NFPA 10)",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "NFPA 10 Standard for Portable Fire Extinguishers",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed fire equipment company",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_FIRE_DOOR_NFPA80",
+      "certificate_type_name": "Fire Door Assembly Inspection (NFPA 80)",
+      "certificate_scope": "Building",
+      "trade_category": "Fire",
+      "regulation_reference": "NFPA 80 Standard for Fire Doors and Other Opening Protectives",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Qualified fire door inspector",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_EMERGENCY_LIGHT_NFPA101",
+      "certificate_type_name": "Emergency & Exit Lighting Testing (NFPA 101)",
+      "certificate_scope": "Building",
+      "trade_category": "Electrical",
+      "regulation_reference": "NFPA 101 Life Safety Code",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed electrical contractor",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_ELEVATOR_A17",
+      "certificate_type_name": "Elevator Safety Inspection Certificate (ASME A17.1)",
+      "certificate_scope": "Building",
+      "trade_category": "Lifts",
+      "regulation_reference": "ASME A17.1 Safety Code for Elevators and Escalators",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "State-licensed elevator inspector",
+      "required_contractor_accreditation": "QEI Certified Inspector",
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_BOILER_INSPECTION",
+      "certificate_type_name": "Boiler & Pressure Vessel Inspection Certificate",
+      "certificate_scope": "Building",
+      "trade_category": "Mechanical",
+      "regulation_reference": "ASME BPVC; National Board Inspection Code (state jurisdiction)",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "National Board / state boiler inspector",
+      "required_contractor_accreditation": "National Board Commissioned Inspector",
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_BACKFLOW",
+      "certificate_type_name": "Backflow Prevention Assembly Test",
+      "certificate_scope": "Building",
+      "trade_category": "Plumbing",
+      "regulation_reference": "EPA Safe Drinking Water Act; local cross-connection control",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Certified backflow assembly tester",
+      "required_contractor_accreditation": "Certified Backflow Tester",
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_GENERATOR_NFPA110",
+      "certificate_type_name": "Emergency / Standby Generator Testing (NFPA 110)",
+      "certificate_scope": "Building",
+      "trade_category": "Electrical",
+      "regulation_reference": "NFPA 110 Standard for Emergency and Standby Power Systems",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed generator service company",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_LEGIONELLA_ASHRAE188",
+      "certificate_type_name": "Legionella / Water Management Plan (ASHRAE 188)",
+      "certificate_scope": "Building",
+      "trade_category": "Water Hygiene",
+      "regulation_reference": "ASHRAE Standard 188 Legionellosis Risk Management",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Qualified water management consultant",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_ASBESTOS_OM",
+      "certificate_type_name": "Asbestos O&M Program Certificate (AHERA)",
+      "certificate_scope": "Building",
+      "trade_category": "Environmental",
+      "regulation_reference": "EPA AHERA (40 CFR 763); OSHA 1926.1101",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "EPA-accredited asbestos professional",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_GL_INSURANCE",
+      "certificate_type_name": "Contractor General Liability Insurance (COI)",
+      "certificate_scope": "Vendor",
+      "trade_category": "Insurance",
+      "regulation_reference": "Commercial contract / risk-transfer requirement",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "Licensed insurance carrier",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_WORKERS_COMP",
+      "certificate_type_name": "Workers Compensation Insurance Certificate",
+      "certificate_scope": "Vendor",
+      "trade_category": "Insurance",
+      "regulation_reference": "State workers compensation statutes",
+      "regulation_url": null,
+      "frequency_months": 12,
+      "issuing_body": "State-authorized WC carrier",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_EPA_608",
+      "certificate_type_name": "EPA Section 608 Technician Certification",
+      "certificate_scope": "Vendor",
+      "trade_category": "HVAC",
+      "regulation_reference": "EPA Clean Air Act Section 608 (40 CFR Part 82)",
+      "regulation_url": null,
+      "frequency_months": 0,
+      "issuing_body": "EPA-approved certifying organization",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": "Lifetime certification - no expiry."
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_STATE_CONTRACTOR_LICENSE",
+      "certificate_type_name": "State Contractor License",
+      "certificate_scope": "Vendor",
+      "trade_category": "General",
+      "regulation_reference": "State contractor licensing board statutes",
+      "regulation_url": null,
+      "frequency_months": 24,
+      "issuing_body": "State contractor licensing board",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_OSHA_30",
+      "certificate_type_name": "OSHA 30-Hour Construction Safety Certification",
+      "certificate_scope": "Vendor",
+      "trade_category": "HSE",
+      "regulation_reference": "OSHA Outreach Training Program (29 CFR 1926)",
+      "regulation_url": null,
+      "frequency_months": 60,
+      "issuing_body": "OSHA-authorized outreach trainer",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_NICET_FIRE",
+      "certificate_type_name": "NICET Fire Protection Certification",
+      "certificate_scope": "Vendor",
+      "trade_category": "Fire",
+      "regulation_reference": "NICET certification program",
+      "regulation_url": null,
+      "frequency_months": 36,
+      "issuing_body": "National Institute for Certification in Engineering Technologies",
+      "required_contractor_accreditation": null,
+      "verification_url": null,
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    },
+    {
+      "pack_id": "US-COMPLIANCE-v1.0",
+      "country_code": "US",
+      "pack_version": "1.0",
+      "certificate_type_code": "US_LEAD_RRP",
+      "certificate_type_name": "EPA Lead-Safe (RRP) Certified Firm",
+      "certificate_scope": "Vendor",
+      "trade_category": "Environmental",
+      "regulation_reference": "EPA Renovation, Repair and Painting Rule (40 CFR 745)",
+      "regulation_url": null,
+      "frequency_months": 60,
+      "issuing_body": "U.S. Environmental Protection Agency",
+      "required_contractor_accreditation": null,
+      "verification_url": "https://www.epa.gov/lead",
+      "key_fields_schema": {
+        "required": [
+          "certificate_number",
+          "issue_date",
+          "expiry_date"
+        ],
+        "optional": []
+      },
+      "frequency_text": null
+    }
+  ]
+}

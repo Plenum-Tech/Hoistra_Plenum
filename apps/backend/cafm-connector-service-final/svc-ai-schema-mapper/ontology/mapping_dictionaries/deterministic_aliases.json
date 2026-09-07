@@ -1,0 +1,32 @@
+{
+  "$schema": "udr-deterministic-aliases/v1",
+  "description": "Deterministic Tier-1 alias maps (exact / Levenshtein<=2). Used before the RAG synonym pass. Keys are normalised (lowercase, non-alnum -> _). >=95% confidence -> auto-resolve.",
+  "table_aliases": {
+    "asset": "assets", "assets": "assets", "equipment": "assets", "equip": "assets", "plant": "assets", "asset_register": "assets", "asset_master": "assets",
+    "work_order": "work_orders", "work_orders": "work_orders", "workorder": "work_orders", "workorders": "work_orders", "wo": "work_orders", "wo_header": "work_orders", "job": "work_orders", "ticket": "work_orders", "order": "work_orders", "work_log": "work_orders", "work_tasks": "work_orders",
+    "site": "sites", "sites": "sites", "property": "sites", "properties": "sites", "facility": "sites", "premises": "sites",
+    "location": "locations", "locations": "locations", "region": "locations", "portfolio": "locations",
+    "space": "spaces", "spaces": "spaces", "unit": "spaces", "units": "spaces", "room": "spaces",
+    "building": "buildings", "buildings": "buildings",
+    "floor": "floors", "floors": "floors", "level": "floors",
+    "vendor": "vendors", "vendors": "vendors", "supplier": "vendors", "suppliers": "vendors", "contractor": "vendors", "contractors": "vendors",
+    "resource": "resources", "resources": "resources", "labour": "resources", "labor": "resources", "manpower": "resources", "technician": "resources", "technicians": "resources", "wo_labour": "resources",
+    "contract": "contracts", "contracts": "contracts",
+    "spare_part": "spare_parts", "spare_parts": "spare_parts", "part": "spare_parts", "parts": "spare_parts", "material": "spare_parts", "inventory": "spare_parts", "wo_parts": "spare_parts",
+    "certificate": "compliance_certificates", "certificates": "compliance_certificates", "compliance": "compliance_certificates", "compliance_certificate": "compliance_certificates",
+    "manufacturer": "manufacturers", "manufacturers": "manufacturers", "make": "manufacturers", "asset_make": "manufacturers",
+    "asset_type": "asset_types", "asset_types": "asset_types", "category": "asset_types",
+    "meter": "meters", "meters": "meters",
+    "meter_reading": "meter_readings", "meter_readings": "meter_readings", "reading": "meter_readings", "readings": "meter_readings",
+    "tenant": "tenants", "tenants": "tenants", "occupier": "tenants",
+    "lease": "leases", "leases": "leases", "tenancy": "leases"
+  },
+  "column_aliases": {
+    "assets": {"asset_id": "asset_code", "assetnum": "asset_code", "equip#": "asset_code", "equipment_number": "asset_code", "tag": "asset_code", "asset_tag": "asset_code", "install_date": "installation_date", "make": "manufacturer_id", "asset_make": "manufacturer_id", "serial": "serial_number", "serial_no": "serial_number"},
+    "work_orders": {"wo_number": "workorder_ref", "wonum": "workorder_ref", "wo_id": "workorder_ref", "work_order_id": "workorder_ref", "wo_priority": "priority", "priority_level": "priority", "wo_status": "status", "wo_type": "work_type", "maintenance_type": "work_type", "site_ref": "site_id", "asset_code": "asset_id"},
+    "sites": {"site_ref": "site_code", "property_code": "site_code", "facility_code": "site_code", "property_name": "site_name", "post_code": "postcode", "zip": "postcode", "gfa": "gfa_sqm", "gross_floor_area": "gfa_sqm"},
+    "resources": {"craft_code": "skill_type", "craft": "skill_type", "trade": "skill_type", "labour_id": "resource_code"},
+    "spare_parts": {"part_code": "part_number", "item_ref": "part_number", "item_code": "part_number", "material_number": "part_number", "sku": "part_number"},
+    "vendors": {"vendor_id": "vendor_code", "supplier_code": "vendor_code", "supplier_name": "vendor_name", "contractor_name": "vendor_name", "post_code": "postcode"}
+  }
+}

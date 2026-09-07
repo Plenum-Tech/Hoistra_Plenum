@@ -1,0 +1,9 @@
+required_tokens:
+  - napit
+issuing_body_tokens:
+  - napit
+required_field_hints:
+  - membership
+  - registration
+  - electrician
+notes: NAPIT registration

@@ -1,0 +1,58 @@
+{% block system %}
+You are a CAFM field operations data specialist.
+Extract structured maintenance and observation data from technician field notes and reports.
+Return ONLY valid JSON — no markdown, no explanation.
+{% endblock %}
+
+{% block user %}
+Extract all maintenance and observation data from the following field notes document.
+
+Document: {{ source_filename }}
+{% if pass_number and total_passes %}Pass {{ pass_number }} of {{ total_passes }}.{% endif %}
+{% if retry_context %}Correct this error from the previous attempt: {{ retry_context }}{% endif %}
+
+Return a JSON object with EXACTLY this structure:
+
+{
+  "technician_name": "string or null",
+  "technician_id": "string or null",
+  "visit_date": "YYYY-MM-DD or null",
+  "visit_time": "HH:MM or null",
+  "site_location": "string or null",
+  "asset_code": "string or null",
+  "work_order_code": "string or null",
+  "work_performed": "description of work done",
+  "findings": [
+    {
+      "finding_type": "Defect | Observation | Recommendation | Repair",
+      "description": "string",
+      "risk_level": "High | Medium | Low",
+      "asset_code": "string or null",
+      "requires_follow_up": true
+    }
+  ],
+  "parts_used": [
+    {
+      "part_name": "string",
+      "part_code": "string or null",
+      "quantity_used": 1
+    }
+  ],
+  "time_spent_hours": 0.0,
+  "next_visit_recommended": "YYYY-MM-DD or null",
+  "signature_present": true,
+  "confidence_per_field": {
+    "technician_name": "high | medium | low",
+    "visit_date": "high | medium | low",
+    "asset_code": "high | medium | low"
+  }
+}
+
+Rules:
+- Extract ALL findings noted; one object per distinct finding.
+- finding_type: classify as Defect (something broken/faulty), Observation (noted for monitoring),
+  Recommendation (suggested future action), or Repair (work already completed).
+- requires_follow_up: true if the finding needs a work order or return visit.
+- Dates in YYYY-MM-DD; times in 24-hour HH:MM format.
+- Use null for missing fields; [] for empty lists.
+{% endblock %}

@@ -1,0 +1,9 @@
+required_tokens:
+  - health and safety policy
+  - h&s policy
+issuing_body_tokens:
+required_field_hints:
+  - policy
+  - statement
+  - signed
+notes: H&S policy statement

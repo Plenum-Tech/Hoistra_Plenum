@@ -1,0 +1,1331 @@
+
+FM ONTOLOGY SEMANTIC MAPPING REFERENCE
+RAG Document for UDR Linguistic Semantic Mapping — Step 1b Mapping Workflow
+Version 1.0 | Covers: COBie v3, BRICK Schema, FM Operations Vocabulary
+Purpose: Retrieved by RAG system to resolve ambiguous table and column names
+to canonical FM UDR entities during the deterministic and semantic mapping steps.
+
+HOW THIS DOCUMENT IS USED
+When a source table or column name fails deterministic matching (exact match below
+95% confidence), this document is retrieved to find synonym clusters, contextual
+descriptions, and linguistic variants that help identify the correct canonical
+FM entity. Each section is designed to be semantically dense with real FM
+language, abbreviations, trade terminology, and cross-standard synonyms.
+
+=============================================================================
+PART 1: CANONICAL ENTITY SEMANTIC CLUSTERS — TABLE LEVEL
+=============================================================================
+
+Each cluster below describes one canonical FM UDR entity. It contains the
+canonical name, a full description in FM operational language, all known
+synonym names across CMMS/CAFM/EAM/COBie/BRICK standards, common
+abbreviations, and the linguistic patterns that identify this entity type
+in source data.
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: SITE
+Canonical Name: Site
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Site is the top-level physical location unit in facilities management. In
+property management it is called a property, estate, campus, or portfolio
+asset. A site contains one or more buildings and is the primary unit at
+which budgets, compliance obligations, and management contracts are held.
+In the UK, a site typically maps to a single freehold or leasehold property.
+In the US it maps to a property or campus. In the Middle East it is often
+called an asset or development.
+
+SYNONYMS AND ALTERNATIVE NAMES (how this appears in source data):
+property, estate, campus, development, asset, location, facility, site-id,
+property-id, estate-id, campus-id, site_code, site_ref, site_name,
+site_description, property_name, property_code, estate_name, estate_code,
+location_name, location_id, loc-id, loc_id, facility_name, facility_code,
+premises, premises_name, premises_id, address, address_line_1, building_site,
+managed_property, client_property, portfolio_asset, managed_estate,
+managed_facility, project_site, construction_site, post-handover_site
+
+COBie v3 EQUIVALENT:
+Sheet: COBie.Facility
+Key column: Name (facility name is the site name)
+Category column: Facility.Type (values: Facility, Project, Site)
+The COBie Facility sheet covers both Site and Building. Site is implied
+when the Facility.Type is Site or when multiple buildings are listed
+under one Facility Name. ExternalSystem and ExternalObject columns link
+back to the originating system.
+
+BRICK SCHEMA EQUIVALENT:
+Class: brick:Site
+URI: https://brickschema.org/schema/Brick#Site
+A brick:Site is the top-level location entity. It contains brick:Building
+instances via the brick:hasPart relationship. In RDF the site is identified
+by a URI such as ex:site_22bishopsgate or similar.
+
+FIELD NAME PATTERNS IN SOURCE DATA:
+Fields whose names contain the words: site, property, estate, campus,
+facility (when at the top level), location (when top-level and not a room),
+premises, development. Also: SITEID (Maximo), WERKS (SAP Plant), site-id
+(Archibus), triProperty (TRIRIGA), Code or Name on top-level location records.
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: BUILDING
+Canonical Name: Building
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Building is an individual structure within a Site. In commercial property
+management, a building is a single tower, block, or structure that has its
+own address, GIA (Gross Internal Area), floor count, and potentially its own
+EPC (Energy Performance Certificate). Multi-building sites have separate
+buildings for each structure. A building contains floors, zones, and rooms.
+In the UK, a building may be referred to as a block, tower, or unit. In
+residential FM, a building is often called a block or court. In retail,
+a building is a unit or store. In industrial/logistics, a building is a
+unit, warehouse, shed, or distribution centre.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+building, block, tower, unit, structure, warehouse, shed, distribution_centre,
+distribution_center, dc, store, court, mansion_block, residential_block,
+office_building, industrial_unit, block_name, block_id, block_code,
+tower_name, tower_id, bl-id, bl_id, bldg, bldg_id, bldg_code, bldg_name,
+building_id, building_code, building_name, building_ref, building_number,
+building_desc, building_description, structure_name, structure_id
+
+COBie v3 EQUIVALENT:
+Sheet: COBie.Facility
+Key column: Name (each row = one building when used at building level)
+The COBie Facility sheet uses a single sheet for both Site and Building.
+A building-level COBie Facility has specific attributes like GrossArea,
+NetArea, NumberOfFloors. The Level sheet (COBie.Level) lists floors under
+a Facility name, providing the link between building and floor.
+
+BRICK SCHEMA EQUIVALENT:
+Class: brick:Building
+URI: https://brickschema.org/schema/Brick#Building
+Relationship: brick:Site brick:hasPart brick:Building
+A brick:Building contains brick:Floor instances. The Building entity
+captures the overall structure within which systems and equipment operate.
+
+FIELD NAME PATTERNS:
+bl-id, bl_id, bldg, building, structure, block, tower. Archibus uses
+the BL table with bl-id as the primary key. Maximo uses LOCATIONS with
+TYPE=BUILDING. SAP uses Functional Location level 2.
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: SPACE
+Canonical Name: Space
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Space is any discrete physical area within a building that can be
+identified, measured, and managed. Spaces include floors, zones, rooms,
+corridors, plant rooms, risers, voids, roof areas, car park levels, and
+common areas. In property management, a space is the unit of lettable area
+associated with a tenant. In FM operations, spaces are the locations where
+assets are installed and where work orders are raised. A space can contain
+other spaces (a floor contains rooms; a zone contains sub-zones). A room
+is the smallest defined space unit.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+space, room, floor, level, zone, area, suite, unit, office, plant_room,
+plant room, riser, corridor, lobby, reception, common_area, common area,
+common_parts, lettable_area, net_lettable_area, floor_plate, floor_plan,
+parking_bay, car_park_level, basement, mezzanine, roof, roof_space,
+void, stairwell, lift_lobby, circulation, fm_area, occupied_space,
+tenanted_area, demised_area, landlord_area, back_of_house, boh,
+front_of_house, foh, rm-id, rm_id, fl-id, fl_id, space_id, space_code,
+space_name, room_id, room_code, room_name, room_number, floor_id, floor_code,
+floor_number, zone_id, zone_code, zone_name, area_id, area_code,
+suite_id, suite_number, unit_id, unit_number
+
+COBie v3 EQUIVALENT:
+COBie.Level — represents a floor or level within a building
+  Key: Name (level name e.g. Ground Floor, Level 1, B1)
+  Fields: Elevation, Height, Category (Floor, Roof, Site)
+  PartOf: links to Facility (building) name
+
+COBie.Space — represents a room or discrete area within a level
+  Key: Name (space/room name or number)
+  Fields: SpaceType.Name, Level.Name, GrossArea, NetArea, UsableHeight
+  PartOf: enables hierarchical grouping of spaces
+
+COBie.Zone — represents a logical grouping of spaces (HVAC zone, fire zone)
+  Key: Name
+  Fields: Category (Circulation Zone, Fire Alarm Zone, Historical Preservation
+  Zone, Lighting Zone, Occupancy Zone, Ventilation Zone), Space.Name
+  Zones are non-physical groupings; spaces are physical areas
+
+COBie.SpaceType — categorises space usage types
+  Key: Name
+  Category: references OmniClass Table 13 or Uniclass SL
+
+BRICK SCHEMA EQUIVALENT:
+brick:Floor — a physical floor level
+brick:Room — a discrete enclosed room
+brick:Zone — a logical grouping (subclasses below)
+brick:HVAC_Zone — zone served by a single HVAC system
+brick:Lighting_Zone — zone served by a lighting system
+brick:Fire_Zone — zone served by fire detection
+brick:Occupancy_Zone — zone defined by occupancy patterns
+brick:Electrical_Room — room housing electrical distribution equipment
+brick:Server_Room — room housing IT/server equipment
+brick:Stairwell — vertical circulation space
+brick:Parking_Space — individual parking bay
+All spaces are linked via brick:isPartOf to a brick:Building or brick:Floor
+
+FIELD NAME PATTERNS:
+rm-id, rm_id, room, floor, level, zone, area, suite, space. COBie uses
+Level.Name and Space.Name. Archibus uses FL table (floors) and RM table
+(rooms). Maximo uses LOCATIONS with TYPE=FLOOR or TYPE=ROOM.
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: ASSET
+Canonical Name: Asset
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+An Asset is any physical piece of equipment, plant, component, or building
+fabric element that requires maintenance, inspection, or management. Assets
+are the primary unit of FM work. Every planned preventive maintenance (PPM)
+schedule, reactive work order, and compliance certificate is associated with
+one or more assets. Assets range from large plant items (chillers, boilers,
+generators) to small components (individual fire detectors, access control
+readers, tap heads). In the UK FM industry, assets are also called plant
+items, equipment, kit, fixed assets, installed assets, M&E assets,
+hard FM assets, or building components. Assets that are part of a larger
+system are called sub-components or child assets.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+asset, equipment, plant, plant_item, component, installed_component,
+fixed_asset, installed_asset, building_component, kit, device, item,
+unit, system_component, sub_component, m_and_e_asset, me_asset,
+hard_fm_asset, asset_id, asset_code, asset_ref, asset_number, asset_tag,
+asset_barcode, asset_qr, asset_description, asset_name, equipment_id,
+equipment_code, equipment_name, equipment_description, equipment_ref,
+plant_id, plant_code, plant_name, plant_ref, component_id, component_code,
+component_name, component_ref, device_id, device_name, kit_id, item_id,
+unit_id, installation_id, eq-id, eq_id, assetnum, equnr, asset_register,
+asset_list, asset_inventory, equipment_register, equipment_list
+
+COBie v3 EQUIVALENT:
+COBie.Component — individual asset/equipment instance
+  Key: Name (asset instance name e.g. AHU-01, LIFT-B2)
+  Fields: Description, AssetIdentifier (asset tag), BarCode, SerialNumber,
+  TagNumber, Type.Name (FK to COBie.Type), Space.Name (installed location),
+  InstallationDate, WarrantyStartDate
+
+COBie.Type — the asset type template (AssetType in canonical UDR)
+  Key: Name (type name e.g. Air Handling Unit, Passenger Lift)
+  Fields: Category (OmniClass/Uniclass code), AssetType (Fixed/Moveable),
+  Manufacturer, ModelNumber, WarrantyDurationParts, WarrantyDurationLabor,
+  NominalHeight, NominalLength, NominalWidth, PurchaseCost
+
+BRICK SCHEMA EQUIVALENT (Equipment Classes):
+brick:Equipment — generic equipment class (parent of all equipment)
+The BRICK equipment hierarchy covers all building systems equipment:
+-- HVAC Equipment --
+brick:Air_Handling_Unit (AHU, Air Handler, Air Handling Unit)
+brick:Fan_Coil_Unit (FCU, Fan Coil)
+brick:Variable_Air_Volume_Box (VAV, VAV Box, VAV Terminal)
+brick:Chiller (Chiller, Water Chiller, Air-Cooled Chiller, Water-Cooled Chiller)
+brick:Boiler (Boiler, Hot Water Boiler, Steam Boiler, Condensing Boiler)
+brick:Cooling_Tower (Cooling Tower, Evaporative Cooler)
+brick:Heat_Exchanger (Heat Exchanger, Plate Heat Exchanger, PHE)
+brick:Pump (Pump, Circulating Pump, Chilled Water Pump, CHWP, HWP)
+brick:Fan (Fan, Exhaust Fan, Supply Fan, Extract Fan, EF, SF)
+brick:Variable_Refrigerant_Flow (VRF, VRV System, Split Unit, Cassette)
+brick:Makeup_Air_Unit (MAU, Makeup Air Unit, Fresh Air Unit, FAU)
+brick:Packaged_Air_Conditioning_Unit (PAC, Packaged Unit, RTU, Rooftop Unit)
+brick:Differential_Pressure_Sensor_Equipment (Pressure Sensor)
+brick:Damper (Damper, Actuated Damper, Fire Damper, Smoke Damper)
+-- Electrical Equipment --
+brick:Meter (Meter, Energy Meter, Electricity Meter, AMR Meter, HHF Meter)
+brick:Lighting_Equipment (Luminaire, Light Fitting, Emergency Light)
+brick:Emergency_Lighting (Emergency Light, Emergency Luminaire, Escape Light)
+brick:Electric_Motor (Motor, Drive Motor)
+brick:Variable_Frequency_Drive (VFD, Variable Speed Drive, VSD, Inverter)
+brick:Uninterruptible_Power_Supply (UPS, Battery Backup, Battery UPS)
+brick:Transformer (Transformer, Distribution Transformer, HV Transformer)
+brick:Switchboard (Switchboard, LV Switchboard, MV Switchboard, Switchgear)
+brick:Panel (Panel, Distribution Board, DB, Consumer Unit, Fuse Box, MDB, SDB)
+-- Plumbing and Water --
+brick:Domestic_Hot_Water_System (DHW, Domestic Hot Water, DHWS, Calorifier)
+brick:Water_Tank (Tank, Cold Water Storage Tank, Break Tank, Header Tank, CWST)
+brick:Backflow_Preventer (RPZ Valve, Reduced Pressure Zone Valve)
+brick:Valve (Valve, Isolating Valve, Control Valve, Gate Valve, Ball Valve)
+-- Fire and Safety --
+brick:Fire_Detection_System (Fire Panel, Fire Alarm Panel, FAS, Fire Control)
+brick:Fire_Alarm_Panel (Fire Alarm Control Panel, FACP, Fire Panel)
+brick:Smoke_Detector (Smoke Detector, Smoke Head, Optical Detector)
+brick:Heat_Detector (Heat Detector, Heat Head, ROR Detector)
+brick:Sprinkler (Sprinkler, Wet Sprinkler, Dry Sprinkler, Deluge System)
+-- Vertical Transportation --
+brick:Elevator (Lift, Passenger Lift, Goods Lift, Platform Lift, LULA Lift)
+brick:Escalator (Escalator, Moving Walkway, Travelator)
+-- Building Control --
+brick:Building_Management_System (BMS, BEMS, Building Automation System, BAS)
+brick:Access_Control (Access Control, Door Entry, ACS, Entry System)
+brick:CCTV_Camera (CCTV, Camera, PTZ Camera, IP Camera, Security Camera)
+-- Specialist --
+brick:Generator (Generator, Standby Generator, Emergency Generator, Gen Set)
+brick:Solar_Panel (Solar Panel, PV Panel, Photovoltaic, Solar Array)
+brick:EV_Charging_Station (EV Charger, Electric Vehicle Charger, Charging Point)
+
+ASSET IDENTIFIER FIELD PATTERNS:
+AssetIdentifier, BarCode, SerialNumber, TagNumber, ASSETNUM, EQUNR, asset_num,
+asset_no, asset_ref, eq-id, eq_id, equip_id, equip-id, component_id,
+component-id, plant_no, plant_number, item_no, item_number, tag_number,
+tag_no, barcode, qr_code, rfid_tag, nfc_tag
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: ASSETTYPE
+Canonical Name: AssetType
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+The AssetType is the classification or category of an asset — what type of
+equipment it is, independent of the specific instance. Every asset is of a
+type. The type defines the maintenance requirements, inspection frequency,
+statutory obligations, and contractor accreditation needed. In FM practice
+this is called asset category, asset class, equipment type, equipment
+standard, equipment classification, or plant category.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+asset_type, asset_category, asset_class, equipment_type, equipment_category,
+equipment_class, equipment_standard, plant_type, plant_category, plant_class,
+component_type, component_category, device_type, item_type, kit_type,
+classification, type_code, type_name, type_description, category_code,
+category_name, class_code, class_name, eqstd, asset_type_id, type_id,
+type_ref, category_ref, assettype, classstructure, eqtyp, klah, dokar,
+uniclass_code, omniclass_code, classification_code, classification_system
+
+COBie v3 EQUIVALENT:
+COBie.Type — the template record from which Component instances are drawn
+  AssetType field values: Fixed (bolted/installed), Moveable (portable)
+  Category field references: OmniClass Table 23 (Products) for North America,
+  Uniclass Pr table for UK, or custom classification codes
+
+BRICK SCHEMA EQUIVALENT:
+BRICK uses its own class hierarchy as the asset type system. The class of
+a brick:Equipment instance IS its type. There is no separate AssetType
+entity in BRICK. The Uniclass 2015 Ss (Systems) codes provide a parallel
+UK classification system. Common type identifiers: AHU, FCU, CHR (chiller),
+BWR (boiler), LFT (lift/elevator), GEN (generator), FAS (fire alarm system),
+ACS (access control), CCTV, BMS, SWB (switchboard), DB (distribution board),
+MDB (main distribution board), UPS, VSD/VFD, HEX (heat exchanger),
+CWT (cooling tower), PHE (plate heat exchanger), DHW (domestic hot water),
+CWST (cold water storage tank)
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: WORKORDER
+Canonical Name: WorkOrder
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A WorkOrder is the fundamental operational record in FM — a documented
+instruction to carry out maintenance, repair, inspection, or other work
+on an asset or space. In UK FM, a work order is also called a job, task,
+job card, work ticket, maintenance request, fault report, defect report,
+reactive call, callout, or reactive job. Planned maintenance work orders
+are called PPM jobs, PM tasks, or planned tasks. An emergency work order
+is called an emergency callout, P1 job, or critical reactive. The work
+order tracks who reported the fault, what was found, who attended, when
+they attended, what they did, how long it took, and what it cost.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+work_order, workorder, job, task, job_card, work_ticket, maintenance_request,
+fault_report, fault_ticket, defect_report, reactive_job, reactive_call,
+callout, call_out, emergency_call, emergency_job, pm_task, ppm_job,
+planned_task, maintenance_task, maintenance_job, service_request,
+service_ticket, help_desk_request, helpdesk_job, fm_job, fm_task,
+maintenance_order, repair_order, maintenance_notice, notification,
+work_request, activity, event, incident_report, inspection_job,
+wo_id, wo_num, wo_number, wo_ref, wo_code, job_id, job_number, job_ref,
+job_code, task_id, task_number, task_ref, fault_id, fault_number,
+defect_id, defect_ref, request_id, request_number, ticket_id, ticket_number,
+wr-id, wr_id, ac-id, ac_id, wonum, aufnr, qmnum
+
+COBie v3 EQUIVALENT:
+COBie.Job — represents both reactive and planned maintenance jobs
+  Key: Name (job name or reference)
+  Fields: TaskNumber, Category (Adjustment, Calibration, Emergency, Inspection,
+  Operation, Project Management, Safety, Shutdown, StartUp, Testing, Trouble),
+  Status (Not Yet Started, Started, Completed),
+  Duration, DurationUnit (Day, Minute, Month, Quarter, Week, Year),
+  Interval, IntervalUnit (time between recurring jobs),
+  Priors (prerequisite job names), Resource.Name (FK to COBie.Resource)
+  Table + Table.Name links the job to the entity it applies to (Component,
+  Space, Type, Zone etc.)
+
+COBie.Event — a specific occurrence of a job
+  Links: Company.Name (contractor), Job.Name, StartDate, EndDate
+
+FIELD NAME PATTERNS IN SOURCE DATA:
+Fields containing: wo, wor, job, task, order, request, ticket, fault, defect,
+defect_id, report, callout, maintenance_job, repair, fix, notification,
+incident, event. Status fields: open, closed, completed, in_progress,
+assigned, pending, on_hold, cancelled, in progress, not started, raised.
+Priority fields: p1, p2, p3, p4, critical, urgent, routine, low, emergency,
+high, medium, normal, planned, reactive. Type fields: reactive, planned,
+ppm, inspection, project, corrective, preventive, emergency, statutory.
+
+WORK ORDER STATUS VOCABULARY:
+The following status values all map to the WorkOrder.status field:
+Open, New, Raised, Created, Logged, Submitted, Pending, Draft,
+Assigned, Dispatched, Allocated, Accepted, Acknowledged,
+In Progress, In Work, Active, Attending, On Site, Started, Working,
+On Hold, Waiting Parts, Awaiting Parts, Escalated, Paused, Suspended,
+Completed, Done, Finished, Resolved, Fixed, Closed, Signed Off,
+Cancelled, Rejected, Deleted, Voided, Withdrawn
+
+WORK ORDER PRIORITY VOCABULARY:
+P1 = Emergency, Critical, Priority 1, P1 Emergency, Immediate, 0-4hr,
+     Life Safety, Urgent Emergency, Critical Safety
+P2 = Urgent, Priority 2, P2 Urgent, Same Day, 4-8hr, 4hr Response,
+     High Priority, Urgent Reactive
+P3 = Routine, Priority 3, P3 Routine, 24hr, Next Day, Standard,
+     Normal, Medium Priority, Routine Reactive
+P4 = Low, Priority 4, P4 Low, Planned, Scheduled, Non-Urgent,
+     Low Priority, 5-Day, Next Week, Deferred
+
+WORK ORDER TYPE VOCABULARY:
+Reactive = Reactive, Fault, Defect, Breakdown, Callout, Emergency Reactive,
+           Unplanned, Ad Hoc, Break Fix, Corrective
+Planned = PPM, PM, Planned, Preventive, Preventative, Scheduled,
+          Routine Maintenance, Periodic, Annual Service, Service
+Inspection = Inspection, Statutory Inspection, Compliance Check,
+             Audit, Test, Survey, Condition Survey
+Project = Project, Cap Ex, Capital Works, Improvement, Upgrade,
+          Refurbishment, Fit Out, Installation, New Works
+Emergency = Emergency, P1 Emergency, Out of Hours, OOH Emergency
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: RESOURCE
+Canonical Name: Resource
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Resource in FM is a person who performs work — an engineer, technician,
+operative, tradesperson, or craftsperson. Resources can be directly
+employed staff or sub-contracted labour provided by a vendor. In the UK
+FM industry, resources are also called: engineers, operatives, technicians,
+tradespeople, craftspeople, field staff, mobile engineers, on-site staff,
+maintenance staff, FM staff, contractors (when referring to individuals),
+skilled workers, multi-skilled engineers (MSE), building services engineers,
+M&E engineers.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+resource, engineer, technician, operative, tradesperson, craftsperson,
+craftspeople, worker, employee, staff, person, contact, labor, labour,
+field_staff, field_engineer, mobile_engineer, on_site_engineer,
+maintenance_staff, maintenance_engineer, building_services_engineer,
+m_and_e_engineer, mse (multi-skilled engineer), skilled_worker,
+contractor_person, subcontractor_person, sub_contractor, fm_operative,
+fm_engineer, fm_staff, operative_id, engineer_id, technician_id,
+person_id, personid, laborcode, labor_code, pernr, resource_id,
+resource_code, resource_name, engineer_name, technician_name, full_name,
+first_name, last_name, surname, forename, name
+
+TRADE AND SKILL VOCABULARY FOR RESOURCE CLASSIFICATION:
+Electrical = Electrician, Electrical Engineer, Electrical Technician,
+             Spark, Elec, LV Engineer, HV Engineer, E&I Engineer,
+             NICEIC Electrician, 18th Edition Electrician
+Mechanical = Mechanical Engineer, HVAC Engineer, Heating Engineer,
+             M&E Engineer, Building Services Engineer, AC Engineer,
+             HVAC Technician, Refrigeration Engineer, F-Gas Engineer
+Plumbing = Plumber, Plumbing Engineer, Pipefitter, Water Systems Engineer,
+           Legionella Specialist, L8 Specialist
+Lift = Lift Engineer, Elevator Engineer, Lift Technician, Escalator Engineer
+Fire = Fire Engineer, Fire Safety Engineer, FAS Engineer, Fire Alarm Engineer,
+       Sprinkler Engineer, Suppression Engineer, BAFE Engineer
+Access Control = ACS Engineer, Door Entry Engineer, Security Engineer,
+                 CCTV Engineer, Security Systems Engineer
+BMS = BMS Engineer, Controls Engineer, Building Controls Engineer,
+      BEMS Engineer, Automation Engineer
+General = Maintenance Technician, General Operative, Multi-Skilled Engineer,
+          MSE, Building Operative, Handyman, Facilities Operative
+
+COBie v3 EQUIVALENT:
+COBie.Resource — represents a resource type (not individual person)
+  Key: Name (resource type name e.g. Electrical Labour, HVAC Technician)
+  Category: from PickList (Labor, Material, Tools, Training)
+  Used in Job.Resource.Name FK
+
+COBie.Company — represents an individual contact
+  Key: Name (person or company name)
+  Fields: Phone, Category, Website, Street, Town, StateRegion,
+  PostalCode, Country, Department
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: VENDOR
+Canonical Name: Vendor
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Vendor is any external company or organisation providing services,
+materials, or specialist expertise. In UK FM, vendors are called:
+contractors, service providers, sub-contractors, suppliers, service
+contractors, specialist contractors, approved contractors, framework
+contractors, specialist vendors, service partners, FM partners. The
+main contractor who holds a Total Facilities Management (TFM) contract
+is called the TFM contractor or managing contractor. Specialist contractors
+are called specialist subcontractors or specialist service providers.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+vendor, contractor, supplier, service_provider, subcontractor, sub_contractor,
+sub-contractor, service_contractor, approved_contractor, framework_contractor,
+specialist_contractor, specialist_vendor, service_partner, fm_partner,
+tfm_contractor, managing_contractor, maintenance_contractor, trade,
+trade_contractor, company, organisation, organization, provider,
+partner, external_company, vendor_id, vendor_code, vendor_name,
+contractor_id, contractor_code, contractor_name, supplier_id,
+supplier_code, supplier_name, company_id, company_name, company_code,
+vn-id, vn_id, lifnr, company_number, registration_number,
+vendor_ref, contractor_ref, supplier_ref
+
+COBie v3 EQUIVALENT:
+COBie.Company — company and contact record
+  Category values include: Architect, Authority Having Jurisdiction,
+  Civil Engineer, Client, Codes Compliance Review, Commissioning Agent,
+  Construction Manager, Cost Estimator, Electrical Engineer, etc.
+  For FM: Contractor, Subcontractor, Supplier, Vendor, Service Provider
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: CONTRACT
+Canonical Name: Contract
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Contract is the formal legal agreement between the building owner or
+managing agent and a vendor, defining scope, duration, cost, and SLA terms.
+In UK FM, contracts are also called: service contracts, maintenance contracts,
+service agreements, framework agreements, call-off contracts, PPM contracts,
+TFM contracts, outsourcing contracts, supplier agreements, SLA agreements.
+The SLA (Service Level Agreement) section of the contract defines response
+and completion time targets for different work order priorities.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+contract, service_contract, maintenance_contract, service_agreement,
+framework_agreement, call_off_contract, ppm_contract, tfm_contract,
+outsourcing_contract, supplier_agreement, sla_agreement, agreement,
+deed, engagement, order, purchase_order, blanket_order, work_order_agreement,
+contract_id, contract_code, contract_number, contract_ref, contract_name,
+contract_description, agreement_id, agreement_ref, agreement_name,
+contractnum, ebeln, ct-id, ct_id, service_level_agreement, sla,
+sla_terms, sla_schedule, kpi_schedule, performance_schedule
+
+SLA TERMINOLOGY VOCABULARY:
+Response time = response target, response SLA, acknowledgement time,
+               attendance time, first attendance, response window
+Completion time = completion target, fix time, resolution time,
+                 completion SLA, rectification time, close-out time
+P1 SLA = 4 hour response, 1 hour response, emergency response, 2 hour fix,
+         4 hour fix, 24 hour completion, same day completion, immediate
+P2 SLA = 8 hour response, 4 hour response, 24 hour completion, next day fix
+P3 SLA = 24 hour response, 48 hour response, 5 day completion, week fix
+P4 SLA = 5 day response, planned response, routine completion, 28 day fix
+KPI = Key Performance Indicator, performance metric, SLA metric,
+      performance target, response rate, completion rate, first fix rate,
+      recall rate, CSAT score, satisfaction score
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: COMPLIANCECERTIFICATE
+Canonical Name: ComplianceCertificate
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A ComplianceCertificate documents that a statutory inspection has been carried
+out on an asset by an accredited contractor and that the asset meets the
+applicable regulatory standard. In UK FM, these are critical legal documents.
+Lapsed certificates create criminal liability for the Responsible Person and
+void the building insurance. Common names: compliance cert, stat cert,
+statutory cert, inspection cert, inspection certificate, test certificate,
+safety certificate, legal certificate, compliance document.
+
+UK STATUTORY CERTIFICATE TYPES AND SYNONYMS:
+Gas Safety Certificate = CP12, Gas Safety Record, Annual Gas Safety Check,
+  LGSR (Landlord Gas Safety Record), Boiler Service Certificate,
+  Heating Safety Certificate, Gas Safety Inspection
+EICR = Electrical Installation Condition Report, Fixed Wire Testing,
+  Electrical Safety Certificate, Electrical Test Certificate,
+  Periodic Inspection Report (PIR), Hard Wire Test, 5-Year Electrical Test
+LOLER = Lift Inspection Certificate, Lift Safety Certificate,
+  Thorough Examination Certificate, Lifting Equipment Inspection,
+  6-Monthly Lift Inspection, LOLER Report, Lift LOLER
+Fire Risk Assessment = FRA, Fire Safety Assessment, Fire Risk Review,
+  Fire Safety Audit, Fire Risk Report, Building Fire Risk Assessment
+Legionella L8 = L8 Risk Assessment, Legionella Risk Assessment,
+  Water Hygiene Risk Assessment, Legionella Survey, L8 Assessment,
+  Water Risk Assessment, LCA (Legionella Control Assessment)
+F-Gas = F-Gas Certificate, Refrigerant Certificate, Fluorinated Gas Record,
+  HFC Record, Refrigerant Log, F-Gas Inspection Certificate
+Asbestos = Asbestos Survey, Asbestos Management Survey, Asbestos Report,
+  ACM Survey (Asbestos Containing Materials), Asbestos Register,
+  R&D Survey (Refurbishment and Demolition Survey)
+PSSR = Pressure Systems Safety Regulations, Written Scheme of Examination,
+  Pressure Vessel Inspection, Steam System Inspection
+Sprinkler = Sprinkler Test Certificate, Fire Suppression Certificate,
+  Sprinkler Inspection Report, Wet System Test
+Emergency Lighting = Emergency Lighting Test, EL Certificate,
+  Emergency Light Test Record, Escape Lighting Certificate
+Fire Alarm = Fire Alarm Service Certificate, FAS Certificate,
+  Fire Alarm Test Report, Fire System Service Record
+PAT Testing = Portable Appliance Testing, PAT Test Record,
+  Electrical Equipment Test, Appliance Safety Check
+
+FIELD PATTERNS FOR COMPLIANCE DATA:
+certificate_type, cert_type, inspection_type, statutory_type, compliance_type,
+expiry_date, cert_expiry, inspection_expiry, next_due, renewal_date,
+next_inspection, due_date, valid_until, valid_to, certificate_date,
+cert_date, issue_date, issued_date, inspection_date, test_date, service_date,
+inspector_name, inspector_no, accreditation_no, accreditation_number,
+gas_safe_no, gas_safe_number, niceic_no, niceic_number, result,
+pass_fail, inspection_result, outcome, defects, actions_required,
+remedial_actions, remedial_required, next_action
+
+COBie v3 EQUIVALENT:
+Compliance certificates appear in COBie as:
+1. COBie.Job (type = Inspection): recurring inspection jobs linked to
+   components/systems. Fields: Category=Inspection, Interval/IntervalUnit
+   for frequency, Resource.Name for accredited contractor
+2. COBie.Document: certificate document files linked to component or job
+   Fields: Category=Certificates, Stage=As Built, Path+File to certificate
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: PPMSCHEDULE
+Canonical Name: PPMSchedule
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A PPM Schedule (Planned Preventive Maintenance Schedule) is the programme
+defining recurring maintenance tasks for an asset. The PPM tells FM teams
+what maintenance to do, how often to do it, who should do it, and when
+the next visit is due. In UK FM, PPM schedules are also called: maintenance
+schedules, service schedules, planned maintenance programmes, PM schedules,
+periodic maintenance schedules, recurring maintenance, maintenance plans,
+SFG20 schedules (referencing the Building Engineering Services Association
+standard for specifying FM tasks), BESA schedules, scheduled maintenance.
+
+SYNONYMS AND ALTERNATIVE NAMES:
+ppm, ppm_schedule, ppm_plan, planned_maintenance, planned_preventive_maintenance,
+preventive_maintenance, preventative_maintenance, pm_schedule, pm_plan,
+maintenance_schedule, maintenance_plan, maintenance_programme, service_schedule,
+service_plan, recurring_maintenance, periodic_maintenance, scheduled_maintenance,
+annual_service, annual_inspection, routine_maintenance, routine_service,
+sfg20_schedule, besa_schedule, maintenance_task_list, task_list, job_plan,
+routine_task, maintenance_procedure, pm_procedure, procedure, schedule_id,
+ppm_id, pm_id, schedule_code, schedule_name, plan_id, plan_name, pmnum,
+mpnum, pm-id, pm_freq, frequency, interval, recurrence, periodicity,
+trigger, schedule_trigger, next_due, next_service, last_service, last_done
+
+PPM FREQUENCY VOCABULARY:
+Weekly = 7 day, 7-day, every week, weekly service, weekly inspection
+Monthly = 28 day, 4-weekly, every month, monthly service, monthly inspection
+Quarterly = 3 monthly, 13 weekly, 91 day, quarterly service, 3-month
+6-Monthly = biannual, bi-annual, semi-annual, 6 month, 6-monthly, 26-weekly
+Annual = yearly, 12 monthly, 365 day, annual service, annual inspection,
+         once a year, yearly service, 12-month, 52-weekly, year service
+2-Year = biennial, 24 monthly, every 2 years, 2 yearly, two year
+5-Year = quinquennial, 60 monthly, every 5 years, 5 yearly, five year
+Custom intervals: 4-monthly, 8-weekly, 16-weekly, fortnightly (2-weekly)
+
+COBie v3 EQUIVALENT:
+COBie.Job (type = Preventive or Operation):
+  Category values: Adjustment, Calibration, Operation (for routine checks),
+  StartUp, ShutDown (for seasonal tasks)
+  Interval = the recurring frequency between visits
+  IntervalUnit = Day, Minute, Month, Quarter, Week, Year
+  Duration = time to complete one visit
+  DurationUnit = Day, Minute, Month, Quarter, Week, Year
+  Priors = prerequisite jobs that must run first
+  TaskNumber = task identifier within a sequence
+
+-----------------------------------------------------------------------------
+ENTITY CLUSTER: METER
+Canonical Name: Meter
+-----------------------------------------------------------------------------
+
+WHAT IT IS IN FM TERMS:
+A Meter is a device that measures consumption, performance, or condition of
+utilities or building systems. In FM practice, meters include electricity
+meters, gas meters, water meters, heat meters, sub-meters, check meters,
+BTU meters, and IoT sensor data points from BMS systems. Meter readings
+support energy management, utility billing, condition-based maintenance,
+and ESG/GRESB reporting. In the UK, electricity meters have an MPAN
+(Meter Point Administration Number) and gas meters have an MPRN
+(Meter Point Reference Number).
+
+SYNONYMS AND ALTERNATIVE NAMES:
+meter, metre, energy_meter, electricity_meter, gas_meter, water_meter,
+heat_meter, sub_meter, submeter, check_meter, interval_meter, amr_meter,
+hh_meter, half_hourly_meter, smart_meter, iot_sensor, sensor, reading_point,
+measurement_point, counter, utility_meter, utility_point, data_point,
+bms_point, bms_sensor, monitoring_point, consumption_meter, kwh_meter,
+m3_meter, mpan, mprn, meter_id, meter_code, meter_name, meter_ref,
+sensor_id, sensor_code, point_id, point_name, point_ref, counter_id,
+mpnum (SAP), metername (Maximo), utility_account, utility_point
+
+METER TYPE AND UNIT VOCABULARY:
+Electricity = kWh, kVA, kVAr, MWh, Power, Active Power, Reactive Power,
+              Current (A), Voltage (V), Power Factor, Half Hourly, HH
+Gas = m3, cubic metres, cubic meters, kWh (gas), BTU, MMBTU, therms
+Water = m3, litres, liters, L, kL, megalitres, gallons
+Heat = kWh (heat), MWh (heat), BTU, MMBTU, GJ (gigajoules), MJ (megajoules),
+       Return Temperature, Flow Temperature, Delta T
+Sub-metering = tenant sub-meter, floor sub-meter, department meter, zone meter
+
+BRICK SCHEMA MEASUREMENT POINT VOCABULARY:
+brick:Meter — generic meter
+brick:Building_Meter — whole building meter
+brick:Floor_Meter — floor-level meter
+brick:Zone_Meter — zone-level meter
+brick:Point — generic data point (parent of sensors, setpoints, alarms)
+brick:Sensor — physical measurement sensor
+brick:Temperature_Sensor — air or water temperature reading
+brick:CO2_Sensor — carbon dioxide concentration
+brick:Occupancy_Sensor — presence/occupancy detection
+brick:Pressure_Sensor — air or water pressure
+brick:Flow_Sensor — air or water flow rate
+brick:Humidity_Sensor — relative humidity
+brick:Energy_Meter — energy consumption meter
+brick:Power_Meter — electrical power measurement
+brick:Setpoint — target value (temperature setpoint, pressure setpoint)
+brick:Alarm — alarm condition indicator
+brick:Status — binary status (on/off, open/closed)
+brick:Command — control output (valve position, damper command)
+
+=============================================================================
+PART 2: COLUMN/ATTRIBUTE SEMANTIC CLUSTERS
+=============================================================================
+
+This section provides semantic clusters for individual column-level fields.
+Each cluster groups all known names for the same attribute across FM systems.
+Use this section when mapping source column names to canonical UDR column names.
+
+-----------------------------------------------------------------------------
+IDENTIFIER COLUMNS (Primary Key patterns)
+-----------------------------------------------------------------------------
+asset_id variants: ASSETNUM, ASSETID, EQUNR, eq-id, eq_id, asset_id,
+asset_num, asset_no, asset_ref, asset_code, asset_number, assetidentifier,
+barcode, tagno, tag_number, serial_no, serialnum, serialnumber, eq-tag,
+equipment_number, equipment_id, equipment_code, component_id, component_name,
+installation_ref, plant_item_no, plant_number, plant_id, item_id, item_no,
+item_number, device_id, device_no, kit_no, unit_ref, unit_id
+
+work_order_id variants: WONUM, AUFNR, QMNUM, wr-id, wr_id, ac-id, wo_id,
+wo_num, wo_number, wo_ref, wo_code, job_id, job_number, job_ref, job_code,
+task_id, task_number, task_ref, request_id, request_number, ticket_id,
+ticket_no, ticket_number, order_id, order_number, order_ref, fault_id,
+fault_number, defect_id, defect_number, report_id, report_number,
+maintenance_ref, maintenance_no, service_ref, service_number
+
+vendor_id variants: COMPANY, LIFNR, vn-id, vn_id, vendor_id, vendor_no,
+vendor_code, vendor_name, contractor_id, contractor_code, contractor_ref,
+supplier_id, supplier_code, supplier_ref, company_id, company_no,
+company_code, organisation_id, org_id
+
+-----------------------------------------------------------------------------
+DATE AND TIME COLUMNS
+-----------------------------------------------------------------------------
+Raised/Created date: date_raised, date_created, raised_date, created_date,
+reported_date, date_reported, open_date, date_opened, log_date, date_logged,
+request_date, date_requested, submit_date, date_submitted, REPORTDATE,
+ERDAT, StartDate (COBie Event), date_of_request
+
+Required by date: required_by, required_date, target_date, due_date,
+requested_by, deadline, completion_deadline, target_completion,
+target_close, expected_date, TARGCOMPDATE, wanted_date, needed_date
+
+Completion date: completion_date, date_completed, closed_date, date_closed,
+finish_date, date_finished, resolved_date, date_resolved, actual_date,
+date_actual, ACTFINISH, resolution_date, close_date, done_date, fixed_date
+
+Inspection date: inspection_date, test_date, service_date, visit_date,
+inspection_performed, date_inspected, date_tested, date_serviced
+
+Expiry date: expiry_date, expiry, expires, expiration_date, valid_until,
+valid_to, renewal_date, next_renewal, certificate_expiry, cert_expiry,
+due_date (for inspections), next_inspection, next_due, next_service,
+review_date (for risk assessments)
+
+Install date: install_date, installation_date, installed_date,
+commissioned_date, commissioning_date, start_date (for assets),
+INSTALLDATE, INBDT, date-installed, date_installed
+
+Warranty date: warranty_start, warranty_start_date, warranty_expiry,
+warranty_end, warranty_expiry_date, WarrantyStartDate (COBie),
+WarrantyDurationParts (COBie), WarrantyDurationLabor (COBie),
+warranty_expires, warranty_expiration, parts_warranty, labour_warranty
+
+-----------------------------------------------------------------------------
+DESCRIPTION AND TEXT COLUMNS
+-----------------------------------------------------------------------------
+Fault description: fault_description, fault_detail, fault_details,
+problem_description, defect_description, issue_description, description,
+fault_report, problem_report, reported_fault, reported_issue, reported_problem,
+symptom, symptoms, complaint, complaint_details, reported_by_text,
+notification_text, request_details, issue, problem, defect, fault
+
+Resolution notes: resolution_notes, resolution_description, work_done,
+work_carried_out, action_taken, actions_taken, completion_notes,
+repair_notes, fix_notes, remedial_work, work_completed, notes,
+technician_notes, engineer_notes, operative_notes, comments, remarks,
+resolution, fix_description, close_out_notes, closeout_notes,
+what_was_done, description_of_work
+
+Asset name/description: description, asset_description, asset_name,
+equipment_description, equipment_name, plant_description, plant_name,
+component_description, component_name, EQKTX, DESCRIPTION, Name (COBie),
+device_name, device_description, unit_name, item_description
+
+-----------------------------------------------------------------------------
+COST AND FINANCIAL COLUMNS
+-----------------------------------------------------------------------------
+Labour cost: labour_cost, labor_cost, labour_charge, labor_charge,
+man_hour_cost, operative_cost, technician_cost, engineer_cost,
+resource_cost, total_labour, total_labor, LABORCOST, actual_labour_cost
+
+Parts cost: parts_cost, materials_cost, material_cost, spares_cost,
+spare_parts_cost, components_cost, supply_cost, supply_and_fix,
+actual_parts_cost, total_parts, total_materials, MATUSETOTALCOST
+
+Total cost: total_cost, cost, invoice_amount, invoice_value, charge,
+total_charge, total_amount, sum, cost_total, overall_cost, actual_cost
+
+Annual value: annual_value, annual_cost, annual_contract_value, acv,
+contract_value, contract_amount, contract_sum, yearly_value, yearly_cost
+
+-----------------------------------------------------------------------------
+AREA MEASUREMENT COLUMNS
+-----------------------------------------------------------------------------
+Gross area: gross_area, gla (gross lettable area), gia (gross internal area),
+gea (gross external area), gross_floor_area, gfa, total_area, gross_sqm,
+gross_sq_m, gross_sqft, gross_sq_ft, area_gross, area-gross (Archibus),
+GrossArea (COBie), total_floor_area, total_size
+
+Net area: net_area, nla (net lettable area), nia (net internal area),
+nfa (net floor area), net_floor_area, usable_area, lettable_area,
+net_sqm, net_sq_m, net_sqft, NetArea (COBie), area_usable, area-usable,
+occupied_area, rentable_area, leasable_area
+
+-----------------------------------------------------------------------------
+STATUS COLUMNS
+-----------------------------------------------------------------------------
+Asset status: status, asset_status, condition, asset_condition,
+operational_status, state, current_state, active_inactive,
+active_status, service_status, in_service, decommissioned,
+STATUS (Maximo), USTMP (SAP), triStatusCL (TRIRIGA)
+Status values: Active, Inactive, Decommissioned, Disposed, Under Repair,
+In Service, Out of Service, Standby, Operational, Non-Operational,
+Condemned, Written Off, Awaiting Disposal, Mothballed
+
+Work order status: status, wo_status, job_status, task_status, order_status,
+request_status, ticket_status
+Status values: Open, New, Raised, Created, Logged, Submitted, Assigned,
+Dispatched, In Progress, Active, On Hold, Completed, Closed, Cancelled
+
+=============================================================================
+PART 3: FM EQUIPMENT TAXONOMY — FULL SYNONYM REFERENCE
+=============================================================================
+
+This section provides all known names, abbreviations, and trade terms for
+each category of FM equipment. Use this when matching asset type names in
+source data to the AssetType canonical entity.
+
+MECHANICAL AND HVAC EQUIPMENT
+Air Handling Unit = AHU, Air Handler, Air Handling Plant, Air Handling System,
+  Central Air Handler, Central AHU, Packaged Air Handler, Roof AHU, Rooftop AHU,
+  Fresh Air Unit, MAU (Make-up Air Unit), DAHU (Dedicated Air Handling Unit),
+  brick:Air_Handling_Unit, Uniclass Ss_60_70_10
+
+Fan Coil Unit = FCU, Fan Coil, Room Fan Coil, Floor-Standing Fan Coil,
+  Cassette Fan Coil, Ceiling Fan Coil, Concealed Fan Coil, 2-Pipe FCU,
+  4-Pipe FCU, Active Chilled Beam, Passive Chilled Beam, Chilled Beam,
+  Induction Unit, brick:Fan_Coil_Unit
+
+Variable Air Volume Box = VAV, VAV Box, VAV Terminal Unit, Variable Volume Box,
+  VAV Controller, Single Duct VAV, Dual Duct VAV, Series Fan Powered VAV,
+  Parallel Fan Powered VAV, Terminal Box, brick:Variable_Air_Volume_Box
+
+Chiller = Chiller, Refrigeration Plant, Chiller Plant, Air-Cooled Chiller,
+  Water-Cooled Chiller, Magnetic Bearing Chiller, Centrifugal Chiller,
+  Screw Chiller, Reciprocating Chiller, Absorption Chiller, District Cooling,
+  VRF Outdoor Unit (when used for central cooling), ACRM (Air-Cooled Refrigeration Machine),
+  brick:Chiller, Uniclass Ss_60_70_50
+
+Boiler = Boiler, Heating Boiler, Hot Water Boiler, Steam Boiler, Condensing Boiler,
+  Non-Condensing Boiler, Low Temperature Boiler, High Temperature Boiler,
+  Biomass Boiler, Modular Boiler, Boiler Plant, LPHW Boiler (Low Pressure Hot Water),
+  MPHW Boiler (Medium Pressure Hot Water), brick:Boiler, Uniclass Ss_60_70_56
+
+Cooling Tower = Cooling Tower, Evaporative Cooler, Evaporative Cooling Tower,
+  Condenser Water Cooling Tower, Induced Draft Tower, Forced Draft Tower,
+  Adiabatic Cooler, Dry Cooler, Fluid Cooler, Evaporative Condenser,
+  CWT, brick:Cooling_Tower
+
+Heat Exchanger = Heat Exchanger, PHE (Plate Heat Exchanger), Plate HEX,
+  Shell and Tube Heat Exchanger, Brazed Plate HEX, Gasket PHE,
+  Thermal Wheel, Heat Recovery Ventilator (HRV), Energy Recovery Ventilator (ERV),
+  Run-Around Coil, brick:Heat_Exchanger
+
+Pump = Pump, Circulating Pump, Chilled Water Pump, CHWP, Hot Water Pump,
+  HWP, Condenser Water Pump, CWP, Domestic Hot Water Pump, DHWP,
+  Sump Pump, Submersible Pump, Transfer Pump, Booster Pump, Pressure Booster,
+  Duty Pump, Standby Pump, Twin Pump, brick:Pump
+
+Fan = Fan, Extract Fan, Supply Fan, Supply Air Fan, Exhaust Fan, Centrifugal Fan,
+  Axial Fan, Mixed Flow Fan, Inline Fan, Kitchen Extract Fan, Car Park Fan,
+  Smoke Extract Fan, Toilet Extract Fan, EF, SF, brick:Fan
+
+VRF/VRV System = VRF, VRV, Variable Refrigerant Volume, Variable Refrigerant Flow,
+  Multi-Split System, Multi-Split AC, Split System, Wall-Mounted Split,
+  Ceiling Cassette, Floor-Standing AC, Window Unit, Portable AC, PTAC
+
+Domestic Hot Water = DHW System, Calorifier, Hot Water Cylinder, DHWS,
+  Hot Water Storage, Unvented Cylinder, Vented Cylinder, Combination Boiler (Combi),
+  Instantaneous Water Heater, Point of Use Heater, Electric Water Heater,
+  Solar DHW, Thermal Store, brick:Domestic_Hot_Water_System
+
+ELECTRICAL EQUIPMENT
+Distribution Board = DB, Distribution Board, Consumer Unit, Fuse Box, Fuse Board,
+  MCB Board, RCBO Board, Sub-Distribution Board, SDB, Main Distribution Board, MDB,
+  Final Distribution Board, FDB, Panel, Electrical Panel, LVDB (Low Voltage DB),
+  brick:Panel, Uniclass Ss_70_50_26
+
+Switchboard = Switchboard, LV Switchboard, MV Switchboard, HV Switchboard,
+  Main LV Switchboard, MLVS, Main Switchboard, Distribution Switchboard,
+  Busbar Chamber, Busway, Busbar Trunking, AMF Panel (Auto Main Failure),
+  ACB Panel, brick:Switchboard
+
+Transformer = Transformer, Distribution Transformer, HV Transformer, LV Transformer,
+  HV/LV Transformer, Package Substation, Padmount Transformer, Ring Main Unit, RMU,
+  Voltage Transformer, Current Transformer, Isolation Transformer
+
+Generator = Generator, Emergency Generator, Standby Generator, Diesel Generator,
+  Gas Generator, Genset, Gen Set, CHP Unit (Combined Heat and Power), CHP,
+  UPS Generator, Static UPS, brick:Generator
+
+UPS = UPS, Uninterruptible Power Supply, Battery Backup, Battery UPS, Static UPS,
+  Online UPS, Offline UPS, Line Interactive UPS, PDU (Power Distribution Unit),
+  brick:Uninterruptible_Power_Supply
+
+Motor = Motor, Electric Motor, AC Motor, DC Motor, Three Phase Motor,
+  Single Phase Motor, Gear Motor, Inverter Duty Motor
+
+VSD/VFD = Variable Speed Drive, VSD, Variable Frequency Drive, VFD, Inverter,
+  Speed Controller, Frequency Inverter, AC Drive, DC Drive,
+  brick:Variable_Frequency_Drive
+
+FIRE AND SAFETY EQUIPMENT
+Fire Alarm Panel = Fire Alarm Control Panel, FACP, Fire Panel, Fire Control Panel,
+  Fire Detection Panel, FAS Panel, AFD Panel (Automatic Fire Detection),
+  Conventional Panel, Addressable Panel, Analogue Addressable Panel,
+  brick:Fire_Alarm_Panel
+
+Sprinkler System = Sprinkler, Wet Pipe Sprinkler, Dry Pipe Sprinkler,
+  Pre-Action Sprinkler, Deluge System, Foam System, Gaseous Suppression,
+  FM200 System, Inergen System, CO2 System, Novec 1230, brick:Sprinkler
+
+Emergency Lighting = Emergency Lighting, Emergency Luminaire, Emergency Light,
+  Escape Lighting, Exit Sign, Maintained Emergency Light, Non-Maintained Emergency Light,
+  Sustained Emergency Light, Central Battery System, Local Battery Emergency Light,
+  brick:Emergency_Lighting
+
+VERTICAL TRANSPORTATION
+Lift = Lift, Elevator, Passenger Lift, Goods Lift, Platform Lift, Wheelchair Lift,
+  Service Lift, Bed Lift, Car Park Lift, Dumbwaiter, LULA Lift (Limited Use Limited Application),
+  Vertical Platform Lift, Step Lift, Stairlift, brick:Elevator,
+  Uniclass Ss_60_70_60_90
+
+Escalator = Escalator, Moving Walkway, Travelator, Moving Pavement,
+  brick:Escalator
+
+WATER SYSTEMS
+Cold Water Storage Tank = CWST, Cold Water Tank, Break Tank, Header Tank,
+  Cold Water Cistern, Boosted Cold Water System, Water Storage Tank,
+  brick:Water_Tank, Uniclass Ss_70_65
+
+Calorifier = Calorifier, Hot Water Calorifier, Storage Calorifier,
+  Hot Water Cylinder, DHWS Calorifier, Hot Water Vessel, HWC
+
+Pumped System = Pump Set, Pump Station, Booster Set, Pressure Set,
+  Packaged Pump Set, Cold Water Booster, Pressurisation Unit
+
+BUILDING MANAGEMENT AND SECURITY
+BMS = Building Management System, BMS, BEMS (Building Energy Management System),
+  Building Automation System, BAS, HVAC Controls, Central Plant Controls,
+  DDC System (Direct Digital Control), SCADA, Energy Management System, EMS,
+  Controls System, Automation System, brick:Building_Management_System
+
+Access Control = Access Control System, ACS, Door Entry System, Door Entry,
+  Access Control Panel, Proximity Reader, Card Reader, Biometric Reader,
+  Turnstile, Barrier, Gate, Security Door, brick:Access_Control
+
+CCTV = CCTV, Closed Circuit Television, CCTV System, Security Camera,
+  IP Camera, PTZ Camera, Fixed Camera, Dome Camera, Bullet Camera,
+  Video Surveillance, NVR (Network Video Recorder), DVR (Digital Video Recorder),
+  brick:CCTV_Camera
+
+BUILDING FABRIC AND STRUCTURE
+Roof = Roof, Flat Roof, Pitched Roof, Green Roof, Inverted Roof,
+  Single Ply Membrane, Felt Roof, Asphalt Roof, Roof Covering, Roof Fabric
+
+Facade = Facade, Cladding, Curtain Walling, External Wall, Building Envelope,
+  Stone Cladding, Brickwork, Render, Glazing, Window Wall
+
+Floor = Raised Floor, Access Floor, Screed, Floor Finish, Raised Access Floor (RAF)
+
+=============================================================================
+PART 4: COBIE V3 ENTITY-TO-FM-ENTITY MAPPING REFERENCE
+=============================================================================
+
+This section maps every COBie v3 sheet to the canonical FM UDR entity and
+explains how COBie fields map to UDR columns.
+
+COBie.Company → FM UDR: Vendor + Resource
+  Company.Name → Vendor.vendor_name or Resource.full_name
+  Company.Category → Vendor.vendor_type or Resource classification
+  Company.Phone → Vendor.primary_contact_phone
+  Company.Website → Vendor.website
+  Company.Street → Vendor.address_line_1
+  Company.Town → Vendor.city
+  Company.PostalCode → Vendor.postcode
+  Company.Country → Vendor.country
+  Company.Department → Resource.trade or organisational unit
+
+COBie.Facility → FM UDR: Site + Building
+  Facility.Name → Site.site_name or Building.building_name
+  Facility.Description → Site.notes or Building description
+  Facility.Category → Building.building_type (references OmniClass/Uniclass)
+  Facility.Address → Site.address_line_1
+  Facility.Latitude → Site.latitude
+  Facility.Longitude → Site.longitude
+  Facility.Elevation → Building height reference
+
+COBie.Level → FM UDR: Space (space_type = Floor)
+  Level.Name → Space.space_name
+  Level.Elevation → Space floor level elevation
+  Level.Height → Space floor-to-ceiling height
+  Level.Category → Space.space_type (Floor, Roof, Site)
+  Level.PartOf → Space.parent_space_id or Building.building_id
+
+COBie.SpaceType → FM UDR: (extension attribute or sub-classification)
+  SpaceType.Name → Space usage classification name
+  SpaceType.Category → Uniclass SL or OmniClass Table 13 code
+
+COBie.Space → FM UDR: Space
+  Space.Name → Space.space_code and space_name
+  Space.Description → Space.notes or description
+  Space.RoomTag → Space tag or physical label on room door
+  Space.SpaceType.Name → Space.usage_type
+  Space.Level.Name → linked to parent Space (floor)
+  Space.PartOf → Space.parent_space_id (for grouped spaces)
+  Space.GrossArea → Space.gross_area_sqm
+  Space.NetArea → Space.net_area_sqm
+  Space.UsableHeight → floor-to-ceiling height
+
+COBie.Zone → FM UDR: Space (space_type = Zone)
+  Zone.Name → Space.space_name
+  Zone.Category → Space.space_type (HVAC Zone, Fire Alarm Zone, Lighting Zone,
+    Circulation Zone, Historical Preservation Zone, Occupancy Zone,
+    Ventilation Zone)
+  Zone.Space.Name → child Space records within this Zone
+
+COBie.Type → FM UDR: AssetType
+  Type.Name → AssetType.asset_type_name
+  Type.Description → AssetType.description
+  Type.Category → AssetType.uniclass_code or omniclass_code
+  Type.AssetType → Fixed (bolted, structural) or Moveable (portable)
+  Type.Manufacturer → AssetType.manufacturer (or specific instance)
+  Type.ModelNumber → AssetType model reference
+  Type.WarrantyGuarantorParts → warranty parts contact (Company.Name)
+  Type.WarrantyDurationParts → Asset.warranty_expiry_date calculation
+  Type.WarrantyGuarantorLabor → warranty labour contact
+  Type.WarrantyDurationLabor → labour warranty period
+  Type.WarrantyDurationUnit → Day, Month, Year
+  Type.PurchaseCost → AssetType.typical_purchase_cost reference
+
+COBie.Component → FM UDR: Asset
+  Component.Name → Asset.asset_code and asset_name
+  Component.Description → Asset.description
+  Component.AssetIdentifier → Asset.asset_tag
+  Component.BarCode → Asset.asset_tag (barcode format)
+  Component.SerialNumber → Asset.serial_number
+  Component.TagNumber → Asset.asset_tag (physical tag number)
+  Component.Type.Name → Asset.asset_type_id (FK to AssetType)
+  Component.Space.Name → Asset.space_id (FK to Space)
+  Component.Space.SecondaryName → secondary space (for dual-location assets)
+  Component.InstallationDate → Asset.install_date
+  Component.WarrantyStartDate → Asset.install_date or commissioning_date
+
+COBie.System → FM UDR: Asset (parent record for asset system)
+  System.Name → parent Asset.asset_code for a system
+  System.Category → system type (references OmniClass Table 21 or Uniclass EF)
+  System.PartOf → parent system reference
+  System.Component.Name → child Asset records within this system
+  Example: AHU System (System) contains AHU Fan, AHU Coil, AHU Filter (Components)
+
+COBie.Resource → FM UDR: Resource
+  Resource.Name → Resource.trade or ResourceSkill.skill_type
+  Resource.Category → Resource classification
+    Labor = human resource (Resource entity)
+    Material = spare part (SparePart entity)
+    Tools = equipment used during maintenance
+    Training = training resource
+
+COBie.Job → FM UDR: WorkOrder + PPMSchedule
+  Job.Name → WorkOrder.title or PPMSchedule.schedule_name
+  Job.Description → WorkOrder.fault_description or PPMSchedule.task_description
+  Job.TaskNumber → work order step or task sequence number
+  Job.Category:
+    Inspection → ComplianceCertificate inspection job or WorkOrder (type=Inspection)
+    Preventive / Operation → PPMSchedule
+    Emergency / Safety / Trouble → WorkOrder (type=Reactive/Emergency)
+    Calibration → WorkOrder (type=Inspection for calibration)
+    Adjustment → WorkOrder (type=Planned)
+    StartUp / ShutDown → PPMSchedule (seasonal)
+  Job.Duration → WorkOrder.labour_hours or PPMSchedule.estimated_duration_hours
+  Job.DurationUnit → unit for duration (Day, Minute, Month, Quarter, Week, Year)
+  Job.Interval → PPMSchedule.frequency_value (how often this job recurs)
+  Job.IntervalUnit → PPMSchedule.frequency_unit
+  Job.Priors → prerequisite job names (task sequencing)
+  Job.Resource.Name → WorkOrder.resource_id or vendor trade requirement
+  Job.Table + Job.Table.Name → links job to entity (Component, Space, Type etc.)
+  Job.Status:
+    Not Yet Started → PPMSchedule (not yet triggered)
+    Started → WorkOrder (status=In Progress)
+    Completed → WorkOrder (status=Completed)
+
+COBie.Event → FM UDR: WorkOrder (instance of a Job)
+  Event.Name → WorkOrder.workorder_ref
+  Event.Company.Name → WorkOrder.vendor_id
+  Event.Job.Name → WorkOrder.ppm_schedule_id or job reference
+  Event.StartDate → WorkOrder.start_date
+  Event.EndDate → WorkOrder.completion_date
+
+COBie.Document → FM UDR: Document
+  Document.Name → Document.document_name
+  Document.Category:
+    Certificates → ComplianceCertificate document
+    Operation and Maintenance → O&M manual
+    Manufacturer Instructions → installation/service manual
+    Shop Drawings → as-built drawing
+    Contract Drawings → design drawing
+    Contract Specifications → specification document
+    Product Data → product data sheet (PDS/TDS)
+    Test Reports → test/commissioning report
+    Punch List Items → defect list
+  Document.Stage → As Built, Approved, Submitted, Exact Requirement
+  Document.Table → entity type this document is attached to
+  Document.Table.Name → specific entity name (FK)
+  Document.ApprovalBy → Document.author or approval authority
+  Document.Path + Document.File → Document.storage_path + file_name
+
+COBie.Attribute → FM UDR: (additional attributes on any entity)
+  Used for all non-standard fields not captured in core COBie sheets.
+  Attribute.Table → entity type (Asset, Space, Component, Type, Zone, etc.)
+  Attribute.Table.Name → specific entity name this attribute belongs to
+  Attribute.Name → attribute/column name
+  Attribute.Value → attribute value
+  Attribute.Unit → unit of measure
+  Attribute.AllowedValues → valid values list
+
+COBie.Risk → FM UDR: Incident (extension entity)
+  Risk.Category → risk type (Change, Claim, Coordination, Environmental,
+    Function, IndoorAirQuality, Installation, RFI, Safety, Specification)
+  Risk.Consequence → risk consequence
+  Risk.LevelOfRisk → Very High, High, Moderate, Low, Unknown
+  Risk.Likelihood → Has Occurred, High, Moderate, Low, Unknown
+  Risk.Mitigation → mitigation action or control measure
+
+=============================================================================
+PART 5: BRICK SCHEMA COMPLETE CLASS VOCABULARY
+=============================================================================
+
+This section lists all BRICK schema classes relevant to FM operations with
+their common synonyms. Use this when source data contains BMS or IoT data
+tagged with BRICK-like terminology.
+
+BRICK LOCATION CLASSES:
+brick:Site = Site, Campus, Property, Estate, Development
+brick:Building = Building, Block, Tower, Structure, Unit
+brick:Floor = Floor, Level, Storey, Story, Deck
+brick:Room = Room, Office, Space, Chamber, Enclosure
+brick:Zone = Zone, Area, Region, Sector
+brick:HVAC_Zone = HVAC Zone, Thermal Zone, Air Zone, Conditioned Zone, Served Zone
+brick:Lighting_Zone = Lighting Zone, Light Zone, Illumination Zone
+brick:Fire_Zone = Fire Zone, Fire Compartment, Fire Section, Protected Zone
+brick:Electrical_Room = Electrical Room, Switch Room, Comms Room, IDF Room, MDF Room,
+  Data Centre, Server Room, Plant Room (electrical), Switchroom
+brick:Roof = Roof, Rooftop, Plant Deck, Roof Level
+brick:Parking_Space = Parking Space, Car Park Bay, Parking Bay, Vehicle Bay
+brick:Stairwell = Stairwell, Stair, Fire Stair, Emergency Stair
+
+BRICK EQUIPMENT PARENT CLASSES:
+brick:HVAC_Equipment = all HVAC equipment
+brick:Electrical_Equipment = all electrical equipment
+brick:Safety_Equipment = all life safety equipment
+brick:Lighting_Equipment = all lighting equipment
+brick:Meter = all metering equipment
+
+BRICK HVAC EQUIPMENT SUBCLASSES:
+brick:Air_Handling_Unit, brick:AHU
+brick:Fan_Coil_Unit, brick:FCU
+brick:Variable_Air_Volume_Box, brick:VAV, brick:VAV_Box
+brick:Chiller, brick:Water_Cooled_Chiller, brick:Air_Cooled_Chiller
+brick:Boiler, brick:Hot_Water_Boiler, brick:Steam_Boiler
+brick:Cooling_Tower, brick:Evaporative_Cooler
+brick:Heat_Exchanger, brick:Plate_Heat_Exchanger
+brick:Pump, brick:Chilled_Water_Pump, brick:Hot_Water_Pump, brick:Condenser_Water_Pump
+brick:Fan, brick:Supply_Fan, brick:Return_Fan, brick:Exhaust_Fan, brick:Relief_Fan
+brick:Damper, brick:Cooling_Coil, brick:Heating_Coil
+brick:Terminal_Unit, brick:Variable_Air_Volume_Box, brick:Fan_Powered_Box
+brick:Variable_Refrigerant_Flow, brick:VRF_Outdoor_Unit, brick:VRF_Indoor_Unit
+
+BRICK ELECTRICAL EQUIPMENT SUBCLASSES:
+brick:Meter, brick:Building_Meter, brick:Zone_Meter, brick:Floor_Meter
+brick:Electrical_Panel, brick:Distribution_Board, brick:Switchboard
+brick:Motor, brick:Variable_Frequency_Drive, brick:VFD
+brick:Transformer, brick:Uninterruptible_Power_Supply, brick:UPS
+brick:Generator, brick:Solar_Panel, brick:EV_Charging_Station
+brick:Lighting_Equipment, brick:Emergency_Lighting, brick:Luminaire
+
+BRICK SAFETY EQUIPMENT SUBCLASSES:
+brick:Fire_Alarm_Panel, brick:FACP
+brick:Smoke_Detector, brick:Heat_Detector, brick:CO_Detector
+brick:Sprinkler, brick:Deluge_System
+brick:Emergency_Lighting
+brick:Access_Control, brick:Card_Reader, brick:Biometric_Reader
+
+BRICK POINT CLASSES (sensor/data point vocabulary):
+Temperature Points:
+brick:Supply_Air_Temperature_Sensor = SAT Sensor, Discharge Air Temp, DAT
+brick:Return_Air_Temperature_Sensor = RAT Sensor, Return Air Temp
+brick:Outside_Air_Temperature_Sensor = OAT Sensor, Outdoor Air Temp, External Temp
+brick:Zone_Air_Temperature_Sensor = Room Temp, Space Temp, Zone Temp
+brick:Chilled_Water_Supply_Temperature_Sensor = CHWS Temp, Leaving Water Temp
+brick:Chilled_Water_Return_Temperature_Sensor = CHWR Temp, Entering Water Temp
+brick:Hot_Water_Supply_Temperature_Sensor = LPHW Flow Temp, Heating Flow Temp
+brick:Hot_Water_Return_Temperature_Sensor = LPHW Return Temp, Heating Return Temp
+
+Flow and Pressure Points:
+brick:Air_Flow_Sensor = Airflow Sensor, Air Volume Sensor, CFM Sensor
+brick:Water_Flow_Sensor = Flow Meter, GPM Sensor, Water Flow Rate
+brick:Pressure_Sensor = Pressure Transducer, Pressure Transmitter
+brick:Differential_Pressure_Sensor = DP Sensor, dP Sensor, Delta P
+
+Quality and Environmental Points:
+brick:CO2_Sensor = CO2 Sensor, Carbon Dioxide Sensor, IAQ Sensor
+brick:Occupancy_Sensor = Occupancy Detector, Motion Sensor, PIR Sensor
+brick:Humidity_Sensor = RH Sensor, Relative Humidity Sensor
+brick:VOC_Sensor = VOC Sensor, Air Quality Sensor
+
+Energy and Power Points:
+brick:Power_Sensor = Power Meter, kW Sensor, Power Transducer
+brick:Energy_Sensor = Energy Meter, kWh Meter, Consumption Meter
+brick:Current_Sensor = Current Transformer, CT, Ammeter
+brick:Voltage_Sensor = Voltmeter, Voltage Transducer
+
+Control Points:
+brick:Setpoint = Setpoint, Set Point, Target Value, SP
+brick:Temperature_Setpoint = Temp SP, Temperature Set Point, Cooling Setpoint, Heating Setpoint
+brick:Command = Command, Control Output, Output, Valve Position, Damper Position
+brick:Alarm = Alarm, Fault, Alert, Warning, Status Alarm
+brick:Status = Status, On/Off Status, Run Status, Fault Status, Binary Input
+
+=============================================================================
+PART 6: FM OPERATIONS VOCABULARY REFERENCE
+=============================================================================
+
+PROPERTY MANAGEMENT SPECIFIC TERMS:
+service charge = service charges, SC, svc charge, service costs,
+  outgoings (Australian), OPEX (operating expenditure), operating costs,
+  building costs, facilities costs, estate costs, property costs
+passing rent = current rent, rent passing, annual rent, rental income,
+  contracted rent, headline rent, face rent, ERV (Estimated Rental Value)
+WAULT = Weighted Average Unexpired Lease Term, weighted unexpired lease,
+  average lease length, lease expiry profile
+break clause = lease break, tenant break, landlord break, break option,
+  break right, break date, option to break
+rent review = rent review date, review date, upward only rent review,
+  open market rent review, RPI linked review, CPI linked review
+dilapidations = dilaps, terminal dilapidations, dilapidation claim,
+  end of lease condition, make good, reinstatement
+void = empty, vacant, unlet, unoccupied, vacancy, void unit, void space,
+  lettable void, unlet unit, free space, available unit
+
+COMPLIANCE AND REGULATORY TERMS:
+Responsible Person = RP, duty holder, building manager (informal),
+  managing agent (when acting as RP), person in control
+Accountable Person = AP, PAP (Principal Accountable Person),
+  BSA duty holder, Building Safety Act duty holder
+Golden Thread = building safety information, safety case record,
+  BSA documentation, digital record, building history record
+RIDDOR = Reporting of Injuries, Diseases and Dangerous Occurrences Regulations,
+  RIDDOR reportable, notifiable incident, HSE notification
+COSHH = Control of Substances Hazardous to Health, hazardous substance,
+  chemical risk, substance assessment
+HSE = Health and Safety Executive (UK regulator)
+BSR = Building Safety Regulator (UK, post-BSA 2022)
+EPC = Energy Performance Certificate, energy rating, SAP rating (residential),
+  SBEM rating (commercial), EPC band, MEES compliance
+MEES = Minimum Energy Efficiency Standards, minimum EPC, EPC minimum,
+  sub-standard EPC, E rating compliance, 2027 EPC requirement
+GRESB = Global Real Estate Sustainability Benchmark, ESG benchmark,
+  sustainability assessment, green building benchmark
+
+MAINTENANCE METHODOLOGY TERMS:
+PPM = Planned Preventive Maintenance, Planned Maintenance, Preventive Maintenance,
+  Preventative Maintenance, Scheduled Maintenance, Routine Maintenance
+SFG20 = BESA SFG20, Building Engineering Services Association standard,
+  maintenance specification, task schedule, task frequency, BESA guide
+Reactive = Reactive Maintenance, Breakdown Maintenance, Corrective Maintenance,
+  Unplanned Maintenance, Emergency Maintenance, Fault Repair
+TFM = Total Facilities Management, Total FM, Integrated FM, IFM,
+  bundled FM, full scope FM, managing contractor model
+Hard FM = Hard Services, M&E, Mechanical and Electrical, Building Services,
+  Technical Services, Engineering Services, M&E Maintenance
+Soft FM = Soft Services, Support Services, Non-Technical FM,
+  Cleaning, Security, Catering, Waste, Landscaping, Pest Control
+First Fix Rate = FFR, first time fix, fix on first visit, single visit resolution
+Recall = Recall Rate, Repeat Fault, Recurring Fault, Comeback,
+  Repeat Call, Repeat Visit, Return Visit, Failed First Fix
+PPM Compliance = PPM completion rate, planned maintenance KPI,
+  scheduled maintenance completion, PPM adherence
+CAFM = Computer Aided Facilities Management, FM Software, CMMS with space,
+  Integrated Workplace Management System, IWMS
+CMMS = Computerised Maintenance Management System, Maintenance Management System,
+  Work Order System, Job Management System, FM System
+
+BUILDING SYSTEMS ACRONYMS QUICK REFERENCE:
+AHU = Air Handling Unit
+BMS = Building Management System / BEMS = Building Energy Management System
+CCTV = Closed Circuit Television
+CHWS = Chilled Water Supply / CHWR = Chilled Water Return
+CWST = Cold Water Storage Tank
+DB = Distribution Board / MDB = Main Distribution Board
+DHW = Domestic Hot Water / DHWS = DHW System
+EF = Extract Fan / SF = Supply Fan
+EPC = Energy Performance Certificate
+F-Gas = Fluorinated Greenhouse Gas (refrigerants)
+FACP = Fire Alarm Control Panel / FAS = Fire Alarm System
+FCU = Fan Coil Unit
+HVAC = Heating, Ventilation and Air Conditioning
+HWS = Hot Water Supply / HWR = Hot Water Return
+LPHW = Low Pressure Hot Water (heating)
+LOLER = Lifting Operations and Lifting Equipment Regulations
+LV = Low Voltage / HV = High Voltage / MV = Medium Voltage
+MCC = Motor Control Centre
+MPAN = Meter Point Administration Number (electricity, UK)
+MPRN = Meter Point Reference Number (gas, UK)
+M&E = Mechanical and Electrical
+PAT = Portable Appliance Testing
+PHE = Plate Heat Exchanger
+PPM = Planned Preventive Maintenance
+PSSR = Pressure Systems Safety Regulations
+RTU = Rooftop Unit (packaged HVAC)
+UPS = Uninterruptible Power Supply
+VAV = Variable Air Volume
+VFD = Variable Frequency Drive / VSD = Variable Speed Drive
+VRF = Variable Refrigerant Flow / VRV = Variable Refrigerant Volume
+WSO = Written Scheme of Examination (pressure systems)

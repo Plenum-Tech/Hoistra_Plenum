@@ -1,0 +1,11 @@
+required_tokens:
+  - emergency lighting
+  - bs 5266
+issuing_body_tokens:
+  - niceic
+  - napit
+required_field_hints:
+  - duration
+  - test
+  - certificate
+notes: Emergency lighting

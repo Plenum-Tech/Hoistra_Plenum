@@ -1,0 +1,10 @@
+required_tokens:
+  - lca
+  - legionella control
+issuing_body_tokens:
+  - lca
+required_field_hints:
+  - member
+  - registration
+  - company
+notes: LCA registration

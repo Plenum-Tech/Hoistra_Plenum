@@ -1,0 +1,11 @@
+required_tokens:
+  - ukas
+  - accreditation
+  - asbestos
+issuing_body_tokens:
+  - ukas
+required_field_hints:
+  - accreditation
+  - number
+  - organisation
+notes: UKAS asbestos

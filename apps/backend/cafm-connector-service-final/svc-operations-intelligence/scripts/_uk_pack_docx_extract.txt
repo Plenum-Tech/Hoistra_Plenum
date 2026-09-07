@@ -1,0 +1,219 @@
+exists True size 59484
+=== PARAS 108 ===
+P1|Normal|UK Building Compliance Certification Pack
+P2|Normal|Property Management Platform ù Regulatory Reference v1.1
+P3|Normal|London, England ╖ Building-level and Vendor-level ╖ Legislation links + Sample format links per certificate
+P6|Normal|These certificates are the legal obligation of the Responsible Person or Principal Accountable Person ù typically the property management company acting on behalf of the building owner. Each certificate card includes a SAMPLE FORMAT row (amber band) with verified links to the official model form, a free fillable template, or the regulatory body's official source ù so your development team can see what each certificate looks like and identify the key fields for UDR document extraction.
+P58|Normal|These certificates must be held by FM companies and their subcontractors. Each card includes the live verification link for the relevant scheme register ù so the platform can provide the PM with a direct verification URL to check any contractor's current accreditation status in real time.
+P107|Normal|Version 1.1 ù Sample format links added June 2025. All links verified at time of publication. Regulatory body websites change; confirm current URL before implementing in platform. This pack covers England under UK law. Scotland, Wales, and Northern Ireland have minor legislative variations.
+=== TABLES 78 ===
+--- TABLE 0 rows=1 cols=1 ---
+T0R0|HOW TO READ EACH CERTIFICATE CARD
+--- TABLE 1 rows=1 cols=1 ---
+T1R0|SECTION 1: BUILDING-LEVEL CERTIFICATES ù Property Manager Responsibility
+--- TABLE 2 rows=1 cols=1 ---
+T2R0|A. FIRE SAFETY
+--- TABLE 3 rows=2 cols=1 ---
+T3R0|Fire Risk Assessment (FRA)
+T3R1|
+--- TABLE 4 rows=2 cols=1 ---
+T4R0|Fire Alarm System Service Certificate
+T4R1|
+--- TABLE 5 rows=2 cols=1 ---
+T5R0|Emergency Lighting Test Certificate
+T5R1|
+--- TABLE 6 rows=2 cols=1 ---
+T6R0|Sprinkler / Suppression System Annual Test Certificate
+T6R1|
+--- TABLE 7 rows=2 cols=1 ---
+T7R0|Fire Door Inspection Report
+T7R1|
+--- TABLE 8 rows=1 cols=1 ---
+T8R0|B. ELECTRICAL
+--- TABLE 9 rows=2 cols=1 ---
+T9R0|Electrical Installation Condition Report (EICR)
+T9R1|
+--- TABLE 10 rows=2 cols=1 ---
+T10R0|Electrical Installation Certificate (EIC) ù new/modified installations
+T10R1|
+--- TABLE 11 rows=2 cols=1 ---
+T11R0|Portable Appliance Testing (PAT) Register
+T11R1|
+--- TABLE 12 rows=1 cols=1 ---
+T12R0|C. GAS SAFETY
+--- TABLE 13 rows=2 cols=1 ---
+T13R0|Gas Safety Certificate ù Commercial (CP17)
+T13R1|
+--- TABLE 14 rows=2 cols=1 ---
+T14R0|Boiler Service Record
+T14R1|
+--- TABLE 15 rows=1 cols=1 ---
+T15R0|D. WATER SYSTEMS & LEGIONELLA
+--- TABLE 16 rows=2 cols=1 ---
+T16R0|Legionella Risk Assessment
+T16R1|
+--- TABLE 17 rows=2 cols=1 ---
+T17R0|Legionella Monitoring Log / Water Treatment Records
+T17R1|
+--- TABLE 18 rows=2 cols=1 ---
+T18R0|Cold Water Storage Tank Inspection Certificate
+T18R1|
+--- TABLE 19 rows=1 cols=1 ---
+T19R0|E. PRESSURE SYSTEMS
+--- TABLE 20 rows=2 cols=1 ---
+T20R0|Written Scheme of Examination (WSE) & Pressure Vessel Inspection Certificate
+T20R1|
+--- TABLE 21 rows=1 cols=1 ---
+T21R0|F. LIFTS & LIFTING EQUIPMENT (LOLER)
+--- TABLE 22 rows=2 cols=1 ---
+T22R0|LOLER Thorough Examination Report ù Passenger / Goods Lift
+T22R1|
+--- TABLE 23 rows=1 cols=1 ---
+T23R0|G. ASBESTOS
+--- TABLE 24 rows=2 cols=1 ---
+T24R0|Asbestos Management Survey Report
+T24R1|
+--- TABLE 25 rows=2 cols=1 ---
+T25R0|Asbestos Register (Living Document)
+T25R1|
+--- TABLE 26 rows=1 cols=1 ---
+T26R0|H. ENERGY & ENVIRONMENTAL
+--- TABLE 27 rows=2 cols=1 ---
+T27R0|Energy Performance Certificate (EPC)
+T27R1|
+--- TABLE 28 rows=2 cols=1 ---
+T28R0|Air Conditioning Inspection Report (TM44)
+T28R1|
+--- TABLE 29 rows=2 cols=1 ---
+T29R0|Display Energy Certificate (DEC) ù Public Buildings
+T29R1|
+--- TABLE 30 rows=2 cols=1 ---
+T30R0|ESOS Assessment Evidence Pack
+T30R1|
+--- TABLE 31 rows=1 cols=1 ---
+T31R0|I. REFRIGERANTS (F-GAS)
+--- TABLE 32 rows=2 cols=1 ---
+T32R0|F-Gas Leak Check Certificate / Refrigerant Log
+T32R1|
+--- TABLE 33 rows=1 cols=1 ---
+T33R0|J. HEALTH & SAFETY DOCUMENTATION
+--- TABLE 34 rows=2 cols=1 ---
+T34R0|Health & Safety Policy Statement
+T34R1|
+--- TABLE 35 rows=2 cols=1 ---
+T35R0|General Risk Assessment Register
+T35R1|
+--- TABLE 36 rows=2 cols=1 ---
+T36R0|Employers' Liability Insurance Certificate
+T36R1|
+--- TABLE 37 rows=1 cols=1 ---
+T37R0|K. BUILDING SAFETY ACT 2022 ù HRBs 18m+ or 7+ storeys
+--- TABLE 38 rows=2 cols=1 ---
+T38R0|Higher-Risk Building (HRB) Registration Certificate
+T38R1|
+--- TABLE 39 rows=2 cols=1 ---
+T39R0|Building Safety Case Report
+T39R1|
+--- TABLE 40 rows=1 cols=1 ---
+T40R0|SECTION 2: VENDOR & CONTRACTOR CERTIFICATES ù By Trade Specialisation
+--- TABLE 41 rows=1 cols=1 ---
+T41R0|A. GAS CONTRACTORS
+--- TABLE 42 rows=2 cols=1 ---
+T42R0|Gas Safe Registration Certificate (Company)
+T42R1|
+--- TABLE 43 rows=2 cols=1 ---
+T43R0|ACS Individual Competency Card (Gas Engineer)
+T43R1|
+--- TABLE 44 rows=1 cols=1 ---
+T44R0|B. ELECTRICAL CONTRACTORS
+--- TABLE 45 rows=2 cols=1 ---
+T45R0|NICEIC Approved Contractor Certificate
+T45R1|
+--- TABLE 46 rows=2 cols=1 ---
+T46R0|NAPIT Registration Certificate
+T46R1|
+--- TABLE 47 rows=2 cols=1 ---
+T47R0|City & Guilds 2382 ù BS 7671 18th Edition Certificate
+T47R1|
+--- TABLE 48 rows=1 cols=1 ---
+T48R0|C. FIRE PROTECTION CONTRACTORS
+--- TABLE 49 rows=2 cols=1 ---
+T49R0|BAFE SP203-1 Registration Certificate
+T49R1|
+--- TABLE 50 rows=2 cols=1 ---
+T50R0|NSI Gold Certificate ù Fire & Security Systems
+T50R1|
+--- TABLE 51 rows=2 cols=1 ---
+T51R0|BAFE SP101 ù Fixed Gaseous Suppression Systems
+T51R1|
+--- TABLE 52 rows=1 cols=1 ---
+T52R0|D. LIFT & VERTICAL TRANSPORTATION CONTRACTORS
+--- TABLE 53 rows=2 cols=1 ---
+T53R0|LEIA Membership Certificate
+T53R1|
+--- TABLE 54 rows=2 cols=1 ---
+T54R0|LOLER Competent Person / Inspection Body Authorisation
+T54R1|
+--- TABLE 55 rows=1 cols=1 ---
+T55R0|E. ASBESTOS CONTRACTORS
+--- TABLE 56 rows=2 cols=1 ---
+T56R0|HSE Asbestos Removal Licence (Licensed Contractor)
+T56R1|
+--- TABLE 57 rows=2 cols=1 ---
+T57R0|UKAS Accreditation Certificate ù Asbestos Surveying & Testing
+T57R1|
+--- TABLE 58 rows=2 cols=1 ---
+T58R0|Individual Asbestos Competency ù P402 / P403 / P404
+T58R1|
+--- TABLE 59 rows=1 cols=1 ---
+T59R0|F. WATER HYGIENE & LEGIONELLA CONTRACTORS
+--- TABLE 60 rows=2 cols=1 ---
+T60R0|Legionella Control Association (LCA) Registration Certificate
+T60R1|
+--- TABLE 61 rows=2 cols=1 ---
+T61R0|BTEC/BOHS Legionella Competency Certificate
+T61R1|
+--- TABLE 62 rows=1 cols=1 ---
+T62R0|G. HVAC & REFRIGERATION CONTRACTORS (F-GAS)
+--- TABLE 63 rows=2 cols=1 ---
+T63R0|F-Gas Company Certificate (REFCOM Registration)
+T63R1|
+--- TABLE 64 rows=2 cols=1 ---
+T64R0|Individual F-Gas Technician Certificate ù City & Guilds 2079
+T64R1|
+--- TABLE 65 rows=1 cols=1 ---
+T65R0|H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS
+--- TABLE 66 rows=2 cols=1 ---
+T66R0|CHAS Premium Plus / SSIP Certificate
+T66R1|
+--- TABLE 67 rows=2 cols=1 ---
+T67R0|ISO 9001:2015 Quality Management Certificate
+T67R1|
+--- TABLE 68 rows=2 cols=1 ---
+T68R0|ISO 14001:2015 Environmental Management Certificate
+T68R1|
+--- TABLE 69 rows=2 cols=1 ---
+T69R0|Contractors' Employers' Liability Insurance Certificate
+T69R1|
+--- TABLE 70 rows=2 cols=1 ---
+T70R0|Contractors' Public Liability Insurance Certificate
+T70R1|
+--- TABLE 71 rows=1 cols=1 ---
+T71R0|I. SECURITY CONTRACTORS
+--- TABLE 72 rows=2 cols=1 ---
+T72R0|SIA Approved Contractor Scheme (ACS) Certificate
+T72R1|
+--- TABLE 73 rows=2 cols=1 ---
+T73R0|Individual SIA Licence
+T73R1|
+--- TABLE 74 rows=2 cols=1 ---
+T74R0|NSI Gold Certificate ù Security Systems (NACOSS Gold)
+T74R1|
+--- TABLE 75 rows=1 cols=1 ---
+T75R0|J. PEST CONTROL CONTRACTORS
+--- TABLE 76 rows=2 cols=1 ---
+T76R0|BPCA Corporate Membership Certificate
+T76R1|
+--- TABLE 77 rows=2 cols=1 ---
+T77R0|Individual Pesticide Application Certificate ù PA1 + PA2 / PA6
+T77R1|

@@ -1,0 +1,12 @@
+required_tokens:
+  - loler
+  - competent person
+issuing_body_tokens:
+  - allianz
+  - bureau veritas
+  - hse
+required_field_hints:
+  - competent
+  - inspection
+  - body
+notes: LOLER competent person

@@ -1,0 +1,10 @@
+required_tokens:
+  - bpca
+  - pest
+issuing_body_tokens:
+  - bpca
+required_field_hints:
+  - membership
+  - member
+  - number
+notes: BPCA membership

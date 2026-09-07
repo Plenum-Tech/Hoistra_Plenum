@@ -1,0 +1,12 @@
+required_tokens:
+  - chas
+  - ssip
+issuing_body_tokens:
+  - chas
+  - ssip
+  - constructionline
+required_field_hints:
+  - member
+  - accreditation
+  - expiry
+notes: CHAS/SSIP

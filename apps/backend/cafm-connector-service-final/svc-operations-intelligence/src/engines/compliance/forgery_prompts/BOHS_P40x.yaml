@@ -1,0 +1,13 @@
+required_tokens:
+  - p402
+  - p403
+  - p404
+  - bohs
+issuing_body_tokens:
+  - bohs
+  - rsph
+required_field_hints:
+  - competency
+  - certificate
+  - candidate
+notes: BOHS P40x

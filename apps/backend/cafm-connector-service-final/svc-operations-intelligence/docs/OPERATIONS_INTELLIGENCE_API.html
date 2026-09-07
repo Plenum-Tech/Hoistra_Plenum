@@ -1,0 +1,629 @@
+<title>Operations Intelligence API — Compliance · Contracts · Energy</title>
+<style>
+  :root{
+    --paper:#ffffff; --surface:#f4f7f7; --surface-2:#eaf0f0; --border:#dbe4e4;
+    --ink:#0e1a1c; --muted:#546063; --faint:#7c8a8d;
+    --accent:#0d7a6e; --accent-soft:#0d7a6e14;
+    --get:#1f6feb; --post:#1a8a44; --patch:#b5730a;
+    --new:#0d7a6e; --fixed:#1f6feb; --changed:#b5730a;
+    --code-bg:#0f2023; --code-ink:#d7e6e4; --code-key:#7fd1c4; --code-str:#e0b68a; --code-com:#6b8a86;
+    --radius:11px; --maxw:940px;
+    --mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0b1416; --surface:#111e21; --surface-2:#16262a; --border:#213437;
+      --ink:#e7f0ef; --muted:#93a4a5; --faint:#6f8082;
+      --accent:#42c7b4; --accent-soft:#42c7b41f;
+      --get:#5b9bff; --post:#54c07f; --patch:#dfa64a;
+      --new:#42c7b4; --fixed:#5b9bff; --changed:#dfa64a;
+      --code-bg:#08110f; --code-ink:#cfe3e0;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#ffffff; --surface:#f4f7f7; --surface-2:#eaf0f0; --border:#dbe4e4;
+    --ink:#0e1a1c; --muted:#546063; --faint:#7c8a8d; --accent:#0d7a6e; --accent-soft:#0d7a6e14;
+    --get:#1f6feb; --post:#1a8a44; --patch:#b5730a; --new:#0d7a6e; --fixed:#1f6feb; --changed:#b5730a;
+    --code-bg:#0f2023; --code-ink:#d7e6e4;
+  }
+  :root[data-theme="dark"]{
+    --paper:#0b1416; --surface:#111e21; --surface-2:#16262a; --border:#213437;
+    --ink:#e7f0ef; --muted:#93a4a5; --faint:#6f8082; --accent:#42c7b4; --accent-soft:#42c7b41f;
+    --get:#5b9bff; --post:#54c07f; --patch:#dfa64a; --new:#42c7b4; --fixed:#5b9bff; --changed:#dfa64a;
+    --code-bg:#08110f; --code-ink:#cfe3e0;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--paper); color:var(--ink); font-family:var(--sans);
+    line-height:1.55; margin:0; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 22px 96px;}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono); font-size:.85em}
+
+  /* Header */
+  header.top{padding:52px 0 26px; border-bottom:1px solid var(--border); margin-bottom:8px}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 14px}
+  h1{font-size:clamp(28px,4.4vw,40px); line-height:1.08; letter-spacing:-.02em; margin:0 0 12px;
+    text-wrap:balance; font-weight:680}
+  .lede{color:var(--muted); font-size:16.5px; max-width:60ch; margin:0}
+  .meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:22px; font-size:13.5px; color:var(--muted)}
+  .meta b{color:var(--ink); font-weight:600}
+  .basewrap{margin-top:16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+  .base{font-family:var(--mono); font-size:13px; background:var(--surface); border:1px solid var(--border);
+    border-radius:8px; padding:7px 11px; color:var(--ink)}
+
+  /* Legend */
+  .legend{display:flex; gap:8px; flex-wrap:wrap; margin:26px 0 6px}
+  .tag{font-family:var(--mono); font-size:11px; letter-spacing:.06em; font-weight:600;
+    padding:3px 9px; border-radius:999px; text-transform:uppercase}
+  .tag.new{color:var(--new); background:color-mix(in srgb,var(--new) 13%,transparent); border:1px solid color-mix(in srgb,var(--new) 34%,transparent)}
+  .tag.fixed{color:var(--fixed); background:color-mix(in srgb,var(--fixed) 13%,transparent); border:1px solid color-mix(in srgb,var(--fixed) 34%,transparent)}
+  .tag.changed{color:var(--changed); background:color-mix(in srgb,var(--changed) 13%,transparent); border:1px solid color-mix(in srgb,var(--changed) 34%,transparent)}
+  .legend .desc{font-size:12.5px; color:var(--faint); align-self:center; margin-left:4px}
+
+  /* Section */
+  section.grp{margin-top:44px}
+  .grp > h2{font-size:13px; font-family:var(--mono); letter-spacing:.13em; text-transform:uppercase;
+    color:var(--muted); margin:0 0 4px; display:flex; align-items:baseline; gap:10px}
+  .grp > h2 .sref{color:var(--accent)}
+  .grp > p.blurb{margin:0 0 18px; color:var(--muted); font-size:14.5px; max-width:64ch}
+
+  /* Endpoint card */
+  .ep{border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
+    margin:14px 0; overflow:hidden}
+  .ep > .head{display:flex; align-items:center; gap:11px; padding:14px 16px; flex-wrap:wrap}
+  .verb{font-family:var(--mono); font-size:11.5px; font-weight:700; letter-spacing:.05em;
+    padding:4px 9px; border-radius:6px; color:#fff}
+  .verb.get{background:var(--get)} .verb.post{background:var(--post)} .verb.patch{background:var(--patch)}
+  .path{font-family:var(--mono); font-size:14.5px; color:var(--ink); font-weight:500}
+  .path .pv{color:var(--accent)}
+  .head .st{margin-left:auto}
+  .ep > .body{padding:0 16px 16px; border-top:1px solid var(--border)}
+  .ep .purpose{color:var(--muted); font-size:14px; margin:13px 0 4px}
+  .lbl{font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--faint); margin:16px 0 7px}
+
+  pre{margin:0; background:var(--code-bg); color:var(--code-ink); border-radius:9px;
+    padding:13px 15px; overflow-x:auto; font-family:var(--mono); font-size:12.6px; line-height:1.6}
+  pre .k{color:var(--code-key)} pre .s{color:var(--code-str)} pre .c{color:var(--code-com)}
+  .two{display:grid; grid-template-columns:1fr; gap:14px}
+  @media(min-width:720px){ .two{grid-template-columns:1fr 1fr} }
+
+  table.params{width:100%; border-collapse:collapse; font-size:13px; margin-top:4px}
+  table.params th{text-align:left; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--faint); font-weight:600; padding:6px 10px 6px 0; border-bottom:1px solid var(--border)}
+  table.params td{padding:7px 10px 7px 0; border-bottom:1px solid var(--border); vertical-align:top; color:var(--muted)}
+  table.params td:first-child{font-family:var(--mono); color:var(--ink); white-space:nowrap; font-size:12.5px}
+  table.params .req{color:var(--changed); font-family:var(--mono); font-size:10.5px; letter-spacing:.05em}
+  .ts{margin-top:14px}
+  .ts summary{cursor:pointer; font-size:12.5px; color:var(--accent); font-family:var(--mono);
+    letter-spacing:.03em; list-style:none; padding:5px 0}
+  .ts summary::-webkit-details-marker{display:none}
+  .ts summary::before{content:"› "; font-weight:700}
+  .ts[open] summary::before{content:"⌄ "}
+  .note{font-size:13px; color:var(--muted); background:var(--accent-soft); border-left:2px solid var(--accent);
+    border-radius:0 7px 7px 0; padding:9px 13px; margin-top:14px}
+  .note b{color:var(--ink)}
+  footer{margin-top:56px; padding-top:22px; border-top:1px solid var(--border); color:var(--faint); font-size:13px}
+  footer code{color:var(--muted)}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">svc-operations-intelligence :8009 · Frontend handoff</p>
+    <h1>Operations Intelligence API — Compliance · Contracts · Energy</h1>
+    <p class="lede">The full endpoint reference for all three engines in one service. Compliance (Feature A) carries this sprint's <span class="tag new" style="vertical-align:1px">New</span>/<span class="tag fixed" style="vertical-align:1px">Fixed</span>/<span class="tag changed" style="vertical-align:1px">Changed</span> work; Contract Performance (B) and Energy Intelligence (C) are the full existing feature set. Contracts pulled straight from the service.</p>
+    <div class="basewrap">
+      <span class="base">/backend/ops-intelligence/api/<b style="color:var(--accent)">compliance</b></span>
+      <span class="base">…/api/<b style="color:var(--accent)">contract-performance</b></span>
+      <span class="base">…/api/<b style="color:var(--accent)">energy</b></span>
+    </div>
+    <div class="meta">
+      <span><b>Auth</b> session</span>
+      <span><b>Content-Type</b> application/json</span>
+      <span><b>Every engine exposes</b> <code>GET /saved-space/summary</code> + <code>GET·POST /approvals[/{id}/decide]</code></span>
+    </div>
+    <div class="legend">
+      <span class="tag new">New</span>
+      <span class="tag fixed">Fixed</span>
+      <span class="tag changed">Changed</span>
+      <span class="desc">tags apply to the Compliance sprint work · Contracts &amp; Energy are existing features</span>
+    </div>
+  </header>
+
+  <!-- MASS IMPORT -->
+  <section class="grp">
+    <h2>Mass import <span class="sref">§3.1</span></h2>
+    <p class="blurb">Ingest up to 5 compliance PDFs in one call — classified, field-extracted, forgery-checked and saved as drafts in parallel, one <code>document_id</code> each. One file failing never blocks the others.</p>
+
+    <div class="ep">
+      <div class="head">
+        <span class="verb post">POST</span>
+        <span class="path">/<span class="pv">ingest-batch</span></span>
+        <span class="st"><span class="tag new">New</span></span>
+      </div>
+      <div class="body">
+        <p class="purpose">Parallel bulk ingest. Each file → classify → extract → draft upsert (which itself fires membership-pending, the PM-confirm approval, and auto-verify). Max 5.</p>
+        <div class="two">
+          <div>
+            <div class="lbl">Request</div>
+<pre><span class="k">{</span>
+  <span class="k">"files"</span>: [                <span class="c">// 1–5</span>
+    {
+      <span class="k">"document_id"</span>: <span class="s">"uuid"</span>,   <span class="c">// from doc-rag</span>
+      <span class="k">"file_name"</span>: <span class="s">"epc.pdf"</span>,
+      <span class="k">"source_text"</span>: <span class="s">"..."</span>,    <span class="c">// or</span>
+      <span class="k">"pdf_base64"</span>: <span class="s">"..."</span>,
+      <span class="k">"certificate_type_code"</span>: <span class="s">null</span>, <span class="c">// optional; else classified</span>
+      <span class="k">"cert_scope"</span>: <span class="s">null</span>,
+      <span class="k">"site_id"</span>: <span class="s">null</span>, <span class="k">"vendor_id"</span>: <span class="s">null</span>
+    }
+  ],
+  <span class="k">"organization_id"</span>: <span class="s">"uuid"</span>,
+  <span class="k">"country_code"</span>: <span class="s">"UK"</span>
+<span class="k">}</span></pre>
+          </div>
+          <div>
+            <div class="lbl">Response</div>
+<pre><span class="k">{</span>
+  <span class="k">"ok"</span>: <span class="s">true</span>, <span class="k">"batch_id"</span>: <span class="s">"uuid"</span>,
+  <span class="k">"requested"</span>: <span class="s">3</span>, <span class="k">"succeeded"</span>: <span class="s">3</span>, <span class="k">"failed"</span>: <span class="s">0</span>,
+  <span class="k">"results"</span>: [{
+    <span class="k">"ok"</span>: <span class="s">true</span>, <span class="k">"stage"</span>: <span class="s">"done"</span>,
+    <span class="k">"document_id"</span>: <span class="s">"uuid"</span>,
+    <span class="k">"certificate_id"</span>: <span class="s">"uuid"</span>,
+    <span class="k">"certificate_type_code"</span>: <span class="s">"EPC"</span>,
+    <span class="k">"cert_scope"</span>: <span class="s">"Building"</span>,
+    <span class="k">"status"</span>: <span class="s">"Current"</span>,
+    <span class="k">"classification"</span>: {<span class="k">"method"</span>:<span class="s">"claude"</span>,<span class="k">"confidence"</span>:<span class="s">"high"</span>},
+    <span class="k">"requires_pm_confirmation"</span>: <span class="s">true</span>,
+    <span class="k">"membership_queue_item_id"</span>: <span class="s">"uuid"</span>,
+    <span class="k">"verification"</span>: { <span class="c">/* §8 result */</span> },
+    <span class="k">"error"</span>: <span class="s">null</span>
+  }]
+<span class="k">}</span></pre>
+          </div>
+        </div>
+        <details class="ts"><summary>TS client</summary>
+<pre><span class="k">ingestComplianceBatch</span>({ files, organizationId?, countryCode? })</pre></details>
+        <div class="note"><b>Draft, not final.</b> Every file lands as a draft awaiting PM confirm + a Keep/Remove membership card. Reject a 6th file with <code>422</code>.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REMOVE / ARCHIVE -->
+  <section class="grp">
+    <h2>Remove with confirmation <span class="sref">§3 · soft-archive</span></h2>
+    <p class="blurb">List certificates of one type, let the PM multi-select, then soft-archive the chosen set — reversible, row + audit kept. Archived certs drop out of lists, KPIs and scans.</p>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/<span class="pv">certificates</span></span><span class="st"><span class="tag changed">Changed</span></span></div>
+      <div class="body">
+        <p class="purpose">The portfolio list — now filterable by type for the removal picker.</p>
+        <div class="lbl">Query params (new ones bold)</div>
+        <table class="params">
+          <tr><th>Param</th><th>Type</th><th>Notes</th></tr>
+          <tr><td><b>certificate_type_code</b></td><td>string</td><td><span class="req">new</span> code or synonym — <code>FRA</code>, <code>"Gas Safe"</code></td></tr>
+          <tr><td><b>include_archived</b></td><td>bool</td><td><span class="req">new</span> default <code>false</code> — hides soft-archived</td></tr>
+          <tr><td>cert_scope</td><td>Building·Vendor</td><td></td></tr>
+          <tr><td>status · risk_filter · draft · limit</td><td>—</td><td>unchanged</td></tr>
+        </table>
+        <details class="ts"><summary>TS client</summary>
+<pre><span class="k">fetchCertificatesByType</span>(<span class="s">"FRA"</span>, { cert_scope?, organizationId?, includeArchived?, limit? })</pre></details>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/certificates/<span class="pv">archive</span></span><span class="st"><span class="tag new">New</span></span></div>
+      <div class="body">
+        <p class="purpose">Soft-archive the PM-confirmed set. Reversible. Multi-select.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div>
+<pre><span class="k">{</span>
+  <span class="k">"certificate_ids"</span>: [<span class="s">"uuid"</span>, <span class="s">"uuid"</span>],
+  <span class="k">"reason"</span>: <span class="s">"duplicate"</span>,
+  <span class="k">"organization_id"</span>: <span class="s">"uuid"</span>
+<span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div>
+<pre><span class="k">{</span>
+  <span class="k">"ok"</span>: <span class="s">true</span>, <span class="k">"requested"</span>: <span class="s">2</span>, <span class="k">"archived"</span>: <span class="s">2</span>,
+  <span class="k">"results"</span>: [{ <span class="k">"certificate_id"</span>:<span class="s">"uuid"</span>, <span class="k">"ok"</span>:<span class="s">true</span> }]
+<span class="k">}</span></pre></div>
+        </div>
+        <details class="ts"><summary>TS client</summary>
+<pre><span class="k">archiveCertificates</span>(ids, { reason?, archivedBy?, organizationId? })</pre></details>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/certificates/<span class="pv">unarchive</span></span><span class="st"><span class="tag new">New</span></span></div>
+      <div class="body">
+        <p class="purpose">Reverse a soft-archive — restores visibility.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div>
+<pre><span class="k">{</span> <span class="k">"certificate_ids"</span>: [<span class="s">"uuid"</span>], <span class="k">"organization_id"</span>: <span class="s">"uuid"</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div>
+<pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"requested"</span>:<span class="s">1</span>, <span class="k">"restored"</span>:<span class="s">1</span>, <span class="k">"results"</span>:[…] <span class="k">}</span></pre></div>
+        </div>
+        <details class="ts"><summary>TS client</summary>
+<pre><span class="k">unarchiveCertificates</span>(ids, { restoredBy?, organizationId? })</pre></details>
+        <div class="note">A ready-made picker component ships too: <code>RemoveCertificatesModal</code> (list → multi-select → two-step confirm → archive).</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VERIFICATION -->
+  <section class="grp">
+    <h2>Accreditation verification <span class="sref">§8</span></h2>
+    <p class="blurb">Verify a certificate against its authoritative source. These endpoints existed but were non-functional until the sources table + register store were fixed — <b>15 cert types now return real <code>verified</code> results</b> (EPC/DEC/TM44 keyless, ESOS via Companies House, EL/PL insurance via FCA, 8 data-dump registers).</p>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">verify</span></span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body">
+        <p class="purpose">Verify by type + identifiers. Picks the channel (public_api / data_dump / website) and returns the register result.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div>
+<pre><span class="k">{</span>
+  <span class="k">"certificate_type_code"</span>: <span class="s">"EPC"</span>,
+  <span class="k">"certificate_number"</span>: <span class="s">"0568-…-8254"</span>,
+  <span class="k">"vendor_name"</span>: <span class="s">null</span>, <span class="k">"company_number"</span>: <span class="s">null</span>,
+  <span class="k">"insurer_name"</span>: <span class="s">null</span>, <span class="k">"postcode"</span>: <span class="s">null</span>,
+  <span class="k">"certificate_id"</span>: <span class="s">null</span>, <span class="k">"persist"</span>: <span class="s">true</span>
+<span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div>
+<pre><span class="k">{</span>
+  <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"verified"</span>:<span class="s">true</span>,
+  <span class="k">"status"</span>:<span class="s">"verified"</span>, <span class="k">"channel"</span>:<span class="s">"public_api"</span>,
+  <span class="k">"source_url"</span>:<span class="s">"https://…/energy-certificate/…"</span>,
+  <span class="k">"checked_at"</span>:<span class="s">"2026-08-…"</span>,
+  <span class="k">"evidence"</span>:{ <span class="k">"current_energy_rating"</span>:<span class="s">"B"</span>,
+              <span class="k">"valid_until"</span>:<span class="s">"5 September 2031"</span> }
+<span class="k">}</span></pre></div>
+        </div>
+        <div class="note"><code>status</code> ∈ <code>verified · failed · needs_config · needs_partner · website_only · n_a · dump_miss</code>. <code>verified</code> is <code>true / false / null</code>.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/certificates/<span class="pv">{id}</span>/verify</span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body"><p class="purpose">Verify a stored certificate by id (reads its number/vendor from the row). Same response as <code>/verify</code>. <span style="color:var(--faint)">TS: <code>cccVerifyCertificate(id)</code></span></p></div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">reverify</span></span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body">
+        <p class="purpose">90-day re-verification of active certs whose last check is stale. <b>Also runs automatically on every <code>/scan</code></b> now.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"organization_id"</span>:<span class="s">null</span>, <span class="k">"limit"</span>:<span class="s">50</span>, <span class="k">"force"</span>:<span class="s">false</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"due_count"</span>:<span class="s">4</span>, <span class="k">"processed"</span>:<span class="s">4</span>,
+  <span class="k">"cutoff"</span>:<span class="s">"2026-05-13"</span>, <span class="k">"results"</span>:[…] <span class="k">}</span></pre></div>
+        </div>
+        <details class="ts"><summary>TS client</summary><pre><span class="k">reverifyDueCertificates</span>({ organizationId?, limit?, force? })</pre></details>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">auto-verify</span></span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body"><p class="purpose">Dashboard-load verify of all listed active certs (skips already-verified). <span style="color:var(--faint)">TS: <code>autoVerifyListedCertificates({ organizationId?, limit?, skipVerified? })</code></span></p>
+        <div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"listed_count"</span>:…, <span class="k">"verified_count"</span>:…, <span class="k">"processed"</span>:…, <span class="k">"results"</span>:[…] <span class="k">}</span></pre>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/<span class="pv">verification-sources</span></span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body"><p class="purpose">The 54 per-type source rows (channel / register / URL / api_available). Query: <code>cert_scope</code>, <code>channel</code>. Auto-seeds if empty.</p>
+      <pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"count"</span>:<span class="s">54</span>, <span class="k">"sources"</span>:[{ <span class="k">"certificate_type_code"</span>,<span class="k">"channel"</span>,<span class="k">"register"</span>,<span class="k">"source_url"</span>,<span class="k">"api_available"</span> }] <span class="k">}</span></pre>
+      <div class="note">Also: <code>POST /verification-sources/seed</code>, <code>GET /catalogue</code> (54-card catalogue with channel badges), <code>POST /verification-dumps/ingest</code> &amp; <code>/run-cron</code> (Channel A weekly dumps), <code>GET·POST /register-search</code> (company-name register search).</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MEMBERSHIP -->
+  <section class="grp">
+    <h2>Vector-DB membership <span class="sref">§3.2</span></h2>
+    <p class="blurb">Keep or Remove an ingested PDF from the vector store, on explicit confirmation. Was returning <code>500</code> (missing audit table) — now fixed and logged.</p>
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/documents/<span class="pv">{document_id}</span>/membership</span><span class="st"><span class="tag fixed">Fixed</span></span></div>
+      <div class="body">
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"action"</span>:<span class="s">"keep"</span>, <span class="c">// or "remove"</span>
+  <span class="k">"organization_id"</span>:<span class="s">null</span>, <span class="k">"actor"</span>:<span class="s">null</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"document_id"</span>:<span class="s">"uuid"</span>,
+  <span class="k">"action"</span>:<span class="s">"keep"</span>, <span class="k">"reindex_result"</span>:{…} <span class="k">}</span></pre></div>
+        </div>
+        <details class="ts"><summary>TS client</summary><pre><span class="k">decideDocumentMembership</span>(documentId, <span class="s">"keep"</span>|<span class="s">"remove"</span>, { organizationId?, actor? })</pre></details>
+        <div class="note"><b>Keep</b> re-indexes into the vector DB (needs doc-rag reachable). <b>Remove</b> detaches. Both write a membership-audit row.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FORENSICS + SCAN -->
+  <section class="grp">
+    <h2>Forensics &amp; scan <span class="sref">§7 · §8.6</span></h2>
+    <p class="blurb">Two existing endpoints gained fields this sprint.</p>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">forensics</span></span><span class="st"><span class="tag changed">Changed</span></span></div>
+      <div class="body">
+        <p class="purpose">Authenticity scoring. New: accepts a <code>digital_signature</code> block (cryptographic PDF-signature result from the ingest agent) and folds it into the verdict.</p>
+        <div class="two">
+          <div><div class="lbl">Request (new field)</div><pre><span class="k">{</span> <span class="c">/* existing fields… */</span>
+  <span class="k">"digital_signature"</span>: {   <span class="c">// new</span>
+    <span class="k">"signed"</span>:<span class="s">true</span>, <span class="k">"intact"</span>:<span class="s">false</span>,
+    <span class="k">"coverage"</span>:<span class="s">"full"</span>, <span class="k">"signer"</span>:<span class="s">"…"</span>
+  } <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>,
+  <span class="k">"ccc_verdict"</span>:<span class="s">"edited"</span>, <span class="c">// genuine·suspect·edited</span>
+  <span class="k">"risk_score"</span>:<span class="s">75</span>,
+  <span class="k">"findings"</span>:[{<span class="k">"code"</span>:<span class="s">"signature_invalid"</span>,…}],
+  <span class="k">"authenticity_warning"</span>:<span class="s">"…"</span>,
+  <span class="k">"allow_extract"</span>:<span class="s">true</span> <span class="k">}</span></pre></div>
+        </div>
+        <div class="note">Tampered signature → <code>edited</code> (feeds §9 forgery alert). Valid → authenticity boost. Not signed → neutral.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">scan</span></span><span class="st"><span class="tag changed">Changed</span></span></div>
+      <div class="body">
+        <p class="purpose">Nightly-equivalent rescan (lifecycle ladder + vendor risk/block). New: response carries a <code>reverification</code> block — every rescan now runs the 90-day re-verify.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"scope"</span>:<span class="s">"all"</span> <span class="c">// building·vendor</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response (new field)</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"building_scanned"</span>:…, <span class="k">"vendor_scanned"</span>:…,
+  <span class="k">"alerts_created"</span>:…, <span class="k">"blocks_set"</span>:…,
+  <span class="k">"reverification"</span>:{ <span class="k">"due_count"</span>:…, <span class="k">"processed"</span>:…,
+                  <span class="k">"cutoff"</span>:<span class="s">"2026-05-13"</span> }  <span class="c">// new</span>
+<span class="k">}</span></pre></div>
+        </div>
+        <div class="note"><b>Also on ingest now:</b> vendor certs fire their renewal-email alert + block on the draft upsert (previously scan-only) — so alerts don't wait for a scan.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ACCREDITATION -->
+  <section class="grp">
+    <h2>Vendor accreditation <span class="sref">§6 · A3</span></h2>
+    <p class="blurb">The vendor / contractor track — coverage %, the pre-engagement passport, operative competency cards, contractor recommendation, and the on-platform registration check. Vendor accreditation <em>rows</em> come from <code>GET /certificates?cert_scope=Vendor</code> (see Remove section).</p>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/coverage/<span class="pv">vendors</span></span></div>
+      <div class="body">
+        <p class="purpose">Per-vendor pack coverage %. Query: <code>country_code=UK</code>, <code>trade_category</code>.</p>
+<pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"average_coverage_pct"</span>:<span class="s">72</span>, <span class="k">"vendors"</span>:[{
+  <span class="k">"vendor_id"</span>,<span class="k">"vendor_name"</span>,<span class="k">"block_state"</span>,
+  <span class="k">"required"</span>,<span class="k">"on_record"</span>,<span class="k">"gaps"</span>:[…],<span class="k">"coverage_pct"</span>,
+  <span class="k">"compliant"</span>,<span class="k">"non_compliant"</span>,<span class="k">"cleared"</span> }] <span class="k">}</span></pre>
+        <div class="note">Building side: <code>GET /coverage/buildings</code> · TS: <code>fetchVendorCoverage()</code> / <code>fetchBuildingCoverage()</code>.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/vendors/<span class="pv">{vendor_id}</span>/passport</span></div>
+      <div class="body">
+        <p class="purpose">Pre-engagement vendor passport — posture, accreditations, insurance, operative skills, Companies-House.</p>
+<pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"vendor"</span>:{…},
+  <span class="k">"posture"</span>:{ <span class="k">"status"</span>:<span class="s">"clear"</span>,<span class="k">"label"</span>:<span class="s">"…"</span>,
+    <span class="k">"current_count"</span>,<span class="k">"at_risk_count"</span>,<span class="k">"lapsed_count"</span>,<span class="k">"blocked"</span> },
+  <span class="k">"coverage"</span>:{…}, <span class="k">"accreditations"</span>:[…], <span class="k">"insurance"</span>:[…],
+  <span class="k">"skills"</span>:[…], <span class="k">"companies_house"</span>:{…} <span class="k">}</span></pre>
+        <div class="note">Share a read-only link: <code>POST /vendors/{id}/passport/share</code> <code>{ ttl_hours:168, recipient? }</code> → <code>{ share_url, token, expires_at }</code>; resolve public via <code>GET /passport/share/{token}</code>. TS: <code>fetchVendorPassport()</code> · <code>shareVendorPassport()</code>.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/<span class="pv">resource-skills</span></span></div>
+      <div class="body">
+        <p class="purpose">Operative competency cards (ACS / SIA / P40x / PAx) per vendor. Query: <code>vendor_id</code>.</p>
+<pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"count"</span>:…, <span class="k">"skills"</span>:[{ <span class="k">"id"</span>,<span class="k">"vendor_id"</span>,<span class="k">"operative_name"</span>,
+  <span class="k">"skill_type_code"</span>,<span class="k">"certificate_number"</span>,<span class="k">"expiry_date"</span>,<span class="k">"status"</span>,<span class="k">"days_to_expiry"</span> }] <span class="k">}</span></pre>
+        <div class="note"><code>POST /resource-skills</code> upserts a card <code>{ vendor_id, skill_type_code, operative_name?, certificate_number?, expiry_date? }</code>. TS: <code>listResourceSkills(vendorId)</code>.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/contractors/<span class="pv">recommend</span></span></div>
+      <div class="body"><p class="purpose">Suggest approved contractors for a required accreditation (used in renewal/booking drafts). <code>{ required_accreditation, organization_id?, limit:5 }</code> → <code>{ ok, count, contractors:[…] }</code>.</p></div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/<span class="pv">vendor-registration-check</span></span></div>
+      <div class="body">
+        <p class="purpose">Is the vendor registered on-platform &amp; currently compliant, and what's the Verify-now register URL.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"vendor_name"</span>:<span class="s">"Acme Ltd"</span>,
+  <span class="k">"certificate_type_code"</span>:<span class="s">"SIA_ACS"</span>,
+  <span class="k">"accreditation_number"</span>:<span class="s">null</span>,
+  <span class="k">"cert_scope"</span>:<span class="s">"Vendor"</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>,
+  <span class="k">"platform_compliance"</span>:<span class="s">"registered"</span>,
+  <span class="k">"is_compliant"</span>:<span class="s">true</span>,
+  <span class="k">"verification_url"</span>:<span class="s">"https://…"</span>,
+  <span class="k">"status_message"</span>:<span class="s">"…"</span> <span class="k">}</span></pre></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ALERTS / APPROVALS -->
+  <section class="grp">
+    <h2>Alerts &amp; approvals queue <span class="sref">§9 · the alert table</span></h2>
+    <p class="blurb">The single queue behind every compliance alert. Each row is one item; <code>item_type</code> tells you which alert it is, and any row with an <code>email_draft</code> is a ready-to-send message (renewal / forgery / verification). This is the table the alert UI reads and the "Confirm &amp; send" button writes to.</p>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/<span class="pv">approvals</span></span></div>
+      <div class="body">
+        <p class="purpose">List queue items (alerts). Query: <code>status=pending</code>, <code>source_feature=A</code>, <code>organization_id</code>, <code>limit</code>.</p>
+<pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"count"</span>:…, <span class="k">"items"</span>:[{
+  <span class="k">"id"</span>:<span class="s">"uuid"</span>, <span class="k">"item_type"</span>:<span class="s">"vendor_email"</span>,
+  <span class="k">"severity"</span>:<span class="s">"Critical"</span>, <span class="k">"status"</span>:<span class="s">"pending"</span>,
+  <span class="k">"summary"</span>:<span class="s">"Lapsed: Acme — SIA ACS"</span>,
+  <span class="k">"related_entity_type"</span>:<span class="s">"vendor"</span>, <span class="k">"related_entity_id"</span>:<span class="s">"uuid"</span>,
+  <span class="k">"payload"</span>:{ <span class="k">"certificate_id"</span>,<span class="k">"risk"</span>,… },
+  <span class="k">"email_draft"</span>:{ <span class="k">"to"</span>,<span class="k">"subject"</span>,<span class="k">"body"</span>,<span class="k">"mailto_uri"</span> }
+}] <span class="k">}</span></pre>
+        <div class="lbl">item_type — the alert taxonomy</div>
+        <table class="params">
+          <tr><th>item_type</th><th>Class</th><th>Meaning</th></tr>
+          <tr><td>vendor_email</td><td>§9·1</td><td>vendor renewal email (High/Lapsed)</td></tr>
+          <tr><td>vendor_risk</td><td>§9·1</td><td>Medium-risk informational</td></tr>
+          <tr><td>block_ack / block_lift</td><td>§5</td><td>vendor blocked / block lifted</td></tr>
+          <tr><td>alert / booking_request</td><td>§9·1</td><td>building ladder renewal / booking</td></tr>
+          <tr><td>forgery_alert</td><td>§9·2</td><td>authenticity suspect/edited</td></tr>
+          <tr><td>verification_human</td><td>§9·3</td><td>register check needs a human</td></tr>
+          <tr><td>certificate_confirm</td><td>—</td><td>draft awaiting PM confirm</td></tr>
+          <tr><td>remedial</td><td>—</td><td>Fail / C1 remedial action</td></tr>
+          <tr><td>vector_membership</td><td>§3.2</td><td>Keep/Remove PDF from vector DB</td></tr>
+        </table>
+        <details class="ts"><summary>TS client</summary><pre><span class="k">listComplianceApprovals</span>()</pre></details>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/approvals/<span class="pv">{item_id}</span>/decide</span></div>
+      <div class="body">
+        <p class="purpose">Act on an alert — approve / edit / dismiss. On approve of an email item it prepares the send (mailto handoff, or platform-send via Graph if <code>EMAIL_DELIVERY_MODE=platform_send</code>).</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span>
+  <span class="k">"decision"</span>:<span class="s">"approve"</span>, <span class="c">// approve·edit·dismiss</span>
+  <span class="k">"pm_notes"</span>:<span class="s">null</span>,
+  <span class="k">"edited_payload"</span>:<span class="s">null</span>,
+  <span class="k">"prepare_email_handoff"</span>:<span class="s">true</span>
+<span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span>
+  <span class="k">"ok"</span>:<span class="s">true</span>,
+  <span class="k">"status"</span>:<span class="s">"handoff_ready"</span>, <span class="c">// or "sent"</span>
+  <span class="k">"email"</span>:{ <span class="k">"to"</span>,<span class="k">"subject"</span>,<span class="k">"body"</span>,<span class="k">"mailto_uri"</span> }
+<span class="k">}</span></pre></div>
+        </div>
+        <details class="ts"><summary>TS client</summary><pre><span class="k">decideComplianceApproval</span>(itemId, <span class="s">"approve"</span>|<span class="s">"edit"</span>|<span class="s">"dismiss"</span>, { pm_notes?, edited_payload? })</pre></details>
+        <div class="note"><b>Send behaviour:</b> default <code>handoff</code> returns a <code>mailto_uri</code> for the PM's client. Set <code>EMAIL_DELIVERY_MODE=platform_send</code> (+ Graph creds) to actually deliver → <code>status:"sent"</code>.</div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/certificates/<span class="pv">renewal-email</span></span></div>
+      <div class="body"><p class="purpose">Draft &amp; queue a renewal email for one certificate. <code>{ certificate_id? | certificate_number? }</code> → <code>{ ok, queue_item_id, email_draft }</code>. TS: <code>draftRenewalEmail()</code>.</p></div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb get">GET</span><span class="path">/approvals/one-click/<span class="pv">{token}</span></span></div>
+      <div class="body"><p class="purpose">Email one-click links (from alert emails). <code>/peek</code> loads the item for the in-app deep-link; <code>POST /redeem</code> applies the Approve/Acknowledge. TS: <code>peekEmailApprovalToken()</code> · <code>redeemEmailApprovalToken()</code>.</p></div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb patch">PATCH</span><span class="path">/certificates/<span class="pv">{id}</span>/remedial-status</span></div>
+      <div class="body"><p class="purpose">Set remedial status on a Fail/C1 item. <code>{ remedial_status: "Open"|"In Progress"|"Closed" }</code>. Also: <code>POST /building-change</code> invalidates certs after a building change (raises alerts). TS: <code>setRemedialStatus()</code> · <code>flagBuildingChange()</code>.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ CONTRACT PERFORMANCE ============ -->
+  <section class="grp" style="margin-top:64px; padding-top:30px; border-top:2px solid var(--border)">
+    <h2 style="font-size:15px; color:var(--accent)">Contract Performance <span style="color:var(--faint); letter-spacing:0">— Feature B · /api/contract-performance · the Vendors dashboard</span></h2>
+    <p class="blurb">Vendor UDR scoring: extract contracts &amp; SLAs, score work orders against them, roll up monthly scorecards, and verify invoices line-by-line. Feeds the Vendors dashboard + Approvals.</p>
+
+    <div class="ep"><div class="body" style="padding-top:14px">
+      <div class="lbl" style="margin-top:0">Contracts &amp; SLA</div>
+      <table class="params">
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/contracts/extract</td><td>Extract contract/SLA fields from a document (auto-ingest by default)</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/contracts/ingest</td><td>Save extracted contract as a draft</td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/contracts · /contracts/{id}</td><td>List / read contract parameters</td></tr>
+        <tr><td><span class="verb patch">PATCH</span></td><td>/contracts/{id}</td><td>Edit contract fields <code>{ updates, actor }</code></td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/contracts/{id}/confirm</td><td>PM confirms the draft → live</td></tr>
+      </table>
+      <div class="lbl">Asset criticality (weights)</div>
+      <table class="params">
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/asset-criticality</td><td>Propose criticality <code>{ asset_id, load_dependence, function_type, sub_meter_high }</code></td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/asset-criticality/{id}/approve</td><td>Approve a proposed criticality</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/asset-criticality/propose-from-udr</td><td>Auto-propose from UDR data</td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/asset-criticality · /admin/weights</td><td>List criticalities · scoring weights</td></tr>
+      </table>
+      <div class="lbl">Scoring &amp; scorecards</div>
+      <table class="params">
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/score/work-orders</td><td>Score WOs vs SLA <code>{ work_orders[], vendor_id, score_month }</code></td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/score/from-udr</td><td>Score straight from UDR buckets (+ generate scorecard)</td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/udr/work-order-buckets</td><td>The WO buckets used for scoring</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/scorecards/monthly</td><td>Monthly vendor scorecard <code>{ vendor_id, score_month, ppm_visits[] }</code></td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/scorecards · /saved-space/summary</td><td>List scorecards · dashboard KPIs</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/fm-staleness</td><td>Flag stale vendor reporting</td></tr>
+      </table>
+    </div></div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/invoices/<span class="pv">extract-verify</span></span><span class="st"><span class="tag" style="color:var(--faint);border:1px solid var(--border)">flagship</span></span></div>
+      <div class="body">
+        <p class="purpose">Extract invoice lines from a document and verify each against completed work orders + pricing — the line-level "did we actually get billed correctly" check.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"source_text"</span>:<span class="s">"…"</span>,   <span class="c">// or lines[]</span>
+  <span class="k">"work_orders"</span>:[…], <span class="k">"invoice_ref"</span>:<span class="s">"INV-…"</span>,
+  <span class="k">"vendor_id"</span>:<span class="s">"uuid"</span>, <span class="k">"labour_day_rate"</span>:<span class="s">280</span>,
+  <span class="k">"parts_pricing_json"</span>:{…} <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"verification_id"</span>:<span class="s">"uuid"</span>,
+  <span class="k">"lines"</span>:[{ <span class="k">"line_id"</span>,<span class="k">"status"</span>:<span class="s">"matched"</span>|<span class="s">"flagged"</span>,
+           <span class="k">"variance_gbp"</span>,<span class="k">"reason"</span> }],
+  <span class="k">"total_flagged_gbp"</span>:… <span class="k">}</span></pre></div>
+        </div>
+        <div class="note">Resolve a flagged line: <code>POST /invoices/{verification_id}/lines/decide</code> <code>{ line_id, decision, pm_notes? }</code>. Also: <code>POST /invoices/verify</code> (verify pre-extracted lines).</div>
+      </div>
+    </div>
+    <p class="blurb" style="margin-top:6px">Queue: <code>GET /approvals</code> · <code>POST /approvals/{id}/decide</code> — same shape as Compliance.</p>
+  </section>
+
+  <!-- ============ ENERGY ============ -->
+  <section class="grp" style="margin-top:56px; padding-top:30px; border-top:2px solid var(--border)">
+    <h2 style="font-size:15px; color:var(--accent)">Energy Intelligence <span style="color:var(--faint); letter-spacing:0">— Feature C · /api/energy</span></h2>
+    <p class="blurb">Meters &amp; half-hourly readings, EUI/TM46 benchmarking, condition deduction, anomaly detection, and monthly energy reports. No work orders are auto-created from anomalies — everything routes through Approvals.</p>
+
+    <div class="ep"><div class="body" style="padding-top:14px">
+      <div class="lbl" style="margin-top:0">Meters &amp; readings</div>
+      <table class="params">
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr>
+        <tr><td><span class="verb post">POST</span> <span class="verb get">GET</span></td><td>/meters</td><td>Upsert / list meters <code>{ meter_type, mpan/mprn, tariff_gbp_per_kwh, carbon_kg_per_kwh, is_sub_meter }</code></td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/meters/pull</td><td>Pull DCC readings for a window</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/readings/ingest · /readings/ingest/csv</td><td>Ingest readings <code>{ meter_id, readings[], detect_gaps }</code></td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/meters/{id}/readings · /gaps</td><td>Read series · list gaps</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/gaps/process-retries</td><td>Retry gap backfill</td></tr>
+      </table>
+      <div class="lbl">Benchmarks &amp; condition</div>
+      <table class="params">
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/buildings/profile</td><td>Set GIA + type <code>{ site_id, gia_m2, building_type }</code></td></tr>
+        <tr><td><span class="verb get">GET</span></td><td>/tm46</td><td>CIBSE TM46 benchmarks</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/eui/compute</td><td>Energy-use intensity <code>{ site_id, period_start, period_end, meter_type }</code></td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/condition/deduce · /deduce-from-vectors</td><td>Deduce asset condition from a report / vector chunks</td></tr>
+        <tr><td><span class="verb post">POST</span></td><td>/recommendations/cross-ref · /occupancy/log</td><td>Cross-ref recommendations · log occupancy state</td></tr>
+      </table>
+    </div></div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/anomalies/<span class="pv">scan</span></span><span class="st"><span class="tag" style="color:var(--faint);border:1px solid var(--border)">flagship</span></span></div>
+      <div class="body">
+        <p class="purpose">Detect consumption anomalies for a meter (spikes, baseload creep, out-of-hours). <code>/scan-all</code> sweeps the portfolio.</p>
+        <div class="two">
+          <div><div class="lbl">Request</div><pre><span class="k">{</span> <span class="k">"meter_id"</span>:<span class="s">"uuid"</span>, <span class="k">"organization_id"</span>:<span class="s">null</span> <span class="k">}</span></pre>
+          <div class="lbl">Act on one</div><pre><span class="k">POST</span> /anomalies/{id}/act
+<span class="k">{</span> <span class="k">"action"</span>:<span class="s">"acknowledge"</span>|<span class="s">"dismiss"</span>|<span class="s">"investigate"</span>,
+  <span class="k">"reason"</span>:<span class="s">"…"</span> <span class="k">}</span></pre></div>
+          <div><div class="lbl">Response</div><pre><span class="k">{</span> <span class="k">"ok"</span>:<span class="s">true</span>, <span class="k">"anomalies"</span>:[{
+  <span class="k">"id"</span>,<span class="k">"meter_id"</span>,<span class="k">"type"</span>:<span class="s">"spike"</span>,
+  <span class="k">"severity"</span>,<span class="k">"delta_pct"</span>,<span class="k">"cost_impact_gbp"</span>,
+  <span class="k">"detected_at"</span>,<span class="k">"recommendation"</span> }] <span class="k">}</span></pre>
+          <div style="margin-top:8px"><span style="font-size:12.5px;color:var(--faint)">List: <code>GET /anomalies</code></span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ep">
+      <div class="head"><span class="verb post">POST</span><span class="path">/reports/<span class="pv">monthly</span></span></div>
+      <div class="body"><p class="purpose">Generate the monthly energy report (KPIs + PDF to Blob). <code>{ site_id, report_month?, export_pdf:true }</code> → <code>{ ok, report_id, kpis, pdf_url }</code>; fetch PDF via <code>GET /reports/{id}/pdf</code>. Dashboard KPIs: <code>GET /saved-space/summary</code>. Queue: <code>GET·POST /approvals</code>.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Contracts verified against the running service. To pick up the code changes, rebuild <code>svc-operations-intelligence</code> and <code>svc-deepagents</code> (the latter also needs <code>pip install pyhanko</code>). DB-side fixes (membership-audit &amp; register tables, verification sources, append-only triggers) are already live on the shared database.
+  </footer>
+</div>

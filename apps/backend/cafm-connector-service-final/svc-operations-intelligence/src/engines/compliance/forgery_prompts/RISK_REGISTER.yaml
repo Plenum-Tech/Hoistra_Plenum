@@ -1,0 +1,9 @@
+required_tokens:
+  - risk assessment
+  - risk register
+issuing_body_tokens:
+required_field_hints:
+  - hazard
+  - control
+  - risk
+notes: General risk register

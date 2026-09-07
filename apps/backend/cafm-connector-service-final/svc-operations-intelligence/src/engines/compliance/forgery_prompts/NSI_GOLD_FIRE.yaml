@@ -1,0 +1,10 @@
+required_tokens:
+  - nsi
+  - gold
+issuing_body_tokens:
+  - nsi
+required_field_hints:
+  - approved
+  - company
+  - fire
+notes: NSI Gold fire

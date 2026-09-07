@@ -1,0 +1,12 @@
+required_tokens:
+  - fire door
+issuing_body_tokens:
+  - fdis
+  - bwf
+  - certifire
+  - trada
+required_field_hints:
+  - inspection
+  - door
+  - rating
+notes: Fire door inspection

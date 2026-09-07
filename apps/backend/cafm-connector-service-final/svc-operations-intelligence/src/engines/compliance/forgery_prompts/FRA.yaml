@@ -1,0 +1,13 @@
+required_tokens:
+  - fire risk assessment
+  - fra
+issuing_body_tokens:
+  - ifsm
+  - ife
+  - fpa
+  - bafe
+required_field_hints:
+  - assessor
+  - premises
+  - review
+notes: Fire risk assessment

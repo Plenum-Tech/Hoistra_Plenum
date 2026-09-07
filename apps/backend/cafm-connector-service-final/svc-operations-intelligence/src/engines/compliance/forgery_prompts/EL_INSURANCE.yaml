@@ -1,0 +1,12 @@
+required_tokens:
+  - employers
+  - liability
+  - insurance
+issuing_body_tokens:
+  - fca
+  - authorised
+required_field_hints:
+  - policy
+  - insurer
+  - period
+notes: Employers liability insurance

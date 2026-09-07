@@ -1,0 +1,26 @@
+/* Hover states from the prototype. Inline styles win over classes, so these are !important by design. */
+.hv1:hover { box-shadow:var(--shadow-md) !important; }
+.hv2:hover { background:var(--color-neutral-900) !important; }
+.hv3:hover { opacity:0.85 !important; }
+.hv4:hover { border-color:var(--color-accent) !important; color:var(--color-accent) !important; }
+.hv5:hover { background:var(--color-neutral-900) !important; color:var(--color-accent) !important; }
+.hv6:hover { color:var(--color-accent) !important; }
+.hv7:hover { opacity:0.88 !important; }
+.hv8:hover { background:var(--color-surface) !important; }
+.hv9:hover { opacity:0.75 !important; }
+.hv10:hover { background:var(--color-neutral-900) !important; color:var(--color-text) !important; }
+.hv11:hover { color:var(--st-risk) !important; }
+.hv12:hover { opacity:0.9 !important; }
+.hv13:hover { border-color:var(--color-accent) !important; }
+.hv14:hover { border-color:var(--color-accent) !important; background:var(--marker-tint) !important; }
+.hv15:hover { background:var(--color-accent) !important; color:var(--accent-ink) !important; }
+.hv16:hover { color:var(--color-text) !important; }
+.hv17:hover { border-color:var(--color-accent-700) !important; color:var(--color-accent-300) !important; }
+.hv18:hover { color:var(--color-accent-300) !important; }
+.hv19:hover { background:var(--marker-tint) !important; }
+.hv20:hover { opacity:0.7 !important; }
+.hv21:hover { opacity:1 !important; }
+.hv22:hover { transform:translateX(-50%) scale(1.6) !important; }
+.hv23:hover { background:var(--color-accent) !important; color:var(--accent-ink) !important; border-color:var(--color-accent) !important; }
+.hv24:hover { opacity:0.8 !important; }
+.hv25:hover { background:var(--color-accent-900) !important; }

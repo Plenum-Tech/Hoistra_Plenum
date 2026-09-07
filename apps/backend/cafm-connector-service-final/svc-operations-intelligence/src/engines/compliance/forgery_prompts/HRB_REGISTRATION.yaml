@@ -1,0 +1,12 @@
+required_tokens:
+  - higher-risk building
+  - hrb
+  - building safety
+issuing_body_tokens:
+  - building safety regulator
+  - hse
+required_field_hints:
+  - registration
+  - building
+  - accountable
+notes: HRB registration

@@ -1,0 +1,11 @@
+required_tokens:
+  - display energy
+  - dec
+issuing_body_tokens:
+  - gov.uk
+  - find energy certificate
+required_field_hints:
+  - operational rating
+  - postcode
+  - valid until
+notes: Display Energy Certificate

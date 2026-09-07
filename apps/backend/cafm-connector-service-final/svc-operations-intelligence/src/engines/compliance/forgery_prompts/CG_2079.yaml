@@ -1,0 +1,13 @@
+required_tokens:
+  - 2079
+  - f-gas
+  - technician
+issuing_body_tokens:
+  - city & guilds
+  - acrib
+  - refcom
+required_field_hints:
+  - technician
+  - certificate
+  - qualification
+notes: C&G 2079

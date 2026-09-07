@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply h-full; }
+  body { @apply h-full bg-slate-50 text-slate-900 font-sans antialiased; }
+  #root { @apply h-full; }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+           bg-indigo-600 text-white text-sm font-semibold
+           hover:bg-indigo-700 active:bg-indigo-800
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+           bg-white text-slate-700 text-sm font-semibold border border-slate-300
+           hover:bg-slate-50 active:bg-slate-100
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+           bg-red-600 text-white text-sm font-semibold
+           hover:bg-red-700 active:bg-red-800
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .input {
+    @apply block w-full rounded-lg border border-slate-300 bg-white px-3 py-2
+           text-sm text-slate-900 placeholder-slate-400
+           focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500;
+  }
+  .label {
+    @apply block text-sm font-medium text-slate-700 mb-1;
+  }
+}
+
+/* ── Work Order Panel animations ────────────────────────────── */
+@keyframes wo-flow-shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(300%); }
+}
+.wo-flow-shimmer {
+  background: linear-gradient(90deg, transparent, #818cf8, #6366f1, #818cf8, transparent);
+  animation: wo-flow-shimmer 2.4s linear infinite;
+}
+
+@keyframes wo-pulse-ring {
+  0%   { opacity: 0.7; transform: scale(1); }
+  70%  { opacity: 0;   transform: scale(1.2); }
+  100% { opacity: 0;   transform: scale(1.2); }
+}
+.wo-pulse-ring {
+  animation: wo-pulse-ring 2.2s ease-out infinite;
+}
+
+@keyframes wo-node-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+  50%       { box-shadow: 0 0 16px 4px rgba(99,102,241,0.35); }
+}
+.wo-node-glow {
+  animation: wo-node-glow 3s ease-in-out infinite;
+}

@@ -1,0 +1,8 @@
+required_tokens:
+  - asbestos register
+issuing_body_tokens:
+required_field_hints:
+  - location
+  - asbestos
+  - register
+notes: Asbestos living register

@@ -1,0 +1,13 @@
+required_tokens:
+  - loler
+  - thorough examination
+  - lift
+issuing_body_tokens:
+  - allianz
+  - bureau veritas
+  - lloyd
+required_field_hints:
+  - examination
+  - lift
+  - report
+notes: LOLER lift exam

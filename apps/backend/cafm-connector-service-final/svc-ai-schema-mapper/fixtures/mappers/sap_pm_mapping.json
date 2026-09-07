@@ -1,0 +1,137 @@
+{
+  "version": "1.0",
+  "source_system": "SAP PM",
+  "customer_id": null,
+  "description": "SAP Plant Maintenance asset inventory mapping template",
+  "canonical_fields": {
+    "asset_id": "Unique identifier for asset (Primary Key)",
+    "asset_code": "Human-readable asset code or tag",
+    "asset_name": "Display name or description of asset",
+    "asset_type": "Category of asset (pump, motor, fan, compressor, etc.)",
+    "location_id": "Foreign key to location table",
+    "location_description": "Site location (building, room, facility)",
+    "department_id": "Foreign key to department table",
+    "department_name": "Department or division name",
+    "serial_number": "Manufacturer serial number",
+    "manufacturer_name": "Equipment manufacturer",
+    "model_number": "Equipment model or part number",
+    "acquisition_date": "Asset purchase or acquisition date",
+    "condition_status": "Operational status (good, fair, poor)",
+    "last_maintenance_date": "Date of last service or maintenance"
+  },
+  "vendor_aliases": {
+    "asset_id": [
+      "EQUNR",
+      "Equipment",
+      "equipment_id",
+      "asset_id"
+    ],
+    "asset_code": [
+      "EQKTX",
+      "SHORT_TEXT",
+      "description",
+      "asset_code"
+    ],
+    "asset_name": [
+      "EQKLS",
+      "equipment_class",
+      "name",
+      "asset_name"
+    ],
+    "asset_type": [
+      "EQTYP",
+      "type_equipment",
+      "type",
+      "asset_type"
+    ],
+    "location_description": [
+      "STORT",
+      "location_text",
+      "location",
+      "place"
+    ],
+    "department_name": [
+      "VTEXT",
+      "plant_text",
+      "department",
+      "plant"
+    ],
+    "serial_number": [
+      "SERGE",
+      "SERNR",
+      "serial",
+      "serial_number"
+    ],
+    "manufacturer_name": [
+      "HERST",
+      "HERSTELLER",
+      "manufacturer",
+      "maker"
+    ],
+    "model_number": [
+      "MODELNR",
+      "TYPBEZ",
+      "model",
+      "model_number"
+    ],
+    "acquisition_date": [
+      "ANDAT",
+      "acquisition_date",
+      "purchase_date",
+      "installed_date"
+    ],
+    "condition_status": [
+      "EQSTAT",
+      "status",
+      "condition",
+      "operational_status"
+    ],
+    "last_maintenance_date": [
+      "DEACTV_DT",
+      "last_maintenance",
+      "last_service",
+      "last_maint_date"
+    ]
+  },
+  "regex_patterns": {
+    "asset_id": {
+      "patterns": [
+        "^EQUNR$",
+        "^equipment_?id$",
+        "^asset_id$"
+      ],
+      "confidence": 0.95,
+      "description": "Match SAP equipment number"
+    },
+    "serial_number": {
+      "patterns": [
+        "^SER",
+        "^serial"
+      ],
+      "confidence": 0.90,
+      "description": "Match serial fields"
+    }
+  },
+  "custom_transformations": {
+    "condition_status": {
+      "type": "map",
+      "values": {
+        "01": "good",
+        "02": "fair",
+        "03": "poor",
+        "A": "good",
+        "I": "poor"
+      },
+      "description": "Map SAP status codes to standard values"
+    }
+  },
+  "excluded_fields": [
+    "ATEXT",
+    "internal_flag",
+    "system_key"
+  ],
+  "confidence_overrides": {
+    "asset_id": 0.99,
+    "asset_code": 0.92
+  }
+}

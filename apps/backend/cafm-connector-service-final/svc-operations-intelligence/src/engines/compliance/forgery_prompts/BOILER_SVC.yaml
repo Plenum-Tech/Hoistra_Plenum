@@ -1,0 +1,10 @@
+required_tokens:
+  - boiler
+  - service
+issuing_body_tokens:
+  - gas safe
+required_field_hints:
+  - appliance
+  - service
+  - date
+notes: Boiler service record

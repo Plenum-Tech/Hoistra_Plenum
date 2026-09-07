@@ -1,0 +1,168 @@
+{
+  "uid": "cafm-document-generation",
+  "title": "CAFM — Document Generation (Layer 7)",
+  "tags": ["cafm", "document-generation", "layer7"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "document_type",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(cafm_query_latency_ms_count, document_type)",
+        "current": {"text": "All", "value": "$__all"},
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Doc Requests / Hour",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_query_latency_ms_count{intent_type=\"document_generate\"}[1h])) * 3600", "legendFormat": "requests/hr"}]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Render Time P95 (ms)",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "unit": "ms",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5000}, {"color": "red", "value": 15000}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(cafm_query_latency_ms_bucket{operation=\"render\"}[5m])))", "legendFormat": "p95 render"}]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Avg EL-7 eval_score",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.75}, {"color": "green", "value": 0.85}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.50, sum(rate(cafm_eval_score_bucket{eval_type=\"doc_eval\"}[1h])) by (le))", "legendFormat": "p50 eval_score"}]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Held for Review (24h)",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["sum"]},
+        "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(cafm_query_latency_ms_count{held_for_review=\"true\"}[24h]))", "legendFormat": "held"}]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "EL-7.DOC.PLAN Pass Rate",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "unit": "percentunit",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.90}, {"color": "green", "value": 0.98}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_query_latency_ms_count{operation=\"doc_validate\",result=\"pass\"}[1h])) / sum(rate(cafm_query_latency_ms_count{operation=\"doc_validate\"}[1h]))", "legendFormat": "plan valid"}]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Template Fill Success Rate",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "unit": "percentunit",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.90}, {"color": "green", "value": 0.98}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_query_latency_ms_count{operation=\"template_fill\",result=\"success\"}[1h])) / sum(rate(cafm_query_latency_ms_count{operation=\"template_fill\"}[1h]))", "legendFormat": "fill success"}]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Document Requests / Hour by Type",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (document_type) (rate(cafm_query_latency_ms_count{intent_type=~\"document_generate|template_fill\"}[1h])) * 3600", "legendFormat": "{{document_type}}"}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Render Time P50/P95/P99 (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.50, sum by (le) (rate(cafm_query_latency_ms_bucket{operation=\"render\"}[5m])))", "legendFormat": "p50"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(cafm_query_latency_ms_bucket{operation=\"render\"}[5m])))", "legendFormat": "p95"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.99, sum by (le) (rate(cafm_query_latency_ms_bucket{operation=\"render\"}[5m])))", "legendFormat": "p99"}
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "EL-7 eval_score Over Time (p50/p5)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.50, sum(rate(cafm_eval_score_bucket{eval_type=\"doc_eval\"}[5m])) by (le))", "legendFormat": "p50 eval_score"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.05, sum(rate(cafm_eval_score_bucket{eval_type=\"doc_eval\"}[5m])) by (le))", "legendFormat": "p5 eval_score"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "0.85", "legendFormat": "threshold 0.85"}
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Held for Review Rate Over Time",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_query_latency_ms_count{held_for_review=\"true\"}[5m])) / sum(rate(cafm_query_latency_ms_count{intent_type=~\"document_generate|template_fill\"}[5m]))", "legendFormat": "held for review %"}
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Spot Checks: Run vs Passed (EL-7.DOC.RENDER)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_documents_ingested_total{eval_layer=\"el7_render\",check=\"run\"}[5m]))", "legendFormat": "spot checks run"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(cafm_documents_ingested_total{eval_layer=\"el7_render\",check=\"passed\"}[5m]))", "legendFormat": "spot checks passed"}
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Intent Classification Distribution",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (intent_type) (rate(cafm_query_latency_ms_count[5m])) * 3600", "legendFormat": "{{intent_type}}"}
+      ]
+    }
+  ]
+}

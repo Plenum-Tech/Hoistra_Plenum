@@ -1,0 +1,3 @@
+# Concept: Table mapping (source table -> canonical UDR table)
+
+Three-step process. (1) Deterministic: exact / Levenshtein<=2 on the table name using mapping_dictionaries/deterministic_aliases.json; >=95% confidence auto-resolves. (2) RAG: match against synonyms.json table_synonyms; >=95% auto-resolves. (3) Semantic NLP: multi-dimension match on name + metadata (PK identity, column names, 3 sample values/col, column count). 70-95% = Suggested (user confirms); <70% = Requires Review. Unmapped -> assign to existing or create new canonical table. The destination UDR must NOT morph into the source; unmappable concepts are appended to the canonical structure to enrich it.

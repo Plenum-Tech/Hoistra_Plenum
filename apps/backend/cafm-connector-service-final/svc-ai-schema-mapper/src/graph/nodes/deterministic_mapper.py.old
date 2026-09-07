@@ -1,0 +1,623 @@
+"""Node 2: Deterministic mapper — 4-tier field mapping strategy.
+
+Supports BOTH:
+1. Hardcoded canonical fields (legacy/fallback)
+2. Customer-provided JSON mapper (from json_mapper in state)
+
+Strategies (in order):
+1. Exact field name match
+2. CMMS alias lookup
+3. Regex pattern matching
+4. Haiku constrained call (fallback)
+
+EL-M.2: No duplicate target fields, all confidences in 0–1 range.
+"""
+
+import json
+import logging
+import re
+from datetime import datetime
+from uuid import uuid4
+
+from anthropic import AsyncAnthropic
+
+from ...matchers import (
+    CMMS_ALIASES,
+    PATTERNS,
+    describe_dataset,
+    get_cmms_alias,
+    match_field_by_pattern,
+)
+from ..state import FieldMapping, MigrationState
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_field_name(field_name: str) -> str:
+    """
+    Normalize field name for matching.
+
+    Handles:
+    - Case insensitivity (converts to lowercase)
+    - Whitespace variations (spaces, tabs, etc. → underscore)
+    - Punctuation/delimiters (dashes, slashes, dots, commas → underscore)
+    - Multiple consecutive delimiters → single underscore
+    - Leading/trailing whitespace
+
+    Examples:
+    - "Asset Code" → "asset_code"
+    - "ASSET_CODE" → "asset_code"
+    - "Asset-Code" → "asset_code"
+    - "Asset / Code" → "asset_code"
+    - "Asset.Code" → "asset_code"
+    """
+    # Step 1: Lowercase
+    normalized = field_name.lower().strip()
+
+    # Step 2: Replace common delimiters with underscore
+    # This regex replaces any whitespace, dash, slash, dot, comma with underscore
+    normalized = re.sub(r'[\s\-_/.,;]+', '_', normalized)
+
+    # Step 3: Remove leading/trailing underscores
+    normalized = normalized.strip('_')
+
+    return normalized
+
+
+# Canonical field registry (fallback if no json_mapper provided)
+CANONICAL_FIELDS = {
+    "asset_code",
+    "asset_name",
+    "category",
+    "location_code",
+    "make",
+    "model",
+    "serial",
+    "wo_code",
+    "wo_priority",
+    "wo_status",
+    "wo_type",
+    "maintenance_type",
+    "sm_code",
+    "trigger_type",
+    "schedule_interval",
+    "sm_priority",
+    "part_code",
+    "stock_on_hand",
+    "minimum_allowed_stock",
+    "supplier",
+    "bom_group_name",
+    "user_full_name",
+    "user_title",
+    "user_name",
+    "reports_to",
+    "inspector_name",
+    "inspection_date",
+    "inspection_location",
+    "finding_type",
+    "risk_level",
+}
+
+# Common field variations mapping (for CSV exports with simple naming)
+# Maps simple field names to canonical names with high confidence
+COMMON_VARIATIONS = {
+    "asset_id": "asset_code",
+    "asset_code": "asset_code",
+    "asset_num": "asset_code",
+    "asset_number": "asset_code",
+    "equipment_id": "asset_code",
+    "equipment_code": "asset_code",
+    "equipment_num": "asset_code",
+    "asset_type": "category",
+    "asset_category": "category",
+    "equipment_type": "category",
+    "category_id": "category",
+    "asset_name": "asset_name",
+    "equipment_name": "asset_name",
+    "asset_desc": "asset_name",
+    "description": "asset_name",
+    "manufacturer": "make",
+    "make": "make",
+    "brand": "make",
+    "model": "model",
+    "model_num": "model",
+    "serial": "serial",
+    "serial_num": "serial",
+    "serial_number": "serial",
+    "sn": "serial",
+    "install_date": "install_date",
+    "installation_date": "install_date",
+    "commissioned_date": "install_date",
+    "criticality": "criticality",
+    "criticality_level": "criticality",
+    "location": "location_code",
+    "location_code": "location_code",
+    "location_id": "location_code",
+    "zone": "location_code",
+    "room": "location_code",
+    "status": "status",
+    "asset_status": "status",
+    "wo_id": "wo_code",
+    "wo_code": "wo_code",
+    "work_order_id": "wo_code",
+    "work_order_number": "wo_code",
+    "wo_number": "wo_code",
+    "order_number": "wo_code",
+    "priority": "wo_priority",
+    "wo_priority": "wo_priority",
+    "priority_level": "wo_priority",
+    "wo_status": "wo_status",
+    "work_order_status": "wo_status",
+    "wo_type": "wo_type",
+    "work_order_type": "wo_type",
+    "order_type": "wo_type",
+    "maintenance_type": "maintenance_type",
+    "job_type": "maintenance_type",
+    "maintenance_type_id": "maintenance_type",
+    "site_id": "site_id",
+    "site_code": "site_id",
+    "site_name": "site_name",
+    "location_name": "site_name",
+    "site_type": "site_type",
+    "location_type": "site_type",
+    "created_at": "created_at",
+    "created_date": "created_at",
+    "date_created": "created_at",
+    "creation_date": "created_at",
+    "completed_at": "completed_at",
+    "completed_date": "completed_at",
+    "date_completed": "completed_at",
+    "completion_date": "completed_at",
+    "responded_at": "responded_at",
+    "response_date": "responded_at",
+}
+
+
+# ── Helper Functions for JSON Mapper Support ────────────────────────────────
+
+def _match_common_variation(source_field: str) -> tuple:
+    """
+    Strategy 1B: Match against common field name variations.
+    Handles simple CSV exports with generic naming (asset_id, wo_id, etc.).
+
+    Returns: (target_field, confidence) or None
+    """
+    normalized_source = _normalize_field_name(source_field)
+
+    # First try exact normalized match in COMMON_VARIATIONS
+    if normalized_source in COMMON_VARIATIONS:
+        target = COMMON_VARIATIONS[normalized_source]
+        return (target, 0.95)  # High confidence - exact match in variation table
+
+    return None
+
+
+def _get_canonical_fields(json_mapper: dict) -> set:
+    """Extract canonical field names from JSON mapper."""
+    return set(json_mapper.get("canonical_fields", {}).keys())
+
+
+def _match_json_alias(source_field: str, json_mapper: dict) -> tuple:
+    """
+    Match source field against vendor aliases in JSON mapper.
+    Uses comprehensive normalization for matching (case-insensitive + all delimiters).
+
+    Returns: (target_field, confidence) or None
+    """
+    vendor_aliases = json_mapper.get("vendor_aliases", {})
+    normalized_source = _normalize_field_name(source_field)
+
+    for canonical, sources in vendor_aliases.items():
+        for source_alias in sources:
+            normalized_alias = _normalize_field_name(source_alias)
+
+            if normalized_source == normalized_alias:
+                # Get confidence override if present
+                confidence_overrides = json_mapper.get("confidence_overrides") or {}
+                conf = confidence_overrides.get(canonical, 0.95)
+                return (canonical, conf)
+
+    return None
+
+
+def _match_json_regex(source_field: str, json_mapper: dict) -> tuple:
+    """
+    Match source field against regex patterns in JSON mapper.
+    Tests against both original field name and normalized version.
+
+    Returns: (target_field, confidence) or None if no match or confidence < 0.85
+    """
+    regex_patterns = json_mapper.get("regex_patterns") or {}
+    normalized_source = _normalize_field_name(source_field)
+
+    for canonical, pattern_config in regex_patterns.items():
+        patterns = pattern_config.get("patterns", [])
+        for pattern in patterns:
+            # Try matching against both original and normalized field names
+            if re.match(pattern, source_field, re.IGNORECASE) or re.match(pattern, normalized_source, re.IGNORECASE):
+                conf = pattern_config.get("confidence", 0.80)
+                if conf >= 0.85:  # Only accept high-confidence matches
+                    return (canonical, conf)
+
+    return None
+
+
+async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
+    """
+    Node 2: Deterministic field mapping using 5-strategy approach — PER TABLE.
+
+    For multi-table uploads, columns are mapped within their source table context.
+    Each source table's columns are mapped together, grouped for human review.
+
+    Strategies applied in order (per table, per column):
+    1. Exact match (case-insensitive)
+    1B. Common field name variations (asset_id → asset_code, wo_id → wo_code, etc.)
+    2. CMMS alias lookup
+    3. Regex pattern matching
+    4. Haiku constrained call (if confidence < 0.85)
+
+    Args:
+        state: MigrationState with parsed_tables and column_descriptions
+
+    Returns:
+        Updated state with tier1_mappings_by_table, unresolved_by_table, overall_confidence
+    """
+
+    migration_id = state.get("migration_id")
+    cmms_name = state.get("cmms_name", "Unknown")
+    parsed_tables = state.get("parsed_tables", {})
+    column_descriptions = state.get("column_descriptions", {})
+    json_mapper = state.get("json_mapper")  # ← Customer-provided mapper (optional)
+
+    if not parsed_tables:
+        logger.error(f"[Node 2] No parsed tables found in state")
+        state["error_message"] = "No parsed data from Node 1"
+        state["error_node"] = 2
+        return state
+
+    # Determine canonical fields: from JSON mapper or fallback to hardcoded
+    if json_mapper:
+        canonical_fields_raw = _get_canonical_fields(json_mapper)
+        canonical_fields = {_normalize_field_name(f) for f in canonical_fields_raw}
+        canonical_fields_map = {_normalize_field_name(f): f for f in canonical_fields_raw}
+        logger.info(f"[Node 2] Using customer JSON mapper: {json_mapper.get('source_system')}")
+        logger.info(f"[Node 2] Loaded {len(canonical_fields_raw)} canonical fields from mapper")
+    else:
+        canonical_fields = CANONICAL_FIELDS
+        canonical_fields_map = {f: f for f in CANONICAL_FIELDS}
+        logger.info(f"[Node 2] Using default hardcoded canonical fields")
+
+    logger.info(f"[Node 2] Starting deterministic mapping (per-table): migration_id={migration_id}")
+
+    try:
+        # MULTI-TABLE: Process each source table independently
+        tier1_mappings_by_table = {}
+        unresolved_by_table = {}
+        all_confidences = []
+
+        for table_name in sorted(parsed_tables.keys()):
+            table_records = parsed_tables[table_name]
+            if not table_records:
+                logger.info(f"[Node 2] Skipping empty table: {table_name}")
+                tier1_mappings_by_table[table_name] = []
+                unresolved_by_table[table_name] = []
+                continue
+
+            logger.info(f"[Node 2] Processing table: {table_name}")
+
+            # Get columns for this specific table
+            table_columns = sorted(table_records[0].keys())
+            logger.info(f"[Node 2] Table '{table_name}': {len(table_columns)} columns")
+
+            # Apply 4-tier strategy to each column in this table
+            tier1_for_table = []
+            unresolved_for_table = []
+
+            for source_field in table_columns:
+                # Strategy 1: Exact match (normalized: case-insensitive + all delimiters)
+                normalized_source = _normalize_field_name(source_field)
+
+                if normalized_source in canonical_fields:
+                # Map back to the original canonical field name
+                target = canonical_fields_map[normalized_source]
+                mapping = FieldMapping(
+                    source_field=source_field,
+                    target_field=target,
+                    confidence=0.99,
+                    tier="T1_exact",
+                    rationale="Exact canonical field name match (normalized)",
+                    langsmith_run_id=None,
+                )
+                tier1_mappings.append(mapping)
+                confidences.append(0.99)
+                logger.info(f"[Node 2] Strategy 1 (exact): {source_field} → {target} (0.99)")
+                continue
+
+            # Strategy 1B: Common field name variations (for CSV exports)
+            variation_result = _match_common_variation(source_field)
+            if variation_result:
+                target, conf = variation_result
+                # Verify target exists in canonical fields
+                target_normalized = _normalize_field_name(target) if json_mapper else target
+                if target_normalized in canonical_fields:
+                    target_canonical = canonical_fields_map[target_normalized]
+                    mapping = FieldMapping(
+                        source_field=source_field,
+                        target_field=target_canonical,
+                        confidence=conf,
+                        tier="T1_variation",
+                        rationale="Common field name variation (e.g., asset_id → asset_code)",
+                        langsmith_run_id=None,
+                    )
+                    tier1_mappings.append(mapping)
+                    confidences.append(conf)
+                    logger.info(f"[Node 2] Strategy 1B (variation): {source_field} → {target_canonical} ({conf})")
+                    continue
+
+            # Strategy 2: CMMS/JSON alias lookup
+            if json_mapper:
+                # Use customer JSON mapper aliases
+                alias_result = _match_json_alias(source_field, json_mapper)
+            else:
+                # Fallback to hardcoded module function
+                alias_result = get_cmms_alias(source_field, cmms_name)
+
+            if alias_result:
+                target, conf = alias_result
+                # For json_mapper: canonical_fields is normalized, so normalize target for check
+                target_check = _normalize_field_name(target) if json_mapper else target
+                if target_check in canonical_fields:
+                    mapping = FieldMapping(
+                        source_field=source_field,
+                        target_field=target,
+                        confidence=conf,
+                        tier="T1_alias",
+                        rationale=f"Matched via CMMS alias table ({cmms_name})",
+                        langsmith_run_id=None,
+                    )
+                    tier1_mappings.append(mapping)
+                    confidences.append(conf)
+                    logger.info(f"[Node 2] Strategy 2 (alias): {source_field} → {target} ({conf:.2f})")
+                    continue
+
+            # Strategy 3: Regex pattern matching
+            if json_mapper:
+                # Use customer JSON mapper regex patterns
+                pattern_result = _match_json_regex(source_field, json_mapper)
+            else:
+                # Fallback to hardcoded module function
+                pattern_result = match_field_by_pattern(source_field)
+
+            if pattern_result:
+                target, conf = pattern_result
+                # For json_mapper: canonical_fields is normalized, so normalize target for check
+                target_check = _normalize_field_name(target) if json_mapper else target
+                if target_check in canonical_fields and conf >= 0.85:
+                    mapping = FieldMapping(
+                        source_field=source_field,
+                        target_field=target,
+                        confidence=conf,
+                        tier="T1_regex",
+                        rationale=f"Matched via naming pattern regex",
+                        langsmith_run_id=None,
+                    )
+                    tier1_mappings.append(mapping)
+                    confidences.append(conf)
+                    logger.info(f"[Node 2] Strategy 3 (regex): {source_field} → {target} ({conf:.2f})")
+                    continue
+
+            # If not matched by Strategies 1-3, keep unresolved for Tier 2
+            unresolved.append(source_field)
+            logger.info(f"[Node 2] Unresolved (→ Tier 2): {source_field}")
+
+        # Strategy 4: Haiku constrained call for high-confidence unresolved fields
+        if unresolved:
+            logger.info(f"[Node 2] Attempting Strategy 4 (Haiku) on {len(unresolved)} unresolved fields")
+            strategy4_mappings = await _strategy4_haiku_mapping(
+                unresolved,
+                column_descriptions,
+                state,
+            )
+            tier1_mappings.extend(strategy4_mappings)
+            # Update unresolved list
+            strategy4_targets = {m["source_field"] for m in strategy4_mappings}
+            unresolved = [f for f in unresolved if f not in strategy4_targets]
+
+            # Add confidences from Strategy 4
+            for mapping in strategy4_mappings:
+                confidences.append(mapping.get("confidence", 0.80))
+
+        # ── Calculate overall confidence ──────────────────────────────
+        overall_confidence = (
+            sum(confidences) / len(confidences) if confidences else 0.0
+        )
+        logger.info(f"[Node 2] Overall confidence: {overall_confidence:.2f}")
+
+        # ── EL-M.2 Validation ────────────────────────────────────────
+        # Check: All confidences in 0–1 range
+        for mapping in tier1_mappings:
+            conf = mapping.get("confidence", 0)
+            if not (0 <= conf <= 1):
+                logger.error(
+                    f"[Node 2] EL-M.2 FAILED: Invalid confidence for {mapping['source_field']}: {conf}"
+                )
+                state["error_message"] = f"Invalid confidence value: {conf}"
+                state["error_node"] = 2
+                state["el_m2_passed"] = False
+                return state
+
+        # Handle duplicate target fields: keep highest confidence, send others to Tier 2
+        target_to_mappings = {}
+        for mapping in tier1_mappings:
+            target = mapping.get("target_field")
+            if target not in target_to_mappings:
+                target_to_mappings[target] = []
+            target_to_mappings[target].append(mapping)
+
+        # Resolve duplicates by keeping highest confidence
+        deduplicated_mappings = []
+        duplicates_to_unresolved = []
+
+        for target, mappings in target_to_mappings.items():
+            if len(mappings) > 1:
+                # Sort by confidence (descending)
+                mappings_sorted = sorted(mappings, key=lambda m: m.get("confidence", 0), reverse=True)
+                # Keep the highest confidence one
+                deduplicated_mappings.append(mappings_sorted[0])
+                # Send lower confidence ones to unresolved
+                for m in mappings_sorted[1:]:
+                    source = m.get("source_field")
+                    duplicates_to_unresolved.append(source)
+                    logger.info(f"[Node 2] EL-M.2: Moved duplicate {source} → {target} to Tier 2 (lower confidence)")
+            else:
+                # No duplicate, keep as is
+                deduplicated_mappings.append(mappings[0])
+
+        # Update tier1_mappings and unresolved
+        tier1_mappings = deduplicated_mappings
+        unresolved.extend(duplicates_to_unresolved)
+
+        state["el_m2_passed"] = True
+        logger.info(f"[Node 2] EL-M.2 PASSED: Resolved {len(duplicates_to_unresolved)} duplicates, all confidences valid")
+
+        # ── Store results in state ───────────────────────────────────
+        state["tier1_mappings"] = tier1_mappings
+        state["unresolved_after_t1"] = unresolved
+        state["tier1_mapped_count"] = len(tier1_mappings)
+        state["overall_confidence"] = overall_confidence
+
+        state["current_step"] = 2
+        state["event_log"].append(
+            {
+                "timestamp": datetime.utcnow().isoformat(),
+                "event": "node_complete",
+                "node": 2,
+                "detail": f"Mapped {len(tier1_mappings)} fields, {len(unresolved)} unresolved",
+            }
+        )
+
+        logger.info(
+            f"[Node 2] Complete: {len(tier1_mappings)} mapped, "
+            f"{len(unresolved)} unresolved, confidence={overall_confidence:.2f}"
+        )
+        return state
+
+    except Exception as e:
+        logger.exception(f"[Node 2] Unhandled exception: {e}")
+        state["error_message"] = str(e)
+        state["error_node"] = 2
+        state["error_timestamp"] = datetime.utcnow()
+        state["status"] = "failed"
+        return state
+
+
+async def _strategy4_haiku_mapping(
+    unresolved_fields: list[str],
+    column_descriptions: dict[str, str],
+    state: MigrationState,
+) -> list[FieldMapping]:
+    """
+    Strategy 4: Use Claude Haiku to map high-confidence unresolved fields.
+
+    Haiku receives:
+    - Unresolved field names
+    - Column descriptions
+    - Canonical field registry
+
+    Returns JSON: {source_field: {target: canonical_field, confidence: 0.xx}}
+
+    Args:
+        unresolved_fields: List of unmapped source field names
+        column_descriptions: dict[field_name] = "description"
+        state: MigrationState (for context)
+
+    Returns:
+        list[FieldMapping] with tier='T1_llm', only if confidence >= 0.85
+    """
+
+    from ...app import get_anthropic_client
+
+    client = get_anthropic_client()
+
+    # Prepare field descriptions for Haiku
+    field_info = []
+    for field in unresolved_fields:
+        desc = column_descriptions.get(field, "Unknown field type")
+        field_info.append(f"- {field}: {desc}")
+
+    canonical_list = ", ".join(sorted(CANONICAL_FIELDS))
+
+    prompt = f"""Map these CMMS field names to canonical CAFM field names.
+Be STRICT: only map if confidence >= 0.85. Otherwise, return "UNMAPPED".
+
+Unresolved fields:
+{chr(10).join(field_info)}
+
+Canonical fields available:
+{canonical_list}
+
+Return JSON only:
+{{
+  "field_name": {{"target": "canonical_field", "confidence": 0.95, "rationale": "reason"}},
+  "another_field": "UNMAPPED"
+}}"""
+
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Try to parse JSON
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.warning("[Node 2] Strategy 4: Haiku returned non-JSON response")
+            return []
+
+        mappings = []
+        langsmith_run_id = str(uuid4())  # Track this Haiku call for feedback
+
+        for source_field, mapping_data in result.items():
+            # Skip unmapped fields
+            if mapping_data == "UNMAPPED":
+                logger.info(f"[Node 2] Strategy 4 (Haiku): {source_field} → UNMAPPED")
+                continue
+
+            if isinstance(mapping_data, dict):
+                target = mapping_data.get("target")
+                confidence = mapping_data.get("confidence", 0.0)
+                rationale = mapping_data.get("rationale", "Haiku mapping")
+
+                # Only accept if confidence >= 0.85
+                if target in CANONICAL_FIELDS and confidence >= 0.85:
+                    mapping = FieldMapping(
+                        source_field=source_field,
+                        target_field=target,
+                        confidence=confidence,
+                        tier="T1_llm",
+                        rationale=rationale,
+                        langsmith_run_id=langsmith_run_id,
+                    )
+                    mappings.append(mapping)
+                    logger.info(
+                        f"[Node 2] Strategy 4 (Haiku): {source_field} → {target} ({confidence:.2f})"
+                    )
+                else:
+                    logger.info(
+                        f"[Node 2] Strategy 4 (Haiku): {source_field} confidence {confidence} < 0.85, deferring to Tier 2"
+                    )
+
+        return mappings
+
+    except Exception as e:
+        logger.warning(f"[Node 2] Strategy 4 (Haiku) failed: {e}")
+        return []

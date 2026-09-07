@@ -1,0 +1,9 @@
+required_tokens:
+  - employers
+  - liability
+issuing_body_tokens:
+  - fca
+required_field_hints:
+  - policy
+  - insurer
+notes: Contractor employers liability

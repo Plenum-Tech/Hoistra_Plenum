@@ -1,0 +1,48 @@
+# wo_rules.yaml
+# EL-5.CONSTRAIN hard rules for WO Agent
+# Hard rules ALWAYS override AI vote — no exceptions.
+# Known state: 17 open WOs, 4 at Highest priority.
+
+rules:
+  - name: highest_priority_overdue_7_days
+    description: >
+      Highest priority WO that is 7+ days old → triage = escalate (always).
+    conditions:
+      - type: any_row_where
+        field: wo_priority
+        operator: eq
+        value: "Highest"
+      - type: any_row_where
+        field: age_days
+        operator: gte
+        value: 7
+    action:
+      set_status: escalate
+
+  - name: highest_priority_overdue_3_days
+    description: >
+      Highest priority WO that is 3+ days old → triage = escalate (always).
+    conditions:
+      - type: any_row_where
+        field: wo_priority
+        operator: eq
+        value: "Highest"
+      - type: any_row_where
+        field: age_days
+        operator: gte
+        value: 3
+    action:
+      set_status: escalate
+
+  - name: four_or_more_highest_same_asset
+    description: >
+      4+ Highest priority open WOs on same asset → escalate + human review.
+    conditions:
+      - type: count_where_gte
+        field: wo_priority
+        operator: eq
+        value: "Highest"
+        threshold: 4
+    action:
+      set_status: escalate
+      requires_human_review: true

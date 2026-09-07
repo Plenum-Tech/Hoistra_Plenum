@@ -1,0 +1,27 @@
+{
+  "$schema": "udr-hierarchy/v1",
+  "description": "Canonical target hierarchy for the recommended finalised DB structure appended to each UDR script (PRD 4.1 AC6). Primary spine plus cross-cutting branches.",
+  "primary_spine": [
+    {"level": 1, "entity": "organization", "table": "organizations"},
+    {"level": 2, "entity": "location", "table": "locations"},
+    {"level": 3, "entity": "site", "table": "sites"},
+    {"level": 4, "entity": "building", "table": "buildings", "optional": true},
+    {"level": 5, "entity": "floor", "table": "floors", "optional": true},
+    {"level": 6, "entity": "space", "table": "spaces", "optional": true},
+    {"level": 7, "entity": "asset", "table": "assets"},
+    {"level": 8, "entity": "work_order", "table": "work_orders"},
+    {"level": 9, "entity": "resource", "table": "resources"},
+    {"level": 10, "entity": "vendor", "table": "vendors"}
+  ],
+  "recommended_structure_md": "Locations -> Sites -> Assets -> Work Orders -> Resources -> Vendors",
+  "branches": {
+    "compliance": ["assets", "compliance_certificates", "duty_holders"],
+    "tenant_operations": ["sites", "spaces", "leases", "tenants"],
+    "energy": ["assets", "meters", "meter_readings"],
+    "spares": ["work_orders", "spare_parts", "manufacturers"],
+    "contracts": ["vendors", "contracts", "resources"],
+    "documents": ["document_chunks"]
+  },
+  "reference_tables": ["asset_types", "manufacturers", "contracts"],
+  "notes": "Reference tables are auto-created during Test-1/Test-2 remediation when a shared attribute is the only available chunk anchor or the only explanation for a cross-table value overlap (e.g. asset_make -> manufacturers, contract_id -> contracts)."
+}

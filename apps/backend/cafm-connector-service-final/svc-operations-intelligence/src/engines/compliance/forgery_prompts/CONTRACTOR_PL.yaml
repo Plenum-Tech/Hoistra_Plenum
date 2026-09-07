@@ -1,0 +1,8 @@
+required_tokens:
+  - public liability
+issuing_body_tokens:
+  - fca
+required_field_hints:
+  - policy
+  - insurer
+notes: Contractor public liability

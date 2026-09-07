@@ -1,0 +1,31 @@
+{
+  "$schema": "udr-relationships/v1",
+  "description": "Canonical FK / relationship-graph edges (Layer 3). rel_type uses verb phrases for the relationship graph. cardinality is parent:child. These are the schema-defined (provenance=schema_defined) edges; LLM-inferred edges are added at runtime to udr_relationship with provenance=llm_inferred.",
+  "relationships": [
+    {"from_table": "locations", "to_table": "sites", "from_column": "id", "to_column": "location_id", "rel_type": "contains", "cardinality": "1:N"},
+    {"from_table": "sites", "to_table": "buildings", "from_column": "id", "to_column": "site_id", "rel_type": "contains", "cardinality": "1:N"},
+    {"from_table": "buildings", "to_table": "floors", "from_column": "id", "to_column": "building_id", "rel_type": "contains", "cardinality": "1:N"},
+    {"from_table": "sites", "to_table": "spaces", "from_column": "id", "to_column": "site_id", "rel_type": "contains", "cardinality": "1:N"},
+    {"from_table": "sites", "to_table": "assets", "from_column": "id", "to_column": "site_id", "rel_type": "contains", "cardinality": "1:N"},
+    {"from_table": "asset_types", "to_table": "assets", "from_column": "id", "to_column": "asset_type_id", "rel_type": "classifies", "cardinality": "1:N"},
+    {"from_table": "manufacturers", "to_table": "assets", "from_column": "id", "to_column": "manufacturer_id", "rel_type": "made_by", "cardinality": "1:N"},
+    {"from_table": "assets", "to_table": "work_orders", "from_column": "id", "to_column": "asset_id", "rel_type": "raised_against", "cardinality": "1:N"},
+    {"from_table": "sites", "to_table": "work_orders", "from_column": "id", "to_column": "site_id", "rel_type": "located_at", "cardinality": "1:N"},
+    {"from_table": "vendors", "to_table": "work_orders", "from_column": "id", "to_column": "vendor_id", "rel_type": "assigned_to", "cardinality": "1:N"},
+    {"from_table": "work_orders", "to_table": "work_order_resources", "from_column": "id", "to_column": "work_order_id", "rel_type": "uses", "cardinality": "1:N"},
+    {"from_table": "resources", "to_table": "work_order_resources", "from_column": "id", "to_column": "resource_id", "rel_type": "allocated_to", "cardinality": "1:N"},
+    {"from_table": "vendors", "to_table": "resources", "from_column": "id", "to_column": "vendor_id", "rel_type": "employs", "cardinality": "1:N"},
+    {"from_table": "vendors", "to_table": "contracts", "from_column": "id", "to_column": "vendor_id", "rel_type": "party_to", "cardinality": "1:N"},
+    {"from_table": "contracts", "to_table": "resources", "from_column": "id", "to_column": "contract_id", "rel_type": "governs", "cardinality": "1:N"},
+    {"from_table": "assets", "to_table": "compliance_certificates", "from_column": "id", "to_column": "asset_id", "rel_type": "certified_by", "cardinality": "1:N"},
+    {"from_table": "duty_holders", "to_table": "compliance_certificates", "from_column": "id", "to_column": "duty_holder_id", "rel_type": "responsible_for", "cardinality": "1:N"},
+    {"from_table": "assets", "to_table": "meters", "from_column": "id", "to_column": "asset_id", "rel_type": "metered_by", "cardinality": "1:N"},
+    {"from_table": "meters", "to_table": "meter_readings", "from_column": "id", "to_column": "meter_id", "rel_type": "records", "cardinality": "1:N"},
+    {"from_table": "tenants", "to_table": "leases", "from_column": "id", "to_column": "tenant_id", "rel_type": "holds", "cardinality": "1:N"},
+    {"from_table": "spaces", "to_table": "leases", "from_column": "id", "to_column": "space_id", "rel_type": "leased_under", "cardinality": "1:N"},
+    {"from_table": "manufacturers", "to_table": "spare_parts", "from_column": "id", "to_column": "manufacturer_id", "rel_type": "made_by", "cardinality": "1:N"}
+  ],
+  "documented_coincidental_overlaps": [
+    {"from_table": "sites", "from_column": "postcode", "to_table": "vendors", "to_column": "postcode", "reason": "Same-city portfolio — values overlap but not a relationship (Test 2 coincidental). Do not re-flag."}
+  ]
+}

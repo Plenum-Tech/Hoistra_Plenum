@@ -1,0 +1,30 @@
+{
+  "organization_id": "00000000-0000-0000-0000-0000000000b1",
+  "vendors": [
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+      "vendor_name": "Apex Mechanical Services Ltd",
+      "vendor_code": "APEX-MECH",
+      "block_state": "Clear",
+      "trade": "Mechanical / HVAC",
+      "contract_ref": "FM-APEX-2026-01"
+    },
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a2",
+      "vendor_name": "BrightSpark Electrical Ltd",
+      "vendor_code": "BRIGHT-ELEC",
+      "block_state": "Clear",
+      "trade": "Electrical",
+      "contract_ref": "FM-BRIGHT-2026-01"
+    },
+    {
+      "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+      "vendor_name": "SafeLift Engineering Ltd",
+      "vendor_code": "SAFELIFT",
+      "block_state": "Blocked",
+      "trade": "Lifts / LOLER",
+      "contract_ref": "FM-SAFELIFT-2026-01",
+      "blocked_from_month": "2026-05-01"
+    }
+  ]
+}

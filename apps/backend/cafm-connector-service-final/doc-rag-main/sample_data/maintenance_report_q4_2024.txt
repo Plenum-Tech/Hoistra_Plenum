@@ -1,0 +1,247 @@
+QUARTERLY MAINTENANCE REPORT
+Q4 2024 - October to December
+
+Building A - Main Campus Facility
+Report Date: December 31, 2024
+Prepared by: John Smith, Facilities Manager
+Approved by: Sarah Johnson, Director of Operations
+
+==================================================
+EXECUTIVE SUMMARY
+==================================================
+
+This report covers routine maintenance activities performed during Q4 2024. 
+A total of 28 assets were inspected and serviced across Building A and Building B.
+All critical systems remain operational with no major issues reported.
+
+==================================================
+HVAC SYSTEMS
+==================================================
+
+AHU-001 (Main Air Handler Unit North)
+- Location: Building A, Floor 5, Mechanical Room 501
+- Service Date: November 20, 2024
+- Work Performed: 
+  * Replaced air filters (MERV 13)
+  * Inspected belt tension and alignment
+  * Cleaned condensate drain pan
+  * Verified damper operation
+- Status: Operational - all parameters within normal range
+- Technician: Mike Wilson
+- Next Service: February 20, 2025
+
+AHU-002 (Main Air Handler Unit South)  
+- Location: Building A, Floor 5, Mechanical Room 502
+- Service Date: November 18, 2024
+- Work Performed:
+  * Replaced air filters (MERV 13)
+  * Tightened fan belt (was showing wear)
+  * Cleaned coils with approved cleaner
+  * Calibrated temperature sensors
+- Status: Operational - minor belt wear noted, replacement scheduled for next service
+- Technician: Mike Wilson
+- Next Service: February 18, 2025
+- Note: Belt replacement parts ordered (Carrier part #39M-BELT-100)
+
+CHW-001 (Primary Chiller Plant)
+- Location: Building A, Basement, Central Plant Room
+- Service Date: October 15, 2024
+- Work Performed:
+  * Checked refrigerant levels (R-134a) - no leaks detected
+  * Inspected compressor oil levels and quality - good condition
+  * Cleaned condenser tubes
+  * Verified control sequences and setpoints
+  * Load tested at 80% capacity - passed
+- Status: Operational - excellent condition
+- Technician: David Chen (certified Trane technician)
+- Next Service: January 15, 2025
+
+CHW-002 (Secondary Chiller Plant)
+- Location: Building B, Basement, Central Plant Room  
+- Service Date: October 20, 2024
+- Work Performed:
+  * Inspected York YCIV-400 compressor components
+  * Changed oil filters
+  * Cleaned condenser and evaporator tubes
+  * Performed leak test - no issues found
+  * Tested automatic switchover to CHW-001 - working correctly
+- Status: Operational - redundancy verified
+- Technician: David Chen
+- Next Service: January 20, 2025
+
+CT-001 (Cooling Tower Main)
+- Location: Building A, Roof
+- Service Date: October 1, 2024
+- Work Performed:
+  * Cleaned basin and removed debris
+  * Inspected fill media for damage - good condition
+  * Tested water treatment system
+  * Verified fan motor operation (Baltimore Aircoil VTI-600)
+  * Checked for proper water distribution
+- Status: Operational - ready for cooling season
+- Technician: Robert Martinez
+- Next Service: January 1, 2025
+
+==================================================
+ELEVATOR SYSTEMS
+==================================================
+
+EL-001 (Main Elevator North Wing)
+- Location: Building A, Ground Floor, Lobby North
+- Service Date: November 25, 2024
+- Work Performed:
+  * Inspected Otis Gen2 drive system and belts
+  * Tested all safety systems (door sensors, emergency brakes)
+  * Lubricated guide rails and rollers
+  * Verified emergency phone functionality
+  * Load tested at rated capacity - passed
+  * Cleaned and inspected door tracks
+- Status: Operational - all safety tests passed
+- Technician: Otis certified technician
+- Next Service: February 25, 2025
+- Annual Inspection: Due March 2025
+
+EL-002 (Main Elevator South Wing)
+- Location: Building A, Ground Floor, Lobby South
+- Service Date: November 22, 2024  
+- Work Performed:
+  * Inspected Schindler 3300 control system
+  * Tested emergency recall function
+  * Adjusted door closing speed (was too fast)
+  * Replaced worn door roller bearings
+  * Verified floor leveling accuracy
+  * Tested backup power operation with GEN-001
+- Status: Operational - door speed issue resolved
+- Technician: Schindler certified technician
+- Parts Used: Door roller bearings (Schindler part #3300-ROLL-12)
+- Next Service: February 22, 2025
+
+EL-003 (Service Elevator)
+- Location: Building A, Ground Floor, Service Corridor
+- Service Date: December 10, 2024
+- Work Performed:
+  * Full inspection of Kone MonoSpace 500 system
+  * Replaced hydraulic fluid (5W-30 synthetic)
+  * Tested overload sensors - calibrated
+  * Inspected car top equipment
+  * Verified freight loading capacity indicators
+- Status: Operational - heavy use but well maintained
+- Technician: Kone certified technician
+- Next Service: March 10, 2025
+
+==================================================
+ELECTRICAL SYSTEMS
+==================================================
+
+GEN-001 (Emergency Generator Main)
+- Location: Building A, Basement, Generator Room
+- Service Date: November 10, 2024
+- Work Performed:
+  * Monthly load test performed (1000 kVA Caterpillar C18)
+  * Changed engine oil and filters
+  * Inspected battery bank - all cells good
+  * Tested automatic transfer switch (ATS)
+  * Verified fuel levels and quality (diesel #2)
+  * Simulated power outage - generator started in 8 seconds
+- Status: Operational - critical system performing excellently
+- Technician: James Rodriguez (Caterpillar certified)
+- Fuel Level: 87% (380 gallons remaining)
+- Next Service: February 10, 2025
+- Annual Load Bank Test: Scheduled for January 2025
+
+UPS-001 (Uninterruptible Power Supply Main)
+- Location: Building A, Basement, UPS Room
+- Service Date: October 15, 2024
+- Work Performed:
+  * Battery bank health test (APC Symmetra PX 250 kVA)
+  * All 40 batteries tested individually - 2 flagged for replacement
+  * Inspected power distribution modules
+  * Verified bypass operation
+  * Cleaned and inspected internal components
+  * Load tested at 80% capacity - 18 minutes runtime
+- Status: Operational - 2 batteries need replacement Q1 2025
+- Technician: Maria Santos (APC certified)
+- Battery Replacement: Scheduled for January 15, 2025
+- Parts Ordered: APC RBC55 replacement battery cartridges (Qty: 2)
+- Next Service: January 15, 2025
+
+==================================================
+PUMPS AND MOTORS
+==================================================
+
+PUMP-001 (Primary Chilled Water Pump)
+- Location: Building A, Basement, Central Plant Room
+- Service Date: October 25, 2024
+- Work Performed:
+  * Inspected Armstrong 4380 pump seals - good condition
+  * Measured motor vibration levels - within spec
+  * Checked bearing temperature - normal
+  * Verified flow rate and pressure differential
+  * Inspected coupling alignment
+- Status: Operational - no issues
+- Technician: Robert Martinez
+- Next Service: January 25, 2025
+
+PUMP-002 (Secondary Chilled Water Pump)
+- Location: Building A, Basement, Central Plant Room
+- Service Date: October 25, 2024
+- Work Performed:
+  * Inspected Armstrong 4380 backup pump
+  * Tested automatic switchover from PUMP-001
+  * Verified rotation direction and flow
+  * Checked motor insulation resistance
+- Status: Operational - standby ready
+- Technician: Robert Martinez  
+- Next Service: January 25, 2025
+
+==================================================
+BUILDING AUTOMATION
+==================================================
+
+BMS-001 (Building Management System Main)
+- Location: Building A, Floor 5, BMS Control Room
+- Service Date: November 1, 2024
+- Work Performed:
+  * Updated Honeywell EBI software to version 5.8.2
+  * Backed up all control sequences and graphics
+  * Verified all field device communications (423 points online)
+  * Tested alarm notification system
+  * Optimized HVAC scheduling for winter operation
+  * Generated energy usage reports for Q3 2024
+- Status: Operational - all systems integrated and responsive
+- Technician: Lisa Wang (Honeywell certified)
+- System Health: 99.7% uptime for Q4 2024
+- Next Service: February 1, 2025
+
+==================================================
+SUMMARY OF ISSUES REQUIRING FOLLOW-UP
+==================================================
+
+1. AHU-002: Belt replacement scheduled for next service (parts on order)
+2. UPS-001: Battery replacement required (2 units, scheduled January 15, 2025)
+3. EL-001: Annual elevator inspection due March 2025 (contact Otis)
+4. GEN-001: Annual load bank test scheduled January 2025
+
+==================================================
+RECOMMENDATIONS
+==================================================
+
+1. Consider preventive replacement of AHU-002 belt during Q1 2025 service
+2. Budget for UPS-001 battery bank full replacement in 2026 (5-year life cycle)
+3. Schedule elevator annual inspections early to avoid downtime
+4. Continue current maintenance intervals - all systems performing well
+
+==================================================
+COST SUMMARY Q4 2024
+==================================================
+
+Labor (internal): $12,450
+Parts and Materials: $3,890
+Contract Services: $8,200
+Total Q4 Maintenance: $24,540
+
+Submitted by: John Smith, Facilities Manager
+Date: December 31, 2024
+
+Approved by: Sarah Johnson, Director of Operations  
+Date: January 2, 2025

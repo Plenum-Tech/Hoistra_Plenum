@@ -1,0 +1,49 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.9.2
+pydantic-settings==2.5.2
+sqlalchemy==2.0.35
+psycopg[binary]==3.2.3
+pgvector==0.3.5
+python-dotenv==1.0.1
+
+# Document parsing
+pypdf==5.0.1
+python-docx==1.1.2
+pdfplumber==0.11.4
+
+# Image + OCR + vision
+Pillow==10.4.0
+pytesseract==0.3.13
+pdf2image==1.17.0
+
+# Retrieval / NLP
+rank-bm25==0.2.2
+numpy==1.26.4
+scikit-learn==1.5.2
+
+# LLM / embeddings
+anthropic>=0.40.0
+openai==1.51.0
+tiktoken==0.7.0
+
+# Data parsing (CSV / Excel row-index upload)
+pandas>=2.2.0
+openpyxl>=3.1.0
+
+# Azure Blob Storage — store original uploaded documents for view/download
+azure-storage-blob>=12.20
+
+# Utilities
+loguru==0.7.2
+httpx==0.27.2
+tenacity>=8.2,<9
+
+# UI
+streamlit==1.39.0
+requests==2.32.3
+
+# Tests
+pytest==8.3.3
+pytest-asyncio==0.24.0

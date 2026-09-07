@@ -1,0 +1,12 @@
+required_tokens:
+  - fire alarm
+  - bs 5839
+issuing_body_tokens:
+  - bafe
+  - nsi
+  - ssaib
+required_field_hints:
+  - certificate
+  - service
+  - system
+notes: Fire alarm service

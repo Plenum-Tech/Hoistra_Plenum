@@ -1,0 +1,6 @@
+assetnum,assettype,location,status,priority,customprop
+A001,Equipment,Building A,Active,1,ExtraData1
+A002,Vehicle,Building B,Inactive,2,ExtraData2
+A003,Tool,Building C,Active,3,ExtraData3
+A004,Furniture,Building D,Maintenance,1,ExtraData4
+A005,Computer,Building E,Active,2,ExtraData5

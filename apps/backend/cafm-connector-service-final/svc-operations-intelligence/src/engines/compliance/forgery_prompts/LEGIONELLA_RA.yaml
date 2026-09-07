@@ -1,0 +1,11 @@
+required_tokens:
+  - legionella
+  - risk assessment
+  - acop l8
+issuing_body_tokens:
+  - lca
+required_field_hints:
+  - assessor
+  - scheme
+  - review
+notes: Legionella RA

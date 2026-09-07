@@ -1,0 +1,12 @@
+required_tokens:
+  - written scheme
+  - pressure
+issuing_body_tokens:
+  - allianz
+  - lloyd
+  - bureau veritas
+required_field_hints:
+  - examination
+  - vessel
+  - competent
+notes: WSE / pressure systems

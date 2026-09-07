@@ -1,0 +1,14 @@
+required_tokens:
+  - pa1
+  - pa2
+  - pa6
+  - pesticide
+issuing_body_tokens:
+  - basis
+  - lantra
+  - city & guilds
+required_field_hints:
+  - certificate
+  - qualification
+  - expiry
+notes: Pesticide PAx

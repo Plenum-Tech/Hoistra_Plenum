@@ -1,0 +1,12 @@
+required_tokens:
+  - electrical installation certificate
+  - eic
+issuing_body_tokens:
+  - niceic
+  - napit
+  - eca
+required_field_hints:
+  - bs 7671
+  - circuit
+  - certificate
+notes: Electrical installation cert

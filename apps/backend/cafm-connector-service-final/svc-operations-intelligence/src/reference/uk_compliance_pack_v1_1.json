@@ -1,0 +1,2311 @@
+{
+ "pack_id": "UK-COMPLIANCE-v1.1",
+ "country_code": "UK",
+ "pack_version": "1.1",
+ "description": "UK Compliance Certification Pack v1.1 — rebuilt from authoritative UK_Compliance_Certification_Pack_v1.1.docx (54 certificate cards).",
+ "source_docx": "C:\\Users\\balap\\Documents\\UK_Compliance_Certification_Pack_v1.1.docx",
+ "type_counts": {
+  "building": 27,
+  "vendor": 28,
+  "total": 55
+ },
+ "verification_registers": [
+  {
+   "register": "BAFE SP203-1 registered firm or NSI/SSAIB-approved company",
+   "trade": "Fire",
+   "prefills_number": true,
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "aliases": [
+    "BAFE",
+    "BAFE SP203-1",
+    "BAFE_SP203_1",
+    "BAFE_SP101",
+    "FIRE_ALARM_SERVICE"
+   ]
+  },
+  {
+   "register": "BPCA (British Pest Control Association)",
+   "trade": "Pest Control",
+   "prefills_number": false,
+   "verification_url": "https://bpca.org.uk/find-a-pest-controller",
+   "aliases": [
+    "BPCA"
+   ]
+  },
+  {
+   "register": "CHAS / Constructionline / SafeContractor / SMAS / Acclaim (all SSIP mutual recognition)",
+   "trade": "General",
+   "prefills_number": false,
+   "verification_url": "https://ssip.org.uk/members/",
+   "aliases": [
+    "CHAS",
+    "SSIP",
+    "CHAS_SSIP",
+    "Constructionline",
+    "SafeContractor"
+   ]
+  },
+  {
+   "register": "Competent assessor — LCA registered company strongly recommended",
+   "trade": "Water/Legionella",
+   "prefills_number": false,
+   "verification_url": "https://www.legionellacontrol.org.uk/members/",
+   "aliases": [
+    "LCA",
+    "L8_RISK",
+    "COLD_WATER_TANK"
+   ]
+  },
+  {
+   "register": "Gas Safe registered engineer",
+   "trade": "Gas",
+   "prefills_number": true,
+   "verification_url": "https://www.gassaferegister.co.uk/find-an-engineer/",
+   "aliases": [
+    "Gas Safe",
+    "GAS_SAFE",
+    "CP17",
+    "BOILER_SERVICE",
+    "ACS_CARD"
+   ]
+  },
+  {
+   "register": "Health and Safety Executive (HSE) — issued per company",
+   "trade": "Asbestos",
+   "prefills_number": true,
+   "verification_url": "https://www.hse.gov.uk/asbestos/licensing/",
+   "aliases": [
+    "HSE Asbestos",
+    "HSE",
+    "HSE_ASBESTOS_LICENCE"
+   ]
+  },
+  {
+   "register": "LEIA (Lift and Escalator Industry Association)",
+   "trade": "Lifts",
+   "prefills_number": false,
+   "verification_url": "https://www.leia.co.uk/",
+   "aliases": [
+    "LEIA"
+   ]
+  },
+  {
+   "register": "NAPIT (National Association of Professional Inspectors and Testers)",
+   "trade": "Electrical",
+   "prefills_number": true,
+   "verification_url": "https://www.napit.org.uk/find-an-installer",
+   "aliases": [
+    "NAPIT"
+   ]
+  },
+  {
+   "register": "NICEIC / NAPIT / ECA-registered contractor",
+   "trade": "Electrical",
+   "prefills_number": true,
+   "verification_url": "https://www.niceic.com/find-a-contractor",
+   "aliases": [
+    "NICEIC",
+    "ECA",
+    "EICR",
+    "EIC",
+    "EMERGENCY_LIGHTING"
+   ]
+  },
+  {
+   "register": "NSI (National Security Inspectorate)",
+   "trade": "Fire",
+   "prefills_number": true,
+   "verification_url": "https://www.nsi.org.uk/find-a-company/",
+   "aliases": [
+    "NSI",
+    "NSI_GOLD_FIRE",
+    "NSI_GOLD_SECURITY"
+   ]
+  },
+  {
+   "register": "REFCOM-registered company; F-Gas certified technician (City & Guilds 2079)",
+   "trade": "F-Gas",
+   "prefills_number": true,
+   "verification_url": "https://www.refcom.org.uk/find-a-company/",
+   "aliases": [
+    "REFCOM",
+    "FGAS",
+    "CG_2079"
+   ]
+  },
+  {
+   "register": "Security Industry Authority (SIA)",
+   "trade": "Security",
+   "prefills_number": true,
+   "verification_url": "https://www.sia.homeoffice.gov.uk/Pages/acs-rosta.aspx",
+   "aliases": [
+    "SIA ACS",
+    "SIA_ACS"
+   ]
+  },
+  {
+   "register": "SIA",
+   "trade": "Security",
+   "prefills_number": true,
+   "verification_url": "https://www.sia.homeoffice.gov.uk/Pages/licensing-check.aspx",
+   "aliases": [
+    "SIA",
+    "SIA licence",
+    "SIA_INDIVIDUAL"
+   ]
+  },
+  {
+   "register": "UKAS-accredited surveying organisation; individual with P402 competency",
+   "trade": "Asbestos",
+   "prefills_number": true,
+   "verification_url": "https://www.ukas.com/find-an-organisation/",
+   "aliases": [
+    "UKAS",
+    "UKAS_ASBESTOS",
+    "ASBESTOS_SURVEY",
+    "ISO_9001",
+    "ISO_14001"
+   ]
+  }
+ ],
+ "certificate_types": [
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "FRA",
+   "certificate_type_name": "Fire Risk Assessment (FRA)",
+   "certificate_scope": "Building",
+   "trade_category": "Fire",
+   "regulation_reference": "Regulatory Reform (Fire Safety) Order 2005 (SI 2005/1541)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Qualified fire risk assessor — IFSM, IFE, FPA, or BAFE SP205 membership recommended",
+   "required_contractor_accreditation": "BAFE SP205",
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Building address",
+     "Date",
+     "Assessor name and qualification",
+     "Scope",
+     "Significant findings",
+     "Persons at risk",
+     "Existing precautions",
+     "Action plan (High",
+     "Medium",
+     "Low priority)",
+     "Completion dates",
+     "Review date",
+     "Assessor signature"
+    ],
+    "source_key_fields": "Building address | Date | Assessor name and qualification | Scope | Significant findings | Persons at risk | Existing precautions | Action plan (High / Medium / Low priority) | Completion dates | Review date | Assessor signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. FIRE SAFETY",
+   "frequency_text": "Annual review minimum; after significant material change; no fixed statutory expiry"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "FIRE_ALARM_SERVICE",
+   "certificate_type_name": "Fire Alarm System Service Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Fire",
+   "regulation_reference": "BS 5839-1:2017; Regulatory Reform (Fire Safety) Order 2005",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "BAFE SP203-1 registered firm or NSI/SSAIB-approved company",
+   "required_contractor_accreditation": "BAFE SP203-1",
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site address",
+     "System type",
+     "grade",
+     "Panel ID",
+     "Date",
+     "Engineer name",
+     "BAFE no.",
+     "Zones tested",
+     "Faults (C1",
+     "C2)",
+     "Remedial actions",
+     "Client signature",
+     "Next service due"
+    ],
+    "source_key_fields": "Site address | System type/grade | Panel ID | Date | Engineer name/BAFE no. | Zones tested | Faults (C1/C2) | Remedial actions | Client signature | Next service due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. FIRE SAFETY",
+   "frequency_text": "Quarterly inspection; 6-monthly or annual full service per BS 5839-1"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "EMERGENCY_LIGHTING",
+   "certificate_type_name": "Emergency Lighting Test Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Fire",
+   "regulation_reference": "BS 5266-1:2011; BS EN 50172; FSO 2005",
+   "regulation_url": null,
+   "frequency_months": 1,
+   "issuing_body": "NICEIC / NAPIT / ECA-registered contractor",
+   "required_contractor_accreditation": "NICEIC",
+   "verification_url": "https://www.niceic.com/find-a-contractor",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "Test date",
+     "Test type (monthly",
+     "annual)",
+     "Luminaire count",
+     "Duration achieved",
+     "Failures",
+     "Pass",
+     "Fail",
+     "Remedial actions",
+     "Next test due"
+    ],
+    "source_key_fields": "Site | Test date | Test type (monthly/annual) | Luminaire count | Duration achieved | Failures | Pass/Fail | Remedial actions | Next test due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. FIRE SAFETY",
+   "frequency_text": "Monthly flick test (self-test log); Annual 3-hour duration test"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "SPRINKLER",
+   "certificate_type_name": "Sprinkler / Suppression System Annual Test Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Fire",
+   "regulation_reference": "BS EN 12845; LPC Rules; FSO 2005",
+   "regulation_url": null,
+   "frequency_months": 60,
+   "issuing_body": "BAFE SP203-1 registered firm or NSI/SSAIB-approved company",
+   "required_contractor_accreditation": "BAFE_SP101",
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "System type",
+     "Date",
+     "Inspector name",
+     "BAFE no.",
+     "Pressure test",
+     "Flow switch test",
+     "Control valve positions",
+     "Deficiencies",
+     "Corrective actions",
+     "Next inspection"
+    ],
+    "source_key_fields": "Site | System type | Date | Inspector name/BAFE no. | Pressure test | Flow switch test | Control valve positions | Deficiencies | Corrective actions | Next inspection"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. FIRE SAFETY",
+   "frequency_text": "Quarterly checks; Annual main test; 5-yearly full trip test"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "FIRE_DOOR",
+   "certificate_type_name": "Fire Door Inspection Report",
+   "certificate_scope": "Building",
+   "trade_category": "Fire",
+   "regulation_reference": "Building Safety Act 2022 (HRBs); BS 8214:2016; FSO 2005",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "Certificated inspector — BWF-CERTIFIRE, BM TRADA Q-Mark, or FDIS trained",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Building",
+     "Door ID",
+     "location",
+     "Inspector cert no.",
+     "Date",
+     "Gap measurements",
+     "Seal condition",
+     "Closer function",
+     "Hold-open device",
+     "Signage",
+     "Ironmongery",
+     "Pass",
+     "Refer",
+     "Fail",
+     "Priority (Urgent",
+     "Routine)"
+    ],
+    "source_key_fields": "Building | Door ID/location | Inspector cert no. | Date | Gap measurements | Seal condition | Closer function | Hold-open device | Signage | Ironmongery | Pass/Refer/Fail | Priority (Urgent/Routine)"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. FIRE SAFETY",
+   "frequency_text": "HRBs: quarterly (communal doors), annual (flat entrance doors). Other commercial: annual"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "EICR",
+   "certificate_type_name": "Electrical Installation Condition Report (EICR)",
+   "certificate_scope": "Building",
+   "trade_category": "Electrical",
+   "regulation_reference": "Electricity at Work Regulations 1989 (SI 1989/635); BS 7671:2018+A4:2026",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "NICEIC Approved Contractor / NAPIT / ECA member firm",
+   "required_contractor_accreditation": "NICEIC",
+   "verification_url": "https://www.niceic.com/find-a-contractor",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Client name",
+     "address",
+     "Inspector name, qualification, NICEIC",
+     "NAPIT no.",
+     "Inspection date",
+     "Scope",
+     "limitations",
+     "Observations: C1 (danger)",
+     "C2 (potentially dangerous)",
+     "C3 (improvement)",
+     "FI (further investigation)",
+     "Overall: Satisfactory",
+     "Unsatisfactory",
+     "Next inspection due",
+     "Signatures"
+    ],
+    "source_key_fields": "Client name/address | Inspector name, qualification, NICEIC/NAPIT no. | Inspection date | Scope/limitations | Observations: C1 (danger) / C2 (potentially dangerous) / C3 (improvement) / FI (further investigation) | Overall: Satisfactory / Unsatisfactory | Next inspection due | Signatures"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL",
+   "frequency_text": null
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "EIC",
+   "certificate_type_name": "Electrical Installation Certificate (EIC) — new/modified installations",
+   "certificate_scope": "Building",
+   "trade_category": "Electrical",
+   "regulation_reference": "BS 7671:2018+A4:2026; Building Regulations Part P",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "NICEIC / NAPIT / ECA-registered contractor",
+   "required_contractor_accreditation": "NICEIC",
+   "verification_url": "https://www.niceic.com/find-a-contractor",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Client",
+     "Description of installation",
+     "Design",
+     "construction",
+     "inspection signatures",
+     "Circuit schedule",
+     "Test results (insulation resistance, continuity, earth fault loop impedance, RCD test times)",
+     "Date",
+     "Contractor NICEIC",
+     "NAPIT no."
+    ],
+    "source_key_fields": "Client | Description of installation | Design/construction/inspection signatures | Circuit schedule | Test results (insulation resistance, continuity, earth fault loop impedance, RCD test times) | Date | Contractor NICEIC/NAPIT no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL",
+   "frequency_text": "On completion of any new or significantly altered electrical installation"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "PAT",
+   "certificate_type_name": "Portable Appliance Testing (PAT) Register",
+   "certificate_scope": "Building",
+   "trade_category": "Electrical",
+   "regulation_reference": "Electricity at Work Regulations 1989; IET Code of Practice for In-Service Inspection",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Competent person with City & Guilds 2377 or equivalent",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Asset ID",
+     "Description",
+     "Location",
+     "Serial no.",
+     "Test date",
+     "Earth continuity (Ω)",
+     "Insulation resistance (MΩ)",
+     "Pass",
+     "Fail",
+     "Withdrawn",
+     "Next test due",
+     "Tester name and signature"
+    ],
+    "source_key_fields": "Asset ID | Description | Location | Serial no. | Test date | Earth continuity (Ω) | Insulation resistance (MΩ) | Pass/Fail/Withdrawn | Next test due | Tester name and signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL",
+   "frequency_text": "Risk-based — annually for most commercial environments"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CP17",
+   "certificate_type_name": "Gas Safety Certificate — Commercial (CP17)",
+   "certificate_scope": "Building",
+   "trade_category": "Gas",
+   "regulation_reference": "Gas Safety (Installation and Use) Regulations 1998 (SI 1998/2451) HSE minimum fields HSE: what a gas safety record must contain",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Gas Safe registered engineer",
+   "required_contractor_accreditation": "Gas Safe",
+   "verification_url": "https://www.gassaferegister.co.uk/find-an-engineer/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Property address",
+     "Appliance description",
+     "location",
+     "Gas Safe registration no.",
+     "Date",
+     "Inlet pressure (mbar)",
+     "Heat input (kW)",
+     "Burner pressure",
+     "Flue flow test",
+     "CO",
+     "CO2 readings",
+     "Safety device operation",
+     "Safe to use: Yes",
+     "No",
+     "Remedial actions",
+     "Engineer signature",
+     "Next check due"
+    ],
+    "source_key_fields": "Property address | Appliance description/location | Gas Safe registration no. | Date | Inlet pressure (mbar) | Heat input (kW) | Burner pressure | Flue flow test | CO/CO2 readings | Safety device operation | Safe to use: Yes/No | Remedial actions | Engineer signature | Next check due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. GAS SAFETY",
+   "frequency_text": "Annual — must not lapse"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BOILER_SERVICE",
+   "certificate_type_name": "Boiler Service Record",
+   "certificate_scope": "Building",
+   "trade_category": "Gas",
+   "regulation_reference": "Gas Safety Regulations 1998; Manufacturer maintenance requirements",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "Gas Safe registered engineer",
+   "required_contractor_accreditation": "Gas Safe",
+   "verification_url": "https://www.gassaferegister.co.uk/find-an-engineer/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Boiler make",
+     "model",
+     "serial no.",
+     "Location",
+     "Service date",
+     "Tasks completed",
+     "Parts replaced",
+     "Combustion analysis (CO, CO2, flue temp, efficiency %)",
+     "Fault codes cleared",
+     "Gas Safe no.",
+     "Engineer signature",
+     "Next service due"
+    ],
+    "source_key_fields": "Boiler make/model/serial no. | Location | Service date | Tasks completed | Parts replaced | Combustion analysis (CO, CO2, flue temp, efficiency %) | Fault codes cleared | Gas Safe no. | Engineer signature | Next service due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. GAS SAFETY",
+   "frequency_text": "Annual minimum; some manufacturers require 6-monthly"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "L8_RISK",
+   "certificate_type_name": "Legionella Risk Assessment",
+   "certificate_scope": "Building",
+   "trade_category": "Water/Legionella",
+   "regulation_reference": "ACOP L8 (4th ed); COSHH 2002 (SI 2002/2677) HSG274 HSE Technical Guidance Parts 1-3",
+   "regulation_url": null,
+   "frequency_months": 24,
+   "issuing_body": "Competent assessor — LCA registered company strongly recommended",
+   "required_contractor_accreditation": "LCA",
+   "verification_url": "https://www.legionellacontrol.org.uk/members/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "Date",
+     "Assessor name",
+     "LCA no.",
+     "Water system description",
+     "Risk rating (High",
+     "Medium",
+     "Low)",
+     "Population at risk",
+     "Significant hazards",
+     "Control measures",
+     "Recommended actions",
+     "Responsible person",
+     "Monitoring scheme",
+     "Review date"
+    ],
+    "source_key_fields": "Site | Date | Assessor name/LCA no. | Water system description | Risk rating (High/Medium/Low) | Population at risk | Significant hazards | Control measures | Recommended actions | Responsible person | Monitoring scheme | Review date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "D. WATER SYSTEMS & LEGIONELLA",
+   "frequency_text": "Every 2 years or after significant system change or incident"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "LEGIONELLA_MONITORING",
+   "certificate_type_name": "Legionella Monitoring Log / Water Treatment Records",
+   "certificate_scope": "Building",
+   "trade_category": "Water/Legionella",
+   "regulation_reference": "ACOP L8; HSG274; COSHH 2002",
+   "regulation_url": null,
+   "frequency_months": 1,
+   "issuing_body": "Water treatment contractor or trained in-house person",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Date",
+     "Outlet reference",
+     "Temperature reading (°C)",
+     "Target met Y",
+     "N",
+     "Flushing duration",
+     "Biocide dose",
+     "concentration",
+     "Chlorine residual (mg",
+     "L)",
+     "Technician name",
+     "signature",
+     "Corrective action",
+     "Next date"
+    ],
+    "source_key_fields": "Date | Outlet reference | Temperature reading (°C) | Target met Y/N | Flushing duration | Biocide dose/concentration | Chlorine residual (mg/L) | Technician name/signature | Corrective action | Next date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "D. WATER SYSTEMS & LEGIONELLA",
+   "frequency_text": "Monthly temperature monitoring; Weekly flushing; Treatment dosing as scheme requires"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "COLD_WATER_TANK",
+   "certificate_type_name": "Cold Water Storage Tank Inspection Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Water/Legionella",
+   "regulation_reference": "ACOP L8; Water Supply (Water Fittings) Regulations 1999 (SI 1999/1148)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Competent assessor — LCA registered company strongly recommended",
+   "required_contractor_accreditation": "LCA",
+   "verification_url": "https://www.legionellacontrol.org.uk/members/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "Tank ID",
+     "location",
+     "Capacity (litres)",
+     "Inspection date",
+     "Lid",
+     "screen",
+     "valve condition",
+     "Water clarity",
+     "Debris",
+     "sediment",
+     "Lining condition",
+     "Insulation",
+     "Temperature (°C)",
+     "Sample taken Y",
+     "N",
+     "Chlorination Y",
+     "N",
+     "Remedial actions",
+     "Technician signature"
+    ],
+    "source_key_fields": "Site | Tank ID/location | Capacity (litres) | Inspection date | Lid/screen/valve condition | Water clarity | Debris/sediment | Lining condition | Insulation | Temperature (°C) | Sample taken Y/N | Chlorination Y/N | Remedial actions | Technician signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "D. WATER SYSTEMS & LEGIONELLA",
+   "frequency_text": "Annual visual inspection; full clean and disinfection every 1-2 years per risk assessment"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "WSE",
+   "certificate_type_name": "Written Scheme of Examination (WSE) & Pressure Vessel Inspection Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Pressure Systems",
+   "regulation_reference": "Pressure Systems Safety Regulations 2000 (SI 2000/128) HSE Guidance HSG261; PSSR ACOP guidance",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "Competent person — Allianz Engineering, Lloyd's Register, Bureau Veritas, TÜV SÜD",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "System description",
+     "Vessel ID",
+     "serial no.",
+     "MAWP (bar)",
+     "Design temperature",
+     "Fluid",
+     "Last exam date",
+     "Exam type (external",
+     "internal",
+     "hydraulic)",
+     "Defects found",
+     "Safe operating limits",
+     "Next exam due",
+     "Competent person name",
+     "body",
+     "signature"
+    ],
+    "source_key_fields": "Site | System description | Vessel ID/serial no. | MAWP (bar) | Design temperature | Fluid | Last exam date | Exam type (external/internal/hydraulic) | Defects found | Safe operating limits | Next exam due | Competent person name/body/signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "E. PRESSURE SYSTEMS",
+   "frequency_text": "As defined in WSE — typically 12-26 months for heating and hot water vessels"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "LOLER",
+   "certificate_type_name": "LOLER Thorough Examination Report — Passenger / Goods Lift",
+   "certificate_scope": "Building",
+   "trade_category": "LOLER",
+   "regulation_reference": "Lifting Operations and Lifting Equipment Regulations 1998 (SI 1998/2307) HSE Guidance L113 ACOP; HSE LOLER thorough examination guidance",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "Competent person — typically insurance-based inspection body (Allianz, Bureau Veritas, Lloyd's Register, TÜV SÜD)",
+   "required_contractor_accreditation": "LEEA",
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "Lift ID",
+     "serial no.",
+     "Lift type",
+     "SWL (persons",
+     "kg)",
+     "Exam date",
+     "Parts examined (ropes, sheaves, buffers, safety gear, car, doors, electrics, overload)",
+     "Defects",
+     "observations",
+     "Immediate danger Y",
+     "N",
+     "Remedy before next use Y",
+     "N",
+     "Next exam due",
+     "Competent person name",
+     "employer",
+     "qualification",
+     "signature"
+    ],
+    "source_key_fields": "Site | Lift ID/serial no. | Lift type | SWL (persons/kg) | Exam date | Parts examined (ropes, sheaves, buffers, safety gear, car, doors, electrics, overload) | Defects/observations | Immediate danger Y/N | Remedy before next use Y/N | Next exam due | Competent person name/employer/qualification/signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "F. LIFTS & LIFTING EQUIPMENT (LOLER)",
+   "frequency_text": "6 months (lifts carrying persons); 12 months (goods lifts)"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ASBESTOS_SURVEY",
+   "certificate_type_name": "Asbestos Management Survey Report",
+   "certificate_scope": "Building",
+   "trade_category": "Asbestos",
+   "regulation_reference": "Control of Asbestos Regulations 2012 (SI 2012/632); HSG264 HSE Guidance HSG264 — Asbestos: The survey guide",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "UKAS-accredited surveying organisation; individual with P402 competency",
+   "required_contractor_accreditation": "UKAS",
+   "verification_url": "https://www.ukas.com/find-an-organisation/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Client",
+     "site",
+     "Survey type",
+     "Date",
+     "Surveyor name",
+     "UKAS no.",
+     "P402 cert",
+     "Areas surveyed",
+     "ACM reference",
+     "Location",
+     "Material type",
+     "Sample ref",
+     "Condition",
+     "Surface treatment",
+     "Risk score",
+     "Management recommendation",
+     "Analyst name",
+     "UKAS no."
+    ],
+    "source_key_fields": "Client/site | Survey type | Date | Surveyor name/UKAS no./P402 cert | Areas surveyed | ACM reference | Location | Material type | Sample ref | Condition | Surface treatment | Risk score | Management recommendation | Analyst name/UKAS no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "G. ASBESTOS",
+   "frequency_text": "One-off survey with annual management plan review"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ASBESTOS_REGISTER",
+   "certificate_type_name": "Asbestos Register (Living Document)",
+   "certificate_scope": "Building",
+   "trade_category": "Asbestos",
+   "regulation_reference": "Control of Asbestos Regulations 2012 (Regulation 4)",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "PM maintains; populated from survey reports",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Building address",
+     "ACM reference",
+     "Floor",
+     "area",
+     "room",
+     "Material description",
+     "Quantity",
+     "Condition (current)",
+     "Risk score",
+     "Management action",
+     "Survey reference",
+     "Last reinspection",
+     "Reinspection frequency",
+     "Action completed Y",
+     "N",
+     "Date",
+     "Notes"
+    ],
+    "source_key_fields": "Building address | ACM reference | Floor/area/room | Material description | Quantity | Condition (current) | Risk score | Management action | Survey reference | Last reinspection | Reinspection frequency | Action completed Y/N | Date | Notes"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "G. ASBESTOS",
+   "frequency_text": "Continuously maintained; updated after any disturbance or reinspection"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "EPC",
+   "certificate_type_name": "Energy Performance Certificate (EPC)",
+   "certificate_scope": "Building",
+   "trade_category": "Energy",
+   "regulation_reference": "Energy Performance of Buildings Regulations 2012 (SI 2012/3118); MEES 2015 MEES Minimum Energy Efficiency Standards (England and Wales) Regulations 2015",
+   "regulation_url": null,
+   "frequency_months": 120,
+   "issuing_body": "Accredited Energy Assessor registered on CIBSE or Elmhurst scheme",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Property address",
+     "EPC ref no.",
+     "Assessment date",
+     "Expiry date",
+     "Asset rating (A-G) and score",
+     "Typical energy cost",
+     "Main heating fuel",
+     "Building type",
+     "area",
+     "CO2 emissions rating",
+     "Primary energy use (kWh",
+     "m²",
+     "year)",
+     "Improvement recommendations",
+     "Assessor name and accreditation no."
+    ],
+    "source_key_fields": "Property address | EPC ref no. | Assessment date | Expiry date | Asset rating (A-G) and score | Typical energy cost | Main heating fuel | Building type/area | CO2 emissions rating | Primary energy use (kWh/m²/year) | Improvement recommendations | Assessor name and accreditation no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. ENERGY & ENVIRONMENTAL",
+   "frequency_text": "Valid 10 years; current at every letting; MEES minimum EPC E (2023), proposed B by 2030"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "TM44",
+   "certificate_type_name": "Air Conditioning Inspection Report (TM44)",
+   "certificate_scope": "Building",
+   "trade_category": "Energy",
+   "regulation_reference": "Energy Performance of Buildings Regulations 2012 — Article 12; SI 2012/3118",
+   "regulation_url": null,
+   "frequency_months": 60,
+   "issuing_body": "CIBSE-registered Energy Assessor (Level 3 or 4 Non-Domestic)",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Property",
+     "Inspection date",
+     "Inspector name",
+     "CIBSE no.",
+     "AC system inventory (type, make, model, age, refrigerant, rated output)",
+     "Maintenance history",
+     "Controls assessment",
+     "Sizing assessment",
+     "Efficiency observations",
+     "Recommended measures",
+     "Certificate ref",
+     "Next inspection due"
+    ],
+    "source_key_fields": "Property | Inspection date | Inspector name/CIBSE no. | AC system inventory (type, make, model, age, refrigerant, rated output) | Maintenance history | Controls assessment | Sizing assessment | Efficiency observations | Recommended measures | Certificate ref | Next inspection due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. ENERGY & ENVIRONMENTAL",
+   "frequency_text": "Every 5 years"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "DEC",
+   "certificate_type_name": "Display Energy Certificate (DEC) — Public Buildings",
+   "certificate_scope": "Building",
+   "trade_category": "Energy",
+   "regulation_reference": "Energy Performance of Buildings Regulations 2012 (public buildings >250m²)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Accredited Energy Assessor",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Property",
+     "DEC reference",
+     "Annual operational rating (A-G)",
+     "CO2 emissions (kg",
+     "m²",
+     "year)",
+     "Energy use breakdown",
+     "Benchmark comparison",
+     "Year of construction",
+     "Floor area",
+     "Assessor name",
+     "accreditation no.",
+     "Advisory report reference",
+     "Valid until"
+    ],
+    "source_key_fields": "Property | DEC reference | Annual operational rating (A-G) | CO2 emissions (kg/m²/year) | Energy use breakdown | Benchmark comparison | Year of construction | Floor area | Assessor name/accreditation no. | Advisory report reference | Valid until"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. ENERGY & ENVIRONMENTAL",
+   "frequency_text": "Operational rating: annual; Advisory report: every 7 years"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ESOS",
+   "certificate_type_name": "ESOS Assessment Evidence Pack",
+   "certificate_scope": "Building",
+   "trade_category": "Energy",
+   "regulation_reference": "Energy Savings Opportunity Scheme Regulations 2014 (SI 2014/1643)",
+   "regulation_url": null,
+   "frequency_months": 48,
+   "issuing_body": "ESOS Lead Assessor registered with CIBSE, Energy Institute, or IEMA",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Organisation name",
+     "Companies House no.",
+     "ESOS notification reference",
+     "Phase",
+     "Compliance date",
+     "Lead assessor name",
+     "registration body",
+     "Energy audits completed (buildings, transport, industrial)",
+     "Total energy consumption (kWh by vector)",
+     "Opportunities identified",
+     "Estimated savings",
+     "Board director sign-off",
+     "Environment Agency notification reference"
+    ],
+    "source_key_fields": "Organisation name | Companies House no. | ESOS notification reference | Phase | Compliance date | Lead assessor name/registration body | Energy audits completed (buildings, transport, industrial) | Total energy consumption (kWh by vector) | Opportunities identified | Estimated savings | Board director sign-off | Environment Agency notification reference"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. ENERGY & ENVIRONMENTAL",
+   "frequency_text": "Every 4 years (Phase 3 deadline: December 2023)"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "FGAS",
+   "certificate_type_name": "F-Gas Leak Check Certificate / Refrigerant Log",
+   "certificate_scope": "Building",
+   "trade_category": "F-Gas",
+   "regulation_reference": "UK F-Gas Regulations 2022 (retained from EU 517/2014); SI 2015/310 as amended GOV.UK Guidance F-Gas guidance for engineers and refrigeration businesses",
+   "regulation_url": null,
+   "frequency_months": 6,
+   "issuing_body": "REFCOM-registered company; F-Gas certified technician (City & Guilds 2079)",
+   "required_contractor_accreditation": "REFCOM",
+   "verification_url": "https://www.refcom.org.uk/find-a-company/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Site",
+     "Equipment ID",
+     "Refrigerant type",
+     "Charge quantity (kg)",
+     "CO2e (tCO2e)",
+     "Check date",
+     "Leak detection method",
+     "Leaks found Y",
+     "N",
+     "Leak location",
+     "Repair action",
+     "Post-repair check result",
+     "Refrigerant added (kg)",
+     "Recovered (kg)",
+     "Company cert no.",
+     "Technician cert no.",
+     "Signature",
+     "Next check due"
+    ],
+    "source_key_fields": "Site | Equipment ID | Refrigerant type | Charge quantity (kg) | CO2e (tCO2e) | Check date | Leak detection method | Leaks found Y/N | Leak location | Repair action | Post-repair check result | Refrigerant added (kg) | Recovered (kg) | Company cert no. | Technician cert no. | Signature | Next check due"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "I. REFRIGERANTS (F-GAS)",
+   "frequency_text": "<5 tCO2e: annual; 5-50t: 6-monthly; >50t: 3-monthly; >500t: 3-monthly with ALD system"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "HS_POLICY",
+   "certificate_type_name": "Health & Safety Policy Statement",
+   "certificate_scope": "Building",
+   "trade_category": "H&S",
+   "regulation_reference": "Health and Safety at Work etc. Act 1974 (Section 2(3))",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Organisation name",
+     "Policy statement",
+     "Signed by (name, title, date)",
+     "Organisation structure",
+     "Responsibilities",
+     "Arrangements",
+     "Distribution list",
+     "Version",
+     "Review date"
+    ],
+    "source_key_fields": "Organisation name | Policy statement | Signed by (name, title, date) | Organisation structure | Responsibilities | Arrangements | Distribution list | Version | Review date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "J. HEALTH & SAFETY DOCUMENTATION",
+   "frequency_text": "Annual review or following significant change"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "HS_RISK_ASSESSMENT",
+   "certificate_type_name": "General Risk Assessment Register",
+   "certificate_scope": "Building",
+   "trade_category": "H&S",
+   "regulation_reference": "Management of H&S at Work Regulations 1999 (SI 1999/3242); HSWA 1974",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Activity",
+     "task",
+     "Hazard",
+     "Who might be harmed",
+     "Existing controls",
+     "Likelihood (1-5)",
+     "Severity (1-5)",
+     "Risk rating",
+     "Additional controls",
+     "Responsible person",
+     "Target date",
+     "Completion date",
+     "Residual risk",
+     "Assessor name",
+     "Date"
+    ],
+    "source_key_fields": "Activity/task | Hazard | Who might be harmed | Existing controls | Likelihood (1-5) | Severity (1-5) | Risk rating | Additional controls | Responsible person | Target date | Completion date | Residual risk | Assessor name | Date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "J. HEALTH & SAFETY DOCUMENTATION",
+   "frequency_text": "Annual review; immediately after incident or significant change"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "EL_INSURANCE",
+   "certificate_type_name": "Employers' Liability Insurance Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "H&S",
+   "regulation_reference": "Employers' Liability (Compulsory Insurance) Act 1969",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Insured name",
+     "Policy number",
+     "Insurer name and FCA authorisation",
+     "Period of insurance (from",
+     "to)",
+     "Minimum indemnity (statutory minimum £5M)",
+     "Compliance statement",
+     "Insurer signature",
+     "Date",
+     "Instruction to display prominently"
+    ],
+    "source_key_fields": "Insured name | Policy number | Insurer name and FCA authorisation | Period of insurance (from/to) | Minimum indemnity (statutory minimum £5M) | Compliance statement | Insurer signature | Date | Instruction to display prominently"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "J. HEALTH & SAFETY DOCUMENTATION",
+   "frequency_text": "Annual renewal"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "HRB_REGISTRATION",
+   "certificate_type_name": "Higher-Risk Building (HRB) Registration Certificate",
+   "certificate_scope": "Building",
+   "trade_category": "Building Safety Act",
+   "regulation_reference": "Building Safety Act 2022; HRB Registration Regulations 2023 (SI 2023/270) BSR Building Safety Regulator — HRB registration guidance",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Building Safety Regulator (BSR) — operated by HSE",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Unique Building Identifier (UBI)",
+     "Building name",
+     "address",
+     "PAP name",
+     "organisation",
+     "Building Manager name",
+     "contact",
+     "Number of floors",
+     "Height (m)",
+     "Number of residential units",
+     "Registration date",
+     "BSR reference",
+     "Compliance status"
+    ],
+    "source_key_fields": "Unique Building Identifier (UBI) | Building name/address | PAP name/organisation | Building Manager name/contact | Number of floors | Height (m) | Number of residential units | Registration date | BSR reference | Compliance status"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "K. BUILDING SAFETY ACT 2022 — HRBs 18m+ or 7+ storeys",
+   "frequency_text": "One-off registration; annual confirmation. Failure to register = criminal offence"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "SAFETY_CASE_REPORT",
+   "certificate_type_name": "Building Safety Case Report",
+   "certificate_scope": "Building",
+   "trade_category": "Building Safety Act",
+   "regulation_reference": "Building Safety Act 2022 (Sections 76-87); SI 2023/999 BSR Safety case report — what to include (HSE)",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Building description",
+     "UBI",
+     "Structural fire safety assessment",
+     "Fire safety measures",
+     "Structural integrity evidence",
+     "Golden Thread information register",
+     "Safety management system",
+     "Residents engagement strategy",
+     "Identified risks and controls",
+     "PAP contact",
+     "Date",
+     "version"
+    ],
+    "source_key_fields": "Building description/UBI | Structural fire safety assessment | Fire safety measures | Structural integrity evidence | Golden Thread information register | Safety management system | Residents engagement strategy | Identified risks and controls | PAP contact | Date/version"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "K. BUILDING SAFETY ACT 2022 — HRBs 18m+ or 7+ storeys",
+   "frequency_text": "Living document — updated on significant change; submitted at registration and on BSR request"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "GAS_SAFE",
+   "certificate_type_name": "Gas Safe Registration Certificate (Company)",
+   "certificate_scope": "Vendor",
+   "trade_category": "Gas",
+   "regulation_reference": "Gas Safety (Installation and Use) Regulations 1998 (SI 1998/2451)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "Gas Safe registered engineer",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.gassaferegister.co.uk/find-an-engineer/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "trading name",
+     "Registered address",
+     "Gas Safe registration no.",
+     "Categories of work authorised",
+     "Expiry date",
+     "Conditions",
+     "Authorised signatories"
+    ],
+    "source_key_fields": "Company name/trading name | Registered address | Gas Safe registration no. | Categories of work authorised | Expiry date | Conditions | Authorised signatories"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. GAS CONTRACTORS",
+   "frequency_text": "Annual renewal — unregistered gas work is a criminal offence"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ACS_CARD",
+   "certificate_type_name": "ACS Individual Competency Card (Gas Engineer)",
+   "certificate_scope": "Vendor",
+   "trade_category": "Gas",
+   "regulation_reference": "Gas Safety Regulations 1998; ACOP supporting competency framework",
+   "regulation_url": null,
+   "frequency_months": 60,
+   "issuing_body": "CATA / NACS / EUSR (certification bodies)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.gassaferegister.co.uk/find-an-engineer/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Engineer name",
+     "photo",
+     "Gas Safe card no.",
+     "Company",
+     "ACS competency codes (CCN1=core, CENWAT=central heating, CKR1=commercial kitchens)",
+     "Issue date",
+     "Expiry"
+    ],
+    "source_key_fields": "Engineer name/photo | Gas Safe card no. | Company | ACS competency codes (CCN1=core, CENWAT=central heating, CKR1=commercial kitchens) | Issue date | Expiry"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "A. GAS CONTRACTORS",
+   "frequency_text": "5-year renewal; engineer must carry card on all gas work"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "NICEIC",
+   "certificate_type_name": "NICEIC Approved Contractor Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Electrical",
+   "regulation_reference": "Electricity at Work Regulations 1989; BS 7671",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "NICEIC (National Inspection Council for Electrical Installation Contracting)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.niceic.com/find-a-contractor",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "NICEIC roll number",
+     "Registration categories",
+     "Qualified Supervisor name",
+     "qualification",
+     "Assessment date",
+     "Expiry date"
+    ],
+    "source_key_fields": "Company name | NICEIC roll number | Registration categories | Qualified Supervisor name/qualification | Assessment date | Expiry date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL CONTRACTORS",
+   "frequency_text": "Annual assessment and renewal"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "NAPIT",
+   "certificate_type_name": "NAPIT Registration Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Electrical",
+   "regulation_reference": "Electricity at Work Regulations 1989; Building Regulations Part P",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "NAPIT (National Association of Professional Inspectors and Testers)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.napit.org.uk/find-an-installer",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "NAPIT member number",
+     "Competencies",
+     "Approved Inspector name",
+     "Issue date",
+     "Expiry"
+    ],
+    "source_key_fields": "Company name | NAPIT member number | Competencies | Approved Inspector name | Issue date | Expiry"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL CONTRACTORS",
+   "frequency_text": "Annual"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CG_2382",
+   "certificate_type_name": "City & Guilds 2382 — BS 7671 18th Edition Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Electrical",
+   "regulation_reference": "BS 7671:2018+A4:2026 (18th Edition Wiring Regulations)",
+   "regulation_url": null,
+   "frequency_months": 60,
+   "issuing_body": "City & Guilds / EAL / BTEC",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Candidate name",
+     "Centre no.",
+     "Candidate no.",
+     "Qualification title (2382-22)",
+     "Units passed",
+     "Date",
+     "Certificate no.",
+     "Awarding body signature"
+    ],
+    "source_key_fields": "Candidate name | Centre no. | Candidate no. | Qualification title (2382-22) | Units passed | Date | Certificate no. | Awarding body signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "B. ELECTRICAL CONTRACTORS",
+   "frequency_text": "Refreshed on each edition update (typically 5 years)"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BAFE_SP203_1",
+   "certificate_type_name": "BAFE SP203-1 Registration Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Fire",
+   "regulation_reference": "FSO 2005; BS 5839-1; BAFE scheme",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "BAFE (British Approvals for Fire Equipment)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "BAFE registration no.",
+     "Scope (design",
+     "installation",
+     "commissioning",
+     "maintenance)",
+     "Scheme (SP203-1)",
+     "Audit date",
+     "Expiry date",
+     "Certification body"
+    ],
+    "source_key_fields": "Company name | BAFE registration no. | Scope (design/installation/commissioning/maintenance) | Scheme (SP203-1) | Audit date | Expiry date | Certification body"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. FIRE PROTECTION CONTRACTORS",
+   "frequency_text": "Annual audit; 3-year full reassessment"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BAFE_SP105",
+   "certificate_type_name": "BAFE SP105 - Service & Maintenance of Dry & Wet Riser / Falling Installations",
+   "certificate_scope": "Vendor",
+   "trade_category": "Fire",
+   "regulation_reference": "FSO 2005; BS 9990 (non-automatic fire-fighting systems - risers)",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "BAFE (British Approvals for Fire Equipment)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "BAFE registration no.",
+     "Scheme (SP105)",
+     "Scope (service/maintenance of dry & wet risers)",
+     "Expiry date",
+     "Certification body"
+    ],
+    "source_key_fields": "Company name | BAFE registration no. | Scheme (SP105) | Scope | Expiry date | Certification body"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. FIRE PROTECTION CONTRACTORS",
+   "frequency_text": "Annual audit; 3-year full reassessment"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "NSI_GOLD_FIRE",
+   "certificate_type_name": "NSI Gold Certificate — Fire & Security Systems",
+   "certificate_scope": "Vendor",
+   "trade_category": "Fire",
+   "regulation_reference": "FSO 2005; BS 5839-1; BS EN 54",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "NSI (National Security Inspectorate)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.nsi.org.uk/find-a-company/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "NSI number",
+     "Activities (fire alarm design, installation, maintenance)",
+     "Grade (Gold",
+     "Silver)",
+     "Expiry date"
+    ],
+    "source_key_fields": "Company name | NSI number | Activities (fire alarm design, installation, maintenance) | Grade (Gold/Silver) | Expiry date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. FIRE PROTECTION CONTRACTORS",
+   "frequency_text": "Annual audit"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BAFE_SP101",
+   "certificate_type_name": "BAFE SP101 - Service & Maintenance of Portable Fire Extinguishers",
+   "certificate_scope": "Vendor",
+   "trade_category": "Fire",
+   "regulation_reference": "FSO 2005; BS 5306-3 (portable fire extinguisher maintenance)",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "BAFE (British Approvals for Fire Equipment)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://bafe.my.salesforce-sites.com/wb/wbCompanyVerify",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "BAFE registration no.",
+     "Scheme (SP101)",
+     "Scope (service/maintenance of portable fire extinguishers)",
+     "Expiry date",
+     "Certification body"
+    ],
+    "source_key_fields": "Company name | BAFE registration no. | Scheme (SP101) | Scope | Expiry date | Certification body"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "C. FIRE PROTECTION CONTRACTORS",
+   "frequency_text": "Annual"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "LEIA",
+   "certificate_type_name": "LEIA Membership Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Lifts",
+   "regulation_reference": "LOLER 1998; PSSR 2000; Machinery Directive (retained UK law)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "LEIA (Lift and Escalator Industry Association)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.leia.co.uk/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "LEIA member number",
+     "Category (installer",
+     "maintainer",
+     "repair",
+     "manufacturer)",
+     "Membership grade",
+     "Expiry date",
+     "Assessed to LEIA Code of Practice"
+    ],
+    "source_key_fields": "Company name | LEIA member number | Category (installer/maintainer/repair/manufacturer) | Membership grade | Expiry date | Assessed to LEIA Code of Practice"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "D. LIFT & VERTICAL TRANSPORTATION CONTRACTORS",
+   "frequency_text": "Annual membership"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "LOLER_CP",
+   "certificate_type_name": "LOLER Competent Person / Inspection Body Authorisation",
+   "certificate_scope": "Vendor",
+   "trade_category": "Lifts",
+   "regulation_reference": "LOLER 1998 (Regulation 9)",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "Inspection bodies: Allianz Engineering, Bureau Veritas, Lloyd's Register, TÜV SÜD, SGS",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Inspector name",
+     "Employer",
+     "inspection body",
+     "Authorisation scope (lift type, SWL range)",
+     "LOLER competency reference",
+     "Issue date",
+     "Authorised signature"
+    ],
+    "source_key_fields": "Inspector name | Employer/inspection body | Authorisation scope (lift type, SWL range) | LOLER competency reference | Issue date | Authorised signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "D. LIFT & VERTICAL TRANSPORTATION CONTRACTORS",
+   "frequency_text": null
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "HSE_ASBESTOS_LICENCE",
+   "certificate_type_name": "HSE Asbestos Removal Licence (Licensed Contractor)",
+   "certificate_scope": "Vendor",
+   "trade_category": "Asbestos",
+   "regulation_reference": "Control of Asbestos Regulations 2012 (Regulation 8)",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "Health and Safety Executive (HSE) — issued per company",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.hse.gov.uk/asbestos/licensing/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "address",
+     "Licence number",
+     "Licence holder",
+     "Scope",
+     "Conditions",
+     "Issue date",
+     "Expiry date",
+     "HSE signature"
+    ],
+    "source_key_fields": "Company name/address | Licence number | Licence holder | Scope | Conditions | Issue date | Expiry date | HSE signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "E. ASBESTOS CONTRACTORS",
+   "frequency_text": "3-year licence renewal"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "UKAS_ASBESTOS",
+   "certificate_type_name": "UKAS Accreditation Certificate — Asbestos Surveying & Testing",
+   "certificate_scope": "Vendor",
+   "trade_category": "Asbestos",
+   "regulation_reference": "CAR 2012; ISO 17020 (inspection) / ISO 17025 (testing)",
+   "regulation_url": null,
+   "frequency_months": 48,
+   "issuing_body": "UKAS-accredited surveying organisation; individual with P402 competency",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.ukas.com/find-an-organisation/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Organisation name",
+     "UKAS accreditation no.",
+     "Scope (fibre counting, bulk analysis, air sampling, survey)",
+     "Standard (ISO 17020",
+     "17025)",
+     "Accreditation date",
+     "Expiry",
+     "Assessment schedule"
+    ],
+    "source_key_fields": "Organisation name | UKAS accreditation no. | Scope (fibre counting, bulk analysis, air sampling, survey) | Standard (ISO 17020/17025) | Accreditation date | Expiry | Assessment schedule"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "E. ASBESTOS CONTRACTORS",
+   "frequency_text": "4-year cycle; annual surveillance"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ASBESTOS_P402_P403_P404",
+   "certificate_type_name": "Individual Asbestos Competency — P402 / P403 / P404",
+   "certificate_scope": "Vendor",
+   "trade_category": "Asbestos",
+   "regulation_reference": "CAR 2012; HSG264",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "BOHS (British Occupational Hygiene Society) / RSPH",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Candidate name",
+     "Module (P402",
+     "P403",
+     "P404)",
+     "Date",
+     "Certificate no.",
+     "BOHS",
+     "RSPH membership no.",
+     "Issuing body signature"
+    ],
+    "source_key_fields": "Candidate name | Module (P402/P403/P404) | Date | Certificate no. | BOHS/RSPH membership no. | Issuing body signature"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "E. ASBESTOS CONTRACTORS",
+   "frequency_text": null
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "LCA",
+   "certificate_type_name": "Legionella Control Association (LCA) Registration Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Water",
+   "regulation_reference": "ACOP L8; COSHH 2002",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "LCA (Legionella Control Association)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.legionellacontrol.org.uk/members/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "LCA registration no.",
+     "Scope (risk assessment",
+     "water treatment",
+     "tank cleaning",
+     "cooling tower cleaning)",
+     "Assessment date",
+     "Expiry date"
+    ],
+    "source_key_fields": "Company name | LCA registration no. | Scope (risk assessment/water treatment/tank cleaning/cooling tower cleaning) | Assessment date | Expiry date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "F. WATER HYGIENE & LEGIONELLA CONTRACTORS",
+   "frequency_text": "Annual assessment and renewal"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BTEC_LEGIONELLA",
+   "certificate_type_name": "BTEC/BOHS Legionella Competency Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Water",
+   "regulation_reference": "ACOP L8 — requires competent persons for risk assessment and water management",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "BOHS / Edexcel BTEC / WMSoc",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Candidate name",
+     "Award title",
+     "Level",
+     "Units completed",
+     "Date",
+     "Certificate no.",
+     "Awarding body",
+     "Registration no."
+    ],
+    "source_key_fields": "Candidate name | Award title | Level | Units completed | Date | Certificate no. | Awarding body | Registration no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "F. WATER HYGIENE & LEGIONELLA CONTRACTORS",
+   "frequency_text": null
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "REFCOM",
+   "certificate_type_name": "F-Gas Company Certificate (REFCOM Registration)",
+   "certificate_scope": "Vendor",
+   "trade_category": "HVAC/F-Gas",
+   "regulation_reference": "UK F-Gas Regulations 2022; SI 2015/310",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "REFCOM (Register of Companies Competent to Handle Refrigerants)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.refcom.org.uk/find-a-company/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "REFCOM registration no.",
+     "Activities (installation",
+     "maintenance",
+     "leak checking",
+     "recovery)",
+     "Nominated technician names",
+     "cert nos.",
+     "Registration date"
+    ],
+    "source_key_fields": "Company name | REFCOM registration no. | Activities (installation/maintenance/leak checking/recovery) | Nominated technician names/cert nos. | Registration date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "G. HVAC & REFRIGERATION CONTRACTORS (F-GAS)",
+   "frequency_text": "Annual — must remain current"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CG_2079",
+   "certificate_type_name": "Individual F-Gas Technician Certificate — City & Guilds 2079",
+   "certificate_scope": "Vendor",
+   "trade_category": "HVAC/F-Gas",
+   "regulation_reference": "UK F-Gas Regulations 2022 — mandatory for anyone handling fluorinated refrigerants",
+   "regulation_url": null,
+   "frequency_months": null,
+   "issuing_body": "City & Guilds / ACRIB (Air Conditioning and Refrigeration Industry Board) Categories Category I: All equipment | Category II: Stationary <3kg | Category III: Hermetically sealed <6kg | Category IV: Recovery only",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Candidate name",
+     "Certificate no.",
+     "Category (I",
+     "II",
+     "III",
+     "IV)",
+     "Refrigerants covered",
+     "Date of award",
+     "City & Guilds",
+     "ACRIB reference"
+    ],
+    "source_key_fields": "Candidate name | Certificate no. | Category (I/II/III/IV) | Refrigerants covered | Date of award | City & Guilds/ACRIB reference"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "G. HVAC & REFRIGERATION CONTRACTORS (F-GAS)",
+   "frequency_text": null
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CHAS_SSIP",
+   "certificate_type_name": "CHAS Premium Plus / SSIP Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "General",
+   "regulation_reference": "Health and Safety at Work Act 1974; CDM Regulations 2015",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "CHAS / Constructionline / SafeContractor / SMAS / Acclaim (all SSIP mutual recognition)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://ssip.org.uk/members/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "SSIP member scheme",
+     "Certificate level",
+     "Scope of works assessed",
+     "Assessment date",
+     "Expiry date",
+     "Assessor body"
+    ],
+    "source_key_fields": "Company name | SSIP member scheme | Certificate level | Scope of works assessed | Assessment date | Expiry date | Assessor body"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS",
+   "frequency_text": "Annual renewal"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ISO_9001",
+   "certificate_type_name": "ISO 9001:2015 Quality Management Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "General",
+   "regulation_reference": null,
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "UKAS-accredited certification body (BSI, Bureau Veritas, NQA, SGS, Intertek)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.ukas.com/find-an-organisation/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Organisation name",
+     "Certificate no.",
+     "Scope",
+     "Certification body",
+     "Date of initial cert",
+     "Current cycle start",
+     "Expiry date",
+     "Issuing signatory",
+     "UKAS accreditation no."
+    ],
+    "source_key_fields": "Organisation name | Certificate no. | Scope | Certification body | Date of initial cert | Current cycle start | Expiry date | Issuing signatory | UKAS accreditation no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS",
+   "frequency_text": "3-year cycle; annual surveillance audits"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "ISO_14001",
+   "certificate_type_name": "ISO 14001:2015 Environmental Management Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "General",
+   "regulation_reference": null,
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "UKAS-accredited certification body",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.ukas.com/find-an-organisation/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Organisation name",
+     "Certificate no.",
+     "Scope",
+     "Sites covered",
+     "Certification body",
+     "UKAS no.",
+     "Expiry date"
+    ],
+    "source_key_fields": "Organisation name | Certificate no. | Scope | Sites covered | Certification body | UKAS no. | Expiry date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS",
+   "frequency_text": "3-year cycle; annual surveillance"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CONTRACTOR_EL_INSURANCE",
+   "certificate_type_name": "Contractors' Employers' Liability Insurance Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "General",
+   "regulation_reference": "Employers' Liability (Compulsory Insurance) Act 1969",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Insured name",
+     "Policy no.",
+     "Insurer name",
+     "FCA no.",
+     "Period",
+     "Minimum indemnity (£5M statutory minimum)",
+     "Date"
+    ],
+    "source_key_fields": "Insured name | Policy no. | Insurer name/FCA no. | Period | Minimum indemnity (£5M statutory minimum) | Date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS",
+   "frequency_text": "Annual — PM must check annually for every contractor"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "CONTRACTOR_PL_INSURANCE",
+   "certificate_type_name": "Contractors' Public Liability Insurance Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "General",
+   "regulation_reference": null,
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": null,
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Insured name",
+     "Policy no.",
+     "Insurer",
+     "Period",
+     "Indemnity limit per occurrence",
+     "Currency statement",
+     "Date"
+    ],
+    "source_key_fields": "Insured name | Policy no. | Insurer | Period | Indemnity limit per occurrence | Currency statement | Date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "H. GENERAL BUILDING & CONSTRUCTION CONTRACTORS",
+   "frequency_text": "Annual — verify at contract renewal and annually during contract"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "SIA_ACS",
+   "certificate_type_name": "SIA Approved Contractor Scheme (ACS) Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Security",
+   "regulation_reference": "Private Security Industry Act 2001",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "Security Industry Authority (SIA)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.sia.homeoffice.gov.uk/Pages/acs-rosta.aspx",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "ACS score (%)",
+     "Activities covered (Manned Guarding",
+     "Door Supervision",
+     "CCTV",
+     "Cash and Valuables)",
+     "Audit date",
+     "Certificate expiry",
+     "SIA reference no."
+    ],
+    "source_key_fields": "Company name | ACS score (%) | Activities covered (Manned Guarding/Door Supervision/CCTV/Cash and Valuables) | Audit date | Certificate expiry | SIA reference no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "I. SECURITY CONTRACTORS",
+   "frequency_text": "Annual audit; ACS accreditation reviewed every 3 years"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "SIA_INDIVIDUAL",
+   "certificate_type_name": "Individual SIA Licence",
+   "certificate_scope": "Vendor",
+   "trade_category": "Security",
+   "regulation_reference": "Private Security Industry Act 2001 — mandatory for all frontline security operatives",
+   "regulation_url": null,
+   "frequency_months": 36,
+   "issuing_body": "SIA",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.sia.homeoffice.gov.uk/Pages/licensing-check.aspx",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Name",
+     "photo",
+     "Licence no.",
+     "Activity (Door Supervisor",
+     "Security Guard",
+     "CCTV Operator",
+     "Close Protection)",
+     "Issue date",
+     "Expiry",
+     "SIA logo"
+    ],
+    "source_key_fields": "Name/photo | Licence no. | Activity (Door Supervisor/Security Guard/CCTV Operator/Close Protection) | Issue date | Expiry | SIA logo"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "I. SECURITY CONTRACTORS",
+   "frequency_text": "3-year renewal; must be carried on duty at all times"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "NSI_GOLD_SECURITY",
+   "certificate_type_name": "NSI Gold Certificate — Security Systems (NACOSS Gold)",
+   "certificate_scope": "Vendor",
+   "trade_category": "Security",
+   "regulation_reference": "BS EN 50131 (intruder); BS EN 62676 (CCTV); BS EN 60839 (access control)",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "NSI (National Security Inspectorate)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://www.nsi.org.uk/find-a-company/",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "NSI NACOSS Gold no.",
+     "Scope (intruder alarm",
+     "CCTV",
+     "access control)",
+     "Grade (Gold)",
+     "Expiry date"
+    ],
+    "source_key_fields": "Company name | NSI NACOSS Gold no. | Scope (intruder alarm/CCTV/access control) | Grade (Gold) | Expiry date"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "I. SECURITY CONTRACTORS",
+   "frequency_text": "Annual audit"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "BPCA",
+   "certificate_type_name": "BPCA Corporate Membership Certificate",
+   "certificate_scope": "Vendor",
+   "trade_category": "Pest Control",
+   "regulation_reference": "Plant Protection Products (Sustainable Use) Regulations 2012",
+   "regulation_url": null,
+   "frequency_months": 12,
+   "issuing_body": "BPCA (British Pest Control Association)",
+   "required_contractor_accreditation": null,
+   "verification_url": "https://bpca.org.uk/find-a-pest-controller",
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Company name",
+     "BPCA member no.",
+     "Category (full",
+     "associate member)",
+     "Expiry date",
+     "Audited to BPCA Code of Practice"
+    ],
+    "source_key_fields": "Company name | BPCA member no. | Category (full/associate member) | Expiry date | Audited to BPCA Code of Practice"
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "J. PEST CONTROL CONTRACTORS",
+   "frequency_text": "Annual"
+  },
+  {
+   "pack_id": "UK-COMPLIANCE-v1.1",
+   "country_code": "UK",
+   "pack_version": "1.1",
+   "certificate_type_code": "PA1_PA2_PA6",
+   "certificate_type_name": "Individual Pesticide Application Certificate — PA1 + PA2 / PA6",
+   "certificate_scope": "Vendor",
+   "trade_category": "Pest Control",
+   "regulation_reference": "Plant Protection Products (Sustainable Use) Regulations 2012",
+   "regulation_url": null,
+   "frequency_months": 60,
+   "issuing_body": "Lantra Awards / City & Guilds / BASIS PROMPT register",
+   "required_contractor_accreditation": null,
+   "verification_url": null,
+   "key_fields_schema": {
+    "required": [
+     "certificate_number",
+     "issue_date",
+     "expiry_date"
+    ],
+    "optional": [
+     "Name",
+     "Modules held",
+     "Certificate of Competence no.",
+     "Issuing body",
+     "Issue date",
+     "Expiry date",
+     "BASIS PROMPT registration no."
+    ],
+    "source_key_fields": "Name | Modules held | Certificate of Competence no. | Issuing body | Issue date | Expiry date | BASIS PROMPT registration no."
+   },
+   "source_document": "UK_Compliance_Certification_Pack_v1.1.docx",
+   "docx_trade_section": "J. PEST CONTROL CONTRACTORS",
+   "frequency_text": "Certificate of Competence valid 5 years; CPD renewal via BASIS PROMPT Modules PA1: Foundation (mandatory for all) | PA2: Pedestrian applicator | PA6: Hand-held applicator — most common for urban pest control FM"
+  }
+ ]
+}

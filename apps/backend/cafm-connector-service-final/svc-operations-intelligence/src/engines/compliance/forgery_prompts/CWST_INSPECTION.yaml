@@ -1,0 +1,11 @@
+required_tokens:
+  - cold water
+  - storage tank
+  - cwst
+issuing_body_tokens:
+  - lca
+required_field_hints:
+  - inspection
+  - tank
+  - hygiene
+notes: CWST inspection

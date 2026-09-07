@@ -1,0 +1,158 @@
+[
+  {
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "contract_ref": "FM-APEX-2026-01",
+    "status": "confirmed",
+    "confirmed_by": "00000000-0000-0000-0000-0000000000f1",
+    "confirmed_at": "2026-01-15T10:00:00+00:00",
+    "extracted": {
+      "sla_response_p1_hours": 1,
+      "sla_response_p2_hours": 4,
+      "sla_response_p3_hours": 24,
+      "sla_response_p4_hours": 72,
+      "sla_completion_p1_hours": 4,
+      "sla_completion_p2_hours": 24,
+      "sla_completion_p3_hours": 72,
+      "sla_completion_p4_hours": 168,
+      "labour_day_rate": 380.0,
+      "overtime_rate": 570.0,
+      "call_out_rate": 165.0,
+      "payment_terms": "Net 30",
+      "parts_pricing_json": {
+        "FILTER-HEPA-20": 48.5,
+        "BELT-A42": 22.0,
+        "CONTACTOR-25A": 65.0,
+        "LAMP-LED-4FT": 18.75,
+        "SEAL-KIT-PUMP": 35.0,
+        "BREAKER-32A": 42.0
+      },
+      "kpi_clauses_json": {
+        "sla_miss_penalty_pct": 2.5,
+        "first_fix_bonus_pct": 1.0,
+        "note": "Penalty applies when monthly SLA attainment < 95%"
+      },
+      "ppm_obligations_json": {
+        "frequency": "monthly",
+        "tolerance_days": 7,
+        "assets_in_scope": "plant_room_and_lifts"
+      },
+      "task_criticality_json": {
+        "L1": "Life safety / business-critical plant \u2014 failure stops operations",
+        "L2": "Important plant \u2014 degraded service within 24h",
+        "L3": "Non-critical / cosmetic"
+      }
+    },
+    "defaults_used": [],
+    "field_sources": {
+      "sla_response_p1_hours": "contract",
+      "labour_day_rate": "contract",
+      "parts_pricing_json": "contract",
+      "payment_terms": "default"
+    }
+  },
+  {
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "vendor_id": "00000000-0000-0000-0000-0000000000a2",
+    "contract_ref": "FM-BRIGHT-2026-01",
+    "status": "draft",
+    "confirmed_by": null,
+    "confirmed_at": null,
+    "extracted": {
+      "sla_response_p1_hours": 1,
+      "sla_response_p2_hours": 4,
+      "sla_response_p3_hours": 24,
+      "sla_response_p4_hours": 72,
+      "sla_completion_p1_hours": 4,
+      "sla_completion_p2_hours": 24,
+      "sla_completion_p3_hours": 72,
+      "sla_completion_p4_hours": 168,
+      "labour_day_rate": 350.0,
+      "overtime_rate": 570.0,
+      "call_out_rate": 165.0,
+      "payment_terms": "Net 30",
+      "parts_pricing_json": {
+        "FILTER-HEPA-20": 48.5,
+        "BELT-A42": 22.0,
+        "CONTACTOR-25A": 65.0,
+        "LAMP-LED-4FT": 18.75,
+        "SEAL-KIT-PUMP": 35.0,
+        "BREAKER-32A": 42.0
+      },
+      "kpi_clauses_json": {
+        "sla_miss_penalty_pct": 2.5,
+        "first_fix_bonus_pct": 1.0,
+        "note": "Penalty applies when monthly SLA attainment < 95%"
+      },
+      "ppm_obligations_json": {
+        "frequency": "monthly",
+        "tolerance_days": 7,
+        "assets_in_scope": "plant_room_and_lifts"
+      },
+      "task_criticality_json": {
+        "L1": "Life safety / business-critical plant \u2014 failure stops operations",
+        "L2": "Important plant \u2014 degraded service within 24h",
+        "L3": "Non-critical / cosmetic"
+      }
+    },
+    "defaults_used": [],
+    "field_sources": {
+      "sla_response_p1_hours": "contract",
+      "labour_day_rate": "contract",
+      "parts_pricing_json": "contract",
+      "payment_terms": "default"
+    }
+  },
+  {
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "contract_ref": "FM-SAFELIFT-2026-01",
+    "status": "confirmed",
+    "confirmed_by": "00000000-0000-0000-0000-0000000000f1",
+    "confirmed_at": "2026-01-15T10:00:00+00:00",
+    "extracted": {
+      "sla_response_p1_hours": 1,
+      "sla_response_p2_hours": 4,
+      "sla_response_p3_hours": 24,
+      "sla_response_p4_hours": 72,
+      "sla_completion_p1_hours": 4,
+      "sla_completion_p2_hours": 24,
+      "sla_completion_p3_hours": 72,
+      "sla_completion_p4_hours": 168,
+      "labour_day_rate": 350.0,
+      "overtime_rate": 570.0,
+      "call_out_rate": 165.0,
+      "payment_terms": "Net 30",
+      "parts_pricing_json": {
+        "FILTER-HEPA-20": 48.5,
+        "BELT-A42": 22.0,
+        "CONTACTOR-25A": 65.0,
+        "LAMP-LED-4FT": 18.75,
+        "SEAL-KIT-PUMP": 35.0,
+        "BREAKER-32A": 42.0
+      },
+      "kpi_clauses_json": {
+        "sla_miss_penalty_pct": 2.5,
+        "first_fix_bonus_pct": 1.0,
+        "note": "Penalty applies when monthly SLA attainment < 95%"
+      },
+      "ppm_obligations_json": {
+        "frequency": "monthly",
+        "tolerance_days": 7,
+        "assets_in_scope": "plant_room_and_lifts"
+      },
+      "task_criticality_json": {
+        "L1": "Life safety / business-critical plant \u2014 failure stops operations",
+        "L2": "Important plant \u2014 degraded service within 24h",
+        "L3": "Non-critical / cosmetic"
+      }
+    },
+    "defaults_used": [],
+    "field_sources": {
+      "sla_response_p1_hours": "contract",
+      "labour_day_rate": "contract",
+      "parts_pricing_json": "contract",
+      "payment_terms": "default"
+    }
+  }
+]

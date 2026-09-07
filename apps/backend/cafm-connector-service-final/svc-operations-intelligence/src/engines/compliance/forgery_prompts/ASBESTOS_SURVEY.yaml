@@ -1,0 +1,12 @@
+required_tokens:
+  - asbestos
+  - survey
+  - hsg264
+issuing_body_tokens:
+  - ukas
+  - p402
+required_field_hints:
+  - survey
+  - asbestos
+  - premises
+notes: Asbestos management survey

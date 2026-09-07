@@ -1,0 +1,9 @@
+required_tokens:
+  - leia
+issuing_body_tokens:
+  - leia
+required_field_hints:
+  - member
+  - membership
+  - lift
+notes: LEIA membership

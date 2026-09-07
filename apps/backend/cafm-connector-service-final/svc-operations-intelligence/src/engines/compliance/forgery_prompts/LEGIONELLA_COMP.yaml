@@ -1,0 +1,11 @@
+required_tokens:
+  - legionella
+  - competency
+issuing_body_tokens:
+  - bohs
+  - wmsoc
+  - btec
+required_field_hints:
+  - certificate
+  - qualification
+notes: Legionella competency

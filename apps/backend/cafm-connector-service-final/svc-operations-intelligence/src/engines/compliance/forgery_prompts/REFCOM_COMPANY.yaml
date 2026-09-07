@@ -1,0 +1,10 @@
+required_tokens:
+  - refcom
+  - f-gas
+issuing_body_tokens:
+  - refcom
+required_field_hints:
+  - company
+  - certificate
+  - registration
+notes: REFCOM company

@@ -1,0 +1,26 @@
+{
+  "$schema": "udr-regex-patterns/v1",
+  "description": "Cell-value FORMAT patterns for column classification (PRD 7.6 AC1: date / numeric / ID-string / free-text / categorical) and for column-name -> canonical regex hints. Format detection drives the >=80% format-similarity gate before value-pattern comparison.",
+  "value_format_patterns": [
+    {"format": "date_iso",        "regex": "^\\d{4}-\\d{2}-\\d{2}$",                       "example": "2024-03-15"},
+    {"format": "date_dmy",        "regex": "^\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}$",          "example": "15/03/2024"},
+    {"format": "datetime_iso",    "regex": "^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}",      "example": "2024-03-15T08:00"},
+    {"format": "integer",         "regex": "^-?\\d+$",                                     "example": "4471"},
+    {"format": "decimal",         "regex": "^-?\\d+\\.\\d+$",                              "example": "10158.50"},
+    {"format": "currency",        "regex": "^[£$€]?\\s?-?\\d{1,3}(,\\d{3})*(\\.\\d+)?$",  "example": "£120,000"},
+    {"format": "uuid",            "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "example": "..."},
+    {"format": "id_code",         "regex": "^[A-Z]{2,}[-_]?[A-Z0-9]+([-_][A-Z0-9]+)*$",   "example": "MOB-AHU-001"},
+    {"format": "wo_code",         "regex": "^(WO|WR|JOB)[-_]?\\d+$",                       "example": "WO-0001"},
+    {"format": "postcode_uk",     "regex": "^[A-Z]{1,2}\\d[A-Z\\d]?\\s?\\d[A-Z]{2}$",     "example": "AB1 2CD"},
+    {"format": "priority_band",   "regex": "^(P[1-5]|URGENT|HIGH|MEDIUM|LOW|CRITICAL)$",   "example": "P1", "categorical": true},
+    {"format": "email",           "regex": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",               "example": "support@siemens.com"}
+  ],
+  "column_name_hints": [
+    {"regex": "(?i)^(asset[_ ]?(id|code|num|no|tag)|equip(ment)?[_ #]?(no|num|id)?)$", "canonical_table": "assets", "canonical_column": "asset_code", "confidence": 0.92},
+    {"regex": "(?i)^(wo[_ ]?(num|no|id)|work[_ ]?order[_ ]?(id|no)|wonum)$",            "canonical_table": "work_orders", "canonical_column": "workorder_ref", "confidence": 0.92},
+    {"regex": "(?i)^(install(ation)?[_ ]?date)$",                                       "canonical_table": "assets", "canonical_column": "installation_date", "confidence": 0.90},
+    {"regex": "(?i)^(expiry|expiration|valid[_ ]?(to|until))([_ ]?date)?$",             "canonical_table": "compliance_certificates", "canonical_column": "expiry_date", "confidence": 0.88},
+    {"regex": "(?i)^(make|asset[_ ]?make|manufacturer|brand|oem)$",                     "canonical_table": "manufacturers", "canonical_column": "manufacturer_name", "confidence": 0.85},
+    {"regex": "(?i)^(priority|wo[_ ]?priority|severity)$",                              "canonical_table": "work_orders", "canonical_column": "priority", "confidence": 0.88}
+  ]
+}

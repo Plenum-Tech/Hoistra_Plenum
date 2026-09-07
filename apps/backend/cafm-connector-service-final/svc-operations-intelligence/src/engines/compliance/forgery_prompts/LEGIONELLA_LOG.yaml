@@ -1,0 +1,10 @@
+required_tokens:
+  - legionella
+  - monitoring
+  - log
+issuing_body_tokens:
+required_field_hints:
+  - temperature
+  - outlet
+  - date
+notes: Legionella monitoring log

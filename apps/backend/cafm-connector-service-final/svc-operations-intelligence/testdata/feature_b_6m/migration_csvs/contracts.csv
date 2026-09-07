@@ -1,0 +1,4 @@
+contract_ref,vendor_id,vendor_name,status,labour_day_rate,sla_response_p1_hours,sla_completion_p1_hours,payment_terms,organization_id
+FM-APEX-2026-01,00000000-0000-0000-0000-0000000000a1,Apex Mechanical Services Ltd,confirmed,380.0,1,4,Net 30,00000000-0000-0000-0000-0000000000b1
+FM-BRIGHT-2026-01,00000000-0000-0000-0000-0000000000a2,BrightSpark Electrical Ltd,draft,350.0,1,4,Net 30,00000000-0000-0000-0000-0000000000b1
+FM-SAFELIFT-2026-01,00000000-0000-0000-0000-0000000000a3,SafeLift Engineering Ltd,confirmed,350.0,1,4,Net 30,00000000-0000-0000-0000-0000000000b1

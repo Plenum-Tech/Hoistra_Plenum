@@ -1,0 +1,3 @@
+# Concept: Foreign-key detection & classification
+
+A column is a FOREIGN KEY only if (a) it is the PRIMARY KEY of another table AND (b) referential integrity >= 95% (>=95% of its values exist in the referenced PK). Otherwise it is a SHARED ATTRIBUTE (threshold hard-coded, not user-adjustable). Test 2: any cross-table column value overlap >= 30% must be explained by a defined FK; unexplained overlap >= 1% of column pairs blocks the UDR. Resolution: define FK, create a reference table (promote the shared value to a PK), or document as coincidental (e.g. sites.postcode vs vendors.postcode in a single-city portfolio).

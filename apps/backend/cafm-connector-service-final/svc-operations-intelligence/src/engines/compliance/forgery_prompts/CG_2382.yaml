@@ -1,0 +1,12 @@
+required_tokens:
+  - 2382
+  - 18th edition
+  - bs 7671
+issuing_body_tokens:
+  - city & guilds
+  - eal
+required_field_hints:
+  - qualification
+  - certificate
+  - candidate
+notes: C&G 2382

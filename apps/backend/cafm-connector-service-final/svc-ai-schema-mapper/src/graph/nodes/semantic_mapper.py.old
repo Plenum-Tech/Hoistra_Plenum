@@ -1,0 +1,249 @@
+"""Node 3: Semantic mapper — Tier 2 embedding-based field mapping.
+
+For fields unresolved after Tier 1 (deterministic strategies):
+1. Embed each unresolved field with context (name | description | sample values)
+2. Compute cosine similarity vs all cached canonical field embeddings
+3. Classify by confidence:
+   - ≥ 0.85: auto-accept (tier2_auto)
+   - 0.65–0.84: flagged for human review (tier2_flagged)
+   - < 0.65: unmappable
+
+EL-M.3: Validate embeddings computed, scores in 0–1, top-3 present.
+"""
+
+import logging
+from datetime import datetime
+from uuid import uuid4
+
+from ...embeddings import embed_texts_batch, find_top_matches
+from ..state import FieldMapping, MigrationState
+
+logger = logging.getLogger(__name__)
+
+
+async def semantic_mapper_node(state: MigrationState) -> MigrationState:
+    """
+    Node 3: Embed unresolved fields and match semantically to canonical fields.
+
+    Args:
+        state: MigrationState with unresolved_after_t1 populated
+
+    Returns:
+        Updated state with tier2_auto_mappings, tier2_flagged_for_review,
+        tier2_unmappable, overall_confidence
+    """
+
+    migration_id = state.get("migration_id")
+    unresolved_fields = state.get("unresolved_after_t1", [])
+    column_descriptions = state.get("column_descriptions", {})
+    parsed_tables = state.get("parsed_tables", {})
+
+    logger.info(f"[Node 3] Starting semantic mapping: {len(unresolved_fields)} unresolved fields")
+
+    if not unresolved_fields:
+        logger.info("[Node 3] No unresolved fields; skipping semantic mapper")
+        state["tier2_auto_mappings"] = []
+        state["tier2_flagged_for_review"] = []
+        state["tier2_unmappable"] = []
+        state["current_step"] = 3
+        return state
+
+    try:
+        # Import here to avoid circular dependency
+        from ...app import get_openai_client
+        client = get_openai_client()
+        tier2_auto = []
+        tier2_flagged = []
+        tier2_unmappable = []
+        all_confidences = []
+
+        # ── BATCH EMBEDDING (efficient single API call for all fields) ──
+        logger.info(f"[Node 3] Preparing batch embedding for {len(unresolved_fields)} fields...")
+
+        # Build embedding texts for all unresolved fields
+        embedding_texts = {}  # maps text → source_field
+        texts_to_embed = []
+
+        for source_field in unresolved_fields:
+            description = column_descriptions.get(source_field, "Unknown field type")
+            sample_values = _get_sample_values(parsed_tables, source_field, max_samples=3)
+            sample_str = ", ".join(sample_values) if sample_values else "(no samples)"
+
+            embedding_text = f"{source_field} | {description} | {sample_str}"
+            embedding_texts[embedding_text] = (source_field, sample_values)
+            texts_to_embed.append(embedding_text)
+
+        # Single batch API call instead of one call per field
+        embeddings_dict = await embed_texts_batch(client, texts_to_embed)
+        logger.info(f"[Node 3] Batch embedding complete: {len(embeddings_dict)}/{len(texts_to_embed)} succeeded")
+
+        # Process each field with its embedding
+        for embedding_text, (source_field, sample_values) in embedding_texts.items():
+            logger.info(f"[Node 3] Mapping {source_field}...")
+
+            source_embedding = embeddings_dict.get(embedding_text)
+            if source_embedding is None:
+                logger.warning(f"[Node 3] Failed to embed {source_field}; marking unmappable")
+                tier2_unmappable.append(source_field)
+                continue
+
+            # Find top-3 matches by cosine similarity
+            top_matches = find_top_matches(source_embedding, top_k=3)
+
+            if not top_matches:
+                logger.warning(f"[Node 3] No matches found for {source_field}; marking unmappable")
+                tier2_unmappable.append(source_field)
+                continue
+
+            # Best match
+            best_target, best_confidence = top_matches[0]
+
+            logger.info(
+                f"[Node 3] {source_field} → {best_target} "
+                f"(confidence: {best_confidence:.3f})"
+            )
+
+            # Classify by confidence threshold
+            langsmith_run_id = str(uuid4())  # Track this embedding call
+
+            if best_confidence >= 0.85:
+                # Auto-accept
+                mapping = FieldMapping(
+                    source_field=source_field,
+                    target_field=best_target,
+                    confidence=best_confidence,
+                    tier="T2_semantic",
+                    rationale=f"Semantic embedding match (confidence: {best_confidence:.3f})",
+                    sample_values=sample_values,
+                    langsmith_run_id=langsmith_run_id,
+                )
+                tier2_auto.append(mapping)
+                all_confidences.append(best_confidence)
+                logger.info(f"[Node 3] AUTO-ACCEPT: {source_field} → {best_target}")
+
+            elif 0.65 <= best_confidence < 0.85:
+                # Flag for human review
+                # Include top-3 suggestions
+                suggestions = [
+                    {"target": match[0], "confidence": match[1]}
+                    for match in top_matches
+                ]
+
+                mapping = FieldMapping(
+                    source_field=source_field,
+                    target_field=best_target,
+                    confidence=best_confidence,
+                    tier="T2_semantic",
+                    rationale=f"Semantic match flagged for review (confidence: {best_confidence:.3f})",
+                    sample_values=sample_values,
+                    langsmith_run_id=langsmith_run_id,
+                )
+                # Store suggestions in a custom field (will be in the review payload)
+                mapping["suggestions"] = suggestions
+                tier2_flagged.append(mapping)
+                all_confidences.append(best_confidence)
+                logger.info(f"[Node 3] FLAGGED FOR REVIEW: {source_field} → {best_target}")
+
+            else:
+                # Unmappable (confidence < 0.65)
+                logger.info(f"[Node 3] UNMAPPABLE: {source_field} (confidence: {best_confidence:.3f})")
+                tier2_unmappable.append(source_field)
+
+        # ── EL-M.3 Validation ────────────────────────────────────────
+        # Check: all confidences in 0–1, all fields processed
+        validated_counts = (
+            len(tier2_auto) + len(tier2_flagged) + len(tier2_unmappable)
+        )
+        if validated_counts != len(unresolved_fields):
+            logger.error(
+                f"[Node 3] EL-M.3 FAILED: {validated_counts} != {len(unresolved_fields)}"
+            )
+            state["error_message"] = "Semantic mapping count mismatch"
+            state["el_m3_passed"] = False
+            return state
+
+        # Check: all confidences in valid range
+        for mapping in tier2_auto + tier2_flagged:
+            conf = mapping.get("confidence", 0)
+            if not (0 <= conf <= 1):
+                logger.error(f"[Node 3] EL-M.3 FAILED: Invalid confidence {conf}")
+                state["error_message"] = f"Invalid confidence value: {conf}"
+                state["el_m3_passed"] = False
+                return state
+
+        state["el_m3_passed"] = True
+        logger.info("[Node 3] EL-M.3 PASSED: All fields processed, confidences valid")
+
+        # ── Update state ───────────────────────────────────────────
+        state["tier2_auto_mappings"] = tier2_auto
+        state["tier2_flagged_for_review"] = tier2_flagged
+        state["tier2_unmappable"] = tier2_unmappable
+
+        # Recalculate overall confidence (including Tier 1 + Tier 2 auto)
+        tier1_confidences = [m.get("confidence", 0) for m in state.get("tier1_mappings", [])]
+        all_confidences.extend(tier1_confidences)
+
+        overall_confidence = (
+            sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
+        )
+        state["overall_confidence"] = overall_confidence
+
+        logger.info(
+            f"[Node 3] Complete: {len(tier2_auto)} auto-accept, "
+            f"{len(tier2_flagged)} flagged, {len(tier2_unmappable)} unmappable"
+        )
+        logger.info(f"[Node 3] Updated overall_confidence: {overall_confidence:.2f}")
+
+        state["current_step"] = 3
+        state["event_log"].append(
+            {
+                "timestamp": datetime.utcnow().isoformat(),
+                "event": "node_complete",
+                "node": 3,
+                "detail": f"{len(tier2_auto)} auto, {len(tier2_flagged)} flagged",
+            }
+        )
+
+        return state
+
+    except Exception as e:
+        logger.exception(f"[Node 3] Unhandled exception: {e}")
+        state["error_message"] = str(e)
+        state["error_node"] = 3
+        state["error_timestamp"] = datetime.utcnow()
+        state["status"] = "failed"
+        return state
+
+
+def _get_sample_values(
+    parsed_tables: dict[str, list[dict]],
+    field_name: str,
+    max_samples: int = 3,
+) -> list[str]:
+    """
+    Extract sample values for a field from parsed tables.
+
+    Args:
+        parsed_tables: dict[table_name] = [row_dicts]
+        field_name: Field to sample
+        max_samples: Maximum sample values to return
+
+    Returns:
+        List of unique, non-null sample values (strings)
+    """
+
+    samples = set()
+
+    for table_records in parsed_tables.values():
+        if not table_records:
+            continue
+
+        for record in table_records:
+            if field_name in record:
+                value = record[field_name]
+                if value and str(value).strip():
+                    samples.add(str(value).strip())
+                    if len(samples) >= max_samples:
+                        return list(samples)[:max_samples]
+
+    return list(samples)[:max_samples]

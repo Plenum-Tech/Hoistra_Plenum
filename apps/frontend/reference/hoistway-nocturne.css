@@ -1,0 +1,28 @@
+/* Hoistway on Nocturne — a thin token layer, loaded AFTER the Nocturne
+   stylesheet. It adds nothing Nocturne already carries: ground, surface,
+   accent, ramps, type, radii and shadows all stay exactly as the design
+   system defines them. What it adds is the four status roles the product
+   needs (a certificate is lapsed or it is not) plus three utility tokens.
+
+   Status colours are held at lower chroma than the blurple accent, so the
+   accent still reads as the accent and status reads as information. Each
+   has a deep companion for pill fills, taken from the same hue at the
+   900-step lightness of Nocturne's own ramps. */
+
+:root {
+  --st-risk: #d98d95;
+  --st-risk-bg: #33232a;
+  --st-warn: #cfa877;
+  --st-warn-bg: #322a20;
+  --st-ok: #8fb5a6;
+  --st-ok-bg: #222e2b;
+  --st-dormant: #9397ab;
+  --st-dormant-bg: #292b31;
+
+  /* Text that sits on an accent fill. Nocturne floods accent almost
+     nowhere, so this is used only on the two chips that must be solid. */
+  --accent-ink: #161826;
+
+  --scrim: rgba(10, 11, 18, 0.62);
+  --marker-tint: color-mix(in srgb, var(--color-accent) 9%, transparent);
+}

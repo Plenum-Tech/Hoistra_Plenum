@@ -1,0 +1,253 @@
+"""Node 4: Human review — GATE 1 HITL interrupt for field mapping approval.
+
+HITL Gate 1 logic:
+1. If tier2_flagged_for_review is non-empty → interrupt with review payload
+2. Customer approves/rejects each flagged mapping
+3. Process decisions: accepted → T2_human tier, rejected → flag for LangSmith feedback
+4. EL-M.4: Validate each decision has action + source_field
+5. Resume graph execution
+"""
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from anthropic import AsyncAnthropic
+from langgraph.types import interrupt
+
+from ..state import FieldMapping, MigrationState
+
+logger = logging.getLogger(__name__)
+
+
+async def human_review_node(state: MigrationState) -> MigrationState:
+    """
+    Node 4: HITL Gate 1 — Customer approves/rejects flagged field mappings.
+
+    Entry conditions:
+    - tier2_flagged_for_review is non-empty, OR
+    - overall_confidence < 0.80 (EL-3.0 forcing review)
+
+    Execution:
+    1. Prepare review payload with flagged fields + suggestions
+    2. Call interrupt() to pause graph execution
+    3. Wait for external resume with customer decisions
+    4. Process decisions: accept/reject/override
+    5. Update tier2_human_decisions and tier2_human_count
+    6. Continue to Node 5
+
+    Args:
+        state: MigrationState with tier2_flagged_for_review populated
+
+    Returns:
+        Updated state with tier2_human_decisions processed
+    """
+
+    migration_id = state.get("migration_id")
+    tier2_flagged = state.get("tier2_flagged_for_review", [])
+    overall_confidence = state.get("overall_confidence", 1.0)
+
+    logger.info(f"[Node 4] GATE 1 HITL: migration_id={migration_id}")
+
+    # Check entry conditions
+    if not tier2_flagged and overall_confidence >= 0.80:
+        logger.info("[Node 4] No flagged fields and confidence ≥ 0.80; skipping Gate 1")
+        state["tier2_human_decisions"] = []
+        state["tier2_human_count"] = 0
+        state["current_step"] = 4
+        return state
+
+    try:
+        # ── Prepare review payload ──────────────────────────────────
+        review_items = []
+
+        if overall_confidence < 0.80:
+            logger.warning(
+                f"[Node 4] EL-3.0 triggered: overall_confidence={overall_confidence:.2f} < 0.80"
+            )
+            review_items.append(
+                {
+                    "type": "confidence_alert",
+                    "message": f"Overall mapping confidence is {overall_confidence:.1%}, below 0.80 threshold. Please review all mappings.",
+                    "severity": "warning",
+                }
+            )
+
+        for mapping in tier2_flagged:
+            item = {
+                "source_field": mapping.get("source_field"),
+                "suggested_target": mapping.get("target_field"),
+                "confidence": mapping.get("confidence"),
+                "rationale": mapping.get("rationale"),
+                "sample_values": mapping.get("sample_values", []),
+                "suggestions": mapping.get("suggestions", []),  # Top-3 alternatives
+                "langsmith_run_id": mapping.get("langsmith_run_id"),
+                "notes": "",  # Filled in by customer
+            }
+            review_items.append(item)
+
+        review_payload = {
+            "migration_id": migration_id,
+            "total_flagged": len(tier2_flagged),
+            "overall_confidence": overall_confidence,
+            "review_items": review_items,
+            "instructions": (
+                "For each field, choose: 1) Accept suggestion, "
+                "2) Reject mapping (will be unmappable), "
+                "3) Select alternative from suggestions. "
+                "Provide notes for any rejections."
+            ),
+        }
+
+        logger.info(f"[Node 4] Interrupting for customer review: {len(review_items)} fields")
+        state["human_review_payload"] = review_payload
+
+        # ── Interrupt graph execution ──────────────────────────────
+        # LangGraph will pause here and allow external resume
+        decisions = interrupt(review_payload)
+
+        # ── Process customer decisions ──────────────────────────────
+        # When resumed, 'decisions' will be populated with customer choices
+        logger.info(f"[Node 4] Resumed with {len(decisions)} decisions")
+
+        human_decisions = []
+        accepted_count = 0
+
+        for decision in decisions:
+            # EL-M.4 validation: each decision must have action + source_field
+            action = decision.get("action")
+            source_field = decision.get("source_field")
+
+            if not action or not source_field:
+                logger.error(f"[Node 4] EL-M.4 FAILED: Invalid decision structure: {decision}")
+                state["error_message"] = "Invalid decision: missing action or source_field"
+                state["error_node"] = 4
+                state["el_m4_passed"] = False
+                return state
+
+            if action not in ["accept", "reject", "override"]:
+                logger.error(f"[Node 4] EL-M.4 FAILED: Invalid action '{action}'")
+                state["error_message"] = f"Invalid action: {action}"
+                state["error_node"] = 4
+                state["el_m4_passed"] = False
+                return state
+
+            # Find original mapping
+            original_mapping = next(
+                (m for m in tier2_flagged if m.get("source_field") == source_field),
+                None,
+            )
+
+            if action == "accept":
+                # Accept suggested target
+                target = decision.get("target_field") or (
+                    original_mapping.get("target_field") if original_mapping else None
+                )
+                if not target:
+                    logger.error(f"[Node 4] No target field for acceptance decision: {source_field}")
+                    state["error_message"] = f"No target for accepted field: {source_field}"
+                    state["el_m4_passed"] = False
+                    return state
+
+                mapping = FieldMapping(
+                    source_field=source_field,
+                    target_field=target,
+                    confidence=original_mapping.get("confidence", 0.70) if original_mapping else 0.70,
+                    tier="T2_human",
+                    rationale="Human approved flagged mapping",
+                    reviewer_id=decision.get("reviewer_id"),
+                    review_timestamp=datetime.utcnow(),
+                    langsmith_run_id=(
+                        original_mapping.get("langsmith_run_id") if original_mapping else None
+                    ),
+                )
+                human_decisions.append(mapping)
+                accepted_count += 1
+                logger.info(f"[Node 4] ACCEPTED: {source_field} → {target}")
+
+            elif action == "reject":
+                # Reject mapping — will become unmappable
+                # Write LangSmith negative feedback on rejection
+                if original_mapping and original_mapping.get("langsmith_run_id"):
+                    logger.info(
+                        f"[Node 4] REJECTED: {source_field} "
+                        f"(LangSmith feedback recorded: {original_mapping['langsmith_run_id']})"
+                    )
+                    # LangSmith feedback would be written here (TODO: implement feedback API)
+                    # For now, just log the rejection with langsmith_run_id for batch processing
+
+            elif action == "override":
+                # Customer provided override
+                override_target = decision.get("target_field")
+                if not override_target:
+                    logger.error(f"[Node 4] EL-M.4 FAILED: Override without target: {source_field}")
+                    state["error_message"] = f"Override without target: {source_field}"
+                    state["el_m4_passed"] = False
+                    return state
+
+                mapping = FieldMapping(
+                    source_field=source_field,
+                    target_field=override_target,
+                    confidence=0.50,  # Lower confidence for manual override
+                    tier="T2_human",
+                    rationale=f"Manual override by customer: {decision.get('notes', '')}",
+                    reviewer_id=decision.get("reviewer_id"),
+                    review_timestamp=datetime.utcnow(),
+                    langsmith_run_id=(
+                        original_mapping.get("langsmith_run_id") if original_mapping else None
+                    ),
+                )
+                human_decisions.append(mapping)
+                accepted_count += 1
+                logger.info(f"[Node 4] OVERRIDE: {source_field} → {override_target}")
+
+        # ── EL-M.4 Validation ────────────────────────────────────
+        if len(decisions) != len(tier2_flagged):
+            logger.error(
+                f"[Node 4] EL-M.4 FAILED: "
+                f"Decision count {len(decisions)} != flagged count {len(tier2_flagged)}"
+            )
+            state["error_message"] = "Decision count mismatch"
+            state["el_m4_passed"] = False
+            return state
+
+        state["el_m4_passed"] = True
+        logger.info("[Node 4] EL-M.4 PASSED: All decisions valid")
+
+        # ── Update state ───────────────────────────────────────────
+        state["tier2_human_decisions"] = human_decisions
+        state["tier2_human_count"] = len(human_decisions)
+
+        # Recalculate overall confidence including human decisions
+        tier1_confs = [m.get("confidence", 0) for m in state.get("tier1_mappings", [])]
+        tier2_auto_confs = [m.get("confidence", 0) for m in state.get("tier2_auto_mappings", [])]
+        human_confs = [m.get("confidence", 0) for m in human_decisions]
+
+        all_confs = tier1_confs + tier2_auto_confs + human_confs
+        new_overall = sum(all_confs) / len(all_confs) if all_confs else 0.0
+        state["overall_confidence"] = new_overall
+
+        logger.info(
+            f"[Node 4] Complete: {accepted_count} decisions processed, "
+            f"overall_confidence updated to {new_overall:.2f}"
+        )
+
+        state["current_step"] = 4
+        state["event_log"].append(
+            {
+                "timestamp": datetime.utcnow().isoformat(),
+                "event": "node_complete",
+                "node": 4,
+                "detail": f"{accepted_count} human decisions processed",
+            }
+        )
+
+        return state
+
+    except Exception as e:
+        logger.exception(f"[Node 4] Unhandled exception: {e}")
+        state["error_message"] = str(e)
+        state["error_node"] = 4
+        state["error_timestamp"] = datetime.utcnow()
+        state["status"] = "failed"
+        return state

@@ -1,0 +1,275 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cafm
+      POSTGRES_PASSWORD: cafm
+      POSTGRES_DB: plenum_cafm
+    volumes:
+      - ./apps/frontend/infra/single-url/postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cafm -d plenum_cafm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  connector-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/cafm-connector-service
+      dockerfile: docker/Dockerfile
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      PLENUM_DB_URL: ${PLENUM_DB_DSN}
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+      DEBUG: "true"
+      SEED_DEFAULT_PLENUM_ORG: "true"
+      # No Tempo/OTLP collector in this local stack — skip trace export so the
+      # logs aren't flooded with "Failed to export traces to localhost:4317".
+      OTEL_SDK_DISABLED: "true"
+    volumes:
+      - ./apps/backend/cafm-connector-service-final/shared-lib:/app/shared-lib
+    command:
+      - bash
+      - -c
+      - "pip install -q -e /app/shared-lib && uvicorn cafm_connector.api.app:app --host 0.0.0.0 --port 8000 --root-path /backend/connector --proxy-headers --forwarded-allow-ips=*"
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-work-order-management
+      dockerfile: Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DATABASE_URL: ${PLENUM_DB_DSN}
+      OUTLOOK_USER_EMAIL: shashank@plenum-tech.com
+      # Background Outlook poll for approval replies — off by default (no Graph/OpenAI spam in logs).
+      APPROVAL_EMAIL_POLL_ENABLED: "false"
+      APPROVAL_EMAIL_POLL_INTERVAL_SECONDS: "3600"
+      SEED_APPROVAL_DEMO: "true"
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        echo "Running DB migrations against Azure..."
+        python scripts/migrate_startup.py
+        if [ "$$SEED_APPROVAL_DEMO" = "true" ]; then python scripts/seed_approval_demo.py; fi
+        exec uvicorn src.app:app --host 0.0.0.0 --port 8007 --root-path /backend/work-order
+    ports:
+      - "18080:8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  schema-mapper-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      USE_SQLITE_DEV: "false"
+      PLENUM_CMMS_SCHEMA: plenum_cafm
+      DEBUG: "true"
+      ENVIRONMENT: development
+      LANGSMITH_TRACING: "false"
+      # No Tempo/OTLP collector in this local stack — skip trace export.
+      OTEL_SDK_DISABLED: "true"
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8003"
+      - --root-path
+      - /backend/schema-mapper
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  svc-udr:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-udr
+      dockerfile: Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      MAX_QUERY_ROWS: "500"
+      MAX_AGENT_ITERATIONS: "10"
+      DEBUG: "false"
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8006"
+      - --root-path
+      - /backend/udr
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  svc-deepagents:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-deepagents
+      dockerfile: Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # OPENAI_SSL_VERIFY, OPENAI_API_BASE, AZURE_OPENAI_* — apps/backend/.env only
+      # (do not set ${VAR:-} here; empty values override env_file and break the OpenAI client URL)
+      # Route compliance through the sub-agent and its skill files instead of the
+      # deterministic preflight. Off = today's behaviour. Both paths live so the same
+      # question can be run through each.
+      # A reading model picks the agent before the keyword tables get a say. Off =
+      # today's behaviour (phase2_intents keyword routing).
+      ORCHESTRATOR_LLM_ROUTING: ${ORCHESTRATOR_LLM_ROUTING:-0}
+      COMPLIANCE_SKILL_PATH: ${COMPLIANCE_SKILL_PATH:-0}
+      COMPLIANCE_SELECTIVE_SKILLS: ${COMPLIANCE_SELECTIVE_SKILLS:-0}
+      UDR_BASE_URL: http://svc-udr:8006
+      WO_MANAGEMENT_BASE_URL: http://backend-app:8007
+      DOC_RAG_BASE_URL: http://schema-mapper-app:8003
+      MIGRATION_BASE_URL: http://schema-mapper-app:8003
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
+      PORT: "8008"
+      DEBUG: "false"
+    command:
+      - uvicorn
+      - src.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8008"
+      - --root-path
+      - /backend/deep-agents
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      svc-udr:
+        condition: service_started
+      backend-app:
+        condition: service_started
+      schema-mapper-app:
+        condition: service_started
+      svc-operations-intelligence:
+        condition: service_started
+    restart: unless-stopped
+
+  # Compliance / Contract / Energy engines (Feature A/B/C) — port 8009
+  svc-operations-intelligence:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-operations-intelligence
+      dockerfile: Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DATABASE_URL: ${PLENUM_DB_DSN}
+      REDIS_URL: redis://redis:6379/0
+      # SMTP_* come from apps/backend/.env (env_file). Set EMAIL_DRY_RUN=false there for live send.
+      EMAIL_DRY_RUN: ${EMAIL_DRY_RUN:-false}
+      AUTO_SEND_LADDER_EMAILS: ${AUTO_SEND_LADDER_EMAILS:-true}
+      AUTO_SEED_UK_PACK: "true"
+      AUTO_MIGRATE_ON_STARTUP: "true"
+      DOC_RAG_BASE_URL: http://schema-mapper-app:8003
+      PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
+      FRONTEND_PUBLIC_URL: http://localhost:3000
+      OTEL_SDK_DISABLED: "true"
+      ENVIRONMENT: development
+      DEBUG: "false"
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8009"
+      - --root-path
+      - /backend/ops-intelligence
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8009"
+    ports:
+      - "8009:8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend-app:
+    # React 18 + Vite static build served by nginx on :3000 (apps/frontend/Dockerfile).
+    # Backend paths are build-time values; the defaults are the gateway paths below.
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_OPS_INTELLIGENCE_BASE_URL: /backend/ops-intelligence
+        VITE_WO_BASE_URL: /backend/work-order
+        VITE_CONNECTOR_BASE_URL: /backend/connector
+        VITE_SCHEMA_MAPPER_BASE_URL: /backend/schema-mapper
+        VITE_DEEP_AGENTS_BASE_URL: /backend/deep-agents
+        VITE_ORGANIZATION_ID: ${VITE_ORGANIZATION_ID:-}
+    expose:
+      - "3000"
+    depends_on:
+      - svc-operations-intelligence
+    restart: unless-stopped
+
+  gateway-app:
+    build:
+      context: ./apps/frontend/infra/single-url
+      dockerfile: Dockerfile.gateway
+    ports:
+      - "3000:8080"
+    depends_on:
+      - frontend-app
+      - backend-app
+      - schema-mapper-app
+      - connector-app
+      - svc-udr
+      - svc-deepagents
+      - svc-operations-intelligence
+    restart: unless-stopped

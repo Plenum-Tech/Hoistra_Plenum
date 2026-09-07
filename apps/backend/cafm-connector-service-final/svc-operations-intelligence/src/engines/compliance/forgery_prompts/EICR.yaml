@@ -1,0 +1,13 @@
+required_tokens:
+  - electrical installation condition
+  - eicr
+  - bs 7671
+issuing_body_tokens:
+  - niceic
+  - napit
+  - eca
+required_field_hints:
+  - installation
+  - observation
+  - next inspection
+notes: Electrical Installation Condition Report

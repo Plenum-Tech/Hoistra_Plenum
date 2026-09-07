@@ -1,0 +1,16 @@
+asset_code,asset_id,criticality,proposed_criticality,approved,rationale
+AHU-01,2254deb1-ceda-5fdc-8662-5e88a82a385f,L1,L1,True,Primary AHU — load dependent
+AHU-02,9082654d-d28b-5d44-8b6e-44a75f9f53ca,L2,L2,True,Secondary AHU
+CHILLER-01,4e25ee9b-426a-5909-8968-db80ba6ee435,L1,L1,True,Main chiller — high sub-meter
+BOILER-01,86e56c75-769b-5c12-ade3-52ebb40657dc,L1,L1,True,Heating plant
+DB-MAIN,50e801c0-1ad5-504f-95d7-d8e74b34b567,L1,L1,True,Main LV board
+DB-FLOOR3,79ece533-a40c-5da9-b9b8-90ff4936aa1d,L2,L2,True,Floor 3 distribution
+LIFT-A,57552a38-528d-582d-8d05-fb00e5254bf0,L1,L1,True,Passenger lift A
+LIFT-B,6e9bab87-0df8-5148-9385-2c8f65780111,L2,L2,True,Goods lift B
+PUMP-HW-01,c96ceff1-b9a9-5a89-a4f6-cbc599c0fc6d,L2,L2,True,HWS circulation
+FCU-301,00cca8c0-d38f-5cf7-bcd4-22497ed31c44,L3,L3,True,Fan coil office 301
+FCU-302,df5a27e5-a1b5-5620-b88c-e1fb6174c980,L2,L3,False,Fan coil office 302 — unapproved → treat as L2
+LIGHT-CORE,3ba07b83-7e04-5835-bc79-d56876b0b151,L2,L3,False,Core lighting — pending PM criticality approval
+UPS-IT,ae943b54-af87-5938-a8be-684dfa2dd4ab,L1,L1,True,IT UPS
+PANEL-FIRE,effe74d6-6e74-576e-96ca-b31101bdc1f4,L2,L1,False,Fire panel — pending PM criticality approval
+DOOR-AUTO-1,81e5b385-171e-5889-8c6a-77e4a2aeef49,L2,L2,True,Auto door reception

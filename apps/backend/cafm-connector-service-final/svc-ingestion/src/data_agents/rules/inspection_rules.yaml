@@ -1,0 +1,54 @@
+# inspection_rules.yaml
+# EL-5.CONSTRAIN hard rules for Inspection Agent
+# Hard rules ALWAYS override AI vote — no exceptions.
+# Threshold: 0.85 (highest — compliance impact).
+
+rules:
+  - name: corrective_keywords_force_action
+    description: >
+      Observation text contains safety-critical keywords →
+      requires_corrective_action = true (always, language check overrides AI).
+    conditions:
+      - type: field_contains
+        field: observations
+        operator: eq
+        value: "corrective"
+    action:
+      set_status: High
+      requires_human_review: true
+
+  - name: immediate_action_keywords
+    description: >
+      'immediate' or 'urgent' in observations → High risk + human review.
+    conditions:
+      - type: field_contains
+        field: observations
+        operator: eq
+        value: "immediate"
+    action:
+      set_status: High
+      requires_human_review: true
+
+  - name: failed_or_critical_keywords
+    description: >
+      'failed' or 'critical' in observations → High risk + human review.
+    conditions:
+      - type: field_contains
+        field: observations
+        operator: eq
+        value: "critical"
+    action:
+      set_status: High
+      requires_human_review: true
+
+  - name: high_risk_always_human_review
+    description: >
+      Any High risk finding always requires human review regardless of confidence.
+    conditions:
+      - type: any_row_where
+        field: risk_level
+        operator: eq
+        value: "High"
+    action:
+      set_status: High
+      requires_human_review: true

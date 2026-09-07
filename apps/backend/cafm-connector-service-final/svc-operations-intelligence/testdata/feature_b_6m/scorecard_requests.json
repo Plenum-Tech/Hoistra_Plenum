@@ -1,0 +1,254 @@
+[
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-02-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-02-03",
+        "completed_date": "2026-02-06"
+      },
+      {
+        "scheduled_date": "2026-02-08",
+        "completed_date": "2026-02-11"
+      },
+      {
+        "scheduled_date": "2026-02-13",
+        "completed_date": "2026-02-18"
+      },
+      {
+        "scheduled_date": "2026-02-18",
+        "completed_date": "2026-02-16"
+      },
+      {
+        "scheduled_date": "2026-02-23",
+        "completed_date": "2026-02-25"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-02-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-02-03",
+        "completed_date": null
+      },
+      {
+        "scheduled_date": "2026-02-08",
+        "completed_date": null
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-03-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-03-03",
+        "completed_date": "2026-03-08"
+      },
+      {
+        "scheduled_date": "2026-03-08",
+        "completed_date": "2026-03-07"
+      },
+      {
+        "scheduled_date": "2026-03-13",
+        "completed_date": "2026-03-13"
+      },
+      {
+        "scheduled_date": "2026-03-18",
+        "completed_date": "2026-03-16"
+      },
+      {
+        "scheduled_date": "2026-03-23",
+        "completed_date": "2026-03-25"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-03-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-03-03",
+        "completed_date": "2026-03-19"
+      },
+      {
+        "scheduled_date": "2026-03-08",
+        "completed_date": "2026-03-12"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-04-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-04-03",
+        "completed_date": "2026-04-08"
+      },
+      {
+        "scheduled_date": "2026-04-08",
+        "completed_date": "2026-04-06"
+      },
+      {
+        "scheduled_date": "2026-04-13",
+        "completed_date": "2026-04-15"
+      },
+      {
+        "scheduled_date": "2026-04-18",
+        "completed_date": "2026-04-17"
+      },
+      {
+        "scheduled_date": "2026-04-23",
+        "completed_date": "2026-04-28"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-04-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-04-03",
+        "completed_date": "2026-04-17"
+      },
+      {
+        "scheduled_date": "2026-04-08",
+        "completed_date": null
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-05-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-05-03",
+        "completed_date": "2026-05-03"
+      },
+      {
+        "scheduled_date": "2026-05-08",
+        "completed_date": "2026-05-06"
+      },
+      {
+        "scheduled_date": "2026-05-13",
+        "completed_date": "2026-05-14"
+      },
+      {
+        "scheduled_date": "2026-05-18",
+        "completed_date": "2026-05-18"
+      },
+      {
+        "scheduled_date": "2026-05-23",
+        "completed_date": "2026-05-28"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-05-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-05-03",
+        "completed_date": null
+      },
+      {
+        "scheduled_date": "2026-05-08",
+        "completed_date": "2026-05-18"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-06-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-06-03",
+        "completed_date": "2026-06-03"
+      },
+      {
+        "scheduled_date": "2026-06-08",
+        "completed_date": "2026-06-11"
+      },
+      {
+        "scheduled_date": "2026-06-13",
+        "completed_date": "2026-06-11"
+      },
+      {
+        "scheduled_date": "2026-06-18",
+        "completed_date": "2026-06-21"
+      },
+      {
+        "scheduled_date": "2026-06-23",
+        "completed_date": "2026-06-28"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-06-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-06-03",
+        "completed_date": "2026-06-19"
+      },
+      {
+        "scheduled_date": "2026-06-08",
+        "completed_date": "2026-06-18"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a1",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-07-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-07-03",
+        "completed_date": "2026-07-06"
+      },
+      {
+        "scheduled_date": "2026-07-08",
+        "completed_date": "2026-07-11"
+      },
+      {
+        "scheduled_date": "2026-07-13",
+        "completed_date": "2026-07-12"
+      },
+      {
+        "scheduled_date": "2026-07-18",
+        "completed_date": "2026-07-21"
+      },
+      {
+        "scheduled_date": "2026-07-23",
+        "completed_date": "2026-07-22"
+      }
+    ]
+  },
+  {
+    "vendor_id": "00000000-0000-0000-0000-0000000000a3",
+    "organization_id": "00000000-0000-0000-0000-0000000000b1",
+    "score_month": "2026-07-01",
+    "ppm_visits": [
+      {
+        "scheduled_date": "2026-07-03",
+        "completed_date": "2026-07-03"
+      },
+      {
+        "scheduled_date": "2026-07-08",
+        "completed_date": "2026-07-16"
+      }
+    ]
+  }
+]

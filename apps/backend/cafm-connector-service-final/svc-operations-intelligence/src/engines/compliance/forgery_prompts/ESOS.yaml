@@ -1,0 +1,12 @@
+required_tokens:
+  - esos
+  - energy savings
+issuing_body_tokens:
+  - environment agency
+  - cibse
+  - companies house
+required_field_hints:
+  - assessment
+  - phase
+  - notification
+notes: ESOS evidence

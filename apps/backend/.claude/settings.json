@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(python -m pip install aiosqlite -q)",
+      "Bash(grep -l \"from ...app import\" *.py)",
+      "Bash(curl -s http://localhost:8003/health)",
+      "Bash(python -m py_compile streamlit_app.py)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Lenovo\\Downloads"
+    ]
+  }
+}

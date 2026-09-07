@@ -1,0 +1,192 @@
+{
+  "uid": "cafm-service-health",
+  "title": "CAFM — Service Health",
+  "tags": ["cafm", "health", "infrastructure"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(up, job)",
+        "current": {"text": "All", "value": "$__all"},
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "cafm-connector-service",
+      "gridPos": {"h": 3, "w": 4, "x": 0, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job=\"cafm-connector-service\"}", "legendFormat": "status"}]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "cafm-ingestion-service",
+      "gridPos": {"h": 3, "w": 4, "x": 4, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job=\"cafm-ingestion-service\"}", "legendFormat": "status"}]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "cafm-query-service",
+      "gridPos": {"h": 3, "w": 4, "x": 8, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job=\"cafm-query-service\"}", "legendFormat": "status"}]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Prometheus",
+      "gridPos": {"h": 3, "w": 4, "x": 12, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job=\"prometheus\"}", "legendFormat": "status"}]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Tempo",
+      "gridPos": {"h": 3, "w": 4, "x": 16, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job=\"tempo\"}", "legendFormat": "status"}]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "All Services Up",
+      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 0},
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+      },
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "min(up{job=~\"cafm.*\"})", "legendFormat": "all healthy"}]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "HTTP Request Rate by Service",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 3},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (job) (rate(http_server_duration_milliseconds_count[5m]))", "legendFormat": "{{job}}"}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "HTTP Error Rate (4xx + 5xx) by Service",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 3},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (job) (rate(http_server_duration_milliseconds_count{http_status_code=~\"[45]..\"}[5m]))", "legendFormat": "{{job}} errors"}
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "HTTP Latency P95 (ms) by Service",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 11},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le, job) (rate(http_server_duration_milliseconds_bucket[5m])))", "legendFormat": "p95 {{job}}"}
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "DB Connection Pool Utilisation",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 11},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sqlalchemy_pool_size{job=~\"cafm.*\"}", "legendFormat": "pool size {{job}}"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sqlalchemy_pool_checkedout{job=~\"cafm.*\"}", "legendFormat": "checked out {{job}}"}
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Redis Connection Latency (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 19},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(db_client_operation_duration_bucket{db_system=\"redis\"}[5m])))", "legendFormat": "p95 Redis latency"}
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "ARQ Worker Throughput (jobs/min)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 19},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (queue) (rate(cafm_documents_ingested_total{source=\"arq_worker\"}[1m])) * 60", "legendFormat": "{{queue}} jobs/min"}
+      ]
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Memory Usage by Service (MB)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "decmbytes"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "process_resident_memory_bytes{job=~\"cafm.*\"} / 1024 / 1024", "legendFormat": "{{job}}"}
+      ]
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "PostgreSQL Query Latency P95 (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "histogram_quantile(0.95, sum by (le) (rate(db_client_operation_duration_bucket{db_system=\"postgresql\"}[5m])))", "legendFormat": "p95 PG latency"}
+      ]
+    }
+  ]
+}

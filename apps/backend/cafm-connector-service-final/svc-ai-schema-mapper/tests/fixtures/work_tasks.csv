@@ -1,0 +1,6 @@
+ID,ASSETNUM,EQKTX,manufacturer,model,site_ref,status
+A-001,A-001,Air Handling Unit AHU-1,Siemens,AHU-9000,S-01,Active
+A-002,A-002,Chiller CH-1,Trane,RTAC-140,S-01,Active
+A-003,A-003,Passenger Lift L-1,Otis,Gen2,S-02,Inactive
+A-004,A-004,Fire Alarm Panel,Siemens,FAP-200,S-02,Active
+A-009,A-009,VRF Outdoor Unit,Daikin,VRV-X,S-02,Active

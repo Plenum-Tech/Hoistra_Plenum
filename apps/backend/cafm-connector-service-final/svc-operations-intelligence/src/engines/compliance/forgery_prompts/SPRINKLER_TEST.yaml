@@ -1,0 +1,11 @@
+required_tokens:
+  - sprinkler
+  - suppression
+issuing_body_tokens:
+  - bafe
+  - lps
+required_field_hints:
+  - annual
+  - test
+  - certificate
+notes: Sprinkler/suppression

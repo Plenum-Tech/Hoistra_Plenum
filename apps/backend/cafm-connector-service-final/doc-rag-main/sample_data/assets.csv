@@ -1,0 +1,31 @@
+asset_code,asset_name,category,building,floor,location,manufacturer,model,serial_number,install_date,warranty_expiry,last_service_date,next_service_due,service_frequency_days,status,criticality,notes
+AHU-001,Main Air Handler Unit North,HVAC,Building A,5,Mechanical Room 501,Trane,CGAM-100,TRN-2019-A501,2019-03-15,2024-03-15,2024-11-20,2025-02-20,90,Operational,High,Serves floors 1-5 North wing
+AHU-002,Main Air Handler Unit South,HVAC,Building A,5,Mechanical Room 502,Carrier,39M-100,CAR-2019-A502,2019-03-20,2024-03-20,2024-11-18,2025-02-18,90,Operational,High,Serves floors 1-5 South wing
+AHU-003,Service Air Handler Unit,HVAC,Building B,3,Mechanical Room 301,York,YVAA-080,YRK-2020-B301,2020-06-10,2025-06-10,2024-12-01,2025-03-01,90,Operational,Medium,Backup unit for Building B
+CHW-001,Primary Chiller Plant,HVAC,Building A,Basement,Central Plant Room,Trane,CVGF-500,TRN-2018-CHW1,2018-08-15,2023-08-15,2024-10-15,2025-01-15,90,Operational,Critical,Primary cooling for entire campus
+CHW-002,Secondary Chiller Plant,HVAC,Building B,Basement,Central Plant Room,York,YCIV-400,YRK-2018-CHW2,2018-09-01,2023-09-01,2024-10-20,2025-01-20,90,Operational,Critical,Redundant chiller for peak loads
+EL-001,Main Elevator North Wing,Elevator,Building A,Ground,Lobby North,Otis,Gen2,OTIS-2019-EL001,2019-05-10,2024-05-10,2024-11-25,2025-02-25,90,Operational,High,Serves floors B1-12
+EL-002,Main Elevator South Wing,Elevator,Building A,Ground,Lobby South,Schindler,3300,SCH-2019-EL002,2019-05-15,2024-05-15,2024-11-22,2025-02-22,90,Operational,High,Serves floors B1-12
+EL-003,Service Elevator,Elevator,Building A,Ground,Service Corridor,Kone,MonoSpace 500,KONE-2020-EL003,2020-02-20,2025-02-20,2024-12-10,2025-03-10,90,Operational,Medium,Freight and service access
+EL-004,Passenger Elevator Building B,Elevator,Building B,Ground,Main Lobby,Mitsubishi,NEXIEZ-MRL,MIT-2020-EL004,2020-03-15,2025-03-15,2024-12-05,2025-03-05,90,Operational,High,Main access for Building B
+ESC-001,Main Escalator Lobby,Escalator,Building A,Ground,Main Entrance,Schindler,9300,SCH-2019-ESC001,2019-04-10,2024-04-10,2024-11-15,2025-02-15,90,Operational,Medium,Ground to Level 2 connection
+PUMP-001,Primary Chilled Water Pump,Pump,Building A,Basement,Central Plant Room,Armstrong,4380,ARM-2018-P001,2018-08-20,2023-08-20,2024-10-25,2025-01-25,90,Operational,High,Primary CHW circulation
+PUMP-002,Secondary Chilled Water Pump,Pump,Building A,Basement,Central Plant Room,Armstrong,4380,ARM-2018-P002,2018-08-20,2023-08-20,2024-10-25,2025-01-25,90,Operational,High,Backup CHW circulation
+PUMP-003,Hot Water Circulation Pump,Pump,Building A,Basement,Boiler Room,Grundfos,TPE-100,GRN-2019-P003,2019-01-15,2024-01-15,2024-11-30,2025-02-28,90,Operational,Medium,Heating system circulation
+FAN-001,Supply Fan AHU-001,Fan,Building A,5,Mechanical Room 501,Howden,AF-100,HOW-2019-F001,2019-03-15,2024-03-15,2024-11-20,2025-02-20,90,Operational,High,Supply air for AHU-001
+FAN-002,Return Fan AHU-001,Fan,Building A,5,Mechanical Room 501,Howden,AF-100,HOW-2019-F002,2019-03-15,2024-03-15,2024-11-20,2025-02-20,90,Operational,High,Return air for AHU-001
+FAN-003,Exhaust Fan Kitchen,Fan,Building A,Ground,Kitchen Area,Greenheck,SWB-200,GRN-2019-F003,2019-06-01,2024-06-01,2024-12-01,2025-03-01,90,Operational,Medium,Kitchen ventilation
+GEN-001,Emergency Generator Main,Generator,Building A,Basement,Generator Room,Caterpillar,C18,CAT-2019-G001,2019-02-10,2024-02-10,2024-11-10,2025-02-10,90,Operational,Critical,1000 kVA backup power
+GEN-002,Emergency Generator Backup,Generator,Building B,Basement,Generator Room,Cummins,C900D6,CUM-2019-G002,2019-02-15,2024-02-15,2024-11-12,2025-02-12,90,Operational,Critical,750 kVA backup power
+UPS-001,Uninterruptible Power Supply Main,Electrical,Building A,Basement,UPS Room,APC,Symmetra PX,APC-2019-U001,2019-01-20,2024-01-20,2024-10-15,2025-01-15,90,Operational,Critical,250 kVA UPS for critical loads
+UPS-002,Uninterruptible Power Supply Server Room,Electrical,Building A,3,Server Room,Eaton,9395,EAT-2020-U002,2020-05-10,2025-05-10,2024-12-15,2025-03-15,90,Operational,Critical,50 kVA UPS for IT equipment
+BMS-001,Building Management System Main,BMS,Building A,5,BMS Control Room,Honeywell,Enterprise Buildings Integrator,HON-2019-BMS1,2019-01-05,2024-01-05,2024-11-01,2025-02-01,90,Operational,Critical,Central BMS for entire facility
+CCTV-001,CCTV System Main,Security,Building A,Ground,Security Control Room,Hikvision,DS-7716NI-K4,HIK-2020-CCTV1,2020-01-15,2025-01-15,2024-12-01,2025-03-01,90,Operational,High,64 camera NVR system
+FA-001,Fire Alarm Panel Main,Fire Safety,Building A,Ground,Fire Control Room,Edwards,EST3X,EDW-2019-FA001,2019-02-01,2024-02-01,2024-11-05,2025-02-05,90,Operational,Critical,Main fire alarm control panel
+WH-001,Domestic Hot Water Heater,Plumbing,Building A,Basement,Water Heater Room,Rheem,Commercial Gas,RHE-2019-WH001,2019-03-01,2024-03-01,2024-11-15,2025-02-15,90,Operational,Medium,500 gallon capacity
+SOFT-001,Water Softener System,Plumbing,Building A,Basement,Water Treatment Room,Culligan,HE-Twin,CUL-2019-WS001,2019-03-05,2024-03-05,2024-12-01,2025-03-01,90,Operational,Low,Softens incoming water supply
+CT-001,Cooling Tower Main,HVAC,Building A,Roof,Rooftop,Baltimore Aircoil,VTI-600,BAC-2018-CT001,2018-08-10,2023-08-10,2024-10-01,2025-01-01,90,Operational,High,Primary cooling tower 600 tons
+CT-002,Cooling Tower Backup,HVAC,Building B,Roof,Rooftop,Evapco,AT-500,EVA-2018-CT002,2018-08-15,2023-08-15,2024-10-05,2025-01-05,90,Operational,High,Backup cooling tower 500 tons
+COMP-001,Air Compressor Main,Compressed Air,Building A,Basement,Compressor Room,Atlas Copco,GA-75,ATC-2019-AC001,2019-04-01,2024-04-01,2024-11-20,2025-02-20,90,Operational,Medium,75 HP rotary screw compressor
+COMP-002,Air Compressor Backup,Compressed Air,Building A,Basement,Compressor Room,Ingersoll Rand,R-55,IR-2019-AC002,2019-04-05,2024-04-05,2024-11-22,2025-02-22,90,Operational,Medium,55 HP backup compressor
+LIGHT-001,Exterior Lighting Control System,Lighting,Building A,Ground,Electrical Room 101,Lutron,Quantum,LUT-2020-L001,2020-02-01,2025-02-01,2024-12-01,2025-03-01,90,Operational,Low,Controls all exterior lighting

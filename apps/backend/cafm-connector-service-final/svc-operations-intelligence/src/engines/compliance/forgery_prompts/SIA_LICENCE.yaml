@@ -1,0 +1,11 @@
+required_tokens:
+  - sia
+  - licence
+  - license
+issuing_body_tokens:
+  - sia
+required_field_hints:
+  - licence number
+  - expiry
+  - licence
+notes: SIA individual licence

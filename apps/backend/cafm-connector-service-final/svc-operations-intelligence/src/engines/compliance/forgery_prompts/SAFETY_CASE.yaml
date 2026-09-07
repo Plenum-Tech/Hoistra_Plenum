@@ -1,0 +1,11 @@
+required_tokens:
+  - safety case
+  - building safety
+issuing_body_tokens:
+  - building safety regulator
+  - hse
+required_field_hints:
+  - safety case
+  - report
+  - building
+notes: Building safety case

@@ -1,0 +1,9 @@
+required_tokens:
+  - gas safe
+issuing_body_tokens:
+  - gas safe register
+required_field_hints:
+  - registration
+  - licence
+  - business
+notes: Gas Safe company registration

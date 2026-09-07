@@ -1,0 +1,10 @@
+required_tokens:
+  - bafe
+  - sp203
+issuing_body_tokens:
+  - bafe
+required_field_hints:
+  - registration
+  - company
+  - fire
+notes: BAFE SP203-1

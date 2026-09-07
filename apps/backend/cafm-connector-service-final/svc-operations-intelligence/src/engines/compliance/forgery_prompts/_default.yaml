@@ -1,0 +1,10 @@
+# Generic checklist applied when no per-format YAML exists
+required_tokens:
+  - certificate
+issuing_body_tokens: []
+required_field_hints:
+  - expiry
+  - date
+  - number
+suspicious_extra: []
+notes: Generic certificate authenticity checklist

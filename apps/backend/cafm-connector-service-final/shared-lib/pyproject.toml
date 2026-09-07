@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cafm-shared"
+version = "0.1.0"
+description = "Shared telemetry, logging, exceptions and model re-exports for the CAFM AI Platform"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+dependencies = [
+    # Logging
+    "structlog>=24.0",
+
+    # OTel — core
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+
+    # OTel — auto-instrumentation
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
+    "opentelemetry-instrumentation-redis>=0.48b0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
+    "opentelemetry-instrumentation-asyncpg>=0.48b0",
+
+    # OTel — exporters
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-exporter-prometheus>=0.48b0",
+
+    # Prometheus client (required by exporter — not always pulled transitively)
+    "prometheus-client>=0.20",
+
+    # Web framework (needed so FastAPI instrumentation can resolve FastAPI types)
+    "fastapi>=0.115,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.13",
+    "ruff>=0.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cafm_shared*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

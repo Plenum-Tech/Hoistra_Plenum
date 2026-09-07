@@ -1,0 +1,11 @@
+required_tokens:
+  - bafe
+  - sp101
+  - gaseous
+issuing_body_tokens:
+  - bafe
+  - lps
+required_field_hints:
+  - registration
+  - suppression
+notes: BAFE SP101

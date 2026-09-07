@@ -1,0 +1,11 @@
+required_tokens:
+  - gas
+  - cp17
+issuing_body_tokens:
+  - gas safe
+required_field_hints:
+  - licence
+  - engineer
+  - appliance
+  - date
+notes: Commercial gas safety CP17

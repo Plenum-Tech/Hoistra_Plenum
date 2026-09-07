@@ -1,0 +1,61 @@
+asset_id,asset_code,asset_name,asset_type,location,department,serial_number,manufacturer,model,acquisition_date,condition_status,last_maintenance_date
+1,PUMP-001,Centrifugal Pump A1,Pump,Building A - Room 101,Operations,SN-2024-001,Flowserve,SIHI 2075,2022-01-15,Good,2026-03-01
+2,PUMP-002,Centrifugal Pump A2,Pump,Building A - Room 101,Operations,SN-2024-002,Flowserve,SIHI 2075,2022-02-20,Good,2026-02-15
+3,MOTOR-001,Electric Motor 5HP,Motor,Building A - Room 102,Operations,SN-2024-003,Siemens,1LE1 Series,2021-06-10,Excellent,2026-03-10
+4,MOTOR-002,Electric Motor 7.5HP,Motor,Building A - Room 102,Operations,SN-2024-004,ABB,IE3,2021-08-22,Good,2026-02-20
+5,TANK-001,Storage Tank 1000L,Tank,Building B - Yard,Maintenance,SN-2024-005,Stainless Steel,SS-1000,2020-03-05,Fair,2025-12-15
+6,TANK-002,Storage Tank 500L,Tank,Building B - Yard,Maintenance,SN-2024-006,Stainless Steel,SS-500,2020-05-12,Good,2026-01-20
+7,HEAT-001,Heat Exchanger,Heat Exchanger,Building C - Room 201,Operations,SN-2024-007,Harsco,Plate Frame,2019-11-08,Fair,2025-11-30
+8,HEAT-002,Backup Heat Exchanger,Heat Exchanger,Building C - Room 202,Operations,SN-2024-008,SPX,Plate Frame,2020-02-14,Good,2026-02-10
+9,COMP-001,Air Compressor 10HP,Compressor,Building D - Room 301,Maintenance,SN-2024-009,Atlas Copco,GA-15,2021-04-18,Excellent,2026-03-05
+10,COMP-002,Air Compressor 5HP,Compressor,Building D - Room 301,Maintenance,SN-2024-010,Kaeser,SK4,2022-07-23,Good,2026-02-28
+11,FAN-001,Centrifugal Fan Type A,Fan,Building A - Room 103,HVAC,SN-2024-011,Trane,CF-500,2020-09-11,Good,2026-01-15
+12,FAN-002,Axial Fan Type B,Fan,Building A - Room 104,HVAC,SN-2024-012,Carrier,AF-250,2021-01-30,Good,2026-02-05
+13,PUMP-003,Gear Pump 2cc,Pump,Building C - Room 203,Operations,SN-2024-013,Bosch Rexroth,PGH5,2022-05-10,Excellent,2026-03-12
+14,PUMP-004,Centrifugal Pump A3,Pump,Building A - Room 105,Operations,SN-2024-014,Flowserve,SIHI 2100,2023-01-20,Excellent,2026-03-20
+15,MOTOR-003,Electric Motor 3HP,Motor,Building B - Room 201,Operations,SN-2024-015,Siemens,1LE0,2021-12-05,Good,2026-02-12
+16,MOTOR-004,Electric Motor 10HP,Motor,Building B - Room 202,Operations,SN-2024-016,WEG,IE3,2022-03-17,Good,2026-03-01
+17,TANK-003,Storage Tank 2000L,Tank,Building C - Yard,Maintenance,SN-2024-017,Stainless Steel,SS-2000,2019-07-22,Fair,2025-10-30
+18,TANK-004,Storage Tank 250L,Tank,Building D - Yard,Maintenance,SN-2024-018,Mild Steel,MS-250,2021-09-08,Good,2026-01-10
+19,HEAT-003,Plate Heat Exchanger,Heat Exchanger,Building D - Room 302,Operations,SN-2024-019,Xylem,PH-200,2020-06-15,Good,2026-02-22
+20,HEAT-004,Shell Tube Exchanger,Heat Exchanger,Building B - Room 203,Operations,SN-2024-020,API,ST-300,2019-10-20,Fair,2025-11-15
+21,COMP-003,Rotary Screw Compressor,Compressor,Building C - Room 204,Maintenance,SN-2024-021,Gardner Denver,NG-20,2020-12-12,Good,2026-02-08
+22,COMP-004,Reciprocating Compressor,Compressor,Building D - Room 303,Maintenance,SN-2024-022,Quincy,QT-7.5,2021-02-28,Good,2026-03-15
+23,FAN-003,Centrifugal Fan Type C,Fan,Building B - Room 204,HVAC,SN-2024-023,Systemair,CF-600,2021-04-10,Good,2026-02-18
+24,FAN-004,Inline Duct Fan,Fan,Building C - Room 205,HVAC,SN-2024-024,Soler Palau,IF-400,2022-06-25,Excellent,2026-03-22
+25,PUMP-005,Submersible Pump,Pump,Building A - Basement,Operations,SN-2024-025,Grundfos,SP-15,2023-02-14,Excellent,2026-03-25
+26,MOTOR-005,DC Motor 2HP,Motor,Building A - Room 106,Operations,SN-2024-026,Siemens,MDT,2021-05-19,Good,2026-02-25
+27,TANK-005,Pressurized Tank,Tank,Building B - Room 205,Maintenance,SN-2024-027,Zilmet,XT-100,2020-11-03,Good,2026-01-28
+28,TANK-006,Open Tank 1000L,Tank,Building C - Basement,Maintenance,SN-2024-028,Fiberglass,FG-1000,2019-08-16,Fair,2025-12-10
+29,HEAT-005,Air Cooled Condenser,Heat Exchanger,Building D - Yard,Operations,SN-2024-029,Thermal Transfer,ACC-500,2020-04-09,Good,2026-02-14
+30,HEAT-006,Water Cooled Condenser,Heat Exchanger,Building A - Room 107,Operations,SN-2024-030,Colmac,WCC-400,2021-03-22,Good,2026-03-08
+31,COMP-005,Variable Speed Compressor,Compressor,Building B - Room 206,Maintenance,SN-2024-031,Ingersoll Rand,M50,2021-11-14,Good,2026-02-20
+32,COMP-006,Single Stage Compressor,Compressor,Building C - Room 206,Maintenance,SN-2024-032,Schulz,MSL7,2022-08-30,Good,2026-03-18
+33,FAN-005,Mixed Flow Fan,Fan,Building A - Room 108,HVAC,SN-2024-033,Flakt Woods,MF-800,2021-07-05,Good,2026-02-28
+34,FAN-006,Backward Curved Fan,Fan,Building B - Room 207,HVAC,SN-2024-034,Nicotra,BC-600,2022-01-16,Good,2026-03-10
+35,PUMP-006,Progressive Cavity Pump,Pump,Building C - Room 207,Operations,SN-2024-035,Netzsch,NM-038,2023-03-28,Excellent,2026-04-01
+36,MOTOR-006,Variable Speed Motor,Motor,Building D - Room 304,Operations,SN-2024-036,ABB,AEVS-XE,2022-02-11,Excellent,2026-03-20
+37,TANK-007,Buffer Tank 100L,Tank,Building A - Room 109,Maintenance,SN-2024-037,Caleffi,MT-100,2021-06-24,Good,2026-02-15
+38,TANK-008,Expansion Tank 50L,Tank,Building B - Room 208,Maintenance,SN-2024-038,Caleffi,ET-50,2022-04-17,Good,2026-03-05
+39,HEAT-007,Immersion Heater,Heat Exchanger,Building C - Room 208,Operations,SN-2024-039,Chromalox,IH-3KW,2020-08-29,Good,2026-01-30
+40,HEAT-008,Circulator Pump,Heat Exchanger,Building D - Room 305,Operations,SN-2024-040,Grundfos,UPS3,2021-09-12,Good,2026-02-20
+41,COMP-007,Oil Free Compressor,Compressor,Building A - Room 110,Maintenance,SN-2024-041,Mann+Hummel,OF-8,2021-01-25,Good,2026-03-12
+42,COMP-008,Oil Lubricated Compressor,Compressor,Building B - Room 209,Maintenance,SN-2024-042,Fusheng,SC30,2022-05-08,Good,2026-03-15
+43,FAN-007,Tubular Fan,Fan,Building C - Room 209,HVAC,SN-2024-043,Xpelair,TB-4,2021-10-19,Good,2026-02-22
+44,FAN-008,Box Fan,Fan,Building D - Room 306,HVAC,SN-2024-044,Panasonic,BF-25,2022-07-03,Good,2026-03-18
+45,PUMP-007,Piston Pump,Pump,Building A - Room 111,Operations,SN-2024-045,Parker,PV,2023-04-12,Excellent,2026-04-10
+46,MOTOR-007,Brake Motor,Motor,Building B - Room 210,Operations,SN-2024-046,Bühler Motor,BRM2,2021-08-01,Good,2026-02-18
+47,TANK-009,Accumulator 10L,Tank,Building C - Room 210,Maintenance,SN-2024-047,Hydac,SB-10,2020-12-22,Good,2026-01-25
+48,TANK-010,Membrane Tank 20L,Tank,Building D - Room 307,Maintenance,SN-2024-048,Zilmet,MT-20,2021-10-05,Good,2026-02-28
+49,HEAT-009,Fin Tube Heater,Heat Exchanger,Building A - Room 112,Operations,SN-2024-049,Convoy,FTH-5,2020-07-14,Good,2026-02-05
+50,HEAT-010,Panel Heater,Heat Exchanger,Building B - Yard,Operations,SN-2024-050,Dimplex,PH-2KW,2021-11-26,Good,2026-03-02
+51,COMP-009,Belt Driven Compressor,Compressor,Building C - Room 211,Maintenance,SN-2024-051,Champion,BD-10,2021-03-10,Good,2026-03-08
+52,COMP-010,Direct Driven Compressor,Compressor,Building D - Room 308,Maintenance,SN-2024-052,FS Curtis,DD-7.5,2022-09-17,Excellent,2026-03-28
+53,FAN-009,Wall Mount Fan,Fan,Building A - Room 113,HVAC,SN-2024-053,Dimplex,WF-20,2021-12-08,Good,2026-03-08
+54,FAN-010,Floor Mount Fan,Fan,Building B - Room 211,HVAC,SN-2024-054,Honeywell,FM-30,2022-02-22,Good,2026-03-15
+55,PUMP-008,Vane Pump,Pump,Building C - Room 212,Operations,SN-2024-055,Eaton,PVH,2023-05-19,Excellent,2026-04-15
+56,MOTOR-008,Synchronous Motor,Motor,Building D - Room 309,Operations,SN-2024-056,Toshiba,SYN-50,2022-01-30,Good,2026-03-12
+57,TANK-011,Surge Tank 500L,Tank,Building A - Basement 2,Maintenance,SN-2024-057,Steel,SG-500,2020-09-18,Fair,2025-12-28
+58,TANK-012,Retention Tank 750L,Tank,Building B - Basement,Maintenance,SN-2024-058,Composite,RT-750,2019-05-11,Fair,2025-11-20
+59,HEAT-011,Immersion Element,Heat Exchanger,Building C - Room 213,Operations,SN-2024-059,Watlow,IE-6KW,2021-02-07,Good,2026-02-15
+60,HEAT-012,Thermostat Control,Heat Exchanger,Building D - Yard 2,Operations,SN-2024-060,Johnson Controls,TC-24,2021-07-29,Good,2026-03-09

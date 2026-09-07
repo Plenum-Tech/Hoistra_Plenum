@@ -1,0 +1,161 @@
+{
+  "version": "1.0",
+  "source_system": "Fiix",
+  "customer_id": null,
+  "description": "Fiix CMMS asset inventory mapping template",
+  "canonical_fields": {
+    "asset_id": "Unique identifier for asset (Primary Key)",
+    "asset_code": "Human-readable asset code or tag",
+    "asset_name": "Display name or description of asset",
+    "asset_type": "Category of asset (pump, motor, fan, compressor, etc.)",
+    "location_id": "Foreign key to location table",
+    "location_description": "Site location (building, room, facility)",
+    "department_id": "Foreign key to department table",
+    "department_name": "Department or division name",
+    "serial_number": "Manufacturer serial number",
+    "manufacturer_name": "Equipment manufacturer",
+    "model_number": "Equipment model or part number",
+    "acquisition_date": "Asset purchase or acquisition date",
+    "condition_status": "Operational status (good, fair, poor)",
+    "last_maintenance_date": "Date of last service or maintenance"
+  },
+  "vendor_aliases": {
+    "asset_id": [
+      "id",
+      "asset_id",
+      "assetid",
+      "ID",
+      "Asset ID"
+    ],
+    "asset_code": [
+      "code",
+      "asset_code",
+      "tag",
+      "asset_tag",
+      "Code",
+      "Tag"
+    ],
+    "asset_name": [
+      "name",
+      "description",
+      "asset_name",
+      "Name",
+      "Description"
+    ],
+    "asset_type": [
+      "type",
+      "category",
+      "asset_type",
+      "asset_category",
+      "Type",
+      "Category"
+    ],
+    "location_description": [
+      "location",
+      "site",
+      "facility",
+      "location_name",
+      "Location",
+      "Site",
+      "Facility"
+    ],
+    "department_name": [
+      "department",
+      "team",
+      "division",
+      "Department",
+      "Team",
+      "Division"
+    ],
+    "serial_number": [
+      "serial",
+      "serial_number",
+      "sn",
+      "Serial",
+      "Serial Number"
+    ],
+    "manufacturer_name": [
+      "manufacturer",
+      "brand",
+      "make",
+      "Manufacturer",
+      "Brand",
+      "Make"
+    ],
+    "model_number": [
+      "model",
+      "model_number",
+      "part_number",
+      "Model",
+      "Part Number"
+    ],
+    "acquisition_date": [
+      "purchase_date",
+      "acquired_date",
+      "installation_date",
+      "date_acquired",
+      "purchase_date",
+      "Purchase Date"
+    ],
+    "condition_status": [
+      "condition",
+      "status",
+      "health",
+      "Condition",
+      "Status",
+      "Health"
+    ],
+    "last_maintenance_date": [
+      "last_service_date",
+      "last_maintenance",
+      "last_check",
+      "last_service_date",
+      "Last Service Date"
+    ]
+  },
+  "regex_patterns": {
+    "asset_id": {
+      "patterns": [
+        "^id$",
+        "^asset.*id$"
+      ],
+      "confidence": 0.92,
+      "description": "Match ID or asset ID fields"
+    },
+    "asset_code": {
+      "patterns": [
+        "^code$",
+        "^tag$",
+        "^asset.*code$"
+      ],
+      "confidence": 0.90,
+      "description": "Match code or tag fields"
+    },
+    "location_description": {
+      "patterns": [
+        "^location",
+        "^site",
+        "^facility"
+      ],
+      "confidence": 0.85,
+      "description": "Match location-related fields"
+    },
+    "serial_number": {
+      "patterns": [
+        "^serial"
+      ],
+      "confidence": 0.90,
+      "description": "Match serial number fields"
+    }
+  },
+  "custom_transformations": null,
+  "excluded_fields": [
+    "internal_notes",
+    "system_flag",
+    "deleted_at"
+  ],
+  "confidence_overrides": {
+    "asset_id": 0.99,
+    "asset_code": 0.95
+  }
+}

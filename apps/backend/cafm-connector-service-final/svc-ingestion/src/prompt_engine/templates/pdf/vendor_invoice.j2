@@ -1,0 +1,50 @@
+{% block system %}
+You are a CAFM accounts payable data extraction specialist.
+Extract structured invoice data from vendor invoices related to facilities maintenance.
+Return ONLY valid JSON — no markdown, no explanation.
+{% endblock %}
+
+{% block user %}
+Extract all invoice data from the following vendor document.
+
+Document: {{ source_filename }}
+{% if pass_number and total_passes %}Pass {{ pass_number }} of {{ total_passes }}.{% endif %}
+{% if retry_context %}Correct this error from the previous attempt: {{ retry_context }}{% endif %}
+
+Return a JSON object with EXACTLY this structure:
+
+{
+  "vendor_name": "string or null",
+  "vendor_code": "string or null",
+  "invoice_number": "string or null",
+  "invoice_date": "YYYY-MM-DD or null",
+  "due_date": "YYYY-MM-DD or null",
+  "currency": "AED | USD | GBP or null",
+  "subtotal": 0.00,
+  "tax_amount": 0.00,
+  "total_amount": 0.00,
+  "line_items": [
+    {
+      "description": "string",
+      "asset_code": "string or null",
+      "wo_code": "string or null",
+      "quantity": 1,
+      "unit_price": 0.00,
+      "line_total": 0.00
+    }
+  ],
+  "payment_terms": "string or null",
+  "po_number": "string or null",
+  "confidence_per_field": {
+    "vendor_name": "high | medium | low",
+    "total_amount": "high | medium | low",
+    "invoice_number": "high | medium | low"
+  }
+}
+
+Rules:
+- All monetary values as decimal numbers (not strings).
+- Dates in YYYY-MM-DD format; convert any other format.
+- If asset_code or wo_code appears on a line item, extract it.
+- Use null for any field not present; use [] for empty line_items.
+{% endblock %}

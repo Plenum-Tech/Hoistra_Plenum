@@ -1,0 +1,50 @@
+# asset_rules.yaml
+# EL-5.CONSTRAIN hard rules for Asset Agent
+# Rules fire in order. All conditions within a rule use AND logic.
+# Hard rules ALWAYS override AI vote — no exceptions.
+
+rules:
+  - name: open_wo_highest_priority_critical
+    description: >
+      3+ open WOs and at least one Highest priority → status = critical.
+      Known state: 17 open WOs, 4 at Highest priority.
+    conditions:
+      - type: count_where_gte
+        field: wo_status
+        operator: eq
+        value: "Open"
+        threshold: 3
+      - type: any_row_where
+        field: wo_priority
+        operator: eq
+        value: "Highest"
+    action:
+      set_status: critical
+
+  - name: overdue_pm_no_completion_at_risk
+    description: >
+      Asset has a scheduled PM and last_pm_date > 90 days ago → at_risk
+      (overrides AI if AI said operational).
+    conditions:
+      - type: any_row_where
+        field: has_scheduled_pm
+        operator: eq
+        value: true
+      - type: any_row_where
+        field: pm_overdue_days
+        operator: gte
+        value: 90
+    action:
+      set_status: at_risk
+
+  - name: missing_asset_code_halt
+    description: >
+      Asset code is null — hard stop, do not pass to Layer 6.
+    conditions:
+      - type: any_row_where
+        field: asset_code
+        operator: is_null
+        value: null
+    action:
+      set_status: critical
+      requires_human_review: true

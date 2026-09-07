@@ -1,0 +1,52 @@
+# contradiction_rules.yaml
+#
+# YAML-configurable contradiction detection rules for EL-2.3 (rule engine pass).
+# Each rule fires when condition_field == condition_value AND
+# contradicted_by == contradicted_value (or 'any').
+#
+# Adding new rules here requires NO code changes.
+#
+# Field paths: simple key names that appear inside entity dicts.
+# Entities checked: all entities flattened across assets, findings, work_orders, etc.
+
+rules:
+  # ── Inspection findings contradictions ───────────────────────────────────────
+
+  - name: normal_reading_critical_severity
+    condition_field: observations
+    condition_value: "normal"
+    contradicted_by: severity
+    contradicted_value: "critical"
+    message: "Normal reading contradicts Critical severity — verify finding"
+
+  - name: normal_observation_high_risk
+    condition_field: observations
+    condition_value: "normal"
+    contradicted_by: risk_level
+    contradicted_value: "high"
+    message: "Normal observation contradicts High risk level — verify finding"
+
+  - name: pass_status_with_corrective_action
+    condition_field: status
+    condition_value: "pass"
+    contradicted_by: corrective_action
+    contradicted_value: "true"
+    message: "Pass status contradicts corrective_action=true — verify inspection record"
+
+  # ── Asset reading contradictions ──────────────────────────────────────────────
+
+  - name: operational_asset_critical_reading
+    condition_field: status
+    condition_value: "operational"
+    contradicted_by: reading_type
+    contradicted_value: "critical"
+    message: "Operational asset status contradicts critical reading type"
+
+  # ── Work order contradictions ─────────────────────────────────────────────────
+
+  - name: closed_wo_open_status
+    condition_field: work_order_number
+    condition_value: "any"
+    contradicted_by: status
+    contradicted_value: "closed"
+    message: "WO marked closed but priority indicates open escalation"

@@ -1,0 +1,1597 @@
+{
+  "_meta": {
+    "description": "Universal deterministic alias registry — seeded from CMMS_ALIASES, grows via approved semantic matches. Covers: Maximo, Fiix, SAP PM, Archibus, and learned aliases.",
+    "learned_count": 2,
+    "total_mappings": 198,
+    "updated_at": "2026-04-17T12:42:52.708763+00:00",
+    "version": 1
+  },
+  "mappings": {
+    "asset_class": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "asset_description": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "asset_id": {
+      "approved_at": "2026-04-16T15:15:24.496743+00:00",
+      "approved_by": "human",
+      "canonical": "asset_id",
+      "confidence": 0.7616,
+      "migration_id": "2639ece9-d3b8-444d-8089-b2d50181a041",
+      "source_cmms": "Custom",
+      "tier": "semantic_approved"
+    },
+    "asset_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assetclass": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "assetid": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "assetname": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "assetnum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "assetstatus": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_status",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assettype": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assigned": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assigned_to": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assigned_user": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "assignedto": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "astatus": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_status",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "aufnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "auftext": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "available_qty": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "bin_qty": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "bl_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "bom_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "bom_group_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "bom_group": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "bom_group_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "bomcode": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "bom_group_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "building_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "class": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "created": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "created_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "created_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "created_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "createddate": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "created_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "due": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "due_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "due_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "due_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "duedate": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "due_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_brand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "make",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_category": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_model": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_sn": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "em_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "eqktx": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "eqnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "eqtyp": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equip_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equip_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equipment_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equipment_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equipment_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "equnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "erdat": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "created_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "fl_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "floor_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "frequency": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "schedule_interval",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "full_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_full_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "fälldatum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "due_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "herst": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "make",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "iaw": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "inaktiv_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "interval": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "schedule_interval",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "issue_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "issue_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "item_num": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "itemdesc": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "itemnum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "job_title": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_title",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "jobtitle": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_title",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "klart": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "labst": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "last_completion": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "last_completion_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "last_pm_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "lastcompdate": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "lastpmdate": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "lifnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "location": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "login": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "maintenance_plan": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "maintenance_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "maktx": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "manager": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "reports_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "manufacturer": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "make",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "manufacturer_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "make",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "matnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "meins": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "min_allowed": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "min_qty": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "minbestand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "minimum_qty": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "model_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "modellnummer": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "modelnum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "mtart": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "parent_asset": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "parent_asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "parent_assetnum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "parent_asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_desc": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_description": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_num": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "part_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "partcode": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "person_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_full_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "personname": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_full_name",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "plan_category": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "plan_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "plant_location": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pldnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "plkat": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pm_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pm_num": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pm_priority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pm_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pmnumplan": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "pmpriority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pmschedule": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "schedule_interval",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "pmtype": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "priok": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "priority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "priority_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "qty_on_hand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "qty_onhand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "quantity_on_hand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "reorder_point": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "reports_to": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "reports_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "reportsto": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "reports_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "req_priority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_priority",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "request_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "rm_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "room_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "schedule_interval": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "schedule_interval",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "serial_no": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "serial_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "serialnumber": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "seriennummer": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "site_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "siteid": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "sitename": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "sn": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "supervisor": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "reports_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "supplier_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "supplier_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "technician": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "title": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_title",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "tplnr": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "trigger": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "typbez": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "typvrt": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "unit": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "unit_measure": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "unit_of_measure": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "uom": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "user_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "username": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "user_name",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "vendor": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "vendor_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "warranty_expiry": {
+      "approved_at": "2026-04-17T12:42:52.708250+00:00",
+      "approved_by": "human",
+      "canonical": "warranty_expiry",
+      "confidence": 0.7636,
+      "migration_id": "d630538d-f394-443e-b429-2f4504a7f9d9",
+      "source_cmms": "Custom",
+      "tier": "semantic_approved"
+    },
+    "wartype": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "werks": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "wo_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "wo_status": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_status",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "wonum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "wopriority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_priority",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "work_order_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "work_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "work_type_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_type",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "workdescription": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_description",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "workordernum": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Generic",
+      "tier": "alias"
+    },
+    "worktype": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_type",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "wostatus": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_status",
+      "confidence": 0.97,
+      "source_cmms": "Maximo",
+      "tier": "alias"
+    },
+    "xasset_category": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "category",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xasset_description": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xasset_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_name",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xasset_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_type",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xassetid": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xassets": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xassigned_user": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "assigned_to",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xcreated_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "created_date",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xdescription": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_description",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xdue_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "due_date",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xfrequency": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "schedule_interval",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xlast_pm_date": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "last_completion_date",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xlocation_name": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xlocationid": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "location_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xmanufacturer": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "make",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xmin_qty": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "minimum_allowed_stock",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xmodel": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "model",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xparent_asset": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "parent_asset_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xpart_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xpart_description": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "part_description",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xpm_code": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xpm_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "trigger_type",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xpriority": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "sm_priority",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xqty_on_hand": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "stock_on_hand",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xserial_number": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "serial",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xstatus": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "asset_status",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xsupplier": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "supplier",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xuom": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "unit_of_measure",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xwo_id": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xwo_status": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_status",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xwork_type": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_type",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    },
+    "xworkorders": {
+      "approved_at": "2026-04-13T00:00:00Z",
+      "approved_by": "seed",
+      "canonical": "wo_code",
+      "confidence": 0.97,
+      "source_cmms": "Fiix",
+      "tier": "alias"
+    }
+  }
+}

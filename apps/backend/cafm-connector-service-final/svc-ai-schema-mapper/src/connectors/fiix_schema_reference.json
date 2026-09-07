@@ -1,0 +1,1552 @@
+{
+  "source": "Fiix CMMS API (fiixCmmsClient) — object/field reference",
+  "note": "Authoritative Fiix source schema. plenum_table is the CAFM target (null = lookup/junction, not ingested). Generated from OBJECT_FIELDS + OBJECT_TABLE_MAP; keep in sync.",
+  "object_count": 88,
+  "objects": {
+    "Account": {
+      "fiix_object": "Account",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "Asset": {
+      "fiix_object": "Asset",
+      "plenum_table": "assets",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "strCode",
+        "strDescription",
+        "strMake",
+        "strModel",
+        "strSerialNumber",
+        "strBarcode",
+        "strInventoryCode",
+        "strAddress",
+        "strCity",
+        "strProvince",
+        "strPostalCode",
+        "strNotes",
+        "strBinNumber",
+        "strRow",
+        "strAisle",
+        "strStockLocation",
+        "strShippingTerms",
+        "strCriticality",
+        "strUnspcCode",
+        "strQuotingTerms",
+        "strRFQTriggerSiteLevelSetting",
+        "strMASourceProduct",
+        "strCustomerIds",
+        "strVendorIds",
+        "qtyMinStockCount",
+        "qtyStockCount",
+        "dblLatitude",
+        "dblLongitude",
+        "dblLastPrice",
+        "intSiteID",
+        "intAssetLocationID",
+        "intAssetParentID",
+        "intCategoryID",
+        "intSuperCategorySysCode",
+        "intAccountID",
+        "intChargeDepartmentID",
+        "intCountryID",
+        "intKind",
+        "bolIsSite",
+        "bolIsOnline",
+        "bolIsRegion",
+        "bolIsBillToFacility",
+        "bolIsShippingOrReceivingFacility",
+        "dtmCreated",
+        "intUpdated"
+      ],
+      "column_count": 47
+    },
+    "AssetBusiness": {
+      "fiix_object": "AssetBusiness",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intBusinessID",
+        "intBusinessRoleTypeID",
+        "intAssetID",
+        "intBusinessGroupID",
+        "bolSendRFQs",
+        "bolPreferredVendor",
+        "qtyEconomicBatchQuantity",
+        "strBusinessAssetNumber"
+      ],
+      "column_count": 9
+    },
+    "AssetCategory": {
+      "fiix_object": "AssetCategory",
+      "plenum_table": "asset_categories",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intParentID",
+        "strName",
+        "intSysCode",
+        "bolOverrideRules",
+        "intUpdated"
+      ],
+      "column_count": 6
+    },
+    "AssetClassification": {
+      "fiix_object": "AssetClassification",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intSiteID",
+        "qtyAnnualUsage",
+        "intClassificationID"
+      ],
+      "column_count": 5
+    },
+    "AssetClassificationLog": {
+      "fiix_object": "AssetClassificationLog",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intSiteID",
+        "dtmDateApplied",
+        "intClassificationID"
+      ],
+      "column_count": 5
+    },
+    "AssetConsumingReference": {
+      "fiix_object": "AssetConsumingReference",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intConsumesAssetID",
+        "intBOMControlID",
+        "intAssetID",
+        "intBOMPartControlID",
+        "qtyMaxConsumption",
+        "intUpdated"
+      ],
+      "column_count": 7
+    },
+    "AssetEvent": {
+      "fiix_object": "AssetEvent",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "dtmDateSubmitted",
+        "intAssetEventTypeID",
+        "intAssetID",
+        "intSubmittedByUserID",
+        "intWorkOrderID",
+        "strAdditionalDescription"
+      ],
+      "column_count": 7
+    },
+    "AssetEventType": {
+      "fiix_object": "AssetEventType",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strEventCode",
+        "strEventDescription",
+        "strEventName"
+      ],
+      "column_count": 4
+    },
+    "AssetOfflineTracker": {
+      "fiix_object": "AssetOfflineTracker",
+      "plenum_table": "asset_offline_log",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intWorkOrderID",
+        "intReasonOfflineID",
+        "intReasonOnlineID",
+        "intSetOfflineByUserID",
+        "intSetOnlineByUserID",
+        "dtmOfflineFrom",
+        "dtmOffLineTo",
+        "dblProductionHoursAffected",
+        "strOfflineAdditionalInfo",
+        "strOnlineAdditionalInfo",
+        "intUpdated"
+      ],
+      "column_count": 13
+    },
+    "AssetUser": {
+      "fiix_object": "AssetUser",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intAssetUserTypeID",
+        "dtmDateAdded",
+        "intUserID",
+        "intAssetID"
+      ],
+      "column_count": 5
+    },
+    "BOMGroup": {
+      "fiix_object": "BOMGroup",
+      "plenum_table": "bom_groups",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "dtmLastUpdated",
+        "intCreatedByUserID",
+        "intLastUpdatedByUserID"
+      ],
+      "column_count": 5
+    },
+    "BOMGroupPart": {
+      "fiix_object": "BOMGroupPart",
+      "plenum_table": "bom_group_parts",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intBOMGroupID",
+        "qtyMaxConsumption"
+      ],
+      "column_count": 4
+    },
+    "BillingTerm": {
+      "fiix_object": "BillingTerm",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intUpdated"
+      ],
+      "column_count": 3
+    },
+    "Business": {
+      "fiix_object": "Business",
+      "plenum_table": "vendors",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "strCode",
+        "strAddress",
+        "strCity",
+        "strProvince",
+        "strPostalCode",
+        "strTimezone",
+        "strPhone",
+        "strPhone2",
+        "strFax",
+        "strPrimaryEmail",
+        "strSecondaryEmail",
+        "strPrimaryContact",
+        "strNotes",
+        "intCountryID",
+        "intPrimaryCurrencyID",
+        "intUpdated"
+      ],
+      "column_count": 18
+    },
+    "BusinessClassification": {
+      "fiix_object": "BusinessClassification",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName"
+      ],
+      "column_count": 2
+    },
+    "BusinessGroup": {
+      "fiix_object": "BusinessGroup",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "bolIsDefaultManufacturer",
+        "bolIsDefaultSupplier",
+        "intRelationshipType"
+      ],
+      "column_count": 5
+    },
+    "BusinessRole": {
+      "fiix_object": "BusinessRole",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intBusinessID",
+        "intBusinessGroupID"
+      ],
+      "column_count": 3
+    },
+    "CalendarEvent": {
+      "fiix_object": "CalendarEvent",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intScheduledMaintenanceID",
+        "intScheduleTriggerID",
+        "dtmDate"
+      ],
+      "column_count": 4
+    },
+    "ChargeDepartment": {
+      "fiix_object": "ChargeDepartment",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "intFacilityID",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "Country": {
+      "fiix_object": "Country",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strMid",
+        "strName",
+        "strShort2",
+        "strShort"
+      ],
+      "column_count": 5
+    },
+    "Currency": {
+      "fiix_object": "Currency",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strDescription",
+        "strISOCode",
+        "strName",
+        "strSymbol"
+      ],
+      "column_count": 5
+    },
+    "CycleCount": {
+      "fiix_object": "CycleCount",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "bolComplete",
+        "bolIncludeClassA",
+        "bolIncludeClassB",
+        "bolIncludeClassC",
+        "bolIncludeNotClassified",
+        "dblGrossVariance",
+        "dblNetVariance",
+        "dblTotalValueCounted",
+        "dblTotalValueExpected",
+        "dtmCompleted",
+        "dtmCreated",
+        "intCompletedBy",
+        "intCreatedBy",
+        "intSiteID",
+        "strAisle",
+        "strRow",
+        "strBin",
+        "intUpdated"
+      ],
+      "column_count": 19
+    },
+    "File": {
+      "fiix_object": "File",
+      "plenum_table": "files",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intFileTypeID",
+        "strName",
+        "intSize",
+        "strNotes",
+        "intFileContentsID",
+        "intAssetID",
+        "intPurchaseOrderID",
+        "intScheduledMaintenanceID",
+        "strLink",
+        "intUpdated"
+      ],
+      "column_count": 12
+    },
+    "FileContents": {
+      "fiix_object": "FileContents",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "strMimeType",
+        "intSize",
+        "intSysCode"
+      ],
+      "column_count": 5
+    },
+    "InventoryTransaction": {
+      "fiix_object": "InventoryTransaction",
+      "plenum_table": "inventory_transactions",
+      "ingested": true,
+      "columns": [
+        "id",
+        "dblCostPerUnit",
+        "dblTotalCost",
+        "dtmDate",
+        "intInventoryChargeID",
+        "intInventoryChargedForID",
+        "intInventoryChargedFromID",
+        "intStockTxTypeID",
+        "qtyTxQuantity"
+      ],
+      "column_count": 9
+    },
+    "MaintenanceType": {
+      "fiix_object": "MaintenanceType",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intSysCode",
+        "strColor",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "MeterReading": {
+      "fiix_object": "MeterReading",
+      "plenum_table": "meter_readings",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intWorkOrderID",
+        "intSubmittedByUserID",
+        "intMeterReadingUnitsID",
+        "dblMeterReading",
+        "dtmDateSubmitted",
+        "intUpdated"
+      ],
+      "column_count": 8
+    },
+    "MeterReadingUnit": {
+      "fiix_object": "MeterReadingUnit",
+      "plenum_table": "asset_meters",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "strSymbol",
+        "intPrecision",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "MiscCost": {
+      "fiix_object": "MiscCost",
+      "plenum_table": "misc_costs",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intMiscCostTypeID",
+        "strDescription",
+        "dblActualTotalCost",
+        "dblActualUnitCost",
+        "dblEstimatedTotalCost",
+        "dblEstimatedUnitCost",
+        "qtyEstQuantity",
+        "qtyQuantity",
+        "intUpdated"
+      ],
+      "column_count": 11
+    },
+    "MiscCostType": {
+      "fiix_object": "MiscCostType",
+      "plenum_table": "misc_cost_types",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "intUpdated"
+      ],
+      "column_count": 3
+    },
+    "Move": {
+      "fiix_object": "Move",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intDestinationTypeID",
+        "intAssetDestinationID",
+        "intUserDestinationID",
+        "intBusinessDestinationID",
+        "intWorkOrderDestinationID",
+        "intProjectDestinationID",
+        "intSiteID",
+        "intFromSiteID",
+        "intMoveStatusID",
+        "intRequestedByID",
+        "intMovedByID",
+        "intConfirmedByID",
+        "intRejectedByID",
+        "strAisle",
+        "strRow",
+        "strBin",
+        "strNotes",
+        "dtmDateRequested",
+        "dtmMoveDate",
+        "dtmDateConfirmed",
+        "dtmDateRejected"
+      ],
+      "column_count": 22
+    },
+    "MoveAsset": {
+      "fiix_object": "MoveAsset",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intMoveID",
+        "intSiteID",
+        "intMovedFromID",
+        "intReasonOfflineID",
+        "intReasonOnlineID",
+        "bolAway",
+        "bolPending",
+        "bolSetOffline",
+        "bolSetOnline",
+        "bolExclude",
+        "dtmReturnDate",
+        "dtmDateReturned",
+        "strFromAisle",
+        "strFromRow",
+        "strFromBin",
+        "strNotes"
+      ],
+      "column_count": 18
+    },
+    "MoveBack": {
+      "fiix_object": "MoveBack",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intMovedBackByUserID",
+        "intRequestedByID",
+        "intConfirmedByID",
+        "intRejectedByID",
+        "intMoveStatusID",
+        "intFromSiteID",
+        "intSiteID",
+        "dtmMoveBackDate",
+        "dtmDateRequested",
+        "dtmDateConfirmed",
+        "dtmDateCanceled",
+        "strNotes"
+      ],
+      "column_count": 13
+    },
+    "MoveBackAsset": {
+      "fiix_object": "MoveBackAsset",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intMoveBackID",
+        "intOriginalMoveAssetID",
+        "intReasonOnlineID",
+        "intReasonOfflineID",
+        "intSiteID",
+        "bolPending",
+        "bolSetBackOnline",
+        "bolSetBackOffline",
+        "bolExclude",
+        "strToAisle",
+        "strToBin",
+        "strToRow",
+        "strNotes"
+      ],
+      "column_count": 15
+    },
+    "MoveSiteManager": {
+      "fiix_object": "MoveSiteManager",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSiteID",
+        "intUserID"
+      ],
+      "column_count": 3
+    },
+    "MoveStatus": {
+      "fiix_object": "MoveStatus",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSysCode",
+        "strDefaultLabel",
+        "strName"
+      ],
+      "column_count": 4
+    },
+    "Priority": {
+      "fiix_object": "Priority",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intOrder",
+        "intSysCode",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "Project": {
+      "fiix_object": "Project",
+      "plenum_table": "projects",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intSiteID",
+        "strName",
+        "strDescription",
+        "dtmProjectedStartDate",
+        "dtmProjectedEndDate",
+        "dtmActualStartDate",
+        "dtmActualEndDate"
+      ],
+      "column_count": 8
+    },
+    "PurchaseOrder": {
+      "fiix_object": "PurchaseOrder",
+      "plenum_table": "purchase_orders",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intCode",
+        "intSupplierID",
+        "intPurchaseOrderStatusID",
+        "intSiteID",
+        "intBillingTermID",
+        "intChargeDepartmentID",
+        "intCreatedByUserID",
+        "intLastUpdatedUserID",
+        "intAccountID",
+        "intAssetID",
+        "intBillToID",
+        "intBillToCountryID",
+        "intShipToID",
+        "intShipToCountryID",
+        "intSupplierCountryID",
+        "intPurchaseCurrencyID",
+        "intWorkOrderID",
+        "intLocationID",
+        "intSendToSupplierMethod",
+        "dblSubtotal",
+        "dblTotal",
+        "dblFreight",
+        "dblTax1",
+        "dblTax2",
+        "strPurchaseOrderReference",
+        "strTransactionID",
+        "strBillToAddress",
+        "strBillToCity",
+        "strBillToPostalCode",
+        "strBillToProvince",
+        "strShipToAddress",
+        "strShipToCity",
+        "strShipToPostalCode",
+        "strShipToProvince",
+        "strSupplierAddress",
+        "strSupplierCity",
+        "strSupplierPostalCode",
+        "strSupplierProvince",
+        "dtmDateCreated",
+        "dtmDateSubmitted",
+        "dtmDateExpectedDelivery",
+        "dtmDateReceived",
+        "dtmDateRequiredBy",
+        "dtmDateLastUpdated",
+        "intUpdated"
+      ],
+      "column_count": 46
+    },
+    "PurchaseOrderAdditionalCost": {
+      "fiix_object": "PurchaseOrderAdditionalCost",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intPurchaseOrderID",
+        "intPurchaseOrderAdditionalCostTypeID",
+        "intShippingTypeID",
+        "intBusinessID",
+        "strDescription",
+        "bolOverridePoLineItemTax",
+        "dblTaxRate",
+        "dblPrice"
+      ],
+      "column_count": 9
+    },
+    "PurchaseOrderAdditionalCostType": {
+      "fiix_object": "PurchaseOrderAdditionalCostType",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intControlID",
+        "intSysCode",
+        "strName",
+        "bolAlwaysShowOnNewPo"
+      ],
+      "column_count": 5
+    },
+    "PurchaseOrderLineItem": {
+      "fiix_object": "PurchaseOrderLineItem",
+      "plenum_table": "purchase_order_lines",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intPurchaseOrderID",
+        "intStockID",
+        "intAssetID",
+        "intAccountID",
+        "intChargeDepartmentID",
+        "intRequestedByUserID",
+        "intShipToLocationID",
+        "intSiteID",
+        "intSourceAssetID",
+        "intSourceWorkOrderID",
+        "intStockHistoryID",
+        "intSupplierID",
+        "intParentPurchaseOrderLineItemID",
+        "strDescription",
+        "qtyOnOrder",
+        "qtyRecieved",
+        "dblUnitPrice",
+        "dblTaxRate",
+        "dblRemoteOrgUnitPrice",
+        "bolAddedDirectlyToPurchaseOrder",
+        "bolProductionEquipmentDownWhileOnOrder",
+        "dtmDateCreated",
+        "dtmRequiredByDate",
+        "intUpdated"
+      ],
+      "column_count": 25
+    },
+    "PurchaseOrderLog": {
+      "fiix_object": "PurchaseOrderLog",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intPurchaseOrderID",
+        "intFromStatusId",
+        "intToStatusId",
+        "intUserID",
+        "dtmDateLogged"
+      ],
+      "column_count": 6
+    },
+    "PurchaseOrderStatus": {
+      "fiix_object": "PurchaseOrderStatus",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSysCode",
+        "intControlID",
+        "strDefaultLabel",
+        "strName",
+        "intUpdated"
+      ],
+      "column_count": 6
+    },
+    "RCAAction": {
+      "fiix_object": "RCAAction",
+      "plenum_table": "rca_actions",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "bolActive",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "RCACause": {
+      "fiix_object": "RCACause",
+      "plenum_table": "rca_causes",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "bolActive",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "RCAGrouping": {
+      "fiix_object": "RCAGrouping",
+      "plenum_table": "rca_groupings",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetCategoryID",
+        "intAssetID",
+        "intRCAProblemID",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "RCAGroupingAction": {
+      "fiix_object": "RCAGroupingAction",
+      "plenum_table": "rca_grouping_actions",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intRCAGroupingID",
+        "intRCAActionID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "RCAGroupingCause": {
+      "fiix_object": "RCAGroupingCause",
+      "plenum_table": "rca_grouping_causes",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intRCACauseID",
+        "intRCAGroupingID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "RCAProblem": {
+      "fiix_object": "RCAProblem",
+      "plenum_table": "rca_problems",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "bolActive",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "RFQ": {
+      "fiix_object": "RFQ",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSiteID",
+        "intCode",
+        "intRFQStatusID",
+        "intCreatedByUserID",
+        "intBusinessID",
+        "intSupplierID",
+        "intSupplierCountryID",
+        "intBillToID",
+        "intBillToCountryID",
+        "intShipToID",
+        "intShipToCountryID",
+        "strQuoteReferenceNumber",
+        "strMessageContent",
+        "strMessageSubject",
+        "strSupplierAddress",
+        "strSupplierCity",
+        "strSupplierPostalCode",
+        "strSupplierProvince",
+        "strBillToAddress",
+        "strBillToCity",
+        "strBillToPostalCode",
+        "strBillToProvince",
+        "strShipToAddress",
+        "strShipToCity",
+        "strShipToPostalCode",
+        "strShipToProvince",
+        "dtmDateRequiredResponse",
+        "dtmDateExpectedDelivery",
+        "dtmDateSent"
+      ],
+      "column_count": 30
+    },
+    "RFQLineItem": {
+      "fiix_object": "RFQLineItem",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intRFQID",
+        "intParentRFQLineItemID",
+        "intPurchaseOrderLineItemID",
+        "intAssetID",
+        "strDescription",
+        "strBusinessAssetNumber",
+        "qtyRequested",
+        "qtyQuoted",
+        "dblQuotedPricePerUnit",
+        "dblQuotedPriceTotal"
+      ],
+      "column_count": 11
+    },
+    "RFQStatus": {
+      "fiix_object": "RFQStatus",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "strDefaultLabel",
+        "intSysCode",
+        "intControlID"
+      ],
+      "column_count": 5
+    },
+    "ReasonToSetAssetOffline": {
+      "fiix_object": "ReasonToSetAssetOffline",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intUpdated"
+      ],
+      "column_count": 3
+    },
+    "ReasonToSetAssetOnline": {
+      "fiix_object": "ReasonToSetAssetOnline",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intUpdated"
+      ],
+      "column_count": 3
+    },
+    "Receipt": {
+      "fiix_object": "Receipt",
+      "plenum_table": "receipts",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intCode",
+        "intPurchaseOrderID",
+        "intReceiptStatusID",
+        "intSiteID",
+        "intSupplierID",
+        "intPurchaseCurrencyID",
+        "strPackingSlip",
+        "dtmDateReceived",
+        "dtmDateOrdered",
+        "intUpdated"
+      ],
+      "column_count": 11
+    },
+    "ReceiptLineItem": {
+      "fiix_object": "ReceiptLineItem",
+      "plenum_table": "receipt_line_items",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intReceiptID",
+        "intPurchaseOrderLineItemID",
+        "intStockID",
+        "intAssetID",
+        "intReceiveToStockID",
+        "intReceiveToFacilityID",
+        "intParentReceiptLineItemID",
+        "qtyQuantityReceived",
+        "qtyQuantityOrdered",
+        "dblPurchasePricePerUnit",
+        "strDescription",
+        "dtmDateExpiryOfInventoryItems",
+        "intUpdated"
+      ],
+      "column_count": 14
+    },
+    "ReceiptStatus": {
+      "fiix_object": "ReceiptStatus",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intControlID",
+        "intSysCode",
+        "strDefaultLabel",
+        "intUpdated"
+      ],
+      "column_count": 6
+    },
+    "RegionUser": {
+      "fiix_object": "RegionUser",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intRegionID",
+        "intUserID"
+      ],
+      "column_count": 3
+    },
+    "RegionUserGroup": {
+      "fiix_object": "RegionUserGroup",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intGroupID",
+        "intRegionUserID"
+      ],
+      "column_count": 3
+    },
+    "ReportsToResolved": {
+      "fiix_object": "ReportsToResolved",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intChildID",
+        "intParentID"
+      ],
+      "column_count": 3
+    },
+    "ScheduleTrigger": {
+      "fiix_object": "ScheduleTrigger",
+      "plenum_table": "schedule_triggers",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strType",
+        "strTSType",
+        "strRType",
+        "strROType",
+        "strRRType",
+        "strTRType",
+        "strMrLogic",
+        "strScheduleDescription",
+        "strDatLogicHourly",
+        "strDatLogicDaily",
+        "strDatLogicMonthly",
+        "strDatLogicYearly",
+        "intScheduledMaintenanceID",
+        "intAssetID",
+        "intAssetEventTypeID",
+        "intRMeterReadingUnitID",
+        "intROMeterReadingUnitID",
+        "intRREndAfter",
+        "intTREndAfter",
+        "intTSDEveryDays",
+        "intTSHEveryHours",
+        "intTSMDayOfMonth",
+        "intTSMEveryMonths",
+        "intTSWEveryWeeks",
+        "intTSYDayOfMonth",
+        "intTSYEveryYears",
+        "intTSYMonthOfYear",
+        "intTRTriggerTime",
+        "dblLastMeterReading",
+        "dblRMeterReading",
+        "dblROMeterReading",
+        "dblRREndBy",
+        "dblRRStart",
+        "dtmLastTriggered",
+        "datTRStart",
+        "datTREndBy",
+        "bolTSWMonday",
+        "bolTSWTuesday",
+        "bolTSWWednesday",
+        "bolTSWThursday",
+        "bolTSWFriday",
+        "bolTSWSaturday",
+        "bolTSWSunday",
+        "bolMrByWOClosed",
+        "bolCreateWorkOrderOnStartDate",
+        "intUpdated"
+      ],
+      "column_count": 47
+    },
+    "ScheduledMaintenance": {
+      "fiix_object": "ScheduledMaintenance",
+      "plenum_table": "scheduled_maintenance",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "strCompletionNotes",
+        "intSiteID",
+        "intPriorityID",
+        "intMaintenanceTypeID",
+        "intScheduledMaintenanceStatusID",
+        "intStartAsWorkOrderStatusID",
+        "intProjectID",
+        "intAccountID",
+        "intChargeDepartmentID",
+        "intRequestorUserID",
+        "intSuggestedCompletion",
+        "bolCanFireSMWithOpenWO",
+        "bolWORequiresSignature",
+        "dtmCreateDate",
+        "dtmUpdatedDate",
+        "intUpdated"
+      ],
+      "column_count": 19
+    },
+    "ScheduledMaintenanceAsset": {
+      "fiix_object": "ScheduledMaintenanceAsset",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intScheduledMaintenanceID",
+        "intAssetID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "ScheduledMaintenanceNesting": {
+      "fiix_object": "ScheduledMaintenanceNesting",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intCurrentIterationCycle",
+        "intMultiplier",
+        "intNameIdentifier",
+        "intParentId",
+        "intScheduledMaintenanceID",
+        "strDescription"
+      ],
+      "column_count": 7
+    },
+    "ScheduledMaintenancePart": {
+      "fiix_object": "ScheduledMaintenancePart",
+      "plenum_table": "scheduled_maintenance_parts",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intScheduledMaintenanceID",
+        "intPartID",
+        "intAssetID",
+        "intStockID",
+        "qtySuggestedQuantity"
+      ],
+      "column_count": 6
+    },
+    "ScheduledMaintenanceUser": {
+      "fiix_object": "ScheduledMaintenanceUser",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intScheduledMaintenanceID",
+        "intUserID",
+        "bolNotifyOnAssignment",
+        "bolNotifyOnCompletion",
+        "bolNotifyOnOnlineOffline",
+        "bolNotifyOnStatusChange",
+        "bolNotifyOnTaskCompleted"
+      ],
+      "column_count": 8
+    },
+    "ScheduledTask": {
+      "fiix_object": "ScheduledTask",
+      "plenum_table": "work_order_tasks",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intTaskType",
+        "intAssetID",
+        "intAssignedToUserID",
+        "intMeterReadingUnitID",
+        "intOrder",
+        "intParentScheduledTaskID",
+        "intScheduledMaintenanceID",
+        "intScheduledMaintenanceNestingID",
+        "strDescription",
+        "dblTimeEstimatedHours",
+        "intUpdated"
+      ],
+      "column_count": 12
+    },
+    "SiteUser": {
+      "fiix_object": "SiteUser",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSiteID",
+        "intUserID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "SiteUserGroup": {
+      "fiix_object": "SiteUserGroup",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intSiteUserID",
+        "intGroupID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "Stock": {
+      "fiix_object": "Stock",
+      "plenum_table": "spare_parts",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intFacilityID",
+        "qtyOnHand",
+        "qtyMinQty",
+        "qtyMaxQty",
+        "strAisle",
+        "strRow",
+        "strBin",
+        "bolDeactivated",
+        "intUpdated"
+      ],
+      "column_count": 11
+    },
+    "StockCycleCount": {
+      "fiix_object": "StockCycleCount",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intCycleCountID",
+        "intStockID",
+        "intCountedBy",
+        "qtyExpected",
+        "qtyStockCount",
+        "dblPrice",
+        "dtmDateCounted",
+        "intUpdated"
+      ],
+      "column_count": 9
+    },
+    "StockHistory": {
+      "fiix_object": "StockHistory",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intStockID",
+        "intStockTxID",
+        "intStockTxTypeID",
+        "intInventoryMethodType",
+        "intUserID",
+        "strDescription",
+        "qtyAfter",
+        "qtyBefore",
+        "qtyMethodQty",
+        "qtyQuantity",
+        "dblLastPrice",
+        "dtmDate",
+        "intUpdated"
+      ],
+      "column_count": 14
+    },
+    "StockTxType": {
+      "fiix_object": "StockTxType",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName"
+      ],
+      "column_count": 2
+    },
+    "TaskGroup": {
+      "fiix_object": "TaskGroup",
+      "plenum_table": "task_groups",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strName",
+        "intCreatedByUserID",
+        "dtmLastUpdated",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "User": {
+      "fiix_object": "User",
+      "plenum_table": "technicians",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strFullName",
+        "strUserName",
+        "strUserTitle",
+        "strEmailAddress",
+        "strPersonnelCode",
+        "strTelephone",
+        "strTelephone2",
+        "strAddress1",
+        "strAddress2",
+        "strCity",
+        "strState",
+        "strPostalCode",
+        "strNotes",
+        "strRequestNotes",
+        "strDefaultLoginLocation",
+        "intCountryID",
+        "intUserStatusID",
+        "bolGroup",
+        "bolApiManaged",
+        "dblHourlyRate",
+        "intUpdated"
+      ],
+      "column_count": 22
+    },
+    "UserCertification": {
+      "fiix_object": "UserCertification",
+      "plenum_table": "technician_skills",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intUserID",
+        "intCertificationID",
+        "intFileContentsID",
+        "strName",
+        "strDescription",
+        "datValidFrom",
+        "datValidTo"
+      ],
+      "column_count": 8
+    },
+    "Warranty": {
+      "fiix_object": "Warranty",
+      "plenum_table": "asset_documents",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intAssetID",
+        "intProvider",
+        "intMeterReadingUnitsID",
+        "intWarrantyTypeID",
+        "intWarrantyUsageTermTypeID",
+        "strCertificateNumber",
+        "strDescription",
+        "strMeterReadingValueLimit",
+        "dtmDateAdded",
+        "dtmExpiryDate"
+      ],
+      "column_count": 11
+    },
+    "WorkOrder": {
+      "fiix_object": "WorkOrder",
+      "plenum_table": "work_orders",
+      "ingested": true,
+      "columns": [
+        "id",
+        "strCode",
+        "strDescription",
+        "strCompletionNotes",
+        "strAdminNotes",
+        "intWorkOrderStatusID",
+        "intPriorityID",
+        "intMaintenanceTypeID",
+        "intSiteID",
+        "intProjectID",
+        "intCompletedByUserID",
+        "intRequestedByUserID",
+        "intAccountID",
+        "intChargeDepartmentID",
+        "intScheduledMaintenanceID",
+        "intLastModifiedByUserID",
+        "intOriginWorkOrderTaskID",
+        "intRCAActionID",
+        "intRCACauseID",
+        "intRCAProblemID",
+        "strAssetIds",
+        "strAssets",
+        "strAssignedUserIds",
+        "strAssignedUsers",
+        "strCompletedByUserIds",
+        "strCompletedByUsers",
+        "strCustomerIds",
+        "strVendorIds",
+        "strEmailUserGuest",
+        "strNameUserGuest",
+        "strPhoneUserGuest",
+        "dtmDateCreated",
+        "dtmDateCompleted",
+        "dtmDateLastModified",
+        "dtmSuggestedStartDate",
+        "dtmSuggestedCompletionDate",
+        "intUpdated"
+      ],
+      "column_count": 37
+    },
+    "WorkOrderAsset": {
+      "fiix_object": "WorkOrderAsset",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intAssetID",
+        "intUpdated"
+      ],
+      "column_count": 4
+    },
+    "WorkOrderBusiness": {
+      "fiix_object": "WorkOrderBusiness",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intAssetID",
+        "intBusinessID",
+        "intBusinessGroupID",
+        "intUpdated"
+      ],
+      "column_count": 6
+    },
+    "WorkOrderPart": {
+      "fiix_object": "WorkOrderPart",
+      "plenum_table": "work_order_parts",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intAssetID",
+        "intStockID",
+        "intPartID",
+        "qtySuggestedQuantity",
+        "qtyActualQuantityUsed",
+        "intUpdated"
+      ],
+      "column_count": 8
+    },
+    "WorkOrderStatus": {
+      "fiix_object": "WorkOrderStatus",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "strName",
+        "intControlID",
+        "intSysCode",
+        "intUpdated"
+      ],
+      "column_count": 5
+    },
+    "WorkOrderStatusTransition": {
+      "fiix_object": "WorkOrderStatusTransition",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intFromWorkOrderStatusID",
+        "intToWorkOrderStatusID",
+        "intUserID",
+        "dtmDate"
+      ],
+      "column_count": 6
+    },
+    "WorkOrderTask": {
+      "fiix_object": "WorkOrderTask",
+      "plenum_table": "work_order_tasks",
+      "ingested": true,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intAssetID",
+        "intTaskType",
+        "intOrder",
+        "strResult",
+        "strDescription",
+        "strTaskNotesCompletion",
+        "intAssignedToUserID",
+        "intCompletedByUserID",
+        "intMeterReadingUnitID",
+        "intParentWorkOrderTaskID",
+        "intTaskGroupControlID",
+        "dblTimeEstimatedHours",
+        "dblTimeSpentHours",
+        "dtmStartDate",
+        "dtmDateCompleted",
+        "intUpdated"
+      ],
+      "column_count": 18
+    },
+    "WorkOrderTaskFile": {
+      "fiix_object": "WorkOrderTaskFile",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intFileID",
+        "intWorkOrderTaskID"
+      ],
+      "column_count": 3
+    },
+    "WorkOrderUser": {
+      "fiix_object": "WorkOrderUser",
+      "plenum_table": null,
+      "ingested": false,
+      "columns": [
+        "id",
+        "intWorkOrderID",
+        "intUserID",
+        "bolNotifyOnAssignment",
+        "bolNotifyOnCompletion",
+        "bolNotifyOnOnlineOffline",
+        "bolNotifyOnStatusChange",
+        "bolNotifyOnTaskCompleted"
+      ],
+      "column_count": 8
+    }
+  }
+}

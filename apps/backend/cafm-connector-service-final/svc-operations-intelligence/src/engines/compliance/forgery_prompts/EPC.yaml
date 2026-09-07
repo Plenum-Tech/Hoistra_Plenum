@@ -1,0 +1,14 @@
+required_tokens:
+  - energy performance
+  - epc
+issuing_body_tokens:
+  - gov.uk
+  - find energy certificate
+  - elmhurst
+  - ecd
+required_field_hints:
+  - rrn
+  - postcode
+  - energy rating
+  - valid until
+notes: Domestic/non-domestic EPC lodged on GOV.UK register

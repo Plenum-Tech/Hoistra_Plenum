@@ -1,0 +1,127 @@
+vendor_name,score_month,asset_code,scheduled_date,completed_date,within_tolerance
+Apex Mechanical Services Ltd,2026-02-01,AHU-01,2026-02-03,2026-02-05,True
+Apex Mechanical Services Ltd,2026-02-01,AHU-02,2026-02-06,2026-02-06,True
+Apex Mechanical Services Ltd,2026-02-01,CHILLER-01,2026-02-09,2026-02-08,True
+Apex Mechanical Services Ltd,2026-02-01,BOILER-01,2026-02-12,2026-02-14,True
+Apex Mechanical Services Ltd,2026-02-01,LIFT-A,2026-02-15,2026-02-17,True
+Apex Mechanical Services Ltd,2026-02-01,LIFT-B,2026-02-18,2026-02-19,True
+Apex Mechanical Services Ltd,2026-02-01,PUMP-HW-01,2026-02-21,2026-02-23,True
+BrightSpark Electrical Ltd,2026-02-01,AHU-01,2026-02-03,2026-02-13,False
+BrightSpark Electrical Ltd,2026-02-01,AHU-02,2026-02-06,2026-02-16,False
+BrightSpark Electrical Ltd,2026-02-01,CHILLER-01,2026-02-09,2026-02-14,True
+BrightSpark Electrical Ltd,2026-02-01,BOILER-01,2026-02-12,2026-02-17,True
+BrightSpark Electrical Ltd,2026-02-01,LIFT-A,2026-02-15,2026-02-27,False
+BrightSpark Electrical Ltd,2026-02-01,LIFT-B,2026-02-18,2026-02-18,True
+BrightSpark Electrical Ltd,2026-02-01,PUMP-HW-01,2026-02-21,2026-03-01,False
+SafeLift Engineering Ltd,2026-02-01,AHU-01,2026-02-03,2026-02-07,True
+SafeLift Engineering Ltd,2026-02-01,AHU-02,2026-02-06,2026-02-22,False
+SafeLift Engineering Ltd,2026-02-01,CHILLER-01,2026-02-09,2026-02-17,False
+SafeLift Engineering Ltd,2026-02-01,BOILER-01,2026-02-12,2026-02-16,True
+SafeLift Engineering Ltd,2026-02-01,LIFT-A,2026-02-15,2026-02-15,True
+SafeLift Engineering Ltd,2026-02-01,LIFT-B,2026-02-18,2026-02-18,True
+SafeLift Engineering Ltd,2026-02-01,PUMP-HW-01,2026-02-21,2026-02-21,True
+Apex Mechanical Services Ltd,2026-03-01,AHU-01,2026-03-03,2026-03-04,True
+Apex Mechanical Services Ltd,2026-03-01,AHU-02,2026-03-06,2026-03-09,True
+Apex Mechanical Services Ltd,2026-03-01,CHILLER-01,2026-03-09,2026-03-14,True
+Apex Mechanical Services Ltd,2026-03-01,BOILER-01,2026-03-12,2026-03-10,True
+Apex Mechanical Services Ltd,2026-03-01,LIFT-A,2026-03-15,2026-03-18,True
+Apex Mechanical Services Ltd,2026-03-01,LIFT-B,2026-03-18,2026-03-23,True
+Apex Mechanical Services Ltd,2026-03-01,PUMP-HW-01,2026-03-21,2026-03-20,True
+BrightSpark Electrical Ltd,2026-03-01,AHU-01,2026-03-03,2026-03-15,False
+BrightSpark Electrical Ltd,2026-03-01,AHU-02,2026-03-06,2026-03-14,False
+BrightSpark Electrical Ltd,2026-03-01,CHILLER-01,2026-03-09,2026-03-14,True
+BrightSpark Electrical Ltd,2026-03-01,BOILER-01,2026-03-12,2026-03-17,True
+BrightSpark Electrical Ltd,2026-03-01,LIFT-A,2026-03-15,2026-03-12,True
+BrightSpark Electrical Ltd,2026-03-01,LIFT-B,2026-03-18,2026-03-20,True
+BrightSpark Electrical Ltd,2026-03-01,PUMP-HW-01,2026-03-21,2026-03-23,True
+SafeLift Engineering Ltd,2026-03-01,AHU-01,2026-03-03,2026-03-17,False
+SafeLift Engineering Ltd,2026-03-01,AHU-02,2026-03-06,2026-03-22,False
+SafeLift Engineering Ltd,2026-03-01,CHILLER-01,2026-03-09,2026-03-13,True
+SafeLift Engineering Ltd,2026-03-01,BOILER-01,2026-03-12,2026-03-12,True
+SafeLift Engineering Ltd,2026-03-01,LIFT-A,2026-03-15,2026-03-31,False
+SafeLift Engineering Ltd,2026-03-01,LIFT-B,2026-03-18,2026-03-22,True
+SafeLift Engineering Ltd,2026-03-01,PUMP-HW-01,2026-03-21,2026-04-06,False
+Apex Mechanical Services Ltd,2026-04-01,AHU-01,2026-04-03,2026-04-03,True
+Apex Mechanical Services Ltd,2026-04-01,AHU-02,2026-04-06,2026-04-06,True
+Apex Mechanical Services Ltd,2026-04-01,CHILLER-01,2026-04-09,2026-04-14,True
+Apex Mechanical Services Ltd,2026-04-01,BOILER-01,2026-04-12,2026-04-10,True
+Apex Mechanical Services Ltd,2026-04-01,LIFT-A,2026-04-15,2026-04-15,True
+Apex Mechanical Services Ltd,2026-04-01,LIFT-B,2026-04-18,2026-04-18,True
+Apex Mechanical Services Ltd,2026-04-01,PUMP-HW-01,2026-04-21,2026-04-23,True
+BrightSpark Electrical Ltd,2026-04-01,AHU-01,2026-04-03,2026-04-11,False
+BrightSpark Electrical Ltd,2026-04-01,AHU-02,2026-04-06,2026-04-08,True
+BrightSpark Electrical Ltd,2026-04-01,CHILLER-01,2026-04-09,2026-04-21,False
+BrightSpark Electrical Ltd,2026-04-01,BOILER-01,2026-04-12,2026-04-09,True
+BrightSpark Electrical Ltd,2026-04-01,LIFT-A,2026-04-15,2026-04-12,True
+BrightSpark Electrical Ltd,2026-04-01,LIFT-B,2026-04-18,2026-04-28,False
+BrightSpark Electrical Ltd,2026-04-01,PUMP-HW-01,2026-04-21,2026-04-23,True
+SafeLift Engineering Ltd,2026-04-01,AHU-01,2026-04-03,2026-04-11,False
+SafeLift Engineering Ltd,2026-04-01,AHU-02,2026-04-06,2026-04-16,False
+SafeLift Engineering Ltd,2026-04-01,CHILLER-01,2026-04-09,2026-04-25,False
+SafeLift Engineering Ltd,2026-04-01,BOILER-01,2026-04-12,2026-04-26,False
+SafeLift Engineering Ltd,2026-04-01,LIFT-A,2026-04-15,2026-04-29,False
+SafeLift Engineering Ltd,2026-04-01,LIFT-B,2026-04-18,2026-04-18,True
+SafeLift Engineering Ltd,2026-04-01,PUMP-HW-01,2026-04-21,2026-04-25,True
+Apex Mechanical Services Ltd,2026-05-01,AHU-01,2026-05-03,2026-05-02,True
+Apex Mechanical Services Ltd,2026-05-01,AHU-02,2026-05-06,2026-05-06,True
+Apex Mechanical Services Ltd,2026-05-01,CHILLER-01,2026-05-09,2026-05-14,True
+Apex Mechanical Services Ltd,2026-05-01,BOILER-01,2026-05-12,2026-05-12,True
+Apex Mechanical Services Ltd,2026-05-01,LIFT-A,2026-05-15,2026-05-18,True
+Apex Mechanical Services Ltd,2026-05-01,LIFT-B,2026-05-18,2026-05-19,True
+Apex Mechanical Services Ltd,2026-05-01,PUMP-HW-01,2026-05-21,2026-05-22,True
+BrightSpark Electrical Ltd,2026-05-01,AHU-01,2026-05-03,2026-05-15,False
+BrightSpark Electrical Ltd,2026-05-01,AHU-02,2026-05-06,2026-05-03,True
+BrightSpark Electrical Ltd,2026-05-01,CHILLER-01,2026-05-09,2026-05-19,False
+BrightSpark Electrical Ltd,2026-05-01,BOILER-01,2026-05-12,2026-05-12,True
+BrightSpark Electrical Ltd,2026-05-01,LIFT-A,2026-05-15,2026-05-20,True
+BrightSpark Electrical Ltd,2026-05-01,LIFT-B,2026-05-18,2026-05-18,True
+BrightSpark Electrical Ltd,2026-05-01,PUMP-HW-01,2026-05-21,2026-05-31,False
+SafeLift Engineering Ltd,2026-05-01,AHU-01,2026-05-03,2026-05-13,False
+SafeLift Engineering Ltd,2026-05-01,AHU-02,2026-05-06,2026-05-20,False
+SafeLift Engineering Ltd,2026-05-01,CHILLER-01,2026-05-09,2026-05-17,False
+SafeLift Engineering Ltd,2026-05-01,BOILER-01,2026-05-12,2026-05-22,False
+SafeLift Engineering Ltd,2026-05-01,LIFT-A,2026-05-15,2026-05-25,False
+SafeLift Engineering Ltd,2026-05-01,LIFT-B,2026-05-18,2026-06-03,False
+SafeLift Engineering Ltd,2026-05-01,PUMP-HW-01,2026-05-21,2026-05-21,True
+Apex Mechanical Services Ltd,2026-06-01,AHU-01,2026-06-03,2026-06-08,True
+Apex Mechanical Services Ltd,2026-06-01,AHU-02,2026-06-06,2026-06-08,True
+Apex Mechanical Services Ltd,2026-06-01,CHILLER-01,2026-06-09,2026-06-09,True
+Apex Mechanical Services Ltd,2026-06-01,BOILER-01,2026-06-12,2026-06-14,True
+Apex Mechanical Services Ltd,2026-06-01,LIFT-A,2026-06-15,2026-06-18,True
+Apex Mechanical Services Ltd,2026-06-01,LIFT-B,2026-06-18,2026-06-21,True
+Apex Mechanical Services Ltd,2026-06-01,PUMP-HW-01,2026-06-21,2026-06-21,True
+BrightSpark Electrical Ltd,2026-06-01,AHU-01,2026-06-03,2026-06-11,False
+BrightSpark Electrical Ltd,2026-06-01,AHU-02,2026-06-06,2026-06-14,False
+BrightSpark Electrical Ltd,2026-06-01,CHILLER-01,2026-06-09,2026-06-06,True
+BrightSpark Electrical Ltd,2026-06-01,BOILER-01,2026-06-12,2026-06-12,True
+BrightSpark Electrical Ltd,2026-06-01,LIFT-A,2026-06-15,2026-06-23,False
+BrightSpark Electrical Ltd,2026-06-01,LIFT-B,2026-06-18,2026-06-28,False
+BrightSpark Electrical Ltd,2026-06-01,PUMP-HW-01,2026-06-21,2026-06-23,True
+SafeLift Engineering Ltd,2026-06-01,AHU-01,2026-06-03,2026-06-11,False
+SafeLift Engineering Ltd,2026-06-01,AHU-02,2026-06-06,2026-06-06,True
+SafeLift Engineering Ltd,2026-06-01,CHILLER-01,2026-06-09,2026-06-13,True
+SafeLift Engineering Ltd,2026-06-01,BOILER-01,2026-06-12,2026-06-20,False
+SafeLift Engineering Ltd,2026-06-01,LIFT-A,2026-06-15,2026-06-15,True
+SafeLift Engineering Ltd,2026-06-01,LIFT-B,2026-06-18,2026-06-26,False
+SafeLift Engineering Ltd,2026-06-01,PUMP-HW-01,2026-06-21,2026-07-01,False
+Apex Mechanical Services Ltd,2026-07-01,AHU-01,2026-07-03,2026-07-06,True
+Apex Mechanical Services Ltd,2026-07-01,AHU-02,2026-07-06,2026-07-08,True
+Apex Mechanical Services Ltd,2026-07-01,CHILLER-01,2026-07-09,2026-07-14,True
+Apex Mechanical Services Ltd,2026-07-01,BOILER-01,2026-07-12,2026-07-11,True
+Apex Mechanical Services Ltd,2026-07-01,LIFT-A,2026-07-15,2026-07-17,True
+Apex Mechanical Services Ltd,2026-07-01,LIFT-B,2026-07-18,2026-07-20,True
+Apex Mechanical Services Ltd,2026-07-01,PUMP-HW-01,2026-07-21,2026-07-22,True
+BrightSpark Electrical Ltd,2026-07-01,AHU-01,2026-07-03,2026-07-03,True
+BrightSpark Electrical Ltd,2026-07-01,AHU-02,2026-07-06,2026-07-14,False
+BrightSpark Electrical Ltd,2026-07-01,CHILLER-01,2026-07-09,2026-07-06,True
+BrightSpark Electrical Ltd,2026-07-01,BOILER-01,2026-07-12,2026-07-24,False
+BrightSpark Electrical Ltd,2026-07-01,LIFT-A,2026-07-15,2026-07-27,False
+BrightSpark Electrical Ltd,2026-07-01,LIFT-B,2026-07-18,2026-07-30,False
+BrightSpark Electrical Ltd,2026-07-01,PUMP-HW-01,2026-07-21,2026-07-23,True
+SafeLift Engineering Ltd,2026-07-01,AHU-01,2026-07-03,2026-07-19,False
+SafeLift Engineering Ltd,2026-07-01,AHU-02,2026-07-06,2026-07-14,False
+SafeLift Engineering Ltd,2026-07-01,CHILLER-01,2026-07-09,2026-07-25,False
+SafeLift Engineering Ltd,2026-07-01,BOILER-01,2026-07-12,2026-07-12,True
+SafeLift Engineering Ltd,2026-07-01,LIFT-A,2026-07-15,2026-07-23,False
+SafeLift Engineering Ltd,2026-07-01,LIFT-B,2026-07-18,2026-07-28,False
+SafeLift Engineering Ltd,2026-07-01,PUMP-HW-01,2026-07-21,2026-07-21,True

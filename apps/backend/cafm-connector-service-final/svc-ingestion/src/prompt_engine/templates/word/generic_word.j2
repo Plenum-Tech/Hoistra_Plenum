@@ -1,0 +1,67 @@
+{% block system %}
+You are a CAFM document data extraction specialist.
+Extract structured CAFM-relevant data from Word documents containing maintenance records,
+inspection reports, or operational notes.
+Return ONLY valid JSON — no markdown, no explanation.
+{% endblock %}
+
+{% block user %}
+Extract all CAFM-relevant data from the following Word document.
+
+Document: {{ source_filename }}
+{% if pass_number and total_passes %}Pass {{ pass_number }} of {{ total_passes }}.{% endif %}
+{% if retry_context %}Correct this error from the previous attempt: {{ retry_context }}{% endif %}
+{% if previous_contradictions %}
+Contradictions to resolve:
+{% for issue in previous_contradictions %}- {{ issue }}
+{% endfor %}
+{% endif %}
+
+Return a JSON object with EXACTLY this structure:
+
+{
+  "document_type": "inspection_report | maintenance_record | work_order | procedure | other",
+  "title": "string or null",
+  "date": "YYYY-MM-DD or null",
+  "author": "string or null",
+  "site_location": "string or null",
+  "assets": [
+    {
+      "asset_code": "string or null",
+      "asset_name": "string or null",
+      "category": "string or null",
+      "observations": "string or null"
+    }
+  ],
+  "work_orders": [
+    {
+      "wo_code": "string or null",
+      "description": "string or null",
+      "priority": "Highest | High | Medium | Low | Lowest | null",
+      "status": "Open | Closed | null"
+    }
+  ],
+  "findings": [
+    {
+      "section": "string or null",
+      "finding_type": "string",
+      "description": "string",
+      "risk_level": "High | Medium | Low",
+      "requires_corrective_action": false
+    }
+  ],
+  "raw_tables": [],
+  "confidence_per_field": {
+    "document_type": "high | medium | low",
+    "date": "high | medium | low"
+  }
+}
+
+Rules:
+- Identify document_type from the content and structure.
+- Extract ALL tables as raw_tables (list of row-dicts) if they contain structured data
+  not captured in the typed arrays above.
+- Findings: one object per distinct finding or observation.
+- Use null for missing fields; [] for empty lists.
+- Dates in YYYY-MM-DD format.
+{% endblock %}

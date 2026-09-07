@@ -1,0 +1,122 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cafm-connector-service"
+version = "0.1.0"
+description = "CAFM Platform — Data Import & Connector Service (US-01)"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+
+    # Data validation
+    "pydantic>=2.10,<3.0",
+    "pydantic-settings>=2.6,<3.0",
+
+    # Auth
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+
+    # Async HTTP (REST/SOAP/OData connectors)
+    "httpx>=0.27",
+    "aiofiles>=24.0",
+
+    # Job queue — Bull equivalent in Python (ARQ over Redis)
+    "arq>=0.26",
+    "redis[hiredis]>=5.0",
+
+    # QR code generation
+    "qrcode[pil]>=8.0",
+    "Pillow>=11.0",
+
+    # Duplicate detection hashing
+    "xxhash>=3.0",
+
+    # Logging
+    "structlog>=24.0",
+    "python-dotenv>=1.0",
+
+    # WebSocket (job status push)
+    "websockets>=13.0",
+]
+
+[project.optional-dependencies]
+postgresql = [
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "asyncpg>=0.30",
+    "psycopg2-binary>=2.9",
+]
+mysql = [
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "aiomysql>=0.2",
+    "PyMySQL>=1.1",
+]
+mssql = [
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "aioodbc>=0.5",
+    "pyodbc>=5.1",
+]
+mongodb = [
+    "motor>=3.6",
+    "pymongo>=4.9",
+]
+files = [
+    "pandas>=2.2,<3.0",
+    "openpyxl>=3.1",
+    "pyarrow>=17.0",       # Parquet
+    "lxml>=5.0",           # XML
+    "zeep>=4.2",           # SOAP
+]
+vault = [
+    "hvac>=2.3",           # HashiCorp Vault client
+]
+azure = [
+    "azure-storage-blob>=12.19",  # Azure Blob Storage for file uploads
+]
+all = [
+    "cafm-connector-service[postgresql,mysql,mssql,mongodb,files,vault,azure]",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.27",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "factory-boy>=3.3",
+]
+
+[project.entry-points."cafm.connectors"]
+postgresql = "cafm_connector.connectors.plugins.postgresql:PostgreSQLConnector"
+mysql      = "cafm_connector.connectors.plugins.mysql:MySQLConnector"
+mssql      = "cafm_connector.connectors.plugins.mssql:MSSQLConnector"
+mongodb    = "cafm_connector.connectors.plugins.mongodb:MongoDBConnector"
+csv        = "cafm_connector.connectors.plugins.csv_source:CSVConnector"
+excel      = "cafm_connector.connectors.plugins.excel:ExcelConnector"
+json       = "cafm_connector.connectors.plugins.json_source:JSONConnector"
+xml        = "cafm_connector.connectors.plugins.xml_source:XMLConnector"
+parquet    = "cafm_connector.connectors.plugins.parquet:ParquetConnector"
+rest       = "cafm_connector.connectors.plugins.rest:RESTConnector"
+soap       = "cafm_connector.connectors.plugins.soap:SOAPConnector"
+odata      = "cafm_connector.connectors.plugins.odata:ODataConnector"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

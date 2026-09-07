@@ -1,0 +1,11 @@
+required_tokens:
+  - portable appliance
+  - pat
+issuing_body_tokens:
+  - city & guilds
+  - iet
+required_field_hints:
+  - appliance
+  - pass
+  - test
+notes: PAT register/self-held

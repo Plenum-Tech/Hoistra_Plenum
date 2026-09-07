@@ -1,0 +1,114 @@
+[project]
+name = "svc-ai-schema-mapper"
+version = "0.1.0"
+description = "Universal AI-native CMMS migration pipeline — converts any customer CMMS export to validated IntermediateSchema"
+authors = [{ name = "Plenum Tech", email = "dev@plenum-tech.com" }]
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+
+    # Data validation
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "psycopg2-binary>=2.9.0",
+
+    # Redis & caching (redis 5.0+ has built-in async support)
+    "redis[hiredis]>=5.0.0",
+
+    # HTTP client
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
+
+    # Claude API
+    "anthropic>=0.40.0",
+
+    # LangGraph & LangSmith (core new dependencies)
+    # Pinned to 0.3.x: <0.4.0 avoids the resume_is_map UnboundLocalError regression
+    "langgraph>=0.3.0,<0.4.0",
+    "langgraph-checkpoint-postgres>=2.0,<3.0",
+    "langchain-core>=0.3.0,<0.4.0",
+    "langchain-anthropic>=0.3.0,<0.4.0",
+    "langsmith>=0.1.0",
+
+    # psycopg3 — required by langgraph-checkpoint-postgres
+    "psycopg[binary,pool]>=3.1.0",
+
+    # Embeddings
+    "openai>=1.0.0",
+
+    # File processing
+    "pandas>=2.2.0",
+    "chardet>=5.0.0",
+    # python-calamine: fast Rust-based Excel READER (pandas engine="calamine"). openpyxl is kept for
+    # WRITING .xlsx (output.xlsx / combined workbook) only — see src/excel_parser.py.
+    "python-calamine>=0.2.0",
+    "openpyxl>=3.1.0",
+    "aiofiles>=24.0.0",
+
+    # PDF generation
+    "reportlab>=4.0.0",
+
+    # Azure Blob
+    "azure-storage-blob>=12.20.0",
+
+    # Telemetry & Logging
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp>=0.48b0",
+    "opentelemetry-instrumentation-fastapi>=0.40b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.40b0",
+    "opentelemetry-instrumentation-redis>=0.40b0",
+    "opentelemetry-instrumentation-requests>=0.40b0",
+    "prometheus-client>=0.20.0",
+
+    # Structured logging
+    "structlog>=24.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.11.0",
+    "websockets>=13.0.0",
+]
+testing = [
+    "streamlit>=1.35.0",
+    "httpx>=0.27.0",   # already a main dep — listed here for clarity
+    "pandas>=2.2.0",   # already a main dep
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # line-length handled above
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
