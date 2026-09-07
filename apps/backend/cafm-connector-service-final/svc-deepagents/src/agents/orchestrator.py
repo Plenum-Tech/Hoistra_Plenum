@@ -139,6 +139,7 @@ from .phase2_intents import Phase2AgentId, resolve_phase2_engine
 from .agent_router import as_phase2_engine, select_agent
 from .compliance_facts import compute_pack_facts
 from .compliance_router import compliance_skill_path_enabled
+from . import activity_log
 from . import llm_cost
 from .skills import prompt_doc
 from .system_prompt import build_system_prompt
@@ -1816,6 +1817,15 @@ class DeepAgentOrchestrator:
             blocked=sum(1 for r in rows if r.get("is_blocked")),
             drafts=sum(1 for r in rows if r.get("is_draft")),
         )
+        activity_log.fire(
+            agent="compliance", stage="fetch", direction="output",
+            summary=f"{len(rows)} rows from plenum_cafm.compliance_certificates",
+            payload={
+                "spec": spec, "limit": limit, "rows": len(rows), "by_status": by_status,
+                "columns": sorted(rows[0].keys()) if rows else [],
+                "sample": rows[:5],
+            },
+        )
         if settings.compliance_debug_payloads:
             for r in rows:
                 log.info(
@@ -2154,6 +2164,12 @@ class DeepAgentOrchestrator:
         if settings.compliance_debug_payloads:
             log.info("compliance.stage2.prompt_system", system=system_text)
             log.info("compliance.stage2.prompt_data", data=data_json)
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="input",
+            summary=(user_message or "")[:300],
+            payload={"question": user_message, "system": system_text, "data_json": data_json,
+                     "blocks": [b.get("source") for b in blocks]},
+        )
 
         # Claude first — this call has to apply compound row filters ("forged AND still
         # compliant") across the whole table, and the cheap general-purpose model used for
@@ -2179,6 +2195,12 @@ class DeepAgentOrchestrator:
                 for part in text
             )
         out = text.strip() if isinstance(text, str) and text.strip() else None
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "fallback model returned nothing")[:300], ok=bool(out),
+            model=getattr(self._llm, "model_name", None) or settings.openai_model,
+            payload={"answer": out, "provider": "openai_fallback"},
+        )
         if out:
             # STAGE 3 LOG — fallback model path.
             log.info(
@@ -2617,6 +2639,10 @@ class DeepAgentOrchestrator:
         """
         text = (user_message or "").strip()
         taxonomy = self._is_taxonomy_question(text)
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", summary=text[:300],
+            payload={"question": text, "taxonomy": taxonomy},
+        )
         default = {
             "reason": (
                 "Answer from the country certificate pack — the question is about what is "
@@ -2743,6 +2769,10 @@ class DeepAgentOrchestrator:
             log.warning(
                 "compliance.plan.failed", error=str(exc)[:200], raw=str(raw)[:600]
             )
+            activity_log.fire(
+                agent="compliance", stage="plan", direction="error", summary=str(exc)[:200],
+                ok=False, error=str(exc), payload={"raw": str(raw)[:2000], "fallback": default},
+            )
             return default
         needs = [n for n in (plan.get("needs") or []) if n in self._PLAN_SOURCES]
         if taxonomy:
@@ -2782,6 +2812,10 @@ class DeepAgentOrchestrator:
             # Kept for the single-question path and for logging.
             "query": subs[0]["query"],
         }
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="output", summary=out["reason"][:300],
+            payload=out,
+        )
         log.info(
             "compliance.stage0.plan",
             reason=out["reason"],
@@ -3730,6 +3764,10 @@ class DeepAgentOrchestrator:
             )
         except Exception as exc:  # noqa: BLE001 — review must never break the turn
             log.warning("compliance.review.failed", model=model, error=str(exc)[:300])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
         llm_cost.record(
             "reviewer",
@@ -3743,10 +3781,25 @@ class DeepAgentOrchestrator:
             "",
         )
         try:
-            return json.loads(raw)
+            review = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.review.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error",
+                summary="unparsable review", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
+        activity_log.fire(
+            agent="compliance", stage="review", direction="output",
+            summary=str(review.get("verdict") or review.get("summary") or "review")[:300],
+            model=model, latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"review": review, "code_findings": code_findings,
+                     "answer_under_review": answer_text},
+        )
+        return review
 
     @staticmethod
     def _revision_brief(
@@ -3813,6 +3866,9 @@ class DeepAgentOrchestrator:
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
+        Every call is recorded in the activity log — input (question, data, sub-questions)
+        and output (the typed response) — so a wrong answer can be replayed.
+
         When `on_zone` is given it is awaited with (key, value) as each top-level zone
         finishes streaming, so the UI can paint the narrative and KPIs first.
         """
@@ -3876,6 +3932,10 @@ class DeepAgentOrchestrator:
             log.warning(
                 "compliance.analyst.failed", model=model, error=str(exc)[:300]
             )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         llm_cost.record(
@@ -3894,8 +3954,21 @@ class DeepAgentOrchestrator:
             payload = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.analyst.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error",
+                summary="unparsable analyst response", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
 
+        activity_log.fire(
+            agent="compliance", stage=role, direction="output",
+            summary=str(payload.get("narrative") or "")[:300], model=model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"response": payload, "effort": effort, "taxonomy": taxonomy},
+        )
         log.info(
             "compliance.stage3.analyst",
             model=model,
@@ -3940,12 +4013,24 @@ class DeepAgentOrchestrator:
                 model=model,
                 error=str(exc)[:300],
             )
+            activity_log.fire(
+                agent="compliance", stage="summary", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         parts = [
             b.text for b in (message.content or []) if getattr(b, "type", "") == "text"
         ]
         out = "\n".join(p for p in parts if p).strip()
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "empty answer")[:300], ok=bool(out), model=model,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"answer": out, "stop_reason": getattr(message, "stop_reason", None),
+                     "provider": "anthropic"},
+        )
         if not out:
             return None
         # STAGE 3 LOG — the summary the model produced.
@@ -5880,11 +5965,25 @@ class DeepAgentOrchestrator:
         """Invoke the agent and normalise the result into our response shape."""
         config = self._config(thread_id)
         set_session_context(thread_id)
+        activity_log.set_current_session(session_id, thread_id)
+        _turn_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input",
+            summary=_latest_user_message(input_)[:300],
+            payload={"input": input_ if not isinstance(input_, dict) else {
+                "message_count": len(input_.get("messages") or []),
+                "latest_user_message": _latest_user_message(input_),
+            }},
+        )
         try:
             result = await self._agent.ainvoke(input_, config)
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+            )
             return {
                 "session_id": session_id,
                 "answer": "",
@@ -5928,6 +6027,18 @@ class DeepAgentOrchestrator:
         if tool_calls:
             tool_name = str(tool_calls[-1].get("tool") or "")
             domain = _TOOL_DOMAIN.get(tool_name, "meta")
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(answer or "")[:300],
+            payload={
+                "answer": answer,
+                "tool_calls": tool_calls,
+                "domain": domain,
+                "interrupted": interrupt_payload is not None,
+                "interrupt_payload": interrupt_payload,
+            },
+            latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+        )
         return attach_route_to_result(
             out,
             session_id,
@@ -6288,6 +6399,12 @@ class DeepAgentOrchestrator:
         sid = session_id or str(uuid.uuid4())
         thread_id = sid
         config = self._config(thread_id)
+        activity_log.set_current_session(sid, thread_id)
+        _stream_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input", summary=user_message[:300],
+            payload={"message": user_message, "extra_context": extra_context, "mode": "stream"},
+        )
         set_session_context(sid)
         record_conversation_turn(sid, "user", user_message)
 
@@ -6485,6 +6602,10 @@ class DeepAgentOrchestrator:
                         }
                     last_domain = domain
 
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="input",
+                        summary=tool_name, payload={"tool": tool_name, "input": tool_input},
+                    )
                     yield {
                         "type": "tool_started",
                         "tool": tool_name,
@@ -6509,6 +6630,10 @@ class DeepAgentOrchestrator:
                             "output": output,
                         }
                     )
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="output",
+                        summary=tool_name, payload={"tool": tool_name, "output": output},
+                    )
                     yield {
                         "type": "tool_completed",
                         "tool": tool_name,
@@ -6532,12 +6657,22 @@ class DeepAgentOrchestrator:
         except GraphInterrupt as gi:
             payload = gi.args[0] if gi.args else {}
             log.info("orchestrator.stream.gate_interrupt", session_id=sid)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="output", summary="gate_interrupt",
+                payload={"gate_interrupt": payload, "tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "gate_interrupt", "payload": payload, "session_id": sid}
             return
 
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.stream.error", session_id=sid, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, payload={"tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "error", "error": err, "session_id": sid}
             return
 
@@ -6549,6 +6684,12 @@ class DeepAgentOrchestrator:
                 llm=self._llm,
             )
         log.info("orchestrator.stream.done", session_id=sid)
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(final_answer or "")[:300],
+            payload={"answer": final_answer, "tool_calls": streamed_tool_calls, "mode": "stream"},
+            latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+        )
         if final_answer.strip():
             record_conversation_turn(sid, "assistant", final_answer)
         yield workflow_stream_completion_payload(

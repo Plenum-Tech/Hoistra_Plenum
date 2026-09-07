@@ -164,6 +164,19 @@ async def list_buildings(
     return await bld_svc.list_buildings(session, organization_id=organization_id, limit=limit)
 
 
+@router.get("/buildings/{site_id}")
+async def get_building(
+    site_id: str,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """One building by sites.site_id (VARCHAR(50)) — same columns as the table row."""
+    out = await bld_svc.get_building(session, site_id, organization_id=organization_id)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail=out)
+    return out
+
+
 @router.get("/tm46")
 async def list_tm46():
     return {"ok": True, **eui_svc.load_tm46()}

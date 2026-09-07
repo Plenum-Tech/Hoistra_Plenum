@@ -114,6 +114,16 @@ class Settings(BaseSettings):
             "COMPLIANCE_DEBUG_PAYLOADS", "compliance_debug_payloads"
         ),
     )
+    # Activity log: every input/output message of the orchestrator and the compliance
+    # stages, appended to plenum_cafm.agent_activity_log for troubleshooting. Payloads are
+    # bounded (ACTIVITY_LOG_PAYLOAD_CHARS). See agents/activity_log.py.
+    activity_log_enabled: bool = Field(
+        True, validation_alias=AliasChoices("ACTIVITY_LOG_ENABLED", "activity_log_enabled")
+    )
+    activity_log_payload_chars: int = Field(
+        64000,
+        validation_alias=AliasChoices("ACTIVITY_LOG_PAYLOAD_CHARS", "activity_log_payload_chars"),
+    )
     # Downstream service URLs
     # NOTE: UDR (user/data lookup) uses direct DB access — no HTTP svc-udr needed
     wo_engine_base_url: str = "http://localhost:8001"       # svc-ingestion (legacy alias kept)

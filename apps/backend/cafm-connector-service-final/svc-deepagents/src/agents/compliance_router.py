@@ -31,6 +31,7 @@ import structlog
 from ..config import settings
 from .skills import prompt_doc, skills_dir
 from . import llm_cost
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
@@ -187,6 +188,11 @@ async def select_docs(question: str) -> dict:
         )
     except Exception as exc:  # noqa: BLE001 — routing must never break the turn
         log.warning("compliance.router.failed", error=str(exc)[:200])
+        activity_log.fire(
+            agent="compliance_router", stage="router", direction="error",
+            summary=str(exc)[:300], ok=False, error=str(exc), model=model,
+            payload={"question": (question or "")[:1000], "fallback_docs": everything},
+        )
         return {"docs": everything, "reason": f"router failed: {type(exc).__name__}", "source": "fallback"}
 
     named = [str(d).strip() for d in (chosen.get("docs") or []) if str(d).strip()]
@@ -195,13 +201,21 @@ async def select_docs(question: str) -> dict:
     dropped = [d for d in named if d not in have]
     if dropped:
         log.warning("compliance.router.unknown_docs", dropped=dropped, kept=kept)
-    if not kept:
-        return {
-            "docs": everything,
-            "reason": "router named nothing that exists",
-            "source": "fallback",
-        }
-    return {"docs": kept, "reason": str(chosen.get("reason") or "")[:200], "source": "router"}
+    result = (
+        {"docs": everything, "reason": "router named nothing that exists", "source": "fallback"}
+        if not kept
+        else {"docs": kept, "reason": str(chosen.get("reason") or "")[:200], "source": "router"}
+    )
+    activity_log.fire(
+        agent="compliance_router", stage="router", direction="output",
+        summary=f"{result['source']}: {', '.join(result['docs'])}"[:300], model=model,
+        latency_ms=(time.perf_counter() - _t0) * 1000,
+        input_tokens=getattr(message.usage, "input_tokens", None),
+        output_tokens=getattr(message.usage, "output_tokens", None),
+        payload={"question": (question or "")[:1000], "chosen": chosen, "dropped": dropped,
+                 "result": result},
+    )
+    return result
 
 
 def compose(docs: list[str]) -> tuple[str, list[str]]:

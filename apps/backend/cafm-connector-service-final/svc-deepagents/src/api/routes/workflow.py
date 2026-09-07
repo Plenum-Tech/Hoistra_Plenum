@@ -29,6 +29,7 @@ from ...agents.single_door_flow import (
 )
 from ...limiter import limiter
 from ..deps import get_orchestrator
+from ...agents import activity_log
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/workflow", tags=["Workflow"])
@@ -696,3 +697,52 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+
+# ── Activity log — the replayable trail of every agent input and output ───────────────
+
+
+class ActivityEntry(BaseModel):
+    """One entry posted by a client (the UI's own compliance actions), stored alongside the
+    server-side stages so a session's trail is complete end to end."""
+
+    session_id: str = Field(..., max_length=120)
+    agent: str = Field("frontend", max_length=60)
+    stage: str = Field(..., max_length=60)
+    direction: str = Field(..., pattern="^(input|output|error)$")
+    summary: str | None = Field(None, max_length=4000)
+    payload: dict[str, Any] | None = None
+    ok: bool = True
+    error: str | None = Field(None, max_length=4000)
+    latency_ms: float | None = None
+
+
+@router.get("/activity")
+async def activity_sessions(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    """Sessions with recorded activity, newest first."""
+    return {"ok": True, "sessions": await activity_log.recent_sessions(limit=limit)}
+
+
+@router.get("/activity/{session_id}")
+async def activity_for_session(
+    session_id: str,
+    agent: str | None = Query(None, description="orchestrator | compliance | compliance_router | tool:<domain> | frontend"),
+    stage: str | None = Query(None, description="turn | plan | fetch | summary | analyst | review | router | tool | action"),
+    limit: int = Query(200, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Every recorded input/output for one session, oldest first — for troubleshooting a turn."""
+    rows = await activity_log.list_activity(session_id, agent=agent, stage=stage, limit=limit)
+    return {"ok": True, "session_id": session_id, "count": len(rows), "entries": rows}
+
+
+@router.post("/activity", status_code=201)
+async def activity_append(entry: ActivityEntry) -> dict[str, Any]:
+    """Append one client-side activity entry (e.g. the compliance console's scan / verify /
+    renewal calls with their responses)."""
+    row_id = await activity_log.record(
+        agent=entry.agent, stage=entry.stage, direction=entry.direction,
+        summary=entry.summary, payload=entry.payload, ok=entry.ok, error=entry.error,
+        latency_ms=entry.latency_ms, session_id=entry.session_id, thread_id=entry.session_id,
+    )
+    return {"ok": row_id is not None, "id": row_id}

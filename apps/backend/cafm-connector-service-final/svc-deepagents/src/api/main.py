@@ -92,6 +92,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         log.warning("svc-deepagents.ingest_batch_tables.failed", error=str(exc)[:300])
 
+    # Activity log table (append-only trail of agent inputs/outputs) — best effort.
+    try:
+        from ..agents import activity_log
+
+        await activity_log.ensure_table()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("svc-deepagents.activity_log.failed", error=str(exc)[:300])
+
     # Initialise HITL Postgres checkpointer (optional)
     checkpointer = None
     _checkpointer_pool = None

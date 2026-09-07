@@ -458,6 +458,26 @@ async def _load_site_rows(session: AsyncSession, *, limit: int) -> list[dict[str
     return out
 
 
+async def get_building(
+    session: AsyncSession,
+    site_id: str,
+    *,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """One building by ``sites.site_id`` (VARCHAR(50)); also matches site_uuid or building_code.
+
+    Built from the same rows as the table so the two never disagree; the rolling benchmark
+    needs the other buildings, which is why this is not a single-row query.
+    """
+    table = await list_buildings(session, organization_id=organization_id, limit=5000)
+    needle = str(site_id or "").strip()
+    for row in table["buildings"]:
+        if needle and needle in {row.get("site_id"), row.get("site_uuid"), row.get("code")}:
+            return {"ok": True, "building": row, "benchmark_unit": table["benchmark_unit"],
+                    "completeness_fields": table["completeness_fields"]}
+    return {"ok": False, "error": "building_not_found", "site_id": needle}
+
+
 async def list_buildings(
     session: AsyncSession,
     *,
