@@ -21,9 +21,10 @@ export const coreMethods = {
     }, 3200);
     // Pull the compliance register from the backend; the seed stays until it answers.
     this.ccLoad();
+    this.bldLoad();
   },
 
-  componentWillUnmount() { window.removeEventListener("keydown", this._key); clearInterval(this._frameTimer); clearInterval(this._cronTimer); clearTimeout(this._ccRetry); },
+  componentWillUnmount() { window.removeEventListener("keydown", this._key); clearInterval(this._frameTimer); clearInterval(this._cronTimer); clearTimeout(this._ccRetry); clearTimeout(this._bldRetry); },
 
   D() { return HOISTWAY; },
 

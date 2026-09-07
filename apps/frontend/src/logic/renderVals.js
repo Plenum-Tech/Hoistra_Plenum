@@ -969,29 +969,8 @@ export const renderValsMethods = {
         { title: "Paid to maintain them", value: "£412k", color: "var(--color-text)", note: "across 6 vendors — 4 with a PPM visit logged but no reading change" },
         { title: "Recoverable", value: "£38k", color: "var(--st-ok)", note: "service credits where the contract's outcome clause was missed" }
       ],
-      buildingRows: BUILDINGS.map((b) => ({
-        id: b.id, name: b.name, use: b.use, floors: String(b.floors), area: b.area,
-        flag: PACKS[b.cc].flag, country: PACKS[b.cc].name, state: b.state,
-        eui: b.euiN + " kWh/m²", bench: b.benchN + " kWh/m²",
-        delta: (b.euiN > b.benchN ? "+" : "") + Math.round(((b.euiN - b.benchN) / b.benchN) * 100) + "%",
-        deltaWord: b.euiN > b.benchN ? "over" : b.euiN < b.benchN ? "under" : "at benchmark",
-        std: PACKS[b.cc].std, stdNote: PACKS[b.cc].note,
-        stdFg: PACKS[b.cc].tone === "ok" ? "var(--st-ok)" : PACKS[b.cc].tone === "warn" ? "var(--st-warn)" : "var(--st-dormant)",
-        route: b.route,
-        routeGran: b.gran === "sub-metered" ? "sub-metered" : "building-level · inferred",
-        routeGranFg: b.gran === "sub-metered" ? "var(--color-neutral-500)" : "var(--st-dormant)",
-        routeTip: b.route + " · " + b.gran,
-        mixText: b.mix.length > 1 ? b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ") : "single use",
-        mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · "),
-        mix: b.mix.map((m) => {
-          const t = USE_TINT[m[0]] || { color: "var(--color-neutral-700)" };
-          return { pct: m[1] + "%", color: t.color, hatch: t.hatch || "none", border: "0", tip: m[0] + " — " + m[1] + "% of floor area" };
-        }),
-        score: String(b.hoist),
-        euiColor: b.euiN > b.benchN ? "var(--st-risk)" : "var(--st-ok)",
-        scoreColor: b.hoist >= 80 ? "var(--st-ok)" : b.hoist >= 65 ? "var(--st-warn)" : "var(--st-risk)",
-        click: () => this.flash(b.name + " — " + b.floors + " floors, " + b.area + ", floor-level use table keyed on floor ID.")
-      })),
+      // Buildings table — live rows from svc-operations-intelligence, seed as fallback (buildingsLive.js).
+      ...this.bldVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
       orchWidth: (s.orchOpen && s.flow === "investigate" ? 420 : 280) + "px",

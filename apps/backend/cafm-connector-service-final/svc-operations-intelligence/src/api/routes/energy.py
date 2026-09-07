@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...engines.energy import anomalies as anom_svc
+from ...engines.energy import buildings as bld_svc
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -149,6 +150,18 @@ async def building_profile(body: BuildingProfileRequest, session: AsyncSession =
         building_type=body.building_type,
         organization_id=body.organization_id,
     )
+
+
+@router.get("/buildings")
+async def list_buildings(
+    organization_id: UUID | None = None,
+    limit: int = Query(500, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Building table for the dashboard — every site with its energy profile, latest EUI,
+    the benchmark it is read against (and where that benchmark came from) and a record
+    completeness figure. See engines/energy/buildings.py."""
+    return await bld_svc.list_buildings(session, organization_id=organization_id, limit=limit)
 
 
 @router.get("/tm46")

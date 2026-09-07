@@ -8,6 +8,7 @@ import { energyMethods } from './energy.js';
 import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
 import { complianceLiveMethods } from './complianceLive.js';
+import { buildingsLiveMethods } from './buildingsLive.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -36,8 +37,10 @@ export class HoistraLogic extends Controller {
     ccPivot: "buildings", ccTab: 0, ccFocus: { kind: "building", name: "Bishopsgate Tower" }, nyView: "building",
     ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform", "Email"],
     // Compliance register from svc-operations-intelligence (null = seed data shown).
-    ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null
+    ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
+    // Buildings table from svc-operations-intelligence (null = seed data shown).
+    bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null
   };
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, buildingsLiveMethods, renderValsMethods);

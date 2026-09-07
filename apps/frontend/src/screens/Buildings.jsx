@@ -56,7 +56,12 @@ export default function Buildings({ vals }) {
                 </span>
               </div>
               <div style={{ fontSize: "13px", color: "var(--color-accent)" }}>
-                {"Hoisted on the Graph with a Building Table"}
+                {vals.bldKicker}
+              </div>
+              <div title={vals.bldSourceDetail} style={{ display: "inline-flex", alignItems: "center", gap: "7px", padding: "5px 11px", borderRadius: "20px", border: "1px solid var(--color-divider)", fontSize: "11px", color: "var(--color-neutral-400)", whiteSpace: "nowrap", alignSelf: "flex-start" }}>
+                <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: vals.bldSourceDot, flexShrink: "0" }}></span>
+                <span>{vals.bldSourceLabel}</span>
+                <span className="hv11" onClick={vals.bldRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.bldRetryShow }}>{"Retry"}</span>
               </div>
             </div>
             {vals.isAdmin ? (
@@ -144,7 +149,7 @@ export default function Buildings({ vals }) {
                       {b.area}
                     </span>
                     <span title={b.routeTip} style={{ minWidth: "0", fontVariantNumeric: "tabular-nums" }}>
-                      <span style={{ whiteSpace: "nowrap" }}>
+                      <span title={b.euiTip} style={{ whiteSpace: "nowrap" }}>
                         {b.eui}
                       </span>
                       <span style={{ display: "block", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.3", textWrap: "pretty", fontVariantNumeric: "normal", marginTop: "2px" }}>
@@ -154,7 +159,7 @@ export default function Buildings({ vals }) {
                         {b.routeGran}
                       </span>
                     </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+                    <span title={b.benchTip} style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
                       {b.bench}
                     </span>
                     <span style={{ fontVariantNumeric: "tabular-nums", color: b.euiColor, whiteSpace: "nowrap" }}>
@@ -169,7 +174,7 @@ export default function Buildings({ vals }) {
                         {b.stdNote}
                       </span>
                     </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
+                    <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
                       {b.score}
                     </span>
                   </div>
