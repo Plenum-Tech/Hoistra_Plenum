@@ -77,6 +77,14 @@ CODE_ALIASES: dict[str, str] = {
     "PA1": "PESTICIDE_PAx",
     "PA2": "PESTICIDE_PAx",
     "PA6": "PESTICIDE_PAx",
+    # Pack codes whose verify-code alias was missing, so §8 verification looked up the pack
+    # code itself and found no source row. The single-door classifier now stores the pack
+    # code (it used to store the verify code, which never joined country_certificate_pack),
+    # so these four types had no verification channel until the alias existed.
+    "PA1_PA2_PA6": "PESTICIDE_PAx",
+    "ASBESTOS_P402_P403_P404": "BOHS_P40x",
+    "BTEC_LEGIONELLA": "LEGIONELLA_COMP",
+    "NSI_GOLD_SECURITY": "NSI_GOLD_SEC",
     # UK EL/PL liability-insurance variants → the two FCA-verified canonical codes, so
     # EVERY liability-insurance certificate routes to the FCA register check centrally
     # (one rule, not per-code seed rows). get_pack_type uses the raw code, so extraction
