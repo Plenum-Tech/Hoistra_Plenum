@@ -9,7 +9,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
-import { deepAgentsApi } from '../api/deepAgents.js';
+import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 
 // The backend spells the Emirates "UAE"; the shell spells it "AE" (PACKS, CC_OF).
 const COUNTRY = {
@@ -370,11 +370,11 @@ export const complianceLiveMethods = {
       { a: "Worker", t: "svc-operations-intelligence recomputes status, alert ladder and vendor block state for every certificate" },
       { a: "Quality", t: "The register above is re-read when the scan returns" }
     ]);
-    const t0 = Date.now();
-    deepAgentsApi.logActivity({ stage: "action", direction: "input", summary: "Run compliance scan", payload: { action: "scan", request: { scope: "all" } } });
+    const t0 = Date.now(); const turn = newTurn();
+    deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "input", summary: "Run compliance scan", payload: { action: "scan", request: { scope: "all" } } });
     try {
       const res = await complianceApi.runScan({});
-      deepAgentsApi.logActivity({ stage: "action", direction: "output", summary: "Compliance scan returned", latency_ms: Date.now() - t0, payload: { action: "scan", response: res } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "output", summary: "Compliance scan returned", latency_ms: Date.now() - t0, payload: { action: "scan", response: res } });
       await this.ccLoad();
       const b = res && res.building_scanned, v = res && res.vendor_scanned;
       const n = (typeof b === "number" || typeof v === "number") ? (b || 0) + (v || 0) : null;
@@ -387,7 +387,7 @@ export const complianceLiveMethods = {
           (typeof blocks === "number" && blocks ? ", " + blocks + " vendor blocks set" : "") + ". The register has been re-read."
       });
     } catch (e) {
-      deepAgentsApi.logActivity({ stage: "action", direction: "error", summary: "Compliance scan failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "scan" } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Compliance scan failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "scan" } });
       this.setState({ flow: null, flowDone: "The scan could not be run: " + ((e && e.message) || e) + ". Showing " + (this.ccIsLive() ? "the last loaded register" : "seed data") + "." });
     }
   },
@@ -413,18 +413,18 @@ export const complianceLiveMethods = {
       { a: "Worker", t: "POST /api/compliance/certificates/{id}/verify" },
       { a: "Quality", t: "Verdict written to the certificate record; the register re-reads" }
     ]);
-    const t0 = Date.now();
-    deepAgentsApi.logActivity({ stage: "action", direction: "input", summary: "Verify register — " + c.nm + " — " + c.holder, payload: { action: "verify", certificate_id: c.id, certificate: { type: c.nm, code: c.code, holder: c.holder, number: c.number } } });
+    const t0 = Date.now(); const turn = newTurn();
+    deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "input", summary: "Verify register — " + c.nm + " — " + c.holder, payload: { action: "verify", certificate_id: c.id, certificate: { type: c.nm, code: c.code, holder: c.holder, number: c.number } } });
     try {
       const r = await complianceApi.verifyCertificate(c.id);
-      deepAgentsApi.logActivity({ stage: "action", direction: "output", summary: "Verify register returned " + String((r && (r.status || r.verification_status)) || "?"), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id, response: r } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "output", summary: "Verify register returned " + String((r && (r.status || r.verification_status)) || "?"), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id, response: r } });
       const st = (r && (r.status || r.verification_status || (r.verification || {}).status)) || (r && r.ok ? "checked" : "unknown");
       const ch = r && (r.channel || (r.verification || {}).channel);
       const url = r && (r.verify_url || r.verification_url || (r.verification || {}).verify_url);
       this.setState({ flow: null, flowDone: "Verification returned “" + String(st).replace(/_/g, " ") + "” for " + c.nm + " — " + c.holder + (ch ? " via " + String(ch).replace(/_/g, " ") : "") + "." + (url ? " Register: " + url : "") });
       this.ccLoad();
     } catch (e) {
-      deepAgentsApi.logActivity({ stage: "action", direction: "error", summary: "Verify register failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Verify register failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id } });
       this.setState({ flow: null, flowDone: "Verification failed: " + ((e && e.message) || e) });
     }
   },
@@ -436,17 +436,17 @@ export const complianceLiveMethods = {
       { a: "Worker", t: "POST /api/compliance/certificates/renewal-email — drafted, not sent" },
       { a: "Quality", t: "Queued on the approvals card. Nothing leaves the platform until you send it." }
     ]);
-    const t0 = Date.now();
-    deepAgentsApi.logActivity({ stage: "action", direction: "input", summary: "Draft renewal email — " + c.nm + " — " + c.holder, payload: { action: "renewal_email", certificate_id: c.id, certificate: { type: c.nm, code: c.code, holder: c.holder, days: isFinite(c.days) ? c.days : null } } });
+    const t0 = Date.now(); const turn = newTurn();
+    deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "input", summary: "Draft renewal email — " + c.nm + " — " + c.holder, payload: { action: "renewal_email", certificate_id: c.id, certificate: { type: c.nm, code: c.code, holder: c.holder, days: isFinite(c.days) ? c.days : null } } });
     try {
       const r = await complianceApi.draftRenewalEmail(c.id);
-      deepAgentsApi.logActivity({ stage: "action", direction: r && r.ok === false ? "error" : "output", summary: (r && r.message) || "Renewal email drafted", ok: !(r && r.ok === false), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id, response: r } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: r && r.ok === false ? "error" : "output", summary: (r && r.message) || "Renewal email drafted", ok: !(r && r.ok === false), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id, response: r } });
       if (r && r.ok === false) throw new Error(r.error || "not drafted");
       const d = (r && r.email_draft) || {};
       this.setState({ flow: null, flowDone: (r && r.message) || "Renewal email drafted and queued for approval.", emTo: d.to || "", emSubject: d.subject || "", emBody: d.body || "" });
       this.ccLoad();
     } catch (e) {
-      deepAgentsApi.logActivity({ stage: "action", direction: "error", summary: "Renewal email failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Renewal email failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id } });
       this.setState({ flow: null, flowDone: "Renewal email could not be drafted: " + ((e && e.message) || e) });
     }
   }

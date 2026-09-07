@@ -19,6 +19,7 @@ from .compliance_offers import offers_for_row, row_from_ingest
 from .contract_performance_single_door import extract_text_from_upload
 from .document_forensics import analyze_certificate_document, forensics_summary_line
 from .pdf_vision_extract import extract_document_text
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
@@ -450,6 +451,8 @@ async def classify_compliance_certificate_llm(
         f"User message: {msg or '(none)'}\n"
         f"Document text (may be partial/OCR):\n{body or '(no text layer extracted)'}"
     )
+    _model = "claude-haiku-4-5-20251001"
+    _t0 = __import__("time").perf_counter()
     try:
         import json as _json
 
@@ -457,13 +460,21 @@ async def classify_compliance_certificate_llm(
 
         client = anthropic.AsyncAnthropic(api_key=key)
         resp = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_model,
             max_tokens=350,
             messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         raw = resp.content[0].text if resp.content else "{}"
         raw = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.I | re.M)
         data = _json.loads(raw)
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg, "text_chars": len(body)},
+            output=data, model=_model, usage=resp.usage,
+            latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+            summary_out=f"compliance={data.get('compliance')} candidates={[c.get('certificate_type_code') for c in (data.get('candidates') or [])]}",
+        )
         if not data.get("compliance"):
             return []
         out: list[dict[str, Any]] = []
@@ -487,6 +498,12 @@ async def classify_compliance_certificate_llm(
         return out
     except Exception as exc:  # noqa: BLE001 — classification is best-effort
         log.warning("single_door.compliance.llm_classify_failed", error=str(exc)[:200])
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg}, error=str(exc),
+            model=_model, latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+        )
         return []
 
 

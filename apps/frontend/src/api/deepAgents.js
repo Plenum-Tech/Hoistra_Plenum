@@ -19,6 +19,9 @@ export function activitySessionId() {
   return _sessionId;
 }
 
+// One id per UI action (scan, verify, renewal) so its input and output rows group as a turn.
+export function newTurn() { return 'ui-turn-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
 export const deepAgentsApi = {
   // Append one client-side entry to plenum_cafm.agent_activity_log. Fire-and-forget: a
   // logging failure is never surfaced to the user.

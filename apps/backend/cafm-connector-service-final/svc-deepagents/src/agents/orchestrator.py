@@ -1305,10 +1305,17 @@ class DeepAgentOrchestrator:
                 "Answer with one of: compliance, contract, energy, general."
             )
         )
+        _t0 = time.perf_counter()
+        _model = getattr(self._llm, "model_name", None) or settings.openai_model
         try:
             resp = await self._llm.ainvoke([system, HumanMessage(content=text[:2000])])
         except Exception as exc:  # noqa: BLE001 — never let routing crash the turn
             log.warning("orchestrator.llm_route.failed", error=str(exc)[:200])
+            activity_log.fire_exchange(
+                agent="orchestrator", stage="classify_engine", system=system.content,
+                user=text[:2000], error=str(exc), model=_model,
+                latency_ms=(time.perf_counter() - _t0) * 1000,
+            )
             return None
         out = getattr(resp, "content", "")
         if isinstance(out, list):
@@ -1324,6 +1331,13 @@ class DeepAgentOrchestrator:
         elif "energy" in out:
             engine = "energy_intelligence"
         log.info("orchestrator.llm_route", classified=out[:40], engine=engine)
+        activity_log.fire_exchange(
+            agent="orchestrator", stage="classify_engine", system=system.content,
+            user=text[:2000], output={"raw": out, "engine": engine}, model=_model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            usage=getattr(resp, "usage_metadata", None),
+            summary_out=f"engine: {engine or 'general'}",
+        )
         return engine
 
     @staticmethod
@@ -2754,6 +2768,13 @@ class DeepAgentOrchestrator:
         # timeout — the handler below still logs `raw`, and an unbound local would turn a
         # recoverable planning failure into an exception that takes the whole turn with it.
         raw: Any = ""
+        _plan_t0 = time.perf_counter()
+        _plan_model = getattr(self._llm, "model_name", None) or settings.openai_model
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", model=_plan_model,
+            summary="planner prompt", payload={"system_prompt": system.content,
+                                                 "user_message": text[:1200]},
+        )
         try:
             resp = await self._llm.ainvoke(
                 [system, HumanMessage(content=text[:1200])]
@@ -2771,7 +2792,9 @@ class DeepAgentOrchestrator:
             )
             activity_log.fire(
                 agent="compliance", stage="plan", direction="error", summary=str(exc)[:200],
-                ok=False, error=str(exc), payload={"raw": str(raw)[:2000], "fallback": default},
+                ok=False, error=str(exc), model=_plan_model,
+                latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+                payload={"model_output_raw": str(raw)[:4000], "fallback": default},
             )
             return default
         needs = [n for n in (plan.get("needs") or []) if n in self._PLAN_SOURCES]
@@ -2814,7 +2837,8 @@ class DeepAgentOrchestrator:
         }
         activity_log.fire(
             agent="compliance", stage="plan", direction="output", summary=out["reason"][:300],
-            payload=out,
+            model=_plan_model, latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+            payload={"plan": out, "model_output_raw": str(raw)},
         )
         log.info(
             "compliance.stage0.plan",
@@ -3734,6 +3758,22 @@ class DeepAgentOrchestrator:
                 else (getattr(settings, "compliance_review_effort", "") or "medium").strip()
             )
             _t0 = time.perf_counter()
+            activity_log.fire(
+                agent="compliance", stage="review", direction="input", model=model,
+                summary="review of: " + (user_message or "")[:250],
+                payload={
+                    "system_prompt": self._REVIEWER_PROMPT,
+                    "user_message": {
+                        "question": user_message[:1000],
+                        "pack_facts": pack_facts or {},
+                        "register_index": self._register_index(rows or []),
+                        "tool_results_digest": self._tool_results_digest(tool_results),
+                        "code_findings": code_findings,
+                        "answer_under_review": answer_text,
+                    },
+                    "params": {"effort": review_effort, "max_tokens": 4000, "schema": "review"},
+                },
+            )
             message = await client.messages.create(
                 model=model,
                 max_tokens=4000,
@@ -3889,6 +3929,21 @@ class DeepAgentOrchestrator:
             system_text = "\n\n---\n\n".join(
                 [self._ANALYST_CONTEXT_DOCS, self._ANALYST_PROMPT]
                 + ([self._TAXONOMY_DIRECTIVE] if taxonomy else [])
+            )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="input", model=model,
+                summary=(user_message or "")[:300],
+                payload={
+                    "system_prompt": system_text,
+                    "user_message": {
+                        "question": user_message,
+                        "sub_questions": self._sub_question_brief(sub_questions, user_message),
+                        "query_notes": query_notes,
+                        "data_json": data_json,
+                    },
+                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": 16000,
+                               "thinking": "adaptive", "schema": "compliance_response"},
+                },
             )
             async with client.messages.stream(
                 model=model,
@@ -5966,6 +6021,7 @@ class DeepAgentOrchestrator:
         config = self._config(thread_id)
         set_session_context(thread_id)
         activity_log.set_current_session(session_id, thread_id)
+        activity_log.ensure_turn()
         _turn_t0 = time.perf_counter()
         activity_log.fire(
             agent="orchestrator", stage="turn", direction="input",
@@ -6400,6 +6456,7 @@ class DeepAgentOrchestrator:
         thread_id = sid
         config = self._config(thread_id)
         activity_log.set_current_session(sid, thread_id)
+        activity_log.ensure_turn()
         _stream_t0 = time.perf_counter()
         activity_log.fire(
             agent="orchestrator", stage="turn", direction="input", summary=user_message[:300],

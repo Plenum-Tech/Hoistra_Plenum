@@ -95,3 +95,23 @@ def test_timed_context_manager_measures():
     with activity_log.timed() as t:
         pass
     assert t.ms >= 0
+
+
+def test_fire_maps_usage_and_drops_unknown_kwargs(monkeypatch):
+    seen: list[dict] = []
+
+    async def fake_record(**kw):
+        seen.append(kw)
+        return "id"
+
+    monkeypatch.setattr(activity_log, "record", fake_record)
+
+    async def run():
+        activity_log.fire(agent="compliance", stage="plan", direction="output", summary="x",
+                          usage={"input_tokens": 12, "output_tokens": 3}, bogus="dropped")
+        await asyncio.sleep(0)
+        await asyncio.gather(*list(activity_log._pending))
+
+    asyncio.run(run())
+    assert seen[0]["input_tokens"] == 12 and seen[0]["output_tokens"] == 3
+    assert "usage" not in seen[0] and "bogus" not in seen[0]

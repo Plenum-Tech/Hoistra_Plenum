@@ -241,6 +241,8 @@ async def run_workflow(
     Use /run-stateful when you need HITL interrupt support.
     Rate limited to 20 requests/minute per IP.
     """
+    activity_log.set_current_session(body.session_id, body.session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id)
     result = await orchestrator.run(
         user_message=body.message,
@@ -275,6 +277,8 @@ async def run_stateful_workflow(
             status_code=400,
             detail="session_id is required for stateful (HITL-capable) workflow runs.",
         )
+    activity_log.set_current_session(sid, sid)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run_stateful", session_id=sid, message_len=len(body.message))
     result = await orchestrator.run_stateful(
         user_message=body.message,
@@ -565,6 +569,10 @@ async def resume_workflow(
         {"confirmed": true}   ← proceeds with the destructive rollback
         {"confirmed": false}  ← cancels the rollback
     """
+    activity_log.set_current_session(session_id, session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
+    activity_log.set_current_session(session_id, session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.resume", session_id=session_id, decision_keys=list(body.decision.keys()))
     result = await orchestrator.resume(
         session_id=session_id,
@@ -675,6 +683,8 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             }))
             return
 
+        activity_log.set_current_session(session_id, session_id)
+        activity_log.start_turn()  # one transaction per request; every row below shares it
         log.info("ws_workflow.start", session_id=session_id, message_len=len(message))
 
         async for event in orchestrator.stream(
@@ -708,6 +718,7 @@ class ActivityEntry(BaseModel):
     server-side stages so a session's trail is complete end to end."""
 
     session_id: str = Field(..., max_length=120)
+    turn_id: str | None = Field(None, max_length=64, description="Groups the rows of one action")
     agent: str = Field("frontend", max_length=60)
     stage: str = Field(..., max_length=60)
     direction: str = Field(..., pattern="^(input|output|error)$")
@@ -729,11 +740,20 @@ async def activity_for_session(
     session_id: str,
     agent: str | None = Query(None, description="orchestrator | compliance | compliance_router | tool:<domain> | frontend"),
     stage: str | None = Query(None, description="turn | plan | fetch | summary | analyst | review | router | tool | action"),
+    turn_id: str | None = Query(None, description="Only the rows of one transaction"),
     limit: int = Query(200, ge=1, le=2000),
 ) -> dict[str, Any]:
     """Every recorded input/output for one session, oldest first — for troubleshooting a turn."""
-    rows = await activity_log.list_activity(session_id, agent=agent, stage=stage, limit=limit)
-    return {"ok": True, "session_id": session_id, "count": len(rows), "entries": rows}
+    rows = await activity_log.list_activity(session_id, agent=agent, stage=stage, turn_id=turn_id, limit=limit)
+    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "count": len(rows), "entries": rows}
+
+
+@router.get("/activity/{session_id}/turns")
+async def activity_turns(session_id: str, limit: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
+    """The transactions of one session: per turn, its first input, final output, the stages it
+    passed through, token totals and whether every step succeeded."""
+    turns = await activity_log.list_turns(session_id, limit=limit)
+    return {"ok": True, "session_id": session_id, "count": len(turns), "turns": turns}
 
 
 @router.post("/activity", status_code=201)
@@ -744,5 +764,6 @@ async def activity_append(entry: ActivityEntry) -> dict[str, Any]:
         agent=entry.agent, stage=entry.stage, direction=entry.direction,
         summary=entry.summary, payload=entry.payload, ok=entry.ok, error=entry.error,
         latency_ms=entry.latency_ms, session_id=entry.session_id, thread_id=entry.session_id,
+        turn_id=entry.turn_id,
     )
     return {"ok": row_id is not None, "id": row_id}

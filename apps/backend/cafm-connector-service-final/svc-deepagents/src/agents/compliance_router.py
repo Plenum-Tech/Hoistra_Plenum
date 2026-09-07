@@ -150,6 +150,13 @@ async def select_docs(question: str) -> dict:
         f"- {name}: {why}" for name, why in TOPIC_DOCS.items() if name in have
     )
     model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+    _user = f"AVAILABLE DOCUMENTS:\n{catalogue}\n\nQUESTION:\n{(question or '').strip()[:1000]}"
+    activity_log.fire(
+        agent="compliance_router", stage="router", direction="input", model=model,
+        summary=(question or "")[:300],
+        payload={"system_prompt": _ROUTER_PROMPT, "user_message": _user,
+                 "params": {"effort": "low", "max_tokens": 500, "schema": "docs"}},
+    )
     try:
         import anthropic
 

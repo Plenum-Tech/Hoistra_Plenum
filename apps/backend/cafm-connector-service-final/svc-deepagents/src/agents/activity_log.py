@@ -43,6 +43,12 @@ _current_session: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _current_thread: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "activity_thread", default=None
 )
+# One turn = one user request through the orchestrator (or one UI action). Every row written
+# while that request runs carries the same turn_id, so a session's trail can be split into
+# transactions and one transaction replayed on its own.
+_current_turn: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "activity_turn", default=None
+)
 
 
 def set_current_session(session_id: str | None, thread_id: str | None = None) -> None:
@@ -52,6 +58,69 @@ def set_current_session(session_id: str | None, thread_id: str | None = None) ->
 
 def get_current_session() -> str | None:
     return _current_session.get()
+
+
+def start_turn(turn_id: str | None = None) -> str:
+    """Begin a new transaction in this context (or adopt ``turn_id``). Returns the id."""
+    tid = turn_id or ("turn-" + uuid.uuid4().hex[:16])
+    _current_turn.set(tid)
+    return tid
+
+
+def current_turn() -> str | None:
+    return _current_turn.get()
+
+
+def ensure_turn() -> str:
+    """The current turn id, starting one if this context has none yet."""
+    return _current_turn.get() or start_turn()
+
+
+def _usage_tokens(usage: Any) -> tuple[int | None, int | None]:
+    if usage is None:
+        return None, None
+    if isinstance(usage, dict):
+        return usage.get("input_tokens"), usage.get("output_tokens")
+    return getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None)
+
+
+def fire_exchange(
+    *,
+    agent: str,
+    stage: str,
+    system: Any = None,
+    user: Any = None,
+    output: Any = None,
+    error: str | None = None,
+    model: str | None = None,
+    latency_ms: float | None = None,
+    usage: Any = None,
+    params: dict[str, Any] | None = None,
+    summary_in: str | None = None,
+    summary_out: str | None = None,
+) -> None:
+    """One model exchange as two rows: the INPUT (system prompt + user message + call
+    parameters) and the OUTPUT (or ERROR). Used at every LLM call in the compliance path so
+    the exact prompt and the exact answer of each sub-agent can be read back per turn."""
+    fire(
+        agent=agent, stage=stage, direction="input", model=model,
+        summary=(summary_in or (str(user)[:300] if user is not None else stage)),
+        payload={"system_prompt": system, "user_message": user, "params": params or {}},
+    )
+    in_tok, out_tok = _usage_tokens(usage)
+    if error:
+        fire(
+            agent=agent, stage=stage, direction="error", model=model, ok=False, error=error,
+            summary=(summary_out or error)[:300], latency_ms=latency_ms,
+            input_tokens=in_tok, output_tokens=out_tok,
+        )
+    else:
+        fire(
+            agent=agent, stage=stage, direction="output", model=model, latency_ms=latency_ms,
+            summary=(summary_out or (str(output)[:300] if output is not None else stage)),
+            input_tokens=in_tok, output_tokens=out_tok,
+            payload={"model_output": output},
+        )
 
 
 def enabled() -> bool:
@@ -135,6 +204,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     id              UUID PRIMARY KEY,
     session_id      VARCHAR(120),
     thread_id       VARCHAR(120),
+    turn_id         VARCHAR(64),
     agent           VARCHAR(60)  NOT NULL,   -- orchestrator | compliance | compliance_router | tool:<domain> | frontend
     stage           VARCHAR(60)  NOT NULL,   -- turn | plan | fetch | prompt | analyst | review | summary | tool | router | action
     direction       VARCHAR(10)  NOT NULL,   -- input | output | error
@@ -150,7 +220,9 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 )
 """
 _IDX = [
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS turn_id VARCHAR(64)",
     f"CREATE INDEX IF NOT EXISTS ix_agent_activity_session ON {TABLE} (session_id, created_at)",
+    f"CREATE INDEX IF NOT EXISTS ix_agent_activity_turn ON {TABLE} (session_id, turn_id, created_at)",
     f"CREATE INDEX IF NOT EXISTS ix_agent_activity_agent_stage ON {TABLE} (agent, stage, created_at DESC)",
 ]
 
@@ -190,15 +262,18 @@ async def record(
     error: str | None = None,
     session_id: str | None = None,
     thread_id: str | None = None,
+    turn_id: str | None = None,
 ) -> str | None:
     """Append one activity row. Returns the row id, or None when nothing was written."""
     sid = session_id or _current_session.get()
     tid = thread_id or _current_thread.get() or sid
+    turn = turn_id or _current_turn.get()
     bounded = bound_payload(payload)
     # Always a structlog line, so the console trail exists even without the table.
     log.info(
         f"activity.{agent}.{stage}.{direction}",
         session_id=sid,
+        turn_id=turn,
         summary=(summary or "")[:300],
         model=model,
         latency_ms=round(latency_ms) if latency_ms is not None else None,
@@ -219,11 +294,12 @@ async def record(
                 text(
                     f"""
                     INSERT INTO {TABLE}
-                        (id, session_id, thread_id, agent, stage, direction, summary, payload,
-                         model, latency_ms, input_tokens, output_tokens, ok, error, created_at)
+                        (id, session_id, thread_id, turn_id, agent, stage, direction, summary,
+                         payload, model, latency_ms, input_tokens, output_tokens, ok, error,
+                         created_at)
                     VALUES
-                        (:id, :session_id, :thread_id, :agent, :stage, :direction, :summary,
-                         CAST(:payload AS JSONB), :model, :latency_ms, :input_tokens,
+                        (:id, :session_id, :thread_id, :turn_id, :agent, :stage, :direction,
+                         :summary, CAST(:payload AS JSONB), :model, :latency_ms, :input_tokens,
                          :output_tokens, :ok, :error, :created_at)
                     """
                 ),
@@ -231,6 +307,7 @@ async def record(
                     "id": row_id,
                     "session_id": (sid or "")[:120] or None,
                     "thread_id": (tid or "")[:120] or None,
+                    "turn_id": (turn or "")[:64] or None,
                     "agent": agent[:60],
                     "stage": stage[:60],
                     "direction": direction[:10],
@@ -264,6 +341,20 @@ def fire(**kwargs: Any) -> None:
         return
     kwargs.setdefault("session_id", _current_session.get())
     kwargs.setdefault("thread_id", _current_thread.get())
+    kwargs.setdefault("turn_id", _current_turn.get())
+    # A raw provider `usage` object is accepted here and mapped to token counts, and any
+    # unknown keyword is dropped rather than raised — a logging call must never take a turn down.
+    if "usage" in kwargs:
+        in_tok, out_tok = _usage_tokens(kwargs.pop("usage"))
+        kwargs.setdefault("input_tokens", in_tok)
+        kwargs.setdefault("output_tokens", out_tok)
+    allowed = {"agent", "stage", "direction", "summary", "payload", "model", "latency_ms",
+               "input_tokens", "output_tokens", "ok", "error", "session_id", "thread_id", "turn_id"}
+    dropped = [k for k in kwargs if k not in allowed]
+    for k in dropped:
+        kwargs.pop(k)
+    if dropped:
+        log.warning("activity_log.unknown_kwargs_dropped", keys=dropped)
     task = loop.create_task(record(**kwargs))
     _pending.add(task)
     task.add_done_callback(_pending.discard)
@@ -289,15 +380,19 @@ async def list_activity(
     *,
     agent: str | None = None,
     stage: str | None = None,
+    turn_id: str | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
-    """Rows for one session, oldest first — the replayable trail."""
+    """Rows for one session (optionally one turn), oldest first — the replayable trail."""
     if not enabled():
         return []
     from ..database import _get_engine
 
     sql = f"SELECT * FROM {TABLE} WHERE session_id = :sid"
     params: dict[str, Any] = {"sid": session_id, "lim": max(1, min(int(limit), 2000))}
+    if turn_id:
+        sql += " AND turn_id = :turn"
+        params["turn"] = turn_id
     if agent:
         sql += " AND agent = :agent"
         params["agent"] = agent
@@ -318,6 +413,40 @@ async def list_activity(
     return out
 
 
+async def list_turns(session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """The transactions of one session: one row per turn with its first input, last
+    output, stages touched and whether anything failed."""
+    if not enabled():
+        return []
+    from ..database import _get_engine
+
+    sql = f"""
+        SELECT turn_id,
+               min(created_at) AS started_at, max(created_at) AS ended_at,
+               count(*) AS rows, bool_and(ok) AS all_ok,
+               array_agg(DISTINCT agent || '/' || stage) AS stages,
+               (array_agg(summary ORDER BY created_at ASC)
+                  FILTER (WHERE direction = 'input' AND agent = 'orchestrator'))[1] AS first_input,
+               (array_agg(summary ORDER BY created_at DESC)
+                  FILTER (WHERE direction = 'output' AND agent = 'orchestrator'))[1] AS final_output,
+               sum(coalesce(input_tokens, 0)) AS input_tokens,
+               sum(coalesce(output_tokens, 0)) AS output_tokens
+        FROM {TABLE}
+        WHERE session_id = :sid
+        GROUP BY turn_id ORDER BY min(created_at) ASC LIMIT :lim
+    """
+    async with _get_engine().connect() as conn:
+        rows = (await conn.execute(text(sql), {"sid": session_id, "lim": max(1, min(int(limit), 2000))})).mappings().all()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("started_at", "ended_at"):
+            if isinstance(d.get(k), datetime):
+                d[k] = d[k].isoformat()
+        out.append(d)
+    return out
+
+
 async def recent_sessions(limit: int = 50) -> list[dict[str, Any]]:
     """Sessions with activity, newest first — the entry point when you only know 'yesterday'."""
     if not enabled():
@@ -327,6 +456,7 @@ async def recent_sessions(limit: int = 50) -> list[dict[str, Any]]:
     sql = f"""
         SELECT session_id, min(created_at) AS started_at, max(created_at) AS last_at,
                count(*) AS rows, bool_and(ok) AS all_ok,
+               count(DISTINCT turn_id) AS turns,
                array_agg(DISTINCT agent) AS agents
         FROM {TABLE}
         WHERE session_id IS NOT NULL
