@@ -34,9 +34,13 @@ from . import llm_cost
 
 log = structlog.get_logger(__name__)
 
-#: Loaded for every compliance question regardless of what the router says. These are the
-#: documents whose absence changes what a word means, not merely what detail is available.
-CORE_DOCS: tuple[str, ...] = ("vocabulary", "tables", "tool-selection", "never")
+#: Loaded for every compliance question regardless of what the router says. `core.md` is the
+#: single compressed document that replaced vocabulary + tables + tool-selection + never and
+#: the recipe index: the words, the tools, the name-matching rules, the data underneath, the
+#: question-shape index and the prohibitions, deduplicated (11K characters where the four
+#: separate files came to 12.7K plus 5.9K of recipes). The four originals stay on disk because
+#: the analyst and reviewer still read vocabulary and tables directly.
+CORE_DOCS: tuple[str, ...] = ("core",)
 
 #: Selectable by the router, with the question shapes each one serves.
 TOPIC_DOCS: dict[str, str] = {
@@ -55,10 +59,26 @@ def selective_loading_enabled() -> bool:
     return str(os.getenv(_ENV_FLAG, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Files in the directory that are not part of the sub-agent's contract. `review` is the
-#: eval agent's own prompt, and `tool-routing` is the pre-split original that vocabulary,
-#: tool-selection and renewals were cut from — loading it would duplicate all three.
-NOT_AGENT_DOCS: frozenset[str] = frozenset({"SKILL", "review", "tool-routing"})
+#: Files in the directory that are not part of the sub-agent's contract. `review` and
+#: `scope-eval` are the reviewer's prompts; `domain_compliance_knowledge` is read by the
+#: analyst and reviewer, not the fetcher; `tool-routing` is the pre-split original that
+#: vocabulary, tool-selection and renewals were cut from; and vocabulary, tables,
+#: tool-selection and never are now folded into `core` — loading any of them alongside it
+#: would say the same thing twice. Excluding them here also keeps them out of the
+#: load-everything fallback.
+NOT_AGENT_DOCS: frozenset[str] = frozenset(
+    {
+        "SKILL",
+        "review",
+        "scope-eval",
+        "tool-routing",
+        "domain_compliance_knowledge",
+        "vocabulary",
+        "tables",
+        "tool-selection",
+        "never",
+    }
+)
 
 
 _PATH_FLAG = "COMPLIANCE_SKILL_PATH"
