@@ -115,7 +115,7 @@ export default function Buildings({ vals }) {
               {(vals.buildingRows || []).map((b, $index) => (
                 <React.Fragment key={$index}>
                   <div className="hv2" onClick={b.click} style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
-                    <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)" }}>
+                    <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)" }}>
                       {b.id}
                     </span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -180,6 +180,9 @@ export default function Buildings({ vals }) {
                   </div>
                 </React.Fragment>
               ))}
+              <div style={{ padding: "22px 16px", fontSize: "12.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", display: vals.bldEmptyShow }}>
+                {vals.bldEmptyText}
+              </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "7px 16px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)" }}>
                 {(vals.useLegend || []).map((u, $index) => (
                   <React.Fragment key={$index}>

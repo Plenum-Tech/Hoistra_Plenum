@@ -50,6 +50,7 @@ def test_tm46_type_mapping():
 
 def test_uk_row_reads_against_tm46_by_site_type():
     row = shape_building_row(_site(), profile=None, snapshot=None, meters=[])
+    assert row["site_id"] == "SITE-001" and row["site_uuid"] is None
     assert row["country_code"] == "UK"
     assert row["benchmark_standard"] == "CIBSE TM46"
     assert row["benchmark_standing"] == "guidance"

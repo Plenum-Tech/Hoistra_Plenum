@@ -23,6 +23,7 @@ engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+_SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"
 
 
 async def init_db() -> None:
@@ -101,6 +102,24 @@ async def apply_sql_migrations() -> None:
                 )
         log.info("db.migration.file_applied", file=mig.name, statements=len(statements))
     log.info("db.migration.applied", statements=total, files=len(files))
+
+
+async def apply_sql_seed(name: str) -> int:
+    """Apply one idempotent seed file from seeds/ (statement by statement). Returns applied count."""
+    path = _SEEDS_DIR / name
+    if not path.exists():
+        log.warning("db.seed.missing", path=str(path))
+        return 0
+    applied = 0
+    for stmt in _split_sql(path.read_text(encoding="utf-8")):
+        try:
+            async with engine.begin() as conn:
+                await conn.exec_driver_sql(stmt)
+            applied += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("db.seed.stmt_skipped", file=name, error=str(exc)[:300])
+    log.info("db.seed.applied", file=name, statements=applied)
+    return applied
 
 
 async def get_session() -> AsyncSession:

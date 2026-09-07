@@ -1,8 +1,9 @@
 """Building table — one row per site with its energy profile, latest EUI and benchmark.
 
-Backs the frontend Buildings screen. Reads ``plenum_cafm.sites`` through the same
-shape-agnostic helpers compliance uses (the table is varchar-keyed in this deployment and
-UUID-keyed in others), then joins what Feature C knows about each site:
+Backs the frontend Buildings screen. Every row IS a ``plenum_cafm.sites`` row, keyed on
+``site_id VARCHAR(50)`` (the table's primary key in this deployment); nothing here is
+hard-coded building data. The energy tables key on a UUID, so they are joined by text on
+whichever identifier the site row carries. What Feature C knows about each site:
 
 * ``building_energy_profiles`` — GIA and TM46 building type (keyed by site UUID)
 * ``eui_snapshots`` — the latest annualised EUI and the benchmark it was compared against
@@ -241,8 +242,8 @@ def shape_building_row(
     benchmark is filled in afterwards by ``apply_rolling_benchmarks`` because it needs the
     other rows.
     """
-    site_uuid = as_uuid(site.get("key")) or as_uuid(site.get("alt_id"))
-    key = str(site.get("key") or "").strip()
+    key = str(site.get("key") or "").strip()  # sites.site_id VARCHAR(50) — the row's identity
+    site_uuid = as_uuid(key) or as_uuid(site.get("alt_id"))  # only used to join the energy tables
     floors = _int(site.get("floors"))
     gfa = _num(site.get("gfa_sqm"))
     cc = country_code_for(site.get("country_code") or site.get("country"))
@@ -325,9 +326,9 @@ def shape_building_row(
     completeness = round(100.0 * (len(COMPLETENESS_FIELDS) - len(missing)) / len(COMPLETENESS_FIELDS))
 
     row = {
+        "site_id": key or None,
         "site_key": key or (str(site_uuid) if site_uuid else None),
         "site_uuid": str(site_uuid) if site_uuid else None,
-        "site_ref": None if site_uuid and key == str(site_uuid) else (key or None),
         "name": site.get("building_name") or site.get("name") or site.get("code") or key,
         "site_name": site.get("name"),
         "building_name": site.get("building_name"),
@@ -410,9 +411,10 @@ async def _load_site_rows(session: AsyncSession, *, limit: int) -> list[dict[str
     cols = shape["columns"]
     if not shape["usable"]:
         return []
+    key_col = _pick(cols, "site_id", "id")
     wanted = {
-        "key": shape["key_columns"][0],
-        "alt_id": _pick(cols, "id") if shape["key_columns"][0] != "id" else None,
+        "key": key_col,
+        "alt_id": _pick(cols, "id") if key_col != "id" else _pick(cols, "site_id"),
         "name": shape["name_columns"][0],
         "code": _pick(cols, "site_code", "code", "site_ref"),
         "country": _pick(cols, "country", "country_code"),
@@ -529,19 +531,31 @@ async def list_buildings(
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+
+    def _lookup(table: dict[str, Any], site: dict[str, Any]) -> Any:
+        # Energy tables key on a UUID site_id; sites here keys on site_id VARCHAR(50) and may
+        # carry the UUID in `id`. Match on the text of either, so both shapes join.
+        for cand in (site.get("key"), site.get("alt_id")):
+            c = str(cand or "").strip()
+            if c and c in table:
+                return table[c]
+            u = as_uuid(c)
+            if u is not None and str(u) in table:
+                return table[str(u)]
+        return None
+
     for site in sites:
-        site_uuid = as_uuid(site.get("key")) or as_uuid(site.get("alt_id"))
-        sid = str(site_uuid) if site_uuid else None
+        cands = {str(c).strip() for c in (site.get("key"), site.get("alt_id")) if c}
+        cands |= {str(as_uuid(c)) for c in list(cands) if as_uuid(c) is not None}
         rows.append(
             shape_building_row(
                 site,
-                profile=profiles.get(sid) if sid else None,
-                snapshot=snapshots.get(sid) if sid else None,
-                meters=meters.get(sid, []) if sid else [],
+                profile=_lookup(profiles, site),
+                snapshot=_lookup(snapshots, site),
+                meters=_lookup(meters, site) or [],
             )
         )
-        if sid:
-            seen.add(sid)
+        seen |= cands
 
     # A site with an energy profile but no sites row is still a building with a footprint.
     for sid, p in profiles.items():
@@ -549,7 +563,7 @@ async def list_buildings(
             continue
         rows.append(
             shape_building_row(
-                {"key": sid, "name": None, "site_type": p.get("building_type")},
+                {"key": sid, "alt_id": None, "name": None, "site_type": p.get("building_type")},
                 profile=p,
                 snapshot=snapshots.get(sid),
                 meters=meters.get(sid, []),

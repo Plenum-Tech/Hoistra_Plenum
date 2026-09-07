@@ -7,11 +7,12 @@
 //   under Benchmark  — the standard for the country's regulation pack and its legal
 //                      standing (enacted · guidance · mandatory submission · none), so a
 //                      proposal is never read as a duty.
-// Rows are reshaped to the seed's BUILDINGS shape so renderVals draws either; the seed
-// remains the fallback and the page says which it is showing.
+// The table is DB-only: every row is a plenum_cafm.sites row (keyed on site_id VARCHAR(50))
+// read through the endpoint. There is no seed fallback — when the backend is unreachable
+// the table is empty and the page says why.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { BUILDINGS, PACKS, USE_TINT } from './constants.js';
+import { PACKS, USE_TINT } from './constants.js';
 import { energyApi } from '../api/energy.js';
 import { normCountry, countryMeta, fmtTime } from './complianceLive.js';
 
@@ -44,8 +45,10 @@ export function shapeLiveBuilding(r, i) {
     : [[use, 100]];
   return {
     live: true,
-    key: r.site_key || r.site_uuid || String(i),
-    id: r.code || r.site_ref || (r.site_uuid ? r.site_uuid.slice(0, 8) : "B-" + String(i + 1).padStart(3, "0")),
+    key: r.site_id || r.site_key || r.site_uuid || String(i),
+    // Building ID is sites.site_id (VARCHAR(50)); the code is shown when it differs.
+    id: r.site_id || r.code || r.site_uuid || String(i + 1),
+    code: r.code || null,
     name: r.name || "Unnamed site",
     cc: cc,
     state: r.region || r.city || "—",
@@ -84,7 +87,8 @@ export function shapeLiveBuildings(payload) {
 }
 
 export const buildingsLiveMethods = {
-  bldData() { return this.state.bldLive || BUILDINGS; },
+  // DB rows only — never the seed.
+  bldData() { return this.state.bldLive || []; },
   bldIsLive() { return !!this.state.bldLive; },
 
   async bldLoad(opts) {
@@ -132,7 +136,8 @@ export const buildingsLiveMethods = {
       : b.benchSource === "sites_recorded" ? "Recorded on the site row"
       : std;
     return {
-      id: b.id, name: b.name, use: b.use,
+      id: b.id, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
+      name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
       area: b.area,
       flag: pack.flag, country: pack.name, state: b.state,
@@ -177,7 +182,12 @@ export const buildingsLiveMethods = {
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
       bldRetryShow: !s.bldLoading && (!s.bldLive || !!s.bldError) ? "inline" : "none",
       bldRetry: () => this.bldRetryNow(),
-      bldKicker: s.bldLive ? "Every site in plenum_cafm.sites, read against its country's regulation pack" : "Hoisted on the Graph with a Building Table"
+      bldEmptyShow: rows.length ? "none" : "block",
+      bldEmptyText: s.bldLoading ? "Reading plenum_cafm.sites…"
+        : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
+        : s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
+        : "Waiting for svc-operations-intelligence.",
+      bldKicker: "Every row is a plenum_cafm.sites record, keyed on site_id, read against its country's regulation pack"
     };
   }
 };

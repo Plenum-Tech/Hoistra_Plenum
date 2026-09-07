@@ -19,7 +19,7 @@ from .api.routes import (
 from .config import settings
 from .core.exceptions import OpsIntelligenceError
 from .core.logging import configure_logging, get_logger
-from .db import AsyncSessionLocal, init_db
+from .db import AsyncSessionLocal, apply_sql_seed, init_db
 
 log = get_logger(__name__)
 
@@ -29,6 +29,11 @@ async def lifespan(app: FastAPI):
     configure_logging()
     log.info("service.startup", service=settings.service_name, version="1.2.0")
     await init_db()
+    if settings.auto_seed_portfolio_buildings:
+        try:
+            await apply_sql_seed("portfolio_buildings.sql")
+        except Exception as exc:  # noqa: BLE001 — a demo seed must never block startup
+            log.warning("portfolio_buildings.seed_failed", error=str(exc))
     from .engines.compliance.country_pack import (
         seed_uae_pack,
         seed_uk_pack,

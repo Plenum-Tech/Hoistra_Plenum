@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     auto_seed_uk_pack: bool = True
     auto_seed_uae_pack: bool = True
     auto_seed_us_pack: bool = True
+    # Demo portfolio rows for plenum_cafm.sites (seeds/portfolio_buildings.sql). Off = the
+    # Buildings table shows exactly what the sites table holds.
+    auto_seed_portfolio_buildings: bool = Field(
+        True,
+        validation_alias=AliasChoices("AUTO_SEED_PORTFOLIO_BUILDINGS", "auto_seed_portfolio_buildings"),
+    )
     auto_migrate_on_startup: bool = True
 
     public_base_url: str = Field(
