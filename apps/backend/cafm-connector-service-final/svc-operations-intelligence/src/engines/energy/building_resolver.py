@@ -201,8 +201,13 @@ _ASSET_CODE_COLS = ("asset_code", "code", "asset_tag", "tag", "reference")
 
 async def load_asset_building_map(
     session: AsyncSession, codes: list[Any]
-) -> dict[str, str]:
-    """``{normalised asset code: building_id}`` for the codes asked about.
+) -> dict[str, dict[str, str | None]]:
+    """``{normalised asset code: {asset_id, building_id}}`` for the codes asked about.
+
+    The asset's own key travels with its building because the caller needs both: a work
+    order that records which asset it is against is a work order the asset's history can be
+    read back from, and a building link alone would place the cost without saying what
+    incurred it.
 
     A work order names the asset it is against, and that asset is already placed. Reading
     the building off the asset is not another guess — it is the link the graph already
@@ -220,20 +225,26 @@ async def load_asset_building_map(
 
     shape = await graph_shape(session)
     assets = shape["assets"]
-    if not assets["exists"] or "building_id" not in assets["columns"]:
+    if not assets["exists"]:
         return {}
     code_col = next((c for c in _ASSET_CODE_COLS if c in assets["columns"]), None)
     if not code_col:
         return {}
+    key_col = assets["key"]
+    # building_id arrives with the migration; an asset table without it can still hand
+    # back the asset's own key, which is what a work order records.
+    bid_expr = "building_id::text" if "building_id" in assets["columns"] else "NULL"
 
     try:
         async with session.begin_nested():
             rows = (
                 await session.execute(
                     text(
-                        f"""SELECT {code_col}::text AS code, building_id::text AS bid
+                        f"""SELECT {code_col}::text AS code,
+                                   {key_col}::text  AS aid,
+                                   {bid_expr}       AS bid
                             FROM plenum_cafm.assets
-                            WHERE building_id IS NOT NULL AND {code_col} IS NOT NULL"""
+                            WHERE {code_col} IS NOT NULL"""
                     )
                 )
             ).mappings().all()
@@ -241,19 +252,22 @@ async def load_asset_building_map(
         log.warning("building_resolver.asset_map_failed", error=str(exc)[:200])
         return {}
 
-    out: dict[str, str] = {}
+    out: dict[str, dict[str, str | None]] = {}
     clashes: set[str] = set()
     for r in rows:
         key = normalize_ref(r["code"])
         if not key or key not in wanted:
             continue
+        entry = {"asset_id": str(r["aid"]) if r["aid"] else None,
+                 "building_id": str(r["bid"]) if r["bid"] else None}
         prior = out.get(key)
-        if prior and prior != r["bid"]:
-            # The same asset code recorded against two buildings. Which is right is not
-            # knowable from here, so neither is used.
+        if prior and prior != entry:
+            # The same asset code recorded twice and differently. Which is right is not
+            # knowable from here, so neither is used — picking one would file the work
+            # order against plant that may not be the plant.
             clashes.add(key)
             continue
-        out[key] = str(r["bid"])
+        out[key] = entry
     for key in clashes:
         out.pop(key, None)
     return out
@@ -271,7 +285,8 @@ async def resolve_one(
     """Resolve one record's building. Reads only."""
     index = await load_building_index(session)
     asset_map = await load_asset_building_map(session, [asset_code]) if asset_code else {}
-    bid = asset_map.get(normalize_ref(asset_code))
+    hit = asset_map.get(normalize_ref(asset_code)) or {}
+    bid = hit.get("building_id")
     if bid:
         return {
             "ok": True,
@@ -279,6 +294,7 @@ async def resolve_one(
                       "site_id": site_id, "asset_code": asset_code},
             "outcome": "resolved",
             "reason": "asset",
+            "asset_id": hit.get("asset_id"),
             "building_id": bid,
             "building": next(
                 (r["label"] for r in index if r["building_id"] == bid), None
@@ -332,7 +348,9 @@ async def resolve_batch(
         # The asset tier first. A work order is against a piece of plant, and that plant
         # is already placed — reading the building off it is the link the graph holds,
         # not a second string match that might land somewhere else.
-        bid = asset_map.get(normalize_ref(item.get("asset_code")))
+        hit = asset_map.get(normalize_ref(item.get("asset_code"))) or {}
+        asset_id = hit.get("asset_id")
+        bid = hit.get("building_id")
         if bid:
             row, reason, outcome = None, "asset", "resolved"
             building_id, building = bid, labels.get(bid)
@@ -348,6 +366,8 @@ async def resolve_batch(
             # useless; "that asset has no building either" names the actual problem and
             # its order of operations — assets before work orders.
             if reason == "no_match" and normalize_ref(item.get("asset_code")):
+                # The asset is known but unplaced, or not known at all. Either way the
+                # work order still records which asset it is against.
                 reason = "asset_not_placed"
             outcome = resolution_outcome(reason)
             building_id = row["building_id"] if row else None
@@ -358,13 +378,18 @@ async def resolve_batch(
             "input": item,
             "outcome": outcome,
             "reason": reason,
+            # Recorded even when the building could not be: a work order that knows its
+            # asset is one the asset's history can be read back from, and the building
+            # follows later once the asset is placed.
+            "asset_id": asset_id,
             "building_id": building_id,
             "building": building,
         })
     return {
         "ok": True,
         "buildings_considered": len(index),
-        "assets_placed": len(asset_map),
+        "assets_known": len(asset_map),
+        "assets_placed": sum(1 for v in asset_map.values() if v.get("building_id")),
         "count": len(items),
         "by_outcome": tally,
         "by_reason": reasons,

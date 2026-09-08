@@ -537,9 +537,10 @@ def _coerce_uuid(val: Any) -> UUID | None:
         return None
 
 
-#: Where the resolved building_id is parked on a row between resolution and record build.
-#: Double-underscored so it can never collide with a real source column.
+#: Where the resolved ids are parked on a row between resolution and record build.
+#: Double-underscored so they can never collide with a real source column.
 _RESOLVED_BUILDING_KEY = "__resolved_building_id__"
+_RESOLVED_ASSET_KEY = "__resolved_asset_id__"
 
 
 def _build_asset_record(
@@ -626,6 +627,12 @@ def _build_work_order_record(
     bid = _coerce_uuid(row.get("building_id")) or _coerce_uuid(row.get(_RESOLVED_BUILDING_KEY))
     if bid is not None:
         record["building_id"] = bid
+    # Recorded even when the building could not be. Which asset the work was done on is
+    # what makes an asset's history readable at all, and it is also how the building is
+    # filled in later once the asset itself is placed.
+    aid = _coerce_uuid(row.get("asset_id")) or _coerce_uuid(row.get(_RESOLVED_ASSET_KEY))
+    if aid is not None:
+        record["asset_id"] = aid
     columns = list(record.keys())
     return tuple(record.values()), columns
 
@@ -1036,6 +1043,9 @@ async def extract_csv(
                 for _i, _bid in enumerate(link["by_row"]):
                     if _bid:
                         rows_as_dicts[_i][_RESOLVED_BUILDING_KEY] = _bid
+                for _i, _aid in enumerate(link.get("asset_by_row") or []):
+                    if _aid:
+                        rows_as_dicts[_i][_RESOLVED_ASSET_KEY] = _aid
                 if _meta_out is not None:
                     _meta_out["building_link"] = link
                 span.set_attribute("cafm.building_link.linked", link["linked"])

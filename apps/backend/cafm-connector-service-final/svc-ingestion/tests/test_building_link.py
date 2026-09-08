@@ -368,3 +368,27 @@ def test_an_assets_row_never_resolves_from_its_own_asset_code():
     assert building_hint(row) == {"name": "Bishopsgate Tower"}
     assert building_hint(row, use_asset=True) == {
         "asset_code": "AHU-004", "name": "Bishopsgate Tower"}
+
+
+def test_the_asset_id_comes_back_so_the_work_order_can_record_it():
+    rows = [{"wo_code": "WO-1", "asset_code": "AHU-004"}]
+    out = _run_wo(rows, _Client(lambda i: [{"building_id": "u-1", "outcome": "resolved",
+                                            "reason": "asset", "asset_id": "asset-9"}]))
+    assert out["by_row"] == ["u-1"]
+    assert out["asset_by_row"] == ["asset-9"]
+
+
+def test_an_unplaced_asset_still_returns_its_id():
+    """The work order records which plant it was against even when that plant has no
+    building yet — that is what lets the building be filled in later."""
+    rows = [{"wo_code": "WO-1", "asset_code": "PUMP-9"}]
+    out = _run_wo(rows, _Client(lambda i: [{"building_id": None, "outcome": "unmatched",
+                                            "reason": "asset_not_placed",
+                                            "asset_id": "asset-4"}]))
+    assert out["by_row"] == [None]
+    assert out["asset_by_row"] == ["asset-4"]
+
+
+def test_rows_with_no_asset_have_no_asset_id():
+    out = _run([{"Building": "Bishopsgate Tower"}], _Client(lambda i: [_resolved("u-1")]))
+    assert out["asset_by_row"] == [None]

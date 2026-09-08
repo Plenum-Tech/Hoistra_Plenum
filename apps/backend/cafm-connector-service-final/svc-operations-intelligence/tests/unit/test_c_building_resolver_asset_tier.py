@@ -41,9 +41,10 @@ def _batch(monkeypatch, items, asset_map):
 
 
 def test_a_work_order_inherits_its_assets_building(monkeypatch):
-    out = _batch(monkeypatch, [{"asset_code": "AHU-004"}], {"AHU004": BID_A})
+    out = _batch(monkeypatch, [{"asset_code": "AHU-004"}], {"AHU004": {"asset_id": "aid-1", "building_id": BID_A}})
     r = out["results"][0]
     assert r["building_id"] == BID_A
+    assert r["asset_id"] == "aid-1", "the asset's own key travels with its building"
     assert r["reason"] == "asset" and r["outcome"] == "resolved"
     assert r["building"] == "Bishopsgate Tower", "the label still comes from the index"
 
@@ -54,7 +55,7 @@ def test_the_asset_beats_a_building_name_on_the_same_row(monkeypatch):
     out = _batch(
         monkeypatch,
         [{"asset_code": "AHU-004", "name": "Riverside Lab Block"}],
-        {"AHU004": BID_A},
+        {"AHU004": {"asset_id": "aid-1", "building_id": BID_A}},
     )
     assert out["results"][0]["building_id"] == BID_A
     assert out["results"][0]["reason"] == "asset"
@@ -78,7 +79,7 @@ def test_a_row_with_only_an_unplaced_asset_resolves_to_nothing(monkeypatch):
 
 
 def test_asset_codes_match_however_they_are_punctuated(monkeypatch):
-    out = _batch(monkeypatch, [{"asset_code": " ahu-004 "}], {"AHU004": BID_A})
+    out = _batch(monkeypatch, [{"asset_code": " ahu-004 "}], {"AHU004": {"asset_id": "aid-1", "building_id": BID_A}})
     assert out["results"][0]["building_id"] == BID_A
 
 
@@ -88,7 +89,7 @@ def test_the_whole_batch_costs_one_asset_read(monkeypatch):
 
     async def counting(session, codes):
         calls["n"] += 1
-        return {"AHU004": BID_A}
+        return {"AHU004": {"asset_id": "aid-1", "building_id": BID_A}}
 
     async def fake_index(session, **_):
         return INDEX
@@ -99,7 +100,7 @@ def test_the_whole_batch_costs_one_asset_read(monkeypatch):
     out = asyncio.run(R.resolve_batch(object(), items))
     assert calls["n"] == 1
     assert out["by_reason"]["asset"] == 500
-    assert out["assets_placed"] == 1
+    assert out["assets_placed"] == 1 and out["assets_known"] == 1
 
 
 def test_a_mixed_file_reports_each_tier_separately(monkeypatch):
@@ -110,7 +111,7 @@ def test_a_mixed_file_reports_each_tier_separately(monkeypatch):
             {"code": "BT-01"},                         # building_code
             {"name": "Nowhere House"},                 # no_match
         ],
-        {"AHU004": BID_A},
+        {"AHU004": {"asset_id": "aid-1", "building_id": BID_A}},
     )
     assert out["by_reason"] == {"asset": 1, "building_code": 1, "no_match": 1}
     assert out["by_outcome"] == {"resolved": 2, "unmatched": 1}
@@ -157,31 +158,40 @@ def _map(monkeypatch, rows, codes, columns=("asset_id", "asset_code", "building_
 
 
 def test_only_the_codes_asked_about_come_back(monkeypatch):
-    rows = [{"code": "AHU-004", "bid": BID_A}, {"code": "CH-1", "bid": BID_B}]
-    assert _map(monkeypatch, rows, ["AHU-004"]) == {"AHU004": BID_A}
+    rows = [{"code": "AHU-004", "aid": "a1", "bid": BID_A},
+            {"code": "CH-1", "aid": "a2", "bid": BID_B}]
+    assert _map(monkeypatch, rows, ["AHU-004"]) == {
+        "AHU004": {"asset_id": "a1", "building_id": BID_A}}
 
 
 def test_one_asset_code_in_two_buildings_resolves_to_neither(monkeypatch):
     """Which is right is not knowable from here, and picking one files the work order
     against a building that may not hold the plant at all."""
-    rows = [{"code": "AHU-004", "bid": BID_A}, {"code": "AHU-004", "bid": BID_B}]
+    rows = [{"code": "AHU-004", "aid": "a1", "bid": BID_A},
+            {"code": "AHU-004", "aid": "a2", "bid": BID_B}]
     assert _map(monkeypatch, rows, ["AHU-004"]) == {}
 
 
 def test_the_same_asset_listed_twice_in_one_building_is_not_a_clash(monkeypatch):
-    rows = [{"code": "AHU-004", "bid": BID_A}, {"code": "AHU-004", "bid": BID_A}]
-    assert _map(monkeypatch, rows, ["AHU-004"]) == {"AHU004": BID_A}
+    rows = [{"code": "AHU-004", "aid": "a1", "bid": BID_A},
+            {"code": "AHU-004", "aid": "a1", "bid": BID_A}]
+    assert _map(monkeypatch, rows, ["AHU-004"]) == {
+        "AHU004": {"asset_id": "a1", "building_id": BID_A}}
 
 
 def test_asking_about_nothing_reads_nothing(monkeypatch):
-    assert _map(monkeypatch, [{"code": "AHU-004", "bid": BID_A}], []) == {}
-    assert _map(monkeypatch, [{"code": "AHU-004", "bid": BID_A}], [None, "  "]) == {}
+    row = [{"code": "AHU-004", "aid": "a1", "bid": BID_A}]
+    assert _map(monkeypatch, row, []) == {}
+    assert _map(monkeypatch, row, [None, "  "]) == {}
 
 
-def test_assets_that_predate_the_graph_yield_an_empty_map(monkeypatch):
-    """assets only gains building_id via the migration; before it, no work order can be
-    placed this way and that has to be a quiet empty rather than a crash."""
-    assert _map(monkeypatch, [], ["AHU-004"], columns=("asset_id", "asset_code")) == {}
+def test_assets_that_predate_the_graph_still_yield_the_asset_key(monkeypatch):
+    """assets only gains building_id via the migration. Before it no work order can be
+    PLACED this way — but it can still record which asset it is against, which is what
+    lets the building be filled in once the migration runs."""
+    rows = [{"code": "AHU-004", "aid": "a1", "bid": None}]
+    out = _map(monkeypatch, rows, ["AHU-004"], columns=("asset_id", "asset_code"))
+    assert out == {"AHU004": {"asset_id": "a1", "building_id": None}}
 
 
 def test_an_unplaced_asset_names_the_ordering_problem_not_just_no_match(monkeypatch):

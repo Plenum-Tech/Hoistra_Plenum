@@ -16,6 +16,7 @@ from ...engines.energy import buildings as bld_svc
 from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import sites_uuid_migration as sites_uuid
 from ...engines.energy import building_resolver as bld_resolver
+from ...engines.energy import cost_drivers as cost
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -254,6 +255,33 @@ async def sites_uuid_migration(
     if phase == "expand":
         return await sites_uuid.apply_expand(session)
     return await sites_uuid.apply_contract(session, confirm=confirm)
+
+
+@router.get("/buildings/{building_id}/cost-drivers")
+async def building_cost_drivers(
+    building_id: str,
+    limit: int = Query(25, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which plant is driving spend on this building, ranked by how far over contract.
+
+    Ranked on the gap between billed and contracted rather than on billed alone — the
+    biggest spender is usually the biggest asset, which tells you nothing. Spend whose work
+    order names no asset is reported separately as `unattributed`: it is real money and it
+    is in the building total, but it cannot be blamed on a piece of plant, and spreading it
+    across the ranking would invent an attribution nobody recorded.
+    """
+    return await cost.building_cost_drivers(session, building_id, limit=limit)
+
+
+@router.get("/assets/{asset_id}/work-history")
+async def asset_work_history(
+    asset_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every work order recorded against this asset, with what each one was billed."""
+    return await cost.asset_work_history(session, asset_id, limit=limit)
 
 
 @router.get("/buildings/{site_id}")

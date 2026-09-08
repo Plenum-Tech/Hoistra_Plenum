@@ -238,6 +238,9 @@ async def resolve_buildings(
     """
     report: dict[str, Any] = {
         "by_row": [None] * len(rows),
+        # The asset a row is against, recorded even when its building could not be —
+        # a work order that knows its plant is one the plant's history can be read from.
+        "asset_by_row": [None] * len(rows),
         "by_reason": {},
         "by_outcome": {},
         "rows": len(rows),
@@ -327,6 +330,8 @@ async def resolve_buildings(
         outcome = str(res.get("outcome") or "unmatched")
         report["by_reason"][reason] = report["by_reason"].get(reason, 0) + 1
         report["by_outcome"][outcome] = report["by_outcome"].get(outcome, 0) + 1
+        if res.get("asset_id"):
+            report["asset_by_row"][i] = str(res["asset_id"])
         if outcome == "resolved" and res.get("building_id"):
             report["by_row"][i] = str(res["building_id"])
             report["linked"] += 1
