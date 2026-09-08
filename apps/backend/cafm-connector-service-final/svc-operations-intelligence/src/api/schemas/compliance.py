@@ -147,6 +147,13 @@ class VerifyNowRequest(BaseModel):
     accreditation_number: str | None = None
     country_code: str = "UK"
     vendor_name: str | None = None
+    certificate_id: UUID | None = Field(
+        None,
+        description="Name the certificate and the register link is stored on it, so it "
+                    "survives a reload instead of living only in the turn that built it. "
+                    "Storing a link never marks the certificate verified — a link to a "
+                    "register says where to look, not that anyone looked.",
+    )
 
 
 class CccVerifyRequest(BaseModel):

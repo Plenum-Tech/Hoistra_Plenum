@@ -485,7 +485,11 @@ async def _persist(
     if not cert:
         return
     meta = dict(cert.raw_metadata or {})
-    verification = {
+    # Merged onto whatever is already there. A register link stored by verify-now lives in
+    # this same block, and replacing it wholesale would erase the link while the status line
+    # kept rendering — a loss nobody would see.
+    verification = dict(meta.get("verification") or {})
+    verification.update({
         "channel": result.get("channel"),
         "source_url": result.get("source_url"),
         "checked_at": result.get("checked_at"),
@@ -493,7 +497,7 @@ async def _persist(
         "status": result.get("status"),
         "evidence": result.get("evidence") or {},
         "canonical_code": result.get("canonical_code"),
-    }
+    })
     meta["verification"] = verification
     cert.raw_metadata = meta
     cert.updated_at = datetime.now(timezone.utc)

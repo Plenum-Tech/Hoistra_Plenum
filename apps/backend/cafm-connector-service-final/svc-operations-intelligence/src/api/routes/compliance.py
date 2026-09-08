@@ -811,6 +811,9 @@ async def verify_now(
         accreditation_number=body.accreditation_number,
         country_code=body.country_code,
         vendor_name=body.vendor_name,
+        # Name the certificate and the link is written onto it, so "Verify now (SIA)" is
+        # still there on reload instead of living only in the turn that built it.
+        certificate_id=getattr(body, "certificate_id", None),
     )
 
 
