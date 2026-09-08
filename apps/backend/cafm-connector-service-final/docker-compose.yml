@@ -212,6 +212,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
       AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+      # Where the building graph lives, for linking ingested assets to a building.
+      # Not a dependency: if it is unreachable the assets still ingest, unlinked, and
+      # the ingest reports which rows need the link and why.
+      OPERATIONS_INTELLIGENCE_BASE_URL: ${OPERATIONS_INTELLIGENCE_BASE_URL:-http://svc-operations-intelligence:8009}
     ports:
       - "8001:8001"
     depends_on:
