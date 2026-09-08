@@ -215,6 +215,12 @@ CREATE INDEX IF NOT EXISTS ix_spaces_building ON plenum_cafm.spaces (building_id
 ALTER TABLE plenum_cafm.assets ADD COLUMN IF NOT EXISTS building_id UUID;
 CREATE INDEX IF NOT EXISTS ix_assets_building ON plenum_cafm.assets (building_id);
 
+-- work_orders predates this migration in every existing deployment, so the CREATE TABLE
+-- above is a no-op there and never adds building_id. Without it an invoice cannot be
+-- placed through the work it bills.
+ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS building_id UUID;
+CREATE INDEX IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
+
 CREATE TABLE IF NOT EXISTS plenum_cafm.equipment (
     equipment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     asset_id     TEXT,

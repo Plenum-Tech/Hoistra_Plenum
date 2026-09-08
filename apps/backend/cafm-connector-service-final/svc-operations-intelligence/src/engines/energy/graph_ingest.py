@@ -65,6 +65,66 @@ async def resolve_building_for(
     }
 
 
+#: Column spellings that might hold a work order's human reference.
+_WO_CODE_COLS = ("wo_code", "work_order_code", "code", "reference", "wo_ref")
+
+
+async def building_from_work_orders(
+    session: AsyncSession, wo_codes: list[Any]
+) -> dict[str, Any]:
+    """The building the billed work orders sit on — when they agree on exactly one.
+
+    An invoice rarely names a building. It names the work it is billing for, and that work
+    is already placed. So the invoice belongs where its work orders are, which is stronger
+    evidence than an address block on the letterhead — that address is as often the
+    vendor's own.
+
+    Work orders spanning two buildings resolve to nothing. An invoice covering a campus is
+    a real thing, and picking one of its buildings would put the whole invoice value
+    against a building that only earned part of it.
+    """
+    codes = [str(c).strip() for c in (wo_codes or []) if str(c or "").strip()]
+    if not codes:
+        return {"building_id": None, "reason": "no_work_orders"}
+
+    shape = await graph_shape(session)
+    wo = shape["work_orders"]
+    if not wo["exists"] or "building_id" not in wo["columns"]:
+        return {"building_id": None, "reason": "work_orders_not_on_the_graph"}
+
+    code_col = next((c for c in _WO_CODE_COLS if c in wo["columns"]), None)
+    if not code_col:
+        return {"building_id": None, "reason": "work_orders_have_no_code_column"}
+
+    try:
+        async with session.begin_nested():
+            rows = (
+                await session.execute(
+                    text(
+                        f"""SELECT DISTINCT building_id::text AS bid
+                            FROM plenum_cafm.work_orders
+                            WHERE building_id IS NOT NULL
+                              AND upper({code_col}::text) = ANY(:codes)"""
+                    ),
+                    {"codes": [c.upper() for c in codes]},
+                )
+            ).all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("graph_ingest.wo_lookup_failed", error=str(exc)[:200])
+        return {"building_id": None, "reason": "work_order_lookup_failed"}
+
+    found = [r[0] for r in rows if r[0]]
+    if len(found) == 1:
+        return {"building_id": found[0], "reason": "work_orders_agree"}
+    if len(found) > 1:
+        return {
+            "building_id": None,
+            "reason": "work_orders_span_buildings",
+            "candidates": found[:10],
+        }
+    return {"building_id": None, "reason": "work_orders_have_no_building"}
+
+
 async def record_document(
     session: AsyncSession,
     *,
@@ -143,6 +203,7 @@ async def attach_to_graph(
     building_reference: Any = None,
     site_name: Any = None,
     site_id: Any = None,
+    work_order_codes: list[Any] | None = None,
     doc_type: str | None = None,
     title: str | None = None,
     file_name: str | None = None,
@@ -150,7 +211,7 @@ async def attach_to_graph(
 ) -> dict[str, Any]:
     """Resolve the building, then record the document against it. One call per ingested file.
 
-    The return is what the certificate row stores alongside itself, so a link can always be
+    The return is what the ingesting row stores alongside itself, so a link can always be
     read back with the basis it was made on rather than appearing as a bare foreign key.
     """
     resolved = await resolve_building_for(
@@ -160,6 +221,31 @@ async def attach_to_graph(
         site_name=site_name,
         site_id=site_id,
     )
+
+    # Nothing the document itself said placed it. An invoice or a contract may still be
+    # placeable through the work it bills, which is already on the graph. Tried second
+    # because a document naming its own building is more direct evidence than an inference
+    # from its line items.
+    if not resolved["building_id"] and work_order_codes:
+        via_wo = await building_from_work_orders(session, work_order_codes)
+        if via_wo["building_id"]:
+            resolved = {
+                "building_id": via_wo["building_id"],
+                "building_label": None,
+                "outcome": "resolved",
+                "reason": via_wo["reason"],
+            }
+        elif via_wo["reason"] != "no_work_orders":
+            # Keep the more informative refusal: "these WOs are in two buildings" tells
+            # someone what to do; "nothing matched" does not.
+            resolved = {
+                **resolved,
+                "reason": via_wo["reason"],
+                "outcome": (
+                    "review" if via_wo["reason"] == "work_orders_span_buildings"
+                    else resolved["outcome"]
+                ),
+            }
     doc = await record_document(
         session,
         document_id=document_id,

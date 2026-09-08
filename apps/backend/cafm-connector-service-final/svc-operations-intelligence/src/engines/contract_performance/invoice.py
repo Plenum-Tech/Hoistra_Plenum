@@ -324,6 +324,11 @@ async def verify_invoice(
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     document_id: UUID | None = None,
+    building_name: str | None = None,
+    building_reference: str | None = None,
+    site_name: str | None = None,
+    site_id: str | None = None,
+    file_name: str | None = None,
     labour_day_rate: float | None = None,
     labour_hour_rate: float | None = None,
     parts_pricing_json: dict[str, Any] | None = None,
@@ -413,6 +418,11 @@ async def verify_invoice(
     flagged_count = insights["flagged_count"]
     ratio = insights["matched_flagged_ratio"]
 
+    # The invoices view reaches a building through plenum_cafm.documents, joined on this
+    # column. A verification with no document_id can never join, so one is minted here when
+    # the caller has none rather than leaving the row permanently unplaceable.
+    document_id = document_id or uuid4()
+
     row = InvoiceVerification(
         id=uuid4(),
         organization_id=organization_id,
@@ -440,6 +450,38 @@ async def verify_invoice(
         parts_framework=parts_pricing_json or {},
         adversary_threshold=adversary_threshold,
     )
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # Record the source file in plenum_cafm.documents and place it on a building, so this
+    # invoice reads back against a property instead of hanging off nothing. An invoice
+    # seldom names its building, so the work orders it bills are the usual route.
+    # Best-effort throughout: an invoice that cannot be placed is still verified.
+    graph: dict[str, Any] = {}
+    try:
+        from ..energy.graph_ingest import attach_to_graph
+
+        graph = await attach_to_graph(
+            session,
+            document_id=document_id,
+            building_name=building_name,
+            building_reference=building_reference,
+            site_name=site_name,
+            site_id=site_id,
+            work_order_codes=[
+                r.get("wo_code") for r in results if r.get("wo_code")
+            ],
+            doc_type="vendor_invoice",
+            title=invoice_ref,
+            file_name=file_name,
+        )
+        insights["building_link"] = {
+            "building_id": graph.get("building_id"),
+            "outcome": graph.get("building_link_outcome"),
+            "reason": graph.get("building_link_reason"),
+        }
+        row.insights_json = insights
+    except Exception as exc:  # noqa: BLE001 — the graph must never fail a verification
+        log.warning("invoice.graph_attach_failed", error=str(exc)[:200])
+
     await write_audit(
         session,
         actor="system",
@@ -462,6 +504,7 @@ async def verify_invoice(
         "matched_flagged_ratio": ratio,
         "lines": results,
         "insights": insights,
+        "building_link": insights.get("building_link"),
     }
 
 
