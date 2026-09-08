@@ -39,6 +39,17 @@ export const GRANULARITIES = [
   { value: 'sub-metered', label: 'Sub-metered', hint: 'Consumption is measured per circuit or plant item.' }
 ];
 
+// Who may change the register. Two roles exist in this app — `admin`, and `user`, which is
+// the everyday facilities-manager view — and both hoist and remove buildings: adding a
+// property you have taken on, and removing one entered by mistake, are the work, not an
+// administrative exception to it.
+//
+// This is an affordance, not a permission. The service does not authorise these routes, so
+// hiding the button never stopped anyone who could reach the API; what the gate decides is
+// whose screen is uncluttered. When a real role model arrives, this set is the one line to
+// change — and the check belongs on the service at the same time.
+export const HOIST_ROLES = new Set(['admin', 'user']);
+
 const BLANK = {
   site_name: '', country_code: 'UK', state: '', city: '', postcode: '',
   use_type: 'Commercial', floors: '', gfa_sqm: '',
@@ -186,6 +197,9 @@ export const buildingsCrudMethods = {
       : '';
 
     return {
+      // Both roles, so a facilities manager is not blocked from the register they keep.
+      bcCanHoist: !!s.signedIn && HOIST_ROLES.has(s.role),
+      bcCanRemove: !!s.signedIn && HOIST_ROLES.has(s.role),
       bcOpen: !!s.bcOpen,
       bcShow: s.bcOpen ? 'flex' : 'none',
       bcForm: f,

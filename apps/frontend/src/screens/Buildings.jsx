@@ -64,7 +64,7 @@ export default function Buildings({ vals }) {
                 <span className="hv11" onClick={vals.bldRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.bldRetryShow }}>{"Retry"}</span>
               </div>
             </div>
-            {vals.isAdmin ? (
+            {vals.bcCanHoist ? (
               <>
                 <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
                   {"Hoist a building"}
@@ -178,7 +178,7 @@ export default function Buildings({ vals }) {
                       <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
                         {b.score}
                       </span>
-                      {vals.isAdmin && b.buildingId ? (
+                      {vals.bcCanRemove && b.buildingId ? (
                         <span className="hv11" title={"Remove " + b.name} onClick={(e) => { e.stopPropagation(); vals.bcAskDelete(b); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
                           <i className="ph ph-trash"></i>
                         </span>
