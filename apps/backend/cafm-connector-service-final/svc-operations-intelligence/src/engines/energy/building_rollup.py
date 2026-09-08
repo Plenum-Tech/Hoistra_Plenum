@@ -326,9 +326,8 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
     # Sites carry the portfolio and the address the building inherits for display.
     if shape["sites"]["exists"] and "site_id" in have:
         skey = shape["sites"]["key"]
-        site_name = "s.name" if "name" in shape["sites"]["columns"] else (
-            "s.site_name" if "site_name" in shape["sites"]["columns"] else "NULL"
-        )
+        _sn = [f"s.{c}" for c in ("name", "site_name") if c in shape["sites"]["columns"]]
+        site_name = f"COALESCE({', '.join(_sn)})" if _sn else "NULL"
         cols += [f"{site_name}::text AS site_name"]
         joins += f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"
 

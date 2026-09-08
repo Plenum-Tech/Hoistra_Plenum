@@ -53,14 +53,56 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.regulation_packs (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ONE locations table serving both meanings.
+--
+-- svc-work-order-management already defines plenum_cafm.locations as a physical location
+-- inside a site — keyed `id`, with name and type — and the graph needs a geographic one
+-- carrying country_code, region and the regulation pack. These are not two tables: a
+-- location is a place, and a place has both an identity and a jurisdiction. The columns are
+-- merged here rather than split, so nothing has to decide which of two tables a row belongs
+-- in and no join has to guess.
+--
+-- The key stays `id`. The work-order ORM maps its `location_id` attribute onto that column
+-- explicitly (models/location.py), so renaming it would break live code for a cosmetic gain;
+-- readers here introspect `location_id` or `id` and take whichever exists.
 CREATE TABLE IF NOT EXISTS plenum_cafm.locations (
-    location_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    country_code CHAR(2),
-    region       TEXT,
-    pack_id      UUID REFERENCES plenum_cafm.regulation_packs (pack_id),
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         VARCHAR(255),
+    type         VARCHAR(100),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Physical identity — present whichever service created the table first.
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS type VARCHAR(100);
+-- Where the place sits. Null on a purely geographic row, set on a room or floor area.
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS site_id TEXT;
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS building_id UUID;
+-- Jurisdiction — what the building is scored against.
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS country_code CHAR(2);
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS pack_id UUID;
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS postcode VARCHAR(40);
+ALTER TABLE plenum_cafm.locations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+-- The pack FK only once regulation_packs exists and pack_id is free of a prior constraint.
+DO $loc_fk$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'locations_pack_id_fkey') THEN
+        BEGIN
+            ALTER TABLE plenum_cafm.locations
+                ADD CONSTRAINT locations_pack_id_fkey
+                FOREIGN KEY (pack_id) REFERENCES plenum_cafm.regulation_packs (pack_id);
+        EXCEPTION WHEN others THEN
+            RAISE NOTICE 'locations.pack_id FK not added: %', SQLERRM;
+        END;
+    END IF;
+END
+$loc_fk$;
+
 CREATE INDEX IF NOT EXISTS ix_locations_pack ON plenum_cafm.locations (pack_id);
+CREATE INDEX IF NOT EXISTS ix_locations_site ON plenum_cafm.locations (site_id);
+CREATE INDEX IF NOT EXISTS ix_locations_building ON plenum_cafm.locations (building_id);
 
 -- sites: canonical shape for a fresh database; an existing varchar-keyed table keeps its key.
 CREATE TABLE IF NOT EXISTS plenum_cafm.sites (
@@ -91,7 +133,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.buildings (
     building_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     -- text, not uuid: it carries whichever key plenum_cafm.sites uses in this deployment.
     site_id          TEXT,
-    location_id      UUID REFERENCES plenum_cafm.locations (location_id),
+    -- FK added below only once the real key column of locations is known.
+    location_id      UUID,
     name             TEXT,
     primary_use      plenum_cafm.building_primary_use,
     floors           INTEGER,
@@ -108,6 +151,26 @@ CREATE INDEX IF NOT EXISTS ix_buildings_location ON plenum_cafm.buildings (locat
 -- The FK to sites only where the key types agree — a varchar-keyed sites cannot be
 -- referenced from a text column without a cast, and an unenforceable constraint is worse
 -- than an honest index.
+DO $bloc$
+DECLARE loc_key TEXT;
+BEGIN
+    SELECT column_name INTO loc_key FROM information_schema.columns
+     WHERE table_schema = 'plenum_cafm' AND table_name = 'locations'
+       AND column_name IN ('location_id', 'id') ORDER BY column_name = 'id' LIMIT 1;
+    IF loc_key IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'buildings_location_id_fkey'
+    ) THEN
+        BEGIN
+            EXECUTE format(
+                'ALTER TABLE plenum_cafm.buildings ADD CONSTRAINT buildings_location_id_fkey '
+                'FOREIGN KEY (location_id) REFERENCES plenum_cafm.locations (%I)', loc_key);
+        EXCEPTION WHEN others THEN
+            RAISE NOTICE 'buildings.location_id FK not added: %', SQLERRM;
+        END;
+    END IF;
+END
+$bloc$;
+
 DO $fk$
 DECLARE site_key_type TEXT;
 BEGIN

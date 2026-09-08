@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
@@ -14,6 +15,7 @@ from ...engines.energy import anomalies as anom_svc
 from ...engines.energy import buildings as bld_svc
 from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import sites_uuid_migration as sites_uuid
+from ...engines.energy import building_resolver as bld_resolver
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -182,6 +184,48 @@ async def backfill_buildings_from_sites(
     """
     return await bld_backfill.backfill_buildings_from_sites(
         session, dry_run=dry_run, country_code=country_code, limit=limit
+    )
+
+
+class ResolveBuildingItem(BaseModel):
+    """What extraction managed to read off one document."""
+    name: str | None = None
+    code: str | None = None
+    site_name: str | None = None
+    site_id: str | None = None
+
+
+class ResolveBuildingsRequest(BaseModel):
+    items: list[ResolveBuildingItem] = Field(..., min_length=1, max_length=1000)
+
+
+@router.get("/buildings/resolve")
+async def resolve_building(
+    name: str | None = Query(None, description="Building name as the document states it."),
+    code: str | None = Query(None, description="Building code / reference."),
+    site_name: str | None = Query(None),
+    site_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which building does this document belong to? Reads only, writes nothing.
+
+    Returns outcome resolved | review | unmatched with the reason. An ambiguous match
+    returns no building and the candidates it saw — filing against the wrong building
+    misstates two buildings' obligations at once, so it declines rather than guesses.
+    """
+    return await bld_resolver.resolve_one(
+        session, name=name, code=code, site_name=site_name, site_id=site_id
+    )
+
+
+@router.post("/buildings/resolve-batch")
+async def resolve_buildings_batch(
+    body: ResolveBuildingsRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Resolve a whole ingest run against one index read. Reads only."""
+    return await bld_resolver.resolve_batch(
+        session, [i.model_dump() for i in body.items]
     )
 
 
