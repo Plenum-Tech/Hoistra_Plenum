@@ -22,16 +22,61 @@ engine = create_async_engine(
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+#: How many times a failing migration is retried after create_all. Three covers a chain of
+#: three dependent migrations; a loop that never terminates would hang startup, which is
+#: worse than a named unapplied file.
+_MAX_MIGRATION_PASSES = 3
+
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 _SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"
 
 
 async def init_db() -> None:
+    """Migrate, create the ORM tables, then re-run whatever the first pass could not apply.
+
+    The two passes exist because the ordering is genuinely circular. Some migrations create
+    things `create_all` needs — the schema itself, tables the ORM does not model — so they
+    have to run first. Others ALTER tables the ORM owns, which on a fresh database do not
+    exist until `create_all` has run, so those are skipped on the way past.
+
+    Nobody noticed because the second boot fixed it: by then the tables existed and the
+    ALTERs applied. A first-boot deployment ran with columns missing and failed with a 500
+    that looked like a code fault — `compliance_certificates.site_ref does not exist` — until
+    somebody restarted the service and it mysteriously healed.
+
+    Only the files that actually failed are retried, so a healthy start still costs one pass.
+    Every migration is written idempotent, which is what makes a second attempt safe.
+    """
     log.info("db.init", status="starting")
+    retry: list[Path] = []
     if settings.auto_migrate_on_startup:
-        await apply_sql_migrations()
+        retry = await apply_sql_migrations()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Retried until nothing more succeeds, not just once. Filename order does not express
+    # dependencies BETWEEN migrations: compliance_certificates_region.sql indexes a column
+    # that compliance_certificates_state.sql adds, and `region` sorts before `state`, so in
+    # any single pass that index can never build. Looping while the failure set shrinks
+    # resolves those without anyone having to rename files into a working order — which is
+    # a trap that re-opens every time a migration is added.
+    passes = 0
+    while retry and passes < _MAX_MIGRATION_PASSES:
+        passes += 1
+        log.info("db.init.migration_retry", pass_no=passes,
+                 files=[f.name for f in retry])
+        still_failing = await apply_sql_migrations(only=retry)
+        if len(still_failing) >= len(retry):
+            retry = still_failing
+            break          # no progress: another pass will not help
+        retry = still_failing
+    if retry:
+        # Not necessarily broken: a migration for a table another service owns will never
+        # apply here. Named so it is a known absence rather than a silent one.
+        log.warning(
+            "db.init.migration_unapplied",
+            files=[f.name for f in retry],
+            note="still failing after the ORM tables were created and retries converged",
+        )
     log.info("db.init", status="complete")
 
 
@@ -75,13 +120,18 @@ def _split_sql(sql: str) -> list[str]:
     return statements
 
 
-async def apply_sql_migrations() -> None:
-    """Apply all idempotent *.sql migrations in migrations/ (sorted by name)."""
+async def apply_sql_migrations(only: list[Path] | None = None) -> list[Path]:
+    """Apply the idempotent *.sql migrations in filename order.
+
+    Returns the files that had at least one statement fail, so the caller can retry them
+    once the ORM tables exist. ``only`` restricts the run to a previous pass's failures.
+    """
     if not _MIGRATIONS_DIR.exists():
         log.warning("db.migration.dir_missing", path=str(_MIGRATIONS_DIR))
-        return
-    files = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+        return []
+    files = list(only) if only is not None else sorted(_MIGRATIONS_DIR.glob("*.sql"))
     total = 0
+    failed: list[Path] = []
     for mig in files:
         statements = _split_sql(mig.read_text(encoding="utf-8"))
         for stmt in statements:
@@ -95,13 +145,17 @@ async def apply_sql_migrations() -> None:
                     await conn.exec_driver_sql(stmt)
                 total += 1
             except Exception as exc:  # noqa: BLE001
+                if mig not in failed:
+                    failed.append(mig)
                 log.warning(
                     "db.migration.stmt_skipped",
                     file=mig.name,
                     error=str(exc)[:300],
                 )
         log.info("db.migration.file_applied", file=mig.name, statements=len(statements))
-    log.info("db.migration.applied", statements=total, files=len(files))
+    log.info("db.migration.applied", statements=total, files=len(files),
+             files_with_failures=len(failed))
+    return failed
 
 
 async def apply_sql_seed(name: str) -> int:
