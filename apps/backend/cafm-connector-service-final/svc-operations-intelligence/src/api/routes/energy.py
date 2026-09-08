@@ -18,6 +18,7 @@ from ...engines.energy import sites_uuid_migration as sites_uuid
 from ...engines.energy import building_resolver as bld_resolver
 from ...engines.energy import cost_drivers as cost
 from ...engines.energy import building_create as bld_create
+from ...engines.energy import building_update as bld_update
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -245,6 +246,66 @@ async def create_building(
     """
     out = await bld_create.create_building(session, body.model_dump(exclude_none=True))
     response.status_code = int(out.get("status") or (201 if out.get("ok") else 400))
+    return out
+
+
+class PatchBuildingRequest(BaseModel):
+    """Only the fields sent are touched. Omitting one leaves it alone.
+
+    Sending one EMPTY is a different instruction: an optional field is cleared, and a
+    required one is refused — a form submitting a blank box must not be able to leave a
+    building with no country.
+    """
+    model_config = {"extra": "allow"}   # unknown keys are refused BY NAME, not ignored
+
+    name: str | None = None
+    site_name: str | None = None
+    country_code: str | None = None
+    country: str | None = None
+    region: str | None = None
+    state: str | None = None
+    use_type: str | None = None
+    use_mix: list[UseMixItem] | None = None
+    floors: int | None = None
+    metering_granularity: str | None = None
+    metering_route: str | None = None
+    gfa_sqm: float | None = Field(None, description="Square METRES, as on create.")
+    building_code: str | None = None
+    site_id: str | None = None
+    city: str | None = None
+    postcode: str | None = None
+    updated_by: str | None = None
+    expected_updated_at: str | None = Field(
+        None,
+        description="The updated_at you read. Sent back, it refuses the patch if the row "
+                    "moved meanwhile instead of overwriting someone else's edit.",
+    )
+
+
+@router.patch("/buildings/{building_id}")
+async def patch_building(
+    building_id: str,
+    body: PatchBuildingRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Change one building. Returns it in the same shape GET /buildings uses.
+
+    Changing the country or region re-resolves the building's location, because the location
+    is what points at the regulation pack — a building moved between markets without one
+    keeps being scored against the standard it left.
+
+    raw_metadata is merged, not replaced, so a patch sending only `floors` does not erase the
+    use mix stored with the building.
+
+    200 on success. 400 with field-keyed errors, including for any field that is not
+    editable. 409 if a building_code is taken, or if `expected_updated_at` says the row moved
+    since it was read.
+    """
+    out = await bld_update.update_building(
+        session, building_id, body.model_dump(exclude_unset=True)
+    )
+    response.status_code = int(out.get("status") or (200 if out.get("ok") else 400))
     return out
 
 

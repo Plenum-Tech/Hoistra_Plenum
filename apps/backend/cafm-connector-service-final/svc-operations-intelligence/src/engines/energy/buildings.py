@@ -376,6 +376,10 @@ def shape_building_row(
         "hoist_score": hoist_score,
         "record_completeness_pct": completeness,
         "completeness_missing": missing,
+        # What a client quotes back as expected_updated_at so a patch cannot silently
+        # overwrite an edit made between the read and the write.
+        "updated_at": site.get("updated_at"),
+        "created_at": site.get("created_at"),
     }
     row.update(met)
     return row
@@ -440,6 +444,8 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
         "building_name": b.get("name") or b.get("building_name"),
         "building_code": b.get("building_code"),
         "code": b.get("building_code"),
+        "updated_at": b.get("updated_at"),
+        "created_at": b.get("created_at"),
         "country": b.get("country"),
         "country_code": b.get("loc_country_code") or b.get("country_code")
                         or b.get("site_country_code"),

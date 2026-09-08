@@ -303,6 +303,9 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
         "floors_recorded", "gfa_sqm_recorded", "eui_kwh_per_m2", "benchmark_kwh_per_m2",
         "benchmark_standard", "benchmark_standing", "benchmark_standing_note",
         "metering_route", "metering_granularity",
+        # Read so the row can hand a client something to send back on a patch. Without it
+        # expected_updated_at is unusable: nobody can quote a value the API never returns.
+        "updated_at", "created_at",
     ]
     cols = [f"b.{key}::text AS building_id"] + [f"b.{c}::text AS {c}" for c in wanted if c in have]
 
