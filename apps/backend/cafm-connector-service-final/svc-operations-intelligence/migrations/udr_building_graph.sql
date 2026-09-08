@@ -212,6 +212,11 @@ CREATE INDEX IF NOT EXISTS ix_spaces_building ON plenum_cafm.spaces (building_id
 
 -- ── :HAS_ASSET → :HAS_EQUIPMENT / :METERED_BY ────────────────────────────────────────
 -- assets already exists keyed on varchar; the graph hangs it off the building.
+-- A building created from the UI carries fields the canonical table has no column for —
+-- use_mix, metering granularity and route, postcode. The platform's rule is that an
+-- unmatched field goes to raw_metadata and is never dropped, so it has somewhere to go.
+ALTER TABLE plenum_cafm.buildings ADD COLUMN IF NOT EXISTS raw_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 ALTER TABLE plenum_cafm.assets ADD COLUMN IF NOT EXISTS building_id UUID;
 CREATE INDEX IF NOT EXISTS ix_assets_building ON plenum_cafm.assets (building_id);
 

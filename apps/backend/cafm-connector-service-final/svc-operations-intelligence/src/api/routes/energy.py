@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import sites_uuid_migration as sites_uuid
 from ...engines.energy import building_resolver as bld_resolver
 from ...engines.energy import cost_drivers as cost
+from ...engines.energy import building_create as bld_create
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -186,6 +187,90 @@ async def backfill_buildings_from_sites(
     return await bld_backfill.backfill_buildings_from_sites(
         session, dry_run=dry_run, country_code=country_code, limit=limit
     )
+
+
+class UseMixItem(BaseModel):
+    use: str
+    pct: float
+
+
+class CreateBuildingRequest(BaseModel):
+    """What the Hoist-a-building form submits.
+
+    `name` and `site_name` are both accepted, as are `region` and `state` — the form and the
+    canonical table use different words for the same thing and neither has to change.
+    """
+    name: str | None = None
+    site_name: str | None = None
+    country_code: str | None = Field(None, description="UK | US | AE | SG. GB and UAE are accepted.")
+    country: str | None = None
+    region: str | None = None
+    state: str | None = None
+    use_type: str | None = Field(None, description="Mall is accepted and stored as Retail.")
+    use_mix: list[UseMixItem] | None = Field(None, description="Percentages summing to 100.")
+    # Deliberately unconstrained here. Every rejection comes back in ONE shape — 400 with
+    # field-keyed errors from validate_payload — instead of some as Pydantic's 422 and the
+    # rest as ours, which would make the form handle two error formats for one submission.
+    floors: int | None = None
+    metering_granularity: str | None = Field(None, description="none | building-level | sub-metered")
+    source: str | None = Field(None, description='Who is creating this, e.g. "hoistra-ui".')
+
+    site_id: str | None = Field(None, description="An EXISTING site. Never allocated here.")
+    building_code: str | None = Field(None, description="Allocated as the next free B-NNN when absent.")
+    city: str | None = None
+    postcode: str | None = None
+    gfa_sqm: float | None = Field(None, description="Square METRES. Converted to the sqft column on write.")
+    metering_route: str | None = None
+    organization_id: str | None = None
+    created_by: str | None = None
+
+
+@router.post("/buildings", status_code=201)
+async def create_building(
+    body: CreateBuildingRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create one building, and return it in the same shape GET /buildings uses.
+
+    A country and region are properties of a location, not of a building, and the location
+    is what carries the regulation pack — so one is resolved or created here. Without it the
+    building has no benchmark at all.
+
+    Benchmark standard, standing and note are NOT stored: they are derived per request from
+    that pack, and a stored copy would go stale the day a standard changes.
+
+    201 on success. 400 with field-keyed errors. 409 when a supplied building_code is taken
+    — an existing building is never overwritten.
+    """
+    out = await bld_create.create_building(session, body.model_dump(exclude_none=True))
+    response.status_code = int(out.get("status") or (201 if out.get("ok") else 400))
+    return out
+
+
+@router.delete("/buildings/{building_id}")
+async def delete_building(
+    building_id: str,
+    response: Response,
+    confirm: bool = Query(False, description="Required to actually delete. Without it this reports what would be touched and changes nothing."),
+    detach: bool = Query(True, description="true unlinks attached records and keeps them; false refuses to delete a building that holds any."),
+    actor: str = Query("hoistra-ui"),
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Remove a building. Reports what it would touch unless confirm=true.
+
+    Attached records are **detached, never deleted**. A certificate, an invoice or a work
+    order is the record of something that actually happened, and the building row going away
+    does not make it untrue — cascading would destroy evidence to tidy up a directory entry.
+    They are left unlinked, which the resolver reports as unplaced and a person can re-link.
+    """
+    out = await bld_create.delete_building(
+        session, building_id, confirm=confirm, detach=detach,
+        actor=actor, organization_id=organization_id,
+    )
+    response.status_code = int(out.get("status") or (200 if out.get("ok") else 400))
+    return out
 
 
 class ResolveBuildingItem(BaseModel):
