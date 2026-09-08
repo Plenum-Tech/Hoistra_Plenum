@@ -439,6 +439,24 @@ async def graph_shape_stats(session: AsyncSession = Depends(get_session)):
     return await bld_tree.graph_shape_stats(session)
 
 
+@router.get("/graph/tables")
+async def graph_tables(session: AsyncSession = Depends(get_session)):
+    """Every graph table with its real row count, column count and history.
+
+    The export panel showed a table name, a row count and four dated "builds". The row
+    count was a formula over a seed building; the builds were four fixed percentages of it,
+    so every table in the portfolio lost precisely 2.4% overnight.
+
+    These are counted. The historical figures come from each row's ``created_at`` rather
+    than a stored snapshot — nothing on this platform records what a table's size was on a
+    past day — which means a row created last month and deleted yesterday is missing from
+    every figure. A past count is therefore a floor, not the exact size, and the payload
+    says so in ``history_basis`` rather than leaving the reader to infer it. A table with
+    no ``created_at`` reports ``history_available: false`` and offers the live count alone.
+    """
+    return await bld_tree.graph_tables(session)
+
+
 @router.get("/buildings/{building_id}/graph")
 async def building_graph(
     building_id: str,

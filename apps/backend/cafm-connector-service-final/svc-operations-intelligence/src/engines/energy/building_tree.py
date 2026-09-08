@@ -26,6 +26,7 @@ migrated in stages, so every branch is read from what the table actually has.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -267,4 +268,119 @@ async def graph_shape_stats(session: AsyncSession) -> dict[str, Any]:
         "columns_by_table": by_table,
         # Named so a partly-migrated deployment shows a smaller graph rather than a wrong one.
         "absent": sorted(t for t, i in shape.items() if not i.get("exists")),
+    }
+
+
+#: The snapshots the export panel offers, as cutoffs rather than stored builds.
+#:
+#: Nothing in this platform records a table's size on a past day. What every graph table
+#: does carry is ``created_at``, and "rows whose created_at is at or before midnight last
+#: Tuesday" is a real figure read from real rows — not a stored snapshot, but not invented
+#: either. The one thing it cannot see is deletion: a row created last month and deleted
+#: yesterday is absent from both today's count and every historical one, so a past figure
+#: is a floor, not an exact size. That caveat travels with the payload rather than being
+#: left for the reader to work out.
+_HISTORY: list[tuple[str, str, str]] = [
+    ("Current — live", "now()", "every row in the table right now"),
+    ("Yesterday's close", "date_trunc('day', now())",
+     "rows created before midnight this morning"),
+    ("Two days back", "date_trunc('day', now()) - interval '1 day'",
+     "rows created before midnight yesterday"),
+    ("Last week's close", "date_trunc('day', now()) - interval '6 days'",
+     "rows created before midnight six days ago"),
+]
+
+
+async def graph_tables(session: AsyncSession) -> dict[str, Any]:
+    """Every graph table: how many rows it holds, how many columns, and its history.
+
+    The export panel named a table, a row count and four dated builds. The row count was a
+    formula over a seed building and the builds were four hardcoded percentages of it, which
+    is why every table in the portfolio lost the same 2.4% overnight. These are counted.
+    """
+    shape = await graph_shape(session)
+    tables = sorted(t for t, i in shape.items() if i.get("exists"))
+    if not tables:
+        return {"ok": False, "error": "No graph tables in this database."}
+
+    try:
+        cols = (
+            await session.execute(
+                text(
+                    """SELECT table_name, count(*) AS n
+                       FROM information_schema.columns
+                       WHERE table_schema = 'plenum_cafm' AND table_name = ANY(:t)
+                       GROUP BY table_name"""
+                ),
+                {"t": tables},
+            )
+        ).mappings().all()
+    except Exception as exc:  # noqa: BLE001 — a panel must not break a page
+        log.warning("building_tree.graph_tables_failed", error=str(exc)[:200])
+        return {"ok": False, "error": str(exc)[:200]}
+    by_table = {r["table_name"]: int(r["n"]) for r in cols}
+
+    out: list[dict[str, Any]] = []
+    for table in tables:
+        info = shape.get(table) or {}
+        dated = "created_at" in (info.get("columns") or set())
+        entry: dict[str, Any] = {
+            "table": table,
+            "columns": by_table.get(table, 0),
+            "rows": None,
+            "history_available": dated,
+            "versions": [],
+            # Said here rather than left for the caller to infer from a false flag: a table
+            # with no history and a table whose history is all zeroes look the same on a
+            # screen, and only one of them is a fact about the rows.
+            "why": None if dated else
+                   f"plenum_cafm.{table} has no created_at, so only its live count can be read.",
+        }
+        # One statement per table, one branch per cutoff. Each in its own savepoint: a
+        # table that cannot be read loses its own row, not the whole panel.
+        picks = _HISTORY if dated else _HISTORY[:1]
+        selects = ", ".join(
+            (f"count(*) AS v{i}" if expr == "now()"
+             else f"count(*) FILTER (WHERE created_at <= {expr}) AS v{i}")
+            for i, (_, expr, _) in enumerate(picks)
+        )
+        try:
+            async with session.begin_nested():
+                row = (
+                    await session.execute(
+                        text(f"SELECT {selects} FROM plenum_cafm.{table}")
+                    )
+                ).mappings().first()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("building_tree.table_count_failed", table=table, error=str(exc)[:200])
+            entry["error"] = f"Could not count plenum_cafm.{table}."
+            out.append(entry)
+            continue
+
+        entry["rows"] = int(row["v0"] or 0)
+        for i, (label, _, note) in enumerate(picks):
+            n = int(row[f"v{i}"] or 0)
+            entry["versions"].append({
+                "label": label,
+                "rows": n,
+                "note": note,
+                "current": i == 0,
+                # The delta against the count before it, so the panel does not recompute
+                # it from percentages and get a different answer.
+                "delta": None if i == 0 else n - int(row[f"v{i - 1}"] or 0),
+            })
+        out.append(entry)
+
+    return {
+        "ok": True,
+        "tables": out,
+        "counted_at": datetime.now(timezone.utc).isoformat(),
+        # Said once, plainly, so a reader does not take a historical figure for a snapshot.
+        "history_basis": (
+            "Historical figures are counted from each row's created_at, not from a stored "
+            "snapshot — nothing on this platform records past table sizes. Rows deleted "
+            "since are absent from every figure, so a past count is a floor, not the exact "
+            "size the table was."
+        ),
+        "no_history": sorted(e["table"] for e in out if not e["history_available"]),
     }

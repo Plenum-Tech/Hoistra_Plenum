@@ -1,6 +1,6 @@
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
+import { CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, CHILD_OF_BUILDING, UNITS, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
 import { fmtTime, runwayTicks } from './complianceLive.js';
 
 export const renderValsMethods = {
@@ -272,11 +272,16 @@ export const renderValsMethods = {
             hw: sq ? n.r * 2 + 10 : 0, haloOp: sq && n.halo ? "0.8" : "0"
           });
         });
-        const selName = s.gBuilding;
+        // The hand-placed positions, filled with real buildings. `gBuilding` holds a
+        // name, so a saved selection can name a building this deployment does not have —
+        // the live selection falls back to the first one drawn rather than to nothing.
+        const HB = this.glHubs();
+        const sel = this.glSelected();
+        const selName = (sel && sel.name) || s.gBuilding;
         const selKid = s.gChild;
         const RAD = Math.PI / 180;
 
-        SHARED_N.forEach((sh) => {
+        this.glShared().forEach((sh) => {
           const mine = sh.links.indexOf(selName) > -1;
           out.push({
             cx: sh.cx, cy: sh.cy, r: sh.r,
@@ -295,8 +300,8 @@ export const renderValsMethods = {
           });
         });
 
-        HUBS.forEach((h) => {
-          const b = GB.find((x) => x.name === h.name) || {};
+        HB.forEach((h) => {
+          const b = h.b;
           const on = h.name === selName;
           const r = on ? h.r + 6 : h.r;
           out.push({
@@ -310,8 +315,12 @@ export const renderValsMethods = {
             font: "var(--font-body)", fs: on ? "13px" : "12px",
             fg: on ? "var(--accent-ink)" : "var(--color-text)",
             subFg: on ? "var(--accent-ink)" : "var(--color-neutral-500)",
-            label: h.name, sub: (b.id || "") + " · " + (b.floors || "") + "f",
-            files: on ? NUM(Math.max(1, Math.round(PER_BUILDING(b).document * 0.06))) : "",
+            label: h.name,
+            // The building's own key and its floor count as recorded, not as computed.
+            sub: (b.code || b.id || "") + (typeof b.floors === "number" ? " · " + b.floors + "f" : ""),
+            // The badge counted vectorised files bound to this node. Nothing reachable
+            // from this panel holds that, so it is absent rather than estimated.
+            files: "",
             click: () => this.setState({ gBuilding: h.name, gChild: "asset", gTable: "building" })
           });
 
@@ -333,8 +342,11 @@ export const renderValsMethods = {
               wrap: "nowrap", pe: on ? "auto" : "none",
               font: "ui-monospace, monospace", fs: "10.5px",
               fg: "var(--color-text)", subFg: "var(--color-neutral-500)",
-              label: on ? t.tbl : "", sub: on && !kOn ? k.rel : "",
-              files: on && VECTOR_CLASSES[k.id] ? NUM(VECTOR_CLASSES[k.id].reduce((q, v) => q + VFILES(v, PER_BUILDING(b)), 0)) : "",  /* rel; count lives in the tree */
+              label: on ? t.tbl : "",
+              // The relation, and beside it what this building actually has on that branch
+              // — "?" where nobody counted it, which is not the same as none.
+              sub: on && !kOn ? k.rel + " · " + this.glCountText(b, k.id) : "",
+              files: "",
               click: () => this.setState({ gBuilding: h.name, gChild: k.id, gTable: k.id })
             });
 
@@ -355,8 +367,8 @@ export const renderValsMethods = {
                 wrap: "nowrap", pe: "auto",
                 font: "ui-monospace, monospace", fs: "10.5px", fg: "var(--color-text)",
                 subFg: "var(--color-neutral-500)",
-                label: st.tbl, sub: sb.on,
-                files: VECTOR_CLASSES[sb.id] ? NUM(VECTOR_CLASSES[sb.id].reduce((q, v) => q + VFILES(v, PER_BUILDING(b)), 0)) : "",
+                label: st.tbl, sub: sb.on + " · " + this.glCountText(b, sb.id),
+                files: "",
                 click: () => this.setState({ gTable: sb.id })
               });
             });
@@ -367,12 +379,14 @@ export const renderValsMethods = {
 
       gEdges: (() => {
         const out = [];
-        const selName = s.gBuilding, selKid = s.gChild;
+        const HB = this.glHubs();
+        const selNow = this.glSelected();
+        const selName = (selNow && selNow.name) || s.gBuilding, selKid = s.gChild;
         const RAD = Math.PI / 180;
 
-        SHARED_N.forEach((sh) => {
+        this.glShared().forEach((sh) => {
           sh.links.forEach((nm) => {
-            const h = HUBS.find((x) => x.name === nm);
+            const h = HB.find((x) => x.name === nm);
             if (!h) return;
             const on = nm === selName;
             const dx = sh.cx - h.cx, dy = sh.cy - h.cy, L = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -385,7 +399,7 @@ export const renderValsMethods = {
           });
         });
 
-        HUBS.forEach((h) => {
+        HB.forEach((h) => {
           const on = h.name === selName;
           CHILD_OF_BUILDING.forEach((k, i) => {
             const a = h.ang[i] * RAD;
@@ -421,32 +435,48 @@ export const renderValsMethods = {
       // needs no explanation.
       exportT: (() => {
         const n = GRAPH.find((x) => x.id === s.gTable) || GRAPH[4];
-        const b = GB.find((x) => x.name === s.gBuilding) || GB[0];
-        const live = PER_BUILDING(b)[n.id];
-        const rows = live !== undefined ? live : parseInt(String(n.rows).replace(/,/g, ""), 10);
-        const hist = [
-          { label: "Current — live", note: "built 02 Sep 04:22 · build 47", d: 0, cur: true },
-          { label: "Yesterday's close", note: "01 Sep 23:50 · build 46", d: -0.024 },
-          { label: "Two days back", note: "31 Aug 23:50 · build 45", d: -0.061 },
-          { label: "Last week's close", note: "26 Aug 23:50 · build 42", d: -0.118 }
-        ];
+        const b = this.glSelected();
+        const t = this.glTable(n.id);
+        const counted = typeof t.rows === "number";
+        const rows = counted ? t.rows : 0;
+        const cols = typeof t.columns === "number" ? t.columns : n.cols.length;
         return {
-          name: n.tbl, rows: NUM(rows), cols: String(n.cols.length),
-          download: () => this.flash(n.tbl + ".csv — " + NUM(rows) + " rows for " + b.name + " at build 47, every column resolved through the graph. Downloading now."),
-          downloadHistory: () => this.flash("Preparing builds 46, 45 and 42 of " + n.tbl + " as one zip, with a change log against the current build."),
-          versions: hist.map((h, i) => {
-            const r = Math.round(rows * (1 + h.d));
-            const prev = i === 0 ? r : Math.round(rows * (1 + hist[i - 1].d));
-            const diff = i === 0 ? 0 : r - prev;
-            return {
-              label: h.label, note: h.note, rows: NUM(r),
-              delta: i === 0 ? "—" : (diff > 0 ? "+" : "") + diff,
-              deltaFg: i === 0 ? "var(--color-neutral-500)" : diff < 0 ? "var(--color-neutral-400)" : "var(--st-ok)",
-              bg: h.cur ? "var(--color-accent-900)" : "transparent",
-              fg: h.cur ? "var(--color-text)" : "var(--color-neutral-300)",
-              download: () => this.flash(n.tbl + " — " + h.label.toLowerCase() + " (" + h.note + "), " + NUM(r) + " rows. Downloading as CSV.")
-            };
-          })
+          name: t.table,
+          // "?" rather than a number for a table this database does not have. The old panel
+          // printed a formula's output here, so a table that did not exist still had rows.
+          rows: counted ? NUM(rows) : "?",
+          cols: String(cols),
+          note: t.why,
+          noteShow: t.why ? "block" : "none",
+          basis: t.basis,
+          basisShow: t.versions.length > 1 ? "block" : "none",
+          download: () => counted
+            ? this.flash(t.table + ".csv — " + NUM(rows) + " rows counted in plenum_cafm."
+                + t.table + ", every column resolved through the graph. Downloading now.")
+            : this.flash("Nothing to export: " + t.why),
+          downloadHistory: () => this.flash(t.versions.length > 1
+            ? "Preparing " + t.table + " at each cutoff as one zip. Each is the set of rows "
+              + "whose created_at falls before that time — a reconstruction from the live "
+              + "table, not a stored build."
+            : "No history for " + t.table + " — " + (t.why || "nothing to reconstruct from.")),
+          // Counted at each cutoff, not scaled from a percentage. A table nobody has
+          // written to since Friday shows the same figure four times, which is the truth
+          // about that table rather than a fixed decline applied to every table alike.
+          versions: t.versions.map((v) => ({
+            label: v.label, note: v.note, rows: NUM(v.rows),
+            delta: v.delta === null || v.delta === undefined ? "—"
+              : v.delta === 0 ? "0" : (v.delta > 0 ? "+" : "") + v.delta,
+            deltaFg: !v.delta ? "var(--color-neutral-500)"
+              : v.delta < 0 ? "var(--color-neutral-400)" : "var(--st-ok)",
+            bg: v.current ? "var(--color-accent-900)" : "transparent",
+            fg: v.current ? "var(--color-text)" : "var(--color-neutral-300)",
+            download: () => this.flash(t.table + " — " + v.label.toLowerCase() + ": "
+              + NUM(v.rows) + " rows, " + v.note + ". Downloading as CSV.")
+          })),
+          versionsShow: t.versions.length ? "block" : "none",
+          // A building is named beside the export only when one is selected; the export
+          // itself is the whole table, and saying otherwise would misdescribe the file.
+          scope: b ? "Whole table · " + b.name + " is the building in focus" : "Whole table"
         };
       })(),
 
@@ -785,56 +815,107 @@ export const renderValsMethods = {
       roleFg: s.role === "admin" ? "var(--accent-ink)" : "var(--color-neutral-400)",
       docScope: s.role === "admin" ? "Everything ingested, per building" : "What you ingested, per building",
       docBlurb: s.role === "admin"
-        ? "Every source in the portfolio. Structured sources became tables and rows; unstructured files were vectorised and bound to a column. Each row names what it turned into."
-        : "Only the documents you uploaded. Everything else in the graph stays readable as data, but the source files belong to whoever ingested them.",
+        ? "Every document on the graph, per building, read from plenum_cafm.documents — and beside each, the certificates it evidences. A building with nothing filed says so rather than showing an empty list."
+        : "The documents on the graph for each building, read from plenum_cafm.documents, and the certificates they evidence. Source files stay with whoever ingested them.",
       docStats: (() => {
-        const admin = s.role === "admin";
-        const share = admin ? 1 : 0.28;
-        const files = Math.round(GB.reduce((q, b) => q + PER_BUILDING(b).document, 0) * share);
-        const gb = Math.round(GB.reduce((q, b) => { const p = PER_BUILDING(b); return q + p.asset * 0.9 + p.document * 2.4; }, 0) * share / 100) / 10;
+        const rows = this.glBuildings();
+        const sum = (k) => rows.reduce((q, b) => {
+          const n = (b.counts || {})[k];
+          return typeof n === "number" ? q + n : q;
+        }, 0);
+        const docs = sum("documents");
+        const certsKnown = this.glBranchCounted("certificates");
+        const certs = certsKnown ? sum("certificates") : null;
+        const none = rows.filter((b) => ((b.counts || {}).documents || 0) === 0).length;
         return [
-          { value: String(Math.round(GB.length * 5 * share)), label: "structured sources", color: "var(--color-text)" },
-          { value: NUM(files), label: "unstructured files", color: "var(--color-text)" },
-          { value: gb + " GB", label: admin ? "under management" : "yours", color: "var(--color-accent)" }
+          { value: NUM(docs), label: docs === 1 ? "document on the graph" : "documents on the graph", color: "var(--color-text)" },
+          { value: certsKnown ? NUM(certs) : "?",
+            label: certsKnown ? "certificates bound to them" : "certificates · branch not counted",
+            color: certsKnown ? "var(--color-text)" : "var(--color-neutral-500)" },
+          // Not a total under management — the buildings with nothing filed, which is the
+          // figure that says what to do next. plenum_cafm.documents records no file size,
+          // so the "0.6 GB" that sat here was a formula over a seed building.
+          { value: String(none), label: none === 1 ? "building with nothing filed" : "buildings with nothing filed",
+            color: none ? "var(--st-warn)" : "var(--color-accent)" }
         ];
       })(),
-      docBuildings: GB.map((b) => {
-        const PB = PER_BUILDING(b);
+      docBuildings: this.glBuildings().map((b) => {
         const open = s.docOpen === b.name;
-        const mine = s.role !== "admin";
-        // Ownership: who put the file into the graph. A user sees only their own.
-        const st = [
-          { file: "Asset register — " + b.name + ".xlsx", became: NUM(PB.asset) + " rows in assets", meta: "2.1 MB · 12 Aug", by: "admin" },
-          { file: "Floor schedule.csv", became: NUM(PB.floor) + " rows in floors", meta: "18 KB · 12 Aug", by: "admin" },
-          { file: "Contract schedule.xlsx", became: NUM(PB.contract) + " rows in contracts", meta: "640 KB · 14 Aug", by: "you" },
-          { file: "Half-hourly meter export.csv", became: NUM(PB.meter) + " rows in meters", meta: "8.4 MB · 02 Sep", by: "admin" },
-          { file: "Service charge ledger.xlsx", became: NUM(PB.invoice) + " rows in invoices", meta: "1.7 MB · 28 Aug", by: "you" }
-        ].filter((d) => !mine || d.by === "you");
-        const YOURS = ["asset", "contract", "workorder", "invoice"];
-        const un = Object.keys(VECTOR_CLASSES)
-          .filter((k) => !mine || YOURS.indexOf(k) > -1)
-          .flatMap((k) => VECTOR_CLASSES[k].map((v) => {
-            const n = mine ? Math.max(1, Math.round(VFILES(v, PB) * 0.5)) : VFILES(v, PB);
-            return { file: v.label, files: n, became: v.col, sim: v.sim, meta: NUM(n) + " files", cls: true, by: mine ? "you" : "admin" };
-          }));
-        const wire = (arr) => arr.map((d) => Object.assign({}, d, {
-          view: () => this.flash(d.cls
-            ? "Listing all " + NUM(d.files) + " files in " + d.file + " for " + b.name + " — each with its match score against " + d.became + "."
-            : "Opening " + d.file + " — source document for " + b.name + ", read-only."),
-          download: () => this.flash(d.cls
-            ? "Downloading " + NUM(d.files) + " files as a zip, with the binding record for each."
-            : "Downloading " + d.file + " with its extraction record and ingestion timestamp.")
+        const key = b.buildingId || b.id;
+        const c = b.counts || {};
+        const nDocs = c.documents, nCerts = c.certificates;
+        // The rows themselves come from the graph endpoint, fetched when the building is
+        // opened and cached per building — the same call the drawer makes, so opening one
+        // in both places costs one request.
+        // Deferred, not called here: this runs inside render, and bgLoad sets state on its
+        // first call. The cache guard inside bgLoad makes it a one-shot per building.
+        if (open) setTimeout(() => this.bgLoad(key), 0);
+        const fetched = this.bgRowsFor(key);
+        const branch = fetched && fetched.documents;
+        const certBranch = fetched && fetched.certificates;
+        const state = (this.state.bgTree || {})[key] || {};
+        const files = ((branch && branch.rows) || []).map((r) => ({
+          file: r.label,
+          became: r.detail ? "filed as " + r.detail : "no document type recorded",
+          // No size and no ingest timestamp on plenum_cafm.documents; the row's own key is
+          // what there is, and it is what identifies the file in the graph.
+          meta: "document_id " + String(r.id).slice(0, 8),
+          by: "graph",
+          view: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
+            + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name + "."),
+          download: () => this.flash("plenum_cafm.documents records a blob_url for "
+            + r.label + " but no local copy; the file is fetched from storage on request.")
         }));
         return {
-          name: b.name, id: b.id, state: b.state,
+          name: b.name, id: b.code || b.id, state: b.state,
           arrow: open ? "▾" : "▸",
           headBg: open ? "var(--color-accent-900)" : "transparent",
           openShow: open ? "flex" : "none",
-          nStruct: String(st.length), nUnstruct: NUM(un.reduce((q, d) => q + d.files, 0)),
-          size: (Math.round((PB.asset * 0.9 + PB.document * 2.4) / 100) / 10) + " GB",
-          structured: wire(st), unstructured: wire(un),
-          toggle: () => this.setState((p) => ({ docOpen: p.docOpen === b.name ? null : b.name })),
-          downloadAll: () => this.flash("Preparing a zip of every source document for " + b.name + ", structured and unstructured, with the extraction record for each."),
+          // "?" where the rollup did not count this branch, not "0" — the panel used to
+          // print "2 structured" for every building in the portfolio, including the ones
+          // with nothing filed at all.
+          nStruct: typeof nDocs === "number" ? NUM(nDocs) : (this.glBranchCounted("documents") ? "0" : "?"),
+          nUnstruct: typeof nCerts === "number" ? NUM(nCerts) : (this.glBranchCounted("certificates") ? "0" : "?"),
+          structLabel: nDocs === 1 ? "document" : "documents",
+          unstructLabel: nCerts === 1 ? "certificate" : "certificates",
+          // plenum_cafm.documents records no file size, so the slot that showed "0.2 GB"
+          // for every building shows nothing rather than a figure derived from row counts.
+          size: "",
+          structured: files,
+          // The right-hand column held "unstructured files, vectorised and bound", with a
+          // similarity score per row. Those scores were weights in a constant. What the
+          // graph does hold on this side is the certificates evidenced by those documents,
+          // so that is what sits there — real rows, in the same place.
+          unstructured: ((certBranch && certBranch.rows) || []).map((r) => ({
+            file: r.label,
+            became: r.detail || "no expiry or status recorded",
+            sim: "",
+            meta: "certificate",
+            view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
+              + r.id + (r.detail ? ", " + r.detail : "") + ", bound to a document on " + b.name + "."),
+            download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
+          })),
+          loading: !!state.loading,
+          emptyText: state.loading ? "Reading the graph…"
+            : state.error ? "Could not read this building's documents: " + state.error
+            : branch && !branch.available ? (branch.empty_reason || "Documents cannot be read here.")
+            : files.length ? "" : "Nothing filed against " + b.name + " yet.",
+          emptyShow: files.length ? "none" : "block",
+          // Each column says why it is empty on its own. A heading with nothing under it
+          // reads as a screen that has not finished loading rather than as a record.
+          certEmpty: !certBranch ? "Reading the graph…"
+            : !certBranch.available ? (certBranch.empty_reason || "Certificates cannot be read here.")
+            : "No certificate has been filed against a document on this building.",
+          certEmptyShow: certBranch && (certBranch.rows || []).length ? "none" : "block",
+          toggle: () => {
+            const opening = s.docOpen !== b.name;
+            this.setState((p) => ({ docOpen: p.docOpen === b.name ? null : b.name }));
+            if (opening) this.bgLoad(key);
+          },
+          downloadAll: () => this.flash(typeof nDocs === "number" && nDocs
+            ? "Preparing every document filed against " + b.name + " — " + nDocs
+              + " rows in plenum_cafm.documents, each fetched from its blob_url."
+            : "Nothing filed against " + b.name + " to download."),
           ingestMore: () => this.runAction("Ingest documents", b.name)
         };
       }),
@@ -842,17 +923,28 @@ export const renderValsMethods = {
       // Hierarchy for the selected building only — parent, children, sub-children,
       // each row carrying the key it is identified by.
       hier: (() => {
-        const b = GB.find((x) => x.name === s.gBuilding) || GB[0];
-        const PB = PER_BUILDING(b);
-        const vecs = (id) => (VECTOR_CLASSES[id] || []).map((v) => ({
-          label: v.label, col: v.col, sim: v.sim,
-          n: NUM(VFILES(v, PB)),
-          tip: () => this.flash(v.label + " — " + VFILES(v, PB) + " files vectorised and bound to " + v.col + " at mean similarity " + v.sim + ". A class, not a row: matched on content, so a scan with no filename convention still finds its asset.")
-        }));
+        const b = this.glSelected();
+        // Vector bindings are a real thing the platform does, and nothing this panel can
+        // reach reports them: the similarity scores and file counts here were weights in a
+        // constant. An empty list renders the row without them rather than with numbers
+        // nobody measured.
+        const vecs = () => [];
         const parentSel = s.gTable === "building";
         const OK = "var(--color-accent)", INK = "var(--accent-ink)";
+        // A branch prints its count, or "?" and the reason nobody has one. The two used to
+        // be the same thing, and a building with no meters read identically to a building
+        // whose meters were never counted.
+        const line = (id, unit) => {
+          const c = this.glCount(b, id);
+          return c.counted ? NUM(c.n) + " " + unit + (c.surveyed ? " · recorded" : "")
+            : "not counted";
+        };
         return {
-          building: b.name, rowKey: b.id, vectors: vecs("building"),
+          building: b ? b.name : "No building on the register",
+          rowKey: b ? (b.code || b.id) : "—",
+          vectors: vecs(),
+          empty: b ? "" : "plenum_cafm.buildings has no rows in this deployment.",
+          emptyShow: b ? "none" : "block",
           pickParent: () => this.setState({ gTable: "building" }),
           parentBg: parentSel ? OK : "transparent",
           parentFg: parentSel ? INK : "var(--color-accent)",
@@ -865,7 +957,7 @@ export const renderValsMethods = {
             const sel = s.gTable === k.id;
             const subs = SUB_OF[k.id] || [];
             return {
-              tbl: t.tbl, glyph: k.glyph, rel: k.rel, pk: t.pk, rows: NUM(PB[k.id]) + " " + k.unit,
+              tbl: t.tbl, glyph: k.glyph, rel: k.rel, pk: t.pk, rows: line(k.id, k.unit),
               arrow: open ? "▾" : "▸",
               bg: sel ? OK : "transparent",
               fg: sel ? INK : "var(--color-text)",
@@ -874,20 +966,21 @@ export const renderValsMethods = {
               chev: sel ? INK : "var(--color-neutral-500)",
               pkBg: sel ? "var(--color-bg)" : "var(--color-neutral-900)",
               pkFg: sel ? OK : "var(--color-accent-300)",
-              openShow: open ? "flex" : "none", vectors: open ? vecs(k.id) : [],
+              openShow: open ? "flex" : "none", vectors: [],
               toggle: () => this.setState((p) => ({ gChild: p.gChild === k.id && p.gTable === k.id ? null : k.id, gTable: k.id })),
               subs: subs.map((sb) => {
                 const st = GRAPH.find((g) => g.id === sb.id);
                 const ssel = s.gTable === sb.id;
                 return {
-                  tbl: st.tbl, glyph: sb.glyph, rel: sb.rel, on: sb.on, pk: st.pk, rows: NUM(PB[sb.id]) + " " + UNITS[sb.id],
+                  tbl: st.tbl, glyph: sb.glyph, rel: sb.rel, on: sb.on, pk: st.pk,
+                  rows: line(sb.id, UNITS[sb.id]),
                   bg: ssel ? OK : "transparent",
                   fg: ssel ? INK : "var(--color-text)",
                   sub: ssel ? INK : "var(--color-neutral-500)",
                   code: ssel ? INK : "var(--color-accent)",
                   pkBg: ssel ? "var(--color-bg)" : "var(--color-neutral-900)",
                   pkFg: ssel ? OK : "var(--color-accent-300)",
-                  vectors: vecs(sb.id),
+                  vectors: [],
                   pick: () => this.setState({ gTable: sb.id })
                 };
               })
@@ -912,8 +1005,14 @@ export const renderValsMethods = {
         const n = GRAPH.find((x) => x.id === s.gTable) || GRAPH[4];
         const kids = GRAPH_EDGES.filter((e) => e[1] === n.id).map((e) => GRAPH.find((x) => x.id === e[0]));
         const pars = GRAPH_EDGES.filter((e) => e[0] === n.id).map((e) => GRAPH.find((x) => x.id === e[1]));
+        const live = this.glTable(n.id);
         return {
-          name: n.tbl, rows: n.rows,
+          name: live.table,
+          // Counted in this database. The number compiled in beside each table was written
+          // when the diagram was drawn and has never been compared to anything since.
+          rows: typeof live.rows === "number" ? NUM(live.rows) : "?",
+          rowsNote: live.why,
+          rowsNoteShow: live.why ? "block" : "none",
           cols: n.cols.map((c) => ({
             name: c[0], type: c[1], key: c[2],
             keyShow: c[2] ? "inline" : "none",
@@ -922,7 +1021,9 @@ export const renderValsMethods = {
             fg: c[2] ? "var(--color-text)" : "var(--color-neutral-400)"
           })),
           children: kids.map((k) => ({
-            name: k.tbl, rows: k.rows, on: "on " + n.pk,
+            name: k.tbl,
+            rows: (() => { const t = this.glTable(k.id); return typeof t.rows === "number" ? NUM(t.rows) : "?"; })(),
+            on: "on " + n.pk,
             click: () => this.setState({ gTable: k.id, gChild: CHILD_OF_BUILDING.some((c) => c.id === k.id) ? k.id : s.gChild })
           })),
           leafShow: kids.length ? "none" : "block",
@@ -936,19 +1037,23 @@ export const renderValsMethods = {
       })(),
 
       // Live when the register answered; the compiled-in figures only when it did not.
+      // Live when the register answered. When it did not, the schema three are what this
+      // build was drawn against — but "24 buildings" and "1,204 documents" were typed in,
+      // and a figure nobody can source reads as "—" rather than as a number.
       graphStats: this.bldVals().graphStatsLiveShow ? this.bldVals().graphStatsLive : [
-        { value: String(GRAPH.length), label: "tables", color: "var(--color-text)" },
-        { value: String(GRAPH.reduce((a, g) => a + g.cols.length, 0)), label: "columns", color: "var(--color-text)" },
-        { value: String(GRAPH_EDGES.length), label: "relationships", color: "var(--color-text)" },
-        { value: "24", label: "buildings", color: "var(--color-accent)" },
-        { value: "1,204", label: "bound documents", color: "var(--color-text)" }
+        { value: String(GRAPH.length), label: "tables in the diagram", color: "var(--color-neutral-400)" },
+        { value: String(GRAPH.reduce((a, g) => a + g.cols.length, 0)), label: "columns in the diagram", color: "var(--color-neutral-400)" },
+        { value: String(GRAPH_EDGES.length), label: "relationships drawn", color: "var(--color-neutral-400)" },
+        { value: "—", label: "buildings · register unreachable", color: "var(--color-neutral-500)" },
+        { value: "—", label: "documents · register unreachable", color: "var(--color-neutral-500)" }
       ],
+      graphNote: this.glHubNote(),
       graphLegend: [
         { label: "selected — click any node to expand", fill: "var(--color-accent)", stroke: "0", radius: "50%" },
         { label: "direct child · carries building_id", fill: "var(--color-bg)", stroke: "1.4px solid var(--color-accent)", radius: "50%" },
         { label: "shared by several buildings", fill: "var(--color-bg)", stroke: "1.2px solid var(--color-neutral-700)", radius: "50%" },
         { label: "reaches a building only indirectly", fill: "var(--color-accent-900)", stroke: "1.4px dashed var(--color-accent)", radius: "50%" },
-        { label: "yellow badge = unstructured files bound to that table by similarity", fill: "var(--marker)", stroke: "0", radius: "3px" }
+        { label: "counts beside each node are read from the graph; “?” means that branch is not counted", fill: "var(--color-bg)", stroke: "1.2px dashed var(--color-neutral-700)", radius: "3px" }
       ],
       graphCodes: "FL floors · AS assets · DO documents · CO contracts · EQ equipment · ME meters · WO work orders · CE certificates · SP spaces · IN invoices",
       graphHops: [

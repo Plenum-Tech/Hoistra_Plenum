@@ -311,8 +311,11 @@ export default function Buildings({ vals }) {
                   {"What a Hoisted Building resolves to"}
                 </div>
                 <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "76ch", lineHeight: "1.5" }}>
-                  {"Two passes. Structured data becomes tables and columns, keyed and joined. Scans and PDFs are then vectorised and bound to the column they resemble — squares on the graph, grouped as file classes rather than listed one by one."}
+                  {"Every node is a table in plenum_cafm and every figure beside one is counted in it. A building's own key and floor count sit under its name; each satellite carries the relation and how many rows this building has on that branch. A branch nobody counted reads “?” rather than nought — the two are different facts, and only one of them is about the building."}
                 </p>
+                <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>
+                  {vals.graphNote}
+                </div>
               </div>
               {vals.isAdmin ? (
                 <>
@@ -667,6 +670,9 @@ export default function Buildings({ vals }) {
                     </span>
                     <span style={{ width: "16px" }}></span>
                   </div>
+                  <div style={{ display: vals.exportT.noteShow, fontSize: "11px", color: "var(--color-neutral-500)", padding: "10px 14px", borderBottom: "1px solid var(--color-divider)" }}>
+                    {vals.exportT.note}
+                  </div>
                   {(vals.exportT.versions || []).map((v, $index) => (
                     <React.Fragment key={$index}>
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: "12px", alignItems: "center", padding: "9px 14px", borderBottom: "1px solid var(--color-divider)", background: v.bg }}>
@@ -690,10 +696,10 @@ export default function Buildings({ vals }) {
                   ))}
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", padding: "11px 14px" }}>
                     <div className="hv15" onClick={vals.exportT.downloadHistory} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                      {"Download the last three snapshots together"}
+                      {"Download every cutoff together"}
                     </div>
                     <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", flex: "1", minWidth: "200px" }}>
-                      {"One CSV per snapshot in a single zip, plus a change log naming which rows moved and what caused it."}
+                      {vals.exportT.basis}
                     </span>
                   </div>
                 </div>
@@ -753,10 +759,10 @@ export default function Buildings({ vals }) {
                               </div>
                             </div>
                             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
-                              {b.nStruct}{" structured"}
+                              {b.nStruct}{" "}{b.structLabel}
                             </span>
                             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
-                              {b.nUnstruct}{" unstructured"}
+                              {b.nUnstruct}{" "}{b.unstructLabel}
                             </span>
                             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
                               {b.size}
@@ -768,7 +774,7 @@ export default function Buildings({ vals }) {
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "50%", background: "var(--color-accent)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                    {"Structured — became tables and rows"}
+                                    {"Documents — filed against this building"}
                                   </span>
                                 </div>
                                 {(b.structured || []).map((d, $index) => (
@@ -797,8 +803,11 @@ export default function Buildings({ vals }) {
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "3px", background: "var(--marker)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                    {"Unstructured — vectorised and bound"}
+                                    {"Certificates — evidenced by those documents"}
                                   </span>
+                                </div>
+                                <div style={{ display: b.certEmptyShow, fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "12px 16px" }}>
+                                  {b.certEmpty}
                                 </div>
                                 {(b.unstructured || []).map((d, $index) => (
                                   <React.Fragment key={$index}>
@@ -808,7 +817,7 @@ export default function Buildings({ vals }) {
                                           {d.file}
                                         </div>
                                         <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                          {"~ "}{d.became}{" · "}{d.sim}
+                                          {d.became}
                                         </div>
                                       </div>
                                       <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
@@ -823,9 +832,12 @@ export default function Buildings({ vals }) {
                                 ))}
                               </div>
                             </div>
+                            <div style={{ display: b.emptyShow, fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "12px 16px", borderTop: "1px solid var(--color-divider)" }}>
+                              {b.emptyText}
+                            </div>
                             <div style={{ display: "flex", gap: "9px", flexWrap: "wrap", padding: "12px 16px", background: "var(--color-bg)" }}>
                               <div className="hv15" onClick={b.downloadAll} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
-                                {"Download all · "}{b.size}
+                                {"Download all"}
                               </div>
                               <div className="hv4" onClick={b.ingestMore} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
                                 {"Ingest more"}

@@ -163,6 +163,7 @@ export const buildingsLiveMethods = {
       this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit } });
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
       this.bldLoadShape();
+      this.glLoadTables();
     } catch (e) {
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;

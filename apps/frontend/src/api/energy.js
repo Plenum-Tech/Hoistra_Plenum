@@ -42,6 +42,12 @@ export const energyApi = {
   // migration runs.
   graphShape: () => apiFetch(B, '/api/energy/graph/shape'),
 
+  // Every graph table with its real row count and the counts behind it. The export panel
+  // showed a formula's output and four fixed percentages of it called "builds"; these are
+  // counted, and the historical figures are read from created_at rather than a snapshot
+  // nobody stores.
+  graphTables: () => apiFetch(B, '/api/energy/graph/tables'),
+
   tm46: () => apiFetch(B, '/api/energy/tm46'),
   savedSpaceSummary: () => apiFetch(B, '/api/energy/saved-space/summary', { query: withOrg() })
 };
