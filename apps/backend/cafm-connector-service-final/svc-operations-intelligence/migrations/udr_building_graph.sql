@@ -261,29 +261,76 @@ CREATE INDEX IF NOT EXISTS ix_compliance_certificates_building
 
 -- ── :UNDER_CONTRACT → :RAISED_UNDER / :INVOICED_BY ───────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS plenum_cafm.contracts (
-    contract_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    building_id      UUID REFERENCES plenum_cafm.buildings (building_id),
-    vendor_id        TEXT,
-    sla_response_hrs INTEGER,
-    penalty_clause   TEXT,
-    annual_value     NUMERIC(16,2),
-    currency         CHAR(3),
-    start_date       DATE,
-    end_date         DATE,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE plenum_cafm.contracts ADD COLUMN IF NOT EXISTS building_id UUID;
-ALTER TABLE plenum_cafm.contracts ADD COLUMN IF NOT EXISTS sla_response_hrs INTEGER;
-ALTER TABLE plenum_cafm.contracts ADD COLUMN IF NOT EXISTS penalty_clause TEXT;
-ALTER TABLE plenum_cafm.contracts ADD COLUMN IF NOT EXISTS annual_value NUMERIC(16,2);
-CREATE INDEX IF NOT EXISTS ix_contracts_building ON plenum_cafm.contracts (building_id);
+-- contracts and invoices are VIEWS, not tables.
+--
+-- The contract engine already owns this data and has real logic behind it:
+-- contract_sla_parameters holds a contract's terms, invoice_verifications and invoice_lines
+-- hold a verified invoice and its lines. A second pair of tables carrying the same facts
+-- would mean two answers to "what does this contract say", and the graph would eventually
+-- disagree with the engine that maintains it. A view has one copy of the truth and cannot
+-- drift from it.
+--
+-- What a view cannot do is be a foreign-key target, so nothing references contracts
+-- (contract_id) — work_orders and invoices carry the id and are joined, not constrained.
+--
+-- Columns the source does not hold are NULL and say so here rather than being invented:
+-- contract_sla_parameters records no contract value, currency or end date, and
+-- invoice_verifications records no issue date. Those are gaps in the source, and the view
+-- makes them visible instead of papering over them.
+
+DO $drop_contracts$
+BEGIN
+    -- Only ever drop the placeholder table, and only when empty. A table with rows is
+    -- somebody's data and is left alone with the view skipped.
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'plenum_cafm' AND table_name = 'contracts'
+                  AND table_type = 'BASE TABLE') THEN
+        IF (SELECT count(*) FROM plenum_cafm.contracts) = 0 THEN
+            DROP TABLE plenum_cafm.contracts CASCADE;
+        ELSE
+            RAISE NOTICE 'plenum_cafm.contracts has rows — left as a table, view not created';
+        END IF;
+    END IF;
+END
+$drop_contracts$;
+
+DO $contracts_view$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'plenum_cafm' AND table_name = 'contracts'
+                      AND table_type = 'BASE TABLE') THEN
+        EXECUTE $v$
+            CREATE OR REPLACE VIEW plenum_cafm.contracts AS
+            SELECT
+                COALESCE(p.contract_id, p.id)          AS contract_id,
+                p.organization_id,
+                d.building_id,
+                p.vendor_id,
+                p.contract_ref,
+                p.document_id,
+                p.sla_response_p1_hours                AS sla_response_hrs,
+                NULLIF(p.kpi_clauses_json::text, 'null') AS penalty_clause,
+                NULL::NUMERIC(16,2)                    AS annual_value,
+                NULL::CHAR(3)                          AS currency,
+                p.signed_date                          AS start_date,
+                NULL::DATE                             AS end_date,
+                p.status,
+                p.created_at
+            FROM plenum_cafm.contract_sla_parameters p
+            LEFT JOIN plenum_cafm.documents d ON d.document_id = p.document_id
+        $v$;
+    END IF;
+EXCEPTION WHEN others THEN
+    RAISE NOTICE 'contracts view not created: %', SQLERRM;
+END
+$contracts_view$;
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.work_orders (
     work_order_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     building_id   UUID REFERENCES plenum_cafm.buildings (building_id),
     asset_id      TEXT,
-    contract_id   UUID REFERENCES plenum_cafm.contracts (contract_id),
+    -- No FK: contracts is a view over contract_sla_parameters and cannot be referenced.
+    contract_id   UUID,
     vendor_id     TEXT,
     title         TEXT,
     status        TEXT,
@@ -296,20 +343,57 @@ CREATE INDEX IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (b
 CREATE INDEX IF NOT EXISTS ix_work_orders_asset ON plenum_cafm.work_orders (asset_id);
 CREATE INDEX IF NOT EXISTS ix_work_orders_contract ON plenum_cafm.work_orders (contract_id);
 
-CREATE TABLE IF NOT EXISTS plenum_cafm.invoices (
-    invoice_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    vendor_id   TEXT,
-    contract_id UUID REFERENCES plenum_cafm.contracts (contract_id),
-    building_id UUID REFERENCES plenum_cafm.buildings (building_id),
-    invoice_ref TEXT,
-    amount      NUMERIC(16,2),
-    currency    CHAR(3),
-    issued_on   DATE,
-    status      TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS ix_invoices_vendor ON plenum_cafm.invoices (vendor_id);
-CREATE INDEX IF NOT EXISTS ix_invoices_contract ON plenum_cafm.invoices (contract_id);
+DO $drop_invoices$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'plenum_cafm' AND table_name = 'invoices'
+                  AND table_type = 'BASE TABLE') THEN
+        IF (SELECT count(*) FROM plenum_cafm.invoices) = 0 THEN
+            DROP TABLE plenum_cafm.invoices CASCADE;
+        ELSE
+            RAISE NOTICE 'plenum_cafm.invoices has rows — left as a table, view not created';
+        END IF;
+    END IF;
+END
+$drop_invoices$;
+
+DO $invoices_view$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'plenum_cafm' AND table_name = 'invoices'
+                      AND table_type = 'BASE TABLE') THEN
+        EXECUTE $v$
+            CREATE OR REPLACE VIEW plenum_cafm.invoices AS
+            SELECT
+                v.id                       AS invoice_id,
+                v.organization_id,
+                v.vendor_id,
+                d.building_id,
+                v.invoice_ref,
+                v.document_id,
+                -- The invoice's value IS the sum of its verified lines; storing a second
+                -- total would be a number that could disagree with them.
+                l.amount,
+                l.line_count,
+                NULL::CHAR(3)              AS currency,
+                NULL::DATE                 AS issued_on,
+                v.status,
+                v.matched_count,
+                v.flagged_count,
+                v.created_at
+            FROM plenum_cafm.invoice_verifications v
+            LEFT JOIN plenum_cafm.documents d ON d.document_id = v.document_id
+            LEFT JOIN LATERAL (
+                SELECT sum(il.line_total) AS amount, count(*) AS line_count
+                FROM plenum_cafm.invoice_lines il
+                WHERE il.invoice_verification_id = v.id
+            ) l ON TRUE
+        $v$;
+    END IF;
+EXCEPTION WHEN others THEN
+    RAISE NOTICE 'invoices view not created: %', SQLERRM;
+END
+$invoices_view$;
 
 -- ── the four regulation packs ────────────────────────────────────────────────────────
 -- Reference data, not demo data: these are the standards the markets are scored against,
