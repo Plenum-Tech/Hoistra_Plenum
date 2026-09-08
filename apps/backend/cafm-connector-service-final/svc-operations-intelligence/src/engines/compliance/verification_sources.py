@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -160,28 +160,28 @@ async def seed_verification_sources(session: AsyncSession) -> dict[str, Any]:
         # Split into single statements and run each via raw DBAPI: asyncpg can't run
         # multiple commands in one prepared statement, and text() would misparse the
         # ``::jsonb`` casts as bind params. Mirrors db.apply_sql_migrations.
-        from ...db import _split_sql, engine
+        from ...db import _split_sql, exec_migration_statements
 
         async def _apply(path, label):
             """Apply one migration file; never let a failure crash startup."""
             if not path.exists():
                 log.warning("verification_sources.sql_missing", file=label)
                 return
-            try:
-                async with engine.begin() as conn:
-                    for stmt in _split_sql(path.read_text(encoding="utf-8")):
-                        await conn.exec_driver_sql(stmt)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "verification_sources.sql_failed", file=label, error=str(exc)[:300]
-                )
+            # Through the shared executor, which knows that a concurrent index build
+            # cannot sit in a transaction. Running these in a begin() block of its own is
+            # what broke this file the moment the index builds became CONCURRENTLY.
+            _, errs = await exec_migration_statements(
+                _split_sql(path.read_text(encoding="utf-8"))
+            )
+            for err in errs:
+                log.warning("verification_sources.sql_failed", file=label, error=err)
 
         # 1) schema upgrade (country_code + composite PK) — must precede the base seed
         await _apply(SOURCES_SQL.parent / SCHEMA_SQL_FILE, SCHEMA_SQL_FILE)
         # 2) UK base seed
-        async with engine.begin() as conn:
-            for stmt in _split_sql(sql):
-                await conn.exec_driver_sql(stmt)
+        _, base_errs = await exec_migration_statements(_split_sql(sql))
+        for err in base_errs:
+            log.warning("verification_sources.sql_failed", file="base_seed", error=err)
         # 3) per-country seeds — independent, so one failure never blocks the others
         for fname in COUNTRY_SQL_FILES:
             await _apply(SOURCES_SQL.parent / fname, fname)

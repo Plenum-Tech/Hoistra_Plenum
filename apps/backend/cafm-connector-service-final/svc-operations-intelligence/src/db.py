@@ -129,6 +129,36 @@ def _split_sql(sql: str) -> list[str]:
     return statements
 
 
+async def exec_migration_statements(statements: list[str]) -> tuple[int, list[str]]:
+    """Run migration statements, sending concurrent index builds outside a transaction.
+
+    The single place that knows how to execute this kind of SQL. Three call sites applied
+    migration files with ``engine.begin()`` of their own, and converting the index builds to
+    CONCURRENTLY broke two of them at once — the SQL is shared, so the knowledge of how to
+    run it has to be too, or the next change breaks them again.
+
+    Returns ``(applied, errors)``. Each statement runs on its own so one failure cannot
+    abort the rest.
+    """
+    applied = 0
+    errors: list[str] = []
+    for stmt in statements:
+        if not str(stmt).strip():
+            continue
+        try:
+            if _CONCURRENT_INDEX.search(stmt):
+                async with engine.connect() as conn:
+                    raw = await conn.get_raw_connection()
+                    await raw.driver_connection.execute(stmt)
+            else:
+                async with engine.begin() as conn:
+                    await conn.exec_driver_sql(stmt)
+            applied += 1
+        except Exception as exc:  # noqa: BLE001 — one bad statement must not lose the file
+            errors.append(str(exc)[:300])
+    return applied, errors
+
+
 async def _drop_invalid_indexes() -> list[str]:
     """Remove indexes a concurrent build left behind unfinished.
 

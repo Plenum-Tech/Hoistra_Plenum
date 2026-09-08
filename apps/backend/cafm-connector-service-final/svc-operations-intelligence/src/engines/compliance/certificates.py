@@ -922,7 +922,7 @@ async def ensure_entity_tables(session: AsyncSession) -> None:
         return
     from pathlib import Path
 
-    from ...db import _split_sql, engine
+    from ...db import _split_sql, exec_migration_statements
 
     sql_path = (
         Path(__file__).resolve().parents[2] / "migrations" / "compliance_entity_bootstrap.sql"
@@ -932,10 +932,9 @@ async def ensure_entity_tables(session: AsyncSession) -> None:
         return
     try:
         sql = sql_path.read_text(encoding="utf-8")
-        async with engine.begin() as conn:
-            for stmt in _split_sql(sql):
-                if stmt.strip():
-                    await conn.exec_driver_sql(stmt)
+        _, errs = await exec_migration_statements(_split_sql(sql))
+        for err in errs:
+            log.warning("compliance.bootstrap_stmt_failed", error=err)
         _ENTITY_TABLES_READY = True
         log.info("compliance.entity_tables_ready")
     except Exception as exc:  # noqa: BLE001 — bootstrap must never crash ingestion
