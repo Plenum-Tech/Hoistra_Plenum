@@ -114,7 +114,7 @@ export default function Buildings({ vals }) {
               </div>
               {(vals.buildingRows || []).map((b, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={b.click} style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
+                  <div className="hv2" onClick={() => vals.bgToggle(b.id)} title="Open the graph for this building" style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
                     <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)" }}>
                       {b.id}
                     </span>
@@ -201,6 +201,66 @@ export default function Buildings({ vals }) {
                       ) : null}
                     </span>
                   </div>
+                  {vals.bgIsOpen(b.id) ? (() => {
+                    const g = vals.bgFor(b);
+                    return (
+                      <div style={{ gridColumn: "1 / -1", padding: "18px 22px 22px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
+                        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 18px", marginBottom: "14px" }}>
+                          <span style={{ fontSize: "13px", fontWeight: "600" }}>
+                            {b.name}{" — "}{g.totalText}
+                          </span>
+                          <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", fontFamily: "ui-monospace,monospace" }}>
+                            {g.scopeNote}
+                          </span>
+                        </div>
+
+                        {/* the branches, as the graph is written */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "14px" }}>
+                          {(g.branches || []).map((br) => (
+                            <div key={br.key} style={{ borderLeft: "2px solid var(--color-divider)", paddingLeft: "13px" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" }}>
+                                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                                  {br.label}
+                                </span>
+                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "16px", fontVariantNumeric: "tabular-nums", color: br.tone }}>
+                                  {br.countText}
+                                </span>
+                              </div>
+                              <div style={{ display: br.noteShow, fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "3px", textWrap: "pretty" }}>
+                                {br.note}
+                              </div>
+                              {(br.children || []).map((c) => (
+                                <div key={c.key} style={{ marginTop: "9px", paddingLeft: "11px", borderLeft: "1px solid var(--color-divider)" }}>
+                                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" }}>
+                                    <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                                      {c.label}
+                                    </span>
+                                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "12.5px", fontVariantNumeric: "tabular-nums", color: c.tone }}>
+                                      {c.countText}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: c.noteShow, fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "2px", textWrap: "pretty" }}>
+                                    {c.note}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* what the counts above explain about the row */}
+                        {(g.notes || []).length ? (
+                          <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                            {g.notes.map((n, $i) => (
+                              <div key={$i} style={{ fontSize: "11.5px", color: n.tone, lineHeight: "1.5", textWrap: "pretty" }}>
+                                {n.text}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })() : null}
                 </React.Fragment>
               ))}
               <div style={{ padding: "22px 16px", fontSize: "12.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", display: vals.bldEmptyShow }}>

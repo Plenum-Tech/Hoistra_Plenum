@@ -126,6 +126,7 @@ export function shapeLiveBuilding(r, i) {
     useMixSource: r.use_mix_source || null,
     spaces: typeof r.spaces === "number" ? r.spaces : null,
     counts: r.graph_counts || {},
+    buildingsOnSite: typeof r.buildings_on_site === "number" ? r.buildings_on_site : 1,
     // Non-empty means the graph holds only PART of this building — three spaces recorded on
     // a twenty-four storey tower. The most useful prompt there is for deciding what to
     // ingest next, so it is carried to the row rather than left in the payload.
@@ -195,6 +196,9 @@ export const buildingsLiveMethods = {
       : b.benchSource === "sites_recorded" ? "Recorded on the site row"
       : std;
     return {
+      // Carried through so the drawer can read them without a second lookup.
+      counts: b.counts, spaces: b.spaces, partial: b.partial,
+      buildingsOnSite: b.buildingsOnSite, missing: b.missing, euiN: b.euiN,
       id: b.id, buildingId: b.buildingId, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",

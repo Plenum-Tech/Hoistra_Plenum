@@ -972,6 +972,7 @@ export const renderValsMethods = {
       // Buildings table — live rows from svc-operations-intelligence, seed as fallback (buildingsLive.js).
       ...this.bldVals(),
       ...this.bcVals(),
+      ...this.bgVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
       orchWidth: (s.orchOpen && s.flow === "investigate" ? 420 : 280) + "px",
