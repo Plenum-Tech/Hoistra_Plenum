@@ -142,15 +142,28 @@ export default function Buildings({ vals }) {
                         {b.mixText}
                       </span>
                     </div>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <span title={b.floorsTip} style={{ fontVariantNumeric: "tabular-nums" }}>
                       {b.floors}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: b.floorsSrcFg }}>{b.floorsSrc}</span>
+                      </span>
                     </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-300)" }}>
+                    <span title={b.areaTip} style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-300)" }}>
                       {b.area}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: b.areaSrcFg }}>{b.areaSrc}</span>
+                        {" "}
+                        <span title={b.partialTip} style={{ display: b.partialShow, padding: "0 4px", borderRadius: "3px", background: "var(--st-warn)", color: "var(--accent-ink,#0d1412)", fontSize: "9px", cursor: "help" }}>
+                          {b.partialLabel}
+                        </span>
+                      </span>
                     </span>
                     <span title={b.routeTip} style={{ minWidth: "0", fontVariantNumeric: "tabular-nums" }}>
                       <span title={b.euiTip} style={{ whiteSpace: "nowrap" }}>
                         {b.eui}
+                        <span style={{ display: "inline-block", marginLeft: "6px", fontSize: "9.5px", letterSpacing: "0.04em", fontVariantNumeric: "normal", color: b.euiSrcFg }}>
+                          {b.euiSrc}
+                        </span>
                       </span>
                       <span style={{ display: "block", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.3", textWrap: "pretty", fontVariantNumeric: "normal", marginTop: "2px" }}>
                         {b.route}
@@ -161,6 +174,9 @@ export default function Buildings({ vals }) {
                     </span>
                     <span title={b.benchTip} style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
                       {b.bench}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: "var(--color-neutral-500)" }}>{b.benchSrc}</span>
+                      </span>
                     </span>
                     <span style={{ fontVariantNumeric: "tabular-nums", color: b.euiColor, whiteSpace: "nowrap" }}>
                       {b.delta}
@@ -204,7 +220,7 @@ export default function Buildings({ vals }) {
               </div>
             </div>
             <div style={{ padding: "13px 18px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.55" }}>
-              {"Use drives the benchmark: each building is scored against the regulation pack for its country — CIBSE TM46, Energy Star Portfolio Manager and ASHRAE 100, the BCA Benchmarking Report, or a rolling live benchmark against comparable buildings in the portfolio. Two provenance lines sit under the numbers. Under EUI: how the reading arrives and at what granularity — a half-hourly data collector under Letter of Authority, a SMETS2 feed through a Smart Energy Code intermediary, a Green Button consent via an aggregator, a contracted retailer feed, or the building's own sub-meters and BMS. Building-level metering is marked in amber because attribution to a plant item there is inferred, not measured. Under the benchmark standard: the legal standing of that standard — enacted, guidance, or no operational standard at all — so a proposal is never read as a duty."}
+              {"Use drives the benchmark: each building is scored against the regulation pack for its country — CIBSE TM46, Energy Star Portfolio Manager and ASHRAE 100, the BCA Benchmarking Report, or a rolling live benchmark against comparable buildings in the portfolio. Two provenance lines sit under the numbers. Under EUI: how the reading arrives and at what granularity — a half-hourly data collector under Letter of Authority, a SMETS2 feed through a Smart Energy Code intermediary, a Green Button consent via an aggregator, a contracted retailer feed, or the building's own sub-meters and BMS. Amber marks an inference, never a threshold: building-level metering is amber because attribution to a plant item there is inferred rather than measured, and a figure that was recorded by hand rather than counted or metered carries the same colour. It says how a number was arrived at, not whether it is bad. A word under each figure names its source, and \u201cpartly counted\u201d against a floor area means the graph holds only some of that building \u2014 the surveyed figure is the one shown. Under the benchmark standard: the legal standing of that standard — enacted, guidance, or no operational standard at all — so a proposal is never read as a duty."}
             </div>
           </div>
           <div style={{ marginTop: "34px" }}>

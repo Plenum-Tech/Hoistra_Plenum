@@ -26,6 +26,51 @@ const STANDING_LABEL = {
 // no standard as dormant. Same palette PACKS uses for the seed.
 const STANDING_TONE = { enacted: "ok", mandatory_submission: "ok", guidance: "warn", none: "dormant" };
 
+// How a figure was arrived at, in one word, shown under the number.
+//
+// A tooltip is not enough for this. Whether an EUI was metered or typed onto a row by hand
+// is the difference between a measurement and somebody's estimate, and a table that renders
+// both as plain "212 kWh/m²" has already told the reader they are the same thing. You should
+// not have to hover to find out which one you are looking at.
+const SOURCE_WORD = {
+  // area
+  spaces_sum: "counted",
+  sites: "surveyed",
+  buildings_recorded: "surveyed",
+  energy_profile: "profile",
+  // floors
+  floors_table: "counted",
+  // eui
+  eui_snapshot: "metered",
+  sites_recorded: "recorded",
+  // benchmark
+  tm46: "TM46",
+  tm46_combined_by_use: "TM46",
+  tm46_by_site_type: "TM46 default",
+  portfolio_rolling: "portfolio median"
+};
+
+// "recorded" and "surveyed" are somebody's number. They are not wrong, but they are not
+// measured either, and the difference is worth a colour.
+const SOFT_SOURCES = new Set(["recorded", "surveyed", "profile", "TM46 default"]);
+
+// The same key means different things in different columns. `buildings_recorded` on a floor
+// area is a survey somebody carried out; on an EUI it is a number typed onto the row. Calling
+// the second one "surveyed" would dress up an estimate as a measurement.
+const EUI_SOURCE_WORD = {
+  eui_snapshot: "metered",
+  buildings_recorded: "recorded",
+  sites_recorded: "recorded",
+  energy_profile: "profile"
+};
+
+const sourceWord = (key) => (key ? SOURCE_WORD[key] || String(key).replace(/_/g, " ") : "");
+const euiSourceWord = (key) => (key ? EUI_SOURCE_WORD[key] || sourceWord(key) : "");
+const sourceTone = (key) => {
+  const w = sourceWord(key);
+  return !w ? "var(--color-neutral-500)" : SOFT_SOURCES.has(w) ? "var(--st-warn)" : "var(--color-neutral-500)";
+};
+
 const titleCase = (s) => String(s || "").replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const fmtInt = (n) => Math.round(n).toLocaleString("en-GB");
 
@@ -81,6 +126,12 @@ export function shapeLiveBuilding(r, i) {
     useMixSource: r.use_mix_source || null,
     spaces: typeof r.spaces === "number" ? r.spaces : null,
     counts: r.graph_counts || {},
+    // Non-empty means the graph holds only PART of this building — three spaces recorded on
+    // a twenty-four storey tower. The most useful prompt there is for deciding what to
+    // ingest next, so it is carried to the row rather than left in the payload.
+    partial: Array.isArray(r.partial_counts) ? r.partial_counts : [],
+    gfaCounted: typeof r.gfa_counted_sqm === "number" ? r.gfa_counted_sqm : null,
+    updatedAt: r.updated_at || null,
     mix: mix,
     route: r.metering_route || (gran === "none" ? "No meter on record" : "Meter on record · route not stated"),
     gran: gran === "sub-metered" ? "sub-metered" : gran === "none" ? "none" : "building-level",
@@ -160,13 +211,23 @@ export const buildingsLiveMethods = {
       euiTip: hasEui ? (b.euiSource === "sites_recorded" ? "Recorded on the site row (no meter feed yet) — not a computed reading" : b.euiPeriod ? "Annualised from meter readings, " + b.euiPeriod : "annualised EUI") : "No EUI: no meter reading and nothing recorded on the site",
       bench: hasBench ? Math.round(b.benchN) + " kWh/m²" : "—",
       benchTip: benchTip,
-      delta: deltaN === null ? "—" : (deltaN > 0 ? "+" : "") + Math.round(deltaN) + "%",
-      deltaWord: deltaN === null ? (hasEui ? "no benchmark" : "no reading") : deltaN > 0 ? "over" : deltaN < 0 ? "under" : "at benchmark",
+      delta: deltaN === null ? "—" : (Math.round(deltaN) > 0 ? "+" : "") + Math.round(deltaN) + "%",
+      // Read off the ROUNDED figure so the word never contradicts the number beside it. A
+      // building 0.2% over its benchmark displays "0%", and "0% over" reads as a fault where
+      // "0% at benchmark" reads as what it is.
+      deltaWord: deltaN === null ? (hasEui ? "no benchmark" : "no reading")
+        : Math.round(deltaN) > 0 ? "over" : Math.round(deltaN) < 0 ? "under" : "at benchmark",
       std: std, stdNote: stdNote,
       stdFg: stdTone === "ok" ? "var(--st-ok)" : stdTone === "warn" ? "var(--st-warn)" : "var(--st-dormant)",
       route: b.route,
       routeGran: gran === "sub-metered" ? "sub-metered" + (b.metersSimulated ? " · simulated feed" : "") : gran === "none" ? "no meter · nothing inferred" : "building-level · inferred" + (b.metersSimulated ? " · simulated feed" : ""),
-      routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-dormant)",
+      // Amber is reserved for INFERENCE, not for a threshold. Building-level metering is
+      // marked because attribution to a plant item there is inferred rather than measured —
+      // a statement about how the reading was obtained, not about whether it is bad. A
+      // sub-metered building over its benchmark is a problem and reads red; a building-level
+      // building at its benchmark is amber, because the number rests on an inference.
+      routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-warn)",
+      inferred: gran !== "sub-metered" && gran !== "none",
       routeTip: b.route + " · " + gran + (b.metersActive ? " · " + b.metersActive + " active meter" + (b.metersActive === 1 ? "" : "s") : "") + (b.meteringSource === "sites_recorded" ? " · as recorded on the site" : ""),
       mixText: b.mix.length > 1 ? b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ") : "single use",
       mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ")
@@ -175,6 +236,22 @@ export const buildingsLiveMethods = {
         const t = USE_TINT[m[0]] || { color: "var(--color-neutral-700)" };
         return { pct: m[1] + "%", color: t.color, hatch: t.hatch || "none", border: "0", tip: m[0] + " — " + m[1] + "% of floor area" };
       }),
+      // Rendered, not hidden in a tooltip. See SOURCE_WORD.
+      floorsSrc: sourceWord(b.floorsSource),
+      floorsSrcFg: sourceTone(b.floorsSource),
+      areaSrc: sourceWord(b.areaSource),
+      areaSrcFg: sourceTone(b.areaSource),
+      euiSrc: hasEui ? euiSourceWord(b.euiSource) : "",
+      euiSrcFg: SOFT_SOURCES.has(euiSourceWord(b.euiSource)) ? "var(--st-warn)" : "var(--color-neutral-500)",
+      benchSrc: hasBench ? sourceWord(b.benchSource) : "",
+
+      // The graph holds only part of this building. The most actionable thing on the row
+      // for anyone deciding what to ingest next, so it gets a badge rather than a tooltip.
+      partialShow: (b.partial || []).length ? "inline-block" : "none",
+      partialLabel: !(b.partial || []).length ? "" : (b.partial.length === 1 ? "part counted" : "partly counted"),
+      partialTip: (b.partial || []).join(" · ")
+        + " — the graph holds part of this building, so the surveyed figure stands.",
+
       score: hoist === null ? "—" : String(hoist),
       scoreTip: b.live
         ? "Hoist Score" + (hoist === null ? " not recorded on the site" : "") + (typeof b.completeness === "number" ? " · record completeness " + b.completeness + "%" + (b.missing && b.missing.length ? " — missing: " + b.missing.join(", ") : "") : "")
