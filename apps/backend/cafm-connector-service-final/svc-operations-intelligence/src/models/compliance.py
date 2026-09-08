@@ -84,6 +84,11 @@ class ComplianceCertificate(Base):
     # Building/site the (Building-scope) certificate belongs to, captured from the document.
     building_name: Mapped[str | None] = mapped_column(String(255))
     building_reference: Mapped[str | None] = mapped_column(String(120))
+    # The graph link (migrations/udr_building_graph.sql). building_name is what the DOCUMENT
+    # said; building_id is the building that was resolved from it, and raw_metadata
+    # ["building_link"] records on what basis — a code match and a single-building-site
+    # inference are different claims and must not read alike.
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     vendor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     duty_holder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     issuer: Mapped[str | None] = mapped_column(String(255))

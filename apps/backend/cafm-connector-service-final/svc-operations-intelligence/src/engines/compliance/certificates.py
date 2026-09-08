@@ -611,6 +611,10 @@ def cert_to_dict(c: ComplianceCertificate) -> dict[str, Any]:
         "site_label": meta.get("site_label"),
         "building_name": c.building_name,
         "building_reference": c.building_reference,
+        # The resolved graph link, and the basis it was made on.
+        "building_id": str(c.building_id) if getattr(c, "building_id", None) else None,
+        "building_link": meta.get("building_link"),
+        "graph_document_id": meta.get("graph_document_id"),
         "vendor_id": str(c.vendor_id) if c.vendor_id else None,
         "issue_date": c.issue_date.isoformat() if c.issue_date else None,
         "expiry_date": c.expiry_date.isoformat() if c.expiry_date else None,
@@ -1554,6 +1558,42 @@ async def upsert_certificate(
                     meta["site_link_source"] = f"ingest:{link.matched_on}"
             except Exception as exc:  # noqa: BLE001 — best-effort site FK
                 log.warning("compliance.site_resolve_failed", error=str(exc)[:150])
+
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # Place the certificate on the graph: resolve the building it belongs to, and record the
+    # source file in plenum_cafm.documents so the certificate hangs off a document rather
+    # than off nothing. Both are best-effort — a certificate that cannot be placed is still
+    # ingested, with the reason stored, because a certificate that exists is worth more than
+    # one rejected for want of a building.
+    if cert.building_name or cert.building_reference or cert.site_id or cert.site_ref:
+        try:
+            from ..energy.graph_ingest import attach_to_graph
+
+            graph = await attach_to_graph(
+                session,
+                document_id=cert.document_id or cert.source_document_id,
+                building_name=cert.building_name,
+                building_reference=cert.building_reference,
+                site_name=meta.get("site_label"),
+                site_id=cert.site_ref or (str(cert.site_id) if cert.site_id else None),
+                doc_type="compliance_certificate",
+                title=cert.certificate_type_code,
+                file_name=meta.get("source_file_name"),
+            )
+            if graph.get("building_id"):
+                cert.building_id = graph["building_id"]
+            # The basis of the link travels with the record: a match on an exact code and one
+            # inferred from a site with a single building are different claims.
+            meta["building_link"] = {
+                "outcome": graph.get("building_link_outcome"),
+                "reason": graph.get("building_link_reason"),
+                "building": graph.get("building_label"),
+            }
+            if graph.get("document_id"):
+                meta["graph_document_id"] = graph["document_id"]
+        except Exception as exc:  # noqa: BLE001 — the graph must never fail an ingest
+            log.warning("compliance.graph_attach_failed", error=str(exc)[:200])
+
     meta["confirmed_by_pm"] = bool(confirmed_by_pm)
     meta["requires_pm_confirmation"] = not bool(confirmed_by_pm)
     if not confirmed_by_pm:
