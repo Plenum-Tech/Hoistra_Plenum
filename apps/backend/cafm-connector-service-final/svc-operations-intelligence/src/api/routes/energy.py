@@ -13,6 +13,7 @@ from ...db import get_session
 from ...engines.energy import anomalies as anom_svc
 from ...engines.energy import buildings as bld_svc
 from ...engines.energy import building_backfill as bld_backfill
+from ...engines.energy import sites_uuid_migration as sites_uuid
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -182,6 +183,27 @@ async def backfill_buildings_from_sites(
     return await bld_backfill.backfill_buildings_from_sites(
         session, dry_run=dry_run, country_code=country_code, limit=limit
     )
+
+
+@router.post("/sites/uuid-migration")
+async def sites_uuid_migration(
+    phase: str = Query("plan", pattern="^(plan|expand|contract)$",
+                       description="plan (default, reads only) | expand (additive) | contract (swaps the primary key)"),
+    confirm: bool = Query(False, description="Required for phase=contract — it rewrites a primary key."),
+    session: AsyncSession = Depends(get_session),
+):
+    """Repoint plenum_cafm.sites onto a uuid key so the nine tables already declaring
+    `site_id uuid` can finally join to it.
+
+    plan     reads only — what would change, how many rows, and every orphan it will not invent a site for
+    expand   additive and reversible — site_id_map, sites.site_uuid, shadow columns; both keys work
+    contract the cutover — needs expand and confirm=true; legacy_site_id is kept on every table
+    """
+    if phase == "plan":
+        return await sites_uuid.plan_migration(session)
+    if phase == "expand":
+        return await sites_uuid.apply_expand(session)
+    return await sites_uuid.apply_contract(session, confirm=confirm)
 
 
 @router.get("/buildings/{site_id}")
