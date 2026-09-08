@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...models.energy import BuildingEnergyProfile, EnergyMeter, EuiSnapshot
 from ..compliance.site_links import as_uuid, sites_shape
+from . import building_rollup
 from .eui import load_tm46, tm46_benchmark
 
 log = get_logger(__name__)
@@ -326,6 +327,9 @@ def shape_building_row(
     completeness = round(100.0 * (len(COMPLETENESS_FIELDS) - len(missing)) / len(COMPLETENESS_FIELDS))
 
     row = {
+        # The row's identity. When the graph is the root this IS the building_id ("B-001");
+        # on the sites fallback both name the same key, so a caller can read either.
+        "building_id": key or None,
         "site_id": key or None,
         "site_key": key or (str(site_uuid) if site_uuid else None),
         "site_uuid": str(site_uuid) if site_uuid else None,
@@ -399,6 +403,77 @@ def apply_rolling_benchmarks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if r.get("eui_kwh_per_m2") is not None and bench:
             r["deviation_pct"] = round(100.0 * (r["eui_kwh_per_m2"] - bench) / bench, 1)
     return rows
+
+
+def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
+    """A plenum_cafm.buildings row in the shape shape_building_row() reads.
+
+    The two tables carry the same facts under different names — a building has `name` where
+    a site has `site_name`, and its recorded fallbacks are suffixed `_recorded` so they can
+    never be mistaken for a counted figure.
+    """
+    return {
+        "key": b.get("building_id"),
+        "alt_id": b.get("site_id"),
+        "name": b.get("name") or b.get("building_name"),
+        "building_name": b.get("name") or b.get("building_name"),
+        "building_code": b.get("building_code"),
+        "code": b.get("building_code"),
+        "country": b.get("country"),
+        "country_code": b.get("country_code"),
+        "city": b.get("city"),
+        "region": b.get("state") or b.get("city"),
+        "postcode": b.get("postcode"),
+        "status": b.get("status"),
+        "site_type": b.get("use_type"),
+        "use_type": b.get("use_type"),
+        "use_mix": None,
+        "floors": b.get("floors_recorded"),
+        "gfa_sqm": b.get("gfa_sqm_recorded"),
+        "metering_route": b.get("metering_route"),
+        "metering_granularity": b.get("metering_granularity"),
+        "benchmark_standard": b.get("benchmark_standard"),
+        "benchmark_standing": b.get("benchmark_standing"),
+        "benchmark_standing_note": b.get("benchmark_standing_note"),
+        "eui_kwh_per_m2": b.get("eui_kwh_per_m2"),
+        "benchmark_kwh_per_m2": b.get("benchmark_kwh_per_m2"),
+        "hoist_score": b.get("hoist_score"),
+    }
+
+
+def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict[str, Any]:
+    """Overlay what the graph counted onto a shaped row, and say where each figure came from.
+
+    A counted figure beats a recorded one — the floors on record ARE the floors — but a
+    building with no floor or space rows keeps its surveyed numbers rather than showing
+    nothing. Each field carries its own source so the two are never conflated.
+    """
+    row["floors_source"] = "buildings_recorded" if row.get("floors") is not None else None
+    row["gfa_source"] = row.get("gfa_source") or ("buildings_recorded" if row.get("gfa_sqm") is not None else None)
+    row["use_mix_source"] = "buildings_recorded" if row.get("use_mix") else None
+    row["graph_counts"] = {}
+    if not roll:
+        return row
+
+    floors = roll.get("floors")
+    if floors:
+        row["floors"] = int(floors)
+        row["floors_source"] = "floors_table"
+    gfa = roll.get("gfa_sqm")
+    if gfa:
+        row["gfa_sqm"] = float(gfa)
+        row["gfa_source"] = "spaces_sum"
+    mix = roll.get("use_mix") or []
+    if mix:
+        row["use_mix"] = mix
+        row["use_mix_source"] = "spaces_by_type"
+        if roll.get("dominant_use"):
+            row["use_type"] = roll["dominant_use"]
+            if not row.get("building_type"):
+                row["building_type"] = tm46_type_for(roll["dominant_use"])
+    row["spaces"] = roll.get("spaces")
+    row["graph_counts"] = roll.get("counts") or {}
+    return row
 
 
 def _pick(cols: dict[str, str], *names: str) -> str | None:
@@ -478,14 +553,121 @@ async def get_building(
     return {"ok": False, "error": "building_not_found", "site_id": needle}
 
 
+async def _list_from_graph(
+    session: AsyncSession,
+    buildings: list[dict[str, Any]],
+    roll: dict[str, Any],
+    *,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """The table rooted on plenum_cafm.buildings, with every figure the graph can count."""
+    profiles, snapshots, meters = await _energy_by_site(session, organization_id)
+    rows: list[dict[str, Any]] = []
+    for b in buildings:
+        src = building_to_row_input(b)
+        bid = str(b.get("building_id") or "")
+        row = shape_building_row(
+            src,
+            profile=profiles.get(bid),
+            snapshot=snapshots.get(bid),
+            meters=meters.get(bid, []),
+        )
+        rows.append(apply_graph_rollup(row, roll.get(bid)))
+    apply_rolling_benchmarks(rows)
+    tm46 = load_tm46()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "root": "buildings",
+        "graph_shape": roll.get("_shape", {}),
+        "benchmark_packs": BENCHMARK_PACKS,
+        "tm46_pack": tm46.get("pack"),
+        "benchmark_unit": tm46.get("unit") or "kWh/m²/yr",
+        "completeness_fields": list(COMPLETENESS_FIELDS),
+        "buildings": rows,
+    }
+
+
 async def list_buildings(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
     limit: int = 500,
 ) -> dict[str, Any]:
+    # The building graph is the root when it has rows: a site can hold several buildings, and
+    # floors / area / use split are counted from it rather than typed onto a row. A deployment
+    # that has not populated plenum_cafm.buildings yet still reads from sites, one per building.
+    graph_buildings = await building_rollup.load_buildings(session, limit=limit)
+    roll = await building_rollup.rollups(session, limit=limit) if graph_buildings else {}
+    if graph_buildings:
+        return await _list_from_graph(
+            session, graph_buildings, roll, organization_id=organization_id
+        )
     sites = await _load_site_rows(session, limit=limit)
 
+    profiles, snapshots, meters = await _energy_by_site(session, organization_id)
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _lookup(table: dict[str, Any], site: dict[str, Any]) -> Any:
+        # Energy tables key on a UUID site_id; sites here keys on site_id VARCHAR(50) and may
+        # carry the UUID in `id`. Match on the text of either, so both shapes join.
+        for cand in (site.get("key"), site.get("alt_id")):
+            c = str(cand or "").strip()
+            if c and c in table:
+                return table[c]
+            u = as_uuid(c)
+            if u is not None and str(u) in table:
+                return table[str(u)]
+        return None
+
+    for site in sites:
+        cands = {str(c).strip() for c in (site.get("key"), site.get("alt_id")) if c}
+        cands |= {str(as_uuid(c)) for c in list(cands) if as_uuid(c) is not None}
+        rows.append(
+            shape_building_row(
+                site,
+                profile=_lookup(profiles, site),
+                snapshot=_lookup(snapshots, site),
+                meters=_lookup(meters, site) or [],
+            )
+        )
+        seen |= cands
+
+    # A site with an energy profile but no sites row is still a building with a footprint.
+    for sid, p in profiles.items():
+        if sid in seen:
+            continue
+        rows.append(
+            shape_building_row(
+                {"key": sid, "alt_id": None, "name": None, "site_type": p.get("building_type")},
+                profile=p,
+                snapshot=snapshots.get(sid),
+                meters=meters.get(sid, []),
+            )
+        )
+
+    apply_rolling_benchmarks(rows)
+
+    tm46 = load_tm46()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "root": "sites",
+        "sites_table_rows": len(sites),
+        "benchmark_packs": BENCHMARK_PACKS,
+        "tm46_pack": tm46.get("pack"),
+        "benchmark_unit": tm46.get("unit") or "kWh/m²/yr",
+        "completeness_fields": list(COMPLETENESS_FIELDS),
+        "buildings": rows,
+    }
+
+
+async def _energy_by_site(
+    session: AsyncSession, organization_id: UUID | None
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """Energy profile, latest EUI snapshot and active meters, keyed by site/building id text."""
     pq = select(BuildingEnergyProfile)
     if organization_id:
         pq = pq.where(BuildingEnergyProfile.organization_id == organization_id)
@@ -549,57 +731,4 @@ async def list_buildings(
     except Exception as exc:  # noqa: BLE001
         log.warning("energy.buildings.meters_read_failed", error=str(exc)[:200])
 
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def _lookup(table: dict[str, Any], site: dict[str, Any]) -> Any:
-        # Energy tables key on a UUID site_id; sites here keys on site_id VARCHAR(50) and may
-        # carry the UUID in `id`. Match on the text of either, so both shapes join.
-        for cand in (site.get("key"), site.get("alt_id")):
-            c = str(cand or "").strip()
-            if c and c in table:
-                return table[c]
-            u = as_uuid(c)
-            if u is not None and str(u) in table:
-                return table[str(u)]
-        return None
-
-    for site in sites:
-        cands = {str(c).strip() for c in (site.get("key"), site.get("alt_id")) if c}
-        cands |= {str(as_uuid(c)) for c in list(cands) if as_uuid(c) is not None}
-        rows.append(
-            shape_building_row(
-                site,
-                profile=_lookup(profiles, site),
-                snapshot=_lookup(snapshots, site),
-                meters=_lookup(meters, site) or [],
-            )
-        )
-        seen |= cands
-
-    # A site with an energy profile but no sites row is still a building with a footprint.
-    for sid, p in profiles.items():
-        if sid in seen:
-            continue
-        rows.append(
-            shape_building_row(
-                {"key": sid, "alt_id": None, "name": None, "site_type": p.get("building_type")},
-                profile=p,
-                snapshot=snapshots.get(sid),
-                meters=meters.get(sid, []),
-            )
-        )
-
-    apply_rolling_benchmarks(rows)
-
-    tm46 = load_tm46()
-    return {
-        "ok": True,
-        "count": len(rows),
-        "sites_table_rows": len(sites),
-        "benchmark_packs": BENCHMARK_PACKS,
-        "tm46_pack": tm46.get("pack"),
-        "benchmark_unit": tm46.get("unit") or "kWh/m²/yr",
-        "completeness_fields": list(COMPLETENESS_FIELDS),
-        "buildings": rows,
-    }
+    return profiles, snapshots, meters

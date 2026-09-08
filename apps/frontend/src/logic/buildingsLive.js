@@ -45,9 +45,9 @@ export function shapeLiveBuilding(r, i) {
     : [[use, 100]];
   return {
     live: true,
-    key: r.site_id || r.site_key || r.site_uuid || String(i),
-    // Building ID is sites.site_id (VARCHAR(50)); the code is shown when it differs.
-    id: r.site_id || r.code || r.site_uuid || String(i + 1),
+    key: r.building_id || r.site_id || r.site_key || String(i),
+    // Building ID is buildings.building_id when the graph is the root, else sites.site_id.
+    id: r.building_id || r.site_id || r.code || String(i + 1),
     code: r.code || null,
     name: r.name || "Unnamed site",
     cc: cc,
@@ -73,6 +73,11 @@ export function shapeLiveBuilding(r, i) {
     missing: r.completeness_missing || [],
     euiSource: r.eui_source || null,
     meteringSource: r.metering_source || null,
+    // Where the graph counted each figure, so the cell can say so rather than just show it.
+    floorsSource: r.floors_source || null,
+    useMixSource: r.use_mix_source || null,
+    spaces: typeof r.spaces === "number" ? r.spaces : null,
+    counts: r.graph_counts || {},
     mix: mix,
     route: r.metering_route || (gran === "none" ? "No meter on record" : "Meter on record · route not stated"),
     gran: gran === "sub-metered" ? "sub-metered" : gran === "none" ? "none" : "building-level",
@@ -139,7 +144,14 @@ export const buildingsLiveMethods = {
       id: b.id, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
+      floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " rows in plenum_cafm.floors"
+        : b.floorsSource === "buildings_recorded" ? "Recorded on the building row — no floor rows on record"
+        : "No floors on record",
       area: b.area,
+      areaTip: b.areaSource === "spaces_sum" ? "Summed from " + (b.spaces || 0) + " spaces"
+        : b.areaSource === "sites" || b.areaSource === "buildings_recorded" ? "Recorded on the building row"
+        : b.areaSource === "energy_profile" ? "GIA from the building's energy profile"
+        : "No floor area on record",
       flag: pack.flag, country: pack.name, state: b.state,
       eui: hasEui ? Math.round(b.euiN) + " kWh/m²" : "—",
       euiTip: hasEui ? (b.euiSource === "sites_recorded" ? "Recorded on the site row (no meter feed yet) — not a computed reading" : b.euiPeriod ? "Annualised from meter readings, " + b.euiPeriod : "annualised EUI") : "No EUI: no meter reading and nothing recorded on the site",
@@ -154,7 +166,8 @@ export const buildingsLiveMethods = {
       routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-dormant)",
       routeTip: b.route + " · " + gran + (b.metersActive ? " · " + b.metersActive + " active meter" + (b.metersActive === 1 ? "" : "s") : "") + (b.meteringSource === "sites_recorded" ? " · as recorded on the site" : ""),
       mixText: b.mix.length > 1 ? b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ") : "single use",
-      mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · "),
+      mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ")
+        + (b.useMixSource === "spaces_by_type" ? " · grouped from " + (b.spaces || 0) + " spaces by area" : ""),
       mix: b.mix.map((m) => {
         const t = USE_TINT[m[0]] || { color: "var(--color-neutral-700)" };
         return { pct: m[1] + "%", color: t.color, hatch: t.hatch || "none", border: "0", tip: m[0] + " — " + m[1] + "% of floor area" };
