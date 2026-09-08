@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db import get_session
 from ...engines.energy import anomalies as anom_svc
 from ...engines.energy import buildings as bld_svc
+from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -162,6 +163,25 @@ async def list_buildings(
     the benchmark it is read against (and where that benchmark came from) and a record
     completeness figure. See engines/energy/buildings.py."""
     return await bld_svc.list_buildings(session, organization_id=organization_id, limit=limit)
+
+
+@router.post("/buildings/backfill-from-sites")
+async def backfill_buildings_from_sites(
+    dry_run: bool = Query(True, description="true (default) reports what would be created and writes nothing."),
+    country_code: str | None = Query(None, description="Country to stamp on every created building, e.g. UK. Omitted = left empty; a country is never guessed from a region."),
+    limit: int = Query(5000, ge=1, le=20000),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create one building per site in plenum_cafm.buildings.
+
+    A site that already has a building is skipped, so this is safe to re-run and it never
+    stands in the way of a site later holding several buildings — add those rows and they
+    appear alongside. Defaults to a dry run: the report names every building it would
+    create, every conflict, and the fields that would be left empty.
+    """
+    return await bld_backfill.backfill_buildings_from_sites(
+        session, dry_run=dry_run, country_code=country_code, limit=limit
+    )
 
 
 @router.get("/buildings/{site_id}")

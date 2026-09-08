@@ -476,6 +476,43 @@ def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict
     return row
 
 
+def attribute_energy(
+    building_id: str,
+    site_id: str,
+    buildings_on_site: int,
+    profiles: dict[str, Any],
+    snapshots: dict[str, Any],
+    meters: dict[str, Any],
+) -> tuple[Any, Any, list[Any], str]:
+    """Which energy records belong to this building, and on what basis.
+
+    Energy is recorded against a site. A building's own records always apply. A site's
+    records apply only when the building IS the site — one building on it. Where a site
+    holds several, its site-level reading is left off every one of them: dividing one
+    meter between two buildings would state a split the data does not contain, and showing
+    the whole reading against each would count the same kilowatt-hours twice.
+
+    Returns (profile, snapshot, meters, attribution) where attribution is one of
+    building | site_sole_building | unattributed_site_shared | none.
+    """
+    b_prof, b_snap = profiles.get(building_id), snapshots.get(building_id)
+    b_mtrs = meters.get(building_id) or []
+    if b_prof or b_snap or b_mtrs:
+        return b_prof, b_snap, b_mtrs, "building"
+
+    sole = bool(site_id) and buildings_on_site == 1
+    if sole:
+        s_prof, s_snap = profiles.get(site_id), snapshots.get(site_id)
+        s_mtrs = meters.get(site_id) or []
+        if s_prof or s_snap or s_mtrs:
+            return s_prof, s_snap, s_mtrs, "site_sole_building"
+        return None, None, [], "none"
+
+    if site_id and (profiles.get(site_id) or snapshots.get(site_id) or meters.get(site_id)):
+        return None, None, [], "unattributed_site_shared"
+    return None, None, [], "none"
+
+
 def _pick(cols: dict[str, str], *names: str) -> str | None:
     return next((c for c in names if c in cols), None)
 
@@ -560,18 +597,33 @@ async def _list_from_graph(
     *,
     organization_id: UUID | None = None,
 ) -> dict[str, Any]:
-    """The table rooted on plenum_cafm.buildings, with every figure the graph can count."""
+    """The table rooted on plenum_cafm.buildings, with every figure the graph can count.
+
+    A site may hold several buildings. Energy records key on the site, so site-level figures
+    are attributed to a building ONLY when that building is the whole site — splitting one
+    site's meter across two buildings would invent a division the data does not contain.
+    Where a site has more than one building, its site-level energy is left off both and the
+    row says the reading is unattributed rather than showing half of it twice.
+    """
     profiles, snapshots, meters = await _energy_by_site(session, organization_id)
+    per_site: dict[str, int] = {}
+    for b in buildings:
+        sid = str(b.get("site_id") or "").strip()
+        if sid:
+            per_site[sid] = per_site.get(sid, 0) + 1
+
     rows: list[dict[str, Any]] = []
     for b in buildings:
         src = building_to_row_input(b)
         bid = str(b.get("building_id") or "")
-        row = shape_building_row(
-            src,
-            profile=profiles.get(bid),
-            snapshot=snapshots.get(bid),
-            meters=meters.get(bid, []),
+        sid = str(b.get("site_id") or "").strip()
+        prof, snap, mtrs, attribution = attribute_energy(
+            bid, sid, per_site.get(sid, 1) if sid else 1, profiles, snapshots, meters
         )
+        row = shape_building_row(src, profile=prof, snapshot=snap, meters=mtrs)
+        row["site_id"] = sid or None
+        row["buildings_on_site"] = per_site.get(sid, 1) if sid else 1
+        row["energy_attribution"] = attribution
         rows.append(apply_graph_rollup(row, roll.get(bid)))
     apply_rolling_benchmarks(rows)
     tm46 = load_tm46()

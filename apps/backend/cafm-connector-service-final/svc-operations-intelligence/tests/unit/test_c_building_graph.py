@@ -81,3 +81,48 @@ def test_a_building_with_no_figures_at_all_claims_nothing():
     out = apply_graph_rollup({"floors": None, "gfa_sqm": None, "use_mix": []}, {})
     assert out["floors"] is None and out["floors_source"] is None
     assert out["gfa_source"] is None and out["use_mix_source"] is None
+
+
+def _energy(**over):
+    base = {"profiles": {}, "snapshots": {}, "meters": {}}
+    base.update(over)
+    return base
+
+
+def test_a_buildings_own_energy_record_always_applies():
+    from src.engines.energy.buildings import attribute_energy
+    e = _energy(profiles={"B-01": {"gia_m2": 100.0}}, snapshots={"B-01": {"eui_kwh_per_m2": 214.0}})
+    prof, snap, mtrs, how = attribute_energy("B-01", "S-01", 3, e["profiles"], e["snapshots"], e["meters"])
+    assert how == "building" and snap["eui_kwh_per_m2"] == 214.0
+
+
+def test_site_energy_applies_when_the_building_is_the_whole_site():
+    from src.engines.energy.buildings import attribute_energy
+    e = _energy(snapshots={"S-01": {"eui_kwh_per_m2": 214.0}})
+    prof, snap, mtrs, how = attribute_energy("B-01", "S-01", 1, e["profiles"], e["snapshots"], e["meters"])
+    assert how == "site_sole_building" and snap["eui_kwh_per_m2"] == 214.0
+
+
+def test_site_energy_is_never_copied_onto_several_buildings():
+    """The whole point: one site meter across three buildings would either invent a split or
+    count the same kilowatt-hours three times. It does neither."""
+    from src.engines.energy.buildings import attribute_energy
+    e = _energy(snapshots={"S-02": {"eui_kwh_per_m2": 198.0}}, meters={"S-02": [{"mpan": "1"}]})
+    for bid in ("B-02", "B-02b", "B-02c"):
+        prof, snap, mtrs, how = attribute_energy(bid, "S-02", 3, e["profiles"], e["snapshots"], e["meters"])
+        assert snap is None and mtrs == []
+        assert how == "unattributed_site_shared"
+
+
+def test_one_building_on_a_shared_site_may_still_have_its_own_reading():
+    from src.engines.energy.buildings import attribute_energy
+    e = _energy(snapshots={"S-02": {"eui_kwh_per_m2": 198.0}, "B-02b": {"eui_kwh_per_m2": 176.0}})
+    _, snap, _, how = attribute_energy("B-02b", "S-02", 3, e["profiles"], e["snapshots"], e["meters"])
+    assert how == "building" and snap["eui_kwh_per_m2"] == 176.0
+    _, snap2, _, how2 = attribute_energy("B-02c", "S-02", 3, e["profiles"], e["snapshots"], e["meters"])
+    assert snap2 is None and how2 == "unattributed_site_shared"
+
+
+def test_no_energy_anywhere_reports_none():
+    from src.engines.energy.buildings import attribute_energy
+    assert attribute_energy("B-09", "S-09", 1, {}, {}, {})[3] == "none"
