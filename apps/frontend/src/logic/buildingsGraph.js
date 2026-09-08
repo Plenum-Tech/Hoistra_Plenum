@@ -1,3 +1,5 @@
+import { energyApi } from '../api/energy.js';
+
 // buildingsGraph — the drawer that opens under a building row.
 //
 // It draws the canonical graph as a tree:
@@ -10,8 +12,9 @@
 //
 // It shows HOW MANY of each, not which. Everything here comes off the row the table already
 // loaded — `graph_counts`, `spaces`, `partial_counts`, `buildings_on_site` — so opening a
-// building costs no request at all. There is no endpoint returning the child rows
-// themselves yet; when there is, this is where it plugs in.
+// building draws immediately from them. The child ROWS come from
+// GET /buildings/{id}/graph, fetched on open and cached per building, so the tree never sits
+// blank while it waits and never asserts a branch is empty before it has asked.
 //
 // A zero is not a blank. "No meter on record" is a fact about the building and the reason
 // its EUI is a recorded figure rather than a reading, so every empty branch says what its
@@ -74,8 +77,29 @@ const readBranch = (b, node) => {
 
 export const buildingsGraphMethods = {
 
+  // Opening a building fetches its children. The counts on the row draw the tree
+  // immediately; the rows fill in when they arrive, so the drawer is never blank while
+  // waiting and never claims a branch is empty before it has been asked.
   bgToggle(id) {
+    const opening = this.state.bgOpen !== id;
     this.setState((p) => ({ bgOpen: p.bgOpen === id ? null : id }));
+    if (opening) this.bgLoad(id);
+  },
+
+  async bgLoad(id) {
+    const cache = this.state.bgTree || {};
+    if (cache[id] && !cache[id].error) return;
+    this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: { loading: true } }) }));
+    try {
+      const res = await energyApi.buildingGraph(id);
+      this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: res }) }));
+    } catch (e) {
+      this.setState((p) => ({
+        bgTree: Object.assign({}, p.bgTree, {
+          [id]: { error: (e && e.message) || String(e) }
+        })
+      }));
+    }
   },
 
   // One building's branches, each with its count or the reason it has none.
@@ -103,6 +127,21 @@ export const buildingsGraphMethods = {
     });
   },
 
+  // The API returns branches nested; flatten to a lookup so the tree built from counts can
+  // pick up its rows without depending on the two orders matching.
+  bgRowsFor(id) {
+    const t = (this.state.bgTree || {})[id];
+    if (!t || t.loading || t.error || !t.branches) return null;
+    const byTable = {};
+    t.branches.forEach((br) => {
+      byTable[br.table] = br;
+      (br.children || []).forEach((c) => { byTable[c.table] = c; });
+    });
+    // The API calls it compliance_certificates; the tree node is `certificates`.
+    if (byTable.compliance_certificates) byTable.certificates = byTable.compliance_certificates;
+    return byTable;
+  },
+
   bgVals() {
     const open = this.state.bgOpen || null;
     return {
@@ -111,7 +150,34 @@ export const buildingsGraphMethods = {
       bgIsOpen: (id) => open === id,
       // Built per row by the screen, so a closed drawer costs nothing to render.
       bgFor: (b) => {
-        const branches = this.bgBranches(b);
+        const fetched = this.bgRowsFor(b.id);
+        const state = (this.state.bgTree || {})[b.id] || {};
+        const branches = this.bgBranches(b).map((br) => {
+          const attach = (node) => {
+            const f = fetched && fetched[node.key];
+            if (!f) return node;
+            // The fetched branch is the authority once it arrives: it knows the difference
+            // between a branch that is empty and one this database cannot join, which the
+            // counts on the row cannot express.
+            return Object.assign({}, node, {
+              count: f.count,
+              countText: f.available ? String(f.count) : "?",
+              counted: f.available,
+              has: f.count > 0,
+              tone: f.count > 0 ? "var(--color-neutral-300)" : "var(--color-neutral-500)",
+              note: f.count > 0 ? "" : (f.empty_reason || node.note),
+              noteShow: f.count > 0 ? "none" : "block",
+              rows: (f.rows || []).map((r) => ({
+                id: r.id, label: r.label, detail: r.detail || ""
+              })),
+              more: f.truncated ? (f.count - (f.rows || []).length) + " more not shown" : "",
+              moreShow: f.truncated ? "block" : "none"
+            });
+          };
+          const top = attach(br);
+          top.children = (br.children || []).map(attach);
+          return top;
+        });
         const total = branches.reduce(
           (t, br) => t + br.count + br.children.reduce((u, c) => u + c.count, 0), 0
         );
@@ -152,6 +218,10 @@ export const buildingsGraphMethods = {
         }
         return {
           branches: branches,
+          loading: !!state.loading,
+          loadingShow: state.loading ? "block" : "none",
+          error: state.error || "",
+          errorShow: state.error ? "block" : "none",
           total: total,
           totalText: (total ? total + (total === 1 ? " record" : " records") + " counted"
             : "Nothing counted on the graph yet")
@@ -159,8 +229,9 @@ export const buildingsGraphMethods = {
           notes: notes,
           emptyShow: total ? "none" : "block",
           // Said plainly rather than implied, so nobody reads a count as a list.
-          scopeNote: "Counts, not rows — the table already carries these, so opening a "
-            + "building costs no request."
+          scopeNote: state.loading ? "Reading the graph…"
+            : fetched ? "Rows read from the graph"
+            : "Counts from the table — rows loading"
         };
       }
     };

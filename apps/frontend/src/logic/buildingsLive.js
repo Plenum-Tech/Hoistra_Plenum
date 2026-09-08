@@ -162,6 +162,7 @@ export const buildingsLiveMethods = {
       this._bldAttempts = 0;
       this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit } });
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
+      this.bldLoadShape();
     } catch (e) {
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;
@@ -174,6 +175,22 @@ export const buildingsLiveMethods = {
   },
 
   bldRetryNow() { this._bldAttempts = 0; return this.bldLoad({ announce: true }); },
+
+  // The Hoist Graph panel is a picture of the schema. Read it rather than compiling it in:
+  // a hardcoded table count goes stale the first time a migration runs, silently, because
+  // nothing compares it to anything.
+  async bldLoadShape() {
+    if (this._shapeLoading) return;
+    this._shapeLoading = true;
+    try {
+      const res = await energyApi.graphShape();
+      if (res && res.ok) this.setState({ bldShape: res });
+    } catch (e) {
+      // A stale panel is better than a broken page; the figures fall back to the row data.
+    } finally {
+      this._shapeLoading = false;
+    }
+  },
 
   // One table row. Handles both the seed record (numbers always present) and a live
   // record (any figure may be missing, and every figure carries its provenance).
@@ -284,7 +301,22 @@ export const buildingsLiveMethods = {
         : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
         : s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
         : "Waiting for svc-operations-intelligence.",
-      bldKicker: "Every row is a plenum_cafm.sites record, keyed on site_id, read against its country's regulation pack"
+      bldKicker: "Every row is a plenum_cafm.sites record, keyed on site_id, read against its country's regulation pack",
+
+      // Five figures, all read. `buildings` and `bound documents` come from the rows already
+      // loaded; the schema three come from the database itself.
+      graphStatsLive: (() => {
+        const sh = s.bldShape;
+        const docs = rows.reduce((t, b) => t + (((b.counts || {}).documents) || 0), 0);
+        return [
+          { value: sh ? String(sh.tables) : "—", label: "tables", color: "var(--color-text)" },
+          { value: sh ? String(sh.columns) : "—", label: "columns", color: "var(--color-text)" },
+          { value: sh ? String(sh.relationships) : "—", label: "relationships", color: "var(--color-text)" },
+          { value: String(rows.length), label: "buildings", color: "var(--color-accent)" },
+          { value: String(docs), label: "bound documents", color: "var(--color-text)" }
+        ];
+      })(),
+      graphStatsLiveShow: !!s.bldLive
     };
   }
 };

@@ -209,8 +209,8 @@ export default function Buildings({ vals }) {
                           <span style={{ fontSize: "13px", fontWeight: "600" }}>
                             {b.name}{" — "}{g.totalText}
                           </span>
-                          <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", fontFamily: "ui-monospace,monospace" }}>
-                            {g.scopeNote}
+                          <span style={{ fontSize: "10.5px", color: g.error ? "var(--st-warn)" : "var(--color-neutral-500)", fontFamily: "ui-monospace,monospace" }}>
+                            {g.error ? ("Could not read the graph — " + g.error + ". The counts below are from the table.") : g.scopeNote}
                           </span>
                         </div>
 
@@ -229,6 +229,15 @@ export default function Buildings({ vals }) {
                               <div style={{ display: br.noteShow, fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "3px", textWrap: "pretty" }}>
                                 {br.note}
                               </div>
+                              {(br.rows || []).map((r) => (
+                                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "11px", marginTop: "3px" }}>
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-neutral-300)" }}>{r.label}</span>
+                                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap", flexShrink: "0" }}>{r.detail}</span>
+                                </div>
+                              ))}
+                              <div style={{ display: br.moreShow, fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "3px", fontFamily: "ui-monospace,monospace" }}>
+                                {br.more}
+                              </div>
                               {(br.children || []).map((c) => (
                                 <div key={c.key} style={{ marginTop: "9px", paddingLeft: "11px", borderLeft: "1px solid var(--color-divider)" }}>
                                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" }}>
@@ -241,6 +250,15 @@ export default function Buildings({ vals }) {
                                   </div>
                                   <div style={{ display: c.noteShow, fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "2px", textWrap: "pretty" }}>
                                     {c.note}
+                                  </div>
+                                  {(c.rows || []).map((r) => (
+                                    <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "10.5px", marginTop: "2px" }}>
+                                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-neutral-400)" }}>{r.label}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap", flexShrink: "0" }}>{r.detail}</span>
+                                    </div>
+                                  ))}
+                                  <div style={{ display: c.moreShow, fontSize: "9.5px", color: "var(--color-neutral-500)", marginTop: "2px", fontFamily: "ui-monospace,monospace" }}>
+                                    {c.more}
                                   </div>
                                 </div>
                               ))}

@@ -32,6 +32,16 @@ export const energyApi = {
       query: withOrg({ confirm: !!(opts && opts.confirm), detach: (opts && opts.detach) !== false })
     }),
 
+  // Everything hanging off one building, nested as the graph is. Separate from the table
+  // on purpose: forty buildings do not need four hundred child rows to draw.
+  buildingGraph: (id) =>
+    apiFetch(B, '/api/energy/buildings/' + encodeURIComponent(id) + '/graph'),
+
+  // The graph as the database actually holds it. The Hoist Graph panel is a picture of the
+  // schema, and a picture that does not read the schema goes stale the first time a
+  // migration runs.
+  graphShape: () => apiFetch(B, '/api/energy/graph/shape'),
+
   tm46: () => apiFetch(B, '/api/energy/tm46'),
   savedSpaceSummary: () => apiFetch(B, '/api/energy/saved-space/summary', { query: withOrg() })
 };

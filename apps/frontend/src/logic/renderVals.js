@@ -935,7 +935,8 @@ export const renderValsMethods = {
         };
       })(),
 
-      graphStats: [
+      // Live when the register answered; the compiled-in figures only when it did not.
+      graphStats: this.bldVals().graphStatsLiveShow ? this.bldVals().graphStatsLive : [
         { value: String(GRAPH.length), label: "tables", color: "var(--color-text)" },
         { value: String(GRAPH.reduce((a, g) => a + g.cols.length, 0)), label: "columns", color: "var(--color-text)" },
         { value: String(GRAPH_EDGES.length), label: "relationships", color: "var(--color-text)" },

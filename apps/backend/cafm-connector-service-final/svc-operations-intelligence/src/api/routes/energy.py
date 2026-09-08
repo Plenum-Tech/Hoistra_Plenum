@@ -19,6 +19,7 @@ from ...engines.energy import building_resolver as bld_resolver
 from ...engines.energy import cost_drivers as cost
 from ...engines.energy import building_create as bld_create
 from ...engines.energy import building_update as bld_update
+from ...engines.energy import building_tree as bld_tree
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -425,6 +426,48 @@ async def sites_uuid_migration(
     if phase == "expand":
         return await sites_uuid.apply_expand(session)
     return await sites_uuid.apply_contract(session, confirm=confirm)
+
+
+@router.get("/graph/shape")
+async def graph_shape_stats(session: AsyncSession = Depends(get_session)):
+    """The graph as this database actually holds it — tables, columns, foreign keys.
+
+    The Hoist Graph panel is a picture of the schema, and a picture that does not read the
+    schema goes stale the first time a migration runs, silently, because nothing checks a
+    hardcoded number against anything.
+    """
+    return await bld_tree.graph_shape_stats(session)
+
+
+@router.get("/buildings/{building_id}/graph")
+async def building_graph(
+    building_id: str,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Everything hanging off one building, nested as the graph is written.
+
+        buildings
+          ├──< floors ──< spaces
+          ├──< assets ──< equipment / meters
+          ├──< documents ──< certificates
+          └──< contracts ──< work_orders / invoices
+
+    Separate from the table on purpose: forty buildings do not need four hundred child rows
+    to draw, and one open building does.
+
+    Each branch carries its own `count` beside the rows returned, so a branch truncated at
+    `row_limit` says so rather than looking complete. An empty branch carries an
+    `empty_reason` — "no meter on record" is a fact about the building, and the reason its
+    EUI is a recorded figure rather than a reading. A branch this database cannot join at
+    all is listed in `unavailable`: that is a fact about the deployment, and a caller that
+    cannot tell the two apart will say "nothing billed here" about a building that has
+    invoices.
+    """
+    out = await bld_tree.building_tree(session, building_id)
+    if not out.get("ok"):
+        response.status_code = int(out.get("status") or 400)
+    return out
 
 
 @router.get("/buildings/{building_id}/cost-drivers")
