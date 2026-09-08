@@ -126,3 +126,36 @@ def test_one_building_on_a_shared_site_may_still_have_its_own_reading():
 def test_no_energy_anywhere_reports_none():
     from src.engines.energy.buildings import attribute_energy
     assert attribute_energy("B-09", "S-09", 1, {}, {}, {})[3] == "none"
+
+
+def test_square_feet_convert_to_metres_before_any_benchmark_sees_them():
+    """412,000 ft² is 38,276 m². Every benchmark is kWh/m², so an unconverted square-foot
+    figure would understate EUI by a factor of ten and read as far under benchmark."""
+    from src.engines.energy.buildings import sqft_to_sqm
+    assert sqft_to_sqm(412_000) == 38276.05
+    assert sqft_to_sqm("148,000") == 13749.65
+    assert sqft_to_sqm(None) is None
+    assert sqft_to_sqm("not a number") is None
+
+
+def test_the_canonical_row_resolves_country_and_standard_from_its_location():
+    from src.engines.energy.buildings import building_to_row_input
+    src = building_to_row_input({
+        "building_id": "u-1", "site_id": "s-1", "name": "Bishopsgate Tower",
+        "primary_use": "Commercial", "floors": "34", "gross_area_sqft": "412000",
+        "eui_kwh_m2": "214", "hoist_score": "88",
+        "loc_country_code": "GB", "loc_region": "Greater London",
+        "pack_standard": "CIBSE TM46", "pack_standing": "guidance",
+        "pack_standing_note": "guidance · EPC E law", "pack_benchmark_source": "TM46 category",
+    })
+    assert src["country_code"] == "GB" and src["region"] == "Greater London"
+    assert src["benchmark_standard"] == "CIBSE TM46" and src["benchmark_standing"] == "guidance"
+    assert src["use_type"] == "Commercial" and src["floors"] == "34"
+    assert src["gfa_sqm"] == 38276.05
+    assert src["eui_kwh_per_m2"] == "214"
+
+
+def test_a_building_with_no_location_falls_back_without_inventing_a_pack():
+    from src.engines.energy.buildings import building_to_row_input
+    src = building_to_row_input({"building_id": "u-2", "name": "Unlocated"})
+    assert src["country_code"] is None and src["benchmark_standard"] is None

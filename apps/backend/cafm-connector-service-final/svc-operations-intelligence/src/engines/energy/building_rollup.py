@@ -30,6 +30,10 @@ log = get_logger(__name__)
 
 # table -> key columns in preference order. The first one the live table actually has wins.
 _KEYS: dict[str, tuple[str, ...]] = {
+    "portfolios": ("portfolio_id", "id"),
+    "locations": ("location_id", "id"),
+    "regulation_packs": ("pack_id", "id"),
+    "sites": ("site_id", "id"),
     "buildings": ("building_id", "id"),
     "floors": ("floor_id", "id"),
     "spaces": ("space_id", "id"),
@@ -83,6 +87,11 @@ async def graph_shape(session: AsyncSession, *, refresh: bool = False) -> dict[s
         shape[table] = {"exists": bool(key), "key": key, "columns": have}
     _SHAPE_CACHE = shape
     return shape
+
+
+#: Square feet in one square metre. The canonical schema records gross_area_sqft; every
+#: benchmark is kWh/m², so the two are never compared without this.
+SQFT_PER_SQM = 10.763910416709722
 
 
 def _num(value: Any) -> float | None:
@@ -167,10 +176,15 @@ async def spaces_rollup(session: AsyncSession) -> dict[str, dict[str, Any]]:
         else ""
     )
     bid = "COALESCE(s.building_id::text, f.building_id::text)" if floor_key else "s.building_id::text"
+    # The canonical column is gross_area_sqft; area_sqm is the older spelling. Everything
+    # downstream is metric — every benchmark on the platform is kWh/m² — so a square-foot
+    # column is converted here rather than travelling on mislabelled as metres.
+    sqft = "gross_area_sqft" in shape["spaces"]["columns"]
+    area_col = "gross_area_sqft" if sqft else "area_sqm"
     sql = f"""
         SELECT {bid} AS bid,
                COALESCE(NULLIF(TRIM(s.space_type), ''), 'Unclassified') AS use_type,
-               SUM(COALESCE(s.area_sqm, 0)) AS area,
+               SUM(COALESCE(s.{area_col}, 0)) AS area,
                COUNT(*) AS n
         FROM plenum_cafm.spaces s
         {join}
@@ -186,8 +200,10 @@ async def spaces_rollup(session: AsyncSession) -> dict[str, dict[str, Any]]:
     for bid_v, use_type, area, n in rows:
         if bid_v is None:
             continue
-        b = out.setdefault(str(bid_v), {"area": 0.0, "spaces": 0, "by_type": {}})
+        b = out.setdefault(str(bid_v), {"area": 0.0, "spaces": 0, "by_type": {}, "area_unit": "m2"})
         a = _num(area) or 0.0
+        if sqft:
+            a = a / SQFT_PER_SQM
         b["area"] += a
         b["spaces"] += int(n or 0)
         if a > 0:
@@ -279,17 +295,46 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
         return []
     key = shape["buildings"]["key"]
     have = shape["buildings"]["columns"]
+    # Canonical columns first, older spellings kept so a part-migrated database still reads.
     wanted = [
-        "site_id", "building_code", "name", "building_name", "country", "country_code",
-        "state", "city", "postcode", "use_type", "status", "floors_recorded",
-        "gfa_sqm_recorded", "eui_kwh_per_m2", "benchmark_kwh_per_m2", "benchmark_standard",
-        "benchmark_standing", "benchmark_standing_note", "metering_route",
-        "metering_granularity", "hoist_score",
+        "site_id", "location_id", "building_code", "name", "building_name", "primary_use",
+        "floors", "gross_area_sqft", "eui_kwh_m2", "hoist_score", "status",
+        "country", "country_code", "state", "city", "postcode", "use_type",
+        "floors_recorded", "gfa_sqm_recorded", "eui_kwh_per_m2", "benchmark_kwh_per_m2",
+        "benchmark_standard", "benchmark_standing", "benchmark_standing_note",
+        "metering_route", "metering_granularity",
     ]
-    cols = [f"{key}::text AS building_id"] + [f"{c}::text AS {c}" for c in wanted if c in have]
-    order = "name" if "name" in have else ("building_name" if "building_name" in have else key)
+    cols = [f"b.{key}::text AS building_id"] + [f"b.{c}::text AS {c}" for c in wanted if c in have]
+
+    # A building is scored against the pack its LOCATION points at — the standard is a
+    # property of where the building is, not a column copied onto every row.
+    joins = ""
+    if shape["locations"]["exists"] and "location_id" in have:
+        lkey = shape["locations"]["key"]
+        cols += ["l.country_code::text AS loc_country_code", "l.region::text AS loc_region"]
+        joins += f" LEFT JOIN plenum_cafm.locations l ON l.{lkey}::text = b.location_id::text"
+        if shape["regulation_packs"]["exists"]:
+            pkey = shape["regulation_packs"]["key"]
+            cols += [
+                "p.standard::text AS pack_standard",
+                "p.benchmark_source::text AS pack_benchmark_source",
+                "p.standing::text AS pack_standing",
+                "p.standing_note::text AS pack_standing_note",
+            ]
+            joins += f" LEFT JOIN plenum_cafm.regulation_packs p ON p.{pkey}::text = l.pack_id::text"
+
+    # Sites carry the portfolio and the address the building inherits for display.
+    if shape["sites"]["exists"] and "site_id" in have:
+        skey = shape["sites"]["key"]
+        site_name = "s.name" if "name" in shape["sites"]["columns"] else (
+            "s.site_name" if "site_name" in shape["sites"]["columns"] else "NULL"
+        )
+        cols += [f"{site_name}::text AS site_name"]
+        joins += f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"
+
+    order = "b.name" if "name" in have else f"b.{key}"
     sql = (
-        f"SELECT {', '.join(cols)} FROM plenum_cafm.buildings "
+        f"SELECT {', '.join(cols)} FROM plenum_cafm.buildings b{joins} "
         f"ORDER BY {order} NULLS LAST LIMIT {int(limit)}"
     )
     try:
@@ -315,6 +360,7 @@ async def rollups(session: AsyncSession, *, limit: int = 1000) -> dict[str, dict
             "floors": c.get("floors"),
             "spaces": s.get("spaces"),
             "gfa_sqm": round(s["area"], 2) if s.get("area") else None,
+            "area_unit": "m2",
             "use_mix": mix,
             "dominant_use": dominant_use(mix),
             "counts": c,

@@ -285,14 +285,23 @@ def shape_building_row(
         bench = _num(site.get("benchmark_kwh_per_m2"))
         bench_source = "sites_recorded"
     if bench is None and tm46_market and building_type:
-        bench = tm46_benchmark(building_type, "electricity")
-        bench_source = "tm46_by_site_type" if bench is not None else None
+        # Compare like with like. A snapshot states the fuel it measured, so its benchmark is
+        # that fuel's. A whole-building EUI recorded on the row names no fuel and covers all
+        # of them, so it reads against the combined benchmark — scoring a 214 kWh/m²
+        # whole-building figure against TM46's 95 electricity-only would report a building
+        # sitting AT its benchmark as 125% over it.
+        fuel = str((snapshot or {}).get("meter_type") or "").strip().lower() or "combined"
+        if fuel not in {"electricity", "gas", "combined"}:
+            fuel = "combined"
+        bench = tm46_benchmark(building_type, fuel)
+        bench_source = f"tm46_{fuel}_by_use" if bench is not None else None
 
     # EUI: computed from meter readings when there is a snapshot, else the recorded value.
     eui_source = "eui_snapshot" if eui is not None else None
     if eui is None and _num(site.get("eui_kwh_per_m2")) is not None:
         eui = _num(site.get("eui_kwh_per_m2"))
-        eui_source = "sites_recorded"
+        # buildings.eui_kwh_m2 in the canonical model; sites.eui_kwh_per_m2 in the older one.
+        eui_source = "buildings_recorded" if site.get("building_id") or site.get("primary_use") else "sites_recorded"
     if deviation is None and eui is not None and bench:
         deviation = round(100.0 * (eui - bench) / bench, 2)
 
@@ -405,6 +414,13 @@ def apply_rolling_benchmarks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return rows
 
 
+def sqft_to_sqm(value: Any) -> float | None:
+    """Square feet to square metres. The canonical schema records gross_area_sqft; every
+    benchmark on the platform is kWh/m², so the two must never be compared unconverted."""
+    v = _num(value)
+    return round(v / building_rollup.SQFT_PER_SQM, 2) if v is not None else None
+
+
 def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
     """A plenum_cafm.buildings row in the shape shape_building_row() reads.
 
@@ -412,30 +428,37 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
     a site has `site_name`, and its recorded fallbacks are suffixed `_recorded` so they can
     never be mistaken for a counted figure.
     """
+    # Country, region and the benchmark standard come from the building's LOCATION and the
+    # regulation pack that location points at. The per-building columns are only read where a
+    # deployment has not migrated to locations yet, so nothing regresses mid-migration.
     return {
         "key": b.get("building_id"),
+        "building_id": b.get("building_id"),
+        "primary_use": b.get("primary_use"),
         "alt_id": b.get("site_id"),
-        "name": b.get("name") or b.get("building_name"),
+        "name": b.get("name") or b.get("building_name") or b.get("site_name"),
         "building_name": b.get("name") or b.get("building_name"),
         "building_code": b.get("building_code"),
         "code": b.get("building_code"),
         "country": b.get("country"),
-        "country_code": b.get("country_code"),
+        "country_code": b.get("loc_country_code") or b.get("country_code"),
         "city": b.get("city"),
-        "region": b.get("state") or b.get("city"),
+        "region": b.get("loc_region") or b.get("state") or b.get("city"),
         "postcode": b.get("postcode"),
         "status": b.get("status"),
-        "site_type": b.get("use_type"),
-        "use_type": b.get("use_type"),
+        "site_type": b.get("primary_use") or b.get("use_type"),
+        "use_type": b.get("primary_use") or b.get("use_type"),
         "use_mix": None,
-        "floors": b.get("floors_recorded"),
-        "gfa_sqm": b.get("gfa_sqm_recorded"),
+        "floors": b.get("floors") if b.get("floors") is not None else b.get("floors_recorded"),
+        # The canonical area is square feet; the row model works in m².
+        "gfa_sqm": sqft_to_sqm(b.get("gross_area_sqft")) or b.get("gfa_sqm_recorded"),
         "metering_route": b.get("metering_route"),
         "metering_granularity": b.get("metering_granularity"),
-        "benchmark_standard": b.get("benchmark_standard"),
-        "benchmark_standing": b.get("benchmark_standing"),
-        "benchmark_standing_note": b.get("benchmark_standing_note"),
-        "eui_kwh_per_m2": b.get("eui_kwh_per_m2"),
+        "benchmark_standard": b.get("pack_standard") or b.get("benchmark_standard"),
+        "benchmark_standing": b.get("pack_standing") or b.get("benchmark_standing"),
+        "benchmark_standing_note": b.get("pack_standing_note") or b.get("benchmark_standing_note"),
+        "benchmark_source_label": b.get("pack_benchmark_source"),
+        "eui_kwh_per_m2": b.get("eui_kwh_m2") or b.get("eui_kwh_per_m2"),
         "benchmark_kwh_per_m2": b.get("benchmark_kwh_per_m2"),
         "hoist_score": b.get("hoist_score"),
     }
