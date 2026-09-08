@@ -467,9 +467,17 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
 def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict[str, Any]:
     """Overlay what the graph counted onto a shaped row, and say where each figure came from.
 
-    A counted figure beats a recorded one — the floors on record ARE the floors — but a
-    building with no floor or space rows keeps its surveyed numbers rather than showing
-    nothing. Each field carries its own source so the two are never conflated.
+    A counted figure beats a recorded one — the floors on record ARE the floors — but only
+    when the count is complete, and a partial count is the normal state of a graph being
+    filled in. Three spaces recorded on a 24-storey building sum to a fraction of its area,
+    and letting that replace the surveyed figure understated one building here by twelve
+    times while looking like an ordinary number.
+
+    So a counted figure replaces a recorded one only when it is not SMALLER than it. When
+    it is smaller the survey stands, and the count travels beside it as
+    ``gfa_counted_sqm`` / ``floors_counted`` with the shortfall named in ``partial_counts``
+    — visibly incomplete rather than quietly wrong. A building with no rows at all keeps
+    its surveyed numbers. Each field carries its own source so the two are never conflated.
     """
     row["floors_source"] = "buildings_recorded" if row.get("floors") is not None else None
     row["gfa_source"] = row.get("gfa_source") or ("buildings_recorded" if row.get("gfa_sqm") is not None else None)
@@ -478,14 +486,31 @@ def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict
     if not roll:
         return row
 
+    partial: list[str] = []
+
     floors = roll.get("floors")
     if floors:
-        row["floors"] = int(floors)
-        row["floors_source"] = "floors_table"
+        recorded = row.get("floors")
+        row["floors_counted"] = int(floors)
+        if recorded is None or int(floors) >= int(recorded):
+            row["floors"] = int(floors)
+            row["floors_source"] = "floors_table"
+        else:
+            # Fewer floor rows than the survey says the building has: the graph is being
+            # filled in, not correcting the survey.
+            partial.append(f"floors: {int(floors)} of {int(recorded)} on record")
+
     gfa = roll.get("gfa_sqm")
     if gfa:
-        row["gfa_sqm"] = float(gfa)
-        row["gfa_source"] = "spaces_sum"
+        recorded_gfa = row.get("gfa_sqm")
+        row["gfa_counted_sqm"] = round(float(gfa), 2)
+        if recorded_gfa is None or float(gfa) >= float(recorded_gfa):
+            row["gfa_sqm"] = float(gfa)
+            row["gfa_source"] = "spaces_sum"
+        else:
+            partial.append(
+                f"area: {round(float(gfa)):,} m² counted of {round(float(recorded_gfa)):,} m² recorded"
+            )
     mix = roll.get("use_mix") or []
     if mix:
         row["use_mix"] = mix
@@ -496,6 +521,9 @@ def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict
                 row["building_type"] = tm46_type_for(roll["dominant_use"])
     row["spaces"] = roll.get("spaces")
     row["graph_counts"] = roll.get("counts") or {}
+    # Named rather than merely implied by two fields disagreeing, so a UI can show "the
+    # graph knows part of this building" without the reader having to spot it.
+    row["partial_counts"] = partial
     return row
 
 
