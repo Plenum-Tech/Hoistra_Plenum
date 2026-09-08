@@ -174,8 +174,15 @@ export default function Buildings({ vals }) {
                         {b.stdNote}
                       </span>
                     </span>
-                    <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
-                      {b.score}
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                      <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
+                        {b.score}
+                      </span>
+                      {vals.isAdmin && b.buildingId ? (
+                        <span className="hv11" title={"Remove " + b.name} onClick={(e) => { e.stopPropagation(); vals.bcAskDelete(b); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
+                          <i className="ph ph-trash"></i>
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                 </React.Fragment>
@@ -740,6 +747,146 @@ export default function Buildings({ vals }) {
             ) : null}
           </div>
         </div>
+
+      {/* ── Hoist a building ──────────────────────────────────────────────────
+          Every error renders against its own input: the API keys them by field
+          precisely so the reader never has to hunt for which box was wrong. */}
+      <div style={{ display: vals.bcShow, position: "fixed", inset: "0", zIndex: "60", background: "rgba(8,14,13,0.44)", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto" }} onClick={vals.bcClose}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "620px", background: "var(--color-surface)", borderRadius: "14px", boxShadow: "var(--shadow-lg,0 24px 60px rgba(0,0,0,.28))", overflow: "hidden" }}>
+
+          <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--color-divider)" }}>
+            <h2 style={{ margin: "0", fontSize: "20px", lineHeight: "1.2" }}>{"Hoist a building"}</h2>
+            <div style={{ fontSize: "12px", color: "var(--color-neutral-400)", marginTop: "5px", lineHeight: "1.5" }}>
+              {"It joins the register immediately and is read against its country's regulation pack. Its country and region become a location, which is what carries that pack."}
+            </div>
+          </div>
+
+          <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+
+            <div style={{ display: vals.bcTopErrorShow, fontSize: "12px", color: "var(--st-warn)", background: "var(--color-bg)", borderRadius: "8px", padding: "10px 12px", lineHeight: "1.5" }}>
+              {vals.bcTopError}
+            </div>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+              <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Building name"}</span>
+              <input value={vals.bcForm.site_name} onChange={vals.bcSet("site_name")} placeholder="Bishopsgate Tower" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+              <span style={{ display: vals.bcErrShow("name"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("name")}</span>
+            </label>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Country"}</span>
+                <select value={vals.bcForm.country_code} onChange={vals.bcSet("country_code")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
+                  {(vals.bcCountries || []).map((c) => (<option key={c.code} value={c.code}>{c.name}</option>))}
+                </select>
+                <span style={{ fontSize: "10.5px", color: "var(--color-accent)", lineHeight: "1.4" }}>{vals.bcStandardNote}</span>
+                <span style={{ display: vals.bcErrShow("country_code"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("country_code")}</span>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Region or state"}</span>
+                <input value={vals.bcForm.state} onChange={vals.bcSet("state")} placeholder="London" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+                <span style={{ display: vals.bcErrShow("region"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("region")}</span>
+              </label>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Primary use"}</span>
+                <select value={vals.bcForm.use_type} onChange={vals.bcSet("use_type")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
+                  {(vals.bcUseTypes || []).map((u) => (<option key={u} value={u}>{u}</option>))}
+                </select>
+                <span style={{ display: vals.bcErrShow("use_type"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("use_type")}</span>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Floors"}</span>
+                <input value={vals.bcForm.floors} onChange={vals.bcSet("floors")} inputMode="numeric" placeholder="24" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+                <span style={{ display: vals.bcErrShow("floors"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("floors")}</span>
+              </label>
+              {/* The one field where a wrong unit is accepted, stored, and wrong
+                  everywhere after. It is labelled m² three times on purpose. */}
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Floor area · m²"}</span>
+                <input value={vals.bcForm.gfa_sqm} onChange={vals.bcSet("gfa_sqm")} inputMode="numeric" placeholder="40000 m²" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{"Square metres, not feet"}</span>
+                <span style={{ display: vals.bcErrShow("gfa_sqm"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("gfa_sqm")}</span>
+              </label>
+            </div>
+
+            <div style={{ display: vals.bcUseNoteShow, fontSize: "11.5px", color: "var(--st-warn)", lineHeight: "1.45" }}>
+              {vals.bcUseNote}
+            </div>
+
+            {/* Use mix — the running total is shown because "must sum to 100" is a rule
+                you can only follow if you can see where you are against it. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Use mix"}</span>
+                <span style={{ fontSize: "11px", color: vals.bcMixTotalColor, fontVariantNumeric: "tabular-nums" }}>{vals.bcMixTotalLabel}</span>
+              </div>
+              {(vals.bcMix || []).map((m) => (
+                <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1fr 92px 24px", gap: "8px", alignItems: "center" }}>
+                  <input value={m.use} onChange={m.setUse} placeholder="office" style={{ padding: "8px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13px" }} />
+                  <input value={m.pct} onChange={m.setPct} inputMode="numeric" placeholder="100" style={{ padding: "8px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13px", fontVariantNumeric: "tabular-nums" }} />
+                  <span className="hv11" onClick={m.remove} style={{ display: m.removeShow, fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer", textAlign: "center" }}>{"×"}</span>
+                </div>
+              ))}
+              <span className="hv11" onClick={vals.bcMixAdd} style={{ fontSize: "11.5px", color: "var(--color-accent)", cursor: "pointer" }}>{"+ Add a use"}</span>
+              <span style={{ display: vals.bcErrShow("use_mix"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("use_mix")}</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Metering"}</span>
+                <select value={vals.bcForm.metering_granularity} onChange={vals.bcSet("metering_granularity")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
+                  {(vals.bcGranularities || []).map((g) => (<option key={g.value} value={g.value}>{g.label}</option>))}
+                </select>
+                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{vals.bcGranularityNote}</span>
+                <span style={{ display: vals.bcErrShow("metering_granularity"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("metering_granularity")}</span>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
+                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Building code"}</span>
+                <input value={vals.bcForm.building_code} onChange={vals.bcSet("building_code")} placeholder="allocated as B-NN" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+                <span style={{ display: vals.bcErrShow("building_code"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("building_code")}</span>
+              </label>
+            </div>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+              <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Site it belongs to"}</span>
+              <input value={vals.bcForm.site_id} onChange={vals.bcSet("site_id")} placeholder="S-01 — optional, must already exist" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
+              <span style={{ display: vals.bcErrShow("site_id"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("site_id")}</span>
+            </label>
+
+          </div>
+
+          <div style={{ padding: "16px 24px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="btn" onClick={vals.bcClose} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Cancel"}</div>
+            <div className="btn btn-primary" onClick={vals.bcSubmit} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.bcSaving ? "default" : "pointer", opacity: vals.bcSaving ? "0.6" : "1" }}>{vals.bcSubmitLabel}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Remove a building ─────────────────────────────────────────────────
+          The dialog opens on a DELETE with no confirm, which changes nothing and
+          reports what the building holds. That report is the whole dialog: the
+          decision is what happens to those records, not "are you sure". */}
+      <div style={{ display: vals.bcDelShow, position: "fixed", inset: "0", zIndex: "61", background: "rgba(8,14,13,0.44)", alignItems: "center", justifyContent: "center", padding: "24px" }} onClick={vals.bcDelCancel}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "460px", background: "var(--color-surface)", borderRadius: "14px", boxShadow: "var(--shadow-lg,0 24px 60px rgba(0,0,0,.28))", overflow: "hidden" }}>
+          <div style={{ padding: "20px 22px 6px" }}>
+            <h2 style={{ margin: "0", fontSize: "18px", lineHeight: "1.25" }}>{"Remove " + vals.bcDelName + "?"}</h2>
+            <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "4px", fontFamily: "ui-monospace,monospace" }}>{vals.bcDelCode}</div>
+          </div>
+          <div style={{ padding: "10px 22px 18px", fontSize: "13px", lineHeight: "1.55", color: "var(--color-neutral-400)" }}>
+            <div style={{ display: vals.bcDelLoading ? "block" : "none" }}>{"Checking what this building holds…"}</div>
+            <div style={{ display: vals.bcDelAttachedShow }}>{vals.bcDelAttachedText}</div>
+            <div style={{ display: vals.bcDelEmptyShow }}>{"This building holds no records. Nothing else is affected."}</div>
+          </div>
+          <div style={{ padding: "14px 22px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="btn" onClick={vals.bcDelCancel} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Keep it"}</div>
+            <div className="btn" onClick={vals.bcDelConfirm} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.bcDelWorking ? "default" : "pointer", color: "var(--st-warn)", border: "1px solid var(--st-warn)", borderRadius: "8px", opacity: vals.bcDelWorking ? "0.6" : "1" }}>{vals.bcDelBusyLabel}</div>
+          </div>
+        </div>
+      </div>
+
       </div>
   );
 }

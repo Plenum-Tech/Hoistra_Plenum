@@ -48,6 +48,9 @@ export function shapeLiveBuilding(r, i) {
     key: r.building_id || r.site_id || r.site_key || String(i),
     // Building ID is buildings.building_id when the graph is the root, else sites.site_id.
     id: r.building_id || r.site_id || r.code || String(i + 1),
+    // The delete keys on the building's own uuid. `id` above falls back to a site_id for
+    // older rows, and deleting by that would address the wrong thing or nothing at all.
+    buildingId: r.building_id || null,
     code: r.code || null,
     name: r.name || "Unnamed site",
     cc: cc,
@@ -141,7 +144,7 @@ export const buildingsLiveMethods = {
       : b.benchSource === "sites_recorded" ? "Recorded on the site row"
       : std;
     return {
-      id: b.id, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
+      id: b.id, buildingId: b.buildingId, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
       floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " rows in plenum_cafm.floors"

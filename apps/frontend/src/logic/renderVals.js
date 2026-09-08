@@ -971,6 +971,7 @@ export const renderValsMethods = {
       ],
       // Buildings table — live rows from svc-operations-intelligence, seed as fallback (buildingsLive.js).
       ...this.bldVals(),
+      ...this.bcVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
       orchWidth: (s.orchOpen && s.flow === "investigate" ? 420 : 280) + "px",
@@ -1154,7 +1155,7 @@ export const renderValsMethods = {
       closeNav: () => this.setState({ navOpen: false }),
       newQuery: () => this.setState({ view: "home", query: "", detail: null, navOpen: false }),
       newSpace: () => this.orch("Create space", "Spaces"),
-      addBuilding: () => this.runAction("Hoist building", "Buildings"),
+      addBuilding: () => this.bcOpenForm(),
       allSessions: () => this.flash("Full session history opens in the workspace archive."),
 
       /* Spaces and sessions in the navigator read the same state the home page

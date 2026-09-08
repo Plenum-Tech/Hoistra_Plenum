@@ -9,6 +9,7 @@ import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
 import { complianceLiveMethods } from './complianceLive.js';
 import { buildingsLiveMethods } from './buildingsLive.js';
+import { buildingsCrudMethods } from './buildingsCrud.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -43,4 +44,4 @@ export class HoistraLogic extends Controller {
   };
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, buildingsLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, buildingsLiveMethods, buildingsCrudMethods, renderValsMethods);
