@@ -8,5 +8,5 @@
 ALTER TABLE plenum_cafm.compliance_certificates
     ADD COLUMN IF NOT EXISTS site_ref VARCHAR(120);
 
-CREATE INDEX IF NOT EXISTS ix_compliance_certificates_site_ref
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_compliance_certificates_site_ref
     ON plenum_cafm.compliance_certificates (cert_scope, site_ref);

@@ -27,6 +27,9 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 #: worse than a named unapplied file.
 _MAX_MIGRATION_PASSES = 3
 
+#: A concurrent index build has to run outside a transaction, so it is routed differently.
+_CONCURRENT_INDEX = re.compile(r"CREATE\s+INDEX\s+CONCURRENTLY", re.IGNORECASE)
+
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 _SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"
 
@@ -50,6 +53,12 @@ async def init_db() -> None:
     log.info("db.init", status="starting")
     retry: list[Path] = []
     if settings.auto_migrate_on_startup:
+        # Swept before the run, so an index left unfinished by a previous concurrent build
+        # is rebuilt on this one rather than skipped forever by IF NOT EXISTS.
+        swept = await _drop_invalid_indexes()
+        if swept:
+            log.warning("db.invalid_indexes_dropped", indexes=swept,
+                        note="left unfinished by an earlier concurrent build; rebuilding")
         retry = await apply_sql_migrations()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -120,6 +129,39 @@ def _split_sql(sql: str) -> list[str]:
     return statements
 
 
+async def _drop_invalid_indexes() -> list[str]:
+    """Remove indexes a concurrent build left behind unfinished.
+
+    This is the trap that comes with CREATE INDEX CONCURRENTLY. When a concurrent build
+    fails part-way, Postgres keeps the index in an INVALID state: it exists, so
+    ``IF NOT EXISTS`` skips it on every later run, and no query will use it. The result is
+    an index that is permanently missing while looking permanently present.
+
+    Dropping one is safe by definition — an invalid index is unusable, so nothing can be
+    relying on it — and it lets the next migration pass build it properly.
+    """
+    dropped: list[str] = []
+    try:
+        async with engine.connect() as conn:
+            raw = await conn.get_raw_connection()
+            rows = await raw.driver_connection.fetch(
+                """SELECT c.relname AS name
+                   FROM pg_index i
+                   JOIN pg_class c ON c.oid = i.indexrelid
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'plenum_cafm' AND NOT i.indisvalid"""
+            )
+            for r in rows:
+                name = r["name"]
+                await raw.driver_connection.execute(
+                    f'DROP INDEX IF EXISTS plenum_cafm."{name}"'
+                )
+                dropped.append(str(name))
+    except Exception as exc:  # noqa: BLE001 — housekeeping must not stop startup
+        log.warning("db.invalid_index_sweep_failed", error=str(exc)[:200])
+    return dropped
+
+
 async def apply_sql_migrations(only: list[Path] | None = None) -> list[Path]:
     """Apply the idempotent *.sql migrations in filename order.
 
@@ -141,8 +183,24 @@ async def apply_sql_migrations(only: list[Path] | None = None) -> list[Path]:
             # exec_driver_sql (raw DBAPI) — NOT text(): several seeds use PostgreSQL
             # ``::jsonb`` casts, which text() misreads as ``:jsonb`` bind params.
             try:
-                async with engine.begin() as conn:
-                    await conn.exec_driver_sql(stmt)
+                if _CONCURRENT_INDEX.search(stmt):
+                    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block,
+                    # and it is concurrent precisely so building an index on a live table
+                    # does not hold a lock that blocks every write to it for the duration —
+                    # on a register being ingested into, that is an outage.
+                    #
+                    # Run on the raw asyncpg connection rather than through SQLAlchemy.
+                    # Neither engine.execution_options(isolation_level="AUTOCOMMIT") nor
+                    # setting it on an open connection took effect on this pooled engine:
+                    # the statement still arrived inside a transaction and every index
+                    # build failed, silently, as a skipped migration. asyncpg's own execute
+                    # opens no transaction, which is the behaviour actually needed.
+                    async with engine.connect() as conn:
+                        raw = await conn.get_raw_connection()
+                        await raw.driver_connection.execute(stmt)
+                else:
+                    async with engine.begin() as conn:
+                        await conn.exec_driver_sql(stmt)
                 total += 1
             except Exception as exc:  # noqa: BLE001
                 if mig not in failed:

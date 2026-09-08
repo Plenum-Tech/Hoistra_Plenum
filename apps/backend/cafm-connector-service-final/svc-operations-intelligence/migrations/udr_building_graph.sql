@@ -100,9 +100,9 @@ BEGIN
 END
 $loc_fk$;
 
-CREATE INDEX IF NOT EXISTS ix_locations_pack ON plenum_cafm.locations (pack_id);
-CREATE INDEX IF NOT EXISTS ix_locations_site ON plenum_cafm.locations (site_id);
-CREATE INDEX IF NOT EXISTS ix_locations_building ON plenum_cafm.locations (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_locations_pack ON plenum_cafm.locations (pack_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_locations_site ON plenum_cafm.locations (site_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_locations_building ON plenum_cafm.locations (building_id);
 
 -- sites: canonical shape for a fresh database; an existing varchar-keyed table keeps its key.
 CREATE TABLE IF NOT EXISTS plenum_cafm.sites (
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.sites (
 );
 ALTER TABLE plenum_cafm.sites ADD COLUMN IF NOT EXISTS portfolio_id UUID;
 ALTER TABLE plenum_cafm.sites ADD COLUMN IF NOT EXISTS address TEXT;
-CREATE INDEX IF NOT EXISTS ix_sites_portfolio ON plenum_cafm.sites (portfolio_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sites_portfolio ON plenum_cafm.sites (portfolio_id);
 
 -- ── buildings — everything resolves to this ──────────────────────────────────────────
 
@@ -145,8 +145,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.buildings (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_buildings_site ON plenum_cafm.buildings (site_id);
-CREATE INDEX IF NOT EXISTS ix_buildings_location ON plenum_cafm.buildings (location_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_buildings_site ON plenum_cafm.buildings (site_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_buildings_location ON plenum_cafm.buildings (location_id);
 
 -- The FK to sites only where the key types agree — a varchar-keyed sites cannot be
 -- referenced from a text column without a cast, and an unenforceable constraint is worse
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.floors (
     gross_area_sqft NUMERIC(16,2),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_floors_building ON plenum_cafm.floors (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_floors_building ON plenum_cafm.floors (building_id);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.spaces (
     space_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -207,8 +207,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.spaces (
     tenant_ref  TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_spaces_floor ON plenum_cafm.spaces (floor_id);
-CREATE INDEX IF NOT EXISTS ix_spaces_building ON plenum_cafm.spaces (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_spaces_floor ON plenum_cafm.spaces (floor_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_spaces_building ON plenum_cafm.spaces (building_id);
 
 -- ── :HAS_ASSET → :HAS_EQUIPMENT / :METERED_BY ────────────────────────────────────────
 -- assets already exists keyed on varchar; the graph hangs it off the building.
@@ -218,13 +218,13 @@ CREATE INDEX IF NOT EXISTS ix_spaces_building ON plenum_cafm.spaces (building_id
 ALTER TABLE plenum_cafm.buildings ADD COLUMN IF NOT EXISTS raw_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 ALTER TABLE plenum_cafm.assets ADD COLUMN IF NOT EXISTS building_id UUID;
-CREATE INDEX IF NOT EXISTS ix_assets_building ON plenum_cafm.assets (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_assets_building ON plenum_cafm.assets (building_id);
 
 -- work_orders predates this migration in every existing deployment, so the CREATE TABLE
 -- above is a no-op there and never adds building_id. Without it an invoice cannot be
 -- placed through the work it bills.
 ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS building_id UUID;
-CREATE INDEX IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.equipment (
     equipment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.equipment (
     installed_on DATE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_equipment_asset ON plenum_cafm.equipment (asset_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_equipment_asset ON plenum_cafm.equipment (asset_id);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.meters (
     meter_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -249,8 +249,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.meters (
 );
 ALTER TABLE plenum_cafm.meters ADD COLUMN IF NOT EXISTS building_id UUID;
 ALTER TABLE plenum_cafm.meters ADD COLUMN IF NOT EXISTS mpan_mprn TEXT;
-CREATE INDEX IF NOT EXISTS ix_meters_asset ON plenum_cafm.meters (asset_id);
-CREATE INDEX IF NOT EXISTS ix_meters_building ON plenum_cafm.meters (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_meters_asset ON plenum_cafm.meters (asset_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_meters_building ON plenum_cafm.meters (building_id);
 
 -- ── :HAS_DOC → :EVIDENCES ────────────────────────────────────────────────────────────
 
@@ -264,10 +264,10 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.documents (
     uploaded_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_documents_building ON plenum_cafm.documents (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_documents_building ON plenum_cafm.documents (building_id);
 
 ALTER TABLE plenum_cafm.compliance_certificates ADD COLUMN IF NOT EXISTS building_id UUID;
-CREATE INDEX IF NOT EXISTS ix_compliance_certificates_building
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_compliance_certificates_building
     ON plenum_cafm.compliance_certificates (building_id);
 
 -- ── :UNDER_CONTRACT → :RAISED_UNDER / :INVOICED_BY ───────────────────────────────────
@@ -350,9 +350,9 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.work_orders (
     closed_at     TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
-CREATE INDEX IF NOT EXISTS ix_work_orders_asset ON plenum_cafm.work_orders (asset_id);
-CREATE INDEX IF NOT EXISTS ix_work_orders_contract ON plenum_cafm.work_orders (contract_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_asset ON plenum_cafm.work_orders (asset_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_contract ON plenum_cafm.work_orders (contract_id);
 
 DO $drop_invoices$
 BEGIN
