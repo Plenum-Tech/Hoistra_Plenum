@@ -381,7 +381,11 @@ services:
       context: ./svc-operations-intelligence
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      # Same database svc-ingestion writes to. A building_id resolved out of one
+      # database and stored against an asset in another is a key that points at
+      # nothing. The Azure DSN stays as the fallback so an unset DB_URL behaves as
+      # it did before.
+      DATABASE_URL: ${DB_URL:-postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent}
       REDIS_URL: redis://redis:6379/0
       EMAIL_DRY_RUN: "true"
       AUTO_SEED_UK_PACK: "true"
@@ -410,7 +414,11 @@ services:
       context: ./svc-operations-intelligence
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      # Same database svc-ingestion writes to. A building_id resolved out of one
+      # database and stored against an asset in another is a key that points at
+      # nothing. The Azure DSN stays as the fallback so an unset DB_URL behaves as
+      # it did before.
+      DATABASE_URL: ${DB_URL:-postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent}
       REDIS_URL: redis://redis:6379/0
       EMAIL_DRY_RUN: "true"
       AUTO_SEED_UK_PACK: "false"
