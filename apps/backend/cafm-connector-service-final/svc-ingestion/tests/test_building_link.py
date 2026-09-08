@@ -54,6 +54,13 @@ def _run(rows, client):
     return asyncio.run(resolve_buildings(rows, url="http://x", client=client))
 
 
+def _run_wo(rows, client):
+    """Work orders hang off an asset, so they opt into the asset tier."""
+    return asyncio.run(
+        resolve_buildings(rows, url="http://x", client=client, use_asset=True)
+    )
+
+
 # ── What a row is read as saying ──────────────────────────────────────────────
 
 
@@ -268,7 +275,7 @@ def test_a_file_with_no_building_column_reports_that_as_the_gap():
     assert out["gaps"][0]["reason"] == "no_building_column"
     assert out["gaps"][0]["row_says"] is None
     assert out["gaps"][0]["rows_affected"] == 2
-    assert "Add a building" in out["gaps"][0]["remedy"]
+    assert "Add an asset_code, building" in out["gaps"][0]["remedy"]
 
 
 def test_an_ambiguous_site_gap_asks_for_the_building_not_the_estate():
@@ -306,3 +313,58 @@ def test_a_mixed_file_reports_only_the_part_that_failed():
     out = _run(rows, _Client(_results))
     assert out["linked"] == 1 and out["unlinked"] == 2
     assert {g["reason"] for g in out["gaps"]} == {"no_match", "no_building_column"}
+
+
+# ── Work orders resolve through the asset they are against ───────────────────
+
+
+def test_an_asset_code_is_the_first_thing_read_off_a_work_order_row():
+    """A work order names its plant far more reliably than it names a building."""
+    hint = building_hint({"wo_code": "WO-100", "Asset Code": "AHU-004"}, use_asset=True)
+    assert hint == {"asset_code": "AHU-004"}
+
+
+def test_an_asset_code_is_sent_alongside_whatever_else_the_row_says():
+    """Both travel: the resolver decides which wins, this only reports what was there."""
+    hint = building_hint({"Asset": "AHU-004", "Building": "Bishopsgate Tower",
+                          "Site": "S-01"}, use_asset=True)
+    assert hint == {"asset_code": "AHU-004", "name": "Bishopsgate Tower",
+                    "site_id": "S-01", "site_name": "S-01"}
+
+
+def test_equipment_columns_count_as_the_asset():
+    for header in ("Equipment Code", "equipment", "asset_tag", "AssetID"):
+        assert building_hint({header: "AHU-004"}, use_asset=True) == {"asset_code": "AHU-004"}
+
+
+def test_a_work_order_placed_through_its_asset_reports_that_as_the_reason():
+    rows = [{"wo_code": "WO-100", "asset_code": "AHU-004"}]
+    out = _run_wo(rows, _Client(lambda i: [_resolved("u-1", reason="asset")]))
+    assert out["by_row"] == ["u-1"]
+    assert out["by_reason"]["asset"] == 1
+
+
+def test_work_orders_whose_assets_are_unplaced_say_to_ingest_assets_first():
+    """The ordering dependency made legible: assets before work orders."""
+    rows = [{"wo_code": "WO-100", "asset_code": "AHU-004"}]
+    out = _run_wo(rows, _Client(lambda i: [{"building_id": None, "outcome": "unmatched",
+                                            "reason": "asset_not_placed"}]))
+    assert out["by_row"] == [None]
+    assert "a work order inherits its building from its plant" in out["gaps"][0]["remedy"]
+
+
+def test_work_orders_on_one_asset_are_a_single_lookup():
+    rows = [{"wo_code": f"WO-{i}", "asset_code": "AHU-004"} for i in range(200)]
+    client = _Client(lambda i: [_resolved("u-1", reason="asset")])
+    out = _run_wo(rows, client)
+    assert len(client.calls[0]) == 1
+    assert out["linked"] == 200
+
+
+def test_an_assets_row_never_resolves_from_its_own_asset_code():
+    """Otherwise a re-upload correcting the Building column would be overridden by the
+    building the asset was already placed in, and the correction would do nothing."""
+    row = {"asset_code": "AHU-004", "Building": "Bishopsgate Tower"}
+    assert building_hint(row) == {"name": "Bishopsgate Tower"}
+    assert building_hint(row, use_asset=True) == {
+        "asset_code": "AHU-004", "name": "Bishopsgate Tower"}

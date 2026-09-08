@@ -188,11 +188,15 @@ async def backfill_buildings_from_sites(
 
 
 class ResolveBuildingItem(BaseModel):
-    """What extraction managed to read off one document."""
+    """What extraction managed to read off one document or row."""
     name: str | None = None
     code: str | None = None
     site_name: str | None = None
     site_id: str | None = None
+    #: The asset this record is against. Tried first and separately from the matching
+    #: tiers: an asset already placed carries the answer, so this is a link the graph
+    #: holds rather than another string to match.
+    asset_code: str | None = None
 
 
 class ResolveBuildingsRequest(BaseModel):
@@ -205,6 +209,7 @@ async def resolve_building(
     code: str | None = Query(None, description="Building code / reference."),
     site_name: str | None = Query(None),
     site_id: str | None = Query(None),
+    asset_code: str | None = Query(None, description="Asset this record is against; its building wins."),
     session: AsyncSession = Depends(get_session),
 ):
     """Which building does this document belong to? Reads only, writes nothing.
@@ -214,7 +219,8 @@ async def resolve_building(
     misstates two buildings' obligations at once, so it declines rather than guesses.
     """
     return await bld_resolver.resolve_one(
-        session, name=name, code=code, site_name=site_name, site_id=site_id
+        session, name=name, code=code, site_name=site_name, site_id=site_id,
+        asset_code=asset_code,
     )
 
 

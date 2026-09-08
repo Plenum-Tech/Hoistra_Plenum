@@ -418,6 +418,9 @@ _FIELD_TO_COLUMN: dict[str, dict[str, str]] = {
 
 # Tables where asyncpg COPY is used directly (all required non-null columns satisfiable)
 _DIRECT_COPY_TABLES: frozenset[str] = frozenset({"assets", "spare_parts", "work_orders"})
+#: Tables whose rows hang off a building in the graph, so their ingest resolves one.
+#: spare_parts are stock, held in a store rather than fixed to a property.
+_BUILDING_LINKED_TABLES: frozenset[str] = frozenset({"assets", "work_orders"})
 
 # Required columns per table (non-null, no server default) that we must always supply
 _REQUIRED_COLUMNS: dict[str, dict[str, Any]] = {
@@ -618,6 +621,11 @@ def _build_work_order_record(
     desc = _coerce_str(row.get("wo_type")) or _coerce_str(row.get("maintenance_type"))
     if desc:
         record["description"] = desc
+    # A work order is against a piece of plant, and that plant is already placed. Whatever
+    # the source carries wins over anything inferred, same rule as assets.
+    bid = _coerce_uuid(row.get("building_id")) or _coerce_uuid(row.get(_RESOLVED_BUILDING_KEY))
+    if bid is not None:
+        record["building_id"] = bid
     columns = list(record.keys())
     return tuple(record.values()), columns
 
@@ -1011,12 +1019,20 @@ async def extract_csv(
 
             rows_as_dicts = df.to_dict(orient="records")
 
-            # ── 6a. Link assets to the building graph ─────────────────────
+            # ── 6a. Link rows to the building graph ───────────────────────
             # One call for the whole file, hints deduped. Enrichment only: a row that
             # cannot be placed still ingests with building_id NULL and its reason logged,
-            # because an asset with no building is recoverable and a lost asset is not.
-            if entity_type == "assets" and rows_as_dicts:
-                link = await building_link.resolve_buildings(rows_as_dicts)
+            # because a row with no building is recoverable and a lost row is not.
+            #
+            # Work orders resolve through the asset they are against, which the resolver
+            # treats as a link rather than a match — so a work order lands in the same
+            # building as its plant by construction. Ingest assets before work orders and
+            # the whole file places itself; the other way round and every row reports
+            # asset_not_placed.
+            if entity_type in _BUILDING_LINKED_TABLES and rows_as_dicts:
+                link = await building_link.resolve_buildings(
+                    rows_as_dicts, use_asset=(entity_type == "work_orders")
+                )
                 for _i, _bid in enumerate(link["by_row"]):
                     if _bid:
                         rows_as_dicts[_i][_RESOLVED_BUILDING_KEY] = _bid

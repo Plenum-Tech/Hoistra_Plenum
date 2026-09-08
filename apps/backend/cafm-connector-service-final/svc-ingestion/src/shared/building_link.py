@@ -50,6 +50,10 @@ _SITE_NAME_KEYS = ("sitename", "estate", "campus")
 #: Deliberately last and only as a code: "location" in a CMMS export is as often a room
 #: as a building, so it is the weakest thing here and never read as a name.
 _FALLBACK_CODE_KEYS = ("locationcode", "location")
+#: The asset a row is against. A work order names its plant far more reliably than it names
+#: a building, and that plant is already placed — so this is the strongest hint a work order
+#: row carries, and the resolver treats it as a link rather than a match.
+_ASSET_KEYS = ("assetcode", "asset", "assetid", "assettag", "equipmentcode", "equipment")
 
 
 def _norm_key(key: Any) -> str:
@@ -73,16 +77,25 @@ def _first(lookup: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def building_hint(row: dict[str, Any]) -> dict[str, str] | None:
+def building_hint(row: dict[str, Any], *, use_asset: bool = False) -> dict[str, str] | None:
     """What this row says about its building, or None when it says nothing.
 
     Reads both canonical and untouched source column names — the schema mapper renames the
     columns it recognises and leaves the rest alone, and a building column is usually one of
     the ones it leaves alone.
+
+    ``use_asset`` is for rows that hang off an asset — a work order, a reading. It is off by
+    default because a row that IS an asset must not resolve its own parent from its own
+    identity: on a re-upload the already-placed asset would win over a corrected Building
+    column in the file, and the correction would silently do nothing.
     """
     lookup = {_norm_key(k): v for k, v in row.items()}
 
     hint: dict[str, str] = {}
+    if use_asset:
+        asset = _first(lookup, _ASSET_KEYS)
+        if asset:
+            hint["asset_code"] = asset
     code = _first(lookup, _CODE_KEYS) or _first(lookup, _FALLBACK_CODE_KEYS)
     if code:
         hint["code"] = code
@@ -113,8 +126,12 @@ def _hint_key(hint: dict[str, str]) -> tuple[tuple[str, str], ...]:
 #: and one somebody has to interpret.
 _REMEDY = {
     "no_building_column": (
-        "The file names no building, site or location. Add a building, building_code or "
-        "site_id column, or ingest one file per building."
+        "The file names no asset, building, site or location. Add an asset_code, building, "
+        "building_code or site_id column, or ingest one file per building."
+    ),
+    "asset_not_placed": (
+        "The rows name an asset, but that asset has no building either. Ingest or backfill "
+        "the assets first — a work order inherits its building from its plant."
     ),
     "no_match": (
         "Nothing in the portfolio matches this. Either the building is not in the graph "
@@ -210,6 +227,7 @@ async def resolve_buildings(
     url: str | None = None,
     timeout: float = _TIMEOUT_S,
     client: Any = None,
+    use_asset: bool = False,
 ) -> dict[str, Any]:
     """Resolve every row's building in one call. Returns a report; never raises.
 
@@ -239,7 +257,7 @@ async def resolve_buildings(
     row_to_hint: list[int | None] = []
     no_hint_rows: list[int] = []
     for row_idx, row in enumerate(rows):
-        hint = building_hint(row)
+        hint = building_hint(row, use_asset=use_asset)
         if not hint:
             row_to_hint.append(None)
             no_hint_rows.append(row_idx)
