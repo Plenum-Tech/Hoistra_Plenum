@@ -164,6 +164,8 @@ async def backfill_buildings_from_sites(
     creates = [p for p in plans if p["action"] == "create"]
 
     written = 0
+    location_link: dict[str, object] = {"linked": 0, "skipped": "dry run"}
+
     if not dry_run and creates:
         for p in creates:
             vals = {k: v for k, v in p["values"].items()
@@ -184,6 +186,21 @@ async def backfill_buildings_from_sites(
                 p["reason"] = str(exc)[:200]
                 log.warning("building_backfill.insert_failed", building=p["building_id"],
                             error=str(exc)[:200])
+        # A building with no location is scored against no standard — it falls through to
+        # the rolling portfolio benchmark and reads as though its market has no regulation.
+        # Linking here is what stops this backfill recreating that gap every time it runs.
+        try:
+            from .building_create import link_buildings_to_locations
+
+            linked = await link_buildings_to_locations(session, dry_run=False)
+            location_link = {
+                "linked": linked.get("linked", 0),
+                "locations_created": linked.get("locations_created", 0),
+                "left_unscored": len(linked.get("skipped") or []),
+            }
+        except Exception as exc:  # noqa: BLE001 — a missing location must not lose the rows
+            location_link = {"error": str(exc)[:200]}
+            log.warning("building_backfill.link_locations_failed", error=str(exc)[:200])
         await session.commit()
 
     incomplete: dict[str, int] = {}
@@ -195,6 +212,9 @@ async def backfill_buildings_from_sites(
         "ok": True,
         "dry_run": dry_run,
         "sites_read": len(sites),
+        # A building with no location is scored against no standard, so what the backfill
+        # linked is part of what it did, not a footnote.
+        "location_link": location_link,
         "would_create" if dry_run else "created": len(creates) if dry_run else written,
         "skipped_existing": sum(1 for p in plans if p["action"] == "skip"),
         "conflicts": [p for p in plans if p["action"] == "conflict"],

@@ -248,6 +248,30 @@ async def create_building(
     return out
 
 
+@router.post("/buildings/link-locations")
+async def link_buildings_to_locations(
+    dry_run: bool = Query(True, description="true (default) reports what would change and writes nothing."),
+    limit: int = Query(5000, ge=1, le=20000),
+    actor: str = Query("hoistra-ui"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Give every building without a location one, derived from its site.
+
+    A building sits in a country and a region, and both are properties of a location — the
+    same location that points at the regulation pack the building is scored against. The
+    foreign key and the read-path join have always been there; what was missing is anything
+    that populates it, so buildings created by backfill-from-sites have none and are scored
+    against no standard at all.
+
+    A building whose site carries no country is left alone and reported. Inventing a market
+    would attach a legal standard on no evidence, and an unscored building is the safer
+    error. Defaults to a dry run.
+    """
+    return await bld_create.link_buildings_to_locations(
+        session, dry_run=dry_run, limit=limit, actor=actor
+    )
+
+
 @router.delete("/buildings/{building_id}")
 async def delete_building(
     building_id: str,

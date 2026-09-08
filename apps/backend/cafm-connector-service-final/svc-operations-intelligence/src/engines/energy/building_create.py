@@ -587,3 +587,129 @@ async def delete_building(
                 + (f" {sum(detached.values())} records were unlinked and kept."
                    if detached else "")
             )}
+
+
+async def link_buildings_to_locations(
+    session: AsyncSession,
+    *,
+    dry_run: bool = True,
+    limit: int = 5000,
+    actor: str = "hoistra-ui",
+) -> dict[str, Any]:
+    """Give every building without a location one, derived from the site it belongs to.
+
+    A building sits in a country and a region, and those are properties of a ``location``,
+    not of the building — the location is also what points at the regulation pack. The
+    foreign key has always been there and the read path has always joined through it. What
+    was missing is anything that POPULATES it: ``backfill-from-sites`` creates buildings and
+    sets no location, so every building on an existing deployment has none, and a building
+    with no location is scored against no standard. It falls through to the rolling
+    portfolio benchmark and reads as though its market simply has no regulation — which for
+    a London or a New York building is not true, and is the kind of wrong that looks
+    perfectly ordinary on screen.
+
+    Derived from the site because that is the only address on record. A building whose site
+    carries no country is left alone and reported: inventing a market would attach a legal
+    standard to a building on no evidence, and an unscored building is the safer error.
+
+    Defaults to a dry run.
+    """
+    shape = await graph_shape(session, refresh=True)
+    if not (shape["buildings"]["exists"] and shape["locations"]["exists"]):
+        return {"ok": False, "error": "buildings or locations absent — run the migration."}
+    have = shape["buildings"]["columns"]
+    if "location_id" not in have:
+        return {"ok": False, "error": "buildings.location_id absent — run the migration."}
+
+    scols = shape["sites"]["columns"] if shape["sites"]["exists"] else set()
+    if "country_code" not in scols:
+        return {"ok": False, "error": "sites carries no country_code — nothing to derive from."}
+    skey = shape["sites"]["key"]
+    region_col = next((c for c in ("region", "state", "city") if c in scols), None)
+
+    rows = (
+        await session.execute(
+            text(
+                f"""SELECT b.building_id::text AS bid, b.name AS name,
+                           s.country_code::text AS cc,
+                           {("s." + region_col + "::text") if region_col else "NULL"} AS region,
+                           {("s.city::text") if "city" in scols else "NULL"} AS city
+                    FROM plenum_cafm.buildings b
+                    LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text
+                    WHERE b.location_id IS NULL
+                    LIMIT :lim"""
+            ),
+            {"lim": int(limit)},
+        )
+    ).mappings().all()
+
+    planned: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for r in rows:
+        cc = (r["cc"] or "").strip().upper()
+        if cc == "GB":
+            cc = "UK"
+        if cc == "UAE":
+            cc = "AE"
+        if not cc:
+            skipped.append({"building_id": r["bid"], "name": r["name"],
+                            "why": "its site carries no country"})
+            continue
+        region = (r["region"] or r["city"] or cc).strip()
+        planned.append({"building_id": r["bid"], "name": r["name"],
+                        "country_code": cc, "region": region, "city": r["city"],
+                        "standard": PACK_STANDARD_FOR.get(cc, "Rolling portfolio benchmark")})
+
+    out: dict[str, Any] = {
+        "ok": True,
+        "dry_run": dry_run,
+        "unlinked_found": len(rows),
+        "would_link" if dry_run else "linked": len(planned),
+        "skipped": skipped,
+        "buildings": planned[:50],
+    }
+    if dry_run or not planned:
+        out["message"] = (
+            f"{len(planned)} building(s) would gain a location. Nothing was changed. "
+            "Re-send with dry_run=false to apply."
+        ) if dry_run else "Nothing to link."
+        return out
+
+    locations_created = 0
+    for item in planned:
+        loc = await _resolve_location(
+            session,
+            country_code=item["country_code"],
+            region=item["region"],
+            city=item.get("city"),
+        )
+        locations_created += 1 if loc["created"] else 0
+        await session.execute(
+            text(
+                """UPDATE plenum_cafm.buildings SET location_id = CAST(:l AS UUID)
+                   WHERE building_id::text = :b AND location_id IS NULL"""
+            ),
+            {"l": loc["location_id"], "b": item["building_id"]},
+        )
+        item["location_id"] = loc["location_id"]
+    out["locations_created"] = locations_created
+
+    try:
+        async with session.begin_nested():
+            await write_audit(
+                session,
+                actor=actor,
+                action_type="building.link_locations",
+                source_feature="C",
+                output_payload={"linked": len(planned), "locations_created": locations_created},
+                detail={"skipped": len(skipped)},
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("building_link_locations.audit_failed", error=str(exc)[:200])
+    await session.commit()
+    out["message"] = (
+        f"{len(planned)} building(s) now carry a location, "
+        f"{locations_created} of which had to be created. "
+        f"{len(skipped)} left alone for want of a country on their site."
+    )
+    return out

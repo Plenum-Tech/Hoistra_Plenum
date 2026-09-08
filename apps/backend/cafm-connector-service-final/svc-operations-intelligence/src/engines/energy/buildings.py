@@ -441,9 +441,11 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
         "building_code": b.get("building_code"),
         "code": b.get("building_code"),
         "country": b.get("country"),
-        "country_code": b.get("loc_country_code") or b.get("country_code"),
+        "country_code": b.get("loc_country_code") or b.get("country_code")
+                        or b.get("site_country_code"),
         "city": b.get("city"),
-        "region": b.get("loc_region") or b.get("state") or b.get("city"),
+        "region": b.get("loc_region") or b.get("state") or b.get("city")
+                  or b.get("site_region") or b.get("site_city"),
         "postcode": b.get("postcode"),
         "status": b.get("status"),
         "site_type": b.get("primary_use") or b.get("use_type"),

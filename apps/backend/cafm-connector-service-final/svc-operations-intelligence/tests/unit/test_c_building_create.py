@@ -161,3 +161,17 @@ def test_an_invented_metering_granularity_is_refused():
 
 def test_a_malformed_organization_id_is_caught_before_the_insert():
     assert "organization_id" in validate_payload(_ok(organization_id="not-a-uuid"))[1]
+
+
+# ── the location link ────────────────────────────────────────────────────────
+
+
+def test_the_market_codes_all_map_to_a_seeded_pack():
+    """A building is scored against the pack its location points at. Every market the form
+    offers must reach one, or a building created there is scored against nothing."""
+    from src.engines.energy.building_create import COUNTRY_CODES, PACK_STANDARD_FOR
+
+    assert set(PACK_STANDARD_FOR) == COUNTRY_CODES
+    seeded = {"CIBSE TM46", "Energy Star · ASHRAE 100",
+              "BCA Benchmarking Report", "Rolling portfolio benchmark"}
+    assert set(PACK_STANDARD_FOR.values()) <= seeded

@@ -329,6 +329,15 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
         _sn = [f"s.{c}" for c in ("name", "site_name") if c in shape["sites"]["columns"]]
         site_name = f"COALESCE({', '.join(_sn)})" if _sn else "NULL"
         cols += [f"{site_name}::text AS site_name"]
+        # The site's address, as a fallback for display only. A building whose location_id
+        # is not set still sits somewhere, and showing no country at all because the graph
+        # link is missing is worse than showing the estate's. It does NOT stand in for the
+        # regulation pack — that comes from the location or not at all, because scoring a
+        # building against a standard inferred from its estate's address is a guess with a
+        # legal claim attached.
+        for c in ("country_code", "region", "city", "postcode"):
+            if c in shape["sites"]["columns"]:
+                cols += [f"s.{c}::text AS site_{c}"]
         joins += f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"
 
     order = "b.name" if "name" in have else f"b.{key}"
