@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
@@ -65,7 +68,127 @@ from ..schemas.compliance import (
     VerifyNowRequest,
 )
 
+from ...engines import ingest_gate
+
 router = APIRouter(prefix="/api/compliance", tags=["compliance"])
+
+
+class ValidateDocumentRequest(BaseModel):
+    """What extraction produced, before anything is written."""
+    doc_type: str = Field(
+        ..., description="compliance_certificate | vendor_invoice | service_contract"
+    )
+    extracted: dict[str, Any] = Field(default_factory=dict)
+    certificate_type_code: str | None = Field(
+        None, description="Required for a certificate — the pack declares its mandatory fields per type."
+    )
+    country_code: str | None = None
+    field_confidence: dict[str, Any] | None = Field(
+        None, description="Per-field confidence from extraction. Anything low is surfaced to confirm rather than retype."
+    )
+    answers: dict[str, Any] | None = Field(
+        None, description="A person's answers to a previous round. Merged before re-checking."
+    )
+    answered_by: str | None = None
+
+
+@router.post("/documents/validate")
+async def validate_document(
+    body: ValidateDocumentRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """What must be answered before this document can be written. Reads only; writes nothing.
+
+    Call it with what extraction produced. `ready: false` means a mandatory field could not
+    be read, and `questions` is what to put to the person — only the fields that are actually
+    missing, plus any read with low confidence shown for confirmation rather than retyping.
+
+    Send the answers back in `answers` to re-check. When `ready` is true the merged payload
+    in `document` is what to ingest, and it records which fields a person supplied: a date
+    typed at ingest is usable evidence, and it is not the same as one read off the
+    certificate.
+
+    For a certificate the mandatory list comes from the country pack, which declares it per
+    certificate type — this endpoint does not hold a second copy of that answer.
+    """
+    merged = ingest_gate.apply_answers(
+        body.extracted, body.answers, answered_by=body.answered_by
+    )
+    out = await ingest_gate.check_document(
+        session,
+        body.doc_type,
+        merged,
+        certificate_type_code=body.certificate_type_code,
+        country_code=body.country_code,
+        field_confidence=body.field_confidence,
+    )
+    out["document"] = merged
+    out["answered"] = sorted((merged.get("raw_metadata") or {}).get("answered_fields") or {})
+    return out
+
+
+class GatedCertificateRequest(ValidateDocumentRequest):
+    """A certificate ingest that refuses to write an incomplete record."""
+    confirmed_by_pm: bool = False
+    link_targets: list[str] | None = None
+
+
+@router.post("/documents/ingest")
+async def ingest_document_gated(
+    body: GatedCertificateRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+):
+    """Validate, then write — and refuse to write until the mandatory fields are there.
+
+    422 with the questions when something required could not be read. Nothing is written on
+    that path: a certificate with no expiry never becomes due, so it drops silently out of
+    compliance reporting, and an absence is far more expensive to find later than a question
+    is to answer now.
+
+    Send the answers back in `answers` and call again. Only the certificate type is wired
+    here so far; invoices and contracts validate through /documents/validate and ingest
+    through their own routes.
+    """
+    merged = ingest_gate.apply_answers(
+        body.extracted, body.answers, answered_by=body.answered_by
+    )
+    gate = await ingest_gate.check_document(
+        session,
+        body.doc_type,
+        merged,
+        certificate_type_code=body.certificate_type_code,
+        country_code=body.country_code,
+        field_confidence=body.field_confidence,
+    )
+    if not gate["ready"]:
+        response.status_code = 422
+        return {**gate, "written": False, "document": merged}
+
+    if body.doc_type != "compliance_certificate":
+        response.status_code = 400
+        return {
+            **gate, "written": False,
+            "error": f"No gated ingest for {body.doc_type} yet — it validates here and "
+                     "ingests through its own route.",
+        }
+
+    payload = dict(merged)
+    payload.setdefault("certificate_type_code", body.certificate_type_code)
+    payload.setdefault("country_code", body.country_code)
+    result = await cert_svc.upsert_certificate(
+        session, payload,
+        confirmed_by_pm=body.confirmed_by_pm,
+        link_targets=body.link_targets,
+    )
+    # Read the outcome rather than assuming it. Reporting a write that the engine refused
+    # is the one failure a gate must not have: the caller stops asking, and nothing is
+    # there.
+    wrote = bool((result or {}).get("ok", True))
+    if not wrote:
+        response.status_code = 422
+    return {**gate, "written": wrote, "certificate": result,
+            "error": None if wrote else (result or {}).get("error")}
 
 
 @router.post("/certificates")
