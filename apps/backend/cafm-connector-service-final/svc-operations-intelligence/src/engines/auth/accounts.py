@@ -416,6 +416,10 @@ async def resend_code(
     same_answer = {
         "ok": True,
         "status": "sent",
+        # Echoed back because the caller just typed it — it says nothing about whether an
+        # account exists, and a client that has to re-read its own form state to render
+        # "we sent a code to X" is being made to work for a field the response declares.
+        "email": address,
         "message": f"If that address needs a code, one is on its way. It lasts {ttl} minutes.",
         "otp": otp_engine.describe_limits(),
     }
@@ -558,6 +562,7 @@ async def forgot_password(
     same_answer = {
         "ok": True,
         "status": "accepted",
+        "email": address,
         "message": GENERIC_RESET_ACCEPTED.format(ttl=ttl),
         "otp": otp_engine.describe_limits(),
     }
@@ -612,8 +617,17 @@ async def reset_password(
     except WeakPassword as exc:
         raise AuthError(str(exc), reason="password") from None
 
+    # Verified but NOT consumed. Two checks still stand between here and the write, and
+    # a code spent on either of them is gone for good: the person is told to choose a
+    # different password and has nothing left to choose it with.
+    #
+    # The obvious alternative — run those checks first — is worse. "Is this the account's
+    # current password" answered before any code is presented is a password oracle on an
+    # unauthenticated endpoint: submit a guess, read the error, learn whether it was
+    # right. So the order stays, and the code is spent at the last possible moment
+    # instead.
     result = await otp_engine.verify(
-        session, email=address, purpose=PASSWORD_RESET, code=code,
+        session, email=address, purpose=PASSWORD_RESET, code=code, consume=False,
     )
     if not result.ok:
         await session.commit()          # keep the attempt count — see verify_email
@@ -630,9 +644,13 @@ async def reset_password(
         await session.commit()
         raise AuthError(
             "That is the password the account already has. If you are resetting it "
-            "because someone else may know it, choose a different one.",
+            "because someone else may know it, choose a different one. Your code is "
+            "still valid.",
             reason="password_unchanged",
         )
+
+    # Committed to the write now, so the code is spent.
+    await otp_engine.consume(session, result.otp_id)
 
     await session.execute(
         text(

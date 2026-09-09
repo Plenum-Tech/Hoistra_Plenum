@@ -318,6 +318,24 @@ async def verify(
     )
 
 
+async def consume(session: AsyncSession, otp_id) -> None:
+    """Spend a code that :func:`verify` accepted without consuming.
+
+    Verification and consumption are separable so a caller with further checks to run —
+    the reset flow still has "is this the password you already have" ahead of it — can
+    accept the code, fail the request for an unrelated reason, and leave the person their
+    code. Spending it there means being told to choose a different password with nothing
+    left to choose it with.
+    """
+    if otp_id is None:
+        return
+    await session.execute(
+        text("UPDATE plenum_cafm.auth_otp_codes SET consumed_at = now() "
+             "WHERE id = :i AND consumed_at IS NULL"),
+        {"i": otp_id},
+    )
+
+
 async def purge_expired(session: AsyncSession, *, older_than_days: int = 7) -> int:
     """Delete spent and expired rows. A consumed code is not evidence of anything."""
     result = await session.execute(
