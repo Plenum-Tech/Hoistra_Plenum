@@ -3,6 +3,25 @@
 import { CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, CHILD_OF_BUILDING, UNITS, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
 import { fmtTime, runwayTicks } from './complianceLive.js';
 
+// A document's stored name, shortened to the part a person wrote.
+//
+// The real records carry the filename their ingestion pipeline produced, and each stage
+// prepended its own id:
+//
+//   cf30c299-…-a41_9c519d0f…41c_0927bdcc-…770_79711cc5…069_ten-building-1786715110_FRA_building.pdf
+//
+// which fills the column and hides the only informative part, at the end. This strips
+// leading uuid_ / 32-hex_ segments for display only — plenum_cafm.documents keeps the
+// name exactly as ingested, and the row's detail flash still shows it in full. If a name
+// is nothing BUT ids, the original is kept rather than rendering an empty cell.
+const _FILE_ID_PREFIX =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})_/i;
+export function tidyFileName(name) {
+  let out = String(name == null ? "" : name);
+  while (_FILE_ID_PREFIX.test(out)) out = out.replace(_FILE_ID_PREFIX, "");
+  return out.trim() || String(name == null ? "" : name);
+}
+
 export const renderValsMethods = {
   renderVals() {
     const D = this.D();
@@ -878,16 +897,24 @@ export const renderValsMethods = {
         const certBranch = fetched && fetched.certificates;
         const state = (this.state.bgTree || {})[key] || {};
         const files = ((branch && branch.rows) || []).map((r) => ({
-          file: r.label,
+          file: tidyFileName(r.label),
           became: r.detail ? "filed as " + r.detail : "no document type recorded",
           // No size and no ingest timestamp on plenum_cafm.documents; the row's own key is
           // what there is, and it is what identifies the file in the graph.
           meta: "document_id " + String(r.id).slice(0, 8),
           by: "graph",
+          // The flash carries the stored name in full — the trim above is for the row,
+          // not a claim about what the file is called.
           view: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
             + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name + "."),
-          download: () => this.flash("plenum_cafm.documents records a blob_url for "
-            + r.label + " but no local copy; the file is fetched from storage on request.")
+          // This used to assert a blob_url existed for every document. Most rows have
+          // none — they were filed from extracted fields, not from a file — so the one
+          // line on screen about where the file lives was the one line that was untrue.
+          // The row itself does not carry storage state, so this says what is certain
+          // and leaves the claim to the row that has it.
+          download: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
+            + ". A download reads that row's blob_url; a document filed without a source "
+            + "file has none.")
         }));
         return {
           name: b.name, id: b.code || b.id, state: b.state,

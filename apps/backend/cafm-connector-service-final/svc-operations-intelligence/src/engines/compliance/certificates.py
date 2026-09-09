@@ -1415,8 +1415,22 @@ async def upsert_certificate(
     cert.defects_found = data.get("defects_found")
     cert.remedial_actions = data.get("remedial_actions")
     cert.remedial_status = remedial_status
-    cert.document_id = _parse_uuid(data.get("document_id"))
-    cert.source_document_id = cert.document_id
+    # The file this certificate was read from. Sticky: a re-file that carries no
+    # document_id must not blank the one an earlier pass established. Ingest is an upsert on
+    # certificate_number, so the second filing of a certificate — a corrected expiry date, a
+    # PM confirmation, a re-run — routinely arrives without the id, and clearing it here also
+    # deprived attach_to_graph below of an id to reuse, so it minted a fresh
+    # plenum_cafm.documents row every time. Five passes over one certificate left five
+    # document rows, four of them orphaned and all five shown on the building.
+    _doc_id = _parse_uuid(data.get("document_id"))
+    if _doc_id is not None:
+        cert.document_id = _doc_id
+        cert.source_document_id = _doc_id
+    # The graph document from a previous pass, if there was one. Not written onto the
+    # certificate — cert.document_id means "there is a real file behind this", and the
+    # download routes rely on that — but passed to the graph below so it updates that row
+    # instead of creating a second identity for the same file.
+    _prior_graph_doc = (cert.raw_metadata or {}).get("graph_document_id")
     cert.country_code = country
     # Sub-national grouping, broad to narrow. Normalised so "scotland", "SCT" and
     # "Scotland" do not become three separate rows in a report grouped by state, and so a
@@ -1570,7 +1584,7 @@ async def upsert_certificate(
 
             graph = await attach_to_graph(
                 session,
-                document_id=cert.document_id or cert.source_document_id,
+                document_id=cert.document_id or cert.source_document_id or _prior_graph_doc,
                 building_name=cert.building_name,
                 building_reference=cert.building_reference,
                 site_name=meta.get("site_label"),

@@ -71,7 +71,11 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     "assets": {"label": ("asset_name", "name", "asset_code"), "detail": ("asset_code", "status")},
     "equipment": {"label": ("name", "equipment_code"), "detail": ("equipment_code",)},
     "meters": {"label": ("meter_ref", "name", "mpan", "mprn"), "detail": ("meter_type",)},
-    "documents": {"label": ("title", "file_name"), "detail": ("doc_type",)},
+    # file_name first: a document is identified by the file it is. `title` here is the
+    # certificate type code, which every document of that type shares — so with title
+    # leading, five real PDFs with distinct filenames all rendered as "EICR" and the panel
+    # had nothing left to tell them apart but a truncated uuid.
+    "documents": {"label": ("file_name", "title"), "detail": ("doc_type",)},
     "compliance_certificates": {"label": ("certificate_type_code", "certificate_number"),
                                 "detail": ("certificate_number", "expiry_date", "status")},
     "work_orders": {"label": ("title", "wo_code"), "detail": ("wo_code", "status")},
@@ -121,12 +125,26 @@ async def _branch(
     out["available"] = True
 
     key = info.get("key") or "id"
-    label_col = _first(cols, spec.get("label") or ())
-    detail_cols = [c for c in (spec.get("detail") or ()) if c in cols and c != label_col]
-    select = [f"{key}::text AS id",
-              (f"{label_col}::text AS label" if label_col else "NULL AS label")]
+    # COALESCE across every candidate the table has, not the first one that EXISTS.
+    #
+    # _first() picks one column for the whole branch, so a table that HAS the column wins
+    # even on rows where it is null — and the row then fell through to `r["id"]` below and
+    # rendered a raw uuid. documents is the case that showed it: file_name is set on the
+    # 18 records ingested from a real PDF and null on the rest, so whichever order the two
+    # candidates were listed in, one group or the other was labelled with a uuid. The
+    # choice is per row, not per table.
+    label_cols = [c for c in (spec.get("label") or ()) if c in cols]
+    label_expr = (
+        "COALESCE(" + ", ".join(f"NULLIF({c}::text, '')" for c in label_cols) + ")"
+        if label_cols else "NULL"
+    )
+    # The primary candidate still drops out of the detail line, so a label is not repeated
+    # beside itself; the later candidates stay, because they are the fallbacks, not the label.
+    primary = label_cols[0] if label_cols else None
+    detail_cols = [c for c in (spec.get("detail") or ()) if c in cols and c != primary]
+    select = [f"{key}::text AS id", f"{label_expr} AS label"]
     select += [f"{c}::text AS d{i}" for i, c in enumerate(detail_cols)]
-    order = f"{label_col} NULLS LAST" if label_col else key
+    order = f"{label_expr} NULLS LAST" if label_cols else key
 
     try:
         async with session.begin_nested():
