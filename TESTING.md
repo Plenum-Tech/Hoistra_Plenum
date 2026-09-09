@@ -31,6 +31,11 @@ given. If it starts, it works.
 | **Compliance** | 83 certificates, 72 against buildings and 11 against vendors, scored against the UK (55 types), UAE (45) and US (18) regulation packs |
 | **Vendors** | 6 firms, 12 contracts, 108 work orders |
 | **Auth** | 6 accounts, and registration that works |
+| **Hoist Graph** | all 15 nodes populated — portfolio, sites, locations, buildings, floors, spaces, assets, equipment, meters, documents, certificates, contracts, work orders, invoices, regulation packs |
+
+Every node the graph draws has rows, so none of them reads `?`. The page uses `?` to mean
+"nobody counted this branch" rather than "none", and the two are different facts — an
+empty node would be telling you about the environment, not about the building.
 
 Expiry dates are spread deliberately across every lifecycle state — current, due for
 renewal, expiring soon, lapsed. A register where everything is current tells you nothing

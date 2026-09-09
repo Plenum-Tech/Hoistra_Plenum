@@ -15,6 +15,11 @@
 SET search_path TO plenum_cafm, public;
 BEGIN;
 
+-- ── the portfolio: the root of the graph ──
+-- One estate. The Hoist Graph draws this as the node every site hangs off, and without a
+-- row here that node reads "?" — which the page uses to mean "nobody counted", not
+-- "none", and which is exactly the wrong thing for a demo environment to say.
+INSERT INTO portfolios (portfolio_id, name, owner_entity, reporting_currency) VALUES ('8faebbfb-5f48-57b9-bf43-83ead520cd6d', 'Hoistra Demo Portfolio', 'Hoistra Demo Ltd', 'GBP') ON CONFLICT (portfolio_id) DO NOTHING;
 -- ── sites: the estate record each building inherits its address and metering from ──
 INSERT INTO sites (site_id, site_name, building_name, building_code, site_code,
         country, country_code, state, city, site_type, use_type, floors, gfa_sqm,
@@ -89,51 +94,110 @@ INSERT INTO sites (site_id, site_name, building_name, building_code, site_code,
         'Retailer feed · contracted', 'sub-metered', 'CIBSE TM46', 176, 192, 92, 'active')
     ON CONFLICT (site_id) DO NOTHING;
 
+-- ── locations: where a building IS, and therefore which rules apply to it ──
+-- A building is scored against the regulation pack its LOCATION points at, not against a
+-- country copied onto the building row — that column is a fallback for deployments that
+-- have not migrated. The pack ids come from 02_reference_data.sql.
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT 'f9136e01-1897-5a4a-ab1f-52aa5347dca2', '00000000-0000-0000-0000-000000000001', 'Bishopsgate Tower - site', 'site',
+        'B-001', 'United Kingdom', 'UK', 'Greater London', 'London',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = 'f9136e01-1897-5a4a-ab1f-52aa5347dca2');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT '93c41c5b-1e4b-5380-8fc5-ce9d59e927d2', '00000000-0000-0000-0000-000000000001', 'Kingsway House - site', 'site',
+        'B-002', 'United Kingdom', 'UK', 'Greater London', 'London',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = '93c41c5b-1e4b-5380-8fc5-ce9d59e927d2');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT 'a911c590-e7e1-5f21-8062-d74b4c37d3eb', '00000000-0000-0000-0000-000000000001', 'Town Hall - site', 'site',
+        'B-003', 'United Kingdom', 'UK', 'Greater Manchester', 'Manchester',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = 'a911c590-e7e1-5f21-8062-d74b4c37d3eb');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT '60663b3c-ebd6-57ff-a6de-c41d02cd32a0', '00000000-0000-0000-0000-000000000001', 'Meridian Quay - site', 'site',
+        'B-004', 'United Kingdom', 'UK', 'Scotland', 'Edinburgh',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = '60663b3c-ebd6-57ff-a6de-c41d02cd32a0');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT '85df6435-0059-5c84-9a77-907cfa0a7111', '00000000-0000-0000-0000-000000000001', 'AN Other House - site', 'site',
+        'B-005', 'United Kingdom', 'UK', 'Greater London', 'London',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = '85df6435-0059-5c84-9a77-907cfa0a7111');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT '11c8f0ee-5735-545c-9429-0e0cea8268b1', '00000000-0000-0000-0000-000000000001', 'Riverside Court - site', 'site',
+        'B-006', 'United Kingdom', 'UK', 'Greater Manchester', 'Manchester',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'CIBSE TM46' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = '11c8f0ee-5735-545c-9429-0e0cea8268b1');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT '74385efd-4072-57ab-a8f1-28b8de7f98f2', '00000000-0000-0000-0000-000000000001', 'Marina Heights - site', 'site',
+        'B-007', 'UAE', 'AE', 'Dubai', 'Dubai',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'Rolling portfolio benchmark' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = '74385efd-4072-57ab-a8f1-28b8de7f98f2');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT 'c0c5fe87-fb71-55e4-a802-6dcaef8f2b73', '00000000-0000-0000-0000-000000000001', 'Northgate Mall - site', 'site',
+        'B-008', 'United States', 'US', 'New York', 'New York',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'Energy Star · ASHRAE 100' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = 'c0c5fe87-fb71-55e4-a802-6dcaef8f2b73');
+INSERT INTO locations (id, organization_id, name, type, site_id, country,
+        country_code, region, city, pack_id)
+    SELECT 'd8cdf863-08b2-5c02-9beb-63786db440d0', '00000000-0000-0000-0000-000000000001', 'Raffles Link - site', 'site',
+        'B-009', 'Singapore', 'SG', 'Central Region', 'Singapore',
+        (SELECT pack_id FROM regulation_packs WHERE standard = 'BCA Benchmarking Report' LIMIT 1)
+    WHERE NOT EXISTS (SELECT 1 FROM locations WHERE id = 'd8cdf863-08b2-5c02-9beb-63786db440d0');
+
 -- ── buildings: the graph node everything else keys on ──
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('4791b70b-862a-5a75-8d24-5fe13d039131', 'B-001', 'Bishopsgate Tower', 'B-001', 'Commercial'::building_primary_use,
-        34, 411999.04, 214, 88)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('4791b70b-862a-5a75-8d24-5fe13d039131', 'B-001', 'f9136e01-1897-5a4a-ab1f-52aa5347dca2', 'Bishopsgate Tower', 'B-001',
+        'Commercial'::building_primary_use, 34, 411999.04, 214, 88)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('7b73cd1a-106f-50fb-a656-135af105df01', 'B-002', 'Kingsway House', 'B-002', 'Mixed'::building_primary_use,
-        11, 148003.62, 198, 71)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('7b73cd1a-106f-50fb-a656-135af105df01', 'B-002', '93c41c5b-1e4b-5380-8fc5-ce9d59e927d2', 'Kingsway House', 'B-002',
+        'Mixed'::building_primary_use, 11, 148003.62, 198, 71)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('425f5590-404f-5d25-ac68-cac5c9cdebcc', 'B-003', 'Town Hall', 'B-003', 'Commercial'::building_primary_use,
-        6, 96003.22, 231, 62)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('425f5590-404f-5d25-ac68-cac5c9cdebcc', 'B-003', 'a911c590-e7e1-5f21-8062-d74b4c37d3eb', 'Town Hall', 'B-003',
+        'Commercial'::building_primary_use, 6, 96003.22, 231, 62)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('3e058306-2411-592d-b063-2fb6028e7816', 'B-004', 'Meridian Quay', 'B-004', 'Residential'::building_primary_use,
-        22, 186000.19, 164, 84)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('3e058306-2411-592d-b063-2fb6028e7816', 'B-004', '60663b3c-ebd6-57ff-a6de-c41d02cd32a0', 'Meridian Quay', 'B-004',
+        'Residential'::building_primary_use, 22, 186000.19, 164, 84)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('fe259daf-58b9-58be-b05e-4e0da3bc0d08', 'B-005', 'AN Other House', 'B-005', 'Retail'::building_primary_use,
-        4, 71999.73, 209, 79)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('fe259daf-58b9-58be-b05e-4e0da3bc0d08', 'B-005', '85df6435-0059-5c84-9a77-907cfa0a7111', 'AN Other House', 'B-005',
+        'Retail'::building_primary_use, 4, 71999.73, 209, 79)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('f12e9629-95ed-5722-80cc-a1397f627850', 'B-006', 'Riverside Court', 'B-006', 'Residential'::building_primary_use,
-        15, 120997.0, 158, 90)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('f12e9629-95ed-5722-80cc-a1397f627850', 'B-006', '11c8f0ee-5735-545c-9429-0e0cea8268b1', 'Riverside Court', 'B-006',
+        'Residential'::building_primary_use, 15, 120997.0, 158, 90)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('8f4a8708-a87c-5887-99b5-865c3a98b511', 'B-007', 'Marina Heights', 'B-007', 'Hospital'::building_primary_use,
-        8, 203997.43, 246, 58)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('8f4a8708-a87c-5887-99b5-865c3a98b511', 'B-007', '74385efd-4072-57ab-a8f1-28b8de7f98f2', 'Marina Heights', 'B-007',
+        'Hospital'::building_primary_use, 8, 203997.43, 246, 58)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('954c3214-8467-528f-95c6-a320de9f579d', 'B-008', 'Northgate Mall', 'B-008', 'Mixed'::building_primary_use,
-        3, 317997.9, 188, 74)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('954c3214-8467-528f-95c6-a320de9f579d', 'B-008', 'c0c5fe87-fb71-55e4-a802-6dcaef8f2b73', 'Northgate Mall', 'B-008',
+        'Mixed'::building_primary_use, 3, 317997.9, 188, 74)
     ON CONFLICT (building_id) DO NOTHING;
-INSERT INTO buildings (building_id, site_id, name, building_code, primary_use,
-        floors, gross_area_sqft, eui_kwh_m2, hoist_score)
-    VALUES ('264f4a18-f7b9-5ca0-baa5-9189ca55ef10', 'B-009', 'Raffles Link', 'B-009', 'Commercial'::building_primary_use,
-        19, 267999.58, 176, 92)
+INSERT INTO buildings (building_id, site_id, location_id, name, building_code,
+        primary_use, floors, gross_area_sqft, eui_kwh_m2, hoist_score)
+    VALUES ('264f4a18-f7b9-5ca0-baa5-9189ca55ef10', 'B-009', 'd8cdf863-08b2-5c02-9beb-63786db440d0', 'Raffles Link', 'B-009',
+        'Commercial'::building_primary_use, 19, 267999.58, 176, 92)
     ON CONFLICT (building_id) DO NOTHING;
 
 -- ── floors and spaces ──
@@ -611,6 +675,342 @@ INSERT INTO work_orders (id, organization_id, wo_code, title, status, building_i
 INSERT INTO work_orders (id, organization_id, wo_code, title, status, building_id, asset_id, raised_at, conflict_flag) VALUES ('f91714c9-0a15-58aa-a21a-95b53d54ed0f', '00000000-0000-0000-0000-000000000001', 'WO-B-009-52', 'Fault call-out - Fire alarm panel 5', 'open', '264f4a18-f7b9-5ca0-baa5-9189ca55ef10', '2cea3f88-c394-510e-bc50-11d5569a370f', '2025-12-23'::timestamptz, false) ON CONFLICT (id) DO NOTHING;
 INSERT INTO work_orders (id, organization_id, wo_code, title, status, building_id, asset_id, raised_at, conflict_flag) VALUES ('41a270f4-aa21-5800-b794-4028dc27a368', '00000000-0000-0000-0000-000000000001', 'WO-B-009-61', 'Annual service - Booster pump 6', 'closed', '264f4a18-f7b9-5ca0-baa5-9189ca55ef10', 'c4cba9c3-f619-55b2-a937-e1641fe3323d', '2025-09-03'::timestamptz, false) ON CONFLICT (id) DO NOTHING;
 INSERT INTO work_orders (id, organization_id, wo_code, title, status, building_id, asset_id, raised_at, conflict_flag) VALUES ('a351197c-0302-5804-8297-9df11d1f48cd', '00000000-0000-0000-0000-000000000001', 'WO-B-009-62', 'Fault call-out - Booster pump 6', 'open', '264f4a18-f7b9-5ca0-baa5-9189ca55ef10', 'c4cba9c3-f619-55b2-a937-e1641fe3323d', '2025-12-23'::timestamptz, false) ON CONFLICT (id) DO NOTHING;
+
+-- ── contracts: a document, the SLA parameters read off it, and the view above them ──
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('04b2343e-79f5-5fd9-9882-d456aff49b5a', '4791b70b-862a-5a75-8d24-5fe13d039131', 'contract', 'Lifts maintenance framework', 'CONTRACT-APEX.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('c6c59b35-8606-519f-8006-e2ac9581f1ef', '00000000-0000-0000-0000-000000000001', '91bba149-25cb-546b-b349-b14a2fab86c7', '04b2343e-79f5-5fd9-9882-d456aff49b5a',
+        'CT-APEX-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('855ce373-2e68-5f15-bd04-45091a0270cf', '7b73cd1a-106f-50fb-a656-135af105df01', 'contract', 'Water maintenance framework', 'CONTRACT-CLRW.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('f8c0dfe7-0fbb-5af0-bc70-3b8b0be2c18e', '00000000-0000-0000-0000-000000000001', '3cf6cc98-9f75-580f-88e5-27c29631945f', '855ce373-2e68-5f15-bd04-45091a0270cf',
+        'CT-CLRW-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('cffaf7bf-d0f7-5eec-ad97-480072d683c2', '425f5590-404f-5d25-ac68-cac5c9cdebcc', 'contract', 'Mechanical maintenance framework', 'CONTRACT-GULF.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('0a19c75a-e4f0-512d-9b1d-a682d239f251', '00000000-0000-0000-0000-000000000001', 'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'cffaf7bf-d0f7-5eec-ad97-480072d683c2',
+        'CT-GULF-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('8909888f-b1b0-53ef-8949-f5b909ea2ecc', '3e058306-2411-592d-b063-2fb6028e7816', 'contract', 'Electrical maintenance framework', 'CONTRACT-NGEL.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('44f2306f-678c-572c-89ae-730c329fda7d', '00000000-0000-0000-0000-000000000001', 'f0d562e2-dab9-53a3-ad79-73a970da2417', '8909888f-b1b0-53ef-8949-f5b909ea2ecc',
+        'CT-NGEL-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('dcd7bc3c-b361-536f-9073-640eac9cf80b', 'fe259daf-58b9-58be-b05e-4e0da3bc0d08', 'contract', 'Fire maintenance framework', 'CONTRACT-SENT.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('999d92e7-9b29-597c-9306-a5bd4190b7fd', '00000000-0000-0000-0000-000000000001', '4221732c-f44d-537c-8c95-76299a19dfef', 'dcd7bc3c-b361-536f-9073-640eac9cf80b',
+        'CT-SENT-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('ddbdbfe5-3569-5a02-a2bc-b5264d621326', 'f12e9629-95ed-5722-80cc-a1397f627850', 'contract', 'Mechanical maintenance framework', 'CONTRACT-HALD.pdf', '2024-11-27'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO contract_sla_parameters (id, organization_id, vendor_id, document_id,
+        contract_ref, status, sla_response_p1_hours, sla_response_p2_hours,
+        sla_completion_p1_hours, labour_day_rate, labour_hour_rate, call_out_rate,
+        payment_terms, signed_date)
+    VALUES ('9c67d252-2641-5600-92e1-3d0d40e9e5e8', '00000000-0000-0000-0000-000000000001', '3f07cc45-fa35-52be-9c80-154df200ece9', 'ddbdbfe5-3569-5a02-a2bc-b5264d621326',
+        'CT-HALD-2026', 'active', 4, 24, 24, 480, 60, 95, '30 days',
+        '2024-11-27')
+    ON CONFLICT (id) DO NOTHING;
+
+-- ── invoices: a document, a verification, and lines for the view to sum ──
+-- One line matches the contract rate and one does not, so the variance path has something
+-- behind it. An invoice register where every line matches exercises nothing.
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('7353f657-9baa-5ed1-a07d-183c3ce83202', '4791b70b-862a-5a75-8d24-5fe13d039131', 'invoice', 'INV-APEX-202601', 'INV-APEX-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('d6748665-bfb6-58c9-89ad-08b2e504551c', '00000000-0000-0000-0000-000000000001', '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202601', '7353f657-9baa-5ed1-a07d-183c3ce83202', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('4d51b65d-14d9-544f-9fa2-63fb2fa03ff5', 'd6748665-bfb6-58c9-89ad-08b2e504551c', '00000000-0000-0000-0000-000000000001',
+                '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('bacdf6ca-30de-5430-b62c-322e188e7cb5', 'd6748665-bfb6-58c9-89ad-08b2e504551c', '00000000-0000-0000-0000-000000000001',
+                '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('64c69304-bd2e-5530-94bd-76fc8b01a823', '4791b70b-862a-5a75-8d24-5fe13d039131', 'invoice', 'INV-APEX-202602', 'INV-APEX-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('c879b842-e742-54c4-9c4e-e12f0816fc56', '00000000-0000-0000-0000-000000000001', '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202602', '64c69304-bd2e-5530-94bd-76fc8b01a823', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('86875011-0065-5929-b995-38413ca031c1', 'c879b842-e742-54c4-9c4e-e12f0816fc56', '00000000-0000-0000-0000-000000000001',
+                '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('e5cb9fe3-0319-52ab-a4a3-2a009dd88957', 'c879b842-e742-54c4-9c4e-e12f0816fc56', '00000000-0000-0000-0000-000000000001',
+                '91bba149-25cb-546b-b349-b14a2fab86c7', 'INV-APEX-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('252de750-1505-5165-b6ea-215d9f2558c1', '7b73cd1a-106f-50fb-a656-135af105df01', 'invoice', 'INV-CLRW-202601', 'INV-CLRW-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('e6170e09-697b-5153-ab98-fcf5dc82c93e', '00000000-0000-0000-0000-000000000001', '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202601', '252de750-1505-5165-b6ea-215d9f2558c1', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('20d94fec-72a6-58d6-8ff7-d9d14d0bd188', 'e6170e09-697b-5153-ab98-fcf5dc82c93e', '00000000-0000-0000-0000-000000000001',
+                '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('90031618-88dc-5170-9423-d309cca4fca9', 'e6170e09-697b-5153-ab98-fcf5dc82c93e', '00000000-0000-0000-0000-000000000001',
+                '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('4110d2b9-9464-54c9-a704-eb3a68a5df36', '7b73cd1a-106f-50fb-a656-135af105df01', 'invoice', 'INV-CLRW-202602', 'INV-CLRW-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('de98b3d1-381c-591d-b935-f94895c3b484', '00000000-0000-0000-0000-000000000001', '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202602', '4110d2b9-9464-54c9-a704-eb3a68a5df36', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('57478b17-2b9e-582e-b1c6-e068a7a7f268', 'de98b3d1-381c-591d-b935-f94895c3b484', '00000000-0000-0000-0000-000000000001',
+                '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('7d45599e-a0e2-59e3-85b0-32b89a69570b', 'de98b3d1-381c-591d-b935-f94895c3b484', '00000000-0000-0000-0000-000000000001',
+                '3cf6cc98-9f75-580f-88e5-27c29631945f', 'INV-CLRW-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('36bceba5-3646-5c33-99c4-8482fe2da26b', '425f5590-404f-5d25-ac68-cac5c9cdebcc', 'invoice', 'INV-GULF-202601', 'INV-GULF-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('248ff1ea-04fa-5a03-8351-8ad81bb40820', '00000000-0000-0000-0000-000000000001', 'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202601', '36bceba5-3646-5c33-99c4-8482fe2da26b', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('98da8ebd-acb1-5ad2-bbee-2c08549e43ef', '248ff1ea-04fa-5a03-8351-8ad81bb40820', '00000000-0000-0000-0000-000000000001',
+                'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('37bed4cf-81c9-52df-826b-4dd6d4bcdca7', '248ff1ea-04fa-5a03-8351-8ad81bb40820', '00000000-0000-0000-0000-000000000001',
+                'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('e8d8c564-3e4c-5d3f-b77e-33964843defe', '425f5590-404f-5d25-ac68-cac5c9cdebcc', 'invoice', 'INV-GULF-202602', 'INV-GULF-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('a31576d1-ad61-5b42-bc73-3bb08d880735', '00000000-0000-0000-0000-000000000001', 'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202602', 'e8d8c564-3e4c-5d3f-b77e-33964843defe', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('933c9766-0354-5440-9188-fa4480c07f4e', 'a31576d1-ad61-5b42-bc73-3bb08d880735', '00000000-0000-0000-0000-000000000001',
+                'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('8fe751b1-97e5-56f8-a75d-8e2fbe642d0c', 'a31576d1-ad61-5b42-bc73-3bb08d880735', '00000000-0000-0000-0000-000000000001',
+                'aa4f1e43-501c-56b8-8d13-6cac6902d6c2', 'INV-GULF-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('7c2b4ae4-2358-5bb6-bbbc-d38d118b6e0b', '3e058306-2411-592d-b063-2fb6028e7816', 'invoice', 'INV-NGEL-202601', 'INV-NGEL-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('5be33218-75bb-5129-9007-7e727538261c', '00000000-0000-0000-0000-000000000001', 'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202601', '7c2b4ae4-2358-5bb6-bbbc-d38d118b6e0b', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('1cacbec8-b63f-566d-9047-b571dfc09773', '5be33218-75bb-5129-9007-7e727538261c', '00000000-0000-0000-0000-000000000001',
+                'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('bce98418-d6a8-5c3a-928d-e6d34d93b83a', '5be33218-75bb-5129-9007-7e727538261c', '00000000-0000-0000-0000-000000000001',
+                'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('2c2e9020-61bb-5c2b-b269-d1feda62bace', '3e058306-2411-592d-b063-2fb6028e7816', 'invoice', 'INV-NGEL-202602', 'INV-NGEL-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('b2206376-ff94-520d-b131-d02718d8432f', '00000000-0000-0000-0000-000000000001', 'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202602', '2c2e9020-61bb-5c2b-b269-d1feda62bace', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('6d77b87f-27da-5abf-8369-a933424d852d', 'b2206376-ff94-520d-b131-d02718d8432f', '00000000-0000-0000-0000-000000000001',
+                'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('0e401bdb-ed17-5a0a-b513-698e05728a5e', 'b2206376-ff94-520d-b131-d02718d8432f', '00000000-0000-0000-0000-000000000001',
+                'f0d562e2-dab9-53a3-ad79-73a970da2417', 'INV-NGEL-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('38a4be16-6eee-51ea-aaee-53bf145c3ff6', 'fe259daf-58b9-58be-b05e-4e0da3bc0d08', 'invoice', 'INV-SENT-202601', 'INV-SENT-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('d0b27650-97e1-50d3-a61b-6e412f43bbbd', '00000000-0000-0000-0000-000000000001', '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202601', '38a4be16-6eee-51ea-aaee-53bf145c3ff6', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('62fb9c61-7c58-55c7-9a73-6de927af608c', 'd0b27650-97e1-50d3-a61b-6e412f43bbbd', '00000000-0000-0000-0000-000000000001',
+                '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('817fc825-b1bf-5de6-8838-424d169086d9', 'd0b27650-97e1-50d3-a61b-6e412f43bbbd', '00000000-0000-0000-0000-000000000001',
+                '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('f464844d-d8fb-515c-b9ae-6a69ba6be010', 'fe259daf-58b9-58be-b05e-4e0da3bc0d08', 'invoice', 'INV-SENT-202602', 'INV-SENT-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('42b42d51-2734-5a72-b344-eb332f992768', '00000000-0000-0000-0000-000000000001', '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202602', 'f464844d-d8fb-515c-b9ae-6a69ba6be010', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('96c6883d-c320-583e-874a-0f39bc4e2a64', '42b42d51-2734-5a72-b344-eb332f992768', '00000000-0000-0000-0000-000000000001',
+                '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('2ab217bb-71d7-537e-9d71-7f83da765364', '42b42d51-2734-5a72-b344-eb332f992768', '00000000-0000-0000-0000-000000000001',
+                '4221732c-f44d-537c-8c95-76299a19dfef', 'INV-SENT-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('8b793aa8-7326-50cf-80ad-1e9274ea1b10', 'f12e9629-95ed-5722-80cc-a1397f627850', 'invoice', 'INV-HALD-202601', 'INV-HALD-202601.pdf', '2025-11-02'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('11056512-35bb-5836-9315-f1d0e7c2c316', '00000000-0000-0000-0000-000000000001', '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202601', '8b793aa8-7326-50cf-80ad-1e9274ea1b10', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('f95cf9ee-c935-562c-8564-e1959130e2ac', '11056512-35bb-5836-9315-f1d0e7c2c316', '00000000-0000-0000-0000-000000000001',
+                '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202601', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('53fc673a-5193-58b8-8988-17ae043a2ba4', '11056512-35bb-5836-9315-f1d0e7c2c316', '00000000-0000-0000-0000-000000000001',
+                '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202601', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO documents (document_id, building_id, doc_type, title, file_name, uploaded_at) VALUES ('b2a824de-2e17-5880-9caf-74ff1b1b4564', 'f12e9629-95ed-5722-80cc-a1397f627850', 'invoice', 'INV-HALD-202602', 'INV-HALD-202602.pdf', '2025-09-03'::timestamptz) ON CONFLICT (document_id) DO NOTHING;
+INSERT INTO invoice_verifications (id, organization_id, vendor_id,
+            invoice_ref, document_id, status, matched_count, flagged_count)
+        VALUES ('8b742f41-0c89-5587-8d82-34a439bcece9', '00000000-0000-0000-0000-000000000001', '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202602', 'b2a824de-2e17-5880-9caf-74ff1b1b4564', 'verified', 1, 1)
+        ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('768f680f-17b5-5746-aa42-88bfd9293281', '8b742f41-0c89-5587-8d82-34a439bcece9', '00000000-0000-0000-0000-000000000001',
+                '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202602', 1, 'Planned maintenance visit', 8, 60, 480, 480,
+                60, 'matched', NULL, 0, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
+INSERT INTO invoice_lines (id, invoice_verification_id, organization_id,
+                vendor_id, invoice_ref, line_no, description, labour_hours, labour_rate,
+                labour_amount, line_total, contract_labour_rate, match_status,
+                discrepancy_code, delta_gbp, adversary_reviewed, raw_metadata)
+            VALUES ('33d288e8-4fea-5ded-a492-9d2605cf618c', '8b742f41-0c89-5587-8d82-34a439bcece9', '00000000-0000-0000-0000-000000000001',
+                '3f07cc45-fa35-52be-9c80-154df200ece9', 'INV-HALD-202602', 2, 'Emergency call-out', 3, 95, 420, 420,
+                60, 'flagged', 'rate_above_contract', 240, false,
+                '{"demo": true}'::jsonb)
+            ON CONFLICT (id) DO NOTHING;
 
 -- ── compliance certificates ──
 -- Building scope. Each building gets a different slice, so portfolio coverage varies
@@ -1680,6 +2080,12 @@ COMMIT;
 --     WHERE cert_scope = 'Building' GROUP BY 1;           -- UK, UAE, US
 --   SELECT role, platform_role FROM users;                -- job title vs platform role
 --   SELECT count(*) FROM documents WHERE file_name IS NOT NULL;
+--
+-- Every node the Hoist Graph draws has rows: portfolios, sites, locations, buildings,
+-- floors, spaces, assets, equipment, meters, documents, compliance_certificates,
+-- contracts, work_orders, invoices, regulation_packs. contracts and invoices are VIEWS —
+-- if either reads 0, look at contract_sla_parameters and invoice_verifications, and at
+-- whether their documents carry a building_id, which is how both views reach a building.
 --
 -- Raffles Link holds no certificates: there is no Singapore pack, and inventing one would
 -- put certificate types in the register that no regulation anywhere requires.

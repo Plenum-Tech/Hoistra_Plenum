@@ -78,9 +78,13 @@ services:
       - ./db/04_demo_data.sql:/docker-entrypoint-initdb.d/04_demo_data.sql:ro
     healthcheck:
       # The database is not ready when the port opens — the init scripts run after that,
-      # and a service connecting in between finds a schema that is half there. Waiting for
-      # a table the LAST script creates is the only honest readiness signal.
-      test: ["CMD-SHELL", "psql -U cafm -d hoistra -c 'SELECT 1 FROM plenum_cafm.buildings LIMIT 1' >/dev/null 2>&1"]
+      # and a service connecting in between finds a schema that is half there.
+      #
+      # Testing for ROWS, not for the table. 04_demo_data.sql runs in one transaction, so a
+      # single bad statement rolls the whole file back — and a healthcheck that only asks
+      # whether plenum_cafm.buildings EXISTS goes green on the empty schema left behind,
+      # which is how an environment comes up looking healthy with nothing in it.
+      test: ["CMD-SHELL", "psql -U cafm -d hoistra -tAc 'SELECT count(*) FROM plenum_cafm.buildings' 2>/dev/null | grep -qv '^0$'"]
       interval: 5s
       timeout: 5s
       retries: 60
