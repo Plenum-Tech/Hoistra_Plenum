@@ -76,6 +76,16 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=1, max_length=200)
 
 
+class SetRoleRequest(BaseModel):
+    """Which role, and why.
+
+    The reason is optional but recorded. Six months later "who made this person an
+    admin" has an answer either way; "and why" only has one if somebody typed it.
+    """
+    role: str = Field(min_length=1, max_length=20)
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class PublicUser(BaseModel):
     id: str
     email: str
@@ -83,6 +93,9 @@ class PublicUser(BaseModel):
     organization_id: str | None = None
     status: str
     email_verified: bool
+    role: str = "user"
+    role_label: str | None = None
+    last_login_at: str | None = None
 
 
 class TokenBundle(BaseModel):
@@ -115,4 +128,12 @@ class AcceptedResponse(BaseModel):
 class SimpleResponse(BaseModel):
     ok: bool = True
     message: str
+    sessions_ended: int | None = None
+
+
+class RoleChangeResponse(BaseModel):
+    ok: bool = True
+    changed: bool
+    message: str
+    user: PublicUser
     sessions_ended: int | None = None

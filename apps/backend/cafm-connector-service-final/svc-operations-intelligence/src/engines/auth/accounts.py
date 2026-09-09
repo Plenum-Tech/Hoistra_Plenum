@@ -35,6 +35,7 @@ from ...config import settings
 from ...core.logging import get_logger
 from ...shared.approvals import send_platform_email
 from . import otp as otp_engine
+from . import roles as role_engine
 from .otp import EMAIL_VERIFICATION, PASSWORD_RESET, normalise_email
 from .passwords import WeakPassword, burn_time, hash_password, validate, verify_password
 from . import tokens as token_engine
@@ -43,6 +44,12 @@ log = get_logger(__name__)
 
 #: Said to anyone whose credentials did not work, whatever the actual reason.
 GENERIC_SIGNIN_FAILURE = "That email address and password do not match an account."
+
+#: Statuses that can still sign in or finish a reset. "invited" is an account an
+#: operator created for someone else: it exists, it has no usable password, and the
+#: person becomes able to sign in by setting one through the reset flow — which proves
+#: they hold the mailbox at the same moment.
+LIVE_STATUSES = frozenset({"active", "pending_verification", "invited"})
 
 #: Said after every request for a reset code, whether or not an account exists.
 GENERIC_RESET_ACCEPTED = (
@@ -74,6 +81,7 @@ class Account:
     password_changed_at: datetime | None
     failed_login_count: int
     locked_until: datetime | None
+    role: str
 
 
 def _now() -> datetime:
@@ -87,12 +95,14 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 _SELECT = """SELECT id, email, full_name, organization_id, status, email_verified,
-                    password_hash, password_changed_at, failed_login_count, locked_until
+                    password_hash, password_changed_at, failed_login_count, locked_until,
+                    role
              FROM plenum_cafm.users"""
 
 
 def _account(row: Any) -> Account:
     return Account(
+        role=str(row["role"] or role_engine.DEFAULT_ROLE),
         id=row["id"], email=row["email"], full_name=row["full_name"],
         organization_id=row["organization_id"], status=str(row["status"] or "active"),
         email_verified=bool(row["email_verified"]),
@@ -291,18 +301,31 @@ async def register(
         await session.commit()
         return same_answer
 
+    # Self-registration NEVER grants a role. The one exception is the bootstrap: a fresh
+    # platform has no superadmin and only a superadmin can appoint one, so the first
+    # account registered with the configured address becomes one — and only while there
+    # is still no superadmin at all, so the setting grants nothing once one exists. The
+    # address is confirmed by email like any other, so this does not hand the platform to
+    # whoever types it first; they have to hold the mailbox.
+    role = role_engine.DEFAULT_ROLE
+    bootstrap = (settings.auth_bootstrap_superadmin_email or "").strip().lower()
+    if bootstrap and bootstrap == address and not await role_engine.superadmin_exists(session):
+        role = role_engine.SUPERADMIN
+        log.warning("auth.bootstrap_superadmin", email_domain=address.split("@")[-1])
+
     try:
         user_id = (
             await session.execute(
                 text(
                     """INSERT INTO plenum_cafm.users
                            (organization_id, full_name, email, password_hash, phone,
-                            status, email_verified, password_changed_at)
-                       VALUES (:o, :n, :e, :h, :p, 'pending_verification', false, now())
+                            status, email_verified, password_changed_at, role)
+                       VALUES (:o, :n, :e, :h, :p, 'pending_verification', false, now(), :r)
                        RETURNING id"""
                 ),
                 {"o": str(org), "n": name, "e": address,
-                 "h": hash_password(password), "p": (phone or "").strip() or None},
+                 "h": hash_password(password), "p": (phone or "").strip() or None,
+                 "r": role},
             )
         ).scalar_one()
     except IntegrityError:
@@ -312,12 +335,18 @@ async def register(
         log.info("auth.register.race", email_domain=address.split("@")[-1])
         return same_answer
 
+    if role != role_engine.DEFAULT_ROLE:
+        await role_engine.record_change(
+            session, user_id=user_id, from_role=None, to_role=role,
+            changed_by=None, reason="bootstrap: first account at the configured address",
+            request_ip=request_ip,
+        )
     await _send_code(
         session, email=address, purpose=EMAIL_VERIFICATION, name=name,
         user_id=user_id, organization_id=org, request_ip=request_ip,
     )
     await session.commit()
-    log.info("auth.register.created", user_id=str(user_id))
+    log.info("auth.register.created", user_id=str(user_id), role=role)
     return same_answer
 
 
@@ -364,6 +393,7 @@ async def verify_email(
         session, user_id=fresh["id"], email=fresh["email"],
         organization_id=fresh["organization_id"],
         password_changed_at=_aware(fresh["password_changed_at"]),
+        role=str(fresh["role"] or role_engine.DEFAULT_ROLE),
         user_agent=user_agent, request_ip=request_ip,
     )
     await session.commit()
@@ -468,7 +498,7 @@ async def sign_in(
                  locked=failures >= cap)
         raise AuthError(GENERIC_SIGNIN_FAILURE, status=401, reason="invalid_credentials")
 
-    if str(row["status"]).lower() not in {"active", "pending_verification"}:
+    if str(row["status"]).lower() not in LIVE_STATUSES:
         await session.commit()
         # Distinct from a wrong password on purpose: the password was right, so this
         # reveals nothing the caller did not already know, and "your account is suspended"
@@ -503,6 +533,7 @@ async def sign_in(
         session, user_id=row["id"], email=row["email"],
         organization_id=row["organization_id"],
         password_changed_at=_aware(row["password_changed_at"]),
+        role=str(row["role"] or role_engine.DEFAULT_ROLE),
         user_agent=user_agent, request_ip=request_ip,
     )
     await session.commit()
@@ -537,7 +568,7 @@ async def forgot_password(
         log.info("auth.forgot.unknown_address", email_domain=address.split("@")[-1])
         return same_answer
 
-    if str(row["status"]).lower() not in {"active", "pending_verification"}:
+    if str(row["status"]).lower() not in LIVE_STATUSES:
         await session.commit()
         return same_answer
 
@@ -609,8 +640,13 @@ async def reset_password(
                    failed_login_count = 0, locked_until = NULL,
                    email_verified = true,
                    email_verified_at = COALESCE(email_verified_at, now()),
-                   status = CASE WHEN status = 'pending_verification' THEN 'active'
-                                 ELSE status END,
+                   -- 'invited' too: an operator created this account and the
+                   -- person is now setting their own password, which is the
+                   -- moment it becomes theirs. Leaving it invited would mean an
+                   -- account that works and still reads as an outstanding
+                   -- invitation on every list of them.
+                   status = CASE WHEN status IN ('pending_verification', 'invited')
+                                 THEN 'active' ELSE status END,
                    updated_at = now()
                WHERE id = :i"""
         ),
@@ -726,6 +762,10 @@ def public_user(row: Any) -> dict[str, Any]:
         "organization_id": str(row["organization_id"]) if row["organization_id"] else None,
         "status": row["status"],
         "email_verified": bool(row["email_verified"]),
+        "role": str(row["role"] or role_engine.DEFAULT_ROLE),
+        "role_label": role_engine.LABELS.get(
+            str(row["role"] or role_engine.DEFAULT_ROLE), ""
+        ),
     }
 
 
@@ -735,4 +775,156 @@ def _token_payload(pair: token_engine.TokenPair) -> dict[str, Any]:
         "refresh_token": pair.refresh_token,
         "token_type": pair.token_type,
         "expires_in": pair.expires_in,
+    }
+
+
+# ── roles ────────────────────────────────────────────────────────────────────────────
+
+
+async def set_role(
+    session: AsyncSession, *, actor: Any, target_user_id: UUID, new_role: str,
+    reason: str | None = None, request_ip: str | None = None,
+) -> dict[str, Any]:
+    """Change an account's platform role.
+
+    ``actor`` is the signed-in caller. The rules live in ``roles.may_assign`` and are pure
+    — every branch of "who may grant what" is testable without a database, which matters
+    for the code that decides who gets the run of the platform.
+    """
+    wanted = role_engine.normalise(new_role)
+    if wanted is None:
+        raise AuthError(
+            f"Unknown role. Choose one of: {', '.join(sorted(role_engine.ROLES))}.",
+            reason="unknown_role",
+        )
+
+    row = (
+        await session.execute(
+            text(f"{_SELECT} WHERE id = :i FOR UPDATE"), {"i": str(target_user_id)},
+        )
+    ).mappings().first()
+    if row is None:
+        raise AuthError("No account with that id.", status=404, reason="no_account")
+
+    current = str(row["role"] or role_engine.DEFAULT_ROLE)
+    decision = role_engine.may_assign(
+        actor_role=actor.role, actor_id=actor.user_id, actor_org=actor.organization_id,
+        target_id=row["id"], target_role=current, target_org=row["organization_id"],
+        new_role=wanted,
+    )
+    if not decision.allowed:
+        log.info("auth.role_change_refused", reason=decision.reason,
+                 actor=str(actor.user_id), target=str(row["id"]))
+        raise AuthError(decision.message, status=403, reason=decision.reason)
+
+    if current == wanted:
+        return {"ok": True, "changed": False,
+                "message": f"{row['email']} is already {wanted}.",
+                "user": public_user(row)}
+
+    # The last superadmin cannot be demoted. Otherwise a platform can arrive at a state
+    # where nobody is able to appoint anyone — recoverable only by an UPDATE against the
+    # production database, which is exactly the operation this whole feature exists so
+    # that nobody has to perform.
+    if current == role_engine.SUPERADMIN and wanted != role_engine.SUPERADMIN:
+        remaining = (
+            await session.execute(
+                text("SELECT count(*) FROM plenum_cafm.users WHERE role = :r AND id <> :i"),
+                {"r": role_engine.SUPERADMIN, "i": str(row["id"])},
+            )
+        ).scalar_one()
+        if int(remaining or 0) == 0:
+            raise AuthError(
+                "That is the only superadmin on the platform. Appoint another one first "
+                "— otherwise nobody is left who can appoint anybody.",
+                status=409, reason="last_superadmin",
+            )
+
+    await session.execute(
+        text("UPDATE plenum_cafm.users SET role = :r, updated_at = now() WHERE id = :i"),
+        {"r": wanted, "i": str(row["id"])},
+    )
+    await role_engine.record_change(
+        session, user_id=row["id"], from_role=current, to_role=wanted,
+        changed_by=actor.user_id, reason=reason, request_ip=request_ip,
+    )
+
+    # Their existing tokens still CLAIM the old role. That claim is not what any decision
+    # reads — principal_from_token reads the row — but ending the sessions makes a
+    # reduction take effect visibly rather than whenever a token happens to expire, which
+    # is what somebody revoking access in a hurry believes has happened.
+    revoked = 0
+    if role_engine.rank(wanted) < role_engine.rank(current):
+        revoked = await token_engine.revoke_all_sessions(
+            session, user_id=row["id"], reason="role_reduced",
+        )
+
+    await send_platform_email(
+        session, to_address=row["email"],
+        subject="Your Hoistra access level changed",
+        body=(
+            "Hello,\n\nYour access on Hoistra was changed from "
+            f"{role_engine.LABELS.get(current, current)} to "
+            f"{role_engine.LABELS.get(wanted, wanted)}.\n\n"
+            "If you were not expecting this, tell your administrator.\n\nHoistra"
+        ),
+        organization_id=row["organization_id"], commit=False,
+    )
+    await session.commit()
+    fresh = await find_by_email(session, row["email"])
+    return {
+        "ok": True, "changed": True,
+        "message": f"{row['email']} is now {wanted}."
+                   + (f" {revoked} session(s) ended." if revoked else ""),
+        "user": public_user(fresh),
+        "sessions_ended": revoked,
+    }
+
+
+async def list_accounts(
+    session: AsyncSession, *, actor: Any, limit: int = 100, offset: int = 0,
+) -> dict[str, Any]:
+    """The accounts this caller may see: their own organisation, or all of them.
+
+    An admin sees their organisation; a superadmin sees the platform. The scope is in the
+    WHERE clause rather than applied to the results afterwards, so a paging mistake cannot
+    leak a row from somewhere else.
+    """
+    if not role_engine.is_admin(actor.role):
+        raise AuthError("Only an administrator can list accounts.", status=403,
+                        reason="forbidden")
+
+    scoped = not role_engine.at_least(actor.role, role_engine.SUPERADMIN)
+    where = "WHERE organization_id = :o" if scoped else ""
+    params: dict[str, Any] = {"lim": max(1, min(int(limit), 500)), "off": max(0, int(offset))}
+    if scoped:
+        params["o"] = str(actor.organization_id) if actor.organization_id else None
+
+    rows = (
+        await session.execute(
+            text(
+                f"""SELECT id, email, full_name, organization_id, status, email_verified,
+                           role, last_login_at, created_at
+                    FROM plenum_cafm.users {where}
+                    ORDER BY created_at DESC LIMIT :lim OFFSET :off"""
+            ),
+            params,
+        )
+    ).mappings().all()
+    total = (
+        await session.execute(
+            text(f"SELECT count(*) FROM plenum_cafm.users {where}"),
+            {k: v for k, v in params.items() if k == "o"},
+        )
+    ).scalar_one()
+
+    return {
+        "ok": True,
+        "scope": "organisation" if scoped else "platform",
+        "total": int(total or 0),
+        "users": [
+            dict(public_user(r), last_login_at=(r["last_login_at"].isoformat()
+                                                if r["last_login_at"] else None))
+            for r in rows
+        ],
     }

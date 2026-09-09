@@ -48,7 +48,12 @@ export const GRANULARITIES = [
 // hiding the button never stopped anyone who could reach the API; what the gate decides is
 // whose screen is uncluttered. When a real role model arrives, this set is the one line to
 // change — and the check belongs on the service at the same time.
-export const HOIST_ROLES = new Set(['admin', 'user']);
+// Every platform role, because all three may hoist a building — a facilities manager
+// is the person who actually does it. Listed rather than left implicit: the backend
+// now issues 'superadmin' as well (svc-operations-intelligence/engines/auth/roles.py),
+// and a set that omits it would deny the platform owner the one action every lesser
+// role is allowed, which reads as a broken screen rather than as a permission.
+export const HOIST_ROLES = new Set(['superadmin', 'admin', 'user']);
 
 const BLANK = {
   site_name: '', country_code: 'UK', state: '', city: '', postcode: '',

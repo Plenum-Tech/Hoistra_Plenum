@@ -269,6 +269,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTH_ALLOW_SELF_REGISTRATION", "auth_allow_self_registration"),
     )
 
+    # The chicken-and-egg of a fresh deployment: only a superadmin can appoint a
+    # superadmin, and a new platform has none. The FIRST account registered with this
+    # address becomes one — and only while the platform still has no superadmin at all,
+    # so setting it later, or leaving it set afterwards, grants nothing. The address
+    # still has to be confirmed by email like any other, so setting this does not hand
+    # the platform to whoever types it first; they must hold the mailbox.
+    auth_bootstrap_superadmin_email: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "AUTH_BOOTSTRAP_SUPERADMIN_EMAIL", "auth_bootstrap_superadmin_email",
+        ),
+    )
+
     class Config:
         env_file = ".env"
         extra = "ignore"

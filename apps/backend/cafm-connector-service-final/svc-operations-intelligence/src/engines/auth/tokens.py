@@ -54,6 +54,10 @@ class Principal:
     session_id: UUID | None
     issued_at: datetime
     password_changed_at: int
+    # The role as the DATABASE holds it right now, not as the token claimed. A token
+    # minted before a demotion still says "admin", and believing it would mean a
+    # revoked privilege keeps working until the token expires.
+    role: str
 
 
 class InvalidToken(Exception):
@@ -94,6 +98,7 @@ def issue_access_token(
     organization_id: UUID | None,
     session_id: UUID | None,
     password_changed_at: datetime | None,
+    role: str = "user",
 ) -> tuple[str, int]:
     """A signed access token and its lifetime in seconds."""
     ttl = max(1, int(settings.auth_access_token_ttl_minutes))
@@ -107,6 +112,10 @@ def issue_access_token(
         # every request, so a password change invalidates tokens issued before it without
         # needing to find and delete them.
         "pwd": _epoch(password_changed_at),
+        # Carried for a client that wants to render a menu without another round trip.
+        # It is NOT what any authorisation decision reads — principal_from_token reads
+        # the row, because a token outlives a demotion by up to its whole lifetime.
+        "role": role,
         "typ": ACCESS,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ttl)).timestamp()),
@@ -158,27 +167,59 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
     except (TypeError, ValueError):
         raise InvalidToken("invalid", "That access token is not valid.") from None
 
+    # The session is joined, not just the account. Without this an access token outlives
+    # everything meant to end it: "sign out everywhere" reports success and the token
+    # keeps working for the rest of its life; a demotion takes effect on privilege but
+    # not on the session; a stolen laptop stays signed in for the full TTL after somebody
+    # has pressed every button the product offers to stop it. The join costs one extra
+    # indexed lookup on a query that was already being made.
+    sid = claims.get("sid")
     row = (
         await session.execute(
             text(
-                """SELECT id, email, organization_id, status, password_changed_at
-                   FROM plenum_cafm.users WHERE id = :i"""
+                """SELECT u.id, u.email, u.organization_id, u.status,
+                          u.password_changed_at, u.role,
+                          s.revoked_at, s.expires_at, s.revoked_reason
+                   FROM plenum_cafm.users u
+                   LEFT JOIN plenum_cafm.auth_sessions s
+                          ON s.id = CAST(:s AS UUID)
+                   WHERE u.id = :i"""
             ),
-            {"i": str(user_id)},
+            {"i": str(user_id), "s": sid},
         )
     ).mappings().first()
     if row is None:
         raise InvalidToken("no_account", "That account no longer exists.")
+
     if str(row["status"]).lower() not in {"active", "pending_verification"}:
         raise InvalidToken("disabled", "That account is not active.")
 
+    # Checked BEFORE the session below, so the more specific reason wins. A
+    # password reset both moves this instant and revokes every session, and
+    # "your password was changed" tells the person what happened where "that
+    # session was ended" leaves them guessing.
     if int(claims.get("pwd") or 0) != _epoch(row["password_changed_at"]):
         # Issued before the current password was set. This is the whole point of the
         # claim: a reset ends every session that existed before it.
         raise InvalidToken("password_changed",
                            "Your password was changed. Sign in again.")
 
-    sid = claims.get("sid")
+    if sid is not None:
+        if row["revoked_at"] is not None:
+            reason = str(row["revoked_reason"] or "")
+            raise InvalidToken(
+                "session_revoked",
+                "That session was ended. Sign in again."
+                if reason != "role_reduced"
+                else "Your access level changed. Sign in again.",
+            )
+        expires = row["expires_at"]
+        if expires is not None:
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires <= _now():
+                raise InvalidToken("expired", "Your session has expired. Sign in again.")
+
     return Principal(
         user_id=row["id"],
         email=row["email"],
@@ -186,6 +227,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         session_id=UUID(sid) if sid else None,
         issued_at=datetime.fromtimestamp(int(claims["iat"]), tz=timezone.utc),
         password_changed_at=int(claims.get("pwd") or 0),
+        role=str(row["role"] or "user"),
     )
 
 
@@ -196,6 +238,7 @@ async def open_session(
     email: str,
     organization_id: UUID | None,
     password_changed_at: datetime | None,
+    role: str = "user",
     user_agent: str | None = None,
     request_ip: str | None = None,
 ) -> TokenPair:
@@ -220,7 +263,7 @@ async def open_session(
 
     access, expires_in = issue_access_token(
         user_id=user_id, email=email, organization_id=organization_id,
-        session_id=session_id, password_changed_at=password_changed_at,
+        session_id=session_id, password_changed_at=password_changed_at, role=role,
     )
     log.info("auth.session.opened", user_id=str(user_id), session_id=str(session_id))
     return TokenPair(
@@ -239,7 +282,8 @@ async def rotate_session(
         await session.execute(
             text(
                 """SELECT s.id, s.user_id, s.expires_at, s.revoked_at,
-                          u.email, u.organization_id, u.status, u.password_changed_at
+                          u.email, u.organization_id, u.status, u.password_changed_at,
+                          u.role
                    FROM plenum_cafm.auth_sessions s
                    JOIN plenum_cafm.users u ON u.id = s.user_id
                    WHERE s.refresh_token_hash = :h
@@ -285,6 +329,7 @@ async def rotate_session(
         user_id=row["user_id"], email=row["email"],
         organization_id=row["organization_id"],
         password_changed_at=row["password_changed_at"],
+        role=str(row["role"] or "user"),
         user_agent=user_agent, request_ip=request_ip,
     )
 

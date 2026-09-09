@@ -14,6 +14,7 @@ survive a restart and apply across replicas, and an in-process counter does neit
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ from ...core.logging import get_logger
 from ...db import get_session
 from ...engines.auth import accounts as acc
 from ...engines.auth import otp as otp_engine
+from ...engines.auth import roles as role_engine
 from ...engines.auth import secrets_store
 from ...engines.auth import tokens as token_engine
 from ..schemas.auth import (
@@ -33,7 +35,9 @@ from ..schemas.auth import (
     RegisterRequest,
     ResendCodeRequest,
     ResetPasswordRequest,
+    RoleChangeResponse,
     SessionResponse,
+    SetRoleRequest,
     SignInRequest,
     SignOutRequest,
     SimpleResponse,
@@ -367,3 +371,94 @@ async def auth_config(response: Response):
         "otp": otp_engine.describe_limits(),
         "secrets_configured": secrets_state,
     }
+
+
+# ── role gating, for this router and any other ───────────────────────────────────────
+
+
+def require_role(minimum: str):
+    """A dependency that admits callers at or above ``minimum``.
+
+    Ranked rather than enumerated: ``require_role(ADMIN)`` admits superadmins without
+    anyone having to remember to list them. A set-membership check is one forgotten
+    entry away from an endpoint a superadmin cannot reach, which is the kind of bug that
+    gets fixed by widening the set until the check means nothing.
+    """
+
+    async def _dep(
+        principal: token_engine.Principal = Depends(current_principal),
+    ) -> token_engine.Principal:
+        if not role_engine.at_least(principal.role, minimum):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "ok": False,
+                    "error": f"This needs {minimum} access. Yours is {principal.role}.",
+                    "reason": "forbidden",
+                    "required_role": minimum,
+                    "your_role": principal.role,
+                },
+            )
+        return principal
+
+    return _dep
+
+
+require_admin = require_role(role_engine.ADMIN)
+require_superadmin = require_role(role_engine.SUPERADMIN)
+
+
+@router.get("/roles")
+async def list_roles():
+    """The three roles, ranked, with what each one means.
+
+    Returned rather than hard-coded in the client, so a picker cannot drift from what the
+    server actually enforces.
+    """
+    return {"ok": True, "roles": role_engine.describe(),
+            "default": role_engine.DEFAULT_ROLE}
+
+
+@router.get("/users")
+async def list_users(
+    limit: int = 100,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+    principal: token_engine.Principal = Depends(require_admin),
+):
+    """The accounts this caller may see — their organisation, or the whole platform."""
+    try:
+        return await acc.list_accounts(session, actor=principal, limit=limit, offset=offset)
+    except acc.AuthError as exc:
+        raise _fail(exc) from None
+
+
+@router.post("/users/{user_id}/role", response_model=RoleChangeResponse)
+async def set_user_role(
+    user_id: str,
+    body: SetRoleRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    principal: token_engine.Principal = Depends(require_admin),
+):
+    """Change an account's platform role.
+
+    A superadmin may set any role. An admin may move accounts between admin and user
+    within their own organisation, and may neither appoint nor demote a superadmin —
+    otherwise the two roles are one role with two names, since any admin could award
+    themselves the other through a colleague. Nobody may change their own.
+    """
+    try:
+        target = UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"ok": False, "error": "user_id must be a UUID.", "reason": "user_id"},
+        ) from None
+    try:
+        return await acc.set_role(
+            session, actor=principal, target_user_id=target, new_role=body.role,
+            reason=body.reason, request_ip=_client_ip(request),
+        )
+    except acc.AuthError as exc:
+        raise _fail(exc) from None
