@@ -9,24 +9,66 @@ portfolio data in it. Apply them in order.
 | `02_reference_data.sql` | Regulation packs and the verification registers — 122 rows of reference data the compliance and benchmark features read | Recommended |
 | `03_bootstrap.sql` | One organisation row, so the first account can be created | Yes, but see below |
 
-```bash
-docker run -d --name hoistra-db \
-  -e POSTGRES_USER=cafm -e POSTGRES_PASSWORD=cafm -e POSTGRES_DB=hoistra \
-  -p 5432:5432 pgvector/pgvector:pg16
+## Load it
 
-for f in 01_schema.sql 02_reference_data.sql 03_bootstrap.sql; do
-  docker exec -i hoistra-db psql -U cafm -d hoistra < "db/$f"
-done
+Use the script for your shell. Both do the same three things and are the tested path.
+
+```cmd
+REM Windows — cmd.exe or PowerShell
+db\setup.cmd
+```
+
+```bash
+# macOS, Linux, WSL, Git Bash
+./db/setup.sh
 ```
 
 Then point the service at it:
 
-```bash
+```
 DB_URL=postgresql+asyncpg://cafm:cafm@127.0.0.1:5432/hoistra
 AUTH_JWT_SECRET=<32+ random characters>
 AUTH_OTP_PEPPER=<32+ different random characters>
 AUTH_DEFAULT_ORGANIZATION_ID=00000000-0000-0000-0000-000000000001
 ```
+
+### Or by hand, in any shell
+
+Three commands, no shell-specific syntax — the waiting and the looping happen *inside*
+the container, where bash exists:
+
+```
+docker run -d --name hoistra-db -e POSTGRES_USER=cafm -e POSTGRES_PASSWORD=cafm -e POSTGRES_DB=hoistra -p 5432:5432 pgvector/pgvector:pg16
+
+docker cp db hoistra-db:/db
+
+docker exec hoistra-db bash -c "until pg_isready -U cafm -d hoistra >/dev/null 2>&1; do sleep 1; done; for f in /db/0*.sql; do psql -q -U cafm -d hoistra -v ON_ERROR_STOP=1 -o /dev/null -f $f || exit 1; echo loaded $f; done"
+```
+
+Check it landed:
+
+```
+docker exec hoistra-db psql -U cafm -d hoistra -c "\dt plenum_cafm.*" | tail -3
+```
+
+### Two things that are not optional, and why
+
+**Wait for Postgres.** `docker run -d` returns as soon as the container is *created*, not
+when Postgres accepts connections — `initdb` takes about eight seconds on first boot. The
+obvious version of this,
+
+```bash
+docker run -d ... pgvector/pgvector:pg16
+for f in db/0*.sql; do docker exec -i hoistra-db psql -U cafm -d hoistra < "$f"; done
+```
+
+fails on all three files with `connection to server ... failed` and leaves you a database
+with **zero tables**. That is not a hypothetical; it is what happens.
+
+**`-v ON_ERROR_STOP=1`.** psql exits **0** even when statements fail. Without this flag,
+the run above — which loaded nothing at all — still reports success, and a half-loaded
+database is indistinguishable from a good one until something reads the table that did
+not get made.
 
 `pgvector/pgvector:pg16` rather than plain `postgres:16` because the schema uses the
 `vector` extension for document embeddings. Plain Postgres will fail on that one
@@ -53,7 +95,9 @@ benchmark column comes back empty. That is a real answer ("no reference table fo
 standard on the platform yet"), not a bug — but it is probably not what you want on a
 first run.
 
-Load it, or don't. Nothing else changes.
+Load it, or don't. Nothing else changes. `SKIP_REFERENCE=1 ./db/setup.sh` leaves it
+out; the `.cmd` script has no equivalent, so on Windows just delete the file from the
+`db` folder before running it, or truncate the two tables afterwards.
 
 ## What "empty" means
 
@@ -140,7 +184,8 @@ not. It now introspects the column rather than assuming either shape.
 
 ## Regenerating
 
-The generator lives outside the repo (it is a build tool, not a deliverable). To rebuild:
+`setup.sh` and `setup.cmd` only *load* these files; they do not regenerate them. The
+generator lives outside the repo (it is a build tool, not a deliverable). To rebuild:
 stand up an empty `pgvector/pgvector:pg16`, run the seven steps above in order, then
 
 ```bash

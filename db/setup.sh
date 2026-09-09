@@ -46,7 +46,7 @@ for f in "${FILES[@]}"; do
   echo "==> $f"
   # ON_ERROR_STOP so a broken file fails the script rather than leaving a half-built
   # database that looks fine until something reads the table that did not get made.
-  docker exec -i "$NAME" psql -q -U "$USER" -d "$DBN" -v ON_ERROR_STOP=1 < "$HERE/$f"
+  docker exec -i "$NAME" psql -q -U "$USER" -d "$DBN" -v ON_ERROR_STOP=1 -o /dev/null < "$HERE/$f"
 done
 
 echo
