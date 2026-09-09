@@ -28,7 +28,11 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 _MAX_MIGRATION_PASSES = 3
 
 #: A concurrent index build has to run outside a transaction, so it is routed differently.
-_CONCURRENT_INDEX = re.compile(r"CREATE\s+INDEX\s+CONCURRENTLY", re.IGNORECASE)
+# UNIQUE sits between CREATE and INDEX, so a pattern without it routes
+# "CREATE UNIQUE INDEX CONCURRENTLY" into a transaction, where Postgres refuses it
+# outright — the index is then reported as a skipped statement and never exists,
+# which for a uniqueness constraint means the thing it was guarding is unguarded.
+_CONCURRENT_INDEX = re.compile(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY", re.IGNORECASE)
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 _SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"

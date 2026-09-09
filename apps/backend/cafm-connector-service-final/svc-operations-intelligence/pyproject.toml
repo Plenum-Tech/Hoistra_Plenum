@@ -18,6 +18,12 @@ dependencies = [
     "azure-storage-blob>=12.20",
     "reportlab>=4.0",
     "anthropic>=0.40",
+    # Auth. bcrypt is used directly rather than through passlib: passlib 1.7.4 reads
+    # bcrypt.__about__ to detect its backend and bcrypt removed that in 4.1, so the pair
+    # logs a backend error and works by accident.
+    "bcrypt>=4.1",
+    "PyJWT>=2.8",
+    "email-validator>=2.0",
 ]
 
 [project.optional-dependencies]

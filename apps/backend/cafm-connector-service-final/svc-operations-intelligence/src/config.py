@@ -176,6 +176,99 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Authentication ──────────────────────────────────────────────────────────────
+    #
+    # Email is the account identifier: there is no separate username to lose or collide.
+    #
+    # Both secrets below are DELIBERATELY empty by default rather than carrying a
+    # development fallback. A shipped default signing key is the same key in every
+    # deployment that forgot to set it, and anyone holding it can mint a token for any
+    # account. Empty means the service refuses to start in production and generates an
+    # ephemeral per-process key in development — where restarting invalidates every
+    # token, which is annoying exactly often enough to be noticed and set properly.
+    auth_jwt_secret: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_JWT_SECRET", "JWT_SECRET", "auth_jwt_secret"),
+    )
+    auth_jwt_algorithm: str = Field(
+        "HS256",
+        validation_alias=AliasChoices("AUTH_JWT_ALGORITHM", "auth_jwt_algorithm"),
+    )
+    # Keyed hash for one-time codes. Separate from the signing key so that disclosure of
+    # one does not hand over the other, and so the signing key can be rotated (ending
+    # sessions) without invalidating every code in flight, or the reverse.
+    auth_otp_pepper: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_OTP_PEPPER", "auth_otp_pepper"),
+    )
+
+    # Short, because an access token cannot be revoked — it is only ever outlived.
+    auth_access_token_ttl_minutes: int = Field(
+        30,
+        validation_alias=AliasChoices("AUTH_ACCESS_TOKEN_TTL_MINUTES", "auth_access_token_ttl_minutes"),
+    )
+    # Long, because a refresh token IS a row and can be revoked the moment it needs to be.
+    auth_refresh_token_ttl_days: int = Field(
+        14,
+        validation_alias=AliasChoices("AUTH_REFRESH_TOKEN_TTL_DAYS", "auth_refresh_token_ttl_days"),
+    )
+
+    auth_otp_length: int = Field(
+        6,
+        validation_alias=AliasChoices("AUTH_OTP_LENGTH", "auth_otp_length"),
+    )
+    # Long enough to fetch an email, short enough that a code read over someone's shoulder
+    # is worthless by the time it is typed somewhere else.
+    auth_otp_ttl_minutes: int = Field(
+        10,
+        validation_alias=AliasChoices("AUTH_OTP_TTL_MINUTES", "auth_otp_ttl_minutes"),
+    )
+    # Six digits is a million combinations, which is a great many at one guess per request
+    # and none at all without a cap.
+    auth_otp_max_attempts: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_ATTEMPTS", "auth_otp_max_attempts"),
+    )
+    # Resending is also an attack: on the mailbox owner, whose inbox fills, and on the
+    # code space, since every send is a fresh million-to-one draw.
+    auth_otp_resend_cooldown_seconds: int = Field(
+        60,
+        validation_alias=AliasChoices("AUTH_OTP_RESEND_COOLDOWN_SECONDS", "auth_otp_resend_cooldown_seconds"),
+    )
+    auth_otp_max_per_hour: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_PER_HOUR", "auth_otp_max_per_hour"),
+    )
+
+    # NIST SP 800-63B: length is what matters; composition rules push people towards
+    # Passw0rd! and no further.
+    auth_password_min_length: int = Field(
+        12,
+        validation_alias=AliasChoices("AUTH_PASSWORD_MIN_LENGTH", "auth_password_min_length"),
+    )
+    auth_login_max_failures: int = Field(
+        8,
+        validation_alias=AliasChoices("AUTH_LOGIN_MAX_FAILURES", "auth_login_max_failures"),
+    )
+    auth_lockout_minutes: int = Field(
+        15,
+        validation_alias=AliasChoices("AUTH_LOCKOUT_MINUTES", "auth_lockout_minutes"),
+    )
+
+    # Which organisation a self-registered account joins. Left empty, registration uses
+    # the only organisation on the platform, and refuses to guess when there is more than
+    # one — putting a new account in the wrong tenant is not a mistake that announces
+    # itself.
+    auth_default_organization_id: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_DEFAULT_ORGANIZATION_ID", "auth_default_organization_id"),
+    )
+    # Open sign-up. Off means an account can only be created by an existing operator.
+    auth_allow_self_registration: bool = Field(
+        True,
+        validation_alias=AliasChoices("AUTH_ALLOW_SELF_REGISTRATION", "auth_allow_self_registration"),
+    )
+
     class Config:
         env_file = ".env"
         extra = "ignore"
