@@ -143,7 +143,13 @@ export function shapeLiveCompliance(input) {
       exp: fmtDate(r.expiry_date), days: days, risk: rk.risk, sev: rk.sev,
       auth: a.auth, authSev: a.authSev, ver: verOf(r), pos: runwayPos(d0),
       status: r.status || null, trade: r.trade_category || null,
-      verificationUrl: r.verification_url || null, draft: !!r.draft
+      verificationUrl: r.verification_url || null, draft: !!r.draft,
+      // Is there a source document behind this certificate, or only fields someone typed?
+      // A certificate with no document cannot be re-read, cannot be scored by forensics and
+      // cannot be produced to an insurer — so the register says which it is rather than
+      // showing both the same way.
+      doc: !!(r.document_id || r.graph_document_id
+              || (Array.isArray(r.linked_documents) && r.linked_documents.length))
     };
   });
 
@@ -151,22 +157,31 @@ export function shapeLiveCompliance(input) {
   // certificate names that coverage did not (a building in a country whose pack is not seeded).
   const bMap = {};
   const ensureB = (name, cc) => {
-    if (!bMap[name]) bMap[name] = { name: name, cc: cc, state: null, use: "—", cov: 0, on: 0, req: 0, certs: 0, high: 0, med: 0, cur: 0, blocked: 0, gaps: [], gapCodes: [], linked: false, siteId: null, _n: 0, _codes: {} };
+    if (!bMap[name]) bMap[name] = { name: name, cc: cc, state: null, use: "—", cov: 0, on: 0, req: 0, certs: 0, high: 0, med: 0, cur: 0, blocked: 0, noDoc: 0, gaps: [], gapCodes: [], linked: false, siteId: null, _n: 0, _codes: {} };
     return bMap[name];
   };
+  // The country comes from the ROW, not from which country's endpoint returned it. The
+  // outer key is only "whose coverage did we ask for"; stamping it onto every building in
+  // the reply is what put a Dubai hospital and a New York mall inside the United Kingdom
+  // scope chip, and from there into the UK's building count, certificate count and tiles.
   Object.keys(coverage).forEach((cc) => {
     ((coverage[cc] && coverage[cc].buildings) || []).forEach((b) => {
-      const x = ensureB(b.site_name || "No building on certificate", cc);
+      const x = ensureB(b.site_name || "No building on certificate", normCountry(b.country_code || cc));
       x.cov = Math.round(Number(b.coverage_pct || 0)); x.on = b.on_record || 0; x.req = b.required || 0;
       x.certs = b.certificates_total || 0; x.linked = !!b.linked; x.siteId = b.site_id || b.site_ref || null;
       x.gapCodes = b.gaps || []; x.gaps = (b.gaps || []).map(nameOf);
       x.use = b.linked ? "Site on record" : "Named on certificate only";
+      // Where it is, for the scope filter's region tier. The certificate's own state is
+      // the fallback below; the site row is the better source because it is filled in for
+      // every building rather than only the ones whose document happened to state one.
+      if (!x.state) x.state = b.state || b.region || null;
     });
   });
   rows.filter((c) => c.kind === "building").forEach((c) => {
     const x = ensureB(c.holder, c.cc);
     if (!x.state && c.state) x.state = c.state;
     x._n += 1; x._codes[c.code] = true;
+    if (!c.doc) x.noDoc += 1;
     if (c.days <= 30) x.high += 1; else if (c.days <= 90) x.med += 1; else x.cur += 1;
   });
   Object.keys(bMap).forEach((name) => {
@@ -188,12 +203,12 @@ export function shapeLiveCompliance(input) {
   // Vendors: coverage rows plus every vendor holding an accreditation certificate.
   const vMap = {};
   const ensureV = (name, cc) => {
-    if (!vMap[name]) vMap[name] = { name: name, cc: cc, id: null, cov: 0, on: 0, req: 0, block: "Clear", worst: "OK", sev: "ok", serves: [], gaps: [], certs: 0, spec: "—", _n: 0, _worst: Infinity };
+    if (!vMap[name]) vMap[name] = { name: name, cc: cc, id: null, cov: 0, on: 0, req: 0, block: "Clear", worst: "OK", sev: "ok", serves: [], gaps: [], certs: 0, noDoc: 0, spec: "—", _n: 0, _worst: Infinity };
     return vMap[name];
   };
   Object.keys(coverage).forEach((cc) => {
     ((coverage[cc] && coverage[cc].vendors) || []).forEach((v) => {
-      const x = ensureV(v.vendor_name || v.vendor_id, cc);
+      const x = ensureV(v.vendor_name || v.vendor_id, normCountry(v.country_code || cc));
       x.id = v.vendor_id || null; x.cov = Math.round(Number(v.coverage_pct || 0)); x.on = v.on_record || 0; x.req = v.required || 0;
       x.certs = v.certificates_total || 0; x.gaps = (v.gaps || []).map(nameOf);
       if (/blocked/i.test(String(v.block_state || ""))) x.block = "Blocked";
@@ -204,6 +219,7 @@ export function shapeLiveCompliance(input) {
     const x = ensureV(c.holder, c.cc);
     if (!x.id && c.vendorId) x.id = c.vendorId;
     x._n += 1;
+    if (!c.doc) x.noDoc += 1;
     if (x.spec === "—" && c.trade) x.spec = c.trade;
     x._worst = Math.min(x._worst, c.days);
     if (c.risk === "Blocked") x.block = "Blocked";

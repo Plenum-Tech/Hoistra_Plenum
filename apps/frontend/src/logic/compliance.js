@@ -161,7 +161,12 @@ export const complianceMethods = {
         else tags.push(tg("clear", "ok"));
         const active = s.ccFocus.kind === "building" && s.ccFocus.name === b.name;
         return {
-          name: b.name, meta: b.state + " · " + b.use + " · " + b.certs + " certificates",
+          name: b.name,
+          // The count of obligations with no document behind them sits next to the count
+          // of obligations. Coverage already says how many pack types are on file; this
+          // says how many of those are backed by something anyone can open.
+          meta: b.state + " · " + b.use + " · " + b.certs + " certificates"
+                + (b.noDoc ? " · " + b.noDoc + " with no document" : ""),
           gap: gapLine(b),
           gapShow: gapsOf(b).length ? "block" : "none",
           cov: b.cov + "%", frac: b.on + "/" + b.req, covColor: covColor(b.cov),
@@ -177,7 +182,11 @@ export const complianceMethods = {
         if (v.block === "Blocked") tags.push(tg("blocked", "risk"));
         const active = s.ccFocus.kind === "vendor" && s.ccFocus.name === v.name;
         return {
-          name: v.name, meta: v.spec + " · " + v.serves.filter((x) => names.indexOf(x) > -1).length + " of " + v.serves.length + " served in scope",
+          name: v.name,
+          meta: v.spec + " · " + v.serves.filter((x) => names.indexOf(x) > -1).length
+                + " of " + v.serves.length + " served in scope"
+                + (v.noDoc ? " · " + v.noDoc + " accreditation"
+                   + (v.noDoc === 1 ? "" : "s") + " with no document" : ""),
           gap: v.gaps.length ? "pending: " + v.gaps[0] + (v.gaps.length > 1 ? " +" + (v.gaps.length - 1) + " more" : "") : "",
           gapShow: v.gaps.length ? "block" : "none",
           cov: v.cov + "%", frac: v.on + "/" + v.req, covColor: covColor(v.cov),
@@ -274,7 +283,11 @@ export const complianceMethods = {
       return {
         nm: c.nm, holder: c.holder,
         kind: c.kind === "vendor" ? "vendor accreditation" : "building certificate",
-        meta: c.exp + " · " + relDays(c.days, true) + " · " + c.ver,
+        // "no document on file" sits in the same line as the expiry and the verification
+        // state, because it is the same kind of fact about the record: an obligation whose
+        // evidence nobody can open is not evidenced, however current the date looks.
+        meta: c.exp + " · " + relDays(c.days, true) + " · " + c.ver
+              + (c.doc ? "" : " · no document on file"),
         risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
         auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
         caret: open ? "ph-caret-up" : "ph-caret-down",
@@ -344,7 +357,8 @@ export const complianceMethods = {
         return {
           nm: c.nm, exp: c.exp, rel: relDays(c.days, false),
           risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
-          auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg, ver: c.ver,
+          auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
+          ver: c.doc ? c.ver : c.ver + " · no document",
           actLabel: acts[0],
           actBorder: urgent ? "var(--color-accent)" : "var(--color-divider)",
           actFg: urgent ? "var(--color-accent)" : "var(--color-neutral-400)",
