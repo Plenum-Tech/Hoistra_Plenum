@@ -63,25 +63,49 @@ class TestIsValid:
 
 
 class TestKeyShape:
-    def test_unknown_column_types_are_refused_not_guessed(self):
-        # A type nobody has thought about is a deployment nobody has thought about.
-        # Treating it as text quietly is how a mismatch becomes a data problem.
-        assert keys._checked("jsonb", "users.id") == "uuid"
+    def test_a_known_type_passes_through(self):
         assert keys._checked("integer", "users.id") == "integer"
+        assert keys._checked("uuid", "users.id") == "uuid"
 
-    def test_a_failed_lookup_falls_back_to_the_orm_shape(self):
-        """The engine must still answer when information_schema cannot be read.
+    def test_an_unknown_column_type_is_refused_not_guessed(self):
+        """A type nobody has thought about is a deployment nobody has thought about.
 
-        A fresh database created by create_all is UUID-keyed, so that is the safe guess —
-        and it is a guess made loudly, with a warning, not silently.
+        Quietly treating it as text is how a mismatch stops being a startup error and
+        becomes a data problem.
+        """
+        with pytest.raises(keys.KeyShapeUnavailable) as exc:
+            keys._checked("jsonb", "users.id")
+        assert "jsonb" in str(exc.value)
+
+    def test_a_failed_lookup_raises_rather_than_guessing(self):
+        """The old behaviour was to fall back to the ORM's uuid.
+
+        On a UUID deployment that guess is right and nothing happens; on an integer one it
+        is wrong in the direction that breaks every auth route — at request time, one 500
+        at a time, with the reason in a startup warning nobody is reading by then. It is
+        resolved at boot now, and a service that cannot resolve it does not start.
         """
         class _Boom:
             async def execute(self, *a, **k):
                 raise RuntimeError("no database here")
 
-        shape = asyncio.run(keys.key_shape(_Boom()))
-        assert shape.users == "uuid"
-        assert shape.organizations is None
+        with pytest.raises(keys.KeyShapeUnavailable):
+            asyncio.run(keys.resolve(_Boom()))
+
+    def test_a_users_table_without_an_id_is_refused(self):
+        class _NoUsers:
+            async def execute(self, *a, **k):
+                class _R:
+                    def mappings(self):
+                        return self
+
+                    def all(self):
+                        return []
+                return _R()
+
+        with pytest.raises(keys.KeyShapeUnavailable) as exc:
+            asyncio.run(keys.resolve(_NoUsers()))
+        assert "users" in str(exc.value)
 
     def test_the_shape_is_read_once(self):
         calls = {"n": 0}
@@ -91,9 +115,13 @@ class TestKeyShape:
                 calls["n"] += 1
                 raise RuntimeError("counted")
 
+        # The first call raises (nothing to read); the point is that a resolved shape is
+        # not re-read. Prime the cache the way startup does, then confirm nothing queries.
+        keys._CACHE = keys.KeyShape(users="integer", organizations="integer",
+                                    users_id_self_assigning=True)
         asyncio.run(keys.key_shape(_Once()))
         asyncio.run(keys.key_shape(_Once()))
-        assert calls["n"] == 1, "the key shape is a deployment property, not a per-request one"
+        assert calls["n"] == 0, "the key shape is a deployment property, not a per-request one"
 
 
 class TestSelfAssigningIds:

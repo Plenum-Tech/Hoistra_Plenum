@@ -39,9 +39,18 @@ _NUMERIC = frozenset({"integer", "bigint", "smallint"})
 _TEXTUAL = frozenset({"uuid", "character varying", "varchar", "text", "character"})
 ALLOWED_KEY_TYPES = _NUMERIC | _TEXTUAL
 
-#: Fallback when the table cannot be read at all. The ORM's shape, because on a fresh
-#: database created by ``create_all`` that is what it will be.
-_DEFAULT = "uuid"
+#: What the connector ORM declares. Used only when this module is asked to ASSUME, which
+#: it does exactly once: in resolve_or_die's error message, to say what it expected.
+_ORM_SHAPE = "uuid"
+
+
+class KeyShapeUnavailable(RuntimeError):
+    """The key type could not be read, so nothing may be bound against it.
+
+    Guessing is what this replaces. A wrong guess is not a degraded mode: binding a uuid
+    into an integer column fails at the driver, on every auth route, one request at a
+    time, with the actual reason sitting in a startup warning nobody is looking at.
+    """
 
 
 @dataclass(frozen=True)
@@ -68,14 +77,20 @@ _CACHE: KeyShape | None = None
 
 
 async def key_shape(session: AsyncSession, *, refresh: bool = False) -> KeyShape:
-    """The key shape, read once per process. A deployment property, not a request one."""
+    """The key shape. Resolved at startup; this returns what was found.
+
+    Raises KeyShapeUnavailable if it never was — a request has no business discovering the
+    schema, and no business proceeding on a guess about it.
+    """
     global _CACHE
     if _CACHE is not None and not refresh:
         return _CACHE
+    return await resolve(session)
 
-    users_type = _DEFAULT
-    orgs_type: str | None = None
-    self_assigning = True
+
+async def resolve(session: AsyncSession) -> KeyShape:
+    """Read the key types. Raises rather than returning something plausible."""
+    global _CACHE
     try:
         rows = (
             await session.execute(
@@ -88,24 +103,31 @@ async def key_shape(session: AsyncSession, *, refresh: bool = False) -> KeyShape
                 )
             )
         ).mappings().all()
-        by_table = {str(r["table_name"]): r for r in rows}
-        if "users" in by_table:
-            users_type = _checked(by_table["users"]["data_type"], "users.id")
-            self_assigning = bool(
-                by_table["users"]["column_default"]
-                or str(by_table["users"]["is_identity"]).upper() == "YES"
-            )
-        if "organizations" in by_table:
-            orgs_type = _checked(
-                by_table["organizations"]["data_type"], "organizations.id"
-            )
-    except Exception as exc:  # noqa: BLE001 — a failed lookup must not break a request
-        log.warning("auth.key_shape.lookup_failed", error=str(exc)[:200])
+    except Exception as exc:  # noqa: BLE001 — re-raised as our own, with the reason
+        raise KeyShapeUnavailable(
+            f"could not read plenum_cafm.users.id from information_schema: "
+            f"{str(exc)[:200]}"
+        ) from exc
 
+    by_table = {str(r["table_name"]): r for r in rows}
+    if "users" not in by_table:
+        raise KeyShapeUnavailable(
+            "plenum_cafm.users has no id column, or the table does not exist. Every "
+            "account, session and one-time code is keyed on it."
+        )
+
+    users_type = _checked(by_table["users"]["data_type"], "users.id")
+    orgs_type = (
+        _checked(by_table["organizations"]["data_type"], "organizations.id")
+        if "organizations" in by_table else None
+    )
     _CACHE = KeyShape(
         users=users_type,
         organizations=orgs_type,
-        users_id_self_assigning=self_assigning,
+        users_id_self_assigning=bool(
+            by_table["users"]["column_default"]
+            or str(by_table["users"]["is_identity"]).upper() == "YES"
+        ),
     )
     log.info(
         "auth.key_shape",
@@ -119,8 +141,11 @@ async def key_shape(session: AsyncSession, *, refresh: bool = False) -> KeyShape
 def _checked(data_type: Any, what: str) -> str:
     kind = str(data_type or "").strip().lower()
     if kind not in ALLOWED_KEY_TYPES:
-        log.warning("auth.key_shape.unknown_type", column=what, data_type=kind)
-        return _DEFAULT
+        raise KeyShapeUnavailable(
+            f"plenum_cafm.{what} is {kind or 'of no readable type'}, which this service "
+            f"does not know how to bind. Expected one of "
+            f"{', '.join(sorted(ALLOWED_KEY_TYPES))} (the ORM declares {_ORM_SHAPE})."
+        )
     return kind
 
 
