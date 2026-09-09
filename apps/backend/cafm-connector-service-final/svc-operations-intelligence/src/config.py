@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     )
     auto_migrate_on_startup: bool = True
 
+    #: Migration files permitted to remain unapplied without stopping the service.
+    #:
+    #: Comma-separated filenames. A migration for a table another service owns will never
+    #: apply here, and that is not a fault — but it has to be SAID, per file, so that an
+    #: allowance is a deliberate statement someone can read and challenge. A blanket
+    #: "ignore migration errors" boolean would be used once in a hurry and never removed,
+    #: which is the behaviour this replaces.
+    migrations_allowed_to_fail: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "MIGRATIONS_ALLOWED_TO_FAIL", "migrations_allowed_to_fail"),
+    )
+
     public_base_url: str = Field(
         "http://localhost:8009",
         validation_alias=AliasChoices("PUBLIC_BASE_URL", "public_base_url"),

@@ -55,7 +55,7 @@ async def init_db() -> None:
     Every migration is written idempotent, which is what makes a second attempt safe.
     """
     log.info("db.init", status="starting")
-    retry: list[Path] = []
+    retry: dict[Path, str] = {}
     if settings.auto_migrate_on_startup:
         # Swept before the run, so an index left unfinished by a previous concurrent build
         # is rebuilt on this one rather than skipped forever by IF NOT EXISTS.
@@ -77,20 +77,52 @@ async def init_db() -> None:
         passes += 1
         log.info("db.init.migration_retry", pass_no=passes,
                  files=[f.name for f in retry])
-        still_failing = await apply_sql_migrations(only=retry)
+        still_failing = await apply_sql_migrations(only=list(retry))
         if len(still_failing) >= len(retry):
             retry = still_failing
             break          # no progress: another pass will not help
         retry = still_failing
     if retry:
-        # Not necessarily broken: a migration for a table another service owns will never
-        # apply here. Named so it is a known absence rather than a silent one.
-        log.warning(
-            "db.init.migration_unapplied",
-            files=[f.name for f in retry],
-            note="still failing after the ORM tables were created and retries converged",
-        )
+        # Converged and still failing. Some of these are genuinely fine — a migration for a
+        # table another service owns will never apply here — but that has to be declared
+        # per file, not assumed for all of them.
+        allowed = {
+            n.strip()
+            for n in str(settings.migrations_allowed_to_fail or "").split(",")
+            if n.strip()
+        }
+        permitted = {f: e for f, e in retry.items() if f.name in allowed}
+        blocking = {f: e for f, e in retry.items() if f.name not in allowed}
+        if permitted:
+            log.warning(
+                "db.init.migration_unapplied_permitted",
+                files=[f.name for f in permitted],
+                note="listed in MIGRATIONS_ALLOWED_TO_FAIL",
+            )
+        if blocking:
+            detail = "; ".join(f"{f.name}: {e}" for f, e in blocking.items())
+            log.error(
+                "db.init.migration_failed",
+                files=[f.name for f in blocking],
+                errors={f.name: e for f, e in blocking.items()},
+                note="refusing to start — the schema is half-applied",
+            )
+            raise MigrationError(
+                f"{len(blocking)} migration(s) could not be applied after "
+                f"{passes} retry pass(es): {detail}. Fix the migration, or name the file "
+                f"in MIGRATIONS_ALLOWED_TO_FAIL if it belongs to another service."
+            )
     log.info("db.init", status="complete")
+
+
+class MigrationError(RuntimeError):
+    """A migration could not be applied and the service must not serve traffic.
+
+    Raised from init_db after the retry passes have converged. Starting anyway is how a
+    half-applied schema reaches production looking healthy: the statements that succeeded
+    stay, the ones that failed are a warning in a log nobody reads during a deploy, and
+    the first request to touch a missing column returns a 500 that looks like a code fault.
+    """
 
 
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z0-9_]*\$")
@@ -196,18 +228,21 @@ async def _drop_invalid_indexes() -> list[str]:
     return dropped
 
 
-async def apply_sql_migrations(only: list[Path] | None = None) -> list[Path]:
+async def apply_sql_migrations(
+    only: list[Path] | None = None,
+) -> dict[Path, str]:
     """Apply the idempotent *.sql migrations in filename order.
 
-    Returns the files that had at least one statement fail, so the caller can retry them
-    once the ORM tables exist. ``only`` restricts the run to a previous pass's failures.
+    Returns {file: last error} for every file that had at least one statement fail, so the
+    caller can retry them once the ORM tables exist — and, when they still fail, say why
+    rather than just which. ``only`` restricts the run to a previous pass's failures.
     """
     if not _MIGRATIONS_DIR.exists():
         log.warning("db.migration.dir_missing", path=str(_MIGRATIONS_DIR))
         return []
     files = list(only) if only is not None else sorted(_MIGRATIONS_DIR.glob("*.sql"))
     total = 0
-    failed: list[Path] = []
+    failed: dict[Path, str] = {}
     for mig in files:
         statements = _split_sql(mig.read_text(encoding="utf-8"))
         for stmt in statements:
@@ -237,8 +272,11 @@ async def apply_sql_migrations(only: list[Path] | None = None) -> list[Path]:
                         await conn.exec_driver_sql(stmt)
                 total += 1
             except Exception as exc:  # noqa: BLE001
-                if mig not in failed:
-                    failed.append(mig)
+                # Tolerated HERE on purpose: within a pass, a statement can fail only
+                # because the thing it needs has not been created yet, and the caller
+                # retries. What must not be tolerated is a failure that survives the
+                # retries — that is handled in init_db.
+                failed[mig] = str(exc)[:300]
                 log.warning(
                     "db.migration.stmt_skipped",
                     file=mig.name,
