@@ -338,7 +338,13 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
         # regulation pack — that comes from the location or not at all, because scoring a
         # building against a standard inferred from its estate's address is a guess with a
         # legal claim attached.
-        for c in ("country_code", "region", "city", "postcode"):
+        # metering_route / metering_granularity are site columns and only ever existed
+        # there — `wanted` above asks plenum_cafm.buildings for them, which has neither, so
+        # they were silently dropped and every building reported "no meters on record".
+        # Not a display nicety: record completeness counts metering, so nine buildings with
+        # a half-hourly data collector on file were each capped at 78%.
+        for c in ("country_code", "region", "city", "postcode",
+                  "metering_route", "metering_granularity"):
             if c in shape["sites"]["columns"]:
                 cols += [f"s.{c}::text AS site_{c}"]
         joins += f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"

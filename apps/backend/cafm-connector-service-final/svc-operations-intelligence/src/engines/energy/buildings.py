@@ -460,8 +460,11 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
         "floors": b.get("floors") if b.get("floors") is not None else b.get("floors_recorded"),
         # The canonical area is square feet; the row model works in m².
         "gfa_sqm": sqft_to_sqm(b.get("gross_area_sqft")) or b.get("gfa_sqm_recorded"),
-        "metering_route": b.get("metering_route"),
-        "metering_granularity": b.get("metering_granularity"),
+        # How the reading arrives. Recorded on the site, not the building — the same
+        # fallback shape as country/region above.
+        "metering_route": b.get("metering_route") or b.get("site_metering_route"),
+        "metering_granularity": (b.get("metering_granularity")
+                                 or b.get("site_metering_granularity")),
         "benchmark_standard": b.get("pack_standard") or b.get("benchmark_standard"),
         "benchmark_standing": b.get("pack_standing") or b.get("benchmark_standing"),
         "benchmark_standing_note": b.get("pack_standing_note") or b.get("benchmark_standing_note"),
