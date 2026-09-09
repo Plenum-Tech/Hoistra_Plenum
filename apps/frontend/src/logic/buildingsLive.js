@@ -71,6 +71,13 @@ const sourceTone = (key) => {
   return !w ? "var(--color-neutral-500)" : SOFT_SOURCES.has(w) ? "var(--st-warn)" : "var(--color-neutral-500)";
 };
 
+// Which table the rows actually came from. The endpoint reports it; before this the
+// screen asserted "sites" whichever it was.
+const ROOT_TABLE = (state) => ((state.bldMeta || {}).root === "buildings" ? "buildings" : "sites");
+const ROOT_NOUN = (state, n) => (ROOT_TABLE(state) === "buildings"
+  ? (n === 1 ? "building" : "buildings")
+  : (n === 1 ? "site" : "sites"));
+
 const titleCase = (s) => String(s || "").replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const fmtInt = (n) => Math.round(n).toLocaleString("en-GB");
 
@@ -160,7 +167,7 @@ export const buildingsLiveMethods = {
       const res = await energyApi.listBuildings();
       const shaped = shapeLiveBuildings(res);
       this._bldAttempts = 0;
-      this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit } });
+      this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit, root: res.root } });
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
       this.bldLoadShape();
       this.glLoadTables();
@@ -291,7 +298,11 @@ export const buildingsLiveMethods = {
       buildingRows: rows.map((b) => this.bldRow(b)),
       bldLive: !!s.bldLive,
       bldCount: rows.length,
-      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + (rows.length === 1 ? " site" : " sites") + (s.bldError ? " · refresh failed" : "")
+      // The register is rooted on buildings where the graph has them and falls back to
+      // sites where it does not, and the endpoint says which in `root`. Naming the wrong
+      // one is not cosmetic: on a fresh database the header read "1 site" while
+      // plenum_cafm.sites held nothing, which sends whoever is checking to an empty table.
+      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + " " + ROOT_NOUN(s, rows.length) + (s.bldError ? " · refresh failed" : "")
         : s.bldLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
       bldSourceDot: s.bldLive ? (s.bldError ? "var(--st-warn)" : "var(--st-ok)") : s.bldLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
@@ -302,7 +313,9 @@ export const buildingsLiveMethods = {
         : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
         : s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
         : "Waiting for svc-operations-intelligence.",
-      bldKicker: "Every row is a plenum_cafm.sites record, keyed on site_id, read against its country's regulation pack",
+      bldKicker: "Every row is a plenum_cafm." + ROOT_TABLE(s) + " record, keyed on "
+        + (ROOT_TABLE(s) === "buildings" ? "building_id" : "site_id")
+        + ", read against its country's regulation pack",
 
       // Five figures, all read. `buildings` and `bound documents` come from the rows already
       // loaded; the schema three come from the database itself.
