@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from ...engines.auth import keys
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -448,13 +450,19 @@ async def set_user_role(
     otherwise the two roles are one role with two names, since any admin could award
     themselves the other through a colleague. Nobody may change their own.
     """
-    try:
-        target = UUID(user_id)
-    except ValueError:
+    # The engine reads the key type; this route has to as well. Parsing the path segment
+    # as a UUID here meant that on an integer-keyed deployment every role change was
+    # refused with "user_id must be a UUID" — a 400 that is both unarguable and wrong,
+    # from the one endpoint an administrator needs in order to appoint anybody.
+    shape = await keys.key_shape(session)
+    if not keys.is_valid(user_id, shape.users):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"ok": False, "error": "user_id must be a UUID.", "reason": "user_id"},
-        ) from None
+            detail={"ok": False,
+                    "error": f"user_id must be {keys.describe(shape.users)}.",
+                    "reason": "user_id"},
+        )
+    target = keys.coerce(user_id, shape.users)
     try:
         return await acc.set_role(
             session, actor=principal, target_user_id=target, new_role=body.role,
