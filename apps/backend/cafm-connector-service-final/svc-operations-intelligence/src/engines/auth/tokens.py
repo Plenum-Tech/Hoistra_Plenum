@@ -272,21 +272,42 @@ async def open_session(
     )
 
 
+#: How long the digest a session held before its last rotation stays acceptable.
+#:
+#: Two tabs restored together both present the same stored refresh token, microseconds
+#: apart. Without this the second arrival is indistinguishable from a stolen token being
+#: replayed, and the response to a stolen token is to end every session — so restoring a
+#: browser signed the person out. Long enough to cover a restore and one network retry,
+#: short enough that a token copied off a device is worthless by the time it is used.
+ROTATION_GRACE_SECONDS = 30
+
+
 async def rotate_session(
     session: AsyncSession, *, refresh_token: str,
     user_agent: str | None = None, request_ip: str | None = None,
 ) -> TokenPair:
-    """Exchange a refresh token for a new pair, revoking the one presented."""
+    """Exchange a refresh token for a new pair, keeping the session it belongs to.
+
+    The session row outlives the token: rotation replaces ``refresh_token_hash`` in place,
+    remembers the digest it replaced, and does not change the session id.
+
+    That the id survives is the point. ``principal_from_token`` refuses any access token
+    whose ``sid`` has been revoked, so ending the row on every rotation invalidated the
+    access token each *other* tab was still holding — one tab refreshing signed the person
+    out everywhere on its next bearer-checked call.
+    """
     digest = hash_refresh_token(refresh_token)
     row = (
         await session.execute(
             text(
-                """SELECT s.id, s.user_id, s.expires_at, s.revoked_at,
+                """SELECT s.id, s.user_id, s.expires_at, s.revoked_at, s.rotated_at,
+                          (s.refresh_token_hash = :h) AS is_current,
                           u.email, u.organization_id, u.status, u.password_changed_at,
                           u.role
                    FROM plenum_cafm.auth_sessions s
                    JOIN plenum_cafm.users u ON u.id = s.user_id
                    WHERE s.refresh_token_hash = :h
+                      OR s.prev_refresh_token_hash = :h
                    FOR UPDATE OF s"""
             ),
             {"h": digest},
@@ -297,15 +318,36 @@ async def rotate_session(
         raise InvalidToken("invalid", "That session is not valid. Sign in again.")
 
     if row["revoked_at"] is not None:
-        # A revoked token being presented means the holder is using a copy that was
-        # already exchanged — replay, or a stolen backup. The safe reading is that the
-        # account is compromised, so every session it has goes.
+        # A token for a session that was deliberately ended — replay, or a stolen backup.
+        # The safe reading is that the account is compromised, so every session goes.
         log.warning("auth.session.replay", user_id=str(row["user_id"]),
-                    session_id=str(row["id"]))
+                    session_id=str(row["id"]), matched="revoked_session")
         await revoke_all_sessions(session, user_id=row["user_id"], reason="refresh_replay")
         raise InvalidToken("replayed",
                            "That session was already used. Every session has been ended "
                            "as a precaution — sign in again.")
+
+    if not row["is_current"]:
+        # The digest matched what this session held BEFORE its last rotation. Inside the
+        # grace window that is the second tab of a browser restore, exchanging the same
+        # stored token a moment later. Outside it, it is a token that has been sitting
+        # somewhere since it was superseded, which is what theft looks like.
+        rotated_at = row["rotated_at"]
+        if rotated_at is not None and rotated_at.tzinfo is None:
+            rotated_at = rotated_at.replace(tzinfo=timezone.utc)
+        age = (_now() - rotated_at).total_seconds() if rotated_at else None
+        if age is None or age > ROTATION_GRACE_SECONDS:
+            log.warning("auth.session.replay", user_id=str(row["user_id"]),
+                        session_id=str(row["id"]), matched="stale_previous_token",
+                        age_seconds=age)
+            await revoke_all_sessions(
+                session, user_id=row["user_id"], reason="refresh_replay")
+            raise InvalidToken(
+                "replayed",
+                "That session was already used. Every session has been ended "
+                "as a precaution — sign in again.")
+        log.info("auth.session.rotation_grace", user_id=str(row["user_id"]),
+                 session_id=str(row["id"]), age_seconds=round(age, 3))
 
     expires_at = row["expires_at"]
     if expires_at.tzinfo is None:
@@ -316,21 +358,33 @@ async def rotate_session(
     if str(row["status"]).lower() != "active":
         raise InvalidToken("disabled", "That account is not active.")
 
+    # Rotate in place. The digest being replaced is kept, so the tab that presented it a
+    # moment ago is recognised rather than accused; the session id — and therefore every
+    # access token already issued against it — survives untouched.
+    refresh = secrets.token_urlsafe(32)
     await session.execute(
         text(
             """UPDATE plenum_cafm.auth_sessions
-               SET revoked_at = now(), revoked_reason = 'rotated', last_used_at = now()
+               SET prev_refresh_token_hash = refresh_token_hash,
+                   refresh_token_hash      = :new,
+                   rotated_at              = now(),
+                   last_used_at            = now()
                WHERE id = :i"""
         ),
-        {"i": row["id"]},
+        {"new": hash_refresh_token(refresh), "i": row["id"]},
     )
-    return await open_session(
-        session,
+
+    access, expires_in = issue_access_token(
         user_id=row["user_id"], email=row["email"],
         organization_id=row["organization_id"],
-        password_changed_at=row["password_changed_at"],
+        session_id=row["id"], password_changed_at=row["password_changed_at"],
         role=str(row["role"] or "user"),
-        user_agent=user_agent, request_ip=request_ip,
+    )
+    log.info("auth.session.rotated", user_id=str(row["user_id"]),
+             session_id=str(row["id"]))
+    return TokenPair(
+        access_token=access, refresh_token=refresh, token_type="Bearer",
+        expires_in=expires_in, session_id=row["id"],
     )
 
 
@@ -341,7 +395,8 @@ async def revoke_session(session: AsyncSession, *, refresh_token: str,
         text(
             """UPDATE plenum_cafm.auth_sessions
                SET revoked_at = now(), revoked_reason = :r
-               WHERE refresh_token_hash = :h AND revoked_at IS NULL"""
+               WHERE (refresh_token_hash = :h OR prev_refresh_token_hash = :h)
+                 AND revoked_at IS NULL"""
         ),
         {"h": hash_refresh_token(refresh_token), "r": reason},
     )
