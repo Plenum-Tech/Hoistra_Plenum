@@ -257,7 +257,8 @@ async def _next_building_code(session: AsyncSession) -> str:
 
 
 async def _resolve_location(
-    session: AsyncSession, *, country_code: str, region: str, city: str | None
+    session: AsyncSession, *, country_code: str, region: str, city: str | None,
+    organization_id: str | None = None,
 ) -> dict[str, Any]:
     """The location this building sits in, created if this market has none yet.
 
@@ -288,14 +289,46 @@ async def _resolve_location(
     if existing:
         return {"location_id": existing[0], "created": False, "pack_id": pack_id}
 
+    # organization_id is written when the column demands it. plenum_cafm.locations is
+    # declared twice — cafm-connector-service's ORM makes it NOT NULL, this service's
+    # udr_building_graph.sql does not — and whichever ran first decides. Omitting it
+    # worked on a database built from the migrations alone and failed with a NOT NULL
+    # violation on one built the documented way, which is the shape a real deployment has.
+    #
+    # Introspected rather than assumed, so this is right on both, and stays right if the
+    # two definitions are ever reconciled.
+    org_col = (
+        await session.execute(
+            text("""SELECT is_nullable FROM information_schema.columns
+                    WHERE table_schema = 'plenum_cafm' AND table_name = 'locations'
+                      AND column_name = 'organization_id'""")
+        )
+    ).first()
+    want_org = org_col is not None
+
+    if want_org and not organization_id:
+        # The column exists and the caller gave us nothing. Rather than fail, take the
+        # organisation the platform already has — the same rule registration follows.
+        row = (
+            await session.execute(
+                text("SELECT id::text FROM plenum_cafm.organizations ORDER BY created_at LIMIT 1")
+            )
+        ).first()
+        organization_id = row[0] if row else None
+
     loc_id = str(uuid4())
+    cols = "id, name, type, country_code, region, pack_id"
+    vals = "CAST(:id AS UUID), :nm, 'region', :cc, :rg, CAST(:pk AS UUID)"
+    params: dict[str, Any] = {
+        "id": loc_id, "nm": city or region, "cc": country_code, "rg": region, "pk": pack_id,
+    }
+    if want_org:
+        cols += ", organization_id"
+        vals += ", CAST(:org AS UUID)"
+        params["org"] = organization_id
+
     await session.execute(
-        text(
-            """INSERT INTO plenum_cafm.locations
-                   (id, name, type, country_code, region, pack_id)
-               VALUES (CAST(:id AS UUID), :nm, 'region', :cc, :rg, CAST(:pk AS UUID))"""
-        ),
-        {"id": loc_id, "nm": city or region, "cc": country_code, "rg": region, "pk": pack_id},
+        text(f"INSERT INTO plenum_cafm.locations ({cols}) VALUES ({vals})"), params,
     )
     return {"location_id": loc_id, "created": True, "pack_id": pack_id}
 

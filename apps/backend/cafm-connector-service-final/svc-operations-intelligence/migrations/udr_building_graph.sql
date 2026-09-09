@@ -331,8 +331,15 @@ BEGIN
             LEFT JOIN plenum_cafm.documents d ON d.document_id = p.document_id
         $v$;
     END IF;
-EXCEPTION WHEN others THEN
-    RAISE NOTICE 'contracts view not created: %', SQLERRM;
+-- No exception handler here on purpose. This block used to swallow its own failure
+-- into a NOTICE, which made the failure invisible to the migration runner: the file
+-- looked applied, so the converging retry — the mechanism that exists precisely to
+-- resolve "this object is not built yet" — never retried it, and the contracts view was
+-- simply missing from every database built from scratch. Nothing reported it.
+--
+-- Letting the error out costs one extra pass and gets the view. The guard above already
+-- handles the one case that is not an error: a real contracts base table, which a
+-- deployment may legitimately have.
 END
 $contracts_view$;
 
@@ -350,6 +357,19 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.work_orders (
     closed_at     TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The CREATE above is IF NOT EXISTS, and on a real deployment the table already exists:
+-- cafm-connector-service declares work_orders too, with fifty columns of its own, and
+-- whichever definition runs first takes the name. When the other one wins, every column
+-- named above is silently absent — which is how the index below came to reference a
+-- contract_id that nothing had added, and fail on every fresh database ever built.
+--
+-- So the columns this migration needs are added rather than assumed. All nullable, so
+-- they cost an existing table nothing.
+ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS building_id UUID;
+ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS contract_id UUID;
+ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS raised_at TIMESTAMPTZ;
+ALTER TABLE plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_building ON plenum_cafm.work_orders (building_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_asset ON plenum_cafm.work_orders (asset_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_work_orders_contract ON plenum_cafm.work_orders (contract_id);
@@ -401,8 +421,15 @@ BEGIN
             ) l ON TRUE
         $v$;
     END IF;
-EXCEPTION WHEN others THEN
-    RAISE NOTICE 'invoices view not created: %', SQLERRM;
+-- No exception handler here on purpose. This block used to swallow its own failure
+-- into a NOTICE, which made the failure invisible to the migration runner: the file
+-- looked applied, so the converging retry — the mechanism that exists precisely to
+-- resolve "this object is not built yet" — never retried it, and the invoices view was
+-- simply missing from every database built from scratch. Nothing reported it.
+--
+-- Letting the error out costs one extra pass and gets the view. The guard above already
+-- handles the one case that is not an error: a real invoices base table, which a
+-- deployment may legitimately have.
 END
 $invoices_view$;
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -313,27 +313,51 @@ async def register(
         role = role_engine.SUPERADMIN
         log.warning("auth.bootstrap_superadmin", email_domain=address.split("@")[-1])
 
+    # The id is generated here rather than left to the column. plenum_cafm.users is
+    # declared in two places: this service's migration gives id a DEFAULT of
+    # gen_random_uuid(), and cafm-connector-service's ORM declares it with a PYTHON-side
+    # default — so SQLAlchemy's create_all emits the column with no DEFAULT at all.
+    # Whichever ran first decides, and on every database where the ORM won, this INSERT
+    # violated NOT NULL and registration was impossible. Supplying the value works on
+    # both shapes and depends on neither.
+    new_id = uuid4()
     try:
         user_id = (
             await session.execute(
                 text(
                     """INSERT INTO plenum_cafm.users
-                           (organization_id, full_name, email, password_hash, phone,
+                           (id, organization_id, full_name, email, password_hash, phone,
                             status, email_verified, password_changed_at, role)
-                       VALUES (:o, :n, :e, :h, :p, 'pending_verification', false, now(), :r)
+                       VALUES (:i, :o, :n, :e, :h, :p, 'pending_verification', false,
+                               now(), :r)
                        RETURNING id"""
                 ),
-                {"o": str(org), "n": name, "e": address,
+                {"i": str(new_id), "o": str(org), "n": name, "e": address,
                  "h": hash_password(password), "p": (phone or "").strip() or None,
                  "r": role},
             )
         ).scalar_one()
-    except IntegrityError:
-        # Two registrations for the same address at once. The loser reports what the
-        # winner would have: the address now has an account, which is what was asked for.
+    except IntegrityError as exc:
         await session.rollback()
-        log.info("auth.register.race", email_domain=address.split("@")[-1])
-        return same_answer
+        # This branch exists for ONE case: two registrations for the same address at
+        # once, where the loser should report what the winner would have. It used to
+        # catch every IntegrityError and report success for all of them — so a NOT NULL
+        # violation on id returned 202 "check your email" for an account that was never
+        # created, and nothing anywhere said otherwise.
+        #
+        # So the race is now proved rather than assumed: if the address really does have
+        # an account, somebody else made it and the generic answer is correct. If it does
+        # not, the insert failed for another reason and must not be reported as success.
+        if await find_by_email(session, address) is not None:
+            log.info("auth.register.race", email_domain=address.split("@")[-1])
+            return same_answer
+        log.error("auth.register.insert_failed", error=str(exc.orig)[:200]
+                  if getattr(exc, "orig", None) else str(exc)[:200])
+        raise AuthError(
+            "The account could not be created. This is a fault on our side, not "
+            "something you did — please tell an administrator.",
+            status=500, reason="insert_failed",
+        ) from None
 
     if role != role_engine.DEFAULT_ROLE:
         await role_engine.record_change(

@@ -53,6 +53,20 @@ BEGIN
 END
 $auth_org_fk$;
 
+-- A server-side default for the primary key.
+--
+-- This migration's CREATE TABLE above gives id a DEFAULT. cafm-connector-service's ORM
+-- declares the same column with a PYTHON-side default, so SQLAlchemy's create_all emits
+-- it with none — and on every database where the ORM created the table first, any INSERT
+-- that does not name id violates NOT NULL. That is not hypothetical: it is what happens
+-- on a database built the documented way, and it made registration impossible while the
+-- API still answered 202.
+--
+-- The auth engine now supplies the id itself, so this is belt and braces — but any other
+-- writer of raw SQL against this table deserves the column to behave the way its own
+-- declaration says it does.
+ALTER TABLE plenum_cafm.users ALTER COLUMN id SET DEFAULT gen_random_uuid();
+
 -- ── what sign-in needs that the owning ORM does not carry ───────────────────────────
 
 -- When the password last changed. Every access token issued before this instant is
