@@ -48,6 +48,11 @@ export const energyApi = {
   // nobody stores.
   graphTables: () => apiFetch(B, '/api/energy/graph/tables'),
 
+  // The unified approvals rail — every Phase 2 source unless source_feature narrows it.
+  // Lives under /api/approvals rather than /api/energy, but on the same service.
+  approvals: (query) =>
+    apiFetch(B, '/api/approvals', { query: withOrg(Object.assign({ limit: 50 }, query || {})) }),
+
   tm46: () => apiFetch(B, '/api/energy/tm46'),
   savedSpaceSummary: () => apiFetch(B, '/api/energy/saved-space/summary', { query: withOrg() })
 };

@@ -52,6 +52,9 @@ export default function Home({ vals }) {
                   {"saved to date"}
                 </span>
               </div>
+              <div style={{ display: vals.pnlNoteShow, fontSize: "9.5px", lineHeight: "1.45", color: "var(--color-neutral-500)", marginTop: "8px", maxWidth: "30ch" }}>
+                {vals.pnlNote}
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginTop: "10px" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 44px 40px", gap: "7px", alignItems: "baseline" }}>
                   <span style={{ fontSize: "9px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
@@ -128,19 +131,19 @@ export default function Home({ vals }) {
             </h1>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 10px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
               <span style={{ fontWeight: "400" }}>
-                {"24 buildings hoisted"}
+                {vals.heroCount}{" "}{vals.heroCountLabel}
+              </span>
+              <span style={{ opacity: "0.4", display: vals.heroShowArea }}>
+                {"·"}
+              </span>
+              <span style={{ fontWeight: "400", display: vals.heroShowArea }}>
+                {vals.heroArea}
               </span>
               <span style={{ opacity: "0.4" }}>
                 {"·"}
               </span>
               <span style={{ fontWeight: "400" }}>
-                {"1.84m ft²"}
-              </span>
-              <span style={{ opacity: "0.4" }}>
-                {"·"}
-              </span>
-              <span style={{ fontWeight: "400" }}>
-                {"UK, US, Singapore, UAE"}
+                {vals.heroMarkets}
               </span>
             </div>
           </div>

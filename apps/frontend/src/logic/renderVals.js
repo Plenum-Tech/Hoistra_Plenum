@@ -769,6 +769,11 @@ export const renderValsMethods = {
       ...this.invVals(s),
       ...this.enBuildingVals(s),
 
+      // Spread AFTER the literals above, so the home page's live figures replace the
+      // constants rather than sitting beside them. Everything homeVals returns comes off
+      // the register this controller has already loaded, except the approvals rail.
+      ...this.homeVals(),
+
       /* Query-first: every non-admin report opens with the ask bar above the
          analysis, scoped to the page you are on. Admin pages (Buildings admin,
          Integrations) are configuration surfaces and do not carry it. */

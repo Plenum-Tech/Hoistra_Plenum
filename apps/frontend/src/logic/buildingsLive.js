@@ -171,6 +171,7 @@ export const buildingsLiveMethods = {
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
       this.bldLoadShape();
       this.glLoadTables();
+      this.homeLoad();
     } catch (e) {
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;
