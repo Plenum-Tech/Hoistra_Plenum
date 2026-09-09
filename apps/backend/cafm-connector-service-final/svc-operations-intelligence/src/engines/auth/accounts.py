@@ -96,7 +96,7 @@ def _aware(value: datetime | None) -> datetime | None:
 
 _SELECT = """SELECT id, email, full_name, organization_id, status, email_verified,
                     password_hash, password_changed_at, failed_login_count, locked_until,
-                    role
+                    role, last_login_at
              FROM plenum_cafm.users"""
 
 
@@ -465,9 +465,10 @@ async def sign_in(
     if locked_until and locked_until > _now():
         wait = int((locked_until - _now()).total_seconds())
         await session.commit()
+        minutes = max(1, -(-wait // 60))   # rounded UP: 899s is 15 minutes, not 14
         raise AuthError(
-            f"Too many failed attempts. Try again in {max(1, wait // 60)} minute(s), or "
-            "reset your password.",
+            f"Too many failed attempts. Try again in {minutes} minute"
+            f"{'s' if minutes != 1 else ''}, or reset your password.",
             status=429, reason="locked", extra={"retry_after_seconds": wait},
         )
 
@@ -766,6 +767,17 @@ def public_user(row: Any) -> dict[str, Any]:
         "role_label": role_engine.LABELS.get(
             str(row["role"] or role_engine.DEFAULT_ROLE), ""
         ),
+        # The PREVIOUS sign-in, not this one — read before last_login_at is stamped, so a
+        # client can say "last seen Tuesday" on the screen it draws straight after. Null
+        # on a first sign-in, which is the truth rather than a placeholder.
+        #
+        # It is filled here because PublicUser declares the field: a response model that
+        # names a key its handler never sets returns null for ever, and a client binds to
+        # it and shows nothing with no way to tell that from an account never used.
+        "last_login_at": (
+            row["last_login_at"].isoformat()
+            if "last_login_at" in row.keys() and row["last_login_at"] else None
+        ),
     }
 
 
@@ -922,9 +934,7 @@ async def list_accounts(
         "ok": True,
         "scope": "organisation" if scoped else "platform",
         "total": int(total or 0),
-        "users": [
-            dict(public_user(r), last_login_at=(r["last_login_at"].isoformat()
-                                                if r["last_login_at"] else None))
-            for r in rows
-        ],
+        # public_user already reads last_login_at from the row, so it is not layered on
+        # a second time here — two sources for one field is how they end up disagreeing.
+        "users": [public_user(r) for r in rows],
     }
