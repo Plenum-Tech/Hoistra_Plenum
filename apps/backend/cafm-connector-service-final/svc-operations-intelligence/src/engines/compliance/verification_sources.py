@@ -110,7 +110,11 @@ def normalize_country(country_code: str | None) -> str:
         return "UK"
     if c in {"USA", "UNITED STATES", "UNITED STATES OF AMERICA"}:
         return "US"
-    if c in {"ARE", "UNITED ARAB EMIRATES"}:
+    # "AE" is the ISO-3166-1 alpha-2 code for the Emirates and the code plenum_cafm.sites
+    # stores. Without it the same country arrived under two names — "AE" matched no pack,
+    # so a certificate stored that way was scored against nothing and reported under a
+    # country that has no register.
+    if c in {"AE", "ARE", "UNITED ARAB EMIRATES"}:
         return "UAE"
     return c
 

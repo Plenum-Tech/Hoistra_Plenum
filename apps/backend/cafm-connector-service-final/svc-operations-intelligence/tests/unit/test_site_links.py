@@ -210,14 +210,21 @@ def test_building_coverage_reports_a_row_per_building(monkeypatch):
         SimpleNamespace(certificate_type_code=c, trade_category=None)
         for c in ("EPC", "EICR", "FRA", "GAS_SAFETY")
     ]
+    # Every certificate names its country. Coverage scores against ONE country's pack and
+    # counts only that country's certificates, so a fixture without country_code is not a
+    # neutral simplification — it is the case where nothing is counted at all.
     certs = [
-        {"building_name": "Mill House", "certificate_type_code": "EPC", "status": "Current"},
-        {"building_name": "Mill House", "certificate_type_code": "EICR", "status": "Current"},
-        {"building_name": "The Mill-House", "certificate_type_code": "FRA", "status": "Lapsed"},
-        {"building_name": "Riverside Depot", "certificate_type_code": "EPC", "status": "Current"},
+        {"building_name": "Mill House", "certificate_type_code": "EPC", "status": "Current",
+         "country_code": "UK"},
+        {"building_name": "Mill House", "certificate_type_code": "EICR", "status": "Current",
+         "country_code": "GB"},  # normalised to UK
+        {"building_name": "The Mill-House", "certificate_type_code": "FRA", "status": "Lapsed",
+         "country_code": "UK"},
+        {"building_name": "Riverside Depot", "certificate_type_code": "EPC", "status": "Current",
+         "country_code": "UK"},
         {"site_ref": "SITE-9", "building_name": "Linked Site", "certificate_type_code": "EPC",
-         "status": "Current"},
-        {"certificate_type_code": "EPC", "status": "Current"},
+         "status": "Current", "country_code": "UK"},
+        {"certificate_type_code": "EPC", "status": "Current", "country_code": "UK"},
     ]
 
     async def _pack_types(session, **kwargs):
@@ -229,9 +236,13 @@ def test_building_coverage_reports_a_row_per_building(monkeypatch):
     async def _labels(session, keys):
         return {"SITE-9": "Riverside Wharf"}
 
+    async def _regions(session, keys):
+        return {}
+
     monkeypatch.setattr(coverage_svc, "list_pack_types", _pack_types)
     monkeypatch.setattr(coverage_svc.cert_svc, "list_certificates", _list)
     monkeypatch.setattr(coverage_svc, "_site_labels", _labels)
+    monkeypatch.setattr(coverage_svc, "_site_regions", _regions)
 
     out = asyncio.run(coverage_svc.building_coverage(_NoDbSession()))
     by_name = {b["site_name"]: b for b in out["buildings"]}
@@ -267,3 +278,67 @@ def test_building_coverage_reports_a_row_per_building(monkeypatch):
     assert all(b["required_basis"] == "country_pack" for b in out["buildings"])
     # The average is now across buildings, not one portfolio-wide figure.
     assert out["average_coverage_pct"] == 37.5
+    # Every certificate in the fixture named a country in scope, so none were set aside.
+    assert out["certificates_without_country"] == 0
+
+
+def test_building_coverage_counts_only_the_country_it_was_asked_for(monkeypatch):
+    """A UK request must not score a Dubai building against the UK pack.
+
+    Coverage took every building certificate in the register whatever country it named,
+    measured it against whichever pack was asked for, and stamped the REQUESTED country on
+    the row. One portfolio of UK buildings hid it completely. The first non-UK building made
+    a Dubai hospital appear inside the United Kingdom scope, at 0%, with none of the UK's 27
+    types on file — because it holds Dubai's.
+
+    A certificate naming no country is counted in neither, and reported separately: it
+    cannot be scored against a pack it never named, and defaulting it to UK is the same bug
+    in smaller print.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from src.engines.compliance import coverage as coverage_svc
+
+    async def _pack_types(session, *, country_code="UK", **kwargs):
+        codes = {"UK": ("EPC", "EICR"), "UAE": ("FIRE_SAFETY_CERT", "COOLING_TOWER")}
+        return [
+            SimpleNamespace(certificate_type_code=c, trade_category=None)
+            for c in codes.get(country_code, ())
+        ]
+
+    certs = [
+        {"building_name": "Town Hall", "certificate_type_code": "EPC",
+         "status": "Current", "country_code": "UK"},
+        {"building_name": "Marina Heights", "certificate_type_code": "FIRE_SAFETY_CERT",
+         "status": "Current", "country_code": "UAE"},
+        {"building_name": "Marina Heights", "certificate_type_code": "COOLING_TOWER",
+         "status": "Current", "country_code": "AE"},  # normalised to UAE
+        {"building_name": "Nowhere House", "certificate_type_code": "EPC",
+         "status": "Current"},  # no country: belongs to no pack
+    ]
+
+    async def _list(session, **kwargs):
+        return certs
+
+    async def _none(session, keys):
+        return {}
+
+    monkeypatch.setattr(coverage_svc, "list_pack_types", _pack_types)
+    monkeypatch.setattr(coverage_svc.cert_svc, "list_certificates", _list)
+    monkeypatch.setattr(coverage_svc, "_site_labels", _none)
+    monkeypatch.setattr(coverage_svc, "_site_regions", _none)
+
+    uk = asyncio.run(coverage_svc.building_coverage(_NoDbSession(), country_code="UK"))
+    assert [b["site_name"] for b in uk["buildings"]] == ["Town Hall"]
+    assert uk["buildings"][0]["country_code"] == "UK"
+    assert uk["buildings"][0]["coverage_pct"] == 50.0  # EPC of (EPC, EICR)
+    assert uk["certificates_without_country"] == 1
+
+    ae = asyncio.run(coverage_svc.building_coverage(_NoDbSession(), country_code="AE"))
+    # The request said "AE"; the packs are keyed "UAE", and the reply says so.
+    assert ae["country_code"] == "UAE"
+    assert [b["site_name"] for b in ae["buildings"]] == ["Marina Heights"]
+    assert ae["buildings"][0]["country_code"] == "UAE"
+    assert ae["buildings"][0]["certificates_total"] == 2
+    assert ae["buildings"][0]["coverage_pct"] == 100.0
