@@ -17,51 +17,22 @@
 -- smaller than the cost of a cross-organisation identity living in an
 -- organisation-scoped table.
 
+-- No NOT NULL and no default: a job title is not required, and 'user' is not one.
+-- VARCHAR(20) was sized for the three platform roles; a job title needs the room.
 ALTER TABLE plenum_cafm.users
-    ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';
+    ADD COLUMN IF NOT EXISTS role VARCHAR(100);
 
--- The set is closed in the database, not only in Python. A typo in a script — 'Admin',
--- 'superuser', 'fm' — would otherwise become an account with a role no code checks for,
--- which fails closed for that person and silently, and looks like a bug in the app.
-DO $auth_role_check$
-DECLARE offending bigint;
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_users_role') THEN
-        RETURN;
-    END IF;
+-- The closed set lives on platform_role now, added by auth_platform_role.sql with its
+-- own CHECK. It is NOT enforced here any more, and not merely guarded: this file sorts
+-- after that one, so a conditional re-add put the constraint straight back on every
+-- startup and users.role — the job title — could not hold 'HVAC Specialist' on any
+-- database where nothing happened to violate it yet.
+--
+-- role is CAFM's column and holds what a person does. This file creates it if a
+-- deployment somehow lacks it, and has no opinion about its contents.
 
-    -- The constraint is only applied where the column already means what it is about to
-    -- promise. In CAFM deployments that predate this engine, users.role holds JOB TITLES
-    -- — 'HVAC Specialist', 'Maintenance Planner' — and adding the check there fails
-    -- against live staff rows.
-    --
-    -- Refusing to add it is not the same as fixing that. The column still means two
-    -- things, and every job title still ranks 0 in roles.py, which is a real and separate
-    -- defect: it needs a platform_role column of its own. What this avoids is a migration
-    -- that can never succeed on those databases and, now that failures stop the service,
-    -- would keep them from starting at all.
-    SELECT count(*) INTO offending
-      FROM plenum_cafm.users
-     WHERE role IS NOT NULL AND role NOT IN ('superadmin', 'admin', 'user');
-
-    IF offending > 0 THEN
-        RAISE WARNING
-            'ck_users_role not applied: % row(s) in plenum_cafm.users hold a role outside '
-            '(superadmin, admin, user). This column is being used for job titles; the '
-            'platform role needs a column of its own.', offending;
-        RETURN;
-    END IF;
-
-    ALTER TABLE plenum_cafm.users
-        ADD CONSTRAINT ck_users_role
-        CHECK (role IN ('superadmin', 'admin', 'user'));
-END
-$auth_role_check$;
-
--- Listing the operators of an organisation, and answering "is there a superadmin yet"
--- — which is what the bootstrap check asks on every registration.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_users_role
-    ON plenum_cafm.users (role);
+-- The index that answered "who are the admins" moved with the question: see
+-- ix_users_platform_role in auth_platform_role.sql.
 
 -- ── who changed whose role ──────────────────────────────────────────────────────────
 --

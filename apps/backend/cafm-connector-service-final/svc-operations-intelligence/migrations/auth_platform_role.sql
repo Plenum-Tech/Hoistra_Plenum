@@ -54,6 +54,28 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_users_platform_role
 -- have had the constraint applied when the column was empty.
 ALTER TABLE plenum_cafm.users DROP CONSTRAINT IF EXISTS ck_users_role;
 
+-- And give it room. An earlier version of auth_user_roles.sql declared role VARCHAR(20),
+-- sized for 'superadmin'. Job titles are longer than that: 'Maintenance Supervisor' is 22.
+DO $widen_role$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'plenum_cafm' AND table_name = 'users'
+                  AND column_name = 'role'
+                  AND character_maximum_length IS NOT NULL
+                  AND character_maximum_length < 100) THEN
+        ALTER TABLE plenum_cafm.users ALTER COLUMN role TYPE VARCHAR(100);
+    END IF;
+    -- NOT NULL DEFAULT 'user' was also a platform-role idea. A person with no job title
+    -- recorded has no job title recorded; 'user' is not one.
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'plenum_cafm' AND table_name = 'users'
+                  AND column_name = 'role' AND is_nullable = 'NO') THEN
+        ALTER TABLE plenum_cafm.users ALTER COLUMN role DROP NOT NULL;
+        ALTER TABLE plenum_cafm.users ALTER COLUMN role DROP DEFAULT;
+    END IF;
+END
+$widen_role$;
+
 COMMENT ON COLUMN plenum_cafm.users.platform_role IS
     'What this account may do on the platform: superadmin | admin | user. Distinct from '
     'users.role, which is the job title and is CAFM''s field, not this service''s.';
