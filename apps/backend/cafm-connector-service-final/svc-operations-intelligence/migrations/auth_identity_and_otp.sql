@@ -47,8 +47,12 @@ BEGIN
     THEN
         ALTER TABLE plenum_cafm.users
             ADD CONSTRAINT fk_users_organization
+            -- RESTRICT, not CASCADE. Cascading here means deleting an organisation
+            -- row silently deletes every person in it, with no confirmation anywhere in
+            -- that sentence. auth_platform_role.sql repairs databases that already took
+            -- the cascade; this is so a fresh one never gets it.
             FOREIGN KEY (organization_id) REFERENCES plenum_cafm.organizations (id)
-            ON DELETE CASCADE;
+            ON DELETE RESTRICT;
     END IF;
 END
 $auth_org_fk$;

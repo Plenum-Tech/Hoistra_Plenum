@@ -147,7 +147,7 @@ async def superadmin_exists(session: AsyncSession) -> bool:
     """Whether the platform has appointed anyone yet — the bootstrap question."""
     found = (
         await session.execute(
-            text("SELECT 1 FROM plenum_cafm.users WHERE role = :r LIMIT 1"),
+            text("SELECT 1 FROM plenum_cafm.users WHERE platform_role = :r LIMIT 1"),
             {"r": SUPERADMIN},
         )
     ).first()

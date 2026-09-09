@@ -189,7 +189,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         await session.execute(
             text(
                 """SELECT u.id, u.email, u.organization_id, u.status,
-                          u.password_changed_at, u.role,
+                          u.password_changed_at, u.platform_role AS role,
                           s.revoked_at, s.expires_at, s.revoked_reason
                    FROM plenum_cafm.users u
                    LEFT JOIN plenum_cafm.auth_sessions s
@@ -315,7 +315,7 @@ async def rotate_session(
                 """SELECT s.id, s.user_id, s.expires_at, s.revoked_at, s.rotated_at,
                           (s.refresh_token_hash = :h) AS is_current,
                           u.email, u.organization_id, u.status, u.password_changed_at,
-                          u.role
+                          u.platform_role AS role
                    FROM plenum_cafm.auth_sessions s
                    JOIN plenum_cafm.users u ON u.id = s.user_id
                    WHERE s.refresh_token_hash = :h

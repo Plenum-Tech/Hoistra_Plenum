@@ -96,9 +96,13 @@ def _aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+# platform_role AS role: within this engine "role" has only ever meant the platform
+# role. users.role is CAFM's column and holds the JOB TITLE — 'HVAC Specialist',
+# 'Maintenance Planner' — which is a different question about the same person and was
+# never this service's to read, let alone to constrain.
 _SELECT = """SELECT id, email, full_name, organization_id, status, email_verified,
                     password_hash, password_changed_at, failed_login_count, locked_until,
-                    role, last_login_at
+                    platform_role AS role, last_login_at
              FROM plenum_cafm.users"""
 
 
@@ -370,14 +374,14 @@ async def register(
                     # true here was read from information_schema at startup.
                     """INSERT INTO plenum_cafm.users
                            (organization_id, full_name, email, password_hash, phone,
-                            status, email_verified, password_changed_at, role)
+                            status, email_verified, password_changed_at, platform_role)
                        VALUES (:o, :n, :e, :h, :p, 'pending_verification', false,
                                now(), :r)
                        RETURNING id"""
                     if _shape.users_id_self_assigning else
                     """INSERT INTO plenum_cafm.users
                            (id, organization_id, full_name, email, password_hash, phone,
-                            status, email_verified, password_changed_at, role)
+                            status, email_verified, password_changed_at, platform_role)
                        VALUES (:i, :o, :n, :e, :h, :p, 'pending_verification', false,
                                now(), :r)
                        RETURNING id"""
@@ -942,7 +946,8 @@ async def set_role(
     if current == role_engine.SUPERADMIN and wanted != role_engine.SUPERADMIN:
         remaining = (
             await session.execute(
-                text("SELECT count(*) FROM plenum_cafm.users WHERE role = :r AND id <> :i"),
+                text("SELECT count(*) FROM plenum_cafm.users "
+                     "WHERE platform_role = :r AND id <> :i"),
                 {"r": role_engine.SUPERADMIN,
                  "i": await keys.user_key(session, row["id"])},
             )
@@ -955,7 +960,8 @@ async def set_role(
             )
 
     await session.execute(
-        text("UPDATE plenum_cafm.users SET role = :r, updated_at = now() WHERE id = :i"),
+        text("UPDATE plenum_cafm.users SET platform_role = :r, updated_at = now() "
+             "WHERE id = :i"),
         {"r": wanted, "i": await keys.user_key(session, row["id"])},
     )
     await role_engine.record_change(
@@ -1018,7 +1024,7 @@ async def list_accounts(
         await session.execute(
             text(
                 f"""SELECT id, email, full_name, organization_id, status, email_verified,
-                           role, last_login_at, created_at
+                           platform_role AS role, last_login_at, created_at
                     FROM plenum_cafm.users {where}
                     ORDER BY created_at DESC LIMIT :lim OFFSET :off"""
             ),
