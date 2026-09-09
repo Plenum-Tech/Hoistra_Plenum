@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Jy6KNguMQmLjMUDkAYrtw4sEfyJdLBjngqIaEcH0YpbdEayH4UZllm615C8Cu1e
+\restrict eUKPSOtkR2DBucnM5YPlx65DVTk1CrlfEi36rm4oYLtc5PRcwlBHhqtodQwuJf3
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg12+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg12+2)
@@ -33,10 +33,24 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
 
 --
+-- Name: EXTENSION pg_trgm; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pg_trgm IS 'text similarity measurement and index searching based on trigrams';
+
+
+--
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
 --
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
@@ -47,10 +61,24 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
 
 
 --
+-- Name: EXTENSION "uuid-ossp"; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION "uuid-ossp" IS 'generate universally unique identifiers (UUIDs)';
+
+
+--
 -- Name: vector; Type: EXTENSION; Schema: -; Owner: -
 --
 
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION vector; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
 
 
 --
@@ -71,6 +99,28 @@ CREATE TYPE plenum_cafm.building_primary_use AS ENUM (
     'Leisure',
     'Other'
 );
+
+
+--
+-- Name: _auth_users_key_type(); Type: FUNCTION; Schema: plenum_cafm; Owner: -
+--
+
+CREATE FUNCTION plenum_cafm._auth_users_key_type() RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+DECLARE t text;
+BEGIN
+    SELECT data_type INTO t FROM information_schema.columns
+     WHERE table_schema = 'plenum_cafm' AND table_name = 'users' AND column_name = 'id';
+    IF t IS NULL THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id not found - the auth tables reference it';
+    END IF;
+    IF t NOT IN ('uuid','integer','bigint','smallint','text','character varying') THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id has unsupported type %', t;
+    END IF;
+    RETURN t;
+END;
+$$;
 
 
 --
@@ -486,8 +536,24 @@ CREATE TABLE plenum_cafm.auth_sessions (
     revoked_reason text,
     user_agent text,
     request_ip text,
-    last_used_at timestamp with time zone
+    last_used_at timestamp with time zone,
+    prev_refresh_token_hash text,
+    rotated_at timestamp with time zone
 );
+
+
+--
+-- Name: COLUMN auth_sessions.prev_refresh_token_hash; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.auth_sessions.prev_refresh_token_hash IS 'The digest this session held before its last rotation. Accepted for a few seconds after the rotation so that two tabs exchanging the same stored token concurrently are not read as a replay; rejected as theft after that.';
+
+
+--
+-- Name: COLUMN auth_sessions.rotated_at; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.auth_sessions.rotated_at IS 'When refresh_token_hash was last replaced. The grace window for prev_refresh_token_hash is measured from here.';
 
 
 --
@@ -566,6 +632,20 @@ CREATE TABLE plenum_cafm.buildings (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     raw_metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
+
+--
+-- Name: TABLE buildings; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON TABLE plenum_cafm.buildings IS 'The key. Everything resolves to it — up through sites to the portfolio, and up through locations to the regulation pack it is scored against.';
+
+
+--
+-- Name: COLUMN buildings.site_id; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.buildings.site_id IS 'Text, not uuid: carries whichever key plenum_cafm.sites uses in this deployment.';
 
 
 --
@@ -663,6 +743,20 @@ CREATE TABLE plenum_cafm.compliance_certificates (
     state character varying(64),
     site_ref character varying(120)
 );
+
+
+--
+-- Name: COLUMN compliance_certificates.region; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.compliance_certificates.region IS 'City or county within state — London, Norfolk, Greater Manchester. The level below state in the reporting hierarchy. NULL where the location is unknown.';
+
+
+--
+-- Name: COLUMN compliance_certificates.state; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.compliance_certificates.state IS 'First-level division within country_code — UK nation, US state, UAE emirate. Used to group compliance reporting below country level. NULL where the source document did not state a location.';
 
 
 --
@@ -816,6 +910,13 @@ CREATE TABLE plenum_cafm.contract_sla_parameters (
     signed_date date,
     labour_hour_rate numeric(12,2)
 );
+
+
+--
+-- Name: COLUMN contract_sla_parameters.signed_date; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.contract_sla_parameters.signed_date IS 'Date the contract was signed. Used to select governing contract when multiple confirmed rows exist for the same vendor (most recently signed wins, per FR-035).';
 
 
 --
@@ -1045,6 +1146,13 @@ CREATE TABLE plenum_cafm.energy_meters (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     raw_metadata jsonb DEFAULT '{}'::jsonb NOT NULL
 );
+
+
+--
+-- Name: COLUMN energy_meters.raw_metadata; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.energy_meters.raw_metadata IS 'Per-meter metadata. simulate=true marks a meter fed by the demo simulator rather than a real DCC feed.';
 
 
 --
@@ -1599,6 +1707,13 @@ CREATE TABLE plenum_cafm.ops_audit_log (
 
 
 --
+-- Name: TABLE ops_audit_log; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON TABLE plenum_cafm.ops_audit_log IS 'Phase 2 immutable ops audit — INSERT only. UPDATE/DELETE blocked by trigger.';
+
+
+--
 -- Name: ops_email_log; Type: TABLE; Schema: plenum_cafm; Owner: -
 --
 
@@ -2002,6 +2117,13 @@ CREATE TABLE plenum_cafm.regulation_packs (
 
 
 --
+-- Name: COLUMN regulation_packs.required_types; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.regulation_packs.required_types IS 'Certificate types the pack requires — the denominator for coverage.';
+
+
+--
 -- Name: resource_skills; Type: TABLE; Schema: plenum_cafm; Owner: -
 --
 
@@ -2243,6 +2365,27 @@ CREATE TABLE plenum_cafm.sites (
     portfolio_id uuid,
     address text
 );
+
+
+--
+-- Name: COLUMN sites.benchmark_standing; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.sites.benchmark_standing IS 'Legal standing of benchmark_standard: enacted | guidance | mandatory_submission | none.';
+
+
+--
+-- Name: COLUMN sites.eui_kwh_per_m2; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.sites.eui_kwh_per_m2 IS 'Recorded annual EUI for a site without a meter feed. Computed EUI from eui_snapshots takes precedence.';
+
+
+--
+-- Name: COLUMN sites.hoist_score; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.sites.hoist_score IS 'Hoist Score 0-100: how completely the building is hoisted onto the graph.';
 
 
 --
@@ -2565,7 +2708,7 @@ CREATE TABLE plenum_cafm.users (
     hourly_rate numeric(10,2),
     is_group boolean DEFAULT false NOT NULL,
     status character varying(50) DEFAULT 'active'::character varying NOT NULL,
-    role character varying(20) DEFAULT 'user'::character varying NOT NULL,
+    role character varying(100),
     last_login_at timestamp without time zone,
     email_verified boolean DEFAULT false NOT NULL,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
@@ -2574,8 +2717,23 @@ CREATE TABLE plenum_cafm.users (
     failed_login_count integer DEFAULT 0 NOT NULL,
     locked_until timestamp with time zone,
     email_verified_at timestamp with time zone,
-    CONSTRAINT ck_users_role CHECK (((role)::text = ANY ((ARRAY['superadmin'::character varying, 'admin'::character varying, 'user'::character varying])::text[])))
+    platform_role character varying(20) DEFAULT 'user'::character varying NOT NULL,
+    CONSTRAINT ck_users_platform_role CHECK (((platform_role)::text = ANY ((ARRAY['superadmin'::character varying, 'admin'::character varying, 'user'::character varying])::text[])))
 );
+
+
+--
+-- Name: COLUMN users.status; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.users.status IS 'active | pending_verification | invited | suspended. "invited" means an operator created the account and its password_hash is the unusable sentinel — the person sets a real one through the OTP reset flow.';
+
+
+--
+-- Name: COLUMN users.platform_role; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.users.platform_role IS 'What this account may do on the platform: superadmin | admin | user. Distinct from users.role, which is the job title and is CAFM''s field, not this service''s.';
 
 
 --
@@ -2896,6 +3054,20 @@ CREATE TABLE plenum_cafm.work_orders (
     closed_at timestamp with time zone,
     site_id uuid
 );
+
+
+--
+-- Name: COLUMN work_orders.conflict_flag; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.work_orders.conflict_flag IS 'Set to TRUE when a work order is re-ingested with values that differ from the stored record. WO is excluded from scoring until PM resolves the conflict (FR-039).';
+
+
+--
+-- Name: COLUMN work_orders.conflict_payload; Type: COMMENT; Schema: plenum_cafm; Owner: -
+--
+
+COMMENT ON COLUMN plenum_cafm.work_orders.conflict_payload IS 'JSONB snapshot of the incoming values that conflicted with the stored record, preserved for PM review (FR-039).';
 
 
 --
@@ -4633,6 +4805,13 @@ CREATE INDEX ix_auth_role_changes_user ON plenum_cafm.auth_role_changes USING bt
 
 
 --
+-- Name: ix_auth_sessions_prev_refresh; Type: INDEX; Schema: plenum_cafm; Owner: -
+--
+
+CREATE INDEX ix_auth_sessions_prev_refresh ON plenum_cafm.auth_sessions USING btree (prev_refresh_token_hash) WHERE (prev_refresh_token_hash IS NOT NULL);
+
+
+--
 -- Name: ix_auth_sessions_user; Type: INDEX; Schema: plenum_cafm; Owner: -
 --
 
@@ -5417,10 +5596,10 @@ CREATE INDEX ix_user_certifications_user_id ON plenum_cafm.user_certifications U
 
 
 --
--- Name: ix_users_role; Type: INDEX; Schema: plenum_cafm; Owner: -
+-- Name: ix_users_platform_role; Type: INDEX; Schema: plenum_cafm; Owner: -
 --
 
-CREATE INDEX ix_users_role ON plenum_cafm.users USING btree (role);
+CREATE INDEX ix_users_platform_role ON plenum_cafm.users USING btree (platform_role);
 
 
 --
@@ -5962,7 +6141,7 @@ ALTER TABLE ONLY plenum_cafm.udr_mapping_decision
 --
 
 ALTER TABLE ONLY plenum_cafm.users
-    ADD CONSTRAINT fk_users_organization FOREIGN KEY (organization_id) REFERENCES plenum_cafm.organizations(id) ON DELETE CASCADE;
+    ADD CONSTRAINT fk_users_organization FOREIGN KEY (organization_id) REFERENCES plenum_cafm.organizations(id) ON DELETE RESTRICT;
 
 
 --
@@ -7073,5 +7252,5 @@ ALTER TABLE ONLY plenum_cafm.work_orders
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Jy6KNguMQmLjMUDkAYrtw4sEfyJdLBjngqIaEcH0YpbdEayH4UZllm615C8Cu1e
+\unrestrict eUKPSOtkR2DBucnM5YPlx65DVTk1CrlfEi36rm4oYLtc5PRcwlBHhqtodQwuJf3
 

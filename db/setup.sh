@@ -5,6 +5,7 @@
 #   ./db/setup.sh                 container hoistra-db on 5432
 #   PORT=5433 NAME=my-db ./db/setup.sh
 #   SKIP_REFERENCE=1 ./db/setup.sh    schema + bootstrap only, no regulation packs
+#   DEMO=1 ./db/setup.sh              plus a demo portfolio to test against
 set -euo pipefail
 
 NAME="${NAME:-hoistra-db}"
@@ -41,6 +42,10 @@ done
 FILES=(01_schema.sql)
 [ "${SKIP_REFERENCE:-0}" = "1" ] || FILES+=(02_reference_data.sql)
 FILES+=(03_bootstrap.sql)
+# The demo portfolio is opt-IN. An empty database is the right default: it is what you
+# want when the next thing to happen is a real import, and demo rows mixed into real ones
+# are hard to tell apart afterwards and harder to remove.
+[ "${DEMO:-0}" = "1" ] && FILES+=(04_demo_data.sql)
 
 for f in "${FILES[@]}"; do
   echo "==> $f"

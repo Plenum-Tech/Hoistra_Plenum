@@ -3,6 +3,7 @@ REM Stand up a fresh Hoistra database and load the schema. Windows: cmd.exe or P
 REM
 REM   db\setup.cmd
 REM   db\setup.cmd my-db 5433
+REM   db\setup.cmd hoistra-db 5432 demo
 REM
 REM Everything that needs a shell — waiting for postgres, looping over the files — happens
 REM INSIDE the container, where bash exists. Nothing here depends on the shell you are
@@ -21,6 +22,12 @@ REM embeddings. On plain postgres that one statement fails and leaves a database
 REM complete apart from document_chunks — worse than an obvious failure, because
 REM everything else works.
 set IMAGE=pgvector/pgvector:pg16
+
+REM Third argument "demo" also loads 04_demo_data.sql - nine buildings, their compliance
+REM register, vendors and contracts, and six accounts. Opt-in: an empty database is the
+REM right default when the next thing to happen is a real import.
+set DEMOFILE=
+if /I "%~3"=="demo" set DEMOFILE= /db/04_demo_data.sql
 
 echo ==^> removing any container named %NAME%
 docker rm -f %NAME% >nul 2>&1
@@ -43,7 +50,7 @@ REM boot. Without this, every psql call fails and you are left with an empty dat
 REM
 REM ON_ERROR_STOP=1 is not optional either: psql exits 0 even when statements fail, so a
 REM half-loaded database otherwise looks exactly like a good one.
-docker exec %NAME% bash -c "until pg_isready -U cafm -d hoistra >/dev/null 2>&1; do sleep 1; done; for f in /db/0*.sql; do psql -q -U cafm -d hoistra -v ON_ERROR_STOP=1 -o /dev/null -f $f || exit 1; echo \"  loaded $(basename $f)\"; done"
+docker exec %NAME% bash -c "until pg_isready -U cafm -d hoistra >/dev/null 2>&1; do sleep 1; done; LOAD=\"/db/01_schema.sql /db/02_reference_data.sql /db/03_bootstrap.sql%DEMOFILE%\"; for f in $LOAD; do psql -q -U cafm -d hoistra -v ON_ERROR_STOP=1 -o /dev/null -f $f || exit 1; echo \"  loaded $(basename $f)\"; done"
 if errorlevel 1 (
   echo    LOAD FAILED - the database is incomplete. Do not use it.
   exit /b 1

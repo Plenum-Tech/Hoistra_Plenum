@@ -99,6 +99,56 @@ Load it, or don't. Nothing else changes. `SKIP_REFERENCE=1 ./db/setup.sh` leaves
 out; the `.cmd` script has no equivalent, so on Windows just delete the file from the
 `db` folder before running it, or truncate the two tables afterwards.
 
+## `04_demo_data.sql` — a portfolio to test against
+
+Opt-in, because an empty database is the right default: it is what you want when the next
+thing to happen is a real import, and demo rows mixed into real ones are hard to tell
+apart afterwards and harder to remove.
+
+```bash
+DEMO=1 ./db/setup.sh              # macOS, Linux, WSL, Git Bash
+db\setup.cmd hoistra-db 5432 demo  # Windows
+```
+
+What it contains, chosen so each of the four modules has something to exercise:
+
+| | |
+|---|---|
+| buildings | 9 across 4 countries — UK, UAE, US, SG — with 108 floors, 108 spaces, 54 assets, 54 equipment records, 18 meters |
+| compliance | 83 certificates, 72 building-scope and 11 vendor-scope, against the UK, UAE and US packs |
+| vendors | 6 firms, 12 contracts, 108 work orders |
+| auth | 6 accounts showing the platform-role / job-title split |
+
+Three things about it are deliberate:
+
+**Nothing in it is real.** No customer name, no issued certificate number, no blob URL. If
+you import real records into a database, they stay in that database — a repository is the
+wrong place for a customer's compliance evidence.
+
+**The accounts cannot sign in.** Their password hash is not a hash of anything. A demo
+account with a known password is a back door, because this file is public and so is the
+password. They exist to exercise the account list, the `platform_role` gates, and the fact
+that a job title and a platform role are different questions — Rowan Ellis is a Facilities
+Director who is also an `admin`; Chris Nakamura is an HVAC Specialist who is not. For an
+account you can use, register one:
+
+```bash
+curl -X POST http://localhost:8009/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"a-long-enough-passphrase"}'
+```
+
+**Expiry dates are spread across every lifecycle state**, and dates are anchored to
+2026-01-01 rather than to `now()`. A register where everything is current proves nothing
+about a screen whose job is to show what is not, and a file that changes every day it is
+generated cannot be reviewed.
+
+Loading it twice changes nothing: every id is a `uuid5` of a stable name, so the inserts
+are `ON CONFLICT DO NOTHING` against ids that do not move.
+
+Raffles Link holds no certificates. There is no Singapore pack, and inventing one would
+put certificate types in the register that no regulation anywhere requires.
+
 ## What "empty" means
 
 Every one of the 145 tables has zero rows after `01_schema.sql`. After all three files:
