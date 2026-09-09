@@ -87,6 +87,7 @@ export const buildingsGraphMethods = {
   },
 
   async bgLoad(id) {
+    this.bgLoadCost(id);
     const cache = this.state.bgTree || {};
     if (cache[id] && !cache[id].error) return;
     this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: { loading: true } }) }));
@@ -100,6 +101,70 @@ export const buildingsGraphMethods = {
         })
       }));
     }
+  },
+
+  // What the building is costing: GET /buildings/{id}/cost-drivers, fetched alongside the
+  // tree and cached per building. Ranked on the gap over contract, not on billed — the
+  // biggest spender is usually the biggest asset and tells you nothing.
+  async bgLoadCost(id) {
+    const cache = this.state.bgCost || {};
+    if (cache[id] && !cache[id].error) return;
+    this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: { loading: true } }) }));
+    try {
+      const res = await energyApi.costDrivers(id);
+      this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: res || {} }) }));
+    } catch (e) {
+      this.setState((p) => ({
+        bgCost: Object.assign({}, p.bgCost, { [id]: { error: (e && e.message) || String(e), status: e && e.status } })
+      }));
+    }
+  },
+
+  // The cost-drivers response as the drawer draws it. Spend with no asset sits OUTSIDE the
+  // ranking: spreading it across the assets would invent an attribution nobody recorded.
+  bgCostFor(id) {
+    const c = (this.state.bgCost || {})[id];
+    const money = (n) => (typeof n === "number" ? n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+    if (!c) return { show: "none", loading: false, error: "", rows: [], totalsShow: "none", noteShow: "none", note: "" };
+    if (c.loading) return { show: "block", loading: true, error: "", rows: [], totalsShow: "none", noteShow: "none", note: "" };
+    if (c.error) {
+      return {
+        show: "block", loading: false,
+        error: c.status === 404 ? "Cost drivers are not on this svc-operations-intelligence yet."
+          : "Could not read cost drivers — " + c.error,
+        rows: [], totalsShow: "none", noteShow: "none", note: ""
+      };
+    }
+    const assets = Array.isArray(c.assets) ? c.assets : [];
+    const t = c.totals || {};
+    const u = c.unattributed || {};
+    const missing = Array.isArray(c.missing) ? c.missing : [];
+    const rows = assets.map((a) => ({
+      key: a.asset_id || a.asset_code || a.asset_name,
+      asset: a.asset_code || a.asset_name || "—",
+      name: a.asset_name && a.asset_code ? a.asset_name : "",
+      wos: String(a.work_orders || 0), lines: String(a.lines || 0),
+      billed: money(a.billed), over: money(a.over_contract),
+      overTone: (a.over_contract || 0) > 0 ? "var(--st-risk)" : "var(--color-neutral-500)",
+      flagged: String(a.flagged_lines || 0)
+    }));
+    const unatt = (u.lines || 0) > 0 ? {
+      key: "unattributed", asset: "(no asset)", name: "work order names no plant",
+      wos: "—", lines: String(u.lines || 0), billed: money(u.billed), over: money(u.over_contract),
+      overTone: (u.over_contract || 0) > 0 ? "var(--st-warn)" : "var(--color-neutral-500)", flagged: "—"
+    } : null;
+    const empty = !rows.length && !unatt;
+    return {
+      show: "block", loading: false, error: "",
+      rows: rows, unattributed: unatt,
+      totalsShow: empty ? "none" : "flex",
+      totalBilled: money(t.billed), totalOver: money(t.over_contract),
+      totalLines: String(t.lines || 0), totalWos: String(t.work_orders || 0),
+      note: c.ok === false && missing.length ? "Not computable here: " + missing.join("; ")
+        : empty ? "Nothing billed against this building yet."
+        : (c.lines_without_delta ? c.lines_without_delta + " line" + (c.lines_without_delta === 1 ? "" : "s") + " carry no contract figure to compare against." : ""),
+      noteShow: (c.ok === false && missing.length) || empty || c.lines_without_delta ? "block" : "none"
+    };
   },
 
   // One building's branches, each with its count or the reason it has none.
@@ -218,6 +283,7 @@ export const buildingsGraphMethods = {
         }
         return {
           branches: branches,
+          cost: this.bgCostFor(b.id),
           loading: !!state.loading,
           loadingShow: state.loading ? "block" : "none",
           error: state.error || "",

@@ -31,6 +31,13 @@ from .building_rollup import graph_shape
 
 log = get_logger(__name__)
 
+# Rows per commit during a real write. A single uncommitted transaction spanning hundreds
+# of sites means one dropped connection anywhere in the run discards every row that had
+# already succeeded — observed live, on a real backfill of 626 sites. Small enough that a
+# drop costs little; large enough that a portfolio this size does not spend the run in
+# round trips to the database for commits alone.
+_COMMIT_BATCH = 25
+
 # Columns copied straight across when the sites table has them: (sites column, buildings column).
 _CARRY: tuple[tuple[str, str], ...] = (
     ("country", "country"),
@@ -92,7 +99,14 @@ def plan_row(
         return {"site_id": site_id, "action": "conflict", "building_id": bid,
                 "reason": f"building {bid} already belongs to site {owner}"}
 
-    values: dict[str, Any] = {"building_id": bid, "site_id": site_id, "name": name}
+    # `bid` is the human-readable code ("B-01"), reported at the top level for every action
+    # (create/skip/conflict) so a caller always knows which code a site maps to. It is NOT
+    # the real primary key: plenum_cafm.buildings.building_id is a uuid with its own
+    # database default (gen_random_uuid()), so the code belongs in building_code — the
+    # column that exists for exactly this. Writing it into building_id fails at the
+    # database on every row ("invalid UUID 'B-01'"); this is what a live run against 626
+    # sites found, creating zero buildings.
+    values: dict[str, Any] = {"building_code": bid, "site_id": site_id, "name": name}
     for src, dst in _CARRY:
         v = site.get(src)
         if v not in (None, "") and values.get(dst) in (None, ""):
@@ -138,20 +152,25 @@ async def backfill_buildings_from_sites(
     shape = await graph_shape(session, refresh=True)
     if not shape["buildings"]["exists"]:
         return {"ok": False, "error": "plenum_cafm.buildings does not exist — apply udr_building_graph.sql"}
-    key = shape["buildings"]["key"]
     have = shape["buildings"]["columns"]
 
     existing_by_site: dict[str, str] = {}
     existing_ids: dict[str, str] = {}
     try:
         async with session.begin_nested():
+            # Keyed by building_code, never by building_id: the real primary key is a fresh
+            # random uuid on every row, so it could never match anything a previous run
+            # produced — building_code is the only identity two backfill passes share.
             rows = (await session.execute(
-                text(f"SELECT {key}::text AS bid, site_id::text AS sid FROM plenum_cafm.buildings")
+                text(
+                    """SELECT building_code, site_id::text AS sid FROM plenum_cafm.buildings
+                       WHERE building_code IS NOT NULL"""
+                )
             )).all()
-        for bid, sid in rows:
-            existing_ids[str(bid)] = str(sid) if sid else ""
+        for code, sid in rows:
+            existing_ids[str(code)] = str(sid) if sid else ""
             if sid:
-                existing_by_site.setdefault(str(sid), str(bid))
+                existing_by_site.setdefault(str(sid), str(code))
     except Exception as exc:  # noqa: BLE001
         log.warning("building_backfill.existing_read_failed", error=str(exc)[:200])
 
@@ -168,15 +187,14 @@ async def backfill_buildings_from_sites(
 
     if not dry_run and creates:
         for p in creates:
+            # building_id is deliberately never in this list — it is the real primary key,
+            # and plenum_cafm.buildings already generates one (gen_random_uuid()) for every
+            # row that omits it, exactly like building_create.py's manual path does.
             vals = {k: v for k, v in p["values"].items()
-                    if not k.startswith("_") and (k == "building_id" or k in have or k == "site_id")}
-            cols = [key if k == "building_id" else k for k in vals]
+                    if not k.startswith("_") and (k in have or k == "site_id")}
             params = {f"p{i}": v for i, v in enumerate(vals.values())}
             placeholders = ", ".join(f":p{i}" for i in range(len(vals)))
-            sql = (
-                f"INSERT INTO plenum_cafm.buildings ({', '.join(cols)}) VALUES ({placeholders}) "
-                f"ON CONFLICT ({key}) DO NOTHING"
-            )
+            sql = f"INSERT INTO plenum_cafm.buildings ({', '.join(vals)}) VALUES ({placeholders})"
             try:
                 async with session.begin_nested():
                     await session.execute(text(sql), params)
@@ -186,9 +204,25 @@ async def backfill_buildings_from_sites(
                 p["reason"] = str(exc)[:200]
                 log.warning("building_backfill.insert_failed", building=p["building_id"],
                             error=str(exc)[:200])
+            # Committed every _COMMIT_BATCH rows rather than once at the very end. A batch
+            # this size (hundreds of sites) held open as one uncommitted transaction means a
+            # single dropped connection anywhere in the run — observed live, mid-way through
+            # a real backfill — discards every row that had already succeeded, not just the
+            # one that failed. Committing as we go makes a drop cost at most one small batch,
+            # and a retry resumes on its own: `existing_by_site` already skips whatever the
+            # previous attempt got durably written.
+            if written and written % _COMMIT_BATCH == 0:
+                await session.commit()
+        try:
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 — the buildings above are already durable;
+            # a failure flushing the remainder must not turn into a 500 that hides that.
+            log.warning("building_backfill.final_commit_failed", error=str(exc)[:200])
         # A building with no location is scored against no standard — it falls through to
         # the rolling portfolio benchmark and reads as though its market has no regulation.
         # Linking here is what stops this backfill recreating that gap every time it runs.
+        # Its own failure (network, a single bad location) must not cost the buildings
+        # already committed above — caught and reported, never re-raised.
         try:
             from .building_create import link_buildings_to_locations
 
@@ -201,7 +235,13 @@ async def backfill_buildings_from_sites(
         except Exception as exc:  # noqa: BLE001 — a missing location must not lose the rows
             location_link = {"error": str(exc)[:200]}
             log.warning("building_backfill.link_locations_failed", error=str(exc)[:200])
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 — same reasoning as the flush commit above:
+            # the buildings are already durable, so this failing must not 500 the request.
+            log.warning("building_backfill.final_commit_failed", error=str(exc)[:200])
+            if "error" not in location_link:
+                location_link = {"error": str(exc)[:200]}
 
     incomplete: dict[str, int] = {}
     for p in creates:

@@ -25,7 +25,7 @@ export default function Home({ vals }) {
               <div style={{ display: "flex", flexDirection: "column", gap: "3px", marginTop: "10px" }}>
                 {(vals.hoistBars || []).map((b, $index) => (
                   <React.Fragment key={$index}>
-                    <div title={`${b.label} — ${b.val}`} style={{ display: "grid", gridTemplateColumns: "1fr 34px 26px", gap: "7px", alignItems: "center" }}>
+                    <div title={`${b.label} — ${b.val}${b.note ? " · " + b.note : ""}`} style={{ display: "grid", gridTemplateColumns: "1fr 34px 26px", gap: "7px", alignItems: "center" }}>
                       <span style={{ fontSize: "9.5px", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {b.short}
                       </span>
@@ -38,6 +38,9 @@ export default function Home({ vals }) {
                     </div>
                   </React.Fragment>
                 ))}
+              </div>
+              <div title={vals.hoistScore.gap} style={{ fontSize: "9px", color: "var(--color-neutral-500)", marginTop: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {vals.hoistScoreNote}
               </div>
             </div>
             <div style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0" }}>
@@ -83,16 +86,19 @@ export default function Home({ vals }) {
                   </React.Fragment>
                 ))}
               </div>
+              <div style={{ fontSize: "9px", color: "var(--color-neutral-500)", marginTop: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {vals.pnlNote}
+              </div>
             </div>
             <div style={{ padding: "14px 0 15px 22px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {"Hoist Crons"}
                 </span>
-                <span style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
-                  <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: "var(--st-ok)" }}></span>
+                <span title={vals.cronsTip} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
+                  <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: vals.cronsDot }}></span>
                   <span>
-                    {"Live"}
+                    {vals.cronsLabel}
                   </span>
                 </span>
               </div>
@@ -129,22 +135,19 @@ export default function Home({ vals }) {
             <h1 style={{ fontSize: "37px", margin: "0", lineHeight: "1.1" }}>
               {"Ask. Run. Anything."}
             </h1>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 10px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
-              <span style={{ fontWeight: "400" }}>
-                {vals.heroCount}{" "}{vals.heroCountLabel}
-              </span>
-              <span style={{ opacity: "0.4", display: vals.heroShowArea }}>
-                {"·"}
-              </span>
-              <span style={{ fontWeight: "400", display: vals.heroShowArea }}>
-                {vals.heroArea}
-              </span>
-              <span style={{ opacity: "0.4" }}>
-                {"·"}
-              </span>
-              <span style={{ fontWeight: "400" }}>
-                {vals.heroMarkets}
-              </span>
+            <div title={vals.heroLive ? "From the live register" : "Seed portfolio — the live register has not answered yet"} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 10px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
+              {(vals.heroStats || []).map((h, $index) => (
+                <React.Fragment key={$index}>
+                  {$index > 0 ? (
+                    <span style={{ opacity: "0.4" }}>
+                      {"·"}
+                    </span>
+                  ) : null}
+                  <span style={{ fontWeight: "400" }}>
+                    {h}
+                  </span>
+                </React.Fragment>
+              ))}
             </div>
           </div>
           <div style={{ marginTop: "26px", position: "relative", width: "100%", maxWidth: "760px", alignSelf: "center" }}>

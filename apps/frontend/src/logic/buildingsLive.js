@@ -18,6 +18,7 @@ import { normCountry, countryMeta, fmtTime } from './complianceLive.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
+export const PAGE_SIZE = 20;
 
 const STANDING_LABEL = {
   enacted: "enacted", guidance: "guidance", mandatory_submission: "submission mandatory", none: "no operational standard"
@@ -97,12 +98,23 @@ export function shapeLiveBuilding(r, i) {
     : [[use, 100]];
   return {
     live: true,
-    key: r.building_id || r.site_id || r.site_key || String(i),
+    key: r.building_id || r.site_id || r.site_key || r.site_uuid || String(i),
     // Building ID is buildings.building_id when the graph is the root, else sites.site_id.
-    id: r.building_id || r.site_id || r.code || String(i + 1),
-    // The delete keys on the building's own uuid. `id` above falls back to a site_id for
-    // older rows, and deleting by that would address the wrong thing or nothing at all.
+    id: r.building_id || r.site_id || r.code || r.site_uuid || String(i + 1),
+    // The delete and the edit key on the building's own uuid. `id` above falls back to a
+    // site_id for older rows, and addressing by that would hit the wrong thing or nothing.
     buildingId: r.building_id || null,
+    // The energy and compliance tables key on the site's UUID where the CMMS tables key on
+    // site_id; the Hoist Graph counts rows against both.
+    uuid: r.site_uuid || null,
+    city: r.city || null,
+    // Raw values the edit form prefills from. `site_type` is the primary_use enum verbatim;
+    // `use_type` above is a resolved TM46-style category ("office"), not the enum member, so
+    // editing off it would silently change the building's use on save.
+    postcode: r.postcode || null,
+    siteId: r.site_id || null,
+    siteTypeRaw: r.site_type || null,
+    useMixRaw: Array.isArray(r.use_mix) ? r.use_mix : null,
     code: r.code || null,
     name: r.name || "Unnamed site",
     cc: cc,
@@ -153,6 +165,16 @@ export function shapeLiveBuildings(payload) {
   return rows.map(shapeLiveBuilding).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Pure: the search bar's match, case-insensitive substring against the fields the table
+// itself shows for a row — name, building ID (code or the fallback key), country and state.
+// A blank query matches everything, so the table's own row order is untouched.
+export function filterBuildings(rows, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((b) => [b.name, b.code, b.id, b.cc, b.city, b.state]
+    .some((v) => v && String(v).toLowerCase().indexOf(q) > -1));
+}
+
 export const buildingsLiveMethods = {
   // DB rows only — never the seed.
   bldData() { return this.state.bldLive || []; },
@@ -171,7 +193,6 @@ export const buildingsLiveMethods = {
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
       this.bldLoadShape();
       this.glLoadTables();
-      this.homeLoad();
     } catch (e) {
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;
@@ -225,7 +246,11 @@ export const buildingsLiveMethods = {
       // Carried through so the drawer can read them without a second lookup.
       counts: b.counts, spaces: b.spaces, partial: b.partial,
       buildingsOnSite: b.buildingsOnSite, missing: b.missing, euiN: b.euiN,
-      id: b.id, buildingId: b.buildingId, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
+      // The human reference is the code; the uuid is the key edit and delete address it by.
+      id: b.id, buildingId: b.buildingId, idText: b.code || b.id,
+      idTip: b.buildingId ? "building_id " + b.buildingId + (b.code ? " · building_code " + b.code : "") + (b.siteId ? " · site " + b.siteId : "")
+        : (b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id"),
+      row: b,
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
       floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " rows in plenum_cafm.floors"
@@ -295,8 +320,17 @@ export const buildingsLiveMethods = {
   bldVals() {
     const s = this.state;
     const rows = this.bldData();
+    const query = s.bldQuery || "";
+    const filtered = filterBuildings(rows, query);
+    const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    // Clamped rather than reset on every render, so a table that shrinks (a search, or the
+    // register itself losing rows on reload) never leaves the page past the end.
+    const page = Math.min(Math.max(0, s.bldPage || 0), pageCount - 1);
+    const pageStart = filtered.length ? page * PAGE_SIZE + 1 : 0;
+    const pageEnd = Math.min(filtered.length, (page + 1) * PAGE_SIZE);
+    const pageRows = filtered.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
     return {
-      buildingRows: rows.map((b) => this.bldRow(b)),
+      buildingRows: pageRows.map((b) => this.bldRow(b)),
       bldLive: !!s.bldLive,
       bldCount: rows.length,
       // The register is rooted on buildings where the graph has them and falls back to
@@ -309,11 +343,28 @@ export const buildingsLiveMethods = {
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
       bldRetryShow: !s.bldLoading && (!s.bldLive || !!s.bldError) ? "inline" : "none",
       bldRetry: () => this.bldRetryNow(),
-      bldEmptyShow: rows.length ? "none" : "block",
+
+      // Search — client-side, over the rows already loaded (name, ID, country, state).
+      bldQuery: query,
+      setBldQuery: (e) => this.setState({ bldQuery: e.target.value, bldPage: 0 }),
+      bldQueryShow: rows.length ? "flex" : "none",
+
+      // Pagination — 20 rows a page, computed after the search filter.
+      bldPage: page,
+      bldPageCount: pageCount,
+      bldPageLabel: filtered.length ? pageStart + "–" + pageEnd + " of " + filtered.length + (query ? " matching" : "") : "0 of 0",
+      bldPagerShow: filtered.length > PAGE_SIZE ? "flex" : "none",
+      bldPagePrevShow: page > 0,
+      bldPageNextShow: page < pageCount - 1,
+      bldPagePrev: () => this.setState((p) => ({ bldPage: Math.max(0, (p.bldPage || 0) - 1) })),
+      bldPageNext: () => this.setState((p) => ({ bldPage: Math.min(pageCount - 1, (p.bldPage || 0) + 1) })),
+
+      bldEmptyShow: filtered.length ? "none" : "block",
       bldEmptyText: s.bldLoading ? "Reading plenum_cafm.sites…"
         : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
-        : s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
-        : "Waiting for svc-operations-intelligence.",
+        : !rows.length && s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
+        : !rows.length ? "Waiting for svc-operations-intelligence."
+        : "No buildings match “" + query + "”. Try a name, building ID, country or state.",
       bldKicker: "Every row is a plenum_cafm." + ROOT_TABLE(s) + " record, keyed on "
         + (ROOT_TABLE(s) === "buildings" ? "building_id" : "site_id")
         + ", read against its country's regulation pack",

@@ -2,65 +2,12 @@
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { HOISTRA_VP } from '../data/hoistra-vendors.js';
 
-const SESSIONS = [
-  { label: "Which buildings put me at risk this month?", when: "12 min ago", k: "compliance" },
-  { label: "Why did Bishopsgate spike on Saturday?", when: "2 hours ago", k: "energy" },
-  { label: "Rank vendors by first-time fix", when: "Yesterday", k: "vendors" },
-  { label: "What needs my approval today?", when: "Yesterday", k: null },
-  { label: "Energy report — August", when: "Mon", k: "energy" }
-];
-
 const KL = {
   Outlier: { c: "var(--st-risk)", b: "var(--st-risk-bg)" },
   Anomaly: { c: "var(--st-warn)", b: "var(--st-warn-bg)" },
   Deficit: { c: "var(--st-dormant)", b: "var(--st-dormant-bg)" },
   "Within band": { c: "var(--st-ok)", b: "var(--st-ok-bg)" }
 };
-
-// Refresh cadences: interval-based and timestamp-based in one list, since the
-// user thinks of them the same way — "how often does this re-read the graph".
-const CADENCES = [
-  { label: "Refresh every 30 minutes", badge: "30 min", last: "14:12 today" },
-  { label: "Refresh every 1 hour", badge: "1 hr", last: "14:00 today" },
-  { label: "Refresh every 6 hours", badge: "6 hr", last: "12:00 today" },
-  { label: "Refresh every 12 hours", badge: "12 hr", last: "06:00 today" },
-  { label: "Refresh every 24 hours", badge: "24 hr", last: "02:00 today" },
-  { label: "Refresh daily at 02:00", badge: "Daily", last: "02:00 today" },
-  { label: "Refresh on chosen days", badge: "Days", last: "14:00 on 31 Aug", pickDays: true }
-];
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// A day-picked cadence reads back as the days and time actually chosen.
-const CADENCE_LABEL = (s) => {
-  const c = CADENCES[s.reportCad] || CADENCES[1];
-  if (!c.pickDays) return c.label;
-  const d = (s.reportDays || []).map((i) => DAYS[i]);
-  return d.length
-    ? "Refresh " + (d.length === 7 ? "every day" : d.join(", ")) + " at " + (s.reportTime || "14:00")
-    : "Refresh on chosen days — pick at least one";
-};
-const CADENCE_BADGE = (s) => {
-  const c = CADENCES[s.reportCad] || CADENCES[1];
-  if (!c.pickDays) return c.badge;
-  const d = (s.reportDays || []).map((i) => DAYS[i]);
-  return d.length === 7 ? "Daily" : d.length ? d.join(" · ") : "Days";
-};
-
-const ASSET_RISK = [
-  { asset: "CHILLER-101", building: "Bishopsgate Tower", section: "Cooling", kwh: "18,420", variance: "+34%", klass: "Outlier", risk: "Yes", why: "Consumption sits 3.4σ above the cooling peer group at comparable floor area and occupancy. Compressor 2 has not modulated below 80% since 14 Aug." },
-  { asset: "AHU-3", building: "Bishopsgate Tower", section: "Ventilation", kwh: "9,180", variance: "+21%", klass: "Anomaly", risk: "Yes", why: "Within the peer band, but broken from its own 12-week baseline: overnight fan speed no longer drops to setback. Likely a BMS schedule override." },
-  { asset: "Boiler-22", building: "Town Hall", section: "Heating", kwh: "12,640", variance: "+47%", klass: "Outlier", risk: "Yes", why: "Highest deviation in the portfolio. The CP12 for this asset is lapsed, so the burner has not been serviced — combustion efficiency is the probable cause." },
-  { asset: "CHILLER-102", building: "Bishopsgate Tower", section: "Cooling", kwh: "14,050", variance: "+4%", klass: "Within band", risk: "No", why: "Tracks its peer group and its own baseline. No action." },
-  { asset: "Boiler-14", building: "Meridian Quay", section: "Heating", kwh: "7,910", variance: "+9%", klass: "Anomaly", risk: "No", why: "Mild baseline drift over three weeks, below the action threshold. Watch rather than act." },
-  { asset: "Main distribution", building: "AN Other House", section: "Electrical", kwh: "21,700", variance: "+28%", klass: "Outlier", risk: "Yes", why: "Landlord-supply draw is well above peer buildings of this size. The EICR is overdue, so the circuit split cannot currently be verified." },
-  { asset: "AHU-7", building: "Kingsway House", section: "Ventilation", kwh: "8,460", variance: "+16%", klass: "Anomaly", risk: "Yes", why: "Baseline break coinciding with a filter change deferred twice. Static pressure has risen steadily since 03 Aug." },
-  { asset: "Basement plant", building: "Kingsway House", section: "Mixed", kwh: "6,930", variance: "+52%", klass: "Outlier", risk: "Yes", why: "Largest proportional deviation. Sub-metering cannot separate pumps from lighting here, so the reading is flagged for a metering fix as well as an energy fix." },
-  { asset: "Wet riser pump", building: "Riverside Court", section: "Fire", kwh: "640", variance: "−31%", klass: "Deficit", risk: "Yes", why: "Running well under design load. On a life-safety asset that reads as under-delivery, not saving — the weekly test may not be completing." },
-  { asset: "Lift Asset-4471", building: "Bishopsgate Tower", section: "Transport", kwh: "2,340", variance: "−18%", klass: "Deficit", risk: "No", why: "Below design load but consistent with reduced footfall on floors 8–14. No fault signature in the LOLER record." },
-  { asset: "Domestic water", building: "Building 5", section: "Water heating", kwh: "5,220", variance: "−12%", klass: "Deficit", risk: "No", why: "Under design load following the L8 flushing regime change. Expected." },
-  { asset: "CHILLER-204", building: "Meridian Quay", section: "Cooling", kwh: "11,380", variance: "+19%", klass: "Anomaly", risk: "No", why: "Baseline break tracks the August heat event across the whole peer group. Weather-corrected, the asset is flat." }
-];
 
 // Floor-area use tints — one accent for the dominant commercial use, the rest
 // a neutral ladder, so a mixed building reads as proportion not as a palette.
@@ -631,4 +578,4 @@ const MODULES = {
   }
 };
 
-export { SESSIONS, KL, CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES };
+export { KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES };

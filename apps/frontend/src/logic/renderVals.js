@@ -1,7 +1,20 @@
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, CHILD_OF_BUILDING, UNITS, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
-import { fmtTime, runwayTicks } from './complianceLive.js';
+import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
+import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
+import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
+import { domainOf } from './chat.js';
+import { CADENCES, DAYS, cadenceLabel, cadenceBadge } from './reports.js';
+import { ago, shapeSessionList, sessionIcon } from './sessions.js';
+import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
+
+// Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
+// adds later falls back to a generic mark rather than disappearing from the run.
+const TRACE_ICON = {
+  route: 'ph-signpost', docs: 'ph-file-text', scope: 'ph-crosshair', plan: 'ph-list-checks',
+  data: 'ph-database', analyse: 'ph-brain', validate: 'ph-shield-check', review: 'ph-eye',
+  revise: 'ph-pencil-simple'
+};
 
 // A document's stored name, shortened to the part a person wrote.
 //
@@ -27,11 +40,21 @@ export const renderValsMethods = {
     const D = this.D();
     const s = this.state;
     if (!D) return {};
+    // The pages that render the live orchestrator transcript: the dock pages (in their dock)
+    // and the chat page (as the page). Home is a dock page too, but it has no dock until a
+    // question or a carried-over task opens one, so it only counts once that has happened.
+    const chatView = ["cc", "chat", "vp", "buildings"].indexOf(s.view) > -1 || (s.view === "home" && !!s.orchOpen);
+    // The chat page carries the run in its trace rail, so an answer's own copy of the steps
+    // starts collapsed there. The console's dock has no rail and keeps it open.
+    const stepsDefault = s.view !== "chat";
 
     const mkActions = (labels, ctx) => labels.map((l, i) => ({
       label: l, cls: i === 0 ? "btn-primary" : "btn-secondary",
       click: () => {
         const low = l.toLowerCase();
+        // The console is the live register; the module is the seed table. Check the
+        // console first because its label also contains "open compliance".
+        if (low.includes("compliance console")) { window.scrollTo(0, 0); return this.setState({ view: "cc", navOpen: true, detail: null, queueOpen: false }); }
         if (low.includes("open compliance")) return this.openModule("compliance");
         if (low.includes("open energy")) return this.openModule("energy");
         if (low.includes("open vendor performance")) return this.openModule("vendors");
@@ -58,35 +81,116 @@ export const renderValsMethods = {
       }
     }));
 
+    // Dock width. orchBaseW is the designed width for the current flow and acts as the
+    // floor; ORCH_MAX_W is the hard ceiling so a drag cannot swallow the page beside it.
+    const orchBaseW = s.flow === "investigate" ? 420 : 280;
+    const ORCH_MAX_W = 720;
+    const orchW = Math.max(orchBaseW, Math.min(ORCH_MAX_W, s.orchW || orchBaseW));
+
     const detail = s.detail;
     const modKey = s.module;
     const mod = modKey ? MODULES[modKey] : null;
     const answer = s.answerKey ? D.answers[s.answerKey] : null;
     const rep = s.reports.find((r) => r.key === s.reportKey) || null;
-    const vpV = D.vendors.find((x) => x.id === s.vpVendor) || D.vendors[0];
-    const vpR = VP.V[vpV.id] || null;
-    // The rows ARE the score: sum them, then apply the accreditation cap.
-    const vpScore = (id) => {
-      const rec = VP.V[id];
-      if (!rec) return { raw: 0, score: 0 };
-      const sc = VP.scorecard(rec);
-      const vend = D.vendors.find((x) => x.id === id) || {};
-      return { raw: sc.raw, score: vend.accred === "Lapsed" ? Math.min(60, sc.raw) : sc.raw, rows: sc.rows };
-    };
-    const SC = vpR ? VP.scorecard(vpR) : { rows: [], raw: 0 };
-    const score = vpR ? vpScore(vpV.id).score : 0;
-    const repCad = {
-      label: (rep && rep.cad) || CADENCES[0].label,
-      last: (rep && rep.last) || CADENCES[0].last
-    };
+    // Vendors: the live model from svc-operations-intelligence once it has loaded, the seed
+    // otherwise (vendorsLive.js). Both expose the same shape — a directory, a record per
+    // vendor and the scorecard rows behind each published score — so the vp* section renders
+    // either without knowing which it holds.
+    const vm = this.vpModel();
+    const VD = vm.live
+      ? {
+          vendors: vm.vendors, V: vm.V, pkgOf: vm.pkgOf,
+          // The published score is the engine's; the rows are its own components.
+          score: (id) => { const R = vm.V[id]; return R ? { raw: R.raw, score: R.score, rows: R.rows } : { raw: 0, score: null, rows: [] }; }
+        }
+      : {
+          vendors: D.vendors, V: VP.V, pkgOf: (id) => PKG[id] || "Other",
+          // The rows ARE the score: sum them, then apply the accreditation cap.
+          score: (id) => {
+            const rec = VP.V[id];
+            if (!rec) return { raw: 0, score: 0, rows: [] };
+            const sc = VP.scorecard(rec);
+            const vend = D.vendors.find((x) => x.id === id) || {};
+            return { raw: sc.raw, score: vend.accred === "Lapsed" ? Math.min(60, sc.raw) : sc.raw, rows: sc.rows };
+          }
+        };
+    const firstId = VD.vendors.length ? VD.vendors[0].id : null;
+    // Seed click targets name vendors by id; when the live directory holds no such id the
+    // computed alternative is used instead.
+    const idOr = (id, alt) => (VD.V[id] ? id : (alt !== undefined && alt !== null ? alt : firstId));
+    // Live vendors carry the compliance engine's block state; the seed infers it from the
+    // accreditation label.
+    const capOf = (v) => (v.blocked !== undefined ? !!v.blocked : v.accred === "Lapsed");
+    const N = (x) => (x === null || x === undefined ? "—" : String(x));
+    const vpV = VD.vendors.find((x) => x.id === s.vpVendor) || VD.vendors[0] || null;
+    const vpR = vpV ? (VD.V[vpV.id] || null) : null;
+    const vpScore = VD.score;
+    const SC = vpR ? vpScore(vpV.id) : { rows: [], raw: 0, score: null };
+    const score = vpR ? SC.score : 0;
+    // The refresh of the report in view (newest unless an older one was picked).
+    const repRun = rep ? ((rep.runs || [])[s.reportRunIdx || 0] || (rep.runs || [])[0] || null) : null;
+    // Spaces: the four engines with their live figures plus the saved spaces (spacesLive.js).
+    const spm = this.spModel();
+    const toneColor = (tone) => (tone && tone !== "none" ? t(tone).color : "var(--color-neutral-500)");
+    const iso = (ms) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
+    // One session row, as the Sessions page and a space page list them.
+    const sessionRow = (r) => ({
+      id: r.id, title: r.title, when: r.when, page: r.page, domain: r.domain, icon: r.icon,
+      turns: r.turns ? r.turns + (r.turns === 1 ? " question" : " questions") : "",
+      spaceName: r.spaceId && spm.byKey[r.spaceId] ? spm.byKey[r.spaceId].name : "",
+      active: s.sessionId === r.id,
+      open: () => this.openSession(r.id),
+      remove: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.deleteSession(r.id); },
+      canFile: r.kind === "chat" && spm.custom.length > 0,
+      fileValue: r.spaceId || "",
+      fileOptions: [{ value: "", label: "No space" }].concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
+      fileTo: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.fileSession(r.id, e.target.value || null); }
+    });
+    const dayGroups = (groups) => groups.map((g) => ({ day: g.day, rows: g.rows.map(sessionRow) }));
     const bkVendor = s.fVendor && s.fVendor !== "the responsible vendor" ? s.fVendor : "Apex Lifts";
     const spec0 = ACTION_SPECS.find((sp) => sp.k === s.fSpec) || null;
     const cc = this.ccModel();
+    // Home tiles from svc-operations-intelligence; hm.live is false until something answers.
+    const hm = this.homeModel();
+    const hmLive = hm.live;
+    const heroLive = hm.hero.buildings !== null;
+
+    // Documents section — search + pagination over the same portfolio, independent of the
+    // buildings table's own (docQuery/docPage) so paging one list never moves the other.
+    const docAll = this.glBuildings();
+    const docFiltered = filterBuildings(docAll, s.docQuery);
+    const docPageCount = Math.max(1, Math.ceil(docFiltered.length / PAGE_SIZE));
+    const docPage = Math.min(Math.max(0, s.docPage || 0), docPageCount - 1);
+    const docPageStart = docFiltered.length ? docPage * PAGE_SIZE + 1 : 0;
+    const docPageEnd = Math.min(docFiltered.length, (docPage + 1) * PAGE_SIZE);
+    const docPageRows = docFiltered.slice(docPage * PAGE_SIZE, docPage * PAGE_SIZE + PAGE_SIZE);
 
     const vals = {
       tenant: "Planum Technologies",
       scopeLine: D.portfolio.buildings + " buildings · " + D.portfolio.area + " · 4 regulation packs",
+      // The line under "Ask. Run. Anything." — the live register when it has answered, the
+      // seed portfolio otherwise. Floor area has no source yet, so the live line counts
+      // certificates on record instead of asserting an area it cannot know.
+      heroStats: heroLive
+        ? [
+            hm.hero.buildings + (hm.hero.buildings === 1 ? " building hoisted" : " buildings hoisted"),
+            hm.hero.certificates + (hm.hero.certificates === 1 ? " certificate on record" : " certificates on record"),
+            hm.hero.countries.length ? hm.hero.countries.map((c) => COUNTRY_SHORT[c] || c).join(", ") : hm.hero.vendors + " vendors"
+          ]
+        : [D.portfolio.buildings + " buildings hoisted", D.portfolio.area, "UK, US, Singapore, UAE"],
+      heroLive: heroLive,
       isHome: s.signedIn && s.view === "home", isAnswer: s.signedIn && s.view === "answer", isModule: s.signedIn && s.view === "module",
+      isChat: s.signedIn && s.view === "chat",
+      // The chat page's connection line and its empty-state copy.
+      chatLinkLabel: s.chatLink === "connected"
+        ? "Connected" + (s.chatTools ? " · " + s.chatTools + " tools" : "")
+        : s.chatLink === "checking" ? "Connecting…"
+        : s.chatLink === "unreachable" ? "Orchestrator unreachable — retry"
+        : "",
+      chatLinkDot: s.chatLink === "connected" ? "var(--st-ok)" : s.chatLink === "unreachable" ? "var(--st-risk)" : "var(--color-neutral-600)",
+      chatLinkTip: s.chatLink === "unreachable" ? (s.chatLinkError || "svc-deepagents did not answer at /backend/deep-agents") : "svc-deepagents · one conversation across every engine",
+      chatRetry: () => this.chatConnect(true),
+      chatIntro: "Ask about compliance, energy, vendors, work orders or documents. The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
       queueOpen: s.queueOpen, paletteOpen: s.paletteOpen, detailOpen: !!detail,
       toggleQueue: () => this.setState((p) => ({ queueOpen: !p.queueOpen, acctOpen: false, paletteOpen: false, detail: null })),
       closeQueue: () => this.setState({ queueOpen: false }),
@@ -96,7 +200,35 @@ export const renderValsMethods = {
       themeIcon: s.dark ? "ph-sun" : "ph-moon",
       themeLabel: s.dark ? "Back to paper" : "Plant room / night shift",
       toggleTheme: () => this.toggleTheme(),
-      goHome: () => this.setState({ view: "home", detail: null, queueOpen: false, navOpen: false }),
+      // Going Home leaves the navigator as it was, like every other page change.
+      goHome: () => this.setState({ view: "home", detail: null, queueOpen: false }),
+
+      // The home ask bar. A question goes to the live orchestrator through the dock chat
+      // (askScoped → ccAsk on this view); Run on an empty bar opens the chat instead.
+      setQuery: (e) => this.setState({ query: e.target.value }),
+      onKey: (e) => {
+        if (e.key !== "Enter") return;
+        const q = (s.query || "").trim();
+        if (!q) return;
+        this.setState({ query: "" });
+        this.askScoped(q);
+      },
+      runQuery: () => {
+        const q = (s.query || "").trim();
+        if (!q) return this.ccOpenChat();
+        this.setState({ query: "" });
+        this.askScoped(q);
+      },
+      // Saved reports first — they are the pinned runs proper, re-run on a cadence — then
+      // the questions the portfolio is most often asked.
+      pinned: s.reports.map((r) => ({
+        label: r.name,
+        run: () => this.rpOpen(r.key)
+      })).concat([
+        "Which buildings put me at risk this month?",
+        "What needs my approval today?",
+        "Which vendors are blocked right now?"
+      ].map((a) => ({ label: a, run: () => this.askScoped(a) }))),
 
       signedIn: s.signedIn, gated: !s.signedIn,
       f1: { o: s.frame === 0 ? 1 : 0, y: s.frame === 0 ? "0px" : (s.frame === 1 ? "-10px" : "10px") },
@@ -187,7 +319,7 @@ export const renderValsMethods = {
       ],
       email: s.email,
       setEmail: (e) => this.setState({ email: e.target.value }),
-      signIn: () => this.setState({ signedIn: true, view: "home" }),
+      signIn: () => this.setState({ signedIn: true, view: "home", navOpen: true }),
       gateKey: (e) => { if (e.key === "Enter") this.setState({ signedIn: true, view: "home" }); },
       signOut: () => this.setState({ signedIn: false, view: "home", role: "user", acctOpen: false, navOpen: false, queueOpen: false, detail: null }),
 
@@ -253,16 +385,31 @@ export const renderValsMethods = {
         };
       }),
 
+      // Portfolio P&L. No backend holds a budget ledger, so this tile is the seed and says so.
       pnlSaved: "£390k",
       pnlTop: D.pnl.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: TONE[r.tone] ? TONE[r.tone].color : "var(--color-neutral-400)" })),
+      pnlNote: "Seed figures · no budget ledger is connected yet",
       cronCount: String(CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length),
-      hoistScore: { value: "78", band: "Supervised autonomy", gap: "Meter consent lowest at 71% — the gap to delegated autonomy", note: "Ingestion coverage across the Hoist Graph. At 85 the agents move from supervised to delegated dispatch on L3 assets." },
-      hoistBars: [
-        { label: "Contracts and framework agreements", short: "Contracts", val: "92%", pct: "92%", color: "var(--st-ok)" },
-        { label: "Asset registers", short: "Assets", val: "84%", pct: "84%", color: "var(--st-ok)" },
-        { label: "Meter consent — MPAN / MPRN", short: "Meter consent", val: "71%", pct: "71%", color: "var(--st-warn)" },
-        { label: "Certificates and evidence", short: "Certificates", val: "65%", pct: "65%", color: "var(--st-warn)" }
-      ],
+      // Hoist Score: ingestion coverage per source, live when at least one source answered.
+      // A bar with no source draws empty and says why in its tooltip.
+      hoistScore: hmLive && hm.score.value !== null
+        ? { value: String(hm.score.value), band: hm.score.band, gap: hm.score.gap, note: "Ingestion coverage across the Hoist Graph, read from the operations backend. At 85 the agents move from supervised to delegated dispatch on L3 assets." }
+        : { value: "78", band: "Supervised autonomy", gap: "Meter consent lowest at 71% — the gap to delegated autonomy", note: "Ingestion coverage across the Hoist Graph. At 85 the agents move from supervised to delegated dispatch on L3 assets." },
+      hoistBars: hmLive && hm.score.value !== null
+        ? hm.score.bars.map((b) => ({
+            label: b.label, short: b.short, val: b.val, note: b.note,
+            pct: (b.pct === null ? 0 : b.pct) + "%",
+            color: b.tone === "none" ? "var(--color-neutral-600)" : t(b.tone).color
+          }))
+        : [
+            { label: "Contracts and framework agreements", short: "Contracts", val: "92%", pct: "92%", color: "var(--st-ok)", note: "seed" },
+            { label: "Asset registers", short: "Assets", val: "84%", pct: "84%", color: "var(--st-ok)", note: "seed" },
+            { label: "Meter consent — MPAN / MPRN", short: "Meter consent", val: "71%", pct: "71%", color: "var(--st-warn)", note: "seed" },
+            { label: "Certificates and evidence", short: "Certificates", val: "65%", pct: "65%", color: "var(--st-warn)", note: "seed" }
+          ],
+      hoistScoreNote: hmLive && hm.score.value !== null
+        ? hm.score.note
+        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · " + (s.homeError ? "backend unreachable — " + s.homeError : "the operations backend has not answered yet")),
 
       isBuildings: s.signedIn && s.view === "buildings",
       useLegend: Object.keys(USE_TINT).map((k) => ({ label: k, color: USE_TINT[k].color, hatch: USE_TINT[k].hatch || "none" })),
@@ -571,66 +718,86 @@ export const renderValsMethods = {
 
       isVP: s.signedIn && s.view === "vp",
       vpRebuild: () => this.runAction("Rebuild scorecards", "Vendors"),
-      vpWeights: () => this.flash("Weights: SLA response 25, SLA completion 25, first-time fix 20, recall rate 15, invoice accuracy 15. Each metric has its own percentage target; shortfall is penalised at three times its relative size. L1 misses weigh 3×, L3 misses 0.5×. A mandatory accreditation lapse puts a ceiling of 60 on the published score."),
+      vpWeights: () => this.flash(vm.live && vm.weightsText
+        ? vm.weightsText
+        : "Weights: SLA response 25, SLA completion 25, first-time fix 20, recall rate 15, invoice accuracy 15. Each metric has its own percentage target; shortfall is penalised at three times its relative size. L1 misses weigh 3×, L3 misses 0.5×. A mandatory accreditation lapse puts a ceiling of 60 on the published score."),
       vpTiles: (() => {
-        const scored = D.vendors.filter((v) => VP.V[v.id]);
-        const avg = Math.round(scored.reduce((q, v) => q + vpScore(v.id).score, 0) / scored.length);
-        const blocked = D.vendors.filter((v) => v.accred === "Lapsed").length;
-        const held = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { invoices: [] }).invoices.filter((i) => i.status === "Held" || i.status === "Disputed").length), 0);
-        const defaults = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { contract: { fields: 0, read: 0 } }).contract.fields - (VP.V[v.id] || { contract: { read: 0 } }).contract.read), 0);
-        const thinnestPre = null;
-        const L1 = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { breaches: [] }).breaches.filter((b) => b.crit === "L1").length), 0);
-        const pending = held + D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { certs: [] }).certs.filter((c) => c.req === "Mandatory" && (c.status === "Lapsed" || c.status === "Not on record")).length), 0);
-        const critical = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { breaches: [] }).breaches.filter((b) => b.crit === "L1" && /blocked|missed/.test(b.actual)).length), 0);
-        const worst = scored.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || D.vendors[0];
-        const thinnest = scored.slice().sort((a, b) => VP.V[a.id].contract.read - VP.V[b.id].contract.read)[0] || D.vendors[0];
+        const vendors = VD.vendors, V = VD.V;
+        const rec = (id) => V[id] || {};
+        const scored = vendors.filter((v) => V[v.id]);
+        const heldOf = (v) => (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length;
+        const blocked = vendors.filter(capOf).length;
+        const held = vm.live ? vm.tiles.held : vendors.reduce((q, v) => q + heldOf(v), 0);
+        const defaults = vm.live ? vm.tiles.defaults : vendors.reduce((q, v) => q + ((rec(v.id).contract || { fields: 0, read: 0 }).fields - (rec(v.id).contract || { read: 0 }).read), 0);
+        const L1 = vm.live ? vm.tiles.L1 : vendors.reduce((q, v) => q + (rec(v.id).breaches || []).filter((b) => b.crit === "L1").length, 0);
+        const pending = vm.live ? vm.tiles.pending
+          : held + vendors.reduce((q, v) => q + (rec(v.id).certs || []).filter((c) => c.req === "Mandatory" && (c.status === "Lapsed" || c.status === "Not on record")).length, 0);
+        const critical = vm.live ? vm.tiles.critical
+          : vendors.reduce((q, v) => q + (rec(v.id).breaches || []).filter((b) => b.crit === "L1" && /blocked|missed/.test(b.actual)).length, 0);
+        const worst = scored.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || vendors[0] || null;
+        const thinnest = scored.slice().sort((a, b) => V[a.id].contract.read - V[b.id].contract.read)[0] || vendors[0] || null;
+        const firstBlocked = vendors.find(capOf) || worst;
+        const mostHeld = vendors.slice().sort((a, b) => heldOf(b) - heldOf(a))[0] || vendors[0] || null;
+        const idOf = (v) => (v ? v.id : firstId);
         return [
-          { value: String(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", click: () => this.setState({ vpVendor: "v2", vpTab: 3 }) },
-          { value: String(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", click: () => this.setState({ queueOpen: true }) },
-          { value: String(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", click: () => this.setState({ vpVendor: "v2", vpTab: 2 }) },
-          { value: String(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", click: () => this.setState({ vpVendor: worst.id, vpTab: 2 }) },
-          { value: String(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", click: () => this.setState({ vpVendor: "v1", vpTab: 4 }) },
-          { value: String(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", click: () => this.setState({ vpVendor: thinnest.id, vpTab: 1 }) }
+          { value: N(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 3 }) },
+          { value: N(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", click: () => this.setState({ queueOpen: true }) },
+          { value: N(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 2 }) },
+          { value: N(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOf(worst), vpTab: 2 }) },
+          { value: N(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
+          { value: N(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) }
         ];
       })(),
 
       vpStats: (() => {
-        const pkgOf = (id) => PKG[id] || "Other";
+        const vendors = VD.vendors, V = VD.V;
+        const rec = (id) => V[id] || {};
         const byPkg = {};
-        D.vendors.forEach((v) => { byPkg[pkgOf(v.id)] = (byPkg[pkgOf(v.id)] || []).concat([v]); });
-        const bar = (n, max) => Math.round((n / Math.max(1, max)) * 100) + "%";
-        const pkgMax = Math.max.apply(null, Object.keys(byPkg).map((k) => byPkg[k].length));
+        vendors.forEach((v) => { byPkg[VD.pkgOf(v.id)] = (byPkg[VD.pkgOf(v.id)] || []).concat([v]); });
+        const bar = (n, max) => (n === null || n === undefined ? "0%" : Math.round((n / Math.max(1, max)) * 100) + "%");
+        const pkgMax = Math.max.apply(null, [1].concat(Object.keys(byPkg).map((k) => byPkg[k].length)));
 
-        const expiring = D.vendors.filter((v) => {
-          const R = VP.V[v.id];
-          return R && /2026/.test(R.contract.expires);
-        });
-        const totalLines = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { invoices: [] }).invoices.length), 0);
-        const heldLines = D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { invoices: [] }).invoices.filter((i) => i.status === "Held" || i.status === "Disputed").length), 0);
-        const wo = D.workorders || [];
+        const expiringV = vm.live ? [] : vendors.filter((v) => { const R = V[v.id]; return R && /2026/.test(R.contract.expires); });
+        const expiring = vm.live ? vm.counts.expiring : expiringV.length;
+        const heldLines = vm.live ? vm.counts.heldLines
+          : vendors.reduce((q, v) => q + (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length, 0);
+        const totalLines = vm.live ? vm.counts.invoiceLines : vendors.reduce((q, v) => q + (rec(v.id).invoices || []).length, 0);
+        const approvedLines = vm.live ? vm.counts.approvedLines : totalLines - heldLines;
+        const woOpen = vm.live ? vm.counts.workordersOpen : (D.workorders || []).length;
+        const termsRead = vm.live ? vm.counts.termsRead : vendors.reduce((q, v) => q + (rec(v.id).contract || { read: 0 }).read, 0);
+        const termsDefault = vm.live ? vm.counts.termsDefault
+          : vendors.reduce((q, v) => q + ((rec(v.id).contract || { fields: 0, read: 0 }).fields - (rec(v.id).contract || { read: 0 }).read), 0);
+        const contractsN = vm.live ? vm.counts.contracts : vendors.filter((v) => V[v.id]).length;
 
-        const scoredV = D.vendors.filter((v) => VP.V[v.id]);
-        const avgS = Math.round(scoredV.reduce((q, v) => q + vpScore(v.id).score, 0) / scoredV.length);
+        const scoredV = vendors.filter((v) => V[v.id] && vpScore(v.id).score !== null);
+        const avgS = scoredV.length ? Math.round(scoredV.reduce((q, v) => q + vpScore(v.id).score, 0) / scoredV.length) : null;
         const band = (lo, hi) => scoredV.filter((v) => { const n = vpScore(v.id).score; return n >= lo && n <= hi; });
-        const lowest = scoredV.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || D.vendors[0];
+        const lowest = scoredV.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || vendors[0] || null;
+        const thinnest = vendors.filter((v) => V[v.id]).slice().sort((a, b) => V[a.id].contract.read - V[b.id].contract.read)[0] || vendors[0] || null;
+        const idOf = (v) => (v ? v.id : firstId);
+        const byAccred = (a) => vendors.filter((v) => v.accred === a);
+        const mostRead = vendors.filter((v) => V[v.id]).slice().sort((a, b) => V[b.id].contract.read - V[a.id].contract.read)[0] || null;
+        const heldOf = (v) => (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length;
+        const mostHeld = vendors.slice().sort((a, b) => heldOf(b) - heldOf(a))[0] || null;
+        const cleanest = vendors.filter((v) => (rec(v.id).invoices || []).length && !heldOf(v))[0] || mostRead;
 
         return [
           {
-            value: String(avgS), label: "Avg score",
-            click: () => this.setState({ vpVendor: lowest.id, vpTab: 0 }),
+            value: N(avgS), label: "Avg score",
+            click: () => this.setState({ vpVendor: idOf(lowest), vpTab: 0 }),
             rows: [
-              { label: "85 and above", n: String(band(85, 100).length), color: "var(--st-ok)", bar: bar(band(85, 100).length, scoredV.length), click: () => this.setState({ vpVendor: (band(85, 100)[0] || D.vendors[0]).id, vpTab: 0 }) },
-              { label: "70 to 84", n: String(band(70, 84).length), color: "var(--st-warn)", bar: bar(band(70, 84).length, scoredV.length), click: () => this.setState({ vpVendor: (band(70, 84)[0] || D.vendors[0]).id, vpTab: 0 }) },
-              { label: "Below 70", n: String(band(0, 69).length), color: "var(--st-risk)", bar: bar(band(0, 69).length, scoredV.length), click: () => this.setState({ vpVendor: lowest.id, vpTab: 0 }) }
+              { label: "85 and above", n: String(band(85, 100).length), color: "var(--st-ok)", bar: bar(band(85, 100).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(85, 100)[0] || vendors[0]), vpTab: 0 }) },
+              { label: "70 to 84", n: String(band(70, 84).length), color: "var(--st-warn)", bar: bar(band(70, 84).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(70, 84)[0] || vendors[0]), vpTab: 0 }) },
+              { label: "Below 70", n: String(band(0, 69).length), color: "var(--st-risk)", bar: bar(band(0, 69).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(lowest), vpTab: 0 }) }
             ]
           },
           {
-            value: String(D.vendors.length), label: "Vendors",
-            click: () => this.setState({ vpVendor: "v1", vpTab: 0 }),
+            value: String(vendors.length), label: "Vendors",
+            click: () => this.setState({ vpVendor: idOr("v1", firstId), vpTab: 0 }),
             rows: [
-              { label: "Fully accredited", n: String(D.vendors.filter((v) => v.accred === "Current").length), color: "var(--st-ok)", bar: bar(D.vendors.filter((v) => v.accred === "Current").length, D.vendors.length), click: () => this.setState({ vpVendor: "v3", vpTab: 3 }) },
-              { label: "Expiring", n: String(D.vendors.filter((v) => v.accred === "Expiring").length), color: "var(--st-warn)", bar: bar(D.vendors.filter((v) => v.accred === "Expiring").length, D.vendors.length), click: () => this.setState({ vpVendor: "v6", vpTab: 3 }) },
-              { label: "Lapsed", n: String(D.vendors.filter((v) => v.accred === "Lapsed").length), color: "var(--st-risk)", bar: bar(D.vendors.filter((v) => v.accred === "Lapsed").length, D.vendors.length), click: () => this.setState({ vpVendor: "v2", vpTab: 3 }) }
+              { label: "Fully accredited", n: String(byAccred("Current").length), color: "var(--st-ok)", bar: bar(byAccred("Current").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v3", idOf(byAccred("Current")[0] || vendors[0])), vpTab: 3 }) },
+              { label: "Expiring", n: String(byAccred("Expiring").length), color: "var(--st-warn)", bar: bar(byAccred("Expiring").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v6", idOf(byAccred("Expiring")[0] || vendors[0])), vpTab: 3 }) },
+              { label: "Lapsed", n: String(byAccred("Lapsed").length), color: "var(--st-risk)", bar: bar(byAccred("Lapsed").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v2", idOf(byAccred("Lapsed")[0] || vendors[0])), vpTab: 3 }) }
             ]
           },
           {
@@ -638,52 +805,55 @@ export const renderValsMethods = {
             click: () => this.flash("Vendors are grouped by service package. A package with a single vendor is a single point of failure — worth a second accredited contractor before the next renewal."),
             rows: Object.keys(byPkg).map((k) => ({
               label: k, n: String(byPkg[k].length),
-              color: byPkg[k].some((v) => v.accred === "Lapsed") ? "var(--st-risk)" : byPkg[k].length === 1 ? "var(--st-warn)" : "var(--st-ok)",
+              color: byPkg[k].some(capOf) ? "var(--st-risk)" : byPkg[k].length === 1 ? "var(--st-warn)" : "var(--st-ok)",
               bar: bar(byPkg[k].length, pkgMax),
               click: () => this.setState({ vpVendor: byPkg[k][0].id, vpTab: 0 })
             }))
           },
           {
-            value: String(D.vendors.filter((v) => VP.V[v.id]).length), label: "Contracts",
-            click: () => this.setState({ vpVendor: "v1", vpTab: 1 }),
+            value: N(contractsN), label: "Contracts",
+            click: () => this.setState({ vpVendor: idOr("v1", idOf(mostRead)), vpTab: 1 }),
             rows: [
-              { label: "Terms read from document", n: String(D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { contract: { read: 0 } }).contract.read), 0)), color: "var(--st-ok)", bar: "72%", click: () => this.setState({ vpVendor: "v3", vpTab: 1 }) },
-              { label: "On platform default", n: String(D.vendors.reduce((q, v) => q + ((VP.V[v.id] || { contract: { fields: 0, read: 0 } }).contract.fields - (VP.V[v.id] || { contract: { read: 0 } }).contract.read), 0)), color: "var(--st-warn)", bar: "28%", click: () => this.setState({ vpVendor: thinnest.id, vpTab: 1 }) },
-              { label: "Expiring this year", n: String(expiring.length), color: expiring.length ? "var(--st-warn)" : "var(--st-ok)", bar: bar(expiring.length, D.vendors.length), click: () => this.setState({ vpVendor: expiring.length ? expiring[0].id : "v1", vpTab: 1 }) }
+              { label: "Terms read from document", n: N(termsRead), color: "var(--st-ok)", bar: vm.live ? bar(termsRead, (termsRead || 0) + (termsDefault || 0)) : "72%", click: () => this.setState({ vpVendor: idOr("v3", idOf(mostRead)), vpTab: 1 }) },
+              { label: "On platform default", n: N(termsDefault), color: "var(--st-warn)", bar: vm.live ? bar(termsDefault, (termsRead || 0) + (termsDefault || 0)) : "28%", click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) },
+              { label: "Expiring this year", n: N(expiring), color: expiring ? "var(--st-warn)" : "var(--st-ok)", bar: bar(expiring, vendors.length), click: () => this.setState({ vpVendor: expiringV.length ? expiringV[0].id : idOr("v1", firstId), vpTab: 1 }) }
             ]
           },
           {
-            value: String(totalLines), label: "Commercial orders",
-            click: () => this.setState({ vpVendor: "v1", vpTab: 4 }),
+            value: N(totalLines), label: "Commercial orders",
+            click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }),
             rows: [
-              { label: "Approved as charged", n: String(totalLines - heldLines), color: "var(--st-ok)", bar: bar(totalLines - heldLines, totalLines), click: () => this.setState({ vpVendor: "v3", vpTab: 4 }) },
-              { label: "Held or disputed", n: String(heldLines), color: "var(--st-risk)", bar: bar(heldLines, totalLines), click: () => this.setState({ vpVendor: "v1", vpTab: 4 }) },
-              { label: "Work orders open", n: String(wo.length), color: "var(--color-neutral-400)", bar: bar(wo.length, wo.length || 1), click: () => this.openModule("ops") }
+              { label: "Approved as charged", n: N(approvedLines), color: "var(--st-ok)", bar: bar(approvedLines, totalLines || approvedLines), click: () => this.setState({ vpVendor: idOr("v3", idOf(cleanest)), vpTab: 4 }) },
+              { label: "Held or disputed", n: N(heldLines), color: "var(--st-risk)", bar: bar(heldLines, totalLines || heldLines), click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
+              { label: "Work orders open", n: N(woOpen), color: "var(--color-neutral-400)", bar: bar(woOpen, woOpen || 1), click: () => this.openModule("ops") }
             ]
           }
         ];
       })(),
-      vpList: D.vendors.map((v) => {
-        const R = VP.V[v.id];
-        const req = R ? R.certs.filter((c) => c.req !== "Preferred").length : 0;
-        const on = R ? R.certs.filter((c) => c.req !== "Preferred" && (c.status === "Current" || c.status === "Expiring")).length : 0;
-        const cov = req ? Math.round((on / req) * 100) : 0;
-        const capped = v.accred === "Lapsed";
-        const active = s.vpVendor === v.id;
+      vpList: VD.vendors.map((v) => {
+        const R = VD.V[v.id];
+        // Live vendors carry the compliance engine's coverage figure; the seed derives it
+        // from the certificates on the record.
+        const req = v.covReq !== undefined ? v.covReq : (R ? R.certs.filter((c) => c.req !== "Preferred").length : 0);
+        const on = v.covOn !== undefined ? v.covOn : (R ? R.certs.filter((c) => c.req !== "Preferred" && (c.status === "Current" || c.status === "Expiring")).length : 0);
+        const cov = v.cov !== undefined ? v.cov : (req ? Math.round((on / req) * 100) : 0);
+        const capped = capOf(v);
+        const active = vpV && vpV.id === v.id;
         const sc = vpScore(v.id);
+        const n = sc.score;
         return {
-          name: v.name, meta: v.spend + " annual · " + v.accred.toLowerCase() + " accreditation",
+          name: v.name, meta: v.meta || (v.spend + " annual · " + v.accred.toLowerCase() + " accreditation"),
           cap: capped ? "ceiling 60 — mandatory lapse" : "", capShow: capped ? "block" : "none", capFg: "var(--st-risk)",
-          score: String(sc.score), trend: v.trend,
-          scoreFg: sc.score >= 85 ? "var(--st-ok)" : sc.score >= 70 ? "var(--st-warn)" : "var(--st-risk)",
+          score: N(n), trend: v.trend,
+          scoreFg: n === null ? "var(--color-neutral-500)" : n >= 85 ? "var(--st-ok)" : n >= 70 ? "var(--st-warn)" : "var(--st-risk)",
           cov: cov + "%", covFrac: on + "/" + req,
           covFg: cov >= 90 ? "var(--st-ok)" : cov >= 60 ? "var(--st-warn)" : "var(--st-risk)",
-          edge: capped ? "var(--st-risk)" : v.score >= 85 ? "var(--st-ok)" : "var(--st-warn)",
+          edge: capped ? "var(--st-risk)" : (v.score !== null && v.score >= 85) ? "var(--st-ok)" : "var(--st-warn)",
           bg: active ? "var(--color-accent-900)" : "transparent",
           pick: () => this.setState({ vpVendor: v.id, vpTab: 0 })
         };
       }),
-      vpTabs: [["Scorecard", 5], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpR ? vpR.breaches.length : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? vpR.invoices.length : 0)]].map((t, i) => ({
+      vpTabs: [["Scorecard", SC.rows.length || 5], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpR ? vpR.breaches.length : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? vpR.invoices.length : 0)]].map((t, i) => ({
         label: t[0], n: String(t[1]),
         edge: s.vpTab === i ? "var(--color-accent)" : "transparent",
         fg: s.vpTab === i ? "var(--color-accent)" : "var(--color-neutral-500)",
@@ -694,7 +864,11 @@ export const renderValsMethods = {
       vp: (() => {
         const v = vpV, R = vpR;
         if (!v || !R) return {};
-        const capped = v.accred === "Lapsed";
+        const capped = capOf(v);
+        // Seed: the cap is a rule applied here. Live: the engine says whether it capped the
+        // published score (block_capped); a block raised after the card was cut shows as a
+        // note, not as a recomputed number.
+        const capApplied = R.capApplied !== undefined ? R.capApplied : capped;
         const req = R.certs.filter((c) => c.req !== "Preferred");
         const onFile = req.filter((c) => c.status === "Current" || c.status === "Expiring");
         const missing = R.certs.filter((c) => c.status === "Not on record" || c.status === "Lapsed");
@@ -704,53 +878,58 @@ export const renderValsMethods = {
           Held: ["var(--st-warn-bg)", "var(--st-warn)"], Disputed: ["var(--st-risk-bg)", "var(--st-risk)"],
           Credited: ["var(--st-ok-bg)", "var(--st-ok)"], Approved: ["var(--color-neutral-900)", "var(--color-neutral-400)"]
         };
+        const tag = (k) => TAGS[k] || TAGS["Not on record"];
         const CRIT = { L1: ["var(--st-risk-bg)", "var(--st-risk)"], L2: ["var(--st-warn-bg)", "var(--st-warn)"], L3: ["var(--color-neutral-900)", "var(--color-neutral-400)"] };
         const credit = R.breaches.reduce((q, b) => q + parseInt(b.cost.replace(/[^0-9]/g, ""), 10), 0);
         const invTotal = R.invoices.filter((i) => i.status === "Held" || i.status === "Disputed")
-          .reduce((q, i) => q + parseInt((i.delta || "0").replace(/[^0-9]/g, "") || "0", 10), 0);
+          .reduce((q, i) => q + (typeof i.deltaValue === "number" ? Math.round(Math.abs(i.deltaValue)) : parseInt((i.delta || "0").replace(/[^0-9]/g, "") || "0", 10)), 0);
+        const mandatoryMissing = missing.filter((c) => c.req === "Mandatory");
+        const capNames = mandatoryMissing.length ? mandatoryMissing.map((c) => c.name).join(" and ")
+          : (v.blockedType || "a mandatory accreditation");
         return {
           name: v.name,
-          contractLine: R.contract.ref + " · signed " + R.contract.signed + " · expires " + R.contract.expires + " · " + R.contract.read + " of " + R.contract.fields + " terms read from " + R.contract.pages + " pages",
-          score: String(score), trend: v.trend,
-          scoreFg: score >= 85 ? "var(--st-ok)" : score >= 70 ? "var(--st-warn)" : "var(--st-risk)",
+          contractLine: R.contract.line || (R.contract.ref + " · signed " + R.contract.signed + " · expires " + R.contract.expires + " · " + R.contract.read + " of " + R.contract.fields + " terms read from " + R.contract.pages + " pages"),
+          score: N(score), trend: v.trend,
+          scoreFg: score === null ? "var(--color-neutral-500)" : score >= 85 ? "var(--st-ok)" : score >= 70 ? "var(--st-warn)" : "var(--st-risk)",
           capShow: capped ? "flex" : "none", capBg: "var(--st-risk-bg)", capFg: "var(--st-risk)",
           capNote: capped
-            ? "Score cannot exceed 60 while " + missing.filter((c) => c.req === "Mandatory").map((c) => c.name).join(" and ") + " " + (missing.filter((c) => c.req === "Mandatory").length > 1 ? "are" : "is") + " not current — this vendor cannot hold regulated work whatever the delivery numbers say."
+            ? "Score cannot exceed " + (R.cap || 60) + " while " + capNames + " " + (mandatoryMissing.length > 1 ? "are" : "is") + " not current — this vendor cannot hold regulated work whatever the delivery numbers say."
             : "",
           metrics: SC.rows.map((r) => {
-            const ratio = r.pts / r.w;
+            const ratio = r.w ? r.pts / r.w : 0;
             return {
               label: r.label, max: String(r.w), pts: String(r.pts),
-              requires: (r.ceiling ? "no more than " : "at least ") + r.target + "%",
-              measured: r.measured + "%",
-              sample: r.basis + " · " + R.samples[r.k] + (r.k === "invoice" ? " invoice lines" : " work orders"),
-              bar: Math.round(ratio * 100) + "%",
+              requires: r.requires || ((r.ceiling ? "no more than " : "at least ") + r.target + "%"),
+              measured: r.measured === null || r.measured === undefined ? "—" : r.measured + "%",
+              sample: r.sample || (r.basis + " · " + R.samples[r.k] + (r.k === "invoice" ? " invoice lines" : " work orders")),
+              bar: Math.round(Math.max(0, Math.min(1, ratio)) * 100) + "%",
               color: ratio >= 0.95 ? "var(--st-ok)" : ratio >= 0.75 ? "var(--st-warn)" : "var(--st-risk)",
-              srcTag: r.fromContract ? "clause " + r.clause + " · p" + r.page
+              srcTag: r.srcTag || (r.fromContract ? "clause " + r.clause + " · p" + r.page
                 : r.clause ? "default " + r.target + "% · obligation at " + r.clause
-                : "platform default " + r.target + "%",
+                : "platform default " + r.target + "%"),
               srcBg: r.fromContract ? "var(--color-accent-900)" : "var(--marker-tint)",
               srcFg: r.fromContract ? "var(--color-accent)" : "var(--color-neutral-300)"
             };
           }),
           totalPts: String(SC.raw),
-          capRowShow: capped ? "grid" : "none",
-          finalScore: String(score),
+          capRowShow: capApplied ? "grid" : "none",
+          finalScore: N(score),
           critSplit: [
-            { label: "L1 · critical", n: String(R.crit.L1), note: "misses weigh 3×", color: "var(--st-risk)" },
-            { label: "L2 · medium", n: String(R.crit.L2), note: "misses weigh 1×", color: "var(--st-warn)" },
-            { label: "L3 · low", n: String(R.crit.L3), note: "misses weigh 0.5×", color: "var(--color-neutral-400)" }
+            { label: "L1 · critical", n: R.crit ? String(R.crit.L1) : "—", note: "misses weigh 3×", color: "var(--st-risk)" },
+            { label: "L2 · medium", n: R.crit ? String(R.crit.L2) : "—", note: "misses weigh 1×", color: "var(--st-warn)" },
+            { label: "L3 · low", n: R.crit ? String(R.crit.L3) : "—", note: "misses weigh 0.5×", color: "var(--color-neutral-400)" }
           ],
-          critNote: "Criticality is set per asset and approved by a person, not inferred. Unapproved assets default to L2 until someone confirms otherwise, so a mis-set L1 cannot quietly triple a vendor's penalty.",
-          sourceNote: R.contract.read + " of " + R.contract.fields + " terms were read from the signed contract — " + Math.round((R.contract.read / R.contract.fields) * 100) + "% source coverage. The rest fell back to platform defaults, which are named below.",
+          critNote: R.critNote || "Criticality is set per asset and approved by a person, not inferred. Unapproved assets default to L2 until someone confirms otherwise, so a mis-set L1 cannot quietly triple a vendor's penalty.",
+          sourceNote: R.sourceNote || (R.contract.read + " of " + R.contract.fields + " terms were read from the signed contract — " + Math.round((R.contract.read / Math.max(1, R.contract.fields)) * 100) + "% source coverage. The rest fell back to platform defaults, which are named below."),
           terms: R.terms.map((t) => ({
             label: t.label, value: t.value,
             valFg: t.src === "contract" ? "var(--color-text)" : "var(--color-neutral-400)",
-            src: t.src === "contract" ? t.clause + " · p" + t.page : "default",
+            src: t.srcLabel || (t.src === "contract" ? t.clause + " · p" + t.page : "default"),
             bg: t.src === "contract" ? "var(--color-accent-900)" : "var(--marker-tint)",
             fg: t.src === "contract" ? "var(--color-accent)" : "var(--color-neutral-300)",
             cursor: t.src === "contract" ? "pointer" : "default",
-            open: () => t.src === "contract"
+            open: () => t.note ? this.flash(t.note)
+              : t.src === "contract"
               ? this.flash("Opening " + R.contract.ref + " at clause " + t.clause + ", page " + t.page + " — the text this term was read from.")
               : this.flash(t.label + " was not found in " + R.contract.ref + ". The platform default of " + t.value + " applies until the term is agreed in writing.")
           })),
@@ -767,14 +946,14 @@ export const renderValsMethods = {
           certs: R.certs.map((c) => ({
             name: c.name, req: c.req, status: c.status, exp: c.exp, ver: c.ver,
             reqFg: c.req === "Preferred" ? "var(--color-neutral-500)" : "var(--color-accent-300)",
-            bg: TAGS[c.status][0], fg: TAGS[c.status][1]
+            bg: tag(c.status)[0], fg: tag(c.status)[1]
           })),
           chase: () => this.runAction("Request evidence", v.name),
           openCompliance: () => this.setState({ view: "cc", ccPivot: "vendors", ccFocus: { kind: "vendor", name: v.name }, ccTab: 0 }),
           invoices: R.invoices.map((i) => ({
             ref: i.ref, period: i.period, line: i.line, charged: i.charged, should: i.should,
             delta: i.delta, deltaFg: i.delta === "—" ? "var(--color-neutral-500)" : "var(--st-risk)",
-            status: i.status, bg: TAGS[i.status][0], fg: TAGS[i.status][1],
+            status: i.status, bg: tag(i.status)[0], fg: tag(i.status)[1],
             flag: i.flag, flagShow: i.flag ? "block" : "none"
           })),
           invTotal: "£" + invTotal.toLocaleString(),
@@ -788,11 +967,6 @@ export const renderValsMethods = {
       ...this.invVals(s),
       ...this.enBuildingVals(s),
 
-      // Spread AFTER the literals above, so the home page's live figures replace the
-      // constants rather than sitting beside them. Everything homeVals returns comes off
-      // the register this controller has already loaded, except the approvals rail.
-      ...this.homeVals(),
-
       /* Query-first: every non-admin report opens with the ask bar above the
          analysis, scoped to the page you are on. Admin pages (Buildings admin,
          Integrations) are configuration surfaces and do not carry it. */
@@ -803,13 +977,16 @@ export const renderValsMethods = {
         const q = (s.pq || "").trim();
         if (!q) return;
         this.setState({ pq: "" });
-        this.ask(q);
+        this.askScoped(q);
       },
       pqRun: () => {
         const q = (s.pq || "").trim();
-        if (!q) return this.flash("Type a question — it runs against the graph behind this page, not the table on it.");
+        // Empty bar: open the chat and put the caret in it, rather than refusing.
+        if (!q) return chatView
+          ? this.ccOpenChat()
+          : this.flash("Type a question — it runs against the graph behind this page, not the table on it.");
         this.setState({ pq: "" });
-        this.ask(q);
+        this.askScoped(q);
       },
       abPh: (() => {
         // Counted, not typed. "118 obligations across 24 buildings" sat above a register
@@ -827,6 +1004,9 @@ export const renderValsMethods = {
               : "nothing on the register yet");
         }
         if (s.view === "vp") {
+          // The live scorecard names its month; until it answers, count what the register
+          // holds rather than quote a scorecard that is not there.
+          if (vm.live) return "Ask anything about vendor performance — " + vm.vendors.length + (vm.vendors.length === 1 ? " vendor" : " vendors") + (vm.month ? ", " + vm.month + " scorecard" : "");
           const vendors = (this.ccData().vendors || []).length;
           return "Ask anything about vendor performance — "
             + (vendors ? vendors + (vendors === 1 ? " vendor" : " vendors") + " on the register"
@@ -847,7 +1027,7 @@ export const renderValsMethods = {
           : s.view === "buildings"
           ? ["Which of my buildings has open risk?", "What documents have I ingested?", "Which assets are unaccounted for?"]
           : (mod && mod.asks) || ["Which buildings put me at risk this month?"];
-        return q.map((a) => ({ label: a, run: () => this.ask(a) }));
+        return q.map((a) => ({ label: a, run: () => this.askScoped(a) }));
       })(),
 
       isUser: s.role !== "admin",
@@ -881,7 +1061,22 @@ export const renderValsMethods = {
             color: none ? "var(--st-warn)" : "var(--color-accent)" }
         ];
       })(),
-      docBuildings: this.glBuildings().map((b) => {
+      // Search + pagination — independent of the buildings table above (docQuery/docPage),
+      // over the same portfolio, filtered the same way (name, building ID, country, state).
+      docQuery: s.docQuery || "",
+      setDocQuery: (e) => this.setState({ docQuery: e.target.value, docPage: 0 }),
+      docQueryShow: docAll.length ? "flex" : "none",
+      docPage: docPage,
+      docPageCount: docPageCount,
+      docPageLabel: docFiltered.length ? docPageStart + "–" + docPageEnd + " of " + docFiltered.length + (s.docQuery ? " matching" : "") : "0 of 0",
+      docPagerShow: docFiltered.length > PAGE_SIZE ? "flex" : "none",
+      docPagePrevShow: docPage > 0,
+      docPageNextShow: docPage < docPageCount - 1,
+      docPagePrev: () => this.setState((p) => ({ docPage: Math.max(0, (p.docPage || 0) - 1) })),
+      docPageNext: () => this.setState((p) => ({ docPage: Math.min(docPageCount - 1, (p.docPage || 0) + 1) })),
+      docEmptyShow: docFiltered.length ? "none" : "block",
+      docEmptyText: "No buildings match “" + s.docQuery + "”. Try a name, building ID, country or state.",
+      docBuildings: docPageRows.map((b) => {
         const open = s.docOpen === b.name;
         const key = b.buildingId || b.id;
         const c = b.counts || {};
@@ -1131,9 +1326,45 @@ export const renderValsMethods = {
       ...this.bgVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
-      orchWidth: (s.orchOpen && s.flow === "investigate" ? 420 : 280) + "px",
-      shellPad: !s.signedIn ? "0px" : ((s.navOpen && s.view !== "home" ? 248 : 52) + (s.orchOpen ? (s.flow === "investigate" ? 420 : 280) : 0)) + "px",
-      orchLeft: (s.navOpen && s.view !== "home" ? 248 : 52) + "px",
+      orchWidth: orchW + "px",
+      // The navigator behaves the same on every page, Home included: open, it sits beside the
+      // content (never over it), and the dock sits beside the navigator.
+      shellPad: !s.signedIn ? "0px" : ((s.navOpen ? 248 : 52) + (s.orchOpen ? orchW : 0)) + "px",
+      orchLeft: (s.navOpen ? 248 : 52) + "px",
+
+      // Drag the dock's right edge to widen it. Widen only: the floor is the flow's own
+      // default (orchBaseW) so a drag can never make the dock narrower than designed, and
+      // the ceiling is ORCH_MAX_W so it can never swallow the register beside it.
+      orchResizeShow: s.orchOpen ? "block" : "none",
+      orchAtMax: orchW >= ORCH_MAX_W,
+      // The handle is fixed, not absolute: the dock scrolls its own content, and an
+      // absolute handle would scroll away with it.
+      orchHandleLeft: ((s.navOpen ? 248 : 52) + orchW - 3) + "px",
+      orchHandleTint: orchW > orchBaseW ? "var(--color-accent)" : "transparent",
+      orchResizeStart: (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = orchW;
+        const move = (ev) => {
+          const next = startW + (ev.clientX - startX);
+          this.setState({ orchW: Math.max(orchBaseW, Math.min(ORCH_MAX_W, next)) });
+        };
+        const up = () => {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+          document.body.style.userSelect = "";
+          document.body.style.cursor = "";
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+        // Without this a drag selects the text it passes over.
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+      },
+      // Double-click the handle to snap back to the default width.
+      orchResizeReset: () => this.setState({ orchW: null }),
       contentCols: s.orchOpen ? "minmax(0,1fr)" : "minmax(0,1fr) 320px",
       modLastRun: "02:14 today",
       answerCols: s.orchOpen ? "minmax(0,1fr)" : "minmax(0,1.5fr) minmax(0,1fr)",
@@ -1141,6 +1372,8 @@ export const renderValsMethods = {
 
       orchOpen: s.signedIn && s.orchOpen,
       orchTitle: s.orchTask ? s.orchTask.label : "Orchestrator",
+      // The chat reports its own route per reply, so the scripted chain is not shown there.
+      orchStepsShow: chatView && ((s.ccChat || []).length > 0 || s.ccBusy) ? "none" : "flex",
       orchSteps: (s.orchTask ? s.orchTask.steps : []).map((st, i) => ({
         a: st.a, t: st.t,
         state: i < s.orchDone ? "done" : (i === s.orchDone ? "live" : "wait"),
@@ -1152,10 +1385,197 @@ export const renderValsMethods = {
       orchRunning: !!s.orchTask && s.orchDone < s.orchTask.steps.length,
       orchQuery: s.orchQuery,
       setOrchQuery: (e) => this.setState({ orchQuery: e.target.value }),
-      orchKey: (e) => { if (e.key === "Enter" && s.orchQuery.trim()) { const q = s.orchQuery.trim(); this.setState({ orchQuery: "" }); this.orch(q, this.ctxLabel()); } },
-      orchSubmit: () => { if (s.orchQuery.trim()) { const q = s.orchQuery.trim(); this.setState({ orchQuery: "" }); this.orch(q, this.ctxLabel()); } },
+      // On the compliance console a follow-up is a real question to the orchestrator, so
+      // the dock is a conversation. Elsewhere it stays the scripted task replay.
+      orchKey: (e) => { if (e.key === "Enter") this.orchSubmitNow(); },
+      orchSubmit: () => this.orchSubmitNow(),
+      orchPlaceholder: !chatView ? "" : ((s.ccChat || []).length ? "Ask a follow-up…"
+        : s.view === "cc" ? "Ask anything about compliance…"
+        : s.view === "vp" ? "Ask anything about vendor performance…"
+        : s.view === "buildings" ? "Ask anything about your buildings…"
+        : s.view === "home" ? "Ask anything about your portfolio…"
+        : "Message the orchestrator…"),
+
+      // Chat transcript. The console, vendors and buildings docks fill this; every other flow
+      // keeps the single fDone result panel it already had.
+      orchChatShow: chatView && ((s.ccChat || []).length > 0 || s.ccBusy),
+      orchChat: (s.ccChat || []).map((m, i) => ({
+        key: i,
+        isYou: m.role === "you",
+        isBot: m.role !== "you",
+        text: m.text,
+        // Which engine answered, read off the tools behind the reply.
+        domain: m.error ? "Orchestrator" : (m.rich ? "Compliance" : domainOf(m.calls)),
+        // Tool names behind a reply, de-duplicated, so the route is visible per message.
+        tools: (m.calls || []).filter((t, j, a) => a.indexOf(t) === j).join(" · "),
+        toolsShow: (m.calls || []).length ? "block" : "none",
+        isNote: !!m.note,
+        bg: m.error ? "var(--st-risk-bg)" : m.note ? "var(--color-bg)" : "var(--color-surface)",
+        fg: m.error ? "var(--st-risk)" : "var(--color-text)",
+        interruptShow: m.interrupted ? "block" : "none",
+        // Structured compliance payload when the preflight answered; the dock renders
+        // the markdown answer instead when this is null.
+        rich: m.rich ? Object.assign({}, m.rich, {
+          // Bars are derived here because the live register (days-to-expiry per
+          // certificate) lives on the controller, not in the answer payload.
+          overdue: overdueBars(m.rich.certificates, this.ccData()),
+          // Each offer becomes a real button. `kind` decides what it runs.
+          offers: (m.rich.offers || []).map((o) => {
+            const busy = !!(s.ccOfferBusy || {})[o.cert_id + ":" + o.kind];
+            return Object.assign({}, o, {
+              busy: busy,
+              label: busy ? "Working…" : o.label,
+              run: busy ? () => {} : () => this.ccRunOffer(o)
+            });
+          })
+        }) : null,
+        ms: m.ms,
+        // Expanded by default — the route is the point of showing it. Collapses per
+        // message once the reader closes it.
+        // Always offered on a question, including mid-turn — clicking it stops the run
+        // first, because the usual reason to edit is that the answer is going wrong.
+        editShow: m.role === "you" && s.ccEditIdx !== i ? "inline-flex" : "none",
+        edit: () => this.ccEditStart(i),
+        // Editing turns the bubble into a box in place.
+        editing: s.ccEditIdx === i,
+        bubbleShow: s.ccEditIdx === i ? "none" : "block",
+        fileNames: (m.files || []).join(" · "),
+        filesShow: (m.files || []).length ? "block" : "none",
+        stoppedShow: m.stopped ? "block" : "none",
+        // On the chat page the trace rail owns the route, so the in-answer copy of it starts
+        // closed — the same steps twice on one screen made the answer harder to read, not
+        // better evidenced. The console's dock has no rail, so there it stays open.
+        stepsOpen: (s.ccStepsOpen || {})[i] === undefined ? stepsDefault : !!(s.ccStepsOpen || {})[i],
+        toggleSteps: () => this.setState((p) => {
+          const o = Object.assign({}, p.ccStepsOpen || {});
+          const open = o[i] === undefined ? stepsDefault : !!o[i];
+          o[i] = !open;
+          return { ccStepsOpen: o };
+        }),
+        // Send this turn's run to the rail. Offered only where there is one to send.
+        traceShow: (m.trace || []).length && !s.ccBusy ? "inline-flex" : "none",
+        traceSelected: s.ccTraceIdx === i,
+        selectTrace: () => this.setState({ ccTraceIdx: i })
+      })),
+      ccEditText: s.ccEditText,
+      ccEditSet: (e) => this.ccEditSet(e.target.value),
+      ccEditKey: (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.ccEditRun(); }
+        if (e.key === "Escape") this.ccEditCancel();
+      },
+      ccEditCancel: () => this.ccEditCancel(),
+      ccEditRun: () => this.ccEditRun(),
+
+      orchBusy: !!s.ccBusy,
+      orchChatHasAny: (s.ccChat || []).length > 0,
+      orchChatReset: () => this.ccChatReset(),
+
+      // The turn in progress, painted from the stream as steps and zones arrive.
+      orchLiveShow: chatView && s.ccBusy && s.ccStream ? "block" : "none",
+      orchLiveRich: (s.ccStream && s.ccStream.rich) || null,
+      orchLiveLabel: (s.ccStream && s.ccStream.reasoning) || "Reading the graph…",
+
+      // ── the trace rail ────────────────────────────────────────────────
+      // The run's sequence of thoughts, beside the conversation rather than folded inside
+      // the answer. While a turn runs this follows the stream; once it lands the rail keeps
+      // showing that turn until another is picked, so the route stays readable after the
+      // fact. Completed events only — the one still in flight is the rail's live row, which
+      // avoids showing "Running list_certificates…" twice.
+      ...(() => {
+        const chat = s.ccChat || [];
+        let lastIdx = -1;
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+          if (chat[i].role !== "you" && (chat[i].trace || []).length) { lastIdx = i; break; }
+        }
+        const picked = (typeof s.ccTraceIdx === "number" && chat[s.ccTraceIdx]) ? s.ccTraceIdx : lastIdx;
+        const busy = !!s.ccBusy;
+        const src = busy ? ((s.ccStream && s.ccStream.trace) || []) : (picked >= 0 ? (chat[picked].trace || []) : []);
+        const secs = (n) => (n / 1000).toFixed(n < 10000 ? 1 : 0) + " s";
+
+        const rows = src
+          // A tool still running is the live row, not a completed one.
+          .filter((e) => !(busy && e.kind === "tool" && e.running))
+          .map((e, i) => {
+            if (e.kind === "step") {
+              const st = e.step || {};
+              const n = (st.queries || []).reduce((a, q) => a + (Number(q.matched_rows) || 0), 0);
+              return {
+                key: "e" + i, icon: TRACE_ICON[st.stage] || "ph-check-circle", mono: false,
+                title: st.label || st.stage || "Step",
+                detail: st.detail || "",
+                meta: n ? n + (n === 1 ? " row" : " rows") : "",
+                parts: (st.parts || []).slice(0, 4).map((p, j) => ({ key: j, text: p.text || p.id || "", scope: p.scope || "" })),
+                issues: (st.issues || []).slice(0, 3)
+              };
+            }
+            if (e.kind === "tool") {
+              return {
+                key: "e" + i, icon: "ph-wrench", mono: true,
+                title: e.tool, detail: "",
+                meta: typeof e.ranMs === "number" ? secs(e.ranMs) : "",
+                parts: [], issues: []
+              };
+            }
+            if (e.kind === "switch") {
+              return {
+                key: "e" + i, icon: "ph-arrows-left-right", mono: false,
+                title: "Handed to " + e.to,
+                detail: e.from ? "from " + e.from : "",
+                meta: "", parts: [], issues: []
+              };
+            }
+            return {
+              key: "e" + i, icon: "ph-lightbulb", mono: false,
+              title: e.label || "Thinking", detail: e.text || "",
+              meta: "", parts: [], issues: []
+            };
+          });
+
+        const elapsed = busy
+          ? (s.ccTick ? s.ccTick + " s" : "")
+          : (picked >= 0 && typeof chat[picked].ms === "number" ? secs(chat[picked].ms) : "");
+        // The question this trace belongs to, so a replayed run says which one it was.
+        let forQ = "";
+        if (!busy && picked > 0 && chat[picked - 1] && chat[picked - 1].role === "you") forQ = chat[picked - 1].text;
+        if (busy) { for (let i = chat.length - 1; i >= 0; i -= 1) { if (chat[i].role === "you") { forQ = chat[i].text; break; } } }
+
+        return {
+          orchTraceShow: chatView && (busy || rows.length > 0),
+          orchTraceRows: rows,
+          orchTraceLive: busy,
+          orchTraceLiveLabel: (s.ccStream && s.ccStream.reasoning) || "Reading the graph…",
+          orchTraceElapsed: elapsed,
+          orchTraceTitle: busy ? "Working" : "Run trace",
+          orchTraceFor: forQ,
+          orchTraceCount: rows.length + (busy ? 1 : 0),
+          // Only offered once a past turn is pinned, so it never appears on the live run.
+          orchTraceUnpinShow: !busy && typeof s.ccTraceIdx === "number" && s.ccTraceIdx !== lastIdx,
+          orchTraceUnpin: () => this.setState({ ccTraceIdx: null }),
+          orchTraceStop: () => this.ccStop()
+        };
+      })(),
+
+      // Stop a turn in flight. Only offered while one is running.
+      orchStopShow: chatView && s.ccBusy ? "inline-flex" : "none",
+      orchStop: () => this.ccStop(),
+
+      // Documents and photos staged for the next question. The backend routes by type:
+      // CSV/Excel to the migration flow, PDF/Word/images to doc-rag indexing.
+      orchAttachShow: chatView ? "flex" : "none",
+      orchFiles: (s.ccFiles || []).map((f, i) => ({
+        key: i,
+        name: f.name,
+        size: f.size < 1024 ? f.size + " B" : f.size < 1048576 ? Math.round(f.size / 1024) + " KB" : (f.size / 1048576).toFixed(1) + " MB",
+        isImage: /^image\//.test(f.type || ""),
+        icon: /^image\//.test(f.type || "") ? "ph-image" : /csv|sheet|excel/i.test(f.type || f.name) ? "ph-table" : "ph-file-text",
+        drop: () => this.ccDropFile(i)
+      })),
+      orchFileCount: (s.ccFiles || []).length,
+      orchPickFiles: (e) => { this.ccAddFiles(e.target.files); e.target.value = ""; },
       closeOrch: () => this.closeOrch(),
-      openOrch: () => this.setState({ orchOpen: true }),
+      // The top-bar icon opens the dock beside a page; on the chat page the page is already the
+      // orchestrator, so it just puts the caret in the composer.
+      openOrch: () => (s.view === "chat" ? this.ccOpenChat() : this.setState({ orchOpen: true })),
       fInputs: s.flow === "inputs",
       fiTitle: s.fLabel,
       fiFields: (spec0 && spec0.inputs || []).map((fd) => ({
@@ -1172,60 +1592,26 @@ export const renderValsMethods = {
         this.setState({ flow: "email", emKind: spec0.k, emKicker: m.kicker, emTo: m.to, emSubject: m.subject, emBody: m.body });
       },
 
-      fDeclare: s.flow === "declare",
-      dStep1: s.declStep === 0, dStep2: s.declStep === 1, dStep3: s.declStep === 2,
-      dStepLabel: "Step " + (s.declStep + 1) + " of 3 · " + ["building record", "schema written", "documents"][s.declStep],
-      dValid: !!(s.decl.name && s.decl.state && s.decl.floors),
-      dValidNote: s.decl.name && s.decl.state && s.decl.floors ? "" : "Name, state and floors are required — they key the record.",
-      dFields: [
-        { key: "name", label: "Building name", ph: "Bishopsgate Tower", type: "text" },
-        { key: "cc", label: "Country", type: "select", options: ["UK", "US", "AE", "SG"] },
-        { key: "state", label: "State or region", type: "select", options: REGIONS[s.decl.cc] || [] },
-        { key: "use", label: "Primary use", type: "select", options: ["Commercial", "Retail", "Residential", "Mall", "Hospital", "Hotel", "Mixed"] },
-        { key: "floors", label: "Floors", ph: "34", type: "text" },
-        { key: "area", label: "Total floor area", ph: "412,000 ft²", type: "text" }
-      ].map((fd) => ({
-        label: fd.label, ph: fd.ph || "", value: s.decl[fd.key],
-        isText: fd.type === "text" ? "block" : "none", isSelect: fd.type === "select" ? "block" : "none",
-        options: fd.options || [],
-        set: (e) => {
-          const v = e.target.value;
-          this.setState((p) => {
-            const next = Object.assign({}, p.decl, { [fd.key]: v });
-            if (fd.key === "cc") next.state = (REGIONS[v] || [""])[0];
-            return { decl: next };
-          });
-        }
-      })),
-      dMixFields: [["mixC", "Commercial"], ["mixR", "Residential"], ["mixL", "Retail"], ["mixM", "Mall"], ["mixH", "Hospital"], ["mixT", "Hotel"]].map((m) => ({
-        label: m[1], value: s.decl[m[0]],
-        set: (e) => { const v = e.target.value; this.setState((p) => ({ decl: Object.assign({}, p.decl, { [m[0]]: v }) })); }
-      })),
-      dMixShow: s.decl.use === "Mixed" ? "flex" : "none",
-      dMixTotal: (() => {
-        const t = ["mixC", "mixR", "mixL", "mixM", "mixH", "mixT"].reduce((a, k) => a + (parseFloat(s.decl[k]) || 0), 0);
-        return t ? t + "% allocated" : "unallocated";
-      })(),
-      dMixColor: (() => {
-        const t = ["mixC", "mixR", "mixL", "mixM", "mixH", "mixT"].reduce((a, k) => a + (parseFloat(s.decl[k]) || 0), 0);
-        return t === 100 ? "var(--st-ok)" : t > 100 ? "var(--st-risk)" : "var(--color-neutral-500)";
-      })(),
-      dNewId: "B-0" + String(BUILDINGS.length + 1).padStart(2, "0"),
-      dName: s.decl.name || "the new building",
-      dNext: () => this.setState((p) => ({ declStep: p.declStep + 1 })),
-      dBack: () => this.setState((p) => ({ declStep: Math.max(0, p.declStep - 1) })),
-      dIngestNow: () => this.setState({ flow: "ingest", declFor: s.decl.name || "the new building" }),
-      dLater: () => this.setState({ flow: null, flowDone: (s.decl.name || "The building") + " is hoisted and keyed as " + ("B-0" + String(BUILDINGS.length + 1).padStart(2, "0")) + ". No documents ingested — its Hoist Score stays at 0% until they arrive. Run Ingest documents whenever you are ready." }),
-
+      // Ingest documents: a real upload against the orchestrator (deepAgentsApi.runStatefulWithFiles
+      // via ccAsk/askScoped), not a canned completion message. Files ride the same tray the
+      // composer's attach button stages (ccFiles/orchFiles below) — attach from either place
+      // and it is there for both, since it is one upload waiting on one send.
       fIngest: s.flow === "ingest",
-      iBuilding: s.declFor,
-      iBuildingOpts: BUILDINGS.map((b) => b.name).concat(s.decl.name && !BUILDINGS.some((b) => b.name === s.decl.name) ? [s.decl.name] : []),
+      iBuilding: s.declFor || "",
+      iBuildingOpts: BUILDINGS.map((b) => b.name).concat(this.bldIsLive() ? this.bldData().map((b) => b.name).filter((n) => !BUILDINGS.some((sb) => sb.name === n)) : []),
       setIBuilding: (e) => this.setState({ declFor: e.target.value }),
       iClasses: ["Certificates and statutory evidence", "Contracts and framework agreements", "Asset registers and PPM schedules", "Meter data and consent — MPAN / MPRN", "Invoices and service charge records"],
-      iRun: () => this.setState({
-        flow: null,
-        flowDone: "Ingesting against " + s.declFor + ". Every document is stamped with that building's ID as a foreign key, so a certificate can never be orphaned from the asset it belongs to. Extraction, relationship mapping and Hoist Score recalculation run as one chain — you will be notified when coverage updates."
-      }),
+      iCanRun: (s.ccFiles || []).length > 0 && !!s.declFor,
+      iHint: !(s.ccFiles || []).length ? "Attach at least one document first — certificates, contracts, asset registers, meter data or invoices."
+        : !s.declFor ? "Choose which building this is for."
+        : "",
+      iRun: () => {
+        if (!(s.ccFiles || []).length) return this.flash("Attach at least one document first — certificates, contracts, asset registers, meter data or invoices.");
+        if (!s.declFor) return this.flash("Choose which building this is for.");
+        const n = (s.ccFiles || []).length;
+        this.setState({ flow: null, flowDone: "" });
+        this.askScoped("Ingest " + n + (n === 1 ? " document" : " documents") + " for " + s.declFor + ".");
+      },
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
       fEmail: s.flow === "email", fDone: !!s.flowDone, fDoneText: s.flowDone,
@@ -1290,64 +1676,129 @@ export const renderValsMethods = {
       em: {
         kicker: s.emKicker, to: s.emTo, subject: s.emSubject, body: s.emBody,
         setTo: (e) => this.setState({ emTo: e.target.value }),
+        setSubject: (e) => this.setState({ emSubject: e.target.value }),
         setBody: (e) => this.setState({ emBody: e.target.value }),
-        send: () => this.setState({
+        // Evidence requests carry the generated pack. It is a blob built in the browser,
+        // so it is offered as an attachment to open rather than a server-side link.
+        packShow: s.emKind === "evidence" && this._ccPack ? "flex" : "none",
+        packName: (this._ccPack && this._ccPack.name) || "",
+        packSize: this._ccPack ? this._ccPack.kb + " KB" : "",
+        openPack: () => { if (this._ccPack) window.open(this._ccPack.url, "_blank"); },
+        send: () => this.setState((prev) => ({
+          // An approved evidence request is remembered against the certificate so its
+          // row stops offering the same request again.
+          ccRequested: s.emKind === "evidence" && s.emCertId
+            ? Object.assign({}, prev.ccRequested || {}, { [s.emCertId]: true })
+            : prev.ccRequested,
           flow: s.emKind === "investigate" && s.inv ? "investigate" : null,
           inv: s.emKind === "investigate" && s.inv ? Object.assign({}, s.inv, { replies: (s.inv.replies || []).concat([{ you: "Send the email", bot: "Sent to " + (s.emTo || "the FM lead") + ". The reply lands on this case; a document attached to it is ingested and bound to the asset record automatically." }]) }) : s.inv,
-          flowDone: s.emKind === "investigate" ? "" : spec0 && spec0.done && spec0.k === s.emKind ? spec0.done(s.fiVals, s.fLabel, s.fSubject) : s.emKind === "quote"
+          flowDone: s.emKind === "investigate" ? "" : spec0 && spec0.done && spec0.k === s.emKind ? spec0.done(s.fiVals, s.fLabel, s.fSubject) : s.emKind === "renewal"
+            ? "Renewal email queued for " + (s.emTo || "the vendor") + ". It sits on the approvals card until it is sent — nothing has left the platform."
+            : s.emKind === "evidence"
+            ? "Evidence request queued for " + (s.emTo || "the vendor") + " with the compliance pack attached. Nothing has left the platform — approving it here records the request; sending it needs the mail step wiring on."
+            : s.emKind === "quote"
             ? "Quote request sent to " + (s.emTo || "the contractor") + ". The reply is watched and a scorecard opens on award."
             : s.emKind === "booking"
               ? "Booking instruction sent to " + (s.emTo || "the vendor") + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
               : "Extension request sent to " + (s.emTo || "the authority") + ". The obligation is marked as contested pending their reply."
-        })
+        }))
       },
 
-      orchRecent: s.sessions.filter((q) => q.kind === "task" && q !== s.orchTask).slice(0, 4).map((q) => ({ label: q.label, when: q.when })),
-      orchHasRecent: s.sessions.filter((q) => q.kind === "task" && q !== s.orchTask).length > 0,
+      // Recent tasks. De-duplicated by label (asking the same thing three times used to
+      // fill the list with itself), stamped with a real elapsed time, and clickable: a
+      // row re-runs the instruction it names. Only the compliance console can re-ask,
+      // so elsewhere a row just reopens the dock on that task.
+      orchRecent: (() => {
+        // Every session is a question worth re-asking, not just the ones this dock
+        // raised — filtering on kind === "task" hid all five of the seeded ones, which
+        // is why the list read empty. `task` carries the raw instruction when the dock
+        // recorded it; a seeded row's label IS the question.
+        const seen = {};
+        return s.sessions
+          .filter((q) => q !== s.orchTask)
+          .filter((q) => { const k = q.task || q.label; if (seen[k]) return false; seen[k] = 1; return true; })
+          .slice(0, 6)
+          .map((q) => {
+            const question = q.task || q.label;
+            const canAsk = chatView;
+            return {
+              label: q.label,
+              when: ago(q.at),
+              hint: canAsk ? "Re-run" : "Open",
+              click: () => (canAsk ? this.askScoped(question) : this.ask(question, q.k || null))
+            };
+          });
+      })(),
+      orchHasRecent: s.sessions.some((q) => q !== s.orchTask),
+
+      // The composer's button becomes Stop while a turn is running.
+      orchSendBusy: !!s.ccBusy && chatView,
+      orchSendIcon: (s.ccBusy && chatView) ? "ph-stop-circle" : "ph-arrow-right",
+      orchSendBg: (s.ccBusy && chatView) ? "var(--st-risk)" : "var(--color-accent)",
+      orchSendTitle: (s.ccBusy && chatView) ? "Stop this answer" : "Send",
+      orchSendClick: () => ((s.ccBusy && chatView) ? this.ccStop() : this.orchSubmitNow()),
       orchLiveDot: s.orchTask && s.orchDone < s.orchTask.steps.length ? "block" : "none",
       orchStatus: !s.orchTask ? "Idle — instruct it below, or trigger any action on the page." : (s.orchDone < s.orchTask.steps.length ? "Running · step " + (s.orchDone + 1) + " of " + s.orchTask.steps.length : "Complete · logged to the Activity Log and stored as a session"),
       navOpen: s.navOpen, navClosed: !s.navOpen,
-      navOverlay: s.navOpen && s.view === "home",
       toggleNav: () => this.setState((p) => ({ navOpen: !p.navOpen })),
       closeNav: () => this.setState({ navOpen: false }),
-      newQuery: () => this.setState({ view: "home", query: "", detail: null, navOpen: false }),
-      newSpace: () => this.orch("Create space", "Spaces"),
+      newQuery: () => this.newQuery(),
+      newSpace: () => this.spNewToggle(),
+      // Hoist a building: the dock card (logic/buildingsCrud.js), wired to POST /api/energy/buildings.
       addBuilding: () => this.bcOpenForm(),
-      allSessions: () => this.flash("Full session history opens in the workspace archive."),
+      // Ingest documents on its own — for a building that already exists, not only the one
+      // just hoisted. A fresh panel, same as opening any other task; nothing preselected.
+      ingestDocuments: () => {
+        this.ccChatReset();
+        this.orchWith('Ingest documents', this.ctxLabel(), 'ingest', { declFor: '' });
+      },
+      allSessions: () => this.openSessions(null),
 
-      /* Spaces and sessions in the navigator read the same state the home page
-         does — a space is a saved scope, a session is a query or an
-         orchestrator task, and both reopen where they came from. */
-      navSpaces: [
-        { name: "Compliance", n: "3 lapsed", key: "compliance" },
-        { name: "Energy", n: "6 anomalies", key: "energy" },
-        { name: "Vendor performance", n: "3 below 80", key: "vendors" },
-        { name: "Vendor operations", n: "14 to approve", key: "ops" }
-      ].map((x) => ({ name: x.name, n: x.n, click: () => this.openModule(x.key) })),
+      /* Spaces: the four engines with their live figures, then the saved spaces from svc-udr
+         (spacesLive.js). Sessions: every conversation and task, newest first, with a real
+         elapsed time (sessions.js). Both open where they came from. */
+      navSpaces: spm.builtin.map((b) => ({
+        name: b.name, n: b.badge, icon: b.icon, tone: toneColor(b.tone), title: b.live ? b.kpis.map((k) => k.label + " " + k.value).join(" · ") : "Waiting for the engine to answer",
+        active: s.view === "space" && s.spaceKey === b.key,
+        click: () => this.openSpace(b.key)
+      })).concat(spm.custom.map((c) => ({
+        name: c.name, n: c.sessions ? String(c.sessions) : "", icon: "ph-folder-simple", tone: "var(--color-neutral-500)", title: "Saved space" + (c.sessions ? " · " + c.sessions + (c.sessions === 1 ? " session" : " sessions") : ""),
+        active: s.view === "space" && s.spaceKey === c.id,
+        click: () => this.openSpace(c.id)
+      }))),
+      navSpaceNew: !!s.spNew,
+      navSpaceName: s.spNewName || "",
+      setNavSpaceName: (e) => this.spNewSet(e.target.value),
+      navSpaceKey: (e) => { if (e.key === "Enter") this.spCreate(); if (e.key === "Escape") this.spNewCancel(); },
+      navSpaceCreate: () => this.spCreate(),
+      navSpaceCancel: () => this.spNewCancel(),
+      navSpaceBusy: !!s.spBusy,
+      navSpaceCanCreate: spm.savedLive && !s.spBusy,
+      navSpaceNote: spm.savedLive ? (spm.custom.length ? "" : "No saved spaces yet — add one with +.")
+        : s.spLoading ? "Loading saved spaces…"
+        : s.spError ? "Saved spaces unavailable — svc-udr did not answer." : "",
+      navSpaceNoteTip: s.spError || "",
 
-      navSessions: s.sessions.map((q) => ({
-        label: q.label,
-        when: q.when,
-        icon: q.kind === "task" ? "ph-lightning"
-          : q.k === "compliance" ? "ph-shield-check"
-          : q.k === "energy" ? "ph-lightning"
-          : q.k === "vendors" ? "ph-chart-line-up"
-          : "ph-magnifying-glass",
-        click: () => {
-          if (q.kind === "task") return this.setState({ orchOpen: true, navOpen: true });
-          if (q.k) return this.openModule(q.k);
-          return this.setState({ queueOpen: true });
-        }
+      navSessions: s.sessions.slice(0, 8).map((q) => ({
+        label: q.title || q.label,
+        when: ago(q.at),
+        icon: sessionIcon(q),
+        active: q.kind === "chat" && s.sessionId === q.id && s.view === "chat",
+        click: () => this.openSession(q.id)
       })),
+      navSessionsEmpty: !s.sessions.length,
+      navSessionsMore: s.sessions.length > 8 ? "All sessions · " + s.sessions.length : "All sessions",
 
+      // Section badges are the spaces' live figures (the number off the badge) and the live
+      // site count; nothing shows until its source has answered.
       navSections: [
-        { label: "Buildings", icon: "ph-buildings", key: "buildings", count: 24 },
+        { label: "Buildings", icon: "ph-buildings", key: "buildings", count: this.bldIsLive() ? this.bldData().length : "" },
         { label: "Buildings", icon: "ph-buildings", key: "buildings_user", count: "" },
-        { label: "Compliance", icon: "ph-shield-check", key: "compliance", count: 3 },
-        { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: 3 },
-        { label: "Energy", icon: "ph-lightning", key: "energy", count: 6 },
+        { label: "Compliance", icon: "ph-shield-check", key: "compliance", count: spm.byKey.compliance.count === null ? "" : spm.byKey.compliance.badge.split(" ")[0] },
+        { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: spm.byKey.vendors.count === null ? "" : spm.byKey.vendors.badge.split(" ")[0] },
+        { label: "Energy", icon: "ph-lightning", key: "energy", count: spm.byKey.energy.count === null ? "" : spm.byKey.energy.badge.split(" ")[0] },
         { label: "Assets (Pending)", icon: "ph-cube", key: "assets" },
-        { label: "Work orders (Pending)", icon: "ph-wrench", key: "ops", count: 14 }
+        { label: "Work orders (Pending)", icon: "ph-wrench", key: "ops", count: spm.byKey.ops.count === null ? "" : spm.byKey.ops.badge.split(" ")[0] }
       ].filter((n) => s.role === "admin" ? n.key === "buildings" : n.key !== "buildings").map((n) => {
         const active = (s.view === "module" && s.module === n.key)
           || (s.view === "buildings" && n.key === "buildings" && s.role === "admin")
@@ -1363,21 +1814,105 @@ export const renderValsMethods = {
             if (n.key === "buildings_user") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "user", navOpen: true, detail: null }); }
             if (n.key === "compliance") { window.scrollTo(0, 0); return this.setState({ view: "cc", navOpen: true, detail: null }); }
             if (n.key === "vendors") { window.scrollTo(0, 0); return this.setState({ view: "vp", navOpen: true, detail: null }); }
-            if (n.key === "assets") return this.setState({ view: "report", reportKey: "assetrisk", navOpen: true, detail: null });
+            // Asset registers hang off the buildings in the Hoist Graph; that page is where they are.
+            if (n.key === "assets") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "user", navOpen: true, detail: null }); }
             return this.openModule(n.key);
           }
         };
       }),
 
       isReport: s.signedIn && s.view === "report",
+      isSessions: s.signedIn && s.view === "sessions",
+      isSpace: s.signedIn && s.view === "space",
+
+      // The Sessions page: every conversation and task in this browser, grouped by day,
+      // searchable, filterable by space; a row reopens, deletes or files its session.
+      sessionsPage: (() => {
+        const filter = s.sessionsFilter || null;
+        const groups = shapeSessionList(s.sessions, { query: s.sessionsQuery, space: filter });
+        const chips = [{ key: null, label: "All" }]
+          .concat(spm.builtin.map((b) => ({ key: b.key, label: b.name })))
+          .concat(spm.custom.map((c) => ({ key: c.id, label: c.name })));
+        return {
+          count: s.sessions.length + (s.sessions.length === 1 ? " session" : " sessions") + " · stored in this browser, threads on svc-deepagents",
+          query: s.sessionsQuery || "",
+          setQuery: (e) => this.setState({ sessionsQuery: e.target.value }),
+          chips: chips.map((c) => ({ label: c.label, on: filter === c.key, pick: () => this.setState({ sessionsFilter: c.key }) })),
+          groups: dayGroups(groups),
+          empty: !groups.length,
+          emptyText: s.sessions.length ? "Nothing matches." : "No sessions yet. Ask anything from the home bar — every conversation lands here.",
+          newQuery: () => this.newQuery()
+        };
+      })(),
+
+      // A space page: a built-in engine with its live figures, or a saved space; then the
+      // sessions filed there and an ask bar that starts a new one in it.
+      spacePage: (() => {
+        const e = this.spaceEntry(s.spaceKey);
+        if (!e) {
+          return {
+            missing: true, name: "", kicker: "Space", icon: "ph-folder-simple", kpis: [], groups: [], empty: true,
+            emptyText: s.spLoading ? "Loading saved spaces…" : s.spError ? "Saved spaces unavailable — svc-udr did not answer." : "This space is not on record any more.",
+            back: () => this.openSessions(null)
+          };
+        }
+        const groups = shapeSessionList(s.sessions, { space: e.custom ? e.id : e.key });
+        return {
+          missing: false,
+          isCustom: !!e.custom,
+          kicker: e.custom ? "Space · saved in svc-udr" : "Space · " + e.page,
+          name: e.name,
+          icon: e.icon,
+          badge: e.custom ? (e.sessions ? e.sessions + (e.sessions === 1 ? " session filed" : " sessions filed") : "Nothing filed yet") : e.badge,
+          badgeColor: toneColor(e.tone),
+          live: !!e.live,
+          sourceNote: e.custom
+            ? "Created " + (e.createdAt ? fmtDateTime(e.createdAt) : "—") + (e.createdBy ? " by " + e.createdBy : "") + " · plenum_cafm.saved_spaces"
+            : (e.live ? "Figures read from svc-operations-intelligence" : "Waiting for the engine to answer"),
+          kpis: e.kpis.map((k) => ({ label: k.label, value: String(k.value) })),
+          openLabel: e.custom ? "" : "Open " + e.page,
+          openPage: () => this.openSpacePage(e.key),
+          renaming: !!s.spRenaming,
+          renameText: s.spRenameText || "",
+          startRename: () => this.setState({ spRenaming: true, spRenameText: e.name }),
+          setRename: (ev) => this.setState({ spRenameText: ev.target.value }),
+          renameKey: (ev) => { if (ev.key === "Enter") this.spRename(e.id, s.spRenameText); if (ev.key === "Escape") this.setState({ spRenaming: false, spRenameText: "" }); },
+          saveRename: () => this.spRename(e.id, s.spRenameText),
+          cancelRename: () => this.setState({ spRenaming: false, spRenameText: "" }),
+          remove: () => this.spDelete(e.id),
+          busy: !!s.spBusy,
+          ask: s.spaceAsk || "",
+          setAsk: (ev) => this.setState({ spaceAsk: ev.target.value }),
+          askKey: (ev) => { if (ev.key === "Enter") this.spaceAskRun(); },
+          askRun: () => this.spaceAskRun(),
+          askPh: e.custom ? "Ask something to file in " + e.name + "…" : "Ask about " + e.name.toLowerCase() + " — the answer is filed here",
+          groups: dayGroups(groups),
+          empty: !groups.length,
+          emptyText: e.custom ? "Nothing filed here yet. Ask below, or file a session from the Sessions page." : "No conversations with this engine yet. Ask below.",
+          back: () => this.openSessions(null)
+        };
+      })(),
+
+      // The conversation page's header: which session this is and where it is filed.
+      chatSessionTitle: (() => { const rec = s.sessions.find((x) => x.id === s.sessionId); return rec ? rec.title : ""; })(),
+      chatSessionMeta: (() => {
+        const rec = s.sessions.find((x) => x.id === s.sessionId);
+        if (!rec) return "";
+        const sp = rec.spaceId ? spm.byKey[rec.spaceId] : null;
+        return ["Asked from " + rec.page, sp ? "filed in " + sp.name : null, ago(rec.at)].filter(Boolean).join(" · ");
+      })(),
+      chatCanFile: !!s.sessionId && spm.custom.length > 0,
+      chatFileValue: (() => { const rec = s.sessions.find((x) => x.id === s.sessionId); return (rec && rec.spaceId) || ""; })(),
+      chatFileOptions: [{ value: "", label: "Not in a space" }].concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
+      chatFileTo: (e) => { if (s.sessionId) this.fileSession(s.sessionId, e.target.value || null); },
       isCC: s.signedIn && s.view === "cc",
       ccScan: () => this.ccRunScan(),
-      ccLastRun: s.ccLastScan ? fmtTime(s.ccLastScan) + " · scan" : s.ccLoadedAt ? fmtTime(s.ccLoadedAt) + " · register read" : (s.ccLoading ? "loading…" : "not yet · seed data"),
+      ccLastRun: s.ccScanning ? "scanning…" : s.ccLastScan ? fmtTime(s.ccLastScan) + " · scan" : s.ccLoadedAt ? fmtTime(s.ccLoadedAt) + " · register read" : (s.ccLoading ? "loading…" : "not yet · seed data"),
       ccLive: !!s.ccLive,
-      ccSourceLabel: s.ccLive ? "Live · svc-operations-intelligence" + (s.ccError ? " · refresh failed" : "") : s.ccLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
-      ccSourceDot: s.ccLive ? (s.ccError ? "var(--st-warn)" : "var(--st-ok)") : s.ccLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
-      ccSourceDetail: s.ccError || "",
-      ccRetryShow: !s.ccLoading && (!s.ccLive || !!s.ccError) ? "inline" : "none",
+      ccSourceLabel: s.ccScanning ? "Scanning the register…" : s.ccLive ? "Live · svc-operations-intelligence" + (s.ccError ? " · refresh failed" : "") : s.ccLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
+      ccSourceDot: s.ccScanning ? "var(--color-accent)" : s.ccLive ? (s.ccError ? "var(--st-warn)" : "var(--st-ok)") : s.ccLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
+      ccSourceDetail: s.ccScanMsg || s.ccError || "",
+      ccRetryShow: !s.ccLoading && !s.ccScanning && (!s.ccLive || !!s.ccError) ? "inline" : "none",
       ccRetry: () => this.ccRetryNow(),
       ccPanelOpen: s.ccPanel,
       ccPanelLabel: s.ccPanel ? "− Close" : "+ Add scope",
@@ -1400,12 +1935,16 @@ export const renderValsMethods = {
       ccCols: cc.cols,
       ccTiles: cc.tiles,
       ccPins: cc.pins,
-      ccTicks: [{ label: "lapsed", color: "var(--st-risk)" }].concat(runwayTicks().map((l) => ({ label: l, color: "var(--color-neutral-500)" }))),
+      // The runway is a picture of counts, so it states them: the lapsed zone is labelled
+      // with how many sit in it, and each legend key carries the number of dots it
+      // explains. Both come from cc.pinCounts, derived from the same rows as the pins.
+      ccTicks: [{ label: "lapsed · " + cc.pinCounts.lapsed, color: "var(--st-risk)" }].concat(runwayTicks().map((l) => ({ label: l, color: "var(--color-neutral-500)" }))),
       ccLegend: [
-        { label: "solid — lapsed or blocked", bg: "var(--st-risk)", border: "0" },
-        { label: "ring — expiring within 90 days", bg: "var(--color-surface)", border: "2.5px solid var(--st-warn)" },
-        { label: "current", bg: "var(--st-ok)", border: "0" },
-        { label: "shaded band = next 90 days", bg: "var(--color-divider)", border: "0" }
+        { label: "solid — lapsed or blocked · " + cc.pinCounts.risk, bg: "var(--st-risk)", border: "0" },
+        { label: "ring — expiring within 90 days · " + cc.pinCounts.warn, bg: "var(--color-surface)", border: "2.5px solid var(--st-warn)" },
+        { label: "current · " + cc.pinCounts.ok, bg: "var(--st-ok)", border: "0" },
+        { label: "shaded band = next 90 days · " + cc.pinCounts.band, bg: "var(--color-divider)", border: "0" },
+        { label: cc.pinCounts.total + (cc.pinCounts.total === 1 ? " certificate plotted" : " certificates plotted"), bg: "transparent", border: "1px dashed var(--color-divider)" }
       ],
 
       ccCols2: s.ccPivot === "matrix" ? "minmax(0,1fr)" : "repeat(auto-fit,minmax(360px,1fr))",
@@ -1445,46 +1984,61 @@ export const renderValsMethods = {
       qModeCerts: cc.qModeCerts, qModeBuildings: cc.qModeBuildings, qModeGaps: cc.qModeGaps,
       qBuildingRows: cc.qBuildingRows, qGapRows: cc.qGapRows,
       qItems: cc.qItems, qEmpty: cc.qEmpty, closeCCQueue: cc.closeCCQueue,
-      report: {
-        title: rep ? rep.name : "",
-        kicker: rep ? "Built from the session “" + rep.src + "”." : "",
-        summary: "Risky buildings have been evaluated on four parameters: outlier consumption against the peer group, anomaly against the building's own 12-week baseline, deficit against design load, and EUI against its regulation-pack benchmark. Any building failing one or more is listed below; the table re-reads the Hoist Graph on every refresh.",
-        lastRun: rep && rep.ready ? "Last refreshed " + repCad.last : "First refresh pending",
-        meta: rep && rep.ready
-          ? repCad.label + " · re-reads the Hoist Graph on each run"
-          : repCad.label + " · first run pending"
-      },
-      reportPending: !!rep && !rep.ready,
-      reportReady: !!rep && !!rep.ready,
-      exportReport: () => this.orch("Export report", rep ? rep.name : "Reports"),
+      // The report page reads the refresh in view (reports.js). Status is explicit: pending
+      // (never run), running, ready, or failed — and a failed refresh keeps the last good one.
+      report: (() => {
+        const cadL = rep ? cadenceLabel(rep.cad) : "";
+        const next = rep && rep.nextRunAt ? fmtDateTime(iso(rep.nextRunAt)) : null;
+        return {
+          title: rep ? rep.name : "",
+          kicker: rep ? "Built from the session “" + rep.prompt + "”" + (rep.page ? ", asked from " + rep.page : "") + "." : "",
+          lastRun: !rep ? ""
+            : rep.status === "running" ? "Refreshing now…"
+            : rep.lastRunAt ? "Last refreshed " + fmtDateTime(iso(rep.lastRunAt))
+            : rep.lastTriedAt ? "Last attempt failed " + fmtDateTime(iso(rep.lastTriedAt))
+            : "First refresh pending",
+          meta: !rep ? "" : cadL + (next && rep.status !== "running" ? " · next " + next : "") + " · re-run while Hoistra is open",
+          status: rep ? rep.status : "",
+          runAt: repRun ? fmtDateTime(iso(repRun.at)) : "",
+          runMs: repRun && typeof repRun.ms === "number" ? Math.round(repRun.ms / 1000) + " s" : "",
+          tools: repRun && (repRun.calls || []).length ? repRun.calls.join(" · ") : "",
+          answer: repRun && !repRun.error ? (repRun.answer || "") : "",
+          rich: repRun && !repRun.error && repRun.rich
+            ? Object.assign({}, repRun.rich, { overdue: overdueBars(repRun.rich.certificates || [], this.ccData()), offers: [] })
+            : null,
+          runs: rep ? (rep.runs || []).map((r, k) => ({
+            label: fmtDateTime(iso(r.at)) + (r.error ? " · failed" : ""),
+            active: k === (s.reportRunIdx || 0),
+            pick: () => this.setState({ reportRunIdx: k })
+          })) : []
+        };
+      })(),
+      reportPending: !!rep && !repRun && rep.status !== "running",
+      reportRunning: !!rep && rep.status === "running",
+      reportReady: !!repRun && !repRun.error,
+      reportFailed: !!repRun && !!repRun.error,
+      reportFailedText: repRun && repRun.error ? repRun.error : "",
+      reportHasRuns: !!rep && (rep.runs || []).length > 1,
+      runReport: () => { if (rep) this.rpRun(rep.key); },
+      exportReport: () => { if (rep) this.rpExport(rep.key, s.reportRunIdx || 0); },
+      deleteReport: () => { if (rep) this.rpDelete(rep.key); },
 
       reportMenu: s.reportMenu,
       reportName: s.reportName,
       setReportName: (e) => this.setState({ reportName: e.target.value }),
       toggleReportMenu: () => this.setState((p) => ({ reportMenu: !p.reportMenu, reportName: "" })),
       cancelReport: () => this.setState({ reportMenu: false, reportName: "" }),
-      createReport: () => {
-        const src = s.sessions.filter((q) => q.kind !== "task")[s.reportSrc].label;
-        const name = (s.reportName || "").trim() || "Untitled report";
-        const cad = CADENCES[s.reportCad] || CADENCES[1];
-        const label = CADENCE_LABEL(s);
-        const key = "r" + Date.now();
-        this.setState((p) => ({
-          reports: p.reports.concat([{ key, name, badge: CADENCE_BADGE(s), src, cad: label, last: cad.last, ready: false }]),
-          reportMenu: false, reportName: "", view: "report", reportKey: key, detail: null
-        }));
-        this.orch("Create report “" + name + "” — " + label.toLowerCase(), "Reports");
-      },
-      reportCadences: CADENCES.map((c, i) => ({
+      createReport: () => this.rpCreate(),
+      reportCadences: CADENCES.map((c, k) => ({
         label: c.label,
-        tick: i === s.reportCad ? "ph-radio-button" : "ph-circle",
-        color: i === s.reportCad ? "var(--color-accent)" : "var(--color-neutral-500)",
-        chip: i === s.reportCad ? "var(--color-accent-900)" : "transparent",
-        pick: () => this.setState({ reportCad: i })
+        tick: k === s.reportCad ? "ph-radio-button" : "ph-circle",
+        color: k === s.reportCad ? "var(--color-accent)" : "var(--color-neutral-500)",
+        chip: k === s.reportCad ? "var(--color-accent-900)" : "transparent",
+        pick: () => this.setState({ reportCad: k })
       })),
       reportDaysShow: (CADENCES[s.reportCad] || {}).pickDays ? "flex" : "none",
-      reportDays: DAYS.map((d, i) => {
-        const on = s.reportDays.indexOf(i) > -1;
+      reportDays: DAYS.map((d, k) => {
+        const on = s.reportDays.indexOf(k) > -1;
         return {
           label: d.charAt(0),
           title: d,
@@ -1492,57 +2046,37 @@ export const renderValsMethods = {
           fg: on ? "var(--accent-ink)" : "var(--color-neutral-400)",
           edge: on ? "var(--color-accent)" : "var(--color-divider)",
           pick: () => this.setState((p) => ({
-            reportDays: p.reportDays.indexOf(i) > -1 ? p.reportDays.filter((x) => x !== i) : p.reportDays.concat([i]).sort()
+            reportDays: p.reportDays.indexOf(k) > -1 ? p.reportDays.filter((x) => x !== k) : p.reportDays.concat([k]).sort()
           }))
         };
       }),
       reportTime: s.reportTime,
       setReportTime: (e) => this.setState({ reportTime: e.target.value }),
-      reportCadenceNote: "The session's query is pinned and re-run " + CADENCE_LABEL(s).replace(/^Refresh /, "") + ". The report shows its last refresh at the top.",
-      reportSources: s.sessions.filter((q) => q.kind !== "task").slice(0, 5).map((q, i) => ({
-        label: q.label,
-        tick: i === s.reportSrc ? "ph-radio-button" : "ph-circle",
-        color: i === s.reportSrc ? "var(--color-accent)" : "var(--color-neutral-500)",
-        chip: i === s.reportSrc ? "var(--color-accent-900)" : "transparent",
-        pick: () => this.setState({ reportSrc: i })
-      })),
+      reportCadenceNote: "The session's question is pinned and re-run " + cadenceLabel({ i: s.reportCad, days: s.reportDays, time: s.reportTime }).replace(/^Refresh /, "") + " while Hoistra is open. The first refresh runs as soon as the report is created.",
+      // Sources are the chat sessions in this browser — a report is a pinned question.
+      reportSources: (() => {
+        const chats = s.sessions.filter((q) => q.kind === "chat").slice(0, 5);
+        const cur = chats.some((q) => q.id === s.reportSrcId) ? s.reportSrcId : (chats[0] ? chats[0].id : null);
+        return chats.map((q) => ({
+          label: q.title || q.label,
+          tick: q.id === cur ? "ph-radio-button" : "ph-circle",
+          color: q.id === cur ? "var(--color-accent)" : "var(--color-neutral-500)",
+          chip: q.id === cur ? "var(--color-accent-900)" : "transparent",
+          pick: () => this.setState({ reportSrcId: q.id })
+        }));
+      })(),
+      reportSourcesEmpty: !s.sessions.some((q) => q.kind === "chat"),
 
       navReports: (s.role === "admin" ? [] : s.reports).map((r) => {
         const active = s.view === "report" && s.reportKey === r.key;
         return {
-          name: r.name, badge: r.ready ? "30 min" : "Pending",
+          name: r.name,
+          badge: r.status === "running" ? "Running" : r.status === "pending" ? "Pending" : (r.status === "error" && !r.lastRunAt) ? "Failed" : cadenceBadge(r.cad),
           color: active ? "var(--color-accent)" : "var(--color-neutral-300)",
           chip: active ? "var(--color-accent-900)" : "transparent",
-          click: () => this.setState({ view: "report", reportKey: r.key, navOpen: true, detail: null })
+          click: () => this.rpOpen(r.key)
         };
       }),
-
-      // Aggregated from the session's own asset table, so the report re-reads
-      // whenever the UDR changes rather than holding a copy.
-      riskBuildings: (() => {
-        const by = {};
-        ASSET_RISK.forEach((a) => {
-          const r = by[a.building] || (by[a.building] = { name: a.building, Outlier: 0, Anomaly: 0, Deficit: 0, risk: 0 });
-          r[a.klass] = (r[a.klass] || 0) + 1;
-          if (a.risk === "Yes") r.risk += 1;
-        });
-        const N = (n, c) => ({ v: n ? String(n) : "—", c: n ? c : "var(--color-neutral-600)" });
-        return Object.keys(by).map((k) => {
-          const r = by[k];
-          const b = BUILDINGS.find((x) => x.name === k);
-          const o = N(r.Outlier, "var(--st-risk)"), an = N(r.Anomaly, "var(--st-warn)"), d = N(r.Deficit, "var(--st-warn)");
-          const over = b && b.euiN > b.benchN;
-          return {
-            name: r.name,
-            out: o.v, outColor: o.c, anom: an.v, anomColor: an.c, def: d.v, defColor: d.c,
-            eui: b ? (over ? "+" : "") + Math.round(((b.euiN - b.benchN) / b.benchN) * 100) + "%" : "—",
-            euiColor: over ? "var(--st-risk)" : "var(--st-ok)",
-            risk: r.risk ? "Yes · " + r.risk : "No",
-            riskColor: r.risk ? "var(--st-risk)" : "var(--st-ok)",
-            click: () => this.setState({ view: "buildings", role: "admin", gBuilding: r.name, navOpen: true })
-          };
-        });
-      })(),
 
       queuePreview: D.decisions.slice(0, 3).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon,
@@ -1553,9 +2087,28 @@ export const renderValsMethods = {
         color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.detailFromDecision(d)
       })),
 
+      // Hoist Crons. Live: what the engines raised (approvals queue) and detected (energy
+      // anomalies), newest first, grouped by day. Seed until the backend answers, and the
+      // header says which it is.
+      cronsLive: hmLive && hm.crons.length > 0,
+      cronsLabel: hmLive && hm.crons.length > 0 ? "Live" : (s.homeLoading ? "Loading" : "Seed"),
+      cronsDot: hmLive && hm.crons.length > 0 ? "var(--st-ok)" : "var(--color-neutral-600)",
+      cronsTip: hmLive && hm.crons.length > 0
+        ? hm.crons.length + " entries from svc-operations-intelligence" + (s.homeLoadedAt ? " · read " + fmtTime(s.homeLoadedAt) : "")
+        : (s.homeError ? "Operations backend unreachable — " + s.homeError : "Seed feed until the operations backend answers"),
       crons: (() => {
+        const gone = s.cronsGone || [];
+        if (hmLive && hm.crons.length) {
+          const out = [];
+          let day = null;
+          hm.crons.filter((c) => !gone.includes(c.id)).slice(0, 80).forEach((c) => {
+            if (c.day !== day) { day = c.day; out.push({ sep: true, day: day }); }
+            out.push({ id: c.id, text: c.text, agent: c.agent, t: c.t, dot: t(c.tone).color, action: c.action, live: c });
+          });
+          return out;
+        }
         const order = ["Today", "Yesterday", "31 Aug"];
-        const live = CRONS.filter((c) => !s.cronsGone.includes(c.text));
+        const live = CRONS.filter((c) => !gone.includes(c.text));
         const out = [];
         order.forEach((day) => {
           const rows = live.filter((c) => (c.day || "Today") === day).sort((a, b) => b.t.localeCompare(a.t));
@@ -1571,31 +2124,22 @@ export const renderValsMethods = {
         actShow: c.action ? "block" : "none",
         noneShow: c.sep || c.action ? "none" : "inline",
         tip: c.sep ? c.day : c.text + (c.action ? " — " + c.action : " — no action needed") + " · " + c.agent + " " + c.t,
-        act: () => c.sep ? null : (c.action ? this.orch(c.action, c.agent) : this.flash(c.text)),
-        dismiss: () => this.setState((p) => ({ cronsGone: p.cronsGone.concat([c.text]) }))
+        // A live row opens the record behind it (read-only); a seed row plays its script.
+        act: () => c.sep ? null
+          : c.live ? this.setState({ detail: this.cronDetail(c.live), queueOpen: false })
+          : (c.action ? this.orch(c.action, c.agent) : this.flash(c.text)),
+        dismiss: () => this.setState((p) => ({ cronsGone: p.cronsGone.concat([c.id || c.text]) }))
       })),
 
 
-      // Each card's subtitle counts what its space actually holds. These were constants
-      // too, and on an empty register they advertised 118 obligations, 24 buildings and
-      // 148 work orders that were not there.
-      spaces: (() => {
-        const cc = this.ccData();
-        const nCerts = (cc.certs || []).length;
-        const nVendors = (cc.vendors || []).length;
-        const nPacks = (cc.countries || []).length;
-        const nBuildings = this.bldData().length;
-        const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
-        return [
-        { name: "Compliance", sub: plural(nCerts, "obligation", "obligations") + " · "
-            + plural(nPacks, "regulation pack", "regulation packs"),
-          icon: "ph-shield-check", badge: "3 lapsed", tone: "risk", key: "compliance" },
-        { name: "Energy", sub: plural(nBuildings, "building", "buildings") + " · half-hourly MPAN",
-          icon: "ph-lightning", badge: "6 anomalies", tone: "warn", key: "energy" },
-        { name: "Vendor performance", sub: plural(nVendors, "contracted vendor", "contracted vendors"),
-          icon: "ph-chart-line-up", badge: "3 below 80", tone: "warn", key: "vendors" },
-        { name: "Vendor operations", sub: "work orders · PPM", icon: "ph-wrench", badge: "14 to approve", tone: "ok", key: "ops" }
-      ]; })().map((x) => ({ ...x, color: t(x.tone).color, bg: t(x.tone).bg, click: () => this.openModule(x.key) })),
+      // Each card's subtitle is what its engine actually reports (spacesLive.js) — never a
+      // constant, so an empty register reads as waiting, not as 118 obligations.
+      spaces: spm.builtin.map((b) => ({
+        name: b.name, key: b.key, icon: b.icon, badge: b.badge, tone: b.tone,
+        sub: b.live ? b.kpis.slice(0, 2).map((k) => k.label.toLowerCase() + " " + k.value).join(" · ") : "waiting for the engine to answer",
+        color: toneColor(b.tone), bg: b.tone && b.tone !== "none" ? t(b.tone).bg : "transparent",
+        click: () => this.openSpace(b.key)
+      })),
 
       pnl: D.pnl.map((r) => ({ ...r, color: t(r.tone).color })),
 

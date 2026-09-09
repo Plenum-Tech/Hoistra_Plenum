@@ -16,22 +16,23 @@ Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pi
 Collapsed rail (icons) or open panel (248px). Open panel shows: **New query** · **Reports** group · **Spaces** · **Sessions**.
 
 Reports group is scoped by mode:
-- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then saved custom reports (e.g. Risky Buildings · 30 min).
+- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then the saved custom reports with their cadence badge.
 - **Admin view:** Buildings (Admin), Integrations (Admin) · 15 min — only these.
 
 Active state follows the actual page and role. Order: Vendors sits above Energy.
 
-**Spaces:** Compliance (3 lapsed), Energy (6 anomalies), Vendor performance (3 below 80), Vendor operations (14 to approve) — each opens its module.
-**Sessions:** every query and every orchestrator task, newest first; a task reopens the orchestrator, a query re-runs, "What needs my approval today?" opens the decision queue.
+**Spaces:** the four built-in spaces — Compliance, Energy, Vendor performance, Vendor operations — carry live badges (lapsed certificates, open anomalies, vendors below 80, approvals pending; `—` until the engine answers) and open a space page: figures, the sessions filed there, an ask bar. **+** adds a saved space (svc-udr `saved_spaces`); saved spaces can be renamed and deleted from their page.
+**Sessions:** every conversation with the orchestrator and every orchestrator task, newest first with a real elapsed time; a chat session reopens the conversation page on its transcript and continues the same thread, a task reopens the dock on its chain. **All sessions** opens the Sessions page (search, by day, delete, file in a space).
 
-**+ New report:** build a saved report from a session — source query, refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name.
+**+ New report:** build a saved report from a session — source (a recent session's question), refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name. The first refresh runs on creation; the badge is the cadence, or Pending / Running / Failed.
 
 ### 4.4 Ask bar (query first)
 Sits directly under the breadcrumb on every non-admin report: Compliance, Vendors, Energy / Assets / Work orders modules, custom reports, Buildings (user view). Sparkle icon, page-scoped placeholder, **Ask** button, three suggested questions for that page. Enter or Ask runs through the query interface and lands on the answer view. Admin pages (Buildings admin, Integrations) do not carry it.
 
 ### 4.5 Orchestrator dock
 Fixed left panel (280px; 420px during an investigation) opened by any action that makes the platform *do* something. Shows the task as intent, the **Orchestrator → Planner → Worker → Quality** chain playing in, then an armed flow:
-- **declare** — hoist a building (3 steps: record → schema → documents)
+- **declare** — Hoist a building / Edit building (`HoistBuildingCard.jsx`, `logic/buildingsCrud.js`): the real form as a card. Hoist runs as three steps — the record (**Write the record** → `POST /api/energy/buildings`), the schema it landed in with the allocated code (**Next steps**), then documents (**Ingest documents now** → the **ingest** flow with that building preselected, or **Do it later**, which leaves the keyed-as line in the dock). Edit is the same card as one step (`PATCH`, only the changed fields). Field-keyed errors from the service render under their own input. Opening either clears a stale conversation already in the dock (`ccChatReset()`) — a new task gets a fresh panel; the old one is still reachable from Recent tasks / Sessions.
+- **ingest** — Ingest documents (`logic/renderVals.js`, the `fIngest` block in `OrchestratorDock.jsx`): reachable on its own from a page-level "Ingest documents" button (no building preselected — nothing is guessed), or from the hoist card's step 3. A real upload: the attach control stages files into the same tray the composer's paperclip uses (`ccFiles`/`ccAddFiles`), "Start ingestion" is disabled with an inline reason until at least one file and a building are chosen, and it then sends a real question — `askScoped("Ingest N document(s) for <building>.")` — through `deepAgentsApi.runStatefulWithFiles`, the same multipart call the composer's own attach makes. The card closes immediately; the real answer streams into the transcript like any other turn.
 - **booking**, **pick** (contractor swap), **new** (new vendor), **email** (draft with To / Subject / Body, Approve & send)
 - **investigate** — the conversational investigation (see §9.6)
 

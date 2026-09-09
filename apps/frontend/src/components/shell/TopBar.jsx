@@ -36,7 +36,7 @@ export default function TopBar({ vals }) {
             {vals.tenant}
           </span>
         </div>
-        <i className="ph ph-cpu hv6" onClick={vals.openOrch} title="Orchestrator" style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+        <i className="ph ph-cpu hv6" onClick={vals.openOrch} title="Open the orchestrator — ask anything beside this page" style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
         <div style={{ position: "relative", flexShrink: "0" }}>
           <div className="hv3" onClick={vals.toggleAcct} title="Aasim" style={{ width: "28px", height: "28px", borderRadius: "50%", background: vals.acctBg, color: vals.acctFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12.5px", cursor: "pointer", border: `1px solid ${vals.acctEdge}` }}>
             {"A"}

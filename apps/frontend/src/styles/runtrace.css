@@ -1,0 +1,310 @@
+/* Run trace — the orchestrator's sequence of thoughts, beside the conversation.
+ *
+ * The rail is drawn as a hoistway: one continuous shaft down the left of the stage list,
+ * with each completed thought a landing on it. The shaft above the car is travelled and
+ * painted solid; below it is hairline. While a turn runs, the car sits at the bottom and
+ * the segment under it carries a slow downward sweep — so shaft fill height IS pipeline
+ * progress rather than a decoration laid over it.
+ *
+ * Written as classes, not inline styles: this is the one surface with real state (done /
+ * live / pinned), hover, focus and motion, none of which an inline style object can carry.
+ */
+
+.rt {
+  /* Two ink values the shipped tokens do not carry, both measured against WCAG 2.1:
+     - live ink on the orange tint is 4.74:1, where --color-accent on the same tint is
+       2.75:1 and cannot hold the 10px labels this rail uses;
+     - car ink on the hi-vis fill is 5.59:1 — the ratio tokens.css documents for
+       --accent-ink and no longer contains. */
+  --rt-live-ink: #C23A05;
+  --rt-car-ink: #1A1A18;
+  /* Travelled shaft against untravelled. These have to separate clearly or the fill height
+     carries no information — --color-neutral-700 sat too close to the divider to read. */
+  --rt-shaft: var(--color-divider);
+  --rt-shaft-done: var(--color-ink-decorative);
+
+  position: sticky;
+  top: 78px;
+  align-self: start;
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-divider);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+:root[data-theme="dark"] .rt {
+  /* On the dark ground the orange lightens, so both inks lighten with it. */
+  --rt-live-ink: #FFB08A;
+  --rt-car-ink: #16150F;
+  --rt-shaft-done: var(--color-neutral-500);
+}
+
+/* ── header ───────────────────────────────────────────────────────────── */
+.rt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-divider);
+  flex-shrink: 0;
+}
+.rt-title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+.rt-title.is-live { color: var(--rt-live-ink); }
+.rt-clock {
+  margin-left: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-500);
+}
+.rt-for {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--color-divider);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-neutral-500);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* ── the shaft ────────────────────────────────────────────────────────── */
+.rt-scroll { overflow-y: auto; overflow-x: hidden; padding: 4px 0 10px; }
+.rt-list { position: relative; margin: 0; padding: 0; list-style: none; }
+
+/* The untravelled shaft: one hairline running past the car to the foot of the list, so the
+   run reads as still having somewhere to go. A finished run has none — its shaft stops at
+   the last landing, which is how you can tell at a glance that it landed. */
+.rt-list.is-live::before {
+  content: "";
+  position: absolute;
+  left: 21px;
+  top: 14px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--rt-shaft);
+}
+/* The travelled shaft, drawn over it and stopping at the car. */
+.rt-list::after {
+  content: "";
+  position: absolute;
+  left: 21px;
+  top: 14px;
+  height: var(--rt-travelled, 0px);
+  width: 1px;
+  background: var(--rt-shaft-done);
+  transition: height 320ms cubic-bezier(.22, .61, .36, 1);
+}
+@media (prefers-reduced-motion: reduce) { .rt-list::after { transition: none; } }
+
+.rt-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+  padding: 7px 14px 7px 7px;
+  align-items: start;
+}
+
+/* The landing marker. */
+.rt-mark {
+  position: relative;
+  z-index: 1;
+  width: 17px;
+  height: 17px;
+  margin-left: 6px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  border: 1px solid var(--rt-shaft-done);
+  color: var(--color-neutral-500);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.rt-row.is-tool .rt-mark {
+  /* Tool calls are the machine's own work, not a stage of the plan — square, so the
+     shaft reads as landings interrupted by machinery. */
+  border-radius: 3px;
+}
+
+.rt-body { min-width: 0; padding-top: 1px; }
+.rt-line { display: flex; align-items: baseline; gap: 8px; }
+.rt-label {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--color-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rt-row.is-tool .rt-label {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--color-neutral-300);
+}
+.rt-meta {
+  margin-left: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.rt-detail {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--color-neutral-500);
+  margin-top: 3px;
+  text-wrap: pretty;
+}
+.rt-parts { display: flex; flex-direction: column; gap: 2px; margin-top: 5px; }
+.rt-part { font-size: 10px; line-height: 1.4; color: var(--color-neutral-500); }
+.rt-part-scope { color: var(--color-ink-decorative); }
+.rt-issue {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--rt-live-ink);
+  margin-top: 4px;
+}
+
+/* ── the car — the stage in flight ────────────────────────────────────── */
+.rt-row.is-car .rt-mark {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--rt-car-ink);
+  animation: pendingBlink 1.6s ease-in-out infinite;
+}
+.rt-row.is-car .rt-label { color: var(--rt-live-ink); }
+
+/* The shaft below the car, sweeping while the stage works. Painted only on the car row,
+   so exactly one segment is ever in motion. */
+.rt-row.is-car::after {
+  content: "";
+  position: absolute;
+  left: 21px;
+  top: 25px;
+  bottom: -10px;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--color-accent) 0%,
+    color-mix(in srgb, var(--color-accent) 12%, transparent) 55%,
+    transparent 100%
+  );
+  background-size: 100% 200%;
+  animation: rtSweep 1.5s linear infinite;
+}
+@keyframes rtSweep {
+  from { background-position: 0 -100%; }
+  to { background-position: 0 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-row.is-car .rt-mark { animation: none; }
+  .rt-row.is-car::after { animation: none; background-position: 0 0; }
+}
+
+/* ── footer ───────────────────────────────────────────────────────────── */
+.rt-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-divider);
+  flex-shrink: 0;
+}
+.rt-note {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--color-neutral-500);
+  min-width: 0;
+}
+.rt-btn {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 6px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.rt-btn:hover { border-color: var(--color-accent); color: var(--rt-live-ink); }
+.rt-btn.is-stop { border-color: var(--st-risk); color: var(--rt-live-ink); }
+
+/* ── empty state ──────────────────────────────────────────────────────── */
+.rt-empty {
+  padding: 18px 14px 20px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-neutral-500);
+  text-wrap: pretty;
+}
+
+/* ── a turn's "show the run" control, in the transcript ───────────────── */
+.rt-pick {
+  font: inherit;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-neutral-500);
+  cursor: pointer;
+}
+.rt-pick:hover { border-color: var(--color-divider); color: var(--color-text); }
+.rt-pick.is-on {
+  border-color: var(--color-accent);
+  color: var(--rt-live-ink);
+  background: var(--color-accent-900);
+}
+
+/* ── the two-column chat workspace ────────────────────────────────────── */
+.chat-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas:
+    "head head"
+    "conv rail";
+  column-gap: 28px;
+  align-items: start;
+  width: 100%;
+  max-width: 1280px;
+}
+.chat-head { grid-area: head; }
+.chat-conv { grid-area: conv; min-width: 0; }
+.rt { grid-area: rail; }
+/* Under about 1120px the rail cannot hold its content beside a readable transcript, so the
+   two stack. It goes ABOVE the conversation, not below: the transcript column is a full
+   viewport tall so that the composer sits at the foot of the screen, and anything placed
+   after it lands a screen-height below the fold — which is the one place a live run must
+   never be. Stacked, the trace reads as the run's status header. With nothing to report it
+   is not rendered at all rather than taking that space as an empty box. */
+@media (max-width: 1120px) {
+  .chat-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "rail" "conv";
+    gap: 0;
+  }
+  .rt { position: static; max-height: none; margin-top: 18px; }
+  .rt-scroll { max-height: 300px; }
+  .rt.is-idle { display: none; }
+}

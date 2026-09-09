@@ -2779,6 +2779,14 @@ class DeepAgentOrchestrator:
             resp = await self._llm.ainvoke(
                 [system, HumanMessage(content=text[:1200])]
             )
+            # Every other stage of this pipeline records to the llm_cost ledger; the planner
+            # was the one call nobody had wired in, so its own step in the UI panel could
+            # never show a time or a $ figure. `usage_from_langchain_messages` reads whichever
+            # shape this model's client returned (OpenAI or Anthropic via LangChain).
+            _plan_usage, _ = llm_cost.usage_from_langchain_messages([resp])
+            llm_cost.record(
+                "plan", _plan_model, _plan_usage, (time.perf_counter() - _plan_t0) * 1000
+            )
             raw = getattr(resp, "content", "") or ""
             if isinstance(raw, list):
                 raw = " ".join(
@@ -4118,6 +4126,13 @@ class DeepAgentOrchestrator:
         the summary plus the UNFILTERED vendor (and building, when in scope) portfolios, then let
         build_deterministic_compliance_answer group them into Blocked / Lapsed / At-risk sections.
         """
+        # Neither caller (_stateful_preflight_shortcut, run_stateful) opens a ledger before
+        # reaching here, so without this the compliance_pipeline output below always attaches
+        # cost=None — the turn's model calls (routing, any LLM this shortcut itself uses) were
+        # never being recorded at all. Guarded exactly like _invoke_phase2_engine's own
+        # begin_turn call, so a turn that DID start a ledger upstream keeps its entries.
+        if llm_cost.current() is None:
+            llm_cost.begin_turn(session_id)
         if compliance_skill_path_enabled():
             # COMPLIANCE_SKILL_PATH=1 — stand down so the question reaches the orchestrator
             # and, through it, the compliance sub-agent with its own skill files. This
@@ -4198,10 +4213,29 @@ class DeepAgentOrchestrator:
         # and returned on the result so the non-streaming path shows the same thing.
         pipeline: list[dict[str, Any]] = []
 
-        async def _step(step: dict[str, Any]) -> None:
+        async def _step(step: dict[str, Any]) -> dict[str, Any]:
             pipeline.append(step)
             if on_zone is not None:
                 await on_zone(self._STEP_ZONE, step)
+            return step
+
+        def _step_cost(role: str) -> dict[str, Any]:
+            """The most recent ledger entry for `role`, shaped for a step's own badge.
+
+            Read once, right after the call it describes returns — a step whose call has not
+            happened yet (the analyst step is emitted before its own call, so streaming shows
+            it as in progress) gets nothing here; its cost is merged in afterwards instead. A
+            role the ledger never recorded (no API key, the call raised) returns {} — the step
+            shows no badge rather than a guessed one.
+            """
+            ledger = llm_cost.current()
+            entry = ledger.last(role) if ledger else None
+            if not entry:
+                return {}
+            return {
+                "ms": entry.get("ms"), "usd": entry.get("usd"), "model": entry.get("model"),
+                "effort": entry.get("effort"), "cache_hit": entry.get("cache_hit"),
+            }
 
         if on_zone is not None and plan.get("reason"):
             # Streamed ahead of the data so the activity log shows the intent first.
@@ -4224,6 +4258,7 @@ class DeepAgentOrchestrator:
                     }
                     for sq in (plan.get("sub_questions") or [])
                 ],
+                **_step_cost("plan"),
             }
         )
 
@@ -4502,7 +4537,11 @@ class DeepAgentOrchestrator:
 
         answer_source = "analyst"
         answer: str | None = None
-        await _step(
+        # Emitted before the call it describes, unlike every other step here, so a streaming
+        # client sees "the analyst is working" for the ~30-60s this actually takes rather than
+        # nothing at all. Its own time/cost/model are filled in below once the call returns —
+        # the returned dict is the same one already in `pipeline`, so mutating it is enough.
+        analyse_step = await _step(
             {
                 "stage": "analyse",
                 "label": "Compliance analyst reasoning",
@@ -4531,6 +4570,7 @@ class DeepAgentOrchestrator:
             query_notes=query_notes,
             taxonomy=is_taxonomy,
         )
+        analyse_step.update(_step_cost("analyst"))
         if analysis and (analysis.get("narrative") or "").strip():
             # EL gate — the orchestrator re-checks the sub-agent's answer against the rows it
             # was given before any of it reaches the user. Only meaningful on the direct-read
@@ -4665,6 +4705,7 @@ class DeepAgentOrchestrator:
                                 if isinstance(f, dict)
                             ]
                         )[:8],
+                        **_step_cost("reviewer"),
                     }
                 )
                 if needs_revision:
@@ -4714,6 +4755,11 @@ class DeepAgentOrchestrator:
                                     "disagree with the pack — shown below the answer"
                                 ),
                                 "issues": remaining[:8],
+                                # The revision call just above is recorded under the same
+                                # "analyst" role as the first pass; by this point in the
+                                # function it is the newest entry under that name, so `last`
+                                # names this call and not the original one.
+                                **_step_cost("analyst"),
                             }
                         )
                         analysis.setdefault("validation", {})["review"] = {
@@ -4746,7 +4792,18 @@ class DeepAgentOrchestrator:
                 {
                     "tool": "compliance_pipeline",
                     "input": {"question": user_message[:300]},
-                    "output": {"steps": pipeline},
+                    "output": {
+                        "steps": pipeline,
+                        # Every model call in this turn already went through the llm_cost
+                        # ledger (routing, doc selection, any LLM the shortcut itself used);
+                        # the UI's pipeline panel reads this the same way the full
+                        # compose_structured_compliance path already does.
+                        "cost": (
+                            llm_cost.current().log_summary(user_message)
+                            if llm_cost.current()
+                            else None
+                        ),
+                    },
                 }
             )
         log.info(

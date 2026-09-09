@@ -2,6 +2,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { GB, PACKS, CC_OF, ENC, ACTION_SPECS, TONE, t, MODULES } from './constants.js';
 import { HOISTWAY } from '../data/hoistway-data.js';
+import { makeSession, newSessionId, trimSessions } from './sessions.js';
 
 export const coreMethods = {
   componentDidMount() {
@@ -19,12 +20,28 @@ export const coreMethods = {
     this._frameTimer = setInterval(() => {
       if (!this.state.signedIn) this.setState((p) => ({ frame: (p.frame + 1) % 4 }));
     }, 3200);
-    // Pull the compliance register from the backend; the seed stays until it answers.
+    // Pull the compliance register, the home tiles and the vendor scorecards from the
+    // backend; the seed stays until each answers.
     this.ccLoad();
+    this.homeLoad();
+    this.vpLoad();
+    // The Buildings table; buildingsLive.js loads the per-table graph counts once it answers.
     this.bldLoad();
+    // Saved spaces from svc-udr, and the scheduler that refreshes the custom reports.
+    this.spLoad();
+    this.rpStart();
+    // A reload that lands on the conversation page re-checks the orchestrator link.
+    if (this.state.view === "chat") this.chatConnect();
   },
 
-  componentWillUnmount() { window.removeEventListener("keydown", this._key); clearInterval(this._frameTimer); clearInterval(this._cronTimer); clearTimeout(this._ccRetry); clearTimeout(this._bldRetry); },
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._key);
+    clearInterval(this._frameTimer); clearInterval(this._cronTimer);
+    clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._gphRetry); clearTimeout(this._gphRefresh);
+    clearTimeout(this._spRetry); this.rpStop();
+  },
 
   D() { return HOISTWAY; },
 
@@ -56,7 +73,9 @@ export const coreMethods = {
 
   // Any action that makes the orchestrator DO something (not just show data)
   // goes through here: opens the dock, logs the task as a session, plays the chain.
-  orch(task, ctx, chain) {
+  // `opts.record === false` skips the session record — the chat records its own question
+  // as a chat session and only borrows the dock's title.
+  orch(task, ctx, chain, opts) {
     const label = ctx ? task + " — " + ctx : task;
     const steps = chain || [
       { a: "Orchestrator", t: "Intent: " + task.toLowerCase() + (ctx ? " · scope: " + ctx : "") },
@@ -64,13 +83,15 @@ export const coreMethods = {
       { a: "Worker", t: "Executing against the live graph — every write logged with actor and timestamp" },
       { a: "Quality", t: "Validation gate armed: the result is checked before it is written back" }
     ];
-    const entry = { label, when: "Just now", k: null, kind: "task", steps };
+    // A task is a session record (logic/sessions.js): `task`/`ctx` keep the raw
+    // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
+    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now() });
+    const record = !(opts && opts.record === false);
     clearInterval(this._orchTick);
-    this.setState((p) => ({
+    this.setState((p) => Object.assign({
       orchOpen: true, orchTask: entry, orchDone: 0,
-      sessions: [entry].concat(p.sessions).slice(0, 12),
       paletteOpen: false, queueOpen: false, detail: null
-    }));
+    }, record ? { sessions: trimSessions([entry].concat(p.sessions || [])) } : {}));
     this._orchTick = setInterval(() => {
       this.setState((p) => {
         const n = p.orchDone + 1;
@@ -81,7 +102,6 @@ export const coreMethods = {
   },
 
   closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null }); },
-
 
   // Opens the orchestrator AND arms a flow: booking draft, contractor swap, or an email.
   orchWith(task, ctx, flow, patch) {
@@ -96,10 +116,8 @@ export const coreMethods = {
     const low = label.toLowerCase();
     const spec = ACTION_SPECS.find((sp) => sp.m && sp.m.some((rx) => rx.test(low)));
     const ven = vendorName || "the responsible vendor";
-    if (/^hoist building/.test(low)) {
-      if (this.state.role !== "admin") { this.orch(label, subject); return this.setState({ flow: null, flowDone: "Hoisting a building is an admin action. Ingestion has to be deliberate — one owner for what enters the Hoist Graph. Ask your workspace admin, or upload documents against a building that already exists." }); }
-      return this.orchWith(label, subject, "declare", { declStep: 0 });
-    }
+    // Re-running the recorded task reopens the form, not just the trace.
+    if (/^hoist building/.test(low)) return this.bcOpenForm();
     if (/^ingest documents/.test(low)) return this.orchWith(label, subject, "ingest", {});
     if (/^update the graph/.test(low)) return this.orchWith(label, subject, "update", { ugText: "", ugParsed: false });
     if (spec && spec.custom) return this.orchWith(label, subject, spec.custom, { bkLocked: true, fSubject: subject, fVendor: ven });
@@ -125,6 +143,9 @@ export const coreMethods = {
     if (s.view === "report") { const r = s.reports.find((x) => x.key === s.reportKey); return r ? r.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
     if (s.view === "answer") return "Query";
+    if (s.view === "chat") return "Orchestrator";
+    if (s.view === "sessions") return "Sessions";
+    if (s.view === "space") { const sp = this.spaceEntry(s.spaceKey); return sp ? sp.name : "Spaces"; }
     return "Home";
   },
 

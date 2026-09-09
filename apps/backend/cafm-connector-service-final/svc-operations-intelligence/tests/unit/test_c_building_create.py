@@ -175,3 +175,43 @@ def test_the_market_codes_all_map_to_a_seeded_pack():
     seeded = {"CIBSE TM46", "Energy Star · ASHRAE 100",
               "BCA Benchmarking Report", "Rolling portfolio benchmark"}
     assert set(PACK_STANDARD_FOR.values()) <= seeded
+
+
+# ── locations.id schema drift ────────────────────────────────────────────────
+#
+# plenum_cafm.locations predates this feature on a deployment built by
+# cafm-connector-service first: `id` is that service's legacy integer primary key.
+# udr_building_graph.sql's `CREATE TABLE IF NOT EXISTS locations (id UUID PRIMARY KEY …)`
+# no-ops against a table that already exists, so `id` never becomes uuid, and a generated
+# uuid4() cannot be inserted into it — Postgres refuses the cast outright
+# (DatatypeMismatchError: column "id" is of type integer but expression is of type uuid).
+# plan_location_insert() decides whether to attempt that insert, from the column's real,
+# introspected type — the same technique this function already uses for organization_id.
+
+
+def test_a_uuid_locations_id_permits_the_insert():
+    from src.engines.energy.building_create import plan_location_insert
+
+    plan = plan_location_insert("uuid")
+    assert plan["can_insert"] is True
+    assert plan["reason"] is None
+
+
+def test_an_integer_locations_id_refuses_the_insert_with_a_clear_reason():
+    from src.engines.energy.building_create import plan_location_insert
+
+    plan = plan_location_insert("integer")
+    assert plan["can_insert"] is False
+    assert "integer" in plan["reason"]
+    assert "locations.id" in plan["reason"]
+
+
+def test_an_unrecognised_or_missing_locations_id_type_refuses_defensively():
+    """Anything other than a confirmed uuid column refuses the insert — a missing or
+    unexpected type is exactly the situation this check exists to catch, not a case to
+    guess through."""
+    from src.engines.energy.building_create import plan_location_insert
+
+    assert plan_location_insert(None)["can_insert"] is False
+    assert plan_location_insert("bigint")["can_insert"] is False
+    assert plan_location_insert("")["can_insert"] is False

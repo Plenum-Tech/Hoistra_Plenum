@@ -58,5 +58,5 @@ Side title, footnote and the "Ask about this module" chips follow the selected m
 ---
 
 ## Assets and Work orders
-Present as modules with the generic layout (metric cards, filterable table, side bars, asks). Assets currently routes to the Risky Buildings report. Full build-out is open.
+Present as modules with the generic layout (metric cards, filterable table, side bars, asks). Assets currently opens the Buildings page, where the asset registers hang off each site. Full build-out is open.
 

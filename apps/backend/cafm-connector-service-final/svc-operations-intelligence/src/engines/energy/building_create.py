@@ -73,6 +73,33 @@ PACK_STANDARD_FOR = {
 }
 GRANULARITIES = {"none", "building-level", "sub-metered"}
 
+
+def plan_location_insert(id_data_type: str | None) -> dict[str, Any]:
+    """Whether a new row can be inserted into ``plenum_cafm.locations`` right now, given the
+    real, introspected type of its ``id`` column.
+
+    ``locations`` predates this feature on a deployment where cafm-connector-service created
+    it first: ``id`` is that service's legacy integer primary key. This engine's own
+    migration (``udr_building_graph.sql``) declares ``CREATE TABLE IF NOT EXISTS locations
+    (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), …)`` — which no-ops against a table that
+    already exists, so ``id`` never becomes uuid there. Generating a fresh ``uuid4()`` and
+    inserting it into an integer column is refused by Postgres outright
+    (``DatatypeMismatchError: column "id" is of type integer but expression is of type
+    uuid``), which is what a hoist attempt hit before this check existed. Anything other
+    than a confirmed ``uuid`` column refuses the insert — a missing or unexpected type is
+    exactly the situation this exists to catch, not a case to guess through.
+    """
+    can_insert = (id_data_type or "").lower() == "uuid"
+    return {
+        "can_insert": can_insert,
+        "reason": None if can_insert else (
+            "No location could be linked — plenum_cafm.locations.id is "
+            + (id_data_type or "of an unrecognised type")
+            + " on this deployment, not uuid, so a new location cannot be created until it "
+            "is migrated. The building was created without one."
+        ),
+    }
+
 MAX_FLOORS = 300
 NAME_MAX = 200
 _CODE_RE = re.compile(r"^B-(\d{2,6})$")
@@ -289,6 +316,21 @@ async def _resolve_location(
     if existing:
         return {"location_id": existing[0], "created": False, "pack_id": pack_id}
 
+    id_type = (
+        await session.execute(
+            text(
+                """SELECT data_type FROM information_schema.columns
+                   WHERE table_schema = 'plenum_cafm' AND table_name = 'locations'
+                     AND column_name = 'id'"""
+            )
+        )
+    ).scalar()
+    plan = plan_location_insert(id_type)
+    if not plan["can_insert"]:
+        log.warning("building_create.location_skipped", id_data_type=id_type, reason=plan["reason"])
+        return {"location_id": None, "created": False, "pack_id": pack_id,
+                "skipped_reason": plan["reason"]}
+
     # organization_id is written when the column demands it. plenum_cafm.locations is
     # declared twice — cafm-connector-service's ORM makes it NOT NULL, this service's
     # udr_building_graph.sql does not — and whichever ran first decides. Omitting it
@@ -459,6 +501,8 @@ async def create_building(
         session, building_id, organization_id=clean.get("organization_id")
     )
     warnings: list[str] = []
+    if loc.get("skipped_reason"):
+        warnings.append(loc["skipped_reason"])
     if clean.get("use_type", "").lower() == "mall":
         warnings.append("Stored as Retail — the database has no Mall category.")
     if not loc["pack_id"]:

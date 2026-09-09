@@ -5,7 +5,10 @@ import React from 'react';
 export default function Buildings({ vals }) {
   return (
       <div style={{ flex: "1", display: "flex", justifyContent: "flex-start", padding: "0 32px 80px" }}>
-        <div style={{ width: "100%", maxWidth: "1180px", animation: "fadeUp 0.28s ease both" }}>
+        {/* No max-width: the table below is wide (1620px min) and wants the room a
+            collapsed navigator or a closed dock frees up, rather than sitting capped
+            with columns truncated either way. */}
+        <div style={{ width: "100%", animation: "fadeUp 0.28s ease both" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "24px 0 0" }}>
             <div className="hv6" onClick={vals.goHome} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
               <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
@@ -66,13 +69,23 @@ export default function Buildings({ vals }) {
             </div>
             {vals.bcCanHoist ? (
               <>
+                <div className="btn" onClick={vals.ingestDocuments} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
+                  {"Ingest documents"}
+                </div>
                 <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
                   {"Hoist a building"}
                 </div>
               </>
             ) : null}
           </div>
-          <div style={{ marginTop: "26px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
+          <div style={{ display: vals.bldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "18px", maxWidth: "420px" }}>
+            <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+            <input className="input" value={vals.bldQuery} onChange={vals.setBldQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+            {vals.bldQuery ? (
+              <i className="ph ph-x hv11" onClick={() => vals.setBldQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+            ) : null}
+          </div>
+          <div style={{ marginTop: "16px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
             <div style={{ minWidth: "1620px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "12px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "10.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                 <span>
@@ -115,8 +128,8 @@ export default function Buildings({ vals }) {
               {(vals.buildingRows || []).map((b, $index) => (
                 <React.Fragment key={$index}>
                   <div className="hv2" onClick={() => vals.bgToggle(b.id)} title="Open the graph for this building" style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
-                    <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)" }}>
-                      {b.id}
+                    <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.idText}
                     </span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {b.name}
@@ -194,6 +207,11 @@ export default function Buildings({ vals }) {
                       <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
                         {b.score}
                       </span>
+                      {vals.bcCanHoist && b.buildingId ? (
+                        <span className="hv6" title={"Edit " + b.name + " — only the fields you change are sent"} onClick={(e) => { e.stopPropagation(); vals.bcOpenEdit(b.row); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
+                          <i className="ph ph-pencil-simple"></i>
+                        </span>
+                      ) : null}
                       {vals.bcCanRemove && b.buildingId ? (
                         <span className="hv11" title={"Remove " + b.name} onClick={(e) => { e.stopPropagation(); vals.bcAskDelete(b); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
                           <i className="ph ph-trash"></i>
@@ -266,6 +284,51 @@ export default function Buildings({ vals }) {
                           ))}
                         </div>
 
+                        {/* what the building is costing — ranked on the gap over contract */}
+                        <div style={{ display: g.cost.show, marginTop: "18px", borderTop: "1px solid var(--color-divider)", paddingTop: "14px" }}>
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                              {"What it is costing"}
+                            </span>
+                            <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                              {"Ranked on the gap over contract, not on billed — the biggest spender is usually the biggest asset."}
+                            </span>
+                          </div>
+                          {g.cost.loading ? (
+                            <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "8px" }}>{"Reading invoice lines…"}</div>
+                          ) : null}
+                          {g.cost.error ? (
+                            <div style={{ fontSize: "11px", color: "var(--st-warn)", marginTop: "8px", lineHeight: "1.45" }}>{g.cost.error}</div>
+                          ) : null}
+                          {(g.cost.rows || []).length || g.cost.unattributed ? (
+                            <div style={{ marginTop: "8px", borderRadius: "8px", background: "var(--color-surface)", overflow: "hidden" }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 44px 48px 92px 104px 60px", gap: "10px", padding: "7px 12px", borderBottom: "1px solid var(--color-divider)", fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                                <span>{"asset"}</span><span style={{ textAlign: "right" }}>{"WOs"}</span><span style={{ textAlign: "right" }}>{"lines"}</span><span style={{ textAlign: "right" }}>{"billed"}</span><span style={{ textAlign: "right" }}>{"over contract"}</span><span style={{ textAlign: "right" }}>{"flagged"}</span>
+                              </div>
+                              {(g.cost.rows || []).concat(g.cost.unattributed ? [g.cost.unattributed] : []).map((r) => (
+                                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 44px 48px 92px 104px 60px", gap: "10px", padding: "7px 12px", borderBottom: "1px solid var(--color-divider)", fontSize: "11px", fontVariantNumeric: "tabular-nums", alignItems: "baseline" }}>
+                                  <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <span style={{ fontFamily: "ui-monospace,monospace", color: r.key === "unattributed" ? "var(--color-neutral-500)" : "var(--color-text)" }}>{r.asset}</span>
+                                    {r.name ? <span style={{ color: "var(--color-neutral-500)", marginLeft: "6px", fontSize: "10.5px" }}>{r.name}</span> : null}
+                                  </span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.wos}</span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.lines}</span>
+                                  <span style={{ textAlign: "right" }}>{r.billed}</span>
+                                  <span style={{ textAlign: "right", color: r.overTone }}>{r.over}</span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.flagged}</span>
+                                </div>
+                              ))}
+                              <div style={{ display: g.cost.totalsShow, justifyContent: "space-between", gap: "12px", flexWrap: "wrap", padding: "8px 12px", fontSize: "10.5px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
+                                <span>{g.cost.totalWos}{" work orders · "}{g.cost.totalLines}{" invoice lines"}</span>
+                                <span>{"billed "}{g.cost.totalBilled}{" · over contract "}<span style={{ color: "var(--st-risk)" }}>{g.cost.totalOver}</span></span>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div style={{ display: g.cost.noteShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px", lineHeight: "1.45", textWrap: "pretty" }}>
+                            {g.cost.note}
+                          </div>
+                        </div>
+
                         {/* what the counts above explain about the row */}
                         {(g.notes || []).length ? (
                           <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -295,6 +358,14 @@ export default function Buildings({ vals }) {
                     </span>
                   </React.Fragment>
                 ))}
+              </div>
+              <div style={{ display: vals.bldPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)" }}>
+                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.bldPageLabel}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div className="hv13" onClick={vals.bldPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.bldPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.bldPagePrevShow ? "pointer" : "default", opacity: vals.bldPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.bldPage + 1) + " of " + vals.bldPageCount}</span>
+                  <div className="hv13" onClick={vals.bldPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.bldPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.bldPageNextShow ? "pointer" : "default", opacity: vals.bldPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                </div>
               </div>
             </div>
             <div style={{ padding: "13px 18px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.55" }}>
@@ -432,14 +503,14 @@ export default function Buildings({ vals }) {
                     </span>
                     <div style={{ minWidth: "0" }}>
                       <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "12.5px", color: vals.hier.parentFg }}>
-                        {"buildings"}
+                        {vals.hier.parentTbl}
                       </div>
                       <div style={{ fontSize: "10.5px", color: vals.hier.parentSub, marginTop: "2px" }}>
                         {vals.hier.building}{" · parent table"}
                       </div>
                     </div>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", background: vals.hier.pkBg, color: vals.hier.pkFg, whiteSpace: "nowrap" }}>
-                      {"PK building_id"}
+                      {vals.hier.pk}
                     </span>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: vals.hier.parentSub, whiteSpace: "nowrap" }}>
                       {vals.hier.rowKey}
@@ -481,7 +552,7 @@ export default function Buildings({ vals }) {
                               {c.tbl}
                             </div>
                             <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: c.sub, marginTop: "2px" }}>
-                              {c.rel}{" · FK building_id"}
+                              {c.rel}{" · "}{c.on}
                             </div>
                           </div>
                           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", background: c.pkBg, color: c.pkFg, whiteSpace: "nowrap" }}>
@@ -742,6 +813,16 @@ export default function Buildings({ vals }) {
                       ))}
                     </div>
                   </div>
+                  <div style={{ display: vals.docQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "16px", maxWidth: "420px" }}>
+                    <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                    <input className="input" value={vals.docQuery} onChange={vals.setDocQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+                    {vals.docQuery ? (
+                      <i className="ph ph-x hv11" onClick={() => vals.setDocQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+                    ) : null}
+                  </div>
+                  <div style={{ display: vals.docEmptyShow, fontSize: "12.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", padding: "16px 2px" }}>
+                    {vals.docEmptyText}
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "16px" }}>
                     {(vals.docBuildings || []).map((b, $index) => (
                       <React.Fragment key={$index}>
@@ -848,128 +929,19 @@ export default function Buildings({ vals }) {
                       </React.Fragment>
                     ))}
                   </div>
+                  <div style={{ display: vals.docPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", marginTop: "14px", padding: "5px 2px" }}>
+                    <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.docPageLabel}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <div className="hv13" onClick={vals.docPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: vals.docPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.docPagePrevShow ? "pointer" : "default", opacity: vals.docPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                      <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.docPage + 1) + " of " + vals.docPageCount}</span>
+                      <div className="hv13" onClick={vals.docPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: vals.docPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.docPageNextShow ? "pointer" : "default", opacity: vals.docPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : null}
           </div>
         </div>
-
-      {/* ── Hoist a building ──────────────────────────────────────────────────
-          Every error renders against its own input: the API keys them by field
-          precisely so the reader never has to hunt for which box was wrong. */}
-      <div style={{ display: vals.bcShow, position: "fixed", inset: "0", zIndex: "60", background: "rgba(8,14,13,0.44)", alignItems: "flex-start", justifyContent: "center", padding: "40px 20px", overflowY: "auto" }} onClick={vals.bcClose}>
-        <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "620px", background: "var(--color-surface)", borderRadius: "14px", boxShadow: "var(--shadow-lg,0 24px 60px rgba(0,0,0,.28))", overflow: "hidden" }}>
-
-          <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--color-divider)" }}>
-            <h2 style={{ margin: "0", fontSize: "20px", lineHeight: "1.2" }}>{"Hoist a building"}</h2>
-            <div style={{ fontSize: "12px", color: "var(--color-neutral-400)", marginTop: "5px", lineHeight: "1.5" }}>
-              {"It joins the register immediately and is read against its country's regulation pack. Its country and region become a location, which is what carries that pack."}
-            </div>
-          </div>
-
-          <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-
-            <div style={{ display: vals.bcTopErrorShow, fontSize: "12px", color: "var(--st-warn)", background: "var(--color-bg)", borderRadius: "8px", padding: "10px 12px", lineHeight: "1.5" }}>
-              {vals.bcTopError}
-            </div>
-
-            <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Building name"}</span>
-              <input value={vals.bcForm.site_name} onChange={vals.bcSet("site_name")} placeholder="Bishopsgate Tower" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-              <span style={{ display: vals.bcErrShow("name"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("name")}</span>
-            </label>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Country"}</span>
-                <select value={vals.bcForm.country_code} onChange={vals.bcSet("country_code")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
-                  {(vals.bcCountries || []).map((c) => (<option key={c.code} value={c.code}>{c.name}</option>))}
-                </select>
-                <span style={{ fontSize: "10.5px", color: "var(--color-accent)", lineHeight: "1.4" }}>{vals.bcStandardNote}</span>
-                <span style={{ display: vals.bcErrShow("country_code"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("country_code")}</span>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Region or state"}</span>
-                <input value={vals.bcForm.state} onChange={vals.bcSet("state")} placeholder="London" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-                <span style={{ display: vals.bcErrShow("region"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("region")}</span>
-              </label>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Primary use"}</span>
-                <select value={vals.bcForm.use_type} onChange={vals.bcSet("use_type")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
-                  {(vals.bcUseTypes || []).map((u) => (<option key={u} value={u}>{u}</option>))}
-                </select>
-                <span style={{ display: vals.bcErrShow("use_type"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("use_type")}</span>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Floors"}</span>
-                <input value={vals.bcForm.floors} onChange={vals.bcSet("floors")} inputMode="numeric" placeholder="24" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-                <span style={{ display: vals.bcErrShow("floors"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("floors")}</span>
-              </label>
-              {/* The one field where a wrong unit is accepted, stored, and wrong
-                  everywhere after. It is labelled m² three times on purpose. */}
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Floor area · m²"}</span>
-                <input value={vals.bcForm.gfa_sqm} onChange={vals.bcSet("gfa_sqm")} inputMode="numeric" placeholder="40000 m²" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{"Square metres, not feet"}</span>
-                <span style={{ display: vals.bcErrShow("gfa_sqm"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("gfa_sqm")}</span>
-              </label>
-            </div>
-
-            <div style={{ display: vals.bcUseNoteShow, fontSize: "11.5px", color: "var(--st-warn)", lineHeight: "1.45" }}>
-              {vals.bcUseNote}
-            </div>
-
-            {/* Use mix — the running total is shown because "must sum to 100" is a rule
-                you can only follow if you can see where you are against it. */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Use mix"}</span>
-                <span style={{ fontSize: "11px", color: vals.bcMixTotalColor, fontVariantNumeric: "tabular-nums" }}>{vals.bcMixTotalLabel}</span>
-              </div>
-              {(vals.bcMix || []).map((m) => (
-                <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1fr 92px 24px", gap: "8px", alignItems: "center" }}>
-                  <input value={m.use} onChange={m.setUse} placeholder="office" style={{ padding: "8px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13px" }} />
-                  <input value={m.pct} onChange={m.setPct} inputMode="numeric" placeholder="100" style={{ padding: "8px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13px", fontVariantNumeric: "tabular-nums" }} />
-                  <span className="hv11" onClick={m.remove} style={{ display: m.removeShow, fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer", textAlign: "center" }}>{"×"}</span>
-                </div>
-              ))}
-              <span className="hv11" onClick={vals.bcMixAdd} style={{ fontSize: "11.5px", color: "var(--color-accent)", cursor: "pointer" }}>{"+ Add a use"}</span>
-              <span style={{ display: vals.bcErrShow("use_mix"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("use_mix")}</span>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Metering"}</span>
-                <select value={vals.bcForm.metering_granularity} onChange={vals.bcSet("metering_granularity")} style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }}>
-                  {(vals.bcGranularities || []).map((g) => (<option key={g.value} value={g.value}>{g.label}</option>))}
-                </select>
-                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{vals.bcGranularityNote}</span>
-                <span style={{ display: vals.bcErrShow("metering_granularity"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("metering_granularity")}</span>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: "0" }}>
-                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Building code"}</span>
-                <input value={vals.bcForm.building_code} onChange={vals.bcSet("building_code")} placeholder="allocated as B-NN" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-                <span style={{ display: vals.bcErrShow("building_code"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("building_code")}</span>
-              </label>
-            </div>
-
-            <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-              <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Site it belongs to"}</span>
-              <input value={vals.bcForm.site_id} onChange={vals.bcSet("site_id")} placeholder="S-01 — optional, must already exist" style={{ padding: "9px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit", font: "inherit", fontSize: "13.5px" }} />
-              <span style={{ display: vals.bcErrShow("site_id"), fontSize: "11px", color: "var(--st-warn)" }}>{vals.bcErr("site_id")}</span>
-            </label>
-
-          </div>
-
-          <div style={{ padding: "16px 24px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-            <div className="btn" onClick={vals.bcClose} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Cancel"}</div>
-            <div className="btn btn-primary" onClick={vals.bcSubmit} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.bcSaving ? "default" : "pointer", opacity: vals.bcSaving ? "0.6" : "1" }}>{vals.bcSubmitLabel}</div>
-          </div>
-        </div>
-      </div>
 
       {/* ── Remove a building ─────────────────────────────────────────────────
           The dialog opens on a DELETE with no confirm, which changes nothing and

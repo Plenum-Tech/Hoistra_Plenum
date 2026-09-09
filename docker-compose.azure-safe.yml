@@ -1,0 +1,55 @@
+# Azure-safe overlay — the one root .env's PLENUM_DB_DSN comment tells you to use.
+#
+#   docker compose -f docker-compose.single-url.local.yml -f docker-compose.azure-safe.yml up -d --build
+#
+# The base file is written for a throwaway local Postgres: it migrates and seeds on boot.
+# Against the hosted Azure database (plenum_agent) every one of those is a production write,
+# so this overlay stands all three writers down:
+#
+#   backend-app                  command ran scripts/migrate_startup.py + scripts/seed_approval_demo.py
+#   connector-app                SEED_DEFAULT_PLENUM_ORG seeded a default org row
+#   svc-operations-intelligence  apply_sql_migrations() + seed_{uk,uae,us}_pack()
+#
+# STILL NOT COVERED — there is no env flag for it: src/db.py:34 runs
+# `Base.metadata.create_all` unconditionally inside init_db(). Against a database whose
+# tables already exist that is a no-op, but it will CREATE TABLE for any model that is
+# missing one. Disabling it needs a code change, not compose.
+
+services:
+  # Was: migrate_startup.py, then seed_approval_demo.py, then uvicorn.
+  # Now: uvicorn only, same args as the base file's final exec.
+  backend-app:
+    environment:
+      SEED_APPROVAL_DEMO: "false"
+      APPROVAL_EMAIL_POLL_ENABLED: "false"
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8007"
+      - --root-path
+      - /backend/work-order
+
+  connector-app:
+    environment:
+      SEED_DEFAULT_PLENUM_ORG: "false"
+
+  svc-operations-intelligence:
+    environment:
+      AUTO_MIGRATE_ON_STARTUP: "false"
+      AUTO_SEED_UK_PACK: "false"
+      # Default to true in src/config.py:67-68 — the base file never names them,
+      # so they have to be pinned here or the packs seed on boot.
+      AUTO_SEED_UAE_PACK: "false"
+      AUTO_SEED_US_PACK: "false"
+      # src/app.py:32 -> apply_sql_seed("portfolio_buildings.sql"), default True in
+      # config.py:71. Nine demo buildings INSERTed into plenum_cafm.sites. Independent of
+      # auto_migrate_on_startup, so the other flags do not cover it. Observed attempting
+      # the INSERT against Azure on boot; it only failed because production's sites table
+      # has no building_name column (db.seed.stmt_skipped, statements=0).
+      AUTO_SEED_PORTFOLIO_BUILDINGS: "false"
+      # Production contact rows are real people. Never let a local run mail them.
+      EMAIL_DRY_RUN: "true"
+      AUTO_SEND_LADDER_EMAILS: "false"

@@ -1,10 +1,30 @@
 // OrchestratorDock — the agent dock and its flows
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
-import React from 'react';
+import React, { useRef } from 'react';
+import Markdown from './Markdown.jsx';
+import ComplianceAnswer from './ComplianceAnswer.jsx';
+import HoistBuildingCard from './HoistBuildingCard.jsx';
+import { useFollowBottom } from './useFollowBottom.js';
 
 export default function OrchestratorDock({ vals }) {
+  // The dock's transcript region scrolls on its own; follow the answer as it streams in,
+  // and stop following while the reader has scrolled up.
+  const scrollRef = useRef(null);
+  useFollowBottom({ container: scrollRef, end: null, busy: vals.orchBusy, count: (vals.orchChat || []).length });
   return (
-      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: "22px 28px 24px", overflowY: "auto", transition: "left 0.2s ease" }}>
+    <>
+      {/* Drag the right edge to widen the dock. Widen only — it never goes below the
+          flow's default width — and it stops at a hard maximum. Double-click to reset. */}
+      <div
+        onMouseDown={vals.orchResizeStart}
+        onDoubleClick={vals.orchResizeReset}
+        title={vals.orchAtMax ? "Maximum width — drag left to narrow back toward the default" : "Drag to widen · double-click to reset"}
+        style={{ display: vals.orchResizeShow, position: "fixed", top: "0", bottom: "0", left: vals.orchHandleLeft, width: "6px", zIndex: "61", cursor: "col-resize", background: vals.orchHandleTint, opacity: "0.5" }}
+      ></div>
+      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: "22px 28px 24px", overflow: "hidden", transition: "left 0.2s ease" }}>
+        {/* Only this region scrolls. The composer below is a footer, so the send / stop
+            button stays put however long the answer grows. */}
+        <div ref={scrollRef} style={{ flex: "1", minHeight: "0", overflowY: "auto", display: "flex", flexDirection: "column", margin: "0 -28px", padding: "0 28px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "var(--color-accent)", display: vals.orchLiveDot }}></span>
@@ -20,7 +40,7 @@ export default function OrchestratorDock({ vals }) {
         <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "4px" }}>
           {vals.orchStatus}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0", marginTop: "18px" }}>
+        <div style={{ display: vals.orchStepsShow, flexDirection: "column", gap: "0", marginTop: "18px" }}>
           {(vals.orchSteps || []).map((st, $index) => (
             <React.Fragment key={$index}>
               <div style={{ display: "grid", gridTemplateColumns: "16px 1fr", gap: "10px", padding: "9px 0", borderTop: "1px solid var(--color-divider)" }}>
@@ -37,6 +57,8 @@ export default function OrchestratorDock({ vals }) {
             </React.Fragment>
           ))}
         </div>
+        {/* Hoist / edit a building — the real form, as a dock flow (HoistBuildingCard.jsx). */}
+        {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
         {vals.fUpdate ? (
           <>
             <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
@@ -134,161 +156,6 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
-        {vals.fDeclare ? (
-          <>
-            <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px" }}>
-                <span style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
-                  {"Hoist a building"}
-                </span>
-                <span style={{ fontSize: "9.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                  {vals.dStepLabel}
-                </span>
-              </div>
-              {vals.dStep1 ? (
-                <>
-                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "7px" }}>
-                    {"This record becomes the primary key. Every document ingested afterwards is stamped with it, so nothing sits in the graph unattached to an asset."}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "7px", marginTop: "10px" }}>
-                    {(vals.dFields || []).map((fd, $index) => (
-                      <React.Fragment key={$index}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                          <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                            {fd.label}
-                          </span>
-                          <input className="input" value={fd.value} onChange={fd.set} placeholder={fd.ph} style={{ display: fd.isText, width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-                          <select className="input" value={fd.value} onChange={fd.set} style={{ display: fd.isSelect, width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }}>
-                            {(fd.options || []).map((o, $index) => (
-                              <React.Fragment key={$index}>
-                                <option value={o}>
-                                  {o}
-                                </option>
-                              </React.Fragment>
-                            ))}
-                          </select>
-                        </div>
-                      </React.Fragment>
-                    ))}
-                    <div style={{ display: vals.dMixShow, flexDirection: "column", gap: "7px", padding: "9px 10px", borderRadius: "7px", background: "var(--color-surface)" }}>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px" }}>
-                        <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                          {"Floor area by use"}
-                        </span>
-                        <span style={{ fontSize: "9.5px", fontFamily: "ui-monospace,monospace", color: vals.dMixColor }}>
-                          {vals.dMixTotal}
-                        </span>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 8px" }}>
-                        {(vals.dMixFields || []).map((m, $index) => (
-                          <React.Fragment key={$index}>
-                            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 44px", gap: "5px", alignItems: "center" }}>
-                              <span style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {m.label}
-                              </span>
-                              <input className="input" value={m.value} onChange={m.set} placeholder="0%" style={{ width: "100%", boxSizing: "border-box", fontSize: "11px", padding: "4px 6px", borderRadius: "5px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "ui-monospace,monospace", outline: "none" }} />
-                            </div>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "10px", color: "var(--st-warn)", marginTop: "8px", lineHeight: "1.4" }}>
-                    {vals.dValidNote}
-                  </div>
-                  <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
-                    <div className="hv7" onClick={vals.dNext} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
-                      {"Write the record"}
-                    </div>
-                    <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
-                      {"Cancel"}
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {vals.dStep2 ? (
-                <>
-                  <div style={{ fontSize: "11.5px", lineHeight: "1.5", marginTop: "8px" }}>
-                    {vals.dName}{" is keyed as "}
-                    <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-accent)" }}>
-                      {vals.dNewId}
-                    </span>
-                    {"."}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "10px" }}>
-                    <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-                      <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-accent-300)" }}>
-                        {"buildings"}
-                      </span>
-                      {" · primary key "}
-                      <span style={{ fontFamily: "ui-monospace,monospace" }}>
-                        {"building_id"}
-                      </span>
-                      {" — name, country, region, use, floors, area\n              "}
-                    </div>
-                    <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-                      <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-accent-300)" }}>
-                        {"floors"}
-                      </span>
-                      {" · primary key "}
-                      <span style={{ fontFamily: "ui-monospace,monospace" }}>
-                        {"floor_id"}
-                      </span>
-                      {" — foreign key "}
-                      <span style={{ fontFamily: "ui-monospace,monospace" }}>
-                        {"building_id"}
-                      </span>
-                      {", use, area\n              "}
-                    </div>
-                    <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-                      <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-accent-300)" }}>
-                        {"documents"}
-                      </span>
-                      {" · foreign key "}
-                      <span style={{ fontFamily: "ui-monospace,monospace" }}>
-                        {"building_id"}
-                      </span>
-                      {" — every certificate, contract and reading resolves back here\n              "}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
-                    <div className="hv7" onClick={vals.dNext} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
-                      {"Next steps"}
-                    </div>
-                    <div className="hv4" onClick={vals.dBack} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                      {"Back"}
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {vals.dStep3 ? (
-                <>
-                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
-                    {"The record exists but holds no evidence. Ingest now, or come back to it — the building simply carries a 0% Hoist Score until documents arrive."}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "11px" }}>
-                    <div className="hv12" onClick={vals.dIngestNow} style={{ padding: "10px 11px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
-                      <div style={{ fontSize: "12px" }}>
-                        {"Ingest documents now"}
-                      </div>
-                      <div style={{ fontSize: "10.5px", opacity: "0.8", marginTop: "2px", lineHeight: "1.4" }}>
-                        {"Certificates, contracts, asset registers, meter consent"}
-                      </div>
-                    </div>
-                    <div className="hv13" onClick={vals.dLater} style={{ padding: "10px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: "pointer" }}>
-                      <div style={{ fontSize: "12px" }}>
-                        {"Do it later"}
-                      </div>
-                      <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", lineHeight: "1.4" }}>
-                        {"Hoist the record only — live and waiting"}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </div>
-          </>
-        ) : null}
         {vals.fIngest ? (
           <>
             <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
@@ -300,6 +167,11 @@ export default function OrchestratorDock({ vals }) {
                   {"Which building"}
                 </span>
                 <select className="input" value={vals.iBuilding} onChange={vals.setIBuilding} style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }}>
+                  {/* A real blank choice — without one, the browser shows the first building
+                      selected the moment the list has options, whether or not one was
+                      actually picked, and "Start ingestion" would then refuse against a
+                      dropdown that looks filled in. */}
+                  <option value="" disabled>{"Choose a building…"}</option>
                   {(vals.iBuildingOpts || []).map((o, $index) => (
                     <React.Fragment key={$index}>
                       <option value={o}>
@@ -310,22 +182,23 @@ export default function OrchestratorDock({ vals }) {
                 </select>
               </div>
               <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "10px" }}>
-                {"Everything ingested carries that building's ID as a foreign key."}
+                {"Everything ingested carries that building's ID as a foreign key. Certificates, contracts, asset registers, meter data or invoices — the orchestrator routes each file by type."}
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "8px" }}>
-                {(vals.iClasses || []).map((c, $index) => (
-                  <React.Fragment key={$index}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "7px", padding: "6px 9px", borderRadius: "6px", background: "var(--color-surface)", fontSize: "10.5px" }}>
-                      <i className="ph ph-file-arrow-up" style={{ fontSize: "12px", color: "var(--color-accent)", flexShrink: "0" }}></i>
-                      <span style={{ minWidth: "0" }}>
-                        {c}
-                      </span>
-                    </div>
-                  </React.Fragment>
-                ))}
-              </div>
+              <label className="hv13" style={{ display: "flex", alignItems: "center", gap: "7px", marginTop: "10px", padding: "8px 10px", borderRadius: "7px", border: "1px dashed var(--color-divider)", cursor: "pointer" }}>
+                <i className="ph ph-file-arrow-up" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+                <span style={{ fontSize: "11px", color: "var(--color-neutral-400)" }}>
+                  {vals.orchFileCount ? vals.orchFileCount + (vals.orchFileCount === 1 ? " document attached — add another…" : " documents attached — add another…") : "Attach documents…"}
+                </span>
+                <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+              </label>
+              {/* The staged files themselves show once, in the composer's tray below — this
+                  card and the composer share one list, so showing it twice on screen at
+                  once would just be the same files rendered in two places. */}
+              {vals.iHint ? (
+                <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "8px" }}>{vals.iHint}</div>
+              ) : null}
               <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
-                <div className="hv7" onClick={vals.iRun} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                <div className="hv7" onClick={vals.iRun} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.iCanRun ? "pointer" : "default", opacity: vals.iCanRun ? "1" : "0.5" }}>
                   {"Start ingestion"}
                 </div>
                 <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
@@ -536,7 +409,7 @@ export default function OrchestratorDock({ vals }) {
                     {"Subject"}
                   </span>
                   <span style={{ fontSize: "11.5px", lineHeight: "1.4" }}>
-                    {vals.em.subject}
+                    <input className="input" value={vals.em.subject} onChange={vals.em.setSubject} style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
                   </span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
@@ -547,6 +420,15 @@ export default function OrchestratorDock({ vals }) {
                 </div>
               </div>
               <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
+                <div className="hv13" onClick={vals.em.openPack} title="Open the generated evidence pack" style={{ display: vals.em.packShow, alignItems: "center", gap: "8px", width: "100%", marginBottom: "8px", padding: "7px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", cursor: "pointer", boxSizing: "border-box" }}>
+                  <i className="ph ph-paperclip" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+                  <span style={{ flex: "1", minWidth: "0", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {vals.em.packName}
+                  </span>
+                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", flexShrink: "0" }}>
+                    {vals.em.packSize}
+                  </span>
+                </div>
                 <div className="hv7" onClick={vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
                   {"Approve & send"}
                 </div>
@@ -723,16 +605,90 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
-        <div style={{ flex: "1" }}></div>
-        <div style={{ display: "flex", gap: "6px", marginTop: "22px" }}>
-          <input className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder="" style={{ flex: "1", minWidth: "0", fontSize: "12px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-          <div className="hv7" onClick={vals.orchSubmit} style={{ width: "34px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: "0" }}>
-            <i className="ph ph-arrow-right" style={{ fontSize: "13px" }}></i>
-          </div>
-        </div>
-        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
-          {"Every instruction is stored as a session, whichever page it was raised from."}
-        </div>
+        {vals.orchChatShow ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "18px" }}>
+              <span style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", flex: "1" }}>
+                {"Conversation"}
+              </span>
+              <span className="hv11" onClick={vals.orchChatReset} style={{ fontSize: "10.5px", color: "var(--color-accent)", cursor: "pointer" }}>
+                {"New thread"}
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "10px" }}>
+              {(vals.orchChat || []).map((m) => (
+                <React.Fragment key={m.key}>
+                  {m.isYou ? (
+                    <div style={{ alignSelf: m.editing ? "stretch" : "flex-end", maxWidth: m.editing ? "100%" : "92%", display: "flex", flexDirection: "column", alignItems: m.editing ? "stretch" : "flex-end", gap: "3px" }}>
+                      {/* Editing happens in place: the bubble becomes a box with the
+                          question, and re-running replaces the answer below it. */}
+                      {m.editing ? (
+                        <div style={{ border: "1px solid var(--color-accent)", borderRadius: "10px", background: "var(--color-bg)", padding: "10px 11px" }}>
+                          <textarea className="input" value={vals.ccEditText} onChange={vals.ccEditSet} onKeyDown={vals.ccEditKey} rows="2" autoFocus style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", lineHeight: "1.5", padding: "0", border: "none", background: "transparent", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", resize: "vertical" }}></textarea>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "10px" }}>
+                            <span style={{ flex: "1", minWidth: "0", fontSize: "10px", color: "var(--color-neutral-500)" }}>
+                              {"Re-running replaces this question's answer."}
+                            </span>
+                            <span className="hv11" onClick={vals.ccEditCancel} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                              {"Cancel"}
+                            </span>
+                            <span className="hv7" onClick={vals.ccEditRun} style={{ fontSize: "11px", padding: "5px 11px", borderRadius: "7px", background: "var(--color-text)", color: "var(--color-bg)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                              {"Run again"}
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div style={{ display: m.bubbleShow, padding: "8px 11px", borderRadius: "10px 10px 3px 10px", background: "var(--color-text)", color: "var(--color-bg)", fontSize: "11.5px", lineHeight: "1.45", whiteSpace: "pre-wrap", animation: "fadeUp 0.2s ease both" }}>
+                        {m.text}
+                        <div style={{ display: m.filesShow, fontFamily: "ui-monospace,monospace", fontSize: "9.5px", opacity: "0.7", marginTop: "5px" }}>
+                          {m.fileNames}
+                        </div>
+                      </div>
+                      <span className="hv11" onClick={m.edit} title="Edit this question and ask again" style={{ display: m.editShow, alignItems: "center", gap: "4px", fontSize: "10px", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                        <i className="ph ph-pencil-simple" style={{ fontSize: "10px" }}></i>
+                        {"Edit"}
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.5", textWrap: "pretty", animation: "fadeUp 0.25s ease both" }}>
+                      {m.rich
+                        ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} />
+                        : m.isNote
+                          ? <div style={{ display: "grid", gridTemplateColumns: "13px minmax(0,1fr)", gap: "7px", alignItems: "start" }}>
+                              <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "12px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "2px" }}></i>
+                              <span>{m.text}</span>
+                            </div>
+                          : <Markdown text={m.text} />}
+                      <div style={{ display: m.interruptShow, fontSize: "10px", color: "var(--color-accent)", marginTop: "6px" }}>
+                        {"Paused for approval before finishing."}
+                      </div>
+                      <div style={{ display: m.toolsShow, fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", marginTop: "7px", paddingTop: "6px", borderTop: "1px solid var(--color-divider)" }}>
+                        {m.tools}
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
+              {vals.orchBusy ? (
+                <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "9px" }}>
+                  {/* Painted from the stream: the steps and the answer's zones appear as
+                      the orchestrator produces them, not all at once at the end. */}
+                  <div style={{ display: vals.orchLiveShow }}>
+                    <ComplianceAnswer rich={vals.orchLiveRich} open={true} onToggle={() => {}} />
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                  <i className="ph ph-circle-notch" style={{ fontSize: "12px", color: "var(--color-accent)" }}></i>
+                  <span style={{ flex: "1", minWidth: "0", fontSize: "11px", color: "var(--color-neutral-500)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {vals.orchLiveLabel}
+                  </span>
+
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+
         {vals.orchHasRecent ? (
           <>
             <div style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "20px" }}>
@@ -741,12 +697,18 @@ export default function OrchestratorDock({ vals }) {
             <div style={{ display: "flex", flexDirection: "column", marginTop: "6px" }}>
               {(vals.orchRecent || []).map((r, $index) => (
                 <React.Fragment key={$index}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "1px", padding: "7px 0", borderTop: "1px solid var(--color-divider)" }}>
-                    <span style={{ fontSize: "11.5px", color: "var(--color-neutral-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {r.label}
-                    </span>
-                    <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>
-                      {r.when}
+                  <div className="hv2" onClick={r.click} title={r.hint + " — " + r.label} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "8px", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--color-divider)", cursor: "pointer" }}>
+                    <div style={{ minWidth: "0" }}>
+                      <span style={{ display: "block", fontSize: "11.5px", color: "var(--color-neutral-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.label}
+                      </span>
+                      <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>
+                        {r.when}
+                      </span>
+                    </div>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10px", color: "var(--color-accent)", flexShrink: "0", whiteSpace: "nowrap" }}>
+                      <i className="ph ph-arrow-counter-clockwise" style={{ fontSize: "10px" }}></i>
+                      {r.hint}
                     </span>
                   </div>
                 </React.Fragment>
@@ -754,6 +716,37 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
+        </div>
+        <div style={{ display: vals.orchAttachShow, flexWrap: "wrap", gap: "5px", marginTop: "14px" }}>
+          {(vals.orchFiles || []).map((f) => (
+            <React.Fragment key={f.key}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "4px 8px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", fontSize: "10.5px", maxWidth: "100%" }}>
+                <i className={`ph ${f.icon}`} style={{ fontSize: "12px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+                <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {f.name}
+                </span>
+                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9px", color: "var(--color-neutral-500)", flexShrink: "0" }}>
+                  {f.size}
+                </span>
+                <i className="ph ph-x hv21" onClick={f.drop} style={{ fontSize: "9px", cursor: "pointer", opacity: "0.6", flexShrink: "0" }}></i>
+              </span>
+            </React.Fragment>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: "6px", marginTop: "10px", alignItems: "stretch" }}>
+          <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: vals.orchAttachShow, width: "34px", flexShrink: "0", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+            <i className="ph ph-paperclip" style={{ fontSize: "14px", color: "var(--color-neutral-400)" }}></i>
+            <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+          </label>
+          <input id="orch-composer" className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder={vals.orchPlaceholder} style={{ flex: "1", minWidth: "0", fontSize: "12px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
+          <div className="hv7" onClick={vals.orchSendClick} title={vals.orchSendTitle} style={{ width: "34px", borderRadius: "7px", background: vals.orchSendBg, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: "0" }}>
+            <i className={`ph ${vals.orchSendIcon}`} style={{ fontSize: "13px" }}></i>
+          </div>
+        </div>
+        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
+          {"Every instruction is stored as a session, whichever page it was raised from."}
+        </div>
       </div>
+    </>
   );
 }
