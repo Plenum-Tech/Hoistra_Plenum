@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from . import keys
+
 import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,7 +165,16 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         raise InvalidToken("wrong_type", "That is not an access token.")
 
     try:
-        user_id = UUID(str(claims.get("sub")))
+        # `sub` is carried as the string it was issued as, not parsed into a UUID. On an
+        # integer-keyed deployment UUID("18") raises, which turned every bearer call from
+        # every existing member of staff into a 401 that said "invalid" and meant "this
+        # service expects a different kind of database".
+        sub = str(claims.get("sub") or "").strip()
+        if not sub:
+            raise InvalidToken("invalid", "That session is not valid. Sign in again.")
+        user_id = keys.coerce(sub, (await keys.key_shape(session)).users)
+        if user_id is None:
+            raise InvalidToken("invalid", "That session is not valid. Sign in again.")
     except (TypeError, ValueError):
         raise InvalidToken("invalid", "That access token is not valid.") from None
 
@@ -185,7 +196,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
                           ON s.id = CAST(:s AS UUID)
                    WHERE u.id = :i"""
             ),
-            {"i": str(user_id), "s": sid},
+            {"i": await keys.user_key(session, user_id), "s": sid},
         )
     ).mappings().first()
     if row is None:
@@ -254,7 +265,8 @@ async def open_session(
                    RETURNING id"""
             ),
             {
-                "u": str(user_id), "h": hash_refresh_token(refresh),
+                "u": await keys.user_key(session, user_id),
+                "h": hash_refresh_token(refresh),
                 "x": _now() + timedelta(days=days),
                 "ua": (user_agent or "")[:400] or None, "ip": request_ip,
             },
@@ -412,7 +424,7 @@ async def revoke_all_sessions(session: AsyncSession, *, user_id: UUID,
                SET revoked_at = now(), revoked_reason = :r
                WHERE user_id = :u AND revoked_at IS NULL"""
         ),
-        {"u": str(user_id), "r": reason},
+        {"u": await keys.user_key(session, user_id), "r": reason},
     )
     n = int(result.rowcount or 0)
     if n:

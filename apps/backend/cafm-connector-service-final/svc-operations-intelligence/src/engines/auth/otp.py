@@ -29,6 +29,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import keys
+
 from ...config import settings
 from ...core.logging import get_logger
 from .secrets_store import otp_pepper
@@ -208,7 +210,7 @@ async def issue(
                    RETURNING id"""
             ),
             {
-                "u": str(user_id) if user_id else None,
+                "u": await keys.user_key(session, user_id) if user_id else None,
                 "e": email, "p": purpose,
                 "h": _digest(code, salt), "s": salt, "x": expires_at,
                 "m": max(1, int(settings.auth_otp_max_attempts)),

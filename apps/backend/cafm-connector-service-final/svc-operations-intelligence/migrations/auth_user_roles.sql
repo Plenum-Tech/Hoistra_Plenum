@@ -24,12 +24,37 @@ ALTER TABLE plenum_cafm.users
 -- 'superuser', 'fm' — would otherwise become an account with a role no code checks for,
 -- which fails closed for that person and silently, and looks like a bug in the app.
 DO $auth_role_check$
+DECLARE offending bigint;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_users_role') THEN
-        ALTER TABLE plenum_cafm.users
-            ADD CONSTRAINT ck_users_role
-            CHECK (role IN ('superadmin', 'admin', 'user'));
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_users_role') THEN
+        RETURN;
     END IF;
+
+    -- The constraint is only applied where the column already means what it is about to
+    -- promise. In CAFM deployments that predate this engine, users.role holds JOB TITLES
+    -- — 'HVAC Specialist', 'Maintenance Planner' — and adding the check there fails
+    -- against live staff rows.
+    --
+    -- Refusing to add it is not the same as fixing that. The column still means two
+    -- things, and every job title still ranks 0 in roles.py, which is a real and separate
+    -- defect: it needs a platform_role column of its own. What this avoids is a migration
+    -- that can never succeed on those databases and, now that failures stop the service,
+    -- would keep them from starting at all.
+    SELECT count(*) INTO offending
+      FROM plenum_cafm.users
+     WHERE role IS NOT NULL AND role NOT IN ('superadmin', 'admin', 'user');
+
+    IF offending > 0 THEN
+        RAISE WARNING
+            'ck_users_role not applied: % row(s) in plenum_cafm.users hold a role outside '
+            '(superadmin, admin, user). This column is being used for job titles; the '
+            'platform role needs a column of its own.', offending;
+        RETURN;
+    END IF;
+
+    ALTER TABLE plenum_cafm.users
+        ADD CONSTRAINT ck_users_role
+        CHECK (role IN ('superadmin', 'admin', 'user'));
 END
 $auth_role_check$;
 
@@ -43,18 +68,45 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_users_role
 -- Append-only. A privilege change is the single most useful line in an incident
 -- timeline, and the one most worth editing afterwards, so nothing here is ever updated
 -- or deleted — a correction is another row.
-CREATE TABLE IF NOT EXISTS plenum_cafm.auth_role_changes (
+-- The key type is read, not assumed. plenum_cafm.users.id is a UUID under the connector
+-- ORM and an integer in the CAFM deployments that predate it; a foreign key declared UUID
+-- against an integer column cannot be implemented, so the table was simply never created
+-- there and the migration reported nothing.
+--
+-- format(%L/%I is not used for the type because a type is neither a literal nor an
+-- identifier; it is checked against an allow-list instead, so a value from
+-- information_schema is never interpolated unexamined.
+CREATE OR REPLACE FUNCTION plenum_cafm._auth_users_key_type() RETURNS text AS $fn$
+DECLARE t text;
+BEGIN
+    SELECT data_type INTO t FROM information_schema.columns
+     WHERE table_schema = 'plenum_cafm' AND table_name = 'users' AND column_name = 'id';
+    IF t IS NULL THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id not found - the auth tables reference it';
+    END IF;
+    IF t NOT IN ('uuid','integer','bigint','smallint','text','character varying') THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id has unsupported type %', t;
+    END IF;
+    RETURN t;
+END;
+$fn$ LANGUAGE plpgsql;
+
+DO $mig$
+BEGIN
+    EXECUTE format($fmt$CREATE TABLE IF NOT EXISTS plenum_cafm.auth_role_changes (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id      UUID NOT NULL REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
+    user_id      %1$s NOT NULL REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
     -- Nullable: the platform itself promotes the bootstrap superadmin, and no person
     -- did that. Recording a human who was not involved would be worse than a null.
-    changed_by   UUID REFERENCES plenum_cafm.users (id) ON DELETE SET NULL,
+    changed_by   %1$s REFERENCES plenum_cafm.users (id) ON DELETE SET NULL,
     from_role    VARCHAR(20),
     to_role      VARCHAR(20) NOT NULL,
     reason       TEXT,
     request_ip   TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+)$fmt$,
+                   plenum_cafm._auth_users_key_type());
+END $mig$;
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_auth_role_changes_user
     ON plenum_cafm.auth_role_changes (user_id, created_at DESC);

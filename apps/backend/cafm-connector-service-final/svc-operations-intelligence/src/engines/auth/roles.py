@@ -31,6 +31,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import keys
+
 from ...core.logging import get_logger
 
 log = get_logger(__name__)
@@ -169,7 +171,8 @@ async def record_change(
                    (user_id, changed_by, from_role, to_role, reason, request_ip)
                VALUES (:u, :b, :f, :t, :r, :ip)"""
         ),
-        {"u": str(user_id), "b": str(changed_by) if changed_by else None,
+        {"u": await keys.user_key(session, user_id),
+         "b": await keys.user_key(session, changed_by) if changed_by else None,
          "f": from_role, "t": to_role, "r": reason, "ip": request_ip},
     )
     log.info("auth.role_changed", user_id=str(user_id), **{"from": from_role},

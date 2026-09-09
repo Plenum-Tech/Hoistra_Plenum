@@ -65,7 +65,17 @@ $auth_org_fk$;
 -- The auth engine now supplies the id itself, so this is belt and braces — but any other
 -- writer of raw SQL against this table deserves the column to behave the way its own
 -- declaration says it does.
-ALTER TABLE plenum_cafm.users ALTER COLUMN id SET DEFAULT gen_random_uuid();
+DO $uuid_default$
+BEGIN
+    -- Only where the column IS a uuid. An integer key fills itself from a sequence and
+    -- already has a default; handing it gen_random_uuid() is a type error, and on a
+    -- runner that reports failures loudly that stops the service rather than being
+    -- shrugged off.
+    IF plenum_cafm._auth_users_key_type() = 'uuid' THEN
+        ALTER TABLE plenum_cafm.users ALTER COLUMN id SET DEFAULT gen_random_uuid();
+    END IF;
+END
+$uuid_default$;
 
 -- ── what sign-in needs that the owning ORM does not carry ───────────────────────────
 
@@ -82,6 +92,21 @@ ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 -- answer whether it happened before or after an account was compromised.
 ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 
+-- The two the engine READS that this file never added.
+--
+-- Both come from the connector ORM, so on a fresh database create_all makes them and
+-- nothing looked wrong. create_all does not ALTER a table that already exists, so on any
+-- deployment whose users table predates this engine they are simply absent — and the very
+-- first query the engine runs names email_verified, so every route returns 500 with
+-- "column email_verified does not exist". A migration that adds four of the six columns
+-- its own engine depends on is not a migration.
+ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+
+-- An existing row that was verified before the boolean existed still is.
+UPDATE plenum_cafm.users SET email_verified = true
+ WHERE email_verified = false AND email_verified_at IS NOT NULL;
+
 -- Addresses are matched case-insensitively: Bala@x.com and bala@x.com are one mailbox,
 -- and uq_users_email would happily hold both as separate accounts — two people who each
 -- believe they own the same identity. Emails are stored lowercased, and this index is
@@ -96,12 +121,37 @@ CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_users_email_lower
 -- The code itself is never stored. What is stored is HMAC-SHA256 over a per-row salt,
 -- keyed by a server-side secret, so a copy of this table is not a set of live codes and
 -- an offline attacker without the service secret cannot grind six digits against it.
-CREATE TABLE IF NOT EXISTS plenum_cafm.auth_otp_codes (
+-- The key type is read, not assumed. plenum_cafm.users.id is a UUID under the connector
+-- ORM and an integer in the CAFM deployments that predate it; a foreign key declared UUID
+-- against an integer column cannot be implemented, so the table was simply never created
+-- there and the migration reported nothing.
+--
+-- format(%L/%I is not used for the type because a type is neither a literal nor an
+-- identifier; it is checked against an allow-list instead, so a value from
+-- information_schema is never interpolated unexamined.
+CREATE OR REPLACE FUNCTION plenum_cafm._auth_users_key_type() RETURNS text AS $fn$
+DECLARE t text;
+BEGIN
+    SELECT data_type INTO t FROM information_schema.columns
+     WHERE table_schema = 'plenum_cafm' AND table_name = 'users' AND column_name = 'id';
+    IF t IS NULL THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id not found - the auth tables reference it';
+    END IF;
+    IF t NOT IN ('uuid','integer','bigint','smallint','text','character varying') THEN
+        RAISE EXCEPTION 'plenum_cafm.users.id has unsupported type %', t;
+    END IF;
+    RETURN t;
+END;
+$fn$ LANGUAGE plpgsql;
+
+DO $mig$
+BEGIN
+    EXECUTE format($fmt$CREATE TABLE IF NOT EXISTS plenum_cafm.auth_otp_codes (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     -- Nullable on purpose: a code is addressed to an EMAIL. If the account is later
     -- deleted the code must die with it, but a code must also be issuable before the
     -- row it belongs to is certain.
-    user_id       UUID REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
+    user_id       %1$s REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
     email         TEXT NOT NULL,
     purpose       TEXT NOT NULL,
     code_hash     TEXT NOT NULL,
@@ -119,7 +169,9 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.auth_otp_codes (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT ck_auth_otp_purpose
         CHECK (purpose IN ('email_verification', 'password_reset'))
-);
+)$fmt$,
+                   plenum_cafm._auth_users_key_type());
+END $mig$;
 
 -- The lookup every verification makes: the newest live code for this address and purpose.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_auth_otp_email_purpose
@@ -134,9 +186,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_auth_otp_expires
 -- password reset that cannot end an attacker's session is not a reset. The token is
 -- stored as a SHA-256 digest — a leaked backup of this table is not a set of live
 -- credentials.
-CREATE TABLE IF NOT EXISTS plenum_cafm.auth_sessions (
+DO $mig$
+BEGIN
+    EXECUTE format($fmt$CREATE TABLE IF NOT EXISTS plenum_cafm.auth_sessions (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id            UUID NOT NULL REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
+    user_id            %1$s NOT NULL REFERENCES plenum_cafm.users (id) ON DELETE CASCADE,
     refresh_token_hash TEXT NOT NULL UNIQUE,
     issued_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at         TIMESTAMPTZ NOT NULL,
@@ -145,7 +199,9 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.auth_sessions (
     user_agent         TEXT,
     request_ip         TEXT,
     last_used_at       TIMESTAMPTZ
-);
+)$fmt$,
+                   plenum_cafm._auth_users_key_type());
+END $mig$;
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_auth_sessions_user
     ON plenum_cafm.auth_sessions (user_id, expires_at DESC);

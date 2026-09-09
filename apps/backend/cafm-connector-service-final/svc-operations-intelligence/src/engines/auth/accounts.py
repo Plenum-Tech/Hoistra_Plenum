@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
+from . import keys
+
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,23 +128,55 @@ async def find_by_email(session: AsyncSession, email: str, *, lock: bool = False
 # ── which organisation a new account joins ───────────────────────────────────────────
 
 
-async def resolve_organization(session: AsyncSession, requested: str | None) -> UUID:
+def _mail_org(organization_id: Any) -> UUID | None:
+    """The organisation id, but only if ops_email_log can actually hold it.
+
+    ops_email_log belongs to THIS service and keys on UUID, whatever the CAFM tables do.
+    Handing it an integer organisation id fails inside the mailer with asyncpg's
+    "'int' object has no attribute 'bytes'" — an error about a column nobody was thinking
+    about, raised from a code path whose job was to send a one-time code, on an endpoint
+    that then returns 500 for a registration which had otherwise succeeded.
+
+    Dropping it is the right loss: the row still records that the email went out, to whom,
+    and when. The alternative is widening a column of ours to carry a foreign key shape we
+    do not control.
+    """
+    if organization_id is None:
+        return None
+    try:
+        return UUID(str(organization_id))
+    except (TypeError, ValueError):
+        return None
+
+
+async def resolve_organization(
+    session: AsyncSession, requested: str | None
+) -> keys.KeyValue:
     """The organisation a registration belongs to, or an error saying it cannot be known.
 
     Never guessed. Putting a new account in the wrong tenant hands one customer's data to
     another, and nothing about it looks wrong afterwards — the account works, it is simply
     looking at the wrong portfolio.
+
+    The id is whatever shape this deployment's organizations table keys on. It used to be
+    forced through ``UUID(candidate)``, so on an integer-keyed database every registration
+    failed on the id before it reached the question of which organisation was meant —
+    "organization_id must be a UUID" being unarguable and unhelpful in equal measure.
     """
+    shape = await keys.key_shape(session)
+    kind = shape.organizations or shape.users
     candidate = (requested or "").strip() or (settings.auth_default_organization_id or "").strip()
     if candidate:
-        try:
-            org = UUID(candidate)
-        except ValueError:
-            raise AuthError("organization_id must be a UUID.", reason="organization_id") from None
+        if not keys.is_valid(candidate, kind):
+            raise AuthError(
+                f"organization_id must be {keys.describe(kind)}.",
+                reason="organization_id",
+            )
+        org = keys.coerce(candidate, kind)
         exists = (
             await session.execute(
                 text("SELECT 1 FROM plenum_cafm.organizations WHERE id = :i"),
-                {"i": str(org)},
+                {"i": org},
             )
         ).first()
         if not exists:
@@ -215,7 +249,7 @@ async def _send_code(
     )
     delivery = await send_platform_email(
         session, to_address=email, subject=subject, body=body,
-        organization_id=organization_id, commit=False, log_body=redacted,
+        organization_id=_mail_org(organization_id), commit=False, log_body=redacted,
     )
     return {"sent": True, "rate_limited": False,
             "delivery_status": delivery.get("status"),
@@ -240,7 +274,7 @@ async def _warn_existing_account(session: AsyncSession, row: Any) -> None:
             "remember it. If it was not you, no action is needed: no account was created "
             "and nothing about yours has changed.\n\nHoistra"
         ),
-        organization_id=row["organization_id"], commit=False,
+        organization_id=_mail_org(row["organization_id"]), commit=False,
     )
 
 
@@ -321,10 +355,26 @@ async def register(
     # violated NOT NULL and registration was impossible. Supplying the value works on
     # both shapes and depends on neither.
     new_id = uuid4()
+    _shape = await keys.key_shape(session)
     try:
         user_id = (
             await session.execute(
                 text(
+                    # id is supplied only when the column will not fill itself in.
+                    #
+                    # The ORM declares users.id with a PYTHON-side default, so create_all
+                    # emits no server default and a raw INSERT that omits the column hits
+                    # NOT NULL. An integer-keyed database is the mirror image: the column
+                    # is sequence-backed, and handing it a uuid is a type error while
+                    # handing it anything at all defeats the sequence. Which of those is
+                    # true here was read from information_schema at startup.
+                    """INSERT INTO plenum_cafm.users
+                           (organization_id, full_name, email, password_hash, phone,
+                            status, email_verified, password_changed_at, role)
+                       VALUES (:o, :n, :e, :h, :p, 'pending_verification', false,
+                               now(), :r)
+                       RETURNING id"""
+                    if _shape.users_id_self_assigning else
                     """INSERT INTO plenum_cafm.users
                            (id, organization_id, full_name, email, password_hash, phone,
                             status, email_verified, password_changed_at, role)
@@ -332,9 +382,13 @@ async def register(
                                now(), :r)
                        RETURNING id"""
                 ),
-                {"i": str(new_id), "o": str(org), "n": name, "e": address,
-                 "h": hash_password(password), "p": (phone or "").strip() or None,
-                 "r": role},
+                ({"o": org, "n": name, "e": address,
+                  "h": hash_password(password), "p": (phone or "").strip() or None,
+                  "r": role}
+                 if _shape.users_id_self_assigning else
+                 {"i": str(new_id), "o": org, "n": name, "e": address,
+                  "h": hash_password(password), "p": (phone or "").strip() or None,
+                  "r": role}),
             )
         ).scalar_one()
     except IntegrityError as exc:
@@ -409,7 +463,7 @@ async def verify_email(
                    updated_at = now()
                WHERE id = :i"""
         ),
-        {"i": str(row["id"])},
+        {"i": await keys.user_key(session, row["id"])},
     )
 
     fresh = await find_by_email(session, address)
@@ -520,7 +574,8 @@ async def sign_in(
                    WHERE id = :i"""
             ),
             {"f": failures, "cap": cap,
-             "until": _now() + timedelta(minutes=lock_for), "i": str(row["id"])},
+             "until": _now() + timedelta(minutes=lock_for),
+             "i": await keys.user_key(session, row["id"])},
         )
         await session.commit()
         log.info("auth.signin.failed", user_id=str(row["id"]), failures=failures,
@@ -556,7 +611,7 @@ async def sign_in(
                    updated_at = now()
                WHERE id = :i"""
         ),
-        {"i": str(row["id"])},
+        {"i": await keys.user_key(session, row["id"])},
     )
     pair = await token_engine.open_session(
         session, user_id=row["id"], email=row["email"],
@@ -693,7 +748,8 @@ async def reset_password(
                    updated_at = now()
                WHERE id = :i"""
         ),
-        {"h": hash_password(new_password), "i": str(row["id"])},
+        {"h": hash_password(new_password),
+         "i": await keys.user_key(session, row["id"])},
     )
 
     # Everything the old password could reach, ended. A reset that leaves the intruder's
@@ -719,7 +775,7 @@ async def reset_password(
             "immediately and tell your administrator — whoever did this had access to "
             "this mailbox.\n\nHoistra"
         ),
-        organization_id=row["organization_id"], commit=False,
+        organization_id=_mail_org(row["organization_id"]), commit=False,
     )
     await session.commit()
     log.info("auth.password_reset", user_id=str(row["id"]), sessions_revoked=revoked)
@@ -738,7 +794,8 @@ async def change_password(
     """Change a password from inside a signed-in session, using the current one."""
     row = (
         await session.execute(
-            text(f"{_SELECT} WHERE id = :i FOR UPDATE"), {"i": str(user_id)},
+            text(f"{_SELECT} WHERE id = :i FOR UPDATE"),
+            {"i": await keys.user_key(session, user_id)},
         )
     ).mappings().first()
     if row is None:
@@ -765,7 +822,8 @@ async def change_password(
                SET password_hash = :h, password_changed_at = now(), updated_at = now()
                WHERE id = :i"""
         ),
-        {"h": hash_password(new_password), "i": str(user_id)},
+        {"h": hash_password(new_password),
+         "i": await keys.user_key(session, user_id)},
     )
     revoked = await token_engine.revoke_all_sessions(
         session, user_id=user_id, reason="password_changed",
@@ -776,7 +834,7 @@ async def change_password(
         body=("Hello,\n\nYour Hoistra password was changed from a signed-in session, and "
               "all other sessions were ended.\n\nIf this was not you, reset your password "
               "immediately.\n\nHoistra"),
-        organization_id=row["organization_id"], commit=False,
+        organization_id=_mail_org(row["organization_id"]), commit=False,
     )
     await session.commit()
     log.info("auth.password_changed", user_id=str(user_id), sessions_revoked=revoked)
@@ -854,7 +912,8 @@ async def set_role(
 
     row = (
         await session.execute(
-            text(f"{_SELECT} WHERE id = :i FOR UPDATE"), {"i": str(target_user_id)},
+            text(f"{_SELECT} WHERE id = :i FOR UPDATE"),
+            {"i": await keys.user_key(session, target_user_id)},
         )
     ).mappings().first()
     if row is None:
@@ -884,7 +943,8 @@ async def set_role(
         remaining = (
             await session.execute(
                 text("SELECT count(*) FROM plenum_cafm.users WHERE role = :r AND id <> :i"),
-                {"r": role_engine.SUPERADMIN, "i": str(row["id"])},
+                {"r": role_engine.SUPERADMIN,
+                 "i": await keys.user_key(session, row["id"])},
             )
         ).scalar_one()
         if int(remaining or 0) == 0:
@@ -896,7 +956,7 @@ async def set_role(
 
     await session.execute(
         text("UPDATE plenum_cafm.users SET role = :r, updated_at = now() WHERE id = :i"),
-        {"r": wanted, "i": str(row["id"])},
+        {"r": wanted, "i": await keys.user_key(session, row["id"])},
     )
     await role_engine.record_change(
         session, user_id=row["id"], from_role=current, to_role=wanted,
@@ -922,7 +982,7 @@ async def set_role(
             f"{role_engine.LABELS.get(wanted, wanted)}.\n\n"
             "If you were not expecting this, tell your administrator.\n\nHoistra"
         ),
-        organization_id=row["organization_id"], commit=False,
+        organization_id=_mail_org(row["organization_id"]), commit=False,
     )
     await session.commit()
     fresh = await find_by_email(session, row["email"])
