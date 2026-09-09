@@ -793,8 +793,26 @@ export const renderValsMethods = {
         this.ask(q);
       },
       abPh: (() => {
-        if (s.view === "cc") return "Ask anything about compliance — 118 obligations across 24 buildings";
-        if (s.view === "vp") return "Ask anything about vendor performance — 6 contracts, August scorecard";
+        // Counted, not typed. "118 obligations across 24 buildings" sat above a register
+        // holding none of either, which is the most misleading place on the screen to put
+        // a constant: it is the first line a person reads, and it contradicts the figures
+        // directly beneath it.
+        if (s.view === "cc") {
+          const cc = this.ccData();
+          const obligations = (cc.certs || []).length;
+          const covered = (cc.buildings || []).length;
+          return "Ask anything about compliance — "
+            + (obligations || covered
+              ? obligations + (obligations === 1 ? " obligation" : " obligations")
+                + " across " + covered + (covered === 1 ? " building" : " buildings")
+              : "nothing on the register yet");
+        }
+        if (s.view === "vp") {
+          const vendors = (this.ccData().vendors || []).length;
+          return "Ask anything about vendor performance — "
+            + (vendors ? vendors + (vendors === 1 ? " vendor" : " vendors") + " on the register"
+              : "no vendors on the register yet");
+        }
         if (s.view === "report") return "Ask anything about this report, or ask for the next one";
         if (s.view === "buildings") return "Ask anything about your buildings — schema, documents, open risk";
         if (s.view === "module" && mod) return "Ask anything about " + mod.name.toLowerCase() + " across the portfolio";
@@ -1531,12 +1549,26 @@ export const renderValsMethods = {
       })),
 
 
-      spaces: [
-        { name: "Compliance", sub: "118 obligations · 4 regulation packs", icon: "ph-shield-check", badge: "3 lapsed", tone: "risk", key: "compliance" },
-        { name: "Energy", sub: "24 buildings · half-hourly MPAN", icon: "ph-lightning", badge: "6 anomalies", tone: "warn", key: "energy" },
-        { name: "Vendor performance", sub: "6 contracted vendors · Aug scorecard", icon: "ph-chart-line-up", badge: "3 below 80", tone: "warn", key: "vendors" },
-        { name: "Vendor operations", sub: "148 live work orders · PPM 92%", icon: "ph-wrench", badge: "14 to approve", tone: "ok", key: "ops" }
-      ].map((x) => ({ ...x, color: t(x.tone).color, bg: t(x.tone).bg, click: () => this.openModule(x.key) })),
+      // Each card's subtitle counts what its space actually holds. These were constants
+      // too, and on an empty register they advertised 118 obligations, 24 buildings and
+      // 148 work orders that were not there.
+      spaces: (() => {
+        const cc = this.ccData();
+        const nCerts = (cc.certs || []).length;
+        const nVendors = (cc.vendors || []).length;
+        const nPacks = (cc.countries || []).length;
+        const nBuildings = this.bldData().length;
+        const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+        return [
+        { name: "Compliance", sub: plural(nCerts, "obligation", "obligations") + " · "
+            + plural(nPacks, "regulation pack", "regulation packs"),
+          icon: "ph-shield-check", badge: "3 lapsed", tone: "risk", key: "compliance" },
+        { name: "Energy", sub: plural(nBuildings, "building", "buildings") + " · half-hourly MPAN",
+          icon: "ph-lightning", badge: "6 anomalies", tone: "warn", key: "energy" },
+        { name: "Vendor performance", sub: plural(nVendors, "contracted vendor", "contracted vendors"),
+          icon: "ph-chart-line-up", badge: "3 below 80", tone: "warn", key: "vendors" },
+        { name: "Vendor operations", sub: "work orders · PPM", icon: "ph-wrench", badge: "14 to approve", tone: "ok", key: "ops" }
+      ]; })().map((x) => ({ ...x, color: t(x.tone).color, bg: t(x.tone).bg, click: () => this.openModule(x.key) })),
 
       pnl: D.pnl.map((r) => ({ ...r, color: t(r.tone).color })),
 
