@@ -89,19 +89,27 @@ COPY ${BE}/svc-deepagents/pyproject.toml svc-deepagents/
 RUN pip install --no-cache-dir -e "svc-deepagents"
 COPY ${BE}/svc-deepagents/ svc-deepagents/
 
+# doc-rag: the document index. Every uploaded PDF goes through it, and it was missing from
+# this image entirely — deep-agents dialled it, got nothing, and reported the upload as
+# complete regardless. Its own Dockerfile runs it on 8000 with --root-path /doc-rag; 8000 is
+# the connector here, so it takes 8004, which is the port deep-agents already looks for.
+COPY ${BE}/doc-rag-main/requirements.txt doc-rag/
+RUN pip install --no-cache-dir -r doc-rag/requirements.txt
+COPY ${BE}/doc-rag-main/ doc-rag/
+
 COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY deploy/allinone/nginx.conf       /etc/nginx/conf.d/hoistra.conf
 COPY deploy/allinone/supervisord.conf /etc/supervisor/conf.d/hoistra.conf
 
-# Where the services find each other inside this container. Every other default already
-# matches the ports supervisord starts — 8000 connector, 8003 schema-mapper, 8006 udr,
-# 8007 work-order, 8009 ops-intelligence — but doc-rag defaults to :8004, and nothing in
-# this image listens there: doc-rag is served by the schema-mapper process on 8003.
-#
-# Leaving it wrong produces no error anyone sees. A document upload answers 200 with
-# "Ingestion complete", the log carries one ConnectError, no row is created, and the file
-# is silently gone. Worth an ENV line.
-ENV DOC_RAG_BASE_URL=http://127.0.0.1:8003
+# Where the services find each other inside this container. Stated rather than inherited:
+# every one of these is a default in some service's config, and a default that silently
+# stops matching the ports supervisord starts is how a document upload comes to answer
+# "Ingestion complete" while writing nothing.
+ENV DOC_RAG_BASE_URL=http://127.0.0.1:8004 \
+    MIGRATION_BASE_URL=http://127.0.0.1:8003 \
+    UDR_BASE_URL=http://127.0.0.1:8006 \
+    WO_MANAGEMENT_BASE_URL=http://127.0.0.1:8007 \
+    OPERATIONS_INTELLIGENCE_BASE_URL=http://127.0.0.1:8009
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
