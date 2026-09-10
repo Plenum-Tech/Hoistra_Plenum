@@ -929,8 +929,13 @@ export default function Buildings({ vals }) {
                               <div className="hv15" onClick={b.downloadAll} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
                                 {"Download all"}
                               </div>
-                              <div className="hv4" onClick={b.ingestMore} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                                {"Ingest more"}
+                              {/* "Ingest more" said nothing about what it ingests or where
+                                  it lands. It attaches a document to THIS building, so it
+                                  says so — and carries an icon, because it is the one
+                                  control on this card that adds something. */}
+                              <div className="hv4" onClick={b.ingestMore} title={"Attach a document to " + b.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+                                <i className="ph ph-file-arrow-up" style={{ fontSize: "13px" }}></i>
+                                {"Ingest a document"}
                               </div>
                             </div>
                           </div>

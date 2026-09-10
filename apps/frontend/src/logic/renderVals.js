@@ -1261,7 +1261,14 @@ export const renderValsMethods = {
                     + "to download."
                   : "Nothing filed against " + b.name + " to download.");
           },
-          ingestMore: () => this.runAction("Ingest documents", b.name)
+          // Opens the same ingest panel the page header does, with this building already
+          // chosen — the card is the answer to the question the panel would otherwise ask.
+          // runAction() was routing here with an empty patch, so the building was dropped on
+          // the way and the dropdown came up blank.
+          ingestMore: () => {
+            this.ccChatReset();
+            this.orchWith("Ingest documents", b.name, "ingest", { declFor: b.name });
+          }
         };
       }),
 
