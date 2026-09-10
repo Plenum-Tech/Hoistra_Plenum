@@ -827,7 +827,14 @@ export default function Buildings({ vals }) {
                     {(vals.docBuildings || []).map((b, $index) => (
                       <React.Fragment key={$index}>
                         <div style={{ borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
-                          <div className="hv2" onClick={b.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(0,1fr) auto auto auto", gap: "12px", alignItems: "center", padding: "12px 16px", cursor: "pointer", background: b.headBg }}>
+                          {/* Three columns, not five. The chips carry what the rollup
+                              counted now ("9 documents · 2 held"), and against five rigid
+                              `auto` tracks that extra text came straight out of the only
+                              flexible one — the building's name, which truncated to "Town…"
+                              while the counts beside it had room to spare. Grouping the
+                              chips lets them wrap under each other on a narrow card, and
+                              the name keeps a floor it cannot be squeezed below. */}
+                          <div className="hv2" onClick={b.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(150px,1fr) auto", gap: "12px", alignItems: "center", padding: "12px 16px", cursor: "pointer", background: b.headBg }}>
                             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-500)" }}>
                               {b.arrow}
                             </span>
@@ -835,19 +842,21 @@ export default function Buildings({ vals }) {
                               <div style={{ fontSize: "13.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {b.name}
                               </div>
-                              <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
+                              <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {b.id}{" · "}{b.state}
                               </div>
                             </div>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
-                              {b.nStruct}{" "}{b.structLabel}
-                            </span>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
-                              {b.nUnstruct}{" "}{b.unstructLabel}
-                            </span>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                              {b.size}
-                            </span>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center", justifyContent: "flex-end", minWidth: "0" }}>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
+                                {b.nStruct}{" "}{b.structLabel}
+                              </span>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
+                                {b.nUnstruct}{" "}{b.unstructLabel}
+                              </span>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                                {b.size}
+                              </span>
+                            </div>
                           </div>
                           <div style={{ display: b.openShow, flexDirection: "column", borderTop: "1px solid var(--color-divider)" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))" }}>
