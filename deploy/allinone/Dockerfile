@@ -93,8 +93,15 @@ COPY ${BE}/svc-deepagents/ svc-deepagents/
 # this image entirely — deep-agents dialled it, got nothing, and reported the upload as
 # complete regardless. Its own Dockerfile runs it on 8000 with --root-path /doc-rag; 8000 is
 # the connector here, so it takes 8004, which is the port deep-agents already looks for.
+#
+# In its own virtualenv, because it pins hard — fastapi==0.115.0, pydantic==2.9.2,
+# sqlalchemy==2.0.35 — and installed into the shared site-packages those pins won for
+# everybody: the first attempt at this took connector and schema-mapper down to 502, six
+# services moved underneath by the seventh's requirements file. One image running seven
+# services is a deployment convenience, not a claim that they share a dependency set.
+RUN python -m venv /opt/docrag && /opt/docrag/bin/pip install --no-cache-dir --upgrade pip
 COPY ${BE}/doc-rag-main/requirements.txt doc-rag/
-RUN pip install --no-cache-dir -r doc-rag/requirements.txt
+RUN /opt/docrag/bin/pip install --no-cache-dir -r doc-rag/requirements.txt
 COPY ${BE}/doc-rag-main/ doc-rag/
 
 COPY --from=frontend /app/dist /usr/share/nginx/html
