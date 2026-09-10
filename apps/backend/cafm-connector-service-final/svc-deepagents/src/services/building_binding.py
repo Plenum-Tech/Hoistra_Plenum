@@ -70,6 +70,34 @@ def document_ids_from(tool_calls: Any) -> list[str]:
     return found
 
 
+async def documents_from_session(session_id: str) -> list[str]:
+    """The documents this upload produced, found by the mark the uploader leaves.
+
+    Every file is saved as "{session_id}_{filename}" before it is handed on, and doc-rag
+    records that name verbatim. So the rows belonging to one upload can be identified without
+    asking any engine to report them — which matters because they do not all report the same
+    way, and the ones that do not fail silently.
+
+    Recent rows only: a session id can be reused, and re-binding a document somebody filed
+    hours ago against a building they have since corrected would be worse than missing it.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return []
+    async with database.AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                text(
+                    """SELECT id::text FROM plenum_cafm.ingestion_documents
+                        WHERE original_filename LIKE :prefix
+                          AND uploaded_at > now() - interval '1 hour'"""
+                ),
+                {"prefix": sid + "\\_%"},
+            )
+        ).scalars().all()
+    return [str(r) for r in rows]
+
+
 async def building_exists(building_id: str) -> bool:
     async with database.AsyncSessionLocal() as session:
         row = await session.execute(
@@ -123,6 +151,17 @@ async def bind_and_log(
     if not building_id:
         return {}
     ids = document_ids_from(tool_calls)
+    # Everything that arrived under this session, whether or not an engine mentioned it.
+    # Union rather than fallback: the tool calls sometimes name a document the session
+    # lookup cannot see (an id reused from an earlier upload), and the session lookup
+    # routinely names ones the tool calls omit.
+    try:
+        for extra in await documents_from_session(session_id):
+            if extra not in ids:
+                ids.append(extra)
+    except Exception as exc:  # noqa: BLE001 — a lookup failure must not lose the ingest
+        log.warning("ingest.session_lookup_failed", where=where, session_id=session_id,
+                    error=str(exc)[:200])
     if not ids:
         log.warning("ingest.nothing_to_bind", where=where, session_id=session_id,
                     building_id=building_id)
