@@ -261,6 +261,20 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
             session,
             "SELECT building_id::text, count(*) FROM plenum_cafm.documents GROUP BY 1",
         ))
+        # Of those, the ones we actually hold. The card said "8 documents" for a building
+        # holding none of them, which is the count equivalent of a working download icon on
+        # a row with no file.
+        if "blob_url" in shape["documents"]["columns"]:
+            # FILTER, not WHERE. A WHERE would drop a building whose documents are all
+            # unheld out of the result entirely, and an absent count is how a caller says
+            # "nobody counted this" — so the one building that most needs to say "none
+            # held" would be the one saying nothing.
+            add("documents_held", await _scalar_counts(
+                session,
+                """SELECT building_id::text,
+                          count(*) FILTER (WHERE NULLIF(blob_url::text, '') IS NOT NULL)
+                     FROM plenum_cafm.documents GROUP BY 1""",
+            ))
         dkey = shape["documents"]["key"]
         if shape["compliance_certificates"]["exists"]:
             add("certificates", await _scalar_counts(
@@ -270,6 +284,20 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
                     LEFT JOIN plenum_cafm.documents d
                            ON d.{dkey}::text = COALESCE(c.document_id::text, c.source_document_id::text)
                     GROUP BY 1""",
+            ))
+            # Certificates with no document behind them at all. These reach a building only
+            # by their own building_id — there is no document to reach it through, which is
+            # the whole point of counting them.
+            add("certificates_unevidenced", await _scalar_counts(
+                session,
+                f"""SELECT COALESCE(c.building_id::text, d.building_id::text),
+                           count(*) FILTER (WHERE COALESCE(c.document_id,
+                                                           c.source_document_id) IS NULL)
+                      FROM plenum_cafm.compliance_certificates c
+                      LEFT JOIN plenum_cafm.documents d
+                             ON d.{dkey}::text = COALESCE(c.document_id::text,
+                                                          c.source_document_id::text)
+                     GROUP BY 1""",
             ))
     if shape["contracts"]["exists"]:
         add("contracts", await _scalar_counts(

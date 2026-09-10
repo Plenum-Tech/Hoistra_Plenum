@@ -35,30 +35,60 @@ export function tidyFileName(name) {
   return out.trim() || String(name == null ? "" : name);
 }
 
-// How a document-ish row should be drawn, given whether a file sits behind it.
+// How a document-ish row should be drawn, given what sits behind it.
 //
-// has_file is three-valued and the third value matters: null means the branch does not
-// track files, and drawing that as "no file" would be a new untruth in place of the old one.
-export function fileAffordance(hasFile) {
+// Two questions, asked in order, because the answers are different findings:
+//
+//   has_ref   does this row name a document at all?
+//   has_file  does that document have a file behind it?
+//
+// A certificate that names no document is a gap in the register — somebody recorded a
+// certificate and nothing was ever filed against it. A certificate whose document we do not
+// hold is a filing problem: the scan is somewhere else. Both used to render as "no file",
+// which told a reader neither, and only the first is a compliance finding.
+//
+// Both flags are three-valued and the third value matters: null means the branch does not
+// track that at all, and drawing it as "no" would be a new untruth in place of the old one.
+export function fileAffordance(hasFile, hasRef, labels) {
+  const L = labels || {};
+  // Dimmed and inert. The row is still a record worth reading — that is what the detail
+  // line and the id are for — but there is nothing to open.
+  //
+  // Mixed rather than picked: the palette's next step down (--color-neutral-700, #CFCCC2)
+  // sits at about 1.5:1 on the page ground, which is not a dimmed icon but an invisible
+  // one. Half-way to the background reads as disabled and still reads.
+  const dim = "color-mix(in srgb, var(--color-neutral-500) 55%, var(--color-bg))";
+
+  if (hasRef === false) {
+    return {
+      held: false,
+      evidenced: false,
+      // Not the same icon as "no file", and not the same colour: this one is a finding, so
+      // it carries the warning tone the rest of the console uses for a gap rather than the
+      // grey it uses for something merely unavailable.
+      viewIcon: "ph ph-file-dashed",
+      viewColor: "var(--st-warn)",
+      viewCursor: "default",
+      viewTitle: L.noRefTitle || "No document behind this record — nothing was filed against it",
+      dlShow: "none",
+      note: L.noRef || " · no document",
+    };
+  }
   if (hasFile === false) {
     return {
       held: false,
+      evidenced: true,
       viewIcon: "ph ph-eye-slash",
-      // Dimmed and inert. The row is still a record worth reading — that is what the
-      // detail line and the id are for — but there is no file to open.
-      //
-      // Mixed rather than picked: the palette's next step down (--color-neutral-700,
-      // #CFCCC2) sits at about 1.5:1 on the page ground, which is not a dimmed icon but an
-      // invisible one. Half-way to the background reads as disabled and still reads.
-      viewColor: "color-mix(in srgb, var(--color-neutral-500) 55%, var(--color-bg))",
+      viewColor: dim,
       viewCursor: "default",
-      viewTitle: "No file held — this row records that the document exists",
+      viewTitle: L.noFileTitle || "No file held — this row records that the document exists",
       dlShow: "none",
-      note: " · no file",
+      note: L.noFile || " · no file",
     };
   }
   return {
     held: hasFile === true,
+    evidenced: hasRef !== false,
     viewIcon: "ph ph-eye hv6",
     viewColor: "var(--color-neutral-500)",
     viewCursor: "pointer",
@@ -1114,6 +1144,9 @@ export const renderValsMethods = {
         const key = b.buildingId || b.id;
         const c = b.counts || {};
         const nDocs = c.documents, nCerts = c.certificates;
+        // How many of those documents we hold, and how many of those certificates have
+        // nothing filed against them. Both counted by the rollup over the whole building.
+        const nHeld = c.documents_held, nBare = c.certificates_unevidenced;
         // The rows themselves come from the graph endpoint, fetched when the building is
         // opened and cached per building — the same call the drawer makes, so opening one
         // in both places costs one request.
@@ -1125,7 +1158,9 @@ export const renderValsMethods = {
         const certBranch = fetched && fetched.certificates;
         const state = (this.state.bgTree || {})[key] || {};
         const files = ((branch && branch.rows) || []).map((r) => {
-          const a = fileAffordance(r.has_file);
+          // A document IS the document, so the "does it name one" question does not apply
+          // to it — only "do we hold the file".
+          const a = fileAffordance(r.has_file, r.has_ref);
           return {
             ...a,
             file: tidyFileName(r.label),
@@ -1156,8 +1191,15 @@ export const renderValsMethods = {
           // with nothing filed at all.
           nStruct: typeof nDocs === "number" ? NUM(nDocs) : (this.glBranchCounted("documents") ? "0" : "?"),
           nUnstruct: typeof nCerts === "number" ? NUM(nCerts) : (this.glBranchCounted("certificates") ? "0" : "?"),
-          structLabel: nDocs === 1 ? "document" : "documents",
-          unstructLabel: nCerts === 1 ? "certificate" : "certificates",
+          // Counted, not sampled: these come from the rollup, so they are right for a
+          // building with more rows than the drawer will ever load. Undefined means the
+          // rollup did not count them, and the chip then says nothing rather than "0".
+          structLabel: (nDocs === 1 ? "document" : "documents")
+            + (typeof nHeld === "number" && typeof nDocs === "number" && nDocs
+                ? (nHeld ? " · " + nHeld + " held" : " · none held") : ""),
+          unstructLabel: (nCerts === 1 ? "certificate" : "certificates")
+            + (typeof nBare === "number" && typeof nCerts === "number" && nCerts
+                ? (nBare ? " · " + nBare + " unevidenced" : " · all evidenced") : ""),
           // plenum_cafm.documents records no file size, so the slot that showed "0.2 GB"
           // for every building shows nothing rather than a figure derived from row counts.
           size: "",
@@ -1170,20 +1212,28 @@ export const renderValsMethods = {
           // has_file follows that reference, so a certificate whose document is only a
           // record shows the same dimmed eye as that document does.
           unstructured: ((certBranch && certBranch.rows) || []).map((r) => {
-            const a = fileAffordance(r.has_file);
+            const a = fileAffordance(r.has_file, r.has_ref, {
+              noRef: " · no document",
+              noRefTitle: "No document behind this certificate — nothing was ever filed "
+                + "against it",
+              noFile: " · no scan",
+              noFileTitle: "No scan held — the certificate is recorded and the document it "
+                + "came from is not on file",
+            });
             return {
               ...a,
               file: r.label,
               became: r.detail || "no expiry or status recorded",
               sim: "",
               meta: "certificate" + a.note,
-              viewTitle: a.held ? "View"
-                : "No scan held — the certificate is recorded, the document it came from "
-                  + "is not on file",
               view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
-                + r.id + (r.detail ? ", " + r.detail : "") + ", bound to a document on "
-                + b.name + "." + (a.held ? "" : " That document has no blob_url, so there "
-                  + "is no scan to open.")),
+                + r.id + (r.detail ? ", " + r.detail : "")
+                + (a.evidenced
+                    ? ", bound to a document on " + b.name + "."
+                      + (a.held ? "" : " That document has no blob_url, so there is no scan "
+                        + "to open.")
+                    : ". No document_id on the row: this certificate is recorded on "
+                      + b.name + " with nothing filed against it.")),
               download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
             };
           }),
@@ -1195,6 +1245,17 @@ export const renderValsMethods = {
           emptyShow: files.length ? "none" : "block",
           // Each column says why it is empty on its own. A heading with nothing under it
           // reads as a screen that has not finished loading rather than as a record.
+          // The column heading claims these certificates are evidenced by the documents
+          // beside them. True of the ones that name a document; for the rest it was the
+          // panel asserting the very thing they are missing.
+          certHead: (() => {
+            const rows = (certBranch && certBranch.rows) || [];
+            const bare = rows.filter((r) => r.has_ref === false).length;
+            if (!rows.length) return "Certificates";
+            if (!bare) return "Certificates — evidenced by those documents";
+            if (bare === rows.length) return "Certificates — none evidenced by a document";
+            return "Certificates — " + bare + " of " + rows.length + " with no document";
+          })(),
           certEmpty: !certBranch ? "Reading the graph…"
             : !certBranch.available ? (certBranch.empty_reason || "Certificates cannot be read here.")
             : "No certificate has been filed against a document on this building.",

@@ -84,17 +84,24 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     # hold a file, the document it was read from does.
     "documents": {"label": ("file_name", "title"), "detail": ("doc_type",),
                   "has_file": "blob_url"},
+    # has_ref is the question one step before has_file: is there a document here to hold a
+    # file? A certificate with no document_id at all has no scan because nothing was ever
+    # filed against it — a gap in the register, not a gap in storage — and the two read
+    # identically until the row says which.
     "compliance_certificates": {"label": ("certificate_type_code", "certificate_number"),
                                 "detail": ("certificate_number", "expiry_date", "status"),
                                 "has_file": {"via": "documents", "col": "blob_url",
-                                             "on": ("document_id", "source_document_id")}},
+                                             "on": ("document_id", "source_document_id")},
+                                "has_ref": ("document_id", "source_document_id")},
     "work_orders": {"label": ("title", "wo_code"), "detail": ("wo_code", "status")},
     "contracts": {"label": ("contract_ref",), "detail": ("status", "start_date"),
                   "has_file": {"via": "documents", "col": "blob_url",
-                               "on": ("document_id",)}},
+                               "on": ("document_id",)},
+                  "has_ref": ("document_id",)},
     "invoices": {"label": ("invoice_ref",), "detail": ("amount", "status"),
                  "has_file": {"via": "documents", "col": "blob_url",
-                              "on": ("document_id",)}},
+                              "on": ("document_id",)},
+                 "has_ref": ("document_id",)},
 }
 
 #: The tree as the graph is written. Children are read by their own building link rather
@@ -194,6 +201,10 @@ async def _branch(
     select = [f"{key}::text AS id", f"{label_expr} AS label"]
     select += [f"{c}::text AS d{i}" for i, c in enumerate(detail_cols)]
     select.append(f"{_has_file(spec, cols, shape)} AS has_file")
+    ref_cols = [c for c in (spec.get("has_ref") or ()) if c in cols]
+    select.append(
+        ("(COALESCE(" + ", ".join(ref_cols) + ") IS NOT NULL)" if ref_cols else "NULL")
+        + " AS has_ref")
     order = f"{label_expr} NULLS LAST" if label_cols else key
 
     try:
@@ -230,6 +241,9 @@ async def _branch(
         # branch does not track files at all, so the question does not apply — a client
         # must not read that as "no".
         "has_file": (None if r["has_file"] is None else bool(r["has_file"])),
+        # true: the row names a document. false: it names none, so there is nothing that
+        # could hold a file. null: this branch has no such reference to name.
+        "has_ref": (None if r["has_ref"] is None else bool(r["has_ref"])),
     } for r in rows]
     out["truncated"] = out["count"] > len(out["rows"])
     return out

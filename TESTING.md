@@ -147,6 +147,35 @@ and this file's secrets are no longer a reasonable trade.
 
 ---
 
+## Real documents, where the environment can hold them
+
+`db/04_demo_data.sql` builds a portfolio of records. Every document row says a document
+exists; none of them has a file behind it, because the generator never had one to point at.
+That is fine for most testing and useless for the half of the product that opens a document:
+every certificate reads "no scan", and nobody can tell the feature works.
+
+`db/tools/import_real_documents.py` copies real compliance PDFs from a database that has them
+into one that does not, attaching each to a certificate of its own type and creating one where
+the target has no certificate of that type:
+
+```bash
+python db/tools/import_real_documents.py --from <source dsn> --to <target dsn>
+python db/tools/import_real_documents.py --from <source dsn> --to <target dsn> --apply
+```
+
+Without `--apply` it prints the plan and writes nothing. Re-running is safe: documents keep
+their source ids, so a second run updates in place. It does not copy inspector names or
+accreditation numbers — the file, its type and its dates are what make the environment
+useful; the name of the engineer who signed it is not.
+
+**Do not point this at a stack started from `docker-compose.testenv.yml`.** The section above
+is the reason: that stack's signing keys are published in this repository, so anyone who can
+read the repo can mint a session for it. Real certificate numbers and real document URLs
+behind a public signing key is exactly the trade that section says not to make. Use it against
+a hosted environment whose secrets are real.
+
+---
+
 ## If something does not come up
 
 ```bash

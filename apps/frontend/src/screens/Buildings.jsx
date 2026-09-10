@@ -884,7 +884,7 @@ export default function Buildings({ vals }) {
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "3px", background: "var(--marker)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                    {"Certificates — evidenced by those documents"}
+                                    {b.certHead}
                                   </span>
                                 </div>
                                 <div style={{ display: b.certEmptyShow, fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "12px 16px" }}>
