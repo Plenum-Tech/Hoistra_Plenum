@@ -75,12 +75,26 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     # certificate type code, which every document of that type shares — so with title
     # leading, five real PDFs with distinct filenames all rendered as "EICR" and the panel
     # had nothing left to tell them apart but a truncated uuid.
-    "documents": {"label": ("file_name", "title"), "detail": ("doc_type",)},
+    # has_file: what decides whether the view and download controls can do anything.
+    # A row here is a record that a document EXISTS; blob_url is the separate claim that we
+    # hold the file. Most rows are the former only, and the drawer drew working icons on all
+    # of them.
+    #
+    # Either a column on the row itself, or a reference to follow — a certificate does not
+    # hold a file, the document it was read from does.
+    "documents": {"label": ("file_name", "title"), "detail": ("doc_type",),
+                  "has_file": "blob_url"},
     "compliance_certificates": {"label": ("certificate_type_code", "certificate_number"),
-                                "detail": ("certificate_number", "expiry_date", "status")},
+                                "detail": ("certificate_number", "expiry_date", "status"),
+                                "has_file": {"via": "documents", "col": "blob_url",
+                                             "on": ("document_id", "source_document_id")}},
     "work_orders": {"label": ("title", "wo_code"), "detail": ("wo_code", "status")},
-    "contracts": {"label": ("contract_ref",), "detail": ("status", "start_date")},
-    "invoices": {"label": ("invoice_ref",), "detail": ("amount", "status")},
+    "contracts": {"label": ("contract_ref",), "detail": ("status", "start_date"),
+                  "has_file": {"via": "documents", "col": "blob_url",
+                               "on": ("document_id",)}},
+    "invoices": {"label": ("invoice_ref",), "detail": ("amount", "status"),
+                 "has_file": {"via": "documents", "col": "blob_url",
+                              "on": ("document_id",)}},
 }
 
 #: The tree as the graph is written. Children are read by their own building link rather
@@ -98,6 +112,41 @@ _LINK = "building_id"
 
 def _first(cols: set[str], names: tuple[str, ...]) -> str | None:
     return next((c for c in names if c in cols), None)
+
+
+def _has_file(spec: dict[str, Any], cols: set[str], shape: dict[str, Any]) -> str:
+    """SQL for "is there a file behind this row", or ``NULL`` where that is unanswerable.
+
+    NULL is a third answer, not a default: a branch whose spec says nothing about files, or
+    whose deployment is missing the column the spec names, does not know — and a caller must
+    not read that as "no file". Only a branch that looked and found nothing says false.
+
+    Every identifier here comes from the literal spec above, filtered by what
+    information_schema reports — none of it from a request.
+    """
+    hf = spec.get("has_file")
+    if isinstance(hf, str):
+        # NULL and '' both mean no file. A blob_url of '' is not a location.
+        return f"(NULLIF({hf}::text, '') IS NOT NULL)" if hf in cols else "NULL"
+    if not isinstance(hf, dict):
+        return "NULL"
+
+    via = str(hf["via"])
+    info = shape.get(via) or {}
+    if not info.get("exists"):
+        return "NULL"
+    vcols: set[str] = info.get("columns") or set()
+    vkey = info.get("key") or "id"
+    if hf["col"] not in vcols or vkey not in vcols:
+        return "NULL"
+    # Whichever reference columns this deployment actually has. Certificates carry two, and
+    # which one is populated depends on how the row was filed.
+    fks = [c for c in hf["on"] if c in cols]
+    if not fks:
+        return "NULL"
+    link = " OR ".join(f"f.{vkey}::text = t.{c}::text" for c in fks)
+    return (f"EXISTS (SELECT 1 FROM plenum_cafm.{via} f WHERE ({link}) "
+            f"AND NULLIF(f.{hf['col']}::text, '') IS NOT NULL)")
 
 
 async def _branch(
@@ -144,6 +193,7 @@ async def _branch(
     detail_cols = [c for c in (spec.get("detail") or ()) if c in cols and c != primary]
     select = [f"{key}::text AS id", f"{label_expr} AS label"]
     select += [f"{c}::text AS d{i}" for i, c in enumerate(detail_cols)]
+    select.append(f"{_has_file(spec, cols, shape)} AS has_file")
     order = f"{label_expr} NULLS LAST" if label_cols else key
 
     try:
@@ -157,8 +207,8 @@ async def _branch(
             rows = (
                 await session.execute(
                     text(
-                        f"SELECT {', '.join(select)} FROM plenum_cafm.{table} "
-                        f"WHERE {_LINK}::text = :b ORDER BY {order} LIMIT {BRANCH_LIMIT}"
+                        f"SELECT {', '.join(select)} FROM plenum_cafm.{table} t "
+                        f"WHERE t.{_LINK}::text = :b ORDER BY {order} LIMIT {BRANCH_LIMIT}"
                     ),
                     {"b": building_id},
                 )
@@ -176,6 +226,10 @@ async def _branch(
         "detail": " · ".join(
             str(r[f"d{i}"]) for i in range(len(detail_cols)) if r.get(f"d{i}")
         ) or None,
+        # true: we hold the file. false: we know of it and do not hold it. null: this
+        # branch does not track files at all, so the question does not apply — a client
+        # must not read that as "no".
+        "has_file": (None if r["has_file"] is None else bool(r["has_file"])),
     } for r in rows]
     out["truncated"] = out["count"] > len(out["rows"])
     return out

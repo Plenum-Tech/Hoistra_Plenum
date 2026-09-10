@@ -873,8 +873,8 @@ export default function Buildings({ vals }) {
                                         {d.meta}
                                       </span>
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
-                                        <i className="ph ph-eye hv6" onClick={d.view} title="View" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
-                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
+                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>
@@ -905,8 +905,8 @@ export default function Buildings({ vals }) {
                                         {d.meta}
                                       </span>
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
-                                        <i className="ph ph-eye hv6" onClick={d.view} title="View" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
-                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
+                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>

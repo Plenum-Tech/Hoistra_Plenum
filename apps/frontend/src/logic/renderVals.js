@@ -35,6 +35,39 @@ export function tidyFileName(name) {
   return out.trim() || String(name == null ? "" : name);
 }
 
+// How a document-ish row should be drawn, given whether a file sits behind it.
+//
+// has_file is three-valued and the third value matters: null means the branch does not
+// track files, and drawing that as "no file" would be a new untruth in place of the old one.
+export function fileAffordance(hasFile) {
+  if (hasFile === false) {
+    return {
+      held: false,
+      viewIcon: "ph ph-eye-slash",
+      // Dimmed and inert. The row is still a record worth reading — that is what the
+      // detail line and the id are for — but there is no file to open.
+      //
+      // Mixed rather than picked: the palette's next step down (--color-neutral-700,
+      // #CFCCC2) sits at about 1.5:1 on the page ground, which is not a dimmed icon but an
+      // invisible one. Half-way to the background reads as disabled and still reads.
+      viewColor: "color-mix(in srgb, var(--color-neutral-500) 55%, var(--color-bg))",
+      viewCursor: "default",
+      viewTitle: "No file held — this row records that the document exists",
+      dlShow: "none",
+      note: " · no file",
+    };
+  }
+  return {
+    held: hasFile === true,
+    viewIcon: "ph ph-eye hv6",
+    viewColor: "var(--color-neutral-500)",
+    viewCursor: "pointer",
+    viewTitle: "View",
+    dlShow: "inline-block",
+    note: "",
+  };
+}
+
 export const renderValsMethods = {
   renderVals() {
     const D = this.D();
@@ -1091,26 +1124,28 @@ export const renderValsMethods = {
         const branch = fetched && fetched.documents;
         const certBranch = fetched && fetched.certificates;
         const state = (this.state.bgTree || {})[key] || {};
-        const files = ((branch && branch.rows) || []).map((r) => ({
-          file: tidyFileName(r.label),
-          became: r.detail ? "filed as " + r.detail : "no document type recorded",
-          // No size and no ingest timestamp on plenum_cafm.documents; the row's own key is
-          // what there is, and it is what identifies the file in the graph.
-          meta: "document_id " + String(r.id).slice(0, 8),
-          by: "graph",
-          // The flash carries the stored name in full — the trim above is for the row,
-          // not a claim about what the file is called.
-          view: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
-            + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name + "."),
-          // This used to assert a blob_url existed for every document. Most rows have
-          // none — they were filed from extracted fields, not from a file — so the one
-          // line on screen about where the file lives was the one line that was untrue.
-          // The row itself does not carry storage state, so this says what is certain
-          // and leaves the claim to the row that has it.
-          download: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
-            + ". A download reads that row's blob_url; a document filed without a source "
-            + "file has none.")
-        }));
+        const files = ((branch && branch.rows) || []).map((r) => {
+          const a = fileAffordance(r.has_file);
+          return {
+            ...a,
+            file: tidyFileName(r.label),
+            became: r.detail ? "filed as " + r.detail : "no document type recorded",
+            // No size and no ingest timestamp on plenum_cafm.documents; the row's own key
+            // is what there is, and it is what identifies the file in the graph. The "no
+            // file" marker rides here too, so the distinction survives a screenshot rather
+            // than living only in a tooltip.
+            meta: "document_id " + String(r.id).slice(0, 8) + a.note,
+            by: "graph",
+            // The flash carries the stored name in full — the trim above is for the row,
+            // not a claim about what the file is called.
+            view: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
+              + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name + "."
+              + (a.held ? "" : " No blob_url on the row: this is a record that the document "
+                + "exists, not a copy of it.")),
+            // Only ever reachable on a row that has one, so it can say so plainly again.
+            download: () => this.flash("Fetching " + r.label + " from its blob_url.")
+          };
+        });
         return {
           name: b.name, id: b.code || b.id, state: b.state,
           arrow: open ? "▾" : "▸",
@@ -1131,15 +1166,27 @@ export const renderValsMethods = {
           // similarity score per row. Those scores were weights in a constant. What the
           // graph does hold on this side is the certificates evidenced by those documents,
           // so that is what sits there — real rows, in the same place.
-          unstructured: ((certBranch && certBranch.rows) || []).map((r) => ({
-            file: r.label,
-            became: r.detail || "no expiry or status recorded",
-            sim: "",
-            meta: "certificate",
-            view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
-              + r.id + (r.detail ? ", " + r.detail : "") + ", bound to a document on " + b.name + "."),
-            download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
-          })),
+          // A certificate holds no file of its own; the document it was read from does.
+          // has_file follows that reference, so a certificate whose document is only a
+          // record shows the same dimmed eye as that document does.
+          unstructured: ((certBranch && certBranch.rows) || []).map((r) => {
+            const a = fileAffordance(r.has_file);
+            return {
+              ...a,
+              file: r.label,
+              became: r.detail || "no expiry or status recorded",
+              sim: "",
+              meta: "certificate" + a.note,
+              viewTitle: a.held ? "View"
+                : "No scan held — the certificate is recorded, the document it came from "
+                  + "is not on file",
+              view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
+                + r.id + (r.detail ? ", " + r.detail : "") + ", bound to a document on "
+                + b.name + "." + (a.held ? "" : " That document has no blob_url, so there "
+                  + "is no scan to open.")),
+              download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
+            };
+          }),
           loading: !!state.loading,
           emptyText: state.loading ? "Reading the graph…"
             : state.error ? "Could not read this building's documents: " + state.error
@@ -1157,10 +1204,21 @@ export const renderValsMethods = {
             this.setState((p) => ({ docOpen: p.docOpen === b.name ? null : b.name }));
             if (opening) this.bgLoad(key);
           },
-          downloadAll: () => this.flash(typeof nDocs === "number" && nDocs
-            ? "Preparing every document filed against " + b.name + " — " + nDocs
-              + " rows in plenum_cafm.documents, each fetched from its blob_url."
-            : "Nothing filed against " + b.name + " to download."),
+          // Counted over the rows loaded, and only those with a file behind them: a
+          // building with eight document rows and no blob_url between them has nothing to
+          // prepare, and "preparing eight" was the same untruth the icons were telling.
+          downloadAll: () => {
+            const held = files.filter((f) => f.held).length;
+            return this.flash(
+              held
+                ? "Preparing " + held + (held === 1 ? " document" : " documents")
+                  + " filed against " + b.name + ", each fetched from its blob_url."
+                : typeof nDocs === "number" && nDocs
+                  ? nDocs + (nDocs === 1 ? " document is" : " documents are") + " recorded "
+                    + "against " + b.name + ", none with a file behind it — there is nothing "
+                    + "to download."
+                  : "Nothing filed against " + b.name + " to download.");
+          },
           ingestMore: () => this.runAction("Ingest documents", b.name)
         };
       }),
