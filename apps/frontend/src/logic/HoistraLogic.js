@@ -18,9 +18,11 @@ import { spacesMethods } from './spacesLive.js';
 import { loadReports, saveReports, reportsMethods } from './reports.js';
 import { buildingsCrudMethods } from './buildingsCrud.js';
 import { buildingsGraphMethods } from './buildingsGraph.js';
+import { AUTH_DEFAULTS, authMethods, canAdmin } from './auth.js';
 
 export class HoistraLogic extends Controller {
   state = {
+    ...AUTH_DEFAULTS,
     view: "home", module: null, answerKey: null, askedQuery: "",
     query: "", queueOpen: false, paletteOpen: false, detail: null,
     chainOpen: true, toast: "", filter: "All", navOpen: false,
@@ -104,6 +106,9 @@ export class HoistraLogic extends Controller {
     // the defaults here. A reload therefore resumes the page it was on instead of
     // dropping back to the sign-in gate.
     Object.assign(this.state, loadSession());
+    // Admin view is only ever offered to an account whose real role allows it; a stored
+    // mode from before the role model, or from another account, is reset.
+    if (this.state.role === "admin" && !canAdmin(this.state.account)) this.state.role = "user";
     // The session list and the saved reports have their own stores. The active session's
     // transcript comes back from its record, so the conversation page resumes as it was.
     this.state.sessions = loadSessions();
@@ -131,8 +136,11 @@ export class HoistraLogic extends Controller {
     if (prev.ccChat !== this.state.ccChat) this.sessionSync();
     if (prev.sessions !== this.state.sessions) saveSessions(this.state.sessions);
     if (prev.reports !== this.state.reports) saveReports(this.state.reports);
-    saveSession(this.state);
+    // Only a signed-in tab owns the stored session. A tab sitting on the gate writes nothing —
+    // its animation ticks would otherwise erase the refresh token another tab is signed in with —
+    // and the key is removed exactly once, on the way out.
+    if (this.state.signedIn || prev.signedIn) saveSession(this.state);
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, buildingsLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, buildingsLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, renderValsMethods);

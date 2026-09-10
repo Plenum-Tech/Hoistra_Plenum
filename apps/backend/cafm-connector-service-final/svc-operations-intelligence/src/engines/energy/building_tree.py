@@ -77,7 +77,10 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     # had nothing left to tell them apart but a truncated uuid.
     "documents": {"label": ("file_name", "title"), "detail": ("doc_type",)},
     "compliance_certificates": {"label": ("certificate_type_code", "certificate_number"),
-                                "detail": ("certificate_number", "expiry_date", "status")},
+                                "detail": ("certificate_number", "expiry_date", "status"),
+                                # The file this certificate was read from, so a caller can
+                                # build a real download link instead of a label alone.
+                                "doc_ref": ("document_id", "source_document_id")},
     "work_orders": {"label": ("title", "wo_code"), "detail": ("wo_code", "status")},
     "contracts": {"label": ("contract_ref",), "detail": ("status", "start_date")},
     "invoices": {"label": ("invoice_ref",), "detail": ("amount", "status")},
@@ -142,8 +145,11 @@ async def _branch(
     # beside itself; the later candidates stay, because they are the fallbacks, not the label.
     primary = label_cols[0] if label_cols else None
     detail_cols = [c for c in (spec.get("detail") or ()) if c in cols and c != primary]
+    doc_col = _first(cols, spec.get("doc_ref") or ())
     select = [f"{key}::text AS id", f"{label_expr} AS label"]
     select += [f"{c}::text AS d{i}" for i, c in enumerate(detail_cols)]
+    if doc_col:
+        select.append(f"{doc_col}::text AS docref")
     order = f"{label_expr} NULLS LAST" if label_cols else key
 
     try:
@@ -176,6 +182,10 @@ async def _branch(
         "detail": " · ".join(
             str(r[f"d{i}"]) for i in range(len(detail_cols)) if r.get(f"d{i}")
         ) or None,
+        # The document behind this row, if the table has a column for one — None for a
+        # table with no such column, not merely absent, so a caller can tell "nothing
+        # filed" apart from "this table cannot say".
+        "document_id": r.get("docref") if doc_col else None,
     } for r in rows]
     out["truncated"] = out["count"] > len(out["rows"])
     return out

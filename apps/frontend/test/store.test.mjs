@@ -20,7 +20,9 @@ const { REPORTS_KEY } = await import('../src/logic/reports.js');
 
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 30));
 let c;
-const fresh = () => { const x = new HoistraLogic(); x.setState({ signedIn: true, view: 'home' }); return x; };
+// A refresh token rides along: since logic/session.js only restores a session that can renew
+// itself, a slice without one lands on the gate instead of the page under test.
+const fresh = () => { const x = new HoistraLogic(); x.setState({ signedIn: true, refreshToken: 'ref-test', view: 'home' }); return x; };
 beforeEach(() => { Object.keys(mem).forEach((k) => { delete mem[k]; }); c = fresh(); });
 const cleanup = (x) => {
   const k = x || c;
@@ -256,8 +258,11 @@ test('the navigator state survives a reload and sign-in opens it', () => {
   const c3 = new HoistraLogic();
   assert.equal(c3.state.navOpen, false);
   const c4 = new HoistraLogic();
-  c4.setState({ signedIn: false });
-  c4.renderVals().signIn();
+  c4.setState({ signedIn: false, navOpen: false });
+  c4.authEnter({
+    user: { id: 'u-1', email: 'a@b.c', full_name: 'A B', organization_id: null, status: 'active', email_verified: true, role: 'user' },
+    tokens: { access_token: 'acc-test', refresh_token: 'ref-test', token_type: 'Bearer', expires_in: 1800 }
+  });
   assert.equal(c4.state.navOpen, true);
   cleanup(); cleanup(c2); cleanup(c3); cleanup(c4);
 });

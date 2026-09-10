@@ -136,6 +136,12 @@ export function shapeLiveCompliance(input) {
     const holder = kind === "vendor" ? (vendor || "Unlinked vendor") : (building || "No building on certificate");
     const a = authOf(r);
     const rk = riskOf(days, kind === "vendor" && vendorBlocked);
+    // The real file behind this certificate, if any — the id a download link is built
+    // from. Falls back to the first linked document when the certificate's own
+    // document_id/graph_document_id were not carried through by the API response.
+    const documentId = r.document_id || r.graph_document_id
+      || (Array.isArray(r.linked_documents) && r.linked_documents[0]
+          && r.linked_documents[0].document_id) || null;
     return {
       id: r.id, code: r.certificate_type_code, number: r.certificate_number || null,
       nm: r.certificate_type_name || nameOf(r.certificate_type_code),
@@ -149,8 +155,7 @@ export function shapeLiveCompliance(input) {
       // A certificate with no document cannot be re-read, cannot be scored by forensics and
       // cannot be produced to an insurer — so the register says which it is rather than
       // showing both the same way.
-      doc: !!(r.document_id || r.graph_document_id
-              || (Array.isArray(r.linked_documents) && r.linked_documents.length))
+      doc: !!documentId, documentId: documentId
     };
   });
 

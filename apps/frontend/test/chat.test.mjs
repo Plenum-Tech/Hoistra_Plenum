@@ -241,7 +241,7 @@ test('the chat view survives a reload', () => {
     setItem: (k, v) => { store[k] = v; },
     removeItem: (k) => { delete store[k]; }
   };
-  saveSession({ signedIn: true, email: 'a@b.c', role: 'user', view: 'chat' });
+  saveSession({ signedIn: true, refreshToken: 'ref-test', email: 'a@b.c', role: 'user', view: 'chat' });
   assert.equal(loadSession().view, 'chat');
   delete globalThis.window.localStorage;
 });

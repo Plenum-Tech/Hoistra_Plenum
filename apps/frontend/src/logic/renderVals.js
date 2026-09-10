@@ -7,6 +7,7 @@ import { domainOf } from './chat.js';
 import { CADENCES, DAYS, cadenceLabel, cadenceBadge } from './reports.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
+import { documentUrl } from '../api/docRag.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -239,7 +240,7 @@ export const renderValsMethods = {
         { name: "NABERS data pack", sub: "Bishopsgate Tower", icon: "ph-file-text" },
         { name: "ESOS data pack", sub: "Portfolio · Phase 4", icon: "ph-file-text" },
         { name: "Vendor scorecard", sub: "Meridian Lifts Ltd", icon: "ph-chart-bar" }
-      ].map((p) => ({ ...p, click: () => this.setState({ signedIn: true, view: "home" }) })),
+      ].map((p) => ({ ...p, click: () => this.setState({ authMode: "signin", authNotice: "Sign in to open " + p.name + "." }) })),
       f2items: [
         { label: "3 certificates expired", dot: "var(--st-risk)" },
         { label: "1 asset failure detected", dot: "var(--st-warn)" },
@@ -317,39 +318,8 @@ export const renderValsMethods = {
         { name: "Hoist Score", what: "Ingestion coverage → autonomy", body: "How completely your portfolio is represented in the Hoist Graph. The score is what earns the agents more authority: coverage first, autonomy second." },
         { name: "Hoisters", what: "Forward-deployed engineers", body: "We hoist buildings. Hoisters do the work — they sit inside your operation, wire up the feeds, and hand over a portfolio the agents can already read." }
       ],
-      email: s.email,
-      setEmail: (e) => this.setState({ email: e.target.value }),
-      signIn: () => this.setState({ signedIn: true, view: "home", navOpen: true }),
-      gateKey: (e) => { if (e.key === "Enter") this.setState({ signedIn: true, view: "home" }); },
-      signOut: () => this.setState({ signedIn: false, view: "home", role: "user", acctOpen: false, navOpen: false, queueOpen: false, detail: null }),
-
-      /* Account menu. The admin view is a mode, not a page: switching into it
-         leaves only the admin surfaces in the navigator, so a configuration
-         session cannot be confused with reading a report. */
-      acctOpen: s.acctOpen,
-      toggleAcct: () => this.setState((p) => ({ acctOpen: !p.acctOpen })),
-      closeAcct: () => this.setState({ acctOpen: false }),
-      acctRole: s.role === "admin" ? "Admin view" : "User view",
-      acctBg: s.role === "admin" ? "var(--color-accent)" : "var(--color-neutral-900)",
-      acctFg: s.role === "admin" ? "var(--accent-ink)" : "var(--color-neutral-300)",
-      acctEdge: s.role === "admin" ? "var(--color-accent)" : "var(--color-divider)",
-      acctItems: [
-        { label: "Pricing", icon: "ph-tag", click: () => this.setState({ acctOpen: false }, () => this.flash("Pricing and plan usage open in the billing workspace — seats, buildings hoisted and ingest volume.")) },
-        { label: "Support", icon: "ph-lifebuoy", click: () => this.setState({ acctOpen: false }, () => this.flash("Support: a Hoister is on call for this portfolio. Every request carries the page and the graph state you were on.")) },
-        { label: s.role === "admin" ? "User view" : "Admin view",
-          icon: s.role === "admin" ? "ph-user-focus" : "ph-shield-star", tick: false,
-          click: () => this.setState((p) => ({
-            role: p.role === "admin" ? "user" : "admin",
-            acctOpen: false,
-            view: p.role === "admin" ? "home" : "buildings",
-            navOpen: true, detail: null
-          })) }
-      ].map((a) => ({
-        label: a.label, icon: a.icon, click: a.click,
-        fg: a.tick ? "var(--color-accent)" : "var(--color-text)",
-        iconFg: a.tick ? "var(--color-accent)" : "var(--color-neutral-500)",
-        tickShow: a.tick ? "block" : "none"
-      })),
+      // The gate, the account menu and the change-password modal: logic/auth.js.
+      ...this.authVals(s),
 
       currencies: ["GBP", "USD", "AED", "SGD"].map((c) => ({
         label: { GBP: "£", USD: "$", AED: "AED", SGD: "S$" }[c],
@@ -1131,15 +1101,24 @@ export const renderValsMethods = {
           // similarity score per row. Those scores were weights in a constant. What the
           // graph does hold on this side is the certificates evidenced by those documents,
           // so that is what sits there — real rows, in the same place.
-          unstructured: ((certBranch && certBranch.rows) || []).map((r) => ({
-            file: r.label,
-            became: r.detail || "no expiry or status recorded",
-            sim: "",
-            meta: "certificate",
-            view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
-              + r.id + (r.detail ? ", " + r.detail : "") + ", bound to a document on " + b.name + "."),
-            download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
-          })),
+          unstructured: ((certBranch && certBranch.rows) || []).map((r) => {
+            // The real file this certificate was read from, when the table carries one —
+            // opens the stored original (or its extracted text, when no original was kept)
+            // in a new tab. No document_id means nothing was ever ingested for this row,
+            // and the toast says that plainly rather than pretending to fetch something.
+            const url = r.document_id ? documentUrl(r.document_id) : null;
+            const open = () => url
+              ? window.open(url, "_blank", "noopener")
+              : this.flash(r.label + " has no source document on file to open.");
+            return {
+              file: r.label,
+              became: r.detail || "no expiry or status recorded",
+              sim: "",
+              meta: "certificate",
+              view: open,
+              download: open
+            };
+          }),
           loading: !!state.loading,
           emptyText: state.loading ? "Reading the graph…"
             : state.error ? "Could not read this building's documents: " + state.error
