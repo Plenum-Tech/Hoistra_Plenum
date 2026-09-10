@@ -392,13 +392,27 @@ async def _claude_classify_once(
             for p in packs
         )
         prompt = (
-            "You are classifying a UK facilities-management compliance document.\n"
-            "Pick the single best matching certificate_type_code from this catalogue "
-            "(building = property/PM; vendor = contractor accreditation):\n"
+            "You are classifying a UK facilities-management compliance document.\n\n"
+            "Read the scheme name and its reference first. These documents print what they "
+            "are in large type near the top or in the title — a scheme name and number such "
+            "as BAFE SP101, BAFE SP203-1, CP12, EICR, ISO 9001, NICEIC — and that is the "
+            "single most reliable signal. Match it against the catalogue before considering "
+            "anything else. Do not settle for a code from the same subject area: BAFE SP101 "
+            "(servicing fire extinguishers) and a fire alarm service certificate are both "
+            "about fire and are different documents.\n\n"
+            "Then decide who the certificate is about, which decides its scope:\n"
+            "  vendor   — it certifies a COMPANY: 'this is to certify that <company> has "
+            "complied with', a registration or competency scheme, a contractor "
+            "accreditation. It names no property.\n"
+            "  building — it certifies a PROPERTY or the work done at one: an address, a "
+            "site, an installation, an inspection of premises.\n\n"
+            "Catalogue (code | name | scope):\n"
             f"{catalogue}\n\n"
             'Return ONLY JSON: {"certificate_type_code": "<code>", '
-            '"confidence": "high|medium|low"}. Use a code exactly as listed, or '
-            '"UNKNOWN" if none fit.'
+            '"scope": "building|vendor", "confidence": "high|medium|low"}. '
+            'Use a code exactly as listed, or "UNKNOWN" if none fit — a wrong code is worse '
+            "than none, because it files the certificate under a regulation it is not "
+            "subject to."
         )
         if file_name:
             prompt += f"\n\nFile name: {file_name}"
@@ -437,6 +451,20 @@ async def _claude_classify_once(
         code = str(data.get("certificate_type_code") or "").strip()
         if not code or code.upper() == "UNKNOWN":
             return None
+        said_scope = str(data.get("scope") or "").strip().lower()
+        if said_scope:
+            implied = next(
+                (str(p.certificate_scope).strip().lower()
+                 for p in packs if str(p.certificate_type_code) == code),
+                "",
+            )
+            if implied and said_scope != implied:
+                # It read the document as one kind and chose a code that is the other. On
+                # the certificate that prompted this work it read "vendor accreditation"
+                # correctly and still picked a Building-scope code.
+                log.warning("classify.scope_disagrees_with_code", code=code,
+                            model_scope=said_scope, code_scope=implied,
+                            file_name=file_name)
         return code
     except Exception as exc:  # noqa: BLE001 — classification is best-effort
         log.warning("classify.claude_failed", error=str(exc)[:200])
