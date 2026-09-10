@@ -989,8 +989,11 @@ export const complianceLiveMethods = {
       // Files still go by POST — the streaming route takes no upload. Everything else
       // streams, so the pipeline steps and the answer's zones paint as they are produced
       // instead of appearing all at once when the turn ends.
+      // The building this upload is being filed against, when the ingest panel set one.
+      // Only sent with files: it is a filing instruction, not a property of the question.
       const r = files.length
-        ? await deepAgentsApi.runStatefulWithFiles(q, sid, context, files, ctrl && ctrl.signal)
+        ? await deepAgentsApi.runStatefulWithFiles(
+            q, sid, context, files, ctrl && ctrl.signal, this.state.declForId || null)
         : await this.ccStreamTurn(q, context, ctrl);
 
       const answer = (r && r.answer) || "";

@@ -93,6 +93,16 @@ COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY deploy/allinone/nginx.conf       /etc/nginx/conf.d/hoistra.conf
 COPY deploy/allinone/supervisord.conf /etc/supervisor/conf.d/hoistra.conf
 
+# Where the services find each other inside this container. Every other default already
+# matches the ports supervisord starts — 8000 connector, 8003 schema-mapper, 8006 udr,
+# 8007 work-order, 8009 ops-intelligence — but doc-rag defaults to :8004, and nothing in
+# this image listens there: doc-rag is served by the schema-mapper process on 8003.
+#
+# Leaving it wrong produces no error anyone sees. A document upload answers 200 with
+# "Ingestion complete", the log carries one ConnectError, no row is created, and the file
+# is silently gone. Worth an ENV line.
+ENV DOC_RAG_BASE_URL=http://127.0.0.1:8003
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     OTEL_SDK_DISABLED=true

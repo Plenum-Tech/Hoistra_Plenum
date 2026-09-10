@@ -63,11 +63,17 @@ export const deepAgentsApi = {
   // Chat plus document ingestion in one turn. The backend routes by file type —
   // CSV/Excel into the migration flow, PDF/Word/images into doc-rag indexing — then
   // continues the conversation in the same session. Multipart, so it carries a FormData.
-  runStatefulWithFiles: (message, sessionId, context, files, signal) => {
+  //
+  // `buildingId` is the one thing here that is not conversation. Named in the message and
+  // mentioned in the context, a building is something an agent has to read and choose to
+  // act on; sent as a field it is a foreign key the endpoint can bind. Optional, because a
+  // question with an attachment is not always a filing.
+  runStatefulWithFiles: (message, sessionId, context, files, signal, buildingId) => {
     const form = new FormData();
     form.append('message', message || '');
     form.append('session_id', sessionId || '');
     if (context) form.append('context', context);
+    if (buildingId) form.append('building_id', buildingId);
     (files || []).forEach((f) => form.append('files', f, f.name));
     return apiFetch(B, '/api/workflow/run-stateful-with-files', {
       method: 'POST',

@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from uuid import UUID
+from ... import database
+from sqlalchemy import text
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from pydantic import BaseModel, Field
 
@@ -30,6 +34,7 @@ from ...agents.single_door_flow import (
 from ...limiter import limiter
 from ..deps import get_orchestrator
 from ...agents import activity_log
+from ...services import building_binding
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/workflow", tags=["Workflow"])
@@ -296,6 +301,7 @@ async def run_stateful_workflow_with_files(
     session_id: str = Form(...),
     context: str | None = Form(None),
     organization_id: str | None = Form(None),
+    building_id: str | None = Form(None),
     cmms_name: str = Form("Custom"),
     ingest_source: str = Form("files"),
     schema_mapping_id: str | None = Form(None),
@@ -316,6 +322,21 @@ async def run_stateful_workflow_with_files(
     """
     source = (ingest_source or "files").strip().lower()
     org = organization_id or "00000000-0000-0000-0000-000000000001"
+
+    # Checked before a byte is written to disk. A building that does not exist is a caller
+    # mistake worth an error, not something to discover after the file has been indexed and
+    # the row has nowhere to hang.
+    building = (building_id or "").strip() or None
+    if building:
+        try:
+            building = str(UUID(building))
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="building_id is not a UUID.") from None
+        if not await building_binding.building_exists(building):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No building {building} — nothing to file this against.")
 
     if source == "fiix":
         from ...agents.session_workspace import ROUTE_FIIX_SYNC, set_pending_fiix_confirm
@@ -401,7 +422,9 @@ async def run_stateful_workflow_with_files(
                 )
                 batch_id = str(batch["batch_id"])
                 orchestrator.register_active_batch(session_id, batch_id, len(files))
-                schedule_ingest_batch(batch_id)
+                # The building travels with the batch. Without it, "multiple documents"
+                # would bind up to the inline threshold and silently stop above it.
+                schedule_ingest_batch(batch_id, building_id=building)
                 log.info(
                     "workflow.bulk_batch.started",
                     session_id=session_id,
@@ -450,6 +473,12 @@ async def run_stateful_workflow_with_files(
                 skip_row_match=interactive_doc_match,
                 interactive_migration=interactive_migration,
             )
+            # The link the caller asked for, made by the caller. Failure here is reported
+            # and does not fail the ingest: the file is indexed either way, and an unbound
+            # document is recoverable while a lost upload is not.
+            await building_binding.bind_and_log(
+                building, flow.tool_calls, where="inline", session_id=session_id)
+
             orchestrator.mark_single_door_ingestion(
                 session_id=session_id,
                 ingested_count=len(files),

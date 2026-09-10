@@ -15,6 +15,7 @@ from ..agents.single_door_flow import (
 )
 from ..config import settings
 from ..services import ingest_batch_service as batch_svc
+from ..services import building_binding
 
 log = structlog.get_logger(__name__)
 
@@ -22,8 +23,9 @@ _background_tasks: set[asyncio.Task] = set()
 _cancelled_batches: set[str] = set()
 
 
-def schedule_ingest_batch(batch_id: str) -> None:
-    task = asyncio.create_task(_run_batch(batch_id), name=f"ingest-batch-{batch_id[:8]}")
+def schedule_ingest_batch(batch_id: str, building_id: str | None = None) -> None:
+    task = asyncio.create_task(_run_batch(batch_id, building_id),
+                               name=f"ingest-batch-{batch_id[:8]}")
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -32,7 +34,7 @@ def mark_batch_cancelled(batch_id: str) -> None:
     _cancelled_batches.add(batch_id)
 
 
-async def _run_batch(batch_id: str) -> None:
+async def _run_batch(batch_id: str, building_id: str | None = None) -> None:
     batch = await batch_svc.get_ingest_batch(batch_id)
     if not batch:
         log.warning("ingest_batch.worker.missing", batch_id=batch_id)
@@ -100,6 +102,12 @@ async def _run_batch(batch_id: str) -> None:
                             "ingest_batch.register_migration_failed",
                             batch_id=batch_id, migration_id=mig_id, error=str(reg_err),
                         )
+                # Filed as soon as it is done, not at the end of the batch: a file that
+                # succeeded can be bound, and a later failure then costs only itself.
+                if ok and building_id:
+                    await building_binding.bind_and_log(
+                        building_id, result.get("tool_calls"),
+                        where="batch", session_id=session_id)
                 await batch_svc.update_batch_item(
                     batch_id,
                     index,

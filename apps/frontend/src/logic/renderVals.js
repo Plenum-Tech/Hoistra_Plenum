@@ -99,7 +99,24 @@ export function fileAffordance(hasFile, hasRef, labels) {
   };
 }
 
+// A building's name as shown, to the id it is stored under. Returns null rather than a
+// guess: an unmatched name means the row is not in the live set — a seed-only name, or a
+// table that has not loaded — and sending nothing is better than sending something wrong,
+// because the endpoint rejects an unknown id and accepts an absent one.
+export function buildingIdByName(rows, name) {
+  const want = String(name || '').trim().toLowerCase();
+  if (!want) return null;
+  const hit = (rows || []).find((r) => String(r.name || '').trim().toLowerCase() === want);
+  return (hit && (hit.buildingId || hit.building_id)) || null;
+}
+
 export const renderValsMethods = {
+  // Live rows only. The seed list has names with no id behind them, and resolving one to a
+  // fabricated key would file a document against a building that does not exist.
+  bldIdFor(name) {
+    return this.bldIsLive() ? buildingIdByName(this.bldData(), name) : null;
+  },
+
   renderVals() {
     const D = this.D();
     const s = this.state;
@@ -1267,7 +1284,8 @@ export const renderValsMethods = {
           // the way and the dropdown came up blank.
           ingestMore: () => {
             this.ccChatReset();
-            this.orchWith("Ingest documents", b.name, "ingest", { declFor: b.name });
+            this.orchWith("Ingest documents", b.name, "ingest",
+              { declFor: b.name, declForId: b.buildingId || null });
           }
         };
       }),
@@ -1706,7 +1724,12 @@ export const renderValsMethods = {
       fIngest: s.flow === "ingest",
       iBuilding: s.declFor || "",
       iBuildingOpts: BUILDINGS.map((b) => b.name).concat(this.bldIsLive() ? this.bldData().map((b) => b.name).filter((n) => !BUILDINGS.some((sb) => sb.name === n)) : []),
-      setIBuilding: (e) => this.setState({ declFor: e.target.value }),
+      // The dropdown is a list of names because that is what a person picks from. The id
+      // is resolved here, once, from the live rows — so the thing that gets sent is the key
+      // and the thing on screen is the name.
+      setIBuilding: (e) => this.setState({
+        declFor: e.target.value, declForId: this.bldIdFor(e.target.value)
+      }),
       iClasses: ["Certificates and statutory evidence", "Contracts and framework agreements", "Asset registers and PPM schedules", "Meter data and consent — MPAN / MPRN", "Invoices and service charge records"],
       iCanRun: (s.ccFiles || []).length > 0 && !!s.declFor,
       iHint: !(s.ccFiles || []).length ? "Attach at least one document first — certificates, contracts, asset registers, meter data or invoices."
