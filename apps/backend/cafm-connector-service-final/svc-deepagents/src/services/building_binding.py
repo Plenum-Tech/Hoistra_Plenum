@@ -120,8 +120,29 @@ async def bind_documents_to_building(
     should report nothing new rather than the same number twice.
     """
     if not document_ids:
-        return {"documents": 0, "certificates": 0}
+        return {"documents": 0, "certificates": 0, "created": 0}
     async with database.AsyncSessionLocal() as session:
+        # The row is created if the engine that owns this file has not written it yet.
+        # It runs after the ingest sequence returns, so on a first upload there is nothing
+        # to update and the link would be lost to a race — while the endpoint, right here,
+        # knows both the document and the building it was filed against.
+        #
+        # The later upsert fills only what is missing, so it completes this row rather than
+        # replacing it, and cannot blank the building.
+        created = await session.execute(
+            text(
+                """INSERT INTO plenum_cafm.documents
+                       (document_id, building_id, doc_type, file_name, uploaded_at)
+                   SELECT i.id, CAST(:b AS uuid),
+                          NULLIF(i.document_type, ''), i.original_filename, now()
+                     FROM plenum_cafm.ingestion_documents i
+                    WHERE i.id::text = ANY(:ids)
+                      AND NOT EXISTS (SELECT 1 FROM plenum_cafm.documents d
+                                       WHERE d.document_id = i.id)
+                   ON CONFLICT (document_id) DO NOTHING"""
+            ),
+            {"b": building_id, "ids": document_ids},
+        )
         docs = await session.execute(
             # CAST(:b AS uuid), not :b::uuid. SQLAlchemy's text() mis-parses a bind
             # parameter followed immediately by a cast and emits SQL Postgres rejects with
@@ -141,7 +162,8 @@ async def bind_documents_to_building(
             {"b": building_id, "ids": document_ids},
         )
         await session.commit()
-        return {"documents": docs.rowcount or 0, "certificates": certs.rowcount or 0}
+        return {"documents": docs.rowcount or 0, "certificates": certs.rowcount or 0,
+                "created": created.rowcount or 0}
 
 
 async def bind_and_log(

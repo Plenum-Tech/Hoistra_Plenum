@@ -34,10 +34,11 @@ STATEMENTS = [b for b in (_TRIPLE + _SINGLE) if _IS_SQL.match(b)]
 
 
 def test_every_statement_in_the_module_is_covered():
-    # Four today: the session lookup, the building check, and the two updates. If a statement
-    # is added this number goes up; if the extraction breaks it goes down, and either way
-    # somebody looks.
-    assert len(STATEMENTS) == 4, f"found {len(STATEMENTS)}: {[s[:40] for s in STATEMENTS]}"
+    # Five today: the session lookup, the building check, the insert that creates a row the
+    # owning engine has not written yet, and the two updates. If a statement is added this
+    # number goes up; if the extraction breaks it goes down, and either way somebody looks.
+    # It has already earned its keep once, catching the insert the moment it was added.
+    assert len(STATEMENTS) == 5, f"found {len(STATEMENTS)}: {[s[:40] for s in STATEMENTS]}"
 
 
 @pytest.mark.parametrize("sql", STATEMENTS)
