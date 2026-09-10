@@ -477,7 +477,8 @@ async def run_stateful_workflow_with_files(
             # and does not fail the ingest: the file is indexed either way, and an unbound
             # document is recoverable while a lost upload is not.
             await building_binding.bind_and_log(
-                building, flow.tool_calls, where="inline", session_id=session_id)
+                building, flow.tool_calls, where="inline", session_id=session_id,
+                file_paths=saved_paths)
 
             orchestrator.mark_single_door_ingestion(
                 session_id=session_id,

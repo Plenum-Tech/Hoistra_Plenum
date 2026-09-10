@@ -104,10 +104,13 @@ async def _run_batch(batch_id: str, building_id: str | None = None) -> None:
                         )
                 # Filed as soon as it is done, not at the end of the batch: a file that
                 # succeeded can be bound, and a later failure then costs only itself.
-                if ok and building_id:
+                # Not `and building_id`: the file still earns its row when no building
+                # was chosen, and bind_and_log returns without binding in that case.
+                if ok:
                     await building_binding.bind_and_log(
                         building_id, result.get("tool_calls"),
-                        where="batch", session_id=session_id)
+                        where="batch", session_id=session_id,
+                        file_paths=[str(file_path)])
                 await batch_svc.update_batch_item(
                     batch_id,
                     index,

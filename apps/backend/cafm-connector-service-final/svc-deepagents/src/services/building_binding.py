@@ -19,6 +19,7 @@ closes the loop.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -33,6 +34,63 @@ log = structlog.get_logger(__name__)
 #: the key, and a document that was created but reported under an unexpected name would go
 #: unbound — so all the spellings in use are read.
 _DOC_ID_KEYS = ("document_id", "documentId", "doc_id", "id")
+
+#: A tool that consumes a whole uploaded file without indexing it, and what that file
+#: therefore is. Only tools that write no ingestion_documents row of their own belong here:
+#: everything routed through doc-rag already records what it indexed, and a second opinion
+#: about a row that exists is how one file becomes two.
+_FILE_TOOL_DOC_TYPES: dict[str, str] = {"ingest_meter_readings": "meter_readings"}
+
+
+def _doc_types_by_file(tool_calls: Any) -> dict[str, str]:
+    """Filename -> document type, for the files an unindexed tool reported consuming."""
+    out: dict[str, str] = {}
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        doc_type = _FILE_TOOL_DOC_TYPES.get(str(call.get("tool") or ""))
+        if not doc_type:
+            continue
+        inp = call.get("input")
+        name = str((inp or {}).get("file") or "").strip() if isinstance(inp, dict) else ""
+        if name:
+            out[name] = doc_type
+    return out
+
+
+async def register_uploads(
+    session_id: str, file_paths: list[str] | None, tool_calls: Any = None
+) -> int:
+    """Give every uploaded file a row, for the engines that do not write one.
+
+    Returns how many rows this created. Files already registered are left alone — this
+    fills gaps, it does not restate what an engine has already said about its own work.
+
+    The one-hour window matches documents_from_session(): a filename is only unique within
+    an upload, and a row from hours ago belongs to a different one.
+    """
+    names = [Path(p).name for p in (file_paths or []) if str(p).strip()]
+    if not names:
+        return 0
+    types = _doc_types_by_file(tool_calls)
+    made = 0
+    async with database.AsyncSessionLocal() as session:
+        for name in names:
+            res = await session.execute(
+                text(
+                    """INSERT INTO plenum_cafm.ingestion_documents
+                           (original_filename, source_type, agent_id, status, document_type)
+                       SELECT :n, 'document', 'uploader', 'received', :dt
+                        WHERE NOT EXISTS (
+                              SELECT 1 FROM plenum_cafm.ingestion_documents
+                               WHERE original_filename = :n
+                                 AND uploaded_at > now() - interval '1 hour')"""
+                ),
+                {"n": name, "dt": types.get(name)},
+            )
+            made += res.rowcount or 0
+        await session.commit()
+    return made
 
 
 def document_ids_from(tool_calls: Any) -> list[str]:
@@ -168,12 +226,25 @@ async def bind_documents_to_building(
 
 async def bind_and_log(
     building_id: str | None, tool_calls: Any, *, where: str, session_id: str = "",
+    file_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Bind, and never let a binding failure take the ingest down with it.
 
     The file is indexed either way. An unbound document can be bound later from the row it
     already is; an upload that 500s because the link failed is gone.
     """
+    # Registration first, and whether or not a building was chosen: a file that arrived
+    # should have a row saying so. Without one there is nothing for the drawer to list and
+    # nothing here to bind — which is how a half-hourly CSV wrote 48 readings while the
+    # building it was filed against showed no document at all.
+    try:
+        made = await register_uploads(session_id, file_paths, tool_calls)
+        if made:
+            log.info("ingest.registered_uploads", where=where, session_id=session_id,
+                     created=made)
+    except Exception as exc:  # noqa: BLE001 — see the docstring below
+        log.warning("ingest.register_failed", where=where, session_id=session_id,
+                    error=str(exc)[:200])
     if not building_id:
         return {}
     ids = document_ids_from(tool_calls)
