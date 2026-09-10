@@ -226,7 +226,11 @@ export const authMethods = {
   // The password is not needed again — verify-email signs the person in — so it leaves memory.
   authAccepted(resp, mode) {
     const otp = Object.assign({}, this.authOtp(), (resp && resp.otp) || {});
-    this.setState({ authBusy: false, authMode: mode, authNotice: (resp && resp.message) || '', authError: '', authReason: '', authAttemptsLeft: null, code: '', password: '' });
+    // The server's own wording, plus the standing fact that this deployment drops mail.
+    // Without the second half the screen says a code is on its way and then asks for it,
+    // and the only way to learn otherwise is to wait for an email that was never sent.
+    const notice = (resp && resp.message) || '';
+    this.setState({ authBusy: false, authMode: mode, authNotice: notice + this.authDeliveryNote(), authError: '', authReason: '', authAttemptsLeft: null, code: '', password: '' });
     this.authArm(otp.resend_cooldown_seconds);
   },
 
@@ -314,6 +318,19 @@ export const authMethods = {
     const m = Math.floor(t / 60), sec = t % 60;
     return (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
   },
+  // Appended wherever the UI says a code has been sent. Empty on a deployment that sends
+  // them, which is every deployment that matters — this exists so the ones that do not say
+  // so out loud instead of looking broken.
+  authDeliveryNote() {
+    const d = (this.state.authConfig || {}).email_delivery;
+    if (!d || d.live !== false) return '';
+    return d.dry_run
+      ? ' This environment has email delivery turned off (EMAIL_DRY_RUN), so the code was '
+        + 'written to the log rather than sent.'
+      : ' This environment has no mail transport configured, so the code was written to the '
+        + 'log rather than sent.';
+  },
+
   authOtp() {
     const cfg = this.state.authConfig || AUTH_FALLBACK_CONFIG;
     return Object.assign({}, AUTH_FALLBACK_CONFIG.otp, cfg.otp || {});

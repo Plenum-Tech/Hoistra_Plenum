@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
+from ...shared.email_graph import graph_configured
 from ...core.logging import get_logger
 from ...db import get_session
 from ...engines.auth import accounts as acc
@@ -362,16 +363,37 @@ async def auth_config(response: Response):
     reports booleans and never the values: a deployment running on a per-process
     generated key works perfectly and signs everyone out on every restart, and this is
     the only place that difference is visible without reading the logs.
+
+    ``email_delivery`` is there for the same reason. Every flow that issues a code answers
+    202 and says one is on its way; a deployment with EMAIL_DRY_RUN set, or with neither
+    Graph nor SMTP configured, writes the message to ops_email_log and drops it, and answers
+    202 all the same. It cannot be reported per request — the 202 is deliberately identical
+    for an address with an account and one without, and whether the mail was dropped is only
+    knowable where an account exists, so saying it there would leak the membership the
+    generic wording exists to protect. Said about the deployment, before anyone types an
+    address, it leaks nothing.
     """
     secrets_state = secrets_store.configured()
     if not all(secrets_state.values()):
         response.headers["X-Auth-Config-Warning"] = "auth secrets not set"
+    graph = graph_configured()
+    smtp = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+    transport = "graph" if graph else ("smtp" if smtp else "none")
+    live = bool(not settings.email_dry_run and (graph or smtp))
+    if not live:
+        response.headers["X-Auth-Config-Warning"] = (
+            response.headers.get("X-Auth-Config-Warning", "") + "; codes are not delivered"
+        ).lstrip("; ")
     return {
         "ok": True,
         "self_registration": bool(settings.auth_allow_self_registration),
         "password": {"min_length": int(settings.auth_password_min_length)},
         "otp": otp_engine.describe_limits(),
         "secrets_configured": secrets_state,
+        # live: a code requested now would actually be sent. dry_run: the flag is set, so it
+        # would not be, whatever is configured. transport: what would carry it.
+        "email_delivery": {"live": live, "dry_run": bool(settings.email_dry_run),
+                           "transport": transport},
     }
 
 
