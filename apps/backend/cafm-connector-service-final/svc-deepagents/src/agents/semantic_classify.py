@@ -18,7 +18,7 @@ import httpx
 import structlog
 
 from ..config import settings
-from ..llm_factory import _supports_temperature
+from ..llm_factory import _supports_temperature, token_limit_kwargs
 
 log = structlog.get_logger(__name__)
 
@@ -224,7 +224,10 @@ async def _llm_pick(
             messages=[{"role": "user", "content": prompt}],
             # Reasoning-tier models reject any temperature but the default.
             **({"temperature": 0} if _supports_temperature(settings.openai_model) else {}),
-            max_tokens=60,
+            # Not max_tokens=60. The configured model rejects that name with a 400, and the
+            # except below turned it into a warning — so this classifier returned None on
+            # every call and the caller quietly fell through to a weaker strategy.
+            **token_limit_kwargs(settings.openai_model, 60),
         )
         raw = resp.choices[0].message.content or "{}"
         raw = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.I | re.M)
