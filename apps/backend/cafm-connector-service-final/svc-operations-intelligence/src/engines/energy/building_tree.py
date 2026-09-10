@@ -70,7 +70,13 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     "spaces": {"label": ("name",), "detail": ("space_type", "gross_area_sqft")},
     "assets": {"label": ("asset_name", "name", "asset_code"), "detail": ("asset_code", "status")},
     "equipment": {"label": ("name", "equipment_code"), "detail": ("equipment_code",)},
-    "meters": {"label": ("meter_ref", "name", "mpan", "mprn"), "detail": ("meter_type",)},
+    # mpan_mprn is the canonical column: one field holding either number, because a meter
+    # has an MPAN (electricity) or an MPRN (gas) and never both. It was missing from this
+    # list, so on the canonical shape no candidate matched, label_expr fell to NULL and
+    # every meter rendered as its raw uuid — the one identifier a person reading the drawer
+    # cannot use. The separate mpan/mprn spellings stay for deployments that have them.
+    "meters": {"label": ("meter_ref", "name", "mpan_mprn", "mpan", "mprn"),
+               "detail": ("meter_type", "unit")},
     # file_name first: a document is identified by the file it is. `title` here is the
     # certificate type code, which every document of that type shares — so with title
     # leading, five real PDFs with distinct filenames all rendered as "EICR" and the panel
