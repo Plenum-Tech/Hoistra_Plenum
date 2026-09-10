@@ -6,12 +6,13 @@ import { makeSession, newSessionId, trimSessions } from './sessions.js';
 
 export const coreMethods = {
   componentDidMount() {
+    this.authBoot();
     this._key = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         this.setState((s) => ({ paletteOpen: !s.paletteOpen }));
       }
-      if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false });
+      if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false, pwOpen: false });
     };
     window.addEventListener("keydown", this._key);
     this._cronTimer = setInterval(() => {
@@ -36,6 +37,7 @@ export const coreMethods = {
 
   componentWillUnmount() {
     window.removeEventListener("keydown", this._key);
+    this.authStop();
     clearInterval(this._frameTimer); clearInterval(this._cronTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);

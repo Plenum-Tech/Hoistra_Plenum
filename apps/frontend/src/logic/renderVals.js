@@ -7,6 +7,7 @@ import { domainOf } from './chat.js';
 import { CADENCES, DAYS, cadenceLabel, cadenceBadge } from './reports.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
+import { documentUrl } from '../api/docRag.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -39,8 +40,8 @@ export function tidyFileName(name) {
 //
 // Two questions, asked in order, because the answers are different findings:
 //
-//   has_ref   does this row name a document at all?
-//   has_file  does that document have a file behind it?
+//   hasRef    does this row name a document at all? (document_id on the row)
+//   hasFile   is there anything to serve for it — a stored file, or extracted text?
 //
 // A certificate that names no document is a gap in the register — somebody recorded a
 // certificate and nothing was ever filed against it. A certificate whose document we do not
@@ -302,7 +303,7 @@ export const renderValsMethods = {
         { name: "NABERS data pack", sub: "Bishopsgate Tower", icon: "ph-file-text" },
         { name: "ESOS data pack", sub: "Portfolio · Phase 4", icon: "ph-file-text" },
         { name: "Vendor scorecard", sub: "Meridian Lifts Ltd", icon: "ph-chart-bar" }
-      ].map((p) => ({ ...p, click: () => this.setState({ signedIn: true, view: "home" }) })),
+      ].map((p) => ({ ...p, click: () => this.setState({ authMode: "signin", authNotice: "Sign in to open " + p.name + "." }) })),
       f2items: [
         { label: "3 certificates expired", dot: "var(--st-risk)" },
         { label: "1 asset failure detected", dot: "var(--st-warn)" },
@@ -380,39 +381,8 @@ export const renderValsMethods = {
         { name: "Hoist Score", what: "Ingestion coverage → autonomy", body: "How completely your portfolio is represented in the Hoist Graph. The score is what earns the agents more authority: coverage first, autonomy second." },
         { name: "Hoisters", what: "Forward-deployed engineers", body: "We hoist buildings. Hoisters do the work — they sit inside your operation, wire up the feeds, and hand over a portfolio the agents can already read." }
       ],
-      email: s.email,
-      setEmail: (e) => this.setState({ email: e.target.value }),
-      signIn: () => this.setState({ signedIn: true, view: "home", navOpen: true }),
-      gateKey: (e) => { if (e.key === "Enter") this.setState({ signedIn: true, view: "home" }); },
-      signOut: () => this.setState({ signedIn: false, view: "home", role: "user", acctOpen: false, navOpen: false, queueOpen: false, detail: null }),
-
-      /* Account menu. The admin view is a mode, not a page: switching into it
-         leaves only the admin surfaces in the navigator, so a configuration
-         session cannot be confused with reading a report. */
-      acctOpen: s.acctOpen,
-      toggleAcct: () => this.setState((p) => ({ acctOpen: !p.acctOpen })),
-      closeAcct: () => this.setState({ acctOpen: false }),
-      acctRole: s.role === "admin" ? "Admin view" : "User view",
-      acctBg: s.role === "admin" ? "var(--color-accent)" : "var(--color-neutral-900)",
-      acctFg: s.role === "admin" ? "var(--accent-ink)" : "var(--color-neutral-300)",
-      acctEdge: s.role === "admin" ? "var(--color-accent)" : "var(--color-divider)",
-      acctItems: [
-        { label: "Pricing", icon: "ph-tag", click: () => this.setState({ acctOpen: false }, () => this.flash("Pricing and plan usage open in the billing workspace — seats, buildings hoisted and ingest volume.")) },
-        { label: "Support", icon: "ph-lifebuoy", click: () => this.setState({ acctOpen: false }, () => this.flash("Support: a Hoister is on call for this portfolio. Every request carries the page and the graph state you were on.")) },
-        { label: s.role === "admin" ? "User view" : "Admin view",
-          icon: s.role === "admin" ? "ph-user-focus" : "ph-shield-star", tick: false,
-          click: () => this.setState((p) => ({
-            role: p.role === "admin" ? "user" : "admin",
-            acctOpen: false,
-            view: p.role === "admin" ? "home" : "buildings",
-            navOpen: true, detail: null
-          })) }
-      ].map((a) => ({
-        label: a.label, icon: a.icon, click: a.click,
-        fg: a.tick ? "var(--color-accent)" : "var(--color-text)",
-        iconFg: a.tick ? "var(--color-accent)" : "var(--color-neutral-500)",
-        tickShow: a.tick ? "block" : "none"
-      })),
+      // The gate, the account menu and the change-password modal: logic/auth.js.
+      ...this.authVals(s),
 
       currencies: ["GBP", "USD", "AED", "SGD"].map((c) => ({
         label: { GBP: "£", USD: "$", AED: "AED", SGD: "S$" }[c],
@@ -1158,9 +1128,12 @@ export const renderValsMethods = {
         const certBranch = fetched && fetched.certificates;
         const state = (this.state.bgTree || {})[key] || {};
         const files = ((branch && branch.rows) || []).map((r) => {
-          // A document IS the document, so the "does it name one" question does not apply
-          // to it — only "do we hold the file".
-          const a = fileAffordance(r.has_file, r.has_ref);
+          // A document IS the document — the reference question is answered by its own
+          // existence, so only "is there anything to serve" is left to ask.
+          const a = fileAffordance(r.has_file, true);
+          const open = a.held
+            ? () => window.open(documentUrl(r.document_id || r.id), "_blank", "noopener")
+            : null;
           return {
             ...a,
             file: tidyFileName(r.label),
@@ -1173,12 +1146,12 @@ export const renderValsMethods = {
             by: "graph",
             // The flash carries the stored name in full — the trim above is for the row,
             // not a claim about what the file is called.
-            view: () => this.flash(r.label + " — plenum_cafm.documents row " + r.id
-              + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name + "."
-              + (a.held ? "" : " No blob_url on the row: this is a record that the document "
-                + "exists, not a copy of it.")),
-            // Only ever reachable on a row that has one, so it can say so plainly again.
-            download: () => this.flash("Fetching " + r.label + " from its blob_url.")
+            view: open || (() => this.flash(r.label + " — plenum_cafm.documents row " + r.id
+              + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name
+              + ". Nothing is stored for it — no file and no extracted text — so this is a "
+              + "record that the document exists, not a copy of it.")),
+            // Only ever drawn on a row that has something behind it.
+            download: open || (() => {})
           };
         });
         return {
@@ -1208,33 +1181,41 @@ export const renderValsMethods = {
           // similarity score per row. Those scores were weights in a constant. What the
           // graph does hold on this side is the certificates evidenced by those documents,
           // so that is what sits there — real rows, in the same place.
-          // A certificate holds no file of its own; the document it was read from does.
-          // has_file follows that reference, so a certificate whose document is only a
-          // record shows the same dimmed eye as that document does.
+          // A certificate holds no file of its own; the document it was read from does, and
+          // has_file follows that reference all the way to what the link will actually
+          // serve. Three states, because "no document was ever filed against this
+          // certificate" and "the document exists and we cannot serve it" are different
+          // findings and only the first is a compliance gap.
           unstructured: ((certBranch && certBranch.rows) || []).map((r) => {
-            const a = fileAffordance(r.has_file, r.has_ref, {
+            const a = fileAffordance(r.has_file, r.document_id != null, {
               noRef: " · no document",
               noRefTitle: "No document behind this certificate — nothing was ever filed "
                 + "against it",
               noFile: " · no scan",
-              noFileTitle: "No scan held — the certificate is recorded and the document it "
-                + "came from is not on file",
+              noFileTitle: "No scan held — the certificate is recorded and nothing can be "
+                + "served for the document it came from",
             });
+            // Opens the stored original, or its extracted text where no original was kept.
+            // Only built where the row says there is something to serve, so the link is
+            // never offered on a row that would answer 404.
+            const open = a.held
+              ? () => window.open(documentUrl(r.document_id), "_blank", "noopener")
+              : () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
+                  + r.id + (r.detail ? ", " + r.detail : "")
+                  + (a.evidenced
+                      ? ", bound to a document on " + b.name + ". Nothing is stored for that "
+                        + "document — no file and no extracted text — so there is nothing "
+                        + "to open."
+                      : ". No document_id on the row: this certificate is recorded on "
+                        + b.name + " with nothing filed against it."));
             return {
               ...a,
               file: r.label,
               became: r.detail || "no expiry or status recorded",
               sim: "",
               meta: "certificate" + a.note,
-              view: () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
-                + r.id + (r.detail ? ", " + r.detail : "")
-                + (a.evidenced
-                    ? ", bound to a document on " + b.name + "."
-                      + (a.held ? "" : " That document has no blob_url, so there is no scan "
-                        + "to open.")
-                    : ". No document_id on the row: this certificate is recorded on "
-                      + b.name + " with nothing filed against it.")),
-              download: () => this.flash("Fetching the certificate scan behind " + r.label + ".")
+              view: open,
+              download: open
             };
           }),
           loading: !!state.loading,
@@ -1250,7 +1231,7 @@ export const renderValsMethods = {
           // panel asserting the very thing they are missing.
           certHead: (() => {
             const rows = (certBranch && certBranch.rows) || [];
-            const bare = rows.filter((r) => r.has_ref === false).length;
+            const bare = rows.filter((r) => r.document_id == null).length;
             if (!rows.length) return "Certificates";
             if (!bare) return "Certificates — evidenced by those documents";
             if (bare === rows.length) return "Certificates — none evidenced by a document";

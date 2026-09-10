@@ -2,6 +2,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { TAG, MK } from './constants.js';
 import { relDays, countryMeta } from './complianceLive.js';
+import { documentUrl } from '../api/docRag.js';
 
 export const complianceMethods = {
   // ── Compliance console ──────────────────────────────────────────────
@@ -412,6 +413,10 @@ export const complianceMethods = {
           risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
           auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
           ver: c.doc ? c.ver : c.ver + " · no document",
+          // The real file behind this certificate — GET /api/documents/{id}/download on
+          // svc-deepagents, which redirects to the stored original (or its extracted text
+          // when no original was kept). Null when nothing was ever ingested for this row.
+          downloadUrl: c.documentId ? documentUrl(c.documentId) : null,
           actLabel: sent ? "Sent for approval" : acts[0],
           actBorder: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-divider)"),
           actFg: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-neutral-400)"),

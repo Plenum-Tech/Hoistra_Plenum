@@ -75,33 +75,20 @@ _BRANCHES: dict[str, dict[str, Any]] = {
     # certificate type code, which every document of that type shares — so with title
     # leading, five real PDFs with distinct filenames all rendered as "EICR" and the panel
     # had nothing left to tell them apart but a truncated uuid.
-    # has_file: what decides whether the view and download controls can do anything.
-    # A row here is a record that a document EXISTS; blob_url is the separate claim that we
-    # hold the file. Most rows are the former only, and the drawer drew working icons on all
-    # of them.
-    #
-    # Either a column on the row itself, or a reference to follow — a certificate does not
-    # hold a file, the document it was read from does.
-    "documents": {"label": ("file_name", "title"), "detail": ("doc_type",),
-                  "has_file": "blob_url"},
-    # has_ref is the question one step before has_file: is there a document here to hold a
-    # file? A certificate with no document_id at all has no scan because nothing was ever
-    # filed against it — a gap in the register, not a gap in storage — and the two read
-    # identically until the row says which.
+    "documents": {"label": ("file_name", "title"), "detail": ("doc_type",)},
+    # doc_ref: the document this row was read from. Two things are built on it — a real
+    # link, which needs the id, and the answer to "is there a document here at all", which
+    # a certificate with no document_id answers by its absence. A certificate like that has
+    # nothing to open because nothing was ever filed against it: a gap in the register,
+    # not a gap in storage, and the two read identically until the row says which.
     "compliance_certificates": {"label": ("certificate_type_code", "certificate_number"),
                                 "detail": ("certificate_number", "expiry_date", "status"),
-                                "has_file": {"via": "documents", "col": "blob_url",
-                                             "on": ("document_id", "source_document_id")},
-                                "has_ref": ("document_id", "source_document_id")},
+                                "doc_ref": ("document_id", "source_document_id")},
     "work_orders": {"label": ("title", "wo_code"), "detail": ("wo_code", "status")},
     "contracts": {"label": ("contract_ref",), "detail": ("status", "start_date"),
-                  "has_file": {"via": "documents", "col": "blob_url",
-                               "on": ("document_id",)},
-                  "has_ref": ("document_id",)},
+                  "doc_ref": ("document_id",)},
     "invoices": {"label": ("invoice_ref",), "detail": ("amount", "status"),
-                 "has_file": {"via": "documents", "col": "blob_url",
-                              "on": ("document_id",)},
-                 "has_ref": ("document_id",)},
+                 "doc_ref": ("document_id",)},
 }
 
 #: The tree as the graph is written. Children are read by their own building link rather
@@ -121,43 +108,91 @@ def _first(cols: set[str], names: tuple[str, ...]) -> str | None:
     return next((c for c in names if c in cols), None)
 
 
-def _has_file(spec: dict[str, Any], cols: set[str], shape: dict[str, Any]) -> str:
-    """SQL for "is there a file behind this row", or ``NULL`` where that is unanswerable.
+#: Whether this deployment has the tables the download route reads. A deployment property,
+#: not a request one, so it is resolved once and kept.
+_RETRIEVAL: dict[str, bool] | None = None
 
-    NULL is a third answer, not a default: a branch whose spec says nothing about files, or
-    whose deployment is missing the column the spec names, does not know — and a caller must
-    not read that as "no file". Only a branch that looked and found nothing says false.
+
+async def _retrieval(session: AsyncSession) -> dict[str, bool]:
+    global _RETRIEVAL
+    if _RETRIEVAL is not None:
+        return _RETRIEVAL
+    try:
+        rows = (
+            await session.execute(
+                text(
+                    """SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'plenum_cafm'
+                          AND table_name IN ('ingestion_documents', 'document_chunks')"""
+                )
+            )
+        ).scalars().all()
+    except Exception as exc:  # noqa: BLE001 — introspection must never break a drawer
+        log.warning("building_tree.retrieval_shape_failed", error=str(exc)[:200])
+        return {"ingestion": False, "chunks": False}
+    have = {str(r) for r in rows}
+    _RETRIEVAL = {"ingestion": "ingestion_documents" in have,
+                  "chunks": "document_chunks" in have}
+    return _RETRIEVAL
+
+
+def _openable(
+    table: str, spec: dict[str, Any], cols: set[str], key: str,
+    shape: dict[str, Any], retrieval: dict[str, bool],
+) -> tuple[str, str]:
+    """SQL for the document this row points at, and for "is there anything to open".
+
+    The second half deliberately mirrors ``GET /api/documents/{id}/download``, which is what
+    the link the client builds will call: the stored original if there is one, the extracted
+    text if there is not. A flag that answers a different question than the endpoint would
+    put a live-looking control on a row that 404s, or grey out one that works — and which of
+    those you get depends only on which database you are pointed at, because production
+    keeps its files in ``ingestion_documents`` and the test portfolio keeps them in
+    ``documents``. Both are asked.
+
+    Returns ``("NULL", "NULL")`` where the question does not apply. NULL is a third answer,
+    not a default: a branch that cannot name a document does not know, and a caller must not
+    read that as "no". Only a branch that looked and found nothing says false.
 
     Every identifier here comes from the literal spec above, filtered by what
     information_schema reports — none of it from a request.
     """
-    hf = spec.get("has_file")
-    if isinstance(hf, str):
-        # NULL and '' both mean no file. A blob_url of '' is not a location.
-        return f"(NULLIF({hf}::text, '') IS NOT NULL)" if hf in cols else "NULL"
-    if not isinstance(hf, dict):
-        return "NULL"
+    if table == "documents":
+        # The row IS the document; there is nothing to follow.
+        doc_expr = f"t.{key}::text"
+        parts = ([f"(NULLIF(t.blob_url::text, '') IS NOT NULL)"]
+                 if "blob_url" in cols else [])
+    else:
+        refs = [c for c in (spec.get("doc_ref") or ()) if c in cols]
+        if not refs:
+            return "NULL", "NULL"
+        doc_expr = "COALESCE(" + ", ".join(f"t.{c}::text" for c in refs) + ")"
+        parts = []
+        info = shape.get("documents") or {}
+        if info.get("exists") and "blob_url" in (info.get("columns") or set()):
+            dkey = info.get("key") or "document_id"
+            parts.append(
+                f"EXISTS (SELECT 1 FROM plenum_cafm.documents f "
+                f"WHERE f.{dkey}::text = {doc_expr} "
+                f"AND NULLIF(f.blob_url::text, '') IS NOT NULL)")
 
-    via = str(hf["via"])
-    info = shape.get(via) or {}
-    if not info.get("exists"):
-        return "NULL"
-    vcols: set[str] = info.get("columns") or set()
-    vkey = info.get("key") or "id"
-    if hf["col"] not in vcols or vkey not in vcols:
-        return "NULL"
-    # Whichever reference columns this deployment actually has. Certificates carry two, and
-    # which one is populated depends on how the row was filed.
-    fks = [c for c in hf["on"] if c in cols]
-    if not fks:
-        return "NULL"
-    link = " OR ".join(f"f.{vkey}::text = t.{c}::text" for c in fks)
-    return (f"EXISTS (SELECT 1 FROM plenum_cafm.{via} f WHERE ({link}) "
-            f"AND NULLIF(f.{hf['col']}::text, '') IS NOT NULL)")
+    if retrieval.get("ingestion"):
+        chunks = (
+            " OR EXISTS (SELECT 1 FROM plenum_cafm.document_chunks ch "
+            "WHERE ch.ingestion_id::text = i.id::text)"
+            if retrieval.get("chunks") else ""
+        )
+        parts.append(
+            f"EXISTS (SELECT 1 FROM plenum_cafm.ingestion_documents i "
+            f"WHERE i.id::text = {doc_expr} "
+            f"AND (NULLIF(i.blob_url::text, '') IS NOT NULL{chunks}))")
+
+    return doc_expr, ("(" + " OR ".join(parts) + ")" if parts else "NULL")
 
 
 async def _branch(
-    session: AsyncSession, table: str, building_id: str, shape: dict[str, Any]
+    session: AsyncSession, table: str, building_id: str, shape: dict[str, Any],
+    retrieval: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """One branch: its total, and up to ``BRANCH_LIMIT`` rows."""
     meta = BRANCH_META.get(table, {"label": table, "empty": "Nothing here."})
@@ -198,13 +233,12 @@ async def _branch(
     # beside itself; the later candidates stay, because they are the fallbacks, not the label.
     primary = label_cols[0] if label_cols else None
     detail_cols = [c for c in (spec.get("detail") or ()) if c in cols and c != primary]
+    doc_expr, open_expr = _openable(
+        table, spec, cols, key, shape, retrieval or {"ingestion": False, "chunks": False})
     select = [f"{key}::text AS id", f"{label_expr} AS label"]
     select += [f"{c}::text AS d{i}" for i, c in enumerate(detail_cols)]
-    select.append(f"{_has_file(spec, cols, shape)} AS has_file")
-    ref_cols = [c for c in (spec.get("has_ref") or ()) if c in cols]
-    select.append(
-        ("(COALESCE(" + ", ".join(ref_cols) + ") IS NOT NULL)" if ref_cols else "NULL")
-        + " AS has_ref")
+    select.append(f"{doc_expr} AS docref")
+    select.append(f"{open_expr} AS has_file")
     order = f"{label_expr} NULLS LAST" if label_cols else key
 
     try:
@@ -237,13 +271,14 @@ async def _branch(
         "detail": " · ".join(
             str(r[f"d{i}"]) for i in range(len(detail_cols)) if r.get(f"d{i}")
         ) or None,
-        # true: we hold the file. false: we know of it and do not hold it. null: this
-        # branch does not track files at all, so the question does not apply — a client
-        # must not read that as "no".
+        # The document behind this row, if the table has a column for one — None for a
+        # table with no such column, not merely absent, so a caller can tell "nothing
+        # filed" apart from "this table cannot say".
+        "document_id": r.get("docref"),
+        # true: something will come back if this is opened. false: the row names a document
+        # and neither a stored file nor extracted text exists for it. null: this branch
+        # cannot name a document, so the question does not apply — never read that as "no".
         "has_file": (None if r["has_file"] is None else bool(r["has_file"])),
-        # true: the row names a document. false: it names none, so there is nothing that
-        # could hold a file. null: this branch has no such reference to name.
-        "has_ref": (None if r["has_ref"] is None else bool(r["has_ref"])),
     } for r in rows]
     out["truncated"] = out["count"] > len(out["rows"])
     return out
@@ -276,10 +311,13 @@ async def building_tree(session: AsyncSession, building_id: str) -> dict[str, An
     if not row:
         return {"ok": False, "error": f"No building {bid}.", "status": 404}
 
+    retrieval = await _retrieval(session)
     branches: list[dict[str, Any]] = []
     for parent, children in _TREE:
-        node = await _branch(session, parent, bid, shape)
-        node["children"] = [await _branch(session, c, bid, shape) for c in children]
+        node = await _branch(session, parent, bid, shape, retrieval)
+        node["children"] = [
+            await _branch(session, c, bid, shape, retrieval) for c in children
+        ]
         branches.append(node)
 
     flat = [b for br in branches for b in [br] + br["children"]]

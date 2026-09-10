@@ -15,6 +15,7 @@ import Sessions from './screens/Sessions.jsx';
 import Space from './screens/Space.jsx';
 import Integrations from './screens/Integrations.jsx';
 import ConnectModal from './components/shell/ConnectModal.jsx';
+import PasswordModal from './components/shell/PasswordModal.jsx';
 import Buildings from './screens/Buildings.jsx';
 import DecisionQueue from './components/shell/DecisionQueue.jsx';
 import DetailDrawer from './components/shell/DetailDrawer.jsx';
@@ -49,6 +50,7 @@ export default function App() {
       {vals.isSpace ? <Space vals={vals} /> : null}
       {vals.isInteg ? <Integrations vals={vals} /> : null}
       {vals.intModalOn ? <ConnectModal vals={vals} /> : null}
+      {vals.pwOpen ? <PasswordModal vals={vals} /> : null}
       {vals.isBuildings ? <Buildings vals={vals} /> : null}
       {vals.queueOpen ? <DecisionQueue vals={vals} /> : null}
       {vals.detailOpen ? <DetailDrawer vals={vals} /> : null}

@@ -5,12 +5,20 @@
 ## Shell and shared components
 
 ### 4.1 Sign-in gate
-Email field + Continue. Session opens in **user view**.
+The right column is one panel with five modes (`GatePanel.jsx`, driven by `logic/auth.js` against svc-operations-intelligence's `/api/auth`). The marketing column beside it is unchanged.
+
+- **Sign in** — email + password, **Continue**. `Single sign-on` is inert (a toast; no SSO endpoint exists yet). Links: *Forgot password?* · *Create an account* (hidden when `GET /api/auth/config` says self-registration is off). A wrong password and an unknown address get the same server line; eight failures lock the account for 15 minutes and the panel counts down beside a *Reset your password* link; a correct password on an unconfirmed address jumps to **Enter the code** (the server has already sent one).
+- **Create an account** — full name, email, password (the minimum length comes from `/config`), phone (optional). 202 → **Enter the code**. An address that already has an account gets the same 202 — the mailbox owner is told, the screen is not.
+- **Enter the code** — six digits, ten minutes, five guesses. A miss keeps the digits and shows the attempts left; an expired, exhausted or superseded code clears the field and makes **Resend code** the emphasised button. Resend is disabled with a countdown while the 60-second cooldown runs; a resend kills the older code, so the typed digits go. The right code confirms the address **and signs in**.
+- **Forgot your password?** — email → 202 (identical whether or not an account exists) → **Set a new password**.
+- **Set a new password** — code + new password on one screen (there is no "check the code" step by design). A rejected password keeps the code; only the password is retyped. Success returns to **Sign in** with the server's line — a reset ends every session and deliberately does not sign in.
+
+Tokens: the access token (30 min) lives in memory; the refresh token (14 days, rotated on every use) is the persisted credential (`logic/session.js`). A reload renders the shell on the stored account and refreshes once; every backend call carries `Authorization: Bearer`; a 401 `expired` is refreshed and retried once; a 401 whose reason says the session is finished (revoked, password changed, replayed, disabled, account gone, invalid token) signs out with the server's line. Session opens in **user view**.
 
 ### 4.2 Top bar
-Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pill (decision queue count, pulsing) · tenant · orchestrator icon · **account avatar "A"**.
+Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pill (decision queue count, pulsing) · tenant · orchestrator icon · **account avatar (the signed-in person's initial)**.
 
-**Account menu (Aasim):** header line states the current mode ("User view · Planum Technologies"). Items: **Pricing**, **Support**, and a mode toggle that reads **Admin view** in user mode and **User view** in admin mode. **Sign out** as a separated last row. The click-away layer sits below the header's stacking context so menu rows stay clickable.
+**Account menu:** the avatar shows the signed-in person's initial; the header shows their name, their email, and the current mode ("User view · Planum Technologies"). Items: **Pricing**, **Support**, the mode toggle (**Admin view** in user mode, **User view** in admin mode — offered only to accounts whose real role is `admin` or `superadmin`; a `user` account has User view and no toggle), **Change password** (a modal: current + new password; success ends every session, this one included, so it returns to the gate with the server's line), **Sign out everywhere** (`POST /api/auth/logout {everywhere:true}`; a toast says how many sessions ended). **Sign out** as a separated last row. The click-away layer sits below the header's stacking context so menu rows stay clickable.
 
 ### 4.3 Navigator (left)
 Collapsed rail (icons) or open panel (248px). Open panel shows: **New query** · **Reports** group · **Spaces** · **Sessions**.
