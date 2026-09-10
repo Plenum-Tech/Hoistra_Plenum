@@ -125,6 +125,49 @@ async def building_from_work_orders(
     return {"building_id": None, "reason": "work_orders_have_no_building"}
 
 
+async def _ingested_filename(session: AsyncSession, document_id: str) -> str | None:
+    """What the ingestion pipeline recorded this file as, if it recorded anything.
+
+    Callers reach the graph through several routes and not all of them carry the name: the
+    invoice path has no file_name parameter to pass, and the certificate path passes one from
+    metadata that is often absent. The row doc-rag wrote has it, under the same id, so the
+    name is read from there rather than depending on every caller to remember.
+
+    Introspected, and best-effort. A deployment without ingestion_documents simply has no
+    answer, and a document row with no name is better than an ingest that failed looking for
+    one.
+    """
+    try:
+        async with session.begin_nested():
+            has = (
+                await session.execute(
+                    text(
+                        """SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'plenum_cafm'
+                              AND table_name = 'ingestion_documents'
+                              AND column_name = 'original_filename'"""
+                    )
+                )
+            ).first()
+            if not has:
+                return None
+            row = (
+                await session.execute(
+                    text(
+                        """SELECT original_filename FROM plenum_cafm.ingestion_documents
+                            WHERE id::text = :did"""
+                    ),
+                    {"did": document_id},
+                )
+            ).first()
+    except Exception as exc:  # noqa: BLE001 — a missing name must never fail an ingest
+        log.warning("graph_ingest.filename_lookup_failed", error=str(exc)[:200],
+                    document_id=document_id)
+        return None
+    name = (row[0] if row else None) or None
+    return str(name).strip() or None if name else None
+
+
 async def record_document(
     session: AsyncSession,
     *,
@@ -147,6 +190,8 @@ async def record_document(
 
     did = str(document_id).strip() if document_id else str(uuid.uuid4())
     key = shape["documents"]["key"]
+    if not file_name:
+        file_name = await _ingested_filename(session, did)
     params = {
         "did": did,
         "bid": str(building_id) if building_id else None,
