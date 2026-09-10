@@ -123,15 +123,19 @@ async def bind_documents_to_building(
         return {"documents": 0, "certificates": 0}
     async with database.AsyncSessionLocal() as session:
         docs = await session.execute(
+            # CAST(:b AS uuid), not :b::uuid. SQLAlchemy's text() mis-parses a bind
+            # parameter followed immediately by a cast and emits SQL Postgres rejects with
+            # "syntax error at or near :" — which the caller logged and swallowed, so the
+            # binding silently never happened while everything reported success.
             text("""UPDATE plenum_cafm.documents
-                       SET building_id = :b::uuid
+                       SET building_id = CAST(:b AS uuid)
                      WHERE document_id::text = ANY(:ids)
                        AND (building_id IS NULL OR building_id::text <> :b)"""),
             {"b": building_id, "ids": document_ids},
         )
         certs = await session.execute(
             text("""UPDATE plenum_cafm.compliance_certificates
-                       SET building_id = :b::uuid
+                       SET building_id = CAST(:b AS uuid)
                      WHERE COALESCE(document_id, source_document_id)::text = ANY(:ids)
                        AND (building_id IS NULL OR building_id::text <> :b)"""),
             {"b": building_id, "ids": document_ids},
