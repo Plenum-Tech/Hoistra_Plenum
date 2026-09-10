@@ -293,4 +293,7 @@ async def main() -> None:
         await conn.close()
 
 
-asyncio.run(main())
+# Guarded so the helpers above can be imported and tested without the script
+# running itself — which it did, the first time something tried.
+if __name__ == "__main__":
+    asyncio.run(main())
