@@ -635,6 +635,17 @@ async def extract_and_verify_invoice(
             organization_id=organization_id,
         )
         vendor_id = vendor_link.get("vendor_id")
+    if vendor_id is None and source_text:
+        # _invoice_vendor_name reads a CSV-shaped pattern and finds nothing in a PDF, so an
+        # uploaded invoice was attributed to no vendor at all — which also means no contract
+        # is found, and the rate and parts checks are skipped on an invoice that reads as
+        # fully verified. Ask the register instead: which vendor we already have is named
+        # here. It cannot invent one.
+        from ...shared.vendor_identity import vendor_named_in
+
+        vendor_id = await vendor_named_in(session, source_text)
+        if vendor_id:
+            log.info("invoice.vendor_matched_from_document", vendor_id=str(vendor_id))
 
     # Contract-derived thresholds. Work orders already auto-load when the caller does not
     # supply them; these did not, and the chat upload path supplies neither — so the

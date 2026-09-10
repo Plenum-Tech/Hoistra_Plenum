@@ -1578,7 +1578,12 @@ async def upsert_certificate(
     # than off nothing. Both are best-effort — a certificate that cannot be placed is still
     # ingested, with the reason stored, because a certificate that exists is worth more than
     # one rejected for want of a building.
-    if cert.building_name or cert.building_reference or cert.site_id or cert.site_ref:
+    # Unconditional. This used to run only when the certificate named a building or a site,
+    # so a vendor accreditation — which names neither — recorded no document row at all: the
+    # file it was read from existed nowhere in the graph and could never appear in a drawer.
+    # Whether a document can be placed on a building is a separate question from whether the
+    # document exists, and only the second one is always answerable.
+    if True:
         try:
             from ..energy.graph_ingest import attach_to_graph
 

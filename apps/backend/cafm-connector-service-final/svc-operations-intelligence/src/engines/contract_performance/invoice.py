@@ -213,33 +213,58 @@ def _discrepancy_code(result: dict[str, Any]) -> str | None:
 async def _resolve_wo_ids(
     session: AsyncSession, wo_codes: list[str]
 ) -> dict[str, str]:
-    """Map wo_code -> work_orders.wo_uuid so invoice lines link to real records.
+    """Map wo_code -> the work order's uuid, so invoice lines link by key and not by string.
 
-    wo_uuid rather than id: work_orders.id is an integer serial in tenants built
-    through svc-work-order-management, and invoice_lines.work_order_id is a UUID.
+    Which column holds that uuid depends on how the tenant was built. Tenants built through
+    svc-work-order-management have an integer serial `id` and carry the uuid in `wo_uuid`;
+    the canonical schema has no wo_uuid at all and `id` is itself a uuid. Selecting wo_uuid
+    unconditionally, as this did, raises `column "wo_uuid" does not exist` on the second
+    kind — and the except below turned that into an empty map at debug level, so every
+    invoice line came out with work_order_id NULL and the failure was invisible.
+
+    Introspected instead, and the log says which column answered.
     """
     codes = [c for c in {c for c in wo_codes if c}]
     if not codes:
         return {}
     try:
         async with session.begin_nested():
+            cols = {
+                r[0] for r in (
+                    await session.execute(
+                        text(
+                            """SELECT column_name FROM information_schema.columns
+                                WHERE table_schema = 'plenum_cafm'
+                                  AND table_name = 'work_orders'"""
+                        )
+                    )
+                ).all()
+            }
+            key = "wo_uuid" if "wo_uuid" in cols else ("id" if "id" in cols else None)
+            if key is None:
+                log.warning("invoice.wo_resolve_no_key_column")
+                return {}
+            code_expr = ("COALESCE(wo_code, workorder_ref)"
+                         if "workorder_ref" in cols else "wo_code")
             rows = (
                 await session.execute(
                     text(
-                        """
-                        SELECT COALESCE(wo_code, workorder_ref) AS code,
-                               wo_uuid::text AS id
+                        f"""
+                        SELECT {code_expr} AS code, {key}::text AS id
                         FROM plenum_cafm.work_orders
-                        WHERE COALESCE(wo_code, workorder_ref) = ANY(:codes)
-                          AND wo_uuid IS NOT NULL
+                        WHERE {code_expr} = ANY(:codes)
+                          AND {key} IS NOT NULL
                         """
                     ),
                     {"codes": codes},
                 )
             ).mappings().all()
-        return {r["code"]: r["id"] for r in rows}
-    except Exception as exc:  # noqa: BLE001
-        log.debug("invoice.wo_resolve_failed", error=str(exc)[:200])
+        out = {r["code"]: r["id"] for r in rows}
+        log.info("invoice.wo_resolved", key_column=key, asked=len(codes), found=len(out))
+        return out
+    except Exception as exc:  # noqa: BLE001 — a missing link must not fail the verification
+        # Warning, not debug: every line losing its work order is worth seeing in a log.
+        log.warning("invoice.wo_resolve_failed", error=str(exc)[:200])
         return {}
 
 
