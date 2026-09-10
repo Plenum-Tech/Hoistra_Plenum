@@ -22,6 +22,12 @@ from .verification_sources import canonicalize_type_code
 
 log = get_logger(__name__)
 
+#: Passes over the same document, and how many must agree. The architecture asks for three
+#: on compliance certificates; two of three is the majority that makes an answer usable
+#: while still refusing a three-way split.
+_CLASSIFY_PASSES = 3
+_CLASSIFY_QUORUM = 2
+
 # Brand / regulation keywords that rarely appear in the pack type NAME but strongly
 # imply a type. Maps a lowercase keyword → the canonical CCC code (matched against the
 # pack via canonicalize on both sides, so pack-code or CCC-code seeding both resolve).
@@ -330,6 +336,52 @@ async def _claude_classify(
     file_name: str | None,
     pdf_base64: str | None,
 ) -> str | None:
+    """Three passes over the document; the answer at least two of them agree on.
+
+    Temperature is zero, so the passes should agree trivially — and where they do not, the
+    document is genuinely ambiguous to the model and a single sample was never a safe way to
+    resolve it. Returning None then is the useful answer: the keyword heuristic downstream is
+    deterministic, and on a document it recognises it is right by construction.
+    """
+    import asyncio
+
+    votes = await asyncio.gather(
+        *(
+            _claude_classify_once(
+                packs=packs, source_text=source_text, file_name=file_name,
+                pdf_base64=pdf_base64,
+            )
+            for _ in range(_CLASSIFY_PASSES)
+        ),
+        return_exceptions=True,
+    )
+    cast = [v for v in votes if isinstance(v, str) and v]
+    if not cast:
+        return None
+
+    tally: dict[str, int] = {}
+    for v in cast:
+        tally[v] = tally.get(v, 0) + 1
+    winner, count = max(tally.items(), key=lambda kv: (kv[1], kv[0]))
+
+    if count < _CLASSIFY_QUORUM:
+        # A split decision on the field that selects the regulation pack. Say so and stand
+        # aside rather than passing off one of three guesses as the answer.
+        log.warning("classify.claude_no_majority", votes=tally, file_name=file_name)
+        return None
+    if len(tally) > 1:
+        log.info("classify.claude_split_vote", votes=tally, chose=winner,
+                 file_name=file_name)
+    return winner
+
+
+async def _claude_classify_once(
+    *,
+    packs: list[Any],
+    source_text: str,
+    file_name: str | None,
+    pdf_base64: str | None,
+) -> str | None:
     try:
         import anthropic
 
@@ -373,6 +425,10 @@ async def _claude_classify(
         resp = await client.messages.create(
             model=model,
             max_tokens=200,
+            # Zero, not the SDK's default of 1.0. This picks one entry from a supplied
+            # catalogue; there is no part of that task that sampling improves, and at 1.0
+            # the same certificate came back as three different types on three uploads.
+            temperature=0,
             messages=[{"role": "user", "content": content}],
         )
         raw = resp.content[0].text if resp.content else "{}"

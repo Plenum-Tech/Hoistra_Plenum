@@ -125,6 +125,32 @@ async def building_from_work_orders(
     return {"building_id": None, "reason": "work_orders_have_no_building"}
 
 
+async def _row_building(session: AsyncSession, key: str, document_id: str) -> str | None:
+    """The building this document row is actually on, after the upsert.
+
+    Not the same as the building that was passed in. The row may already have been placed —
+    by the ingest endpoint, which knows which building the person filed the file against
+    before any engine has seen it — and the upsert above preserves that rather than
+    overwriting it. Reading the row back is how a caller learns what it settled on.
+    """
+    try:
+        async with session.begin_nested():
+            row = (
+                await session.execute(
+                    text(
+                        f"""SELECT building_id::text FROM plenum_cafm.documents
+                             WHERE {key}::text = :did"""
+                    ),
+                    {"did": document_id},
+                )
+            ).first()
+    except Exception as exc:  # noqa: BLE001 — a read-back must never fail an ingest
+        log.warning("graph_ingest.row_building_failed", error=str(exc)[:200],
+                    document_id=document_id)
+        return None
+    return (row[0] if row else None) or None
+
+
 async def _ingested_filename(session: AsyncSession, document_id: str) -> str | None:
     """What the ingestion pipeline recorded this file as, if it recorded anything.
 
@@ -224,7 +250,8 @@ async def record_document(
                     ),
                     params,
                 )
-                return {"document_id": did, "created": False}
+                return {"document_id": did, "created": False,
+                        "building_id": await _row_building(session, key, did)}
 
             await session.execute(
                 text(
@@ -234,7 +261,8 @@ async def record_document(
                 ),
                 params,
             )
-        return {"document_id": did, "created": True}
+        return {"document_id": did, "created": True,
+                "building_id": await _row_building(session, key, did)}
     except Exception as exc:  # noqa: BLE001 — a document row must never fail an ingest
         log.warning("graph_ingest.record_document_failed", error=str(exc)[:200], document_id=did)
         return {"document_id": did, "created": False, "error": str(exc)[:200]}
@@ -307,4 +335,8 @@ async def attach_to_graph(
         "building_link_reason": resolved["reason"],
         "document_id": doc.get("document_id"),
         "document_created": doc.get("created", False),
+        # Where the document row actually sits, which is not always where resolution
+        # pointed: an upload filed against a building is bound before any engine runs, and
+        # a caller that resolved nothing of its own can still learn the answer from here.
+        "document_building_id": doc.get("building_id"),
     }

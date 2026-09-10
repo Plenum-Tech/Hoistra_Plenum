@@ -1600,6 +1600,14 @@ async def upsert_certificate(
             )
             if graph.get("building_id"):
                 cert.building_id = graph["building_id"]
+            elif graph.get("document_building_id"):
+                # Nothing in the certificate named a building, but the document it was read
+                # from is already on one — put there by whoever uploaded it, who said which
+                # building they meant. A certificate with no building appears in no drawer
+                # and in no coverage figure, so an answer somebody actually gave beats the
+                # null we would otherwise keep.
+                cert.building_id = graph["document_building_id"]
+                meta["building_link_via"] = "document"
             # The basis of the link travels with the record: a match on an exact code and one
             # inferred from a site with a single building are different claims.
             meta["building_link"] = {
