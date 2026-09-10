@@ -211,6 +211,55 @@ async def spaces_rollup(session: AsyncSession) -> dict[str, dict[str, Any]]:
     return out
 
 
+def invoices_count_sql(shape: dict[str, Any]) -> str | None:
+    """SQL to count invoices per building, or None where they cannot reach one.
+
+    Three shapes are possible and all three occur:
+
+      building_id on the view    count it directly — this is what the canonical schema
+                                 gives, since the view resolves the building through the
+                                 document the invoice was read from
+      contract_id only           reach the building through the contract
+      both                       prefer the direct link, fall back to the contract
+      neither                    an invoice here cannot be tied to a building at all, and
+                                 saying so by returning None is the honest answer: the
+                                 count then reads "?" rather than "0"
+
+    Pure string-building over introspected column names, so it can be tested without a
+    database — which is the point, because the version that assumed contract_id could only
+    have been caught by running it against a schema that lacks one.
+    """
+    info = shape.get("invoices") or {}
+    if not info.get("exists"):
+        return None
+    cols: set[str] = info.get("columns") or set()
+    direct = "building_id" in cols
+    via_contract = (
+        "contract_id" in cols
+        and (shape.get("contracts") or {}).get("exists")
+        and "building_id" in ((shape.get("contracts") or {}).get("columns") or set())
+    )
+    if direct and via_contract:
+        ckey = shape["contracts"]["key"]
+        return (f"SELECT COALESCE(i.building_id::text, c.building_id::text), count(*)\n"
+                f"  FROM plenum_cafm.invoices i\n"
+                f"  LEFT JOIN plenum_cafm.contracts c "
+                f"ON c.{ckey}::text = i.contract_id::text\n"
+                f" GROUP BY 1")
+    if direct:
+        return ("SELECT i.building_id::text, count(*)\n"
+                "  FROM plenum_cafm.invoices i\n"
+                " GROUP BY 1")
+    if via_contract:
+        ckey = shape["contracts"]["key"]
+        return (f"SELECT c.building_id::text, count(*)\n"
+                f"  FROM plenum_cafm.invoices i\n"
+                f"  JOIN plenum_cafm.contracts c "
+                f"ON c.{ckey}::text = i.contract_id::text\n"
+                f" GROUP BY 1")
+    return None
+
+
 async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
     """Every relation in the graph, counted per building.
 
@@ -236,14 +285,14 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
             "SELECT building_id::text, count(*) FROM plenum_cafm.assets GROUP BY 1",
         ))
         akey = shape["assets"]["key"]
-        if shape["equipment"]["exists"]:
+        if shape["equipment"]["exists"] and "asset_id" in shape["equipment"]["columns"]:
             add("equipment", await _scalar_counts(
                 session,
                 f"""SELECT a.building_id::text, count(*) FROM plenum_cafm.equipment e
                     JOIN plenum_cafm.assets a ON a.{akey}::text = e.asset_id::text
                     GROUP BY 1""",
             ))
-        if shape["meters"]["exists"]:
+        if shape["meters"]["exists"] and "asset_id" in shape["meters"]["columns"]:
             add("meters", await _scalar_counts(
                 session,
                 f"""SELECT COALESCE(m.building_id::text, a.building_id::text), count(*)
@@ -276,7 +325,10 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
                      FROM plenum_cafm.documents GROUP BY 1""",
             ))
         dkey = shape["documents"]["key"]
-        if shape["compliance_certificates"]["exists"]:
+        if shape["compliance_certificates"]["exists"] and (
+            {"document_id", "source_document_id"}
+            & shape["compliance_certificates"]["columns"]
+        ):
             add("certificates", await _scalar_counts(
                 session,
                 f"""SELECT COALESCE(c.building_id::text, d.building_id::text), count(*)
@@ -304,15 +356,9 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
             session,
             "SELECT building_id::text, count(*) FROM plenum_cafm.contracts GROUP BY 1",
         ))
-        ckey = shape["contracts"]["key"]
-        if shape["invoices"]["exists"]:
-            add("invoices", await _scalar_counts(
-                session,
-                f"""SELECT COALESCE(i.building_id::text, c.building_id::text), count(*)
-                    FROM plenum_cafm.invoices i
-                    LEFT JOIN plenum_cafm.contracts c ON c.{ckey}::text = i.contract_id::text
-                    GROUP BY 1""",
-            ))
+    inv_sql = invoices_count_sql(shape)
+    if inv_sql:
+        add("invoices", await _scalar_counts(session, inv_sql))
     return result
 
 
