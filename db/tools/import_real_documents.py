@@ -24,6 +24,13 @@ What it does NOT copy: inspector names and accreditation numbers. A shared test 
 needs the file, its type and its dates to be useful; it does not need the name of the engineer
 who signed it, and the fewer real people in a database several testers can read, the better.
 
+Two tables are written, because two are read. ``plenum_cafm.documents`` is what the Hoist
+Graph drawer reads to say a document exists; ``plenum_cafm.ingestion_documents`` is what
+``GET /api/documents/{id}/download`` reads to serve it. Production keeps its files in the
+second and has nothing in the first; the demo portfolio is built entirely in the first.
+Writing only one of them leaves an environment where the drawer lists documents nobody can
+open — so the same id goes in both.
+
 Re-running is safe. Documents keep their source ids, so a second run updates in place rather
 than duplicating, and a certificate that already points at its file is left alone.
 """
@@ -44,6 +51,15 @@ DEFAULT_FROM = "postgresql://cafm:cafm@localhost:5432/hoistra"
 # belongs to no building at all, and giving it one would put it in a drawer it has no business
 # being in.
 SCOPES = ("Building", "Vendor")
+
+
+def cert_ref(doc: dict[str, Any]) -> str:
+    """The reference this import gives a certificate it creates.
+
+    Derived from the document, so it is the same string on every run — which is what makes
+    a second run recognise its own work instead of duplicating it.
+    """
+    return f"{doc['certificate_type_code']}-REAL-{str(doc['document_id'])[:8]}"
 
 
 async def read_source(dsn: str) -> list[dict[str, Any]]:
@@ -114,6 +130,23 @@ async def plan(src: list[dict[str, Any]], conn: asyncpg.Connection) -> list[dict
         code = d["certificate_type_code"]
         scope = d["cert_scope"] if d["cert_scope"] in SCOPES else "Building"
 
+        # Already placed by an earlier run — either onto a certificate that was missing its
+        # document, or onto one this import created. Both are recognised before anything is
+        # created, which is what makes a second run a no-op instead of a duplicate.
+        done = await conn.fetchrow(
+            """SELECT id, building_id, vendor_id FROM plenum_cafm.compliance_certificates
+                WHERE COALESCE(document_id, source_document_id)::text = $1
+                   OR certificate_ref = $2
+                ORDER BY (COALESCE(document_id, source_document_id)::text = $1) DESC
+                LIMIT 1""",
+            str(d["document_id"]), cert_ref(d))
+        if done:
+            taken.add(done["id"])
+            steps.append({"doc": d, "cert_id": done["id"], "create_cert": False,
+                          "building_id": done["building_id"], "vendor_id": done["vendor_id"],
+                          "scope": scope, "why": "already placed — left as it is"})
+            continue
+
         # An unevidenced certificate of the same type is the best home: it is a real gap in
         # the register that this file closes, and nothing gets displaced.
         cert = await conn.fetchrow(
@@ -152,6 +185,11 @@ async def plan(src: list[dict[str, Any]], conn: asyncpg.Connection) -> list[dict
 
 
 async def apply(steps: list[dict[str, Any]], conn: asyncpg.Connection) -> None:
+    ingestion = await conn.fetchval(
+        "SELECT to_regclass('plenum_cafm.ingestion_documents') IS NOT NULL")
+    if not ingestion:
+        print("note: no plenum_cafm.ingestion_documents in this database — the drawer will "
+              "list these documents and nothing will be able to serve them")
     async with conn.transaction():
         for s in steps:
             if s.get("skip"):
@@ -172,8 +210,22 @@ async def apply(steps: list[dict[str, Any]], conn: asyncpg.Connection) -> None:
                 d["document_id"], s.get("building_id"),
                 d["title"] or d["certificate_type_code"], d["file_name"], d["blob_url"])
 
+            # The row the download route reads. Same id, so a link built from the drawer
+            # resolves. source_type and agent_id are NOT NULL and say honestly what put the
+            # row there, rather than naming an ingestion that never ran.
+            if ingestion:
+                await conn.execute(
+                    """INSERT INTO plenum_cafm.ingestion_documents
+                           (id, source_type, agent_id, original_filename, blob_url, status,
+                            uploaded_at)
+                       VALUES ($1, 'pdf', 'import_real_documents', $2, $3, 'indexed', now())
+                       ON CONFLICT (id) DO UPDATE
+                          SET original_filename = EXCLUDED.original_filename,
+                              blob_url          = EXCLUDED.blob_url""",
+                    d["document_id"], d["file_name"], d["blob_url"])
+
             if s["create_cert"]:
-                ref = f"{d['certificate_type_code']}-REAL-{str(d['document_id'])[:8]}"
+                ref = cert_ref(d)
                 await conn.execute(
                     """INSERT INTO plenum_cafm.compliance_certificates
                            (id, org_id, organization_id, certificate_ref, cert_type,
@@ -221,6 +273,8 @@ async def main() -> None:
             print("\nplan only — pass --apply to write")
             return
         await apply(steps, conn)
+        ingestion = await conn.fetchval(
+            "SELECT to_regclass('plenum_cafm.ingestion_documents') IS NOT NULL")
         held, total = await conn.fetchrow(
             """SELECT count(*) FILTER (WHERE NULLIF(blob_url,'') IS NOT NULL), count(*)
                  FROM plenum_cafm.documents""")
@@ -229,6 +283,10 @@ async def main() -> None:
                                                                source_document_id) IS NOT NULL)
                  FROM plenum_cafm.compliance_certificates""")
         print(f"\ndocuments:    {total} rows, {held} now hold a file")
+        servable = await conn.fetchval(
+            """SELECT count(*) FROM plenum_cafm.ingestion_documents
+                WHERE NULLIF(blob_url,'') IS NOT NULL""") if ingestion else 0
+        print(f"servable:     {servable} of them the download route can actually serve")
         print(f"certificates: {certs} rows, {evidenced} evidenced, "
               f"{certs - evidenced} still with no document on file")
     finally:

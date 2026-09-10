@@ -121,16 +121,25 @@ async def _retrieval(session: AsyncSession) -> dict[str, bool]:
         rows = (
             await session.execute(
                 text(
-                    """SELECT table_name FROM information_schema.tables
+                    """SELECT table_name, column_name FROM information_schema.columns
                         WHERE table_schema = 'plenum_cafm'
-                          AND table_name IN ('ingestion_documents', 'document_chunks')"""
+                          AND (table_name = 'ingestion_documents'
+                               OR (table_name = 'document_chunks'
+                                   AND column_name = 'ingestion_id'))"""
                 )
             )
-        ).scalars().all()
+        ).all()
     except Exception as exc:  # noqa: BLE001 — introspection must never break a drawer
         log.warning("building_tree.retrieval_shape_failed", error=str(exc)[:200])
         return {"ingestion": False, "chunks": False}
-    have = {str(r) for r in rows}
+    have = {str(t) for t, _ in rows}
+    # The chunk fallback is claimed only where document_chunks is keyed on ingestion_id,
+    # because that is the column the download route joins on. Two unrelated tables carry
+    # this name across deployments — production keys chunks on ingestion_id and stores
+    # chunk_text; the demo schema keys them on document_id and stores content — and the
+    # route can only read the first. Asserting a fallback the route cannot serve would put
+    # a live control on a row that answers 404, which is the thing this flag exists to
+    # prevent. Testing for the table alone is not testing for the thing.
     _RETRIEVAL = {"ingestion": "ingestion_documents" in have,
                   "chunks": "document_chunks" in have}
     return _RETRIEVAL
