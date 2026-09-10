@@ -62,3 +62,38 @@ def test_a_cast_on_a_column_is_still_fine():
     # above must not catch it.
     assert not re.search(r":\w+::", "WHERE document_id::text = ANY(:ids)")
     text("SELECT 1 WHERE CAST(:x AS uuid) = ANY(:ids)").compile(dialect=PG)
+
+
+def test_a_repeated_parameter_has_at_most_one_uncast_occurrence():
+    """The failure a compile check cannot see.
+
+    A name used twice is emitted as ONE parameter, and Postgres deduces its type separately
+    at each site. Two uncast sites are two independent deductions that can disagree, and
+    when they do the server refuses the whole statement:
+
+        asyncpg.exceptions.AmbiguousParameterError: inconsistent types deduced for
+        parameter $1   DETAIL:  text versus character varying
+
+    That is exactly what the registration INSERT did — :n in the SELECT list deduced text,
+    :n in the comparison against original_filename deduced varchar — on every upload,
+    silently, because this module catches its own errors so that a broken link never costs
+    an upload. It compiled perfectly the whole time, which is why the test above did not
+    see it.
+
+    An explicit CAST leaves the parameter unknown at that site, so it imposes nothing. One
+    uncast occurrence is therefore the single authority on the type and cannot contradict
+    anything; two can. That is the rule stated here, and it is also why the building
+    updates are fine with one bare :b beside a CAST(:b AS uuid).
+    """
+    name_re = re.compile(r"(?<!:):(\w+)\b")
+    for sql in STATEMENTS:
+        for name in sorted(set(name_re.findall(sql))):
+            uses = len(re.findall(r"(?<!:):%s\b" % name, sql))
+            if uses < 2:
+                continue
+            cast = len(re.findall(r"CAST\(\s*:%s\s+AS\b" % name, sql, re.I))
+            assert uses - cast <= 1, (
+                ":%s appears %d times with %d uncast; wrap all but one in "
+                "CAST(:%s AS <type>) so the server deduces a single type for it\n%s"
+                % (name, uses, uses - cast, name, sql.strip()[:200])
+            )

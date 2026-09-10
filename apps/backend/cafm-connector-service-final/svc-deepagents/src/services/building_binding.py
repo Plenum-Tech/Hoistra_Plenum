@@ -78,12 +78,21 @@ async def register_uploads(
         for name in names:
             res = await session.execute(
                 text(
+                    # CAST(:n AS varchar) at BOTH occurrences, and not a bare :n. The name
+                    # is emitted as one parameter, and Postgres deduced its type twice from
+                    # two contexts that disagreed — text from the SELECT list, varchar from
+                    # the comparison against the column — and refused the statement with
+                    # "inconsistent types deduced for parameter $1". An explicit cast leaves
+                    # the parameter unknown at each site and both resolve to the same type.
+                    # It compiles cleanly either way, so this only ever fails against a real
+                    # server; here it failed on every upload and was swallowed by design.
                     """INSERT INTO plenum_cafm.ingestion_documents
                            (original_filename, source_type, agent_id, status, document_type)
-                       SELECT :n, 'document', 'uploader', 'received', :dt
+                       SELECT CAST(:n AS varchar), 'document', 'uploader', 'received',
+                              CAST(:dt AS varchar)
                         WHERE NOT EXISTS (
                               SELECT 1 FROM plenum_cafm.ingestion_documents
-                               WHERE original_filename = :n
+                               WHERE original_filename = CAST(:n AS varchar)
                                  AND uploaded_at > now() - interval '1 hour')"""
                 ),
                 {"n": name, "dt": types.get(name)},
