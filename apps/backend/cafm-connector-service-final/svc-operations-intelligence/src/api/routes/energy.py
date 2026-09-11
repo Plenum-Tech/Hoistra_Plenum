@@ -220,9 +220,13 @@ async def list_buildings(
     The caller's company, and for a plain user only their allocated buildings. The company
     used to be whatever the client sent."""
     out = await bld_svc.list_buildings(session, organization_id=s.organization_id, limit=limit)
-    if s.restricted and isinstance(out, dict) and isinstance(out.get("rows"), list):
-        rows = [r for r in out["rows"] if s.allows_building(r.get("building_id"))]
-        out = dict(out, rows=rows, count=len(rows), scoped_to_buildings=len(rows))
+    if s.restricted and isinstance(out, dict):
+        # The engine returns the table under "buildings". The filter first looked for
+        # "rows", found nothing, and let a one-building user read the whole portfolio.
+        key = "buildings" if isinstance(out.get("buildings"), list) else "rows"
+        rows = [r for r in (out.get(key) or [])
+                if s.allows_building(r.get("building_id") or r.get("id"))]
+        out = dict(out, **{key: rows}, count=len(rows), scoped_to_buildings=len(rows))
     return out
 
 

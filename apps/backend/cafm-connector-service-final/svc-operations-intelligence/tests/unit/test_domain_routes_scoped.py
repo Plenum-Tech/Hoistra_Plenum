@@ -125,3 +125,32 @@ def test_a_superadmin_may_name_another_company(client):
 def test_the_kill_switch_is_off_by_default():
     from src.config import settings
     assert settings.auth_enforce_scope is True
+
+
+def test_the_buildings_table_a_user_sees_is_only_their_buildings(client, monkeypatch):
+    # The engine returns the table under "buildings", not "rows". The first filter looked
+    # for "rows", found nothing to filter, and a one-building user read all nine.
+    from src.api.routes import energy as energy_routes
+
+    async def fake_list(session, *, organization_id=None, limit=500):
+        return {"ok": True, "count": 2, "root": "sites",
+                "buildings": [{"building_id": str(MINE), "name": "Mine"},
+                              {"building_id": str(THEIRS), "name": "Theirs"}]}
+    monkeypatch.setattr(energy_routes.bld_svc, "list_buildings", fake_list)
+    as_(principal(buildings=(MINE,)))
+    r = client.get("/api/energy/buildings")
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert [b["name"] for b in body["buildings"]] == ["Mine"]
+    assert body["count"] == 1 and body["scoped_to_buildings"] == 1
+
+
+def test_an_admin_sees_the_whole_table(client, monkeypatch):
+    from src.api.routes import energy as energy_routes
+
+    async def fake_list(session, *, organization_id=None, limit=500):
+        return {"ok": True, "count": 2, "buildings": [{"building_id": str(MINE)}, {"building_id": str(THEIRS)}]}
+    monkeypatch.setattr(energy_routes.bld_svc, "list_buildings", fake_list)
+    as_(principal(role="admin"))
+    body = client.get("/api/energy/buildings").json()
+    assert body["count"] == 2 and len(body["buildings"]) == 2
