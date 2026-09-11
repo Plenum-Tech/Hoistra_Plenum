@@ -357,33 +357,62 @@ def test_every_card_rule_has_a_detector_name():
 
 
 class TestOverlappingTrendExports:
-    """Two BMS exports covering the same hours must not cancel each other out.
+    """Two BMS exports of one zone must not cancel each other out — at any phase.
 
-    The live scan found nothing on a zone that was plainly fighting, because the table held
-    two trend uploads for it. Interleaved, their timestamps made a five-minute cadence look
-    like a one-minute one, so every run was chopped below the thirty-minute threshold.
-    Samples are now collapsed onto a grid per zone, each slot taking the strongest signal in
-    it: if one export says heating is calling and another says cooling is, both are.
+    The live scan found nothing on a zone that was fighting for seventy minutes, because the
+    table held two exports covering different hours. Any rule that first estimates one
+    cadence for the zone and then asks whether two samples are "contiguous" breaks here: at
+    one phase the estimate is five minutes, at another it is three, and the run is chopped
+    below the threshold either way. A run is now simply consecutive samples that all say
+    both are calling, ended by the first that says otherwise — phase and cadence do not
+    enter into it.
     """
 
     @staticmethod
-    def series(n, fighting, *, offset_min=0, step=5, heat=65.0, cool=58.0):
-        return [(END - timedelta(minutes=step * i + offset_min), "L3-East", heat,
+    def series(n, fighting, *, start_ago=0, step=5, heat=65.0, cool=58.0, zone="L3-East"):
+        return [(END - timedelta(minutes=start_ago + step * i), zone, heat,
                  cool if i < fighting else 0.0) for i in range(n)]
 
     def test_one_export_fires(self):
         hit = D.detect_simultaneous_heating_cooling(self.series(60, 14), tariff=TARIFF)
         assert hit and max(r["minutes"] for r in hit["detail"]["runs"]) >= 60
 
-    def test_two_overlapping_exports_still_fire(self):
-        both = self.series(60, 14) + self.series(48, 12, offset_min=3, heat=60.0, cool=55.0)
-        hit = D.detect_simultaneous_heating_cooling(both, tariff=TARIFF)
-        assert hit, "two exports of the same fighting zone must not cancel out"
+    def test_a_second_export_at_another_phase_does_not_hide_it(self):
+        both = self.series(60, 14) + self.series(48, 12, start_ago=172)
+        hit = D.detect_simultaneous_heating_cooling(sorted(both, key=lambda x: x[0]), tariff=TARIFF)
+        assert hit, "an unrelated export must not suppress a genuine run"
         assert max(r["minutes"] for r in hit["detail"]["runs"]) >= 60
 
+    def test_exports_that_disagree_raise_nothing(self):
+        # One says the zone was fighting, the other says it was not, over the same stretch.
+        # An alarm is worth having only where the trends agree.
+        clash = [(END - timedelta(minutes=5 * i), "L3-East", 65.0, 58.0) for i in range(14)] +                 [(END - timedelta(minutes=5 * i + 2), "L3-East", 65.0, 0.0) for i in range(14)]
+        assert D.detect_simultaneous_heating_cooling(sorted(clash, key=lambda x: x[0]),
+                                                     tariff=TARIFF) is None
+
+    def test_the_same_instant_reported_twice_takes_the_stronger_signal(self):
+        pair = [(END, "L3-East", 65.0, 0.0), (END, "L3-East", 0.0, 58.0),
+                (END - timedelta(minutes=5), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=10), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=15), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=20), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=25), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=30), "L3-East", 65.0, 58.0),
+                (END - timedelta(minutes=35), "L3-East", 65.0, 0.0)]
+        hit = D.detect_simultaneous_heating_cooling(sorted(pair, key=lambda x: x[0]), tariff=TARIFF)
+        assert hit and hit["detail"]["runs"][0]["minutes"] >= 30
+
+    def test_a_sparse_trend_does_not_inherit_the_hour_between_its_rows(self):
+        # Hourly rows: two fighting rows are 60 minutes apart, and one sample stands for at
+        # most fifteen minutes — so the run is measured, not assumed.
+        hourly = [(END - timedelta(hours=i), "L3-East", 65.0, 58.0 if i < 2 else 0.0)
+                  for i in range(10)]
+        hit = D.detect_simultaneous_heating_cooling(sorted(hourly, key=lambda x: x[0]), tariff=TARIFF)
+        assert hit and hit["detail"]["runs"][0]["minutes"] == 75.0
+
     def test_a_second_export_cannot_invent_a_fight(self):
-        quiet = self.series(60, 0) + self.series(48, 0, offset_min=3)
+        quiet = self.series(60, 0) + self.series(48, 0, start_ago=172)
         assert D.detect_simultaneous_heating_cooling(quiet, tariff=TARIFF) is None
 
-    def test_the_threshold_still_holds_on_a_grid(self):
+    def test_the_threshold_still_holds(self):
         assert D.detect_simultaneous_heating_cooling(self.series(60, 4), tariff=TARIFF) is None

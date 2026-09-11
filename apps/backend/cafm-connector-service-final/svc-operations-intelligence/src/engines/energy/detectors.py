@@ -653,55 +653,51 @@ def detect_simultaneous_heating_cooling(
     the zone's plant draws; otherwise the excess is reported in hours and left unpriced,
     rather than invented.
     """
-    by_zone: dict[str, list[tuple[datetime, float, float]]] = {}
+    by_zone: dict[str, dict[datetime, tuple[float, float]]] = {}
     for t, zone, h, c in trends:
-        by_zone.setdefault(str(zone), []).append((_aware(t), float(h), float(c)))
+        at = _aware(t)
+        slot = by_zone.setdefault(str(zone), {})
+        prev = slot.get(at, (0.0, 0.0))
+        # The same instant reported twice takes the strongest signal: two exports of one
+        # zone should not cancel, and a trend that mentions only heating does not mean
+        # cooling was off.
+        slot[at] = (max(prev[0], float(h)), max(prev[1], float(c)))
+
     runs: list[dict[str, Any]] = []
-    for zone, samples in by_zone.items():
-        samples.sort(key=lambda x: x[0])
-        if len(samples) < 2:
+    for zone, slots in by_zone.items():
+        entries = sorted(slots.items())
+        if len(entries) < 2:
             continue
-        gaps = [(b[0] - a[0]).total_seconds() / 60 for a, b in zip(samples, samples[1:])]
+        gaps = [(b[0] - a[0]).total_seconds() / 60 for a, b in zip(entries, entries[1:])]
         positive = [g for g in gaps if g > 0]
-        step = median(positive) if positive else 15.0
-        # Two trend exports covering the same hours arrive interleaved, and read literally
-        # their timestamps make a five-minute cadence look like a one-minute one — which
-        # chops every run below the threshold. So the zone is put on a regular grid at its
-        # own cadence and each slot takes the STRONGEST signal seen in it: if one export
-        # says heating is calling at 14:20 and another says cooling is, both are calling.
-        slot = max(1.0, step)
-        grid: dict[int, tuple[float, float]] = {}
-        for t, h, c in samples:
-            key = int(round(t.timestamp() / (slot * 60)))
-            prev = grid.get(key, (0.0, 0.0))
-            grid[key] = (max(prev[0], h), max(prev[1], c))
-        keys = sorted(grid)
-        start_key: int | None = None
-        last_key: int | None = None
-        for key in keys + [keys[-1] + 2]:
-            h, c = grid.get(key, (0.0, 0.0))
-            both = h > FIGHT_CALL_PCT and c > FIGHT_CALL_PCT
-            contiguous = last_key is not None and key - last_key <= 1
-            if both and (start_key is None or not contiguous):
-                if start_key is not None and last_key is not None:
-                    minutes = (last_key - start_key + 1) * slot
-                    if minutes >= FIGHT_MIN_MINUTES:
-                        runs.append({"zone": zone,
-                                     "from": datetime.fromtimestamp(start_key * slot * 60, timezone.utc).isoformat(),
-                                     "to": datetime.fromtimestamp(last_key * slot * 60, timezone.utc).isoformat(),
-                                     "minutes": round(minutes, 1)})
-                start_key = last_key = key
-            elif both:
-                last_key = key
+        # What one sample stands for. Bounded: a trend export with an hour between rows says
+        # nothing about the fifty-nine minutes in between, and a run must not inherit them.
+        cadence = min(15.0, max(1.0, median(positive))) if positive else 15.0
+
+        # A run is consecutive entries that all say both are calling, ended by the first
+        # entry that says otherwise. No cadence estimate decides whether two samples belong
+        # to the same run, so two exports at different phases cannot break one — and where
+        # they disagree, the disagreement ends the run rather than raising an alarm on it.
+        start_at: datetime | None = None
+        last_at: datetime | None = None
+
+        def close() -> None:
+            if start_at is None or last_at is None:
+                return
+            minutes = (last_at - start_at).total_seconds() / 60 + cadence
+            if minutes >= FIGHT_MIN_MINUTES:
+                runs.append({"zone": zone, "from": start_at.isoformat(),
+                             "to": last_at.isoformat(), "minutes": round(minutes, 1)})
+
+        for at, (h, c) in entries:
+            if h > FIGHT_CALL_PCT and c > FIGHT_CALL_PCT:
+                if start_at is None:
+                    start_at = at
+                last_at = at
             else:
-                if start_key is not None and last_key is not None:
-                    minutes = (last_key - start_key + 1) * slot
-                    if minutes >= FIGHT_MIN_MINUTES:
-                        runs.append({"zone": zone,
-                                     "from": datetime.fromtimestamp(start_key * slot * 60, timezone.utc).isoformat(),
-                                     "to": datetime.fromtimestamp(last_key * slot * 60, timezone.utc).isoformat(),
-                                     "minutes": round(minutes, 1)})
-                start_key = last_key = None
+                close()
+                start_at = last_at = None
+        close()
     if not runs:
         return None
     longest = max(r["minutes"] for r in runs)
