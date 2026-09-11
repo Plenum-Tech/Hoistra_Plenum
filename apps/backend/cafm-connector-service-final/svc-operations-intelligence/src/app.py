@@ -17,6 +17,7 @@ from .api.routes import (
     compliance_router,
     contract_performance_router,
     energy_router,
+    ingestion_router,
     superadmin_router,
 )
 from .config import settings
@@ -145,3 +146,4 @@ app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(energy_router)
+app.include_router(ingestion_router)

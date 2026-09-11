@@ -148,6 +148,8 @@ async def documents_from_session(session_id: str) -> list[str]:
 
     Recent rows only: a session id can be reused, and re-binding a document somebody filed
     hours ago against a building they have since corrected would be worse than missing it.
+    ``within_hours`` widens that window for the one caller that legitimately arrives late:
+    releasing a document that was held for a validation decision.
     """
     sid = (session_id or "").strip()
     if not sid:
@@ -158,9 +160,9 @@ async def documents_from_session(session_id: str) -> list[str]:
                 text(
                     """SELECT id::text FROM plenum_cafm.ingestion_documents
                         WHERE original_filename LIKE :prefix
-                          AND uploaded_at > now() - interval '1 hour'"""
+                          AND uploaded_at > now() - make_interval(hours => :hrs)"""
                 ),
-                {"prefix": sid + "\\_%"},
+                {"prefix": sid + "\\_%", "hrs": max(1, int(within_hours))},
             )
         ).scalars().all()
     return [str(r) for r in rows]
@@ -507,3 +509,74 @@ async def bind_and_log(
     log.info("ingest.bound_to_building", where=where, session_id=session_id,
              building_id=building_id, candidates=len(ids), **bound)
     return dict(bound, candidates=len(ids))
+
+
+# ── what the validation gate needs to read a document with ───────────────────────────
+
+#: Tool outputs that carry fields an extractor already read, and the key they sit under.
+_EXTRACTED_KEYS = ("extracted", "extracted_fields", "fields", "certificate", "contract")
+_TEXT_KEYS = ("text", "content", "source_text", "document_text", "extracted_text")
+
+
+def extracted_fields_by_file(tool_calls: Any) -> dict[str, dict[str, Any]]:
+    """Filename → the fields an engine extracted from it during this turn.
+
+    The validation check is far stronger with these than without: a labelled
+    `building_name` from the compliance extractor is a claim about the property, where the
+    same words in the body of a contract might be the counterparty's address.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        inp = call.get("input") if isinstance(call.get("input"), dict) else {}
+        name = str(inp.get("file") or inp.get("file_name") or inp.get("filename") or "").strip()
+        body = call.get("output")
+        if not name or not isinstance(body, dict):
+            continue
+        for key in _EXTRACTED_KEYS:
+            found = body.get(key)
+            if isinstance(found, dict) and found:
+                merged = out.setdefault(Path(name).name, {})
+                for k, v in found.items():
+                    if isinstance(v, (str, int, float)) and k not in merged:
+                        merged[k] = v
+    return out
+
+
+def doc_type_for(file_name: str, tool_calls: Any) -> str | None:
+    """The kind of document an engine took this file to be, when one said so."""
+    types = _doc_types_by_file(tool_calls)
+    base = Path(file_name).name
+    for k, v in types.items():
+        if Path(k).name == base:
+            return v
+    return None
+
+
+def document_text(path: str, *, limit: int = 200_000) -> str | None:
+    """Enough of the file's text for the check to read it, when it can be read at all.
+
+    Plain text and CSV are read directly; a PDF is read with pypdf when it is installed.
+    An unreadable file is not an error — the check then works from the file name, the
+    extracted fields and the building's own evidence, and says so.
+    """
+    p = Path(path)
+    try:
+        if p.suffix.lower() in (".txt", ".csv", ".md", ".json", ".xml"):
+            return p.read_text(encoding="utf-8", errors="replace")[:limit]
+        if p.suffix.lower() == ".pdf":
+            try:
+                from pypdf import PdfReader
+            except ImportError:
+                return None
+            reader = PdfReader(str(p))
+            parts: list[str] = []
+            for page in reader.pages[:30]:
+                parts.append(page.extract_text() or "")
+                if sum(len(x) for x in parts) > limit:
+                    break
+            return "\n".join(parts)[:limit] or None
+    except Exception as exc:  # noqa: BLE001 — unreadable is a thinner check, not a failure
+        log.info("ingest.text_unreadable", file=p.name, error=str(exc)[:160])
+    return None

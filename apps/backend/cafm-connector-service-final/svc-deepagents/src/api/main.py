@@ -27,6 +27,7 @@ from ..config import settings
 from ..database import init_session_factory
 from ..limiter import limiter
 from .routes.documents import router as documents_router
+from .routes.ingestion_cases import router as ingestion_cases_router
 from .routes.health import router as health_router
 from .routes.ingest_batch import router as ingest_batch_router
 from .routes.migration import router as migration_router
@@ -197,6 +198,7 @@ app.include_router(workflow_router)
 app.include_router(ingest_batch_router)
 app.include_router(migration_router)
 app.include_router(documents_router)
+app.include_router(ingestion_cases_router)
 
 
 if __name__ == "__main__":

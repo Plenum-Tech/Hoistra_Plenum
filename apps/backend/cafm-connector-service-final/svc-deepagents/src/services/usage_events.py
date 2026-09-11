@@ -35,6 +35,9 @@ TARIFF: dict[str, float] = {"query": 1.0, "ingest": 5.0, "api_request": 0.1}
 
 OUTCOMES = frozenset({
     "accepted", "reassigned", "overridden", "rejected", "approved_on_confirmation",
+    # the validation protocol's own steps, written by operations-intelligence and by the
+    # upload route when a document is held for a check rather than bound
+    "validated", "held", "clarified",
 })
 
 

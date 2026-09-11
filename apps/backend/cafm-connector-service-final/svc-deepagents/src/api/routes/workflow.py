@@ -35,6 +35,7 @@ from ...limiter import limiter
 from ..deps import get_orchestrator
 from ...agents import activity_log
 from ...services import building_binding, usage_events
+from ...services import ingestion_validation as validation_gate
 from ...services.principal import Principal, current_principal
 from ...http_client import caller_authorization
 
@@ -112,6 +113,12 @@ class WorkflowResponse(BaseModel):
     ingested_schema_mapping_ids: list[str] = Field(default_factory=list)
     # Structured citations for chat UI (source file + confidence + quote)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    # The ingestion check, one case per uploaded file: verdict, findings, the question put
+    # to the uploader and the building suggested instead. `validation_held` names the cases
+    # that stopped this upload — those files are indexed and registered but NOT bound to a
+    # building, and will not be until somebody answers.
+    validation_cases: list[dict[str, Any]] = Field(default_factory=list)
+    validation_held: list[str] = Field(default_factory=list)
 
 
 class ResumeRequest(BaseModel):
@@ -227,6 +234,8 @@ def _to_response(result: dict[str, Any]) -> WorkflowResponse:
         ingested_migration_ids=list(migration_ids or []),
         ingested_schema_mapping_ids=list(schema_ids or []),
         citations=list(result.get("citations") or []),
+        validation_cases=list(result.get("validation_cases") or []),
+        validation_held=[str(x) for x in (result.get("validation_held") or []) if x],
     )
 
 
@@ -542,12 +551,41 @@ async def run_stateful_workflow_with_files(
                 skip_row_match=interactive_doc_match,
                 interactive_migration=interactive_migration,
             )
+            # ── the check that runs before the building owns it ──────────────────────
+            # Indexing is reversible; binding is what makes a document evidence — from that
+            # moment it counts in the building's compliance position and its reports. So
+            # each file is checked against the building that was selected first, and a file
+            # that does not clearly belong there is HELD: registered, indexed, not bound,
+            # and put to the uploader as a question. The protocol is the same for an admin.
+            validation_cases: list[dict] = []
+            if building:
+                _extracted = building_binding.extracted_fields_by_file(flow.tool_calls)
+                for _p in saved_paths:
+                    _name = Path(_p).name
+                    _case = await validation_gate.validate(
+                        building_id=building, document_name=_name,
+                        doc_type=building_binding.doc_type_for(_name, flow.tool_calls),
+                        extracted=_extracted.get(_name) or {},
+                        text=building_binding.document_text(_p),
+                        session_id=session_id,
+                        authorization=request.headers.get("authorization"),
+                    )
+                    _case.setdefault("document_name", _name)
+                    validation_cases.append(_case)
+            held = validation_gate.blocking(validation_cases)
+
             # The link the caller asked for, made by the caller. Failure here is reported
             # and does not fail the ingest: the file is indexed either way, and an unbound
             # document is recoverable while a lost upload is not.
-            bound = await building_binding.bind_and_log(
+            bound = {} if held else await building_binding.bind_and_log(
                 building, flow.tool_calls, where="inline", session_id=session_id,
                 file_paths=saved_paths)
+            if held:
+                # Registration and hashing still happen — the rows must exist for the
+                # release to find them — but no building_id is written.
+                await building_binding.bind_and_log(
+                    None, flow.tool_calls, where="inline-held", session_id=session_id,
+                    file_paths=saved_paths)
             # The receipt. One ingest event for the turn and one audit row per file, so the
             # trail can answer "who put this here" and the bill "what did it cost".
             await usage_events.record_usage(
@@ -558,7 +596,10 @@ async def run_stateful_workflow_with_files(
                         "bound": {k: v for k, v in (bound or {}).items()
                                   if isinstance(v, int)}},
             )
+            _held_names = {c.get("document_name") for c in held}
             for _p in saved_paths:
+                if Path(_p).name in _held_names:
+                    continue  # the validation service already recorded why it was held
                 await usage_events.record_ingestion_audit(
                     outcome="accepted", organization_id=principal.organization_id,
                     actor_user_id=principal.user_id, actor_role=principal.role,
@@ -660,6 +701,16 @@ async def run_stateful_workflow_with_files(
                     result["answer"] = preface
             else:
                 result["citations"] = extract_chat_citations(merged_tool_calls)
+            # A held document is the first thing the uploader needs to read, and the cases
+            # travel with the answer so the interface can run the conversation without
+            # going looking for them.
+            if held:
+                notice = validation_gate.summarise(validation_cases)
+                _prev = (result.get("answer") or "").strip()
+                result["answer"] = notice + ('\n\n---\n\n' + _prev if _prev else "")
+            if validation_cases:
+                result["validation_cases"] = validation_cases
+                result["validation_held"] = [c.get("id") for c in held]
             return _to_response(result)
         finally:
             if not use_bulk:

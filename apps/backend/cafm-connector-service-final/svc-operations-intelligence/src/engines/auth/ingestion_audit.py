@@ -26,7 +26,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 OUTCOMES = frozenset({
+    # the decisions
     "accepted", "reassigned", "overridden", "rejected", "approved_on_confirmation",
+    # the steps before one: the check ran and was clean, the check ran and held the write,
+    # the uploader answered the question it asked
+    "validated", "held", "clarified",
 })
 
 
@@ -45,6 +49,7 @@ async def record(
     explanation: str | None = None,
     approved_by: UUID | None = None,
     detail: dict[str, Any] | None = None,
+    case_id: UUID | None = None,
     commit: bool = True,
 ) -> str:
     if outcome not in OUTCOMES:
@@ -54,13 +59,14 @@ async def record(
             text("""INSERT INTO plenum_cafm.ingestion_audit_events
                         (organization_id, actor_user_id, actor_role, document_name, document_id,
                          building_id, reassigned_to_building_id, warning, explanation, outcome,
-                         approved_by, detail)
-                    VALUES (:o, :a, :r, :dn, :did, :b, :rb, :w, :x, :oc, :ap, CAST(:d AS jsonb))
+                         approved_by, detail, case_id)
+                    VALUES (:o, :a, :r, :dn, :did, :b, :rb, :w, :x, :oc, :ap, CAST(:d AS jsonb),
+                            :case)
                     RETURNING id::text"""),
             {"o": organization_id, "a": actor_user_id, "r": actor_role, "dn": document_name,
              "did": document_id, "b": building_id, "rb": reassigned_to_building_id,
              "w": warning, "x": explanation, "oc": outcome, "ap": approved_by,
-             "d": json.dumps(detail or {}, default=str)},
+             "d": json.dumps(detail or {}, default=str), "case": case_id},
         )
     ).scalar()
     if commit:
