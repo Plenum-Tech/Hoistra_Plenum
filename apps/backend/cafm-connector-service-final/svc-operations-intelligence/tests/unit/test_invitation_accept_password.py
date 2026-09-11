@@ -46,7 +46,7 @@ def open_invitation():
 def test_a_strong_password_is_not_refused():
     s = FakeSession(open_invitation())
     with pytest.raises(Passed):
-        asyncio.run(invitations.accept(s, token="t", password="Riverside-Only-2026!"))
+        asyncio.run(invitations.accept(s, token="t", password="Correct-Horse-Battery-2026!"))
 
 
 def test_a_weak_password_is_refused_without_echoing_it():
