@@ -162,6 +162,21 @@ async def main() -> None:
                         WHERE k.document_id::text = $2""",
                     drop, keep,
                 )
+                # The hash the survivor never had: it predates hashing, the rows it
+                # absorbs do not, and they are the same content by construction. Without
+                # this the document is recognised by its filename for ever.
+                await conn.execute(
+                    """UPDATE plenum_cafm.ingestion_documents k
+                          SET file_hash_sha256 = f.h
+                         FROM (SELECT max(file_hash_sha256) AS h
+                                 FROM plenum_cafm.ingestion_documents
+                                WHERE id::text = ANY($1)
+                                  AND file_hash_sha256 IS NOT NULL) f
+                        WHERE k.id::text = $2
+                          AND k.file_hash_sha256 IS NULL
+                          AND f.h IS NOT NULL""",
+                    drop, keep,
+                )
                 for table, column in columns:
                     tag = await conn.execute(
                         f"UPDATE plenum_cafm.{_ident(table)} "

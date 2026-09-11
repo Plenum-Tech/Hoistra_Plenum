@@ -210,3 +210,43 @@ def test_both_queries_take_the_building_as_a_bound_parameter():
         # No f-string placeholder survived import. Braces themselves are fine and expected:
         # the name query carries a regex, and "[0-9a-f]{8}" is a quantifier, not a hole.
         assert "{_" not in sql
+
+
+def test_the_survivor_inherits_a_hash_it_never_had():
+    """The earliest row is the one most likely to predate hashing, and it is the one kept.
+
+    Riverside Court's invoice survived six uploads with file_hash_sha256 NULL while the rows
+    it absorbed carried 51d20d41f10d — computed from the very bytes the survivor is a record
+    of. Without this it is matched by its FILENAME for ever: upload the same content under a
+    different name and nothing can prove the match, because the row that would have to be
+    compared has no hash.
+    """
+    collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
+    inherit = collapse.index("UPDATE plenum_cafm.ingestion_documents k")
+    assert "SET file_hash_sha256 = f.h" in collapse
+    # Before the absorbed rows are deleted, or there is nothing left to inherit from.
+    assert inherit < collapse.index("DELETE FROM plenum_cafm.documents")
+
+
+def test_an_existing_hash_on_the_survivor_is_not_replaced():
+    # It was computed from these same bytes: replacing it can only be a no-op or a mistake.
+    collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
+    inherit = collapse[collapse.index("UPDATE plenum_cafm.ingestion_documents k"):]
+    inherit = inherit[: inherit.index('"""')]
+    assert "k.file_hash_sha256 IS NULL" in inherit
+
+
+def test_nothing_is_written_when_no_absorbed_row_has_a_hash():
+    # Every row in the group predates hashing: there is no fact to carry over, and the
+    # survivor must not be stamped with NULL as though one had been found.
+    collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
+    inherit = collapse[collapse.index("UPDATE plenum_cafm.ingestion_documents k"):]
+    inherit = inherit[: inherit.index('"""')]
+    assert "f.h IS NOT NULL" in inherit
+    assert "file_hash_sha256 IS NOT NULL" in inherit  # the subquery ignores unhashed rows
+
+
+def test_each_collapse_moves_the_document_toward_being_known_by_content():
+    # The point of inheriting: once the survivor carries a hash, the content pass can
+    # recognise it, and the filename fallback is no longer the only thing holding it.
+    assert "i.file_hash_sha256 IS NOT NULL" in bb._GROUP_BY_CONTENT

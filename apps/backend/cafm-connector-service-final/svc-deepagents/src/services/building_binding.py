@@ -401,6 +401,24 @@ async def collapse_duplicate_documents(building_id: str) -> dict[str, Any]:
                     ),
                     {"ids": drop, "keep": keep},
                 )
+                # The hash the survivor never had. It predates hashing and the rows it
+                # absorbs do not, and they are the same content by construction — so the
+                # document stops depending on its filename to be recognised next time.
+                # Only where it has none: an existing value came from these same bytes.
+                await session.execute(
+                    text(
+                        """UPDATE plenum_cafm.ingestion_documents k
+                              SET file_hash_sha256 = f.h
+                             FROM (SELECT max(file_hash_sha256) AS h
+                                     FROM plenum_cafm.ingestion_documents
+                                    WHERE id::text = ANY(:ids)
+                                      AND file_hash_sha256 IS NOT NULL) f
+                            WHERE k.id::text = :keep
+                              AND k.file_hash_sha256 IS NULL
+                              AND f.h IS NOT NULL"""
+                    ),
+                    {"ids": drop, "keep": keep},
+                )
                 for table, column in columns:
                     res = await session.execute(
                         text(
