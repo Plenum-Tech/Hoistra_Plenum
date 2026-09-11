@@ -26,7 +26,7 @@ from ...engines.auth import roles as role_engine
 from ...engines.auth import tokens as token_engine
 from ...engines.auth import usage as usage_engine
 from ...engines.energy.buildings import country_code_for
-from ...shared.approvals import write_audit
+from ...shared.approvals import PLATFORM_FEATURE, write_audit
 from .auth import require_superadmin
 
 router = APIRouter(prefix="/api/superadmin", tags=["superadmin"])
@@ -79,10 +79,13 @@ async def create_company(
                     "reason": "duplicate_name", "organization_id": dup},
         )
     org_id = (await session.execute(
+        # organizations.id has no default in the live schema (unlike users, invitations
+        # and the ledgers), so the key is generated here rather than left to the database.
         text("""INSERT INTO plenum_cafm.organizations
-                    (name, industry, country, country_code, timezone, status, lifecycle,
+                    (id, name, industry, country, country_code, timezone, status, lifecycle,
                      admin_email, created_by, created_at, updated_at)
-                VALUES (:n, :ind, :c, :cc, :tz, 'active', 'created', :ae, :by, now(), now())
+                VALUES (gen_random_uuid(), :n, :ind, :c, :cc, :tz, 'active', 'created',
+                        :ae, :by, now(), now())
                 RETURNING id"""),
         {"n": body.name.strip(), "ind": body.industry, "c": body.country_code, "cc": code,
          "tz": body.timezone, "ae": str(body.admin_email) if body.admin_email else None,
@@ -90,7 +93,7 @@ async def create_company(
     )).scalar()
     await write_audit(
         session, actor=str(principal.email), action_type="superadmin.company.created",
-        source_feature="platform", organization_id=org_id,
+        source_feature=PLATFORM_FEATURE, organization_id=org_id,
         input_payload={"name": body.name, "country_code": code},
         output_payload={"organization_id": str(org_id)},
     )
@@ -180,7 +183,7 @@ async def invite_company_admin(
     )
     await write_audit(
         session, actor=str(principal.email), action_type="superadmin.company.admin_invited",
-        source_feature="platform", organization_id=organization_id,
+        source_feature=PLATFORM_FEATURE, organization_id=organization_id,
         input_payload={"email": str(body.email)}, output_payload={"user_id": out["user_id"]},
     )
     await session.commit()

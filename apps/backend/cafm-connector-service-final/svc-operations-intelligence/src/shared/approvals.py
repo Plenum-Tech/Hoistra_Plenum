@@ -130,6 +130,12 @@ def _hash_payload(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+#: ops_audit_log.source_feature is CHAR(1): A/B/C are the three product features. Platform
+#: administration (companies, invitations, allocation) is none of them, so it gets its own
+#: letter. Anything longer than one character is rejected by the database, not stored.
+PLATFORM_FEATURE = "P"
+
+
 async def write_audit(
     session: AsyncSession,
     *,

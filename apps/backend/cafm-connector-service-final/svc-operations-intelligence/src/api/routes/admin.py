@@ -27,7 +27,7 @@ from ...engines.auth import ingestion_audit
 from ...engines.auth import invitations as invite_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import usage as usage_engine
-from ...shared.approvals import write_audit
+from ...shared.approvals import PLATFORM_FEATURE, write_audit
 from .auth import current_principal, require_admin, token_engine
 
 router = APIRouter(prefix="/api/admin", tags=["company-admin"])
@@ -188,7 +188,7 @@ async def invite_user(
                             detail={"ok": False, "error": exc.message, "reason": exc.reason})
     await write_audit(
         session, actor=str(scope.user_id), action_type="admin.user.invited",
-        source_feature="platform", organization_id=scope.organization_id,
+        source_feature=PLATFORM_FEATURE, organization_id=scope.organization_id,
         input_payload={"email": str(body.email), "buildings": ids, "can_ingest": body.can_ingest},
         output_payload={"user_id": out["user_id"]},
     )
@@ -254,7 +254,7 @@ async def patch_user(
                      WHERE user_id = :u AND revoked_at IS NULL"""), {"u": user_id})
     await write_audit(
         session, actor=str(scope.user_id), action_type="admin.user.updated",
-        source_feature="platform", organization_id=scope.organization_id,
+        source_feature=PLATFORM_FEATURE, organization_id=scope.organization_id,
         input_payload=changed, output_payload={"user_id": str(user_id)},
     )
     await session.commit()
