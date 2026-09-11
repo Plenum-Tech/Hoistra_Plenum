@@ -69,8 +69,15 @@ from ..schemas.compliance import (
 )
 
 from ...engines import ingest_gate
+from ...engines.auth import access
+from .auth import scope
 
-router = APIRouter(prefix="/api/compliance", tags=["compliance"])
+router = APIRouter(prefix="/api/compliance", tags=["compliance"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 class ValidateDocumentRequest(BaseModel):
@@ -244,7 +251,10 @@ async def list_certificates(
     ),
     limit: int = Query(200, le=1000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    # The company is the caller's, not the query string's.
+    organization_id = s.organization_id
     rows = await cert_svc.list_certificates(
         session,
         cert_scope=cert_scope,
@@ -264,6 +274,12 @@ async def list_certificates(
         include_archived=include_archived,
         limit=limit,
     )
+    if s.restricted:
+        # A plain user sees certificates on their buildings, plus vendor accreditations
+        # (which name no property) — never another building's certificates.
+        rows = [r for r in rows
+                if s.allows_building(r.get("building_id"))
+                or (not r.get("building_id") and str(r.get("cert_scope") or "").lower() == "vendor")]
     return {
         "ok": True,
         "count": len(rows),

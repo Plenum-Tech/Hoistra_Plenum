@@ -27,6 +27,8 @@ from ...engines.energy import occupancy as occ_svc
 from ...engines.energy import reports as report_svc
 from ...models.energy import EnergyMonthlyReport
 from ...shared import approvals as approvals_svc
+from ...engines.auth import access
+from .auth import scope
 from ..schemas.energy import (
     AnomalyActionRequest,
     AnomalyScanRequest,
@@ -43,7 +45,12 @@ from ..schemas.energy import (
     ReadingsIngestRequest,
 )
 
-router = APIRouter(prefix="/api/energy", tags=["energy-intelligence"])
+router = APIRouter(prefix="/api/energy", tags=["energy-intelligence"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 @router.post("/meters")
@@ -135,7 +142,9 @@ async def list_meter_readings(
 async def building_meter_summary(
     building_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_building(s, building_id, action="read")
     """Every meter on one building, readings counted and totalled. Read-only.
 
     Answers "how many half-hourly readings does this building have, on which MPAN, and how
@@ -176,14 +185,21 @@ async def building_profile(body: BuildingProfileRequest, session: AsyncSession =
 
 @router.get("/buildings")
 async def list_buildings(
-    organization_id: UUID | None = None,
     limit: int = Query(500, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Building table for the dashboard — every site with its energy profile, latest EUI,
     the benchmark it is read against (and where that benchmark came from) and a record
-    completeness figure. See engines/energy/buildings.py."""
-    return await bld_svc.list_buildings(session, organization_id=organization_id, limit=limit)
+    completeness figure. See engines/energy/buildings.py.
+
+    The caller's company, and for a plain user only their allocated buildings. The company
+    used to be whatever the client sent."""
+    out = await bld_svc.list_buildings(session, organization_id=s.organization_id, limit=limit)
+    if s.restricted and isinstance(out, dict) and isinstance(out.get("rows"), list):
+        rows = [r for r in out["rows"] if s.allows_building(r.get("building_id"))]
+        out = dict(out, rows=rows, count=len(rows), scoped_to_buildings=len(rows))
+    return out
 
 
 @router.post("/buildings/backfill-from-sites")
@@ -303,7 +319,9 @@ async def patch_building(
     body: PatchBuildingRequest,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_building(s, building_id, action="change")
     """Change one building. Returns it in the same shape GET /buildings uses.
 
     Changing the country or region re-resolves the building's location, because the location
@@ -357,7 +375,9 @@ async def delete_building(
     actor: str = Query("hoistra-ui"),
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_building(s, building_id, action="delete")
     """Remove a building. Reports what it would touch unless confirm=true.
 
     Attached records are **detached, never deleted**. A certificate, an invoice or a work
@@ -476,7 +496,9 @@ async def building_graph(
     building_id: str,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_building(s, building_id, action="read")
     """Everything hanging off one building, nested as the graph is written.
 
         buildings
@@ -507,7 +529,9 @@ async def building_cost_drivers(
     building_id: str,
     limit: int = Query(25, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_building(s, building_id, action="read")
     """Which plant is driving spend on this building, ranked by how far over contract.
 
     Ranked on the gap between billed and contracted rather than on billed alone — the

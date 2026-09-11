@@ -455,7 +455,7 @@ require_superadmin = require_role(role_engine.SUPERADMIN)
 
 # The building-scope dependencies every other router uses. Bound here because access.py
 # cannot import current_principal without a circular import.
-scope, ingest_scope = access.bind(current_principal)
+scope, ingest_scope = access.bind(current_principal, get_session)
 
 
 class AcceptInvitation(BaseModel):

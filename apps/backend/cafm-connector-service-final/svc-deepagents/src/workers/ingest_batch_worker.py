@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import UUID
 from pathlib import Path
 
 import structlog
@@ -15,7 +16,8 @@ from ..agents.single_door_flow import (
 )
 from ..config import settings
 from ..services import ingest_batch_service as batch_svc
-from ..services import building_binding
+from ..http_client import caller_authorization
+from ..services import building_binding, usage_events
 
 log = structlog.get_logger(__name__)
 
@@ -23,8 +25,25 @@ _background_tasks: set[asyncio.Task] = set()
 _cancelled_batches: set[str] = set()
 
 
-def schedule_ingest_batch(batch_id: str, building_id: str | None = None) -> None:
-    task = asyncio.create_task(_run_batch(batch_id, building_id),
+def _as_uuid(value) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (ValueError, TypeError):
+        return None
+
+
+def schedule_ingest_batch(
+    batch_id: str, building_id: str | None = None, *,
+    authorization: str | None = None, actor: dict | None = None,
+) -> None:
+    """Start the batch in the background, carrying the caller with it.
+
+    ``authorization`` is the user's own bearer token. The worker runs outside any request,
+    so without this every call it makes to operations-intelligence would arrive with no
+    caller and be refused — or, worse, be made with a credential that sees everything. The
+    user who pressed upload is who this batch acts as. ``actor`` is what the receipts name.
+    """
+    task = asyncio.create_task(_run_batch(batch_id, building_id, authorization, actor or {}),
                                name=f"ingest-batch-{batch_id[:8]}")
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -34,7 +53,14 @@ def mark_batch_cancelled(batch_id: str) -> None:
     _cancelled_batches.add(batch_id)
 
 
-async def _run_batch(batch_id: str, building_id: str | None = None) -> None:
+async def _run_batch(
+    batch_id: str, building_id: str | None = None,
+    authorization: str | None = None, actor: dict | None = None,
+) -> None:
+    # Set inside the task, before anything else, so every sub-task copies it — the same
+    # reason set_session_context() below sits where it does.
+    caller_authorization.set(authorization)
+    actor = actor or {}
     batch = await batch_svc.get_ingest_batch(batch_id)
     if not batch:
         log.warning("ingest_batch.worker.missing", batch_id=batch_id)
@@ -111,6 +137,22 @@ async def _run_batch(batch_id: str, building_id: str | None = None) -> None:
                         building_id, result.get("tool_calls"),
                         where="batch", session_id=session_id,
                         file_paths=[str(file_path)])
+                # The receipt for this file, whichever way it went: who, what, where, outcome.
+                _uid = actor.get("user_id")
+                await usage_events.record_ingestion_audit(
+                    outcome="accepted" if ok else "rejected",
+                    organization_id=_as_uuid(org), actor_user_id=_as_uuid(_uid),
+                    actor_role=actor.get("role"), document_name=Path(file_path).name,
+                    building_id=_as_uuid(building_id),
+                    warning=None if ok else str(result.get("error") or "")[:500] or None,
+                    detail={"session_id": session_id, "batch_id": batch_id, "where": "batch"},
+                )
+                if ok:
+                    await usage_events.record_usage(
+                        kind="ingest", organization_id=_as_uuid(org), user_id=_as_uuid(_uid),
+                        building_id=_as_uuid(building_id),
+                        detail={"session_id": session_id, "batch_id": batch_id, "file": Path(file_path).name},
+                    )
                 await batch_svc.update_batch_item(
                     batch_id,
                     index,

@@ -10,9 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...shared import approvals as approvals_svc
+from .auth import scope
 from ..schemas.compliance import QueueDecisionRequest
 
-router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+router = APIRouter(prefix="/api/approvals", tags=["approvals"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 class SendEmailDraftRequest(BaseModel):

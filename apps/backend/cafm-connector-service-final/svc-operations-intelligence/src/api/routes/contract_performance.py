@@ -14,6 +14,8 @@ from ...engines.contract_performance import invoice as invoice_svc
 from ...engines.contract_performance import parameters as params_svc
 from ...engines.contract_performance import scoring as score_svc
 from ...shared import approvals as approvals_svc
+from ...engines.auth import access
+from .auth import scope
 from ..schemas.contract_performance import (
     AssetCriticalityApproveRequest,
     AssetCriticalityRequest,
@@ -35,7 +37,12 @@ from ..schemas.contract_performance import (
     WorkOrderConflictResolveRequest,
 )
 
-router = APIRouter(prefix="/api/contract-performance", tags=["contract-performance"])
+router = APIRouter(prefix="/api/contract-performance", tags=["contract-performance"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 # ── B1 Contract parameters ──────────────────────────────────────────
@@ -100,19 +107,23 @@ async def ingest_contract(
 
 @router.get("/contracts")
 async def list_contracts(
-    organization_id: UUID | None = None,
     vendor_id: UUID | None = None,
     status: str | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     rows = await params_svc.list_contract_parameters(
         session,
-        organization_id=organization_id,
+        organization_id=s.organization_id,
         vendor_id=vendor_id,
         status=status,
         limit=limit,
     )
+    if s.restricted:
+        # Each row carries the building it covers (resolved through its document). A user
+        # sees only contracts on their buildings; an unplaced contract is not theirs to see.
+        rows = [r for r in rows if s.allows_building(r.get("building_id"))]
     return {"ok": True, "count": len(rows), "parameters": rows}
 
 
@@ -397,7 +408,6 @@ async def extract_verify_invoice(
 
 @router.get("/invoices")
 async def list_invoices(
-    organization_id: UUID | None = None,
     building_id: UUID | None = Query(
         None, description="Only invoices filed against this building."
     ),
@@ -408,6 +418,7 @@ async def list_invoices(
     status: str | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Verified invoices with their building and vendor. Read-only.
 
@@ -415,15 +426,19 @@ async def list_invoices(
     nothing that lists, so a question about a building's invoices could only be answered
     "none found" however many it had.
     """
+    if building_id is not None:
+        access.assert_building(s, building_id, action="read")
     rows = await invoice_svc.list_invoices(
         session,
-        organization_id=organization_id,
+        organization_id=s.organization_id,
         building_id=building_id,
         vendor_id=vendor_id,
         invoice_ref=invoice_ref,
         status=status,
         limit=limit,
     )
+    if s.restricted:
+        rows = [r for r in rows if s.allows_building(r.get("building_id"))]
     return {"ok": True, "count": len(rows), "invoices": rows}
 
 

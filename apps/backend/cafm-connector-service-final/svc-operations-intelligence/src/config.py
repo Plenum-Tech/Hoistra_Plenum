@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     )
     # Where invitation links point: the frontend's public origin. Blank means links are
     # emitted relative and the client resolves them against itself.
+    # The kill switch, not the default. Every domain route requires a signed-in caller and
+    # scopes to their company and buildings. Set false ONLY to recover a live deployment
+    # where a client has not yet learned to send a token; every request then logs that the
+    # boundary is off, so it cannot quietly stay that way.
+    auth_enforce_scope: bool = Field(
+        True, validation_alias=AliasChoices("AUTH_ENFORCE_SCOPE", "auth_enforce_scope"),
+    )
     public_app_url: str = Field(
         "", validation_alias=AliasChoices("PUBLIC_APP_URL", "public_app_url"),
     )

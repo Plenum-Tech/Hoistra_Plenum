@@ -33,6 +33,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from contextvars import ContextVar
+
 import httpx
 import structlog
 from tenacity import (
@@ -112,6 +114,15 @@ def _is_transient(exc: BaseException) -> bool:
 # Public request function
 # ──────────────────────────────────────────────────────────────────────────────
 
+#: The signed-in caller's Authorization header, set by the workflow endpoint for the life of
+#: one request and forwarded on every call this service makes on that caller's behalf.
+#: operations-intelligence now requires a caller on every route and scopes what it returns
+#: to that caller's company and buildings — so a request made without this would be refused,
+#: and one made with a service credential would see everything, which is worse. The user's
+#: own token is the only thing that carries the right answer to "what may this call see".
+caller_authorization: ContextVar[str | None] = ContextVar("caller_authorization", default=None)
+
+
 async def request(
     method: str,
     base_url: str,
@@ -168,6 +179,9 @@ async def request(
                 )
             try:
                 async with httpx.AsyncClient(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+                    _auth = caller_authorization.get()
+                    if _auth and 'Authorization' not in {k.title(): v for k, v in (kwargs.get('headers') or {}).items()}:
+                        kwargs['headers'] = {**(kwargs.get('headers') or {}), 'Authorization': _auth}
                     resp = await client.request(method, path, **kwargs)
                     resp.raise_for_status()
                     cb.record_success()

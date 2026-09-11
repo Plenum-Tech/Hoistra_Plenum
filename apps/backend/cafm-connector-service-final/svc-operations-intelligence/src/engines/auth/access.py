@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Query, status
 
 from . import roles as role_engine
 from . import tokens as token_engine
@@ -177,13 +177,38 @@ async def scope(
     raise RuntimeError("access.scope must be bound with access.bind(current_principal)")
 
 
-def bind(current_principal_dep):
+def bind(current_principal_dep, get_session_dep=None):
     """Produce the real ``scope`` dependency given the router's current_principal.
 
     Done this way because current_principal lives in api/routes/auth.py, which imports this
     module; a direct import here would be circular. The routes package calls bind() once and
     exports the result.
+
+    The enforcement switch is read ONCE, here, and decides which dependency is returned.
+    Settings are fixed for the life of the process, and choosing at bind time keeps the
+    signed-in path a plain ``Depends(current_principal)`` — so FastAPI's dependency
+    overrides still reach it in tests, and a route cannot be accidentally half-enforced.
     """
+    from ...config import settings  # local: config imports nothing from here
+
+    if not settings.auth_enforce_scope:
+        import structlog
+        structlog.get_logger(__name__).warning(
+            "access.scope_enforcement_disabled",
+            note="every domain route is open and unscoped; AUTH_ENFORCE_SCOPE=false",
+        )
+
+        async def _unscoped(
+            organization_id: UUID | None = Query(None),
+        ) -> Scope:
+            # The boundary is switched off. Said on every request, because a switch meant
+            # for one bad afternoon becomes permanent when it is silent.
+            structlog.get_logger(__name__).warning("access.scope_enforcement_disabled")
+            return Scope(user_id=UUID(int=0), role=role_engine.SUPERADMIN,
+                         organization_id=organization_id, building_ids=None, can_ingest=True)
+
+        return _unscoped, _unscoped
+
     async def _scope(
         organization_id: UUID | None = Query(
             None,
