@@ -791,6 +791,51 @@ async def _enrich_certificate_rows(
             or {}
         )
 
+    # The building each certificate is filed against, read from the FK that holds it.
+    # Resolution below went site_id -> sites, else the building_name text column captured at
+    # ingestion. building_id was never consulted, and it is the only one of the three set on
+    # every linked row — so a certificate filed correctly against a building answered "no
+    # such building" to every name filter, which is how the agents ask.
+    # Parsed defensively. This list is built on every certificate listing, including the
+    # console's first paint, and one unparseable value here would cost every other row its
+    # page — a bad id in one certificate is not a reason to fail the whole register.
+    building_ids: list[UUID] = []
+    for r in rows:
+        raw_bid = r.get("building_id")
+        if not raw_bid:
+            continue
+        try:
+            building_ids.append(UUID(str(raw_bid)))
+        except (ValueError, AttributeError, TypeError):
+            log.warning("certificates.building_id_unparseable", value=str(raw_bid)[:60])
+    buildings: dict[str, dict[str, str | None]] = {}
+    if building_ids:
+
+        async def _load_buildings():
+            stmt = text(
+                """
+                SELECT building_id, name, building_code
+                FROM plenum_cafm.buildings
+                WHERE building_id IN :ids
+                """
+            ).bindparams(bindparam("ids", expanding=True))
+            brows = (await session.execute(stmt, {"ids": building_ids})).mappings().all()
+            return {
+                str(b["building_id"]): {"name": b["name"], "code": b["building_code"]}
+                for b in brows
+                if b.get("name")
+            }
+
+        buildings = (
+            await _safe_exec(
+                session,
+                _load_buildings,
+                label="certificates.building_enrich_failed",
+                default={},
+            )
+            or {}
+        )
+
     site_cache: dict[str, dict[str, str | None]] = {}
     for r in rows:
         sid = r.get("site_id")
@@ -847,6 +892,16 @@ async def _enrich_certificate_rows(
         else:
             r["asset_code"] = None
             r["asset_reference"] = None
+
+        # The FK first. A stored name that disagrees with it still wins, because a name
+        # read off the document is what the certificate itself says and correcting that
+        # silently would hide a mis-filing rather than show it.
+        bld = buildings.get(str(r.get("building_id") or "")) or {}
+        if bld.get("name"):
+            r["building_name"] = r.get("building_name") or bld["name"]
+            r["building_reference"] = (
+                r.get("building_reference") or bld.get("code") or bld["name"]
+            )
 
         if r.get("site_id") and r["site_id"] in site_cache:
             site = site_cache[r["site_id"]]
