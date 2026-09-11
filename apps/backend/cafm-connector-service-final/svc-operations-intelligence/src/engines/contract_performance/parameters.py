@@ -678,6 +678,45 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001
             for d in out:
                 d.setdefault("document_name", None)
+
+        # Which building this contract covers. contract_sla_parameters has no building
+        # column; the link runs through the document it was extracted from, which is the
+        # join plenum_cafm.contracts makes and the building graph draws. Without it every
+        # row reaching a caller was silent about the building, and a question about one
+        # could only be answered "no contract is linked to it".
+        try:
+            from sqlalchemy import text as _text
+
+            res3 = await session.execute(
+                _text(
+                    "SELECT d.document_id::text AS did, d.building_id::text AS bid, "
+                    "       b.name AS building_name, b.building_code "
+                    "  FROM plenum_cafm.documents d "
+                    "  JOIN plenum_cafm.buildings b ON b.building_id = d.building_id "
+                    " WHERE d.document_id::text = ANY(:ids)"
+                ),
+                {"ids": doc_ids},
+            )
+            placed = {
+                row.did: {
+                    "building_id": row.bid,
+                    "building_name": row.building_name,
+                    "building_reference": row.building_code,
+                }
+                for row in res3
+            }
+            for d in out:
+                d.update(
+                    placed.get(str(d.get("document_id") or ""))
+                    or {"building_id": None, "building_name": None,
+                        "building_reference": None}
+                )
+        except Exception:  # noqa: BLE001 — a contract that cannot be placed is still a
+            # contract; losing the listing over it would be worse.
+            for d in out:
+                d.setdefault("building_id", None)
+                d.setdefault("building_name", None)
+                d.setdefault("building_reference", None)
     return out
 
 

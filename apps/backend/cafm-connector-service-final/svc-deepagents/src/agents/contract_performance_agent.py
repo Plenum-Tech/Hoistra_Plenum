@@ -293,6 +293,12 @@ async def list_contract_parameters(
 
     Each row carries `vendor_name` — ALWAYS refer to vendors by name in answers
     (fall back to the contract_ref); never present a raw vendor_id UUID to the user.
+
+    Each row also carries `building_name` and `building_reference` — the property the
+    contract covers, resolved through the document it was extracted from. Use these to
+    answer "what contracts are on <building>". A null building_name means that contract
+    could not be placed against a property, NOT that it belongs to whichever building was
+    asked about: say it is unplaced rather than attributing it.
     """
     try:
         params: dict[str, Any] = {}
