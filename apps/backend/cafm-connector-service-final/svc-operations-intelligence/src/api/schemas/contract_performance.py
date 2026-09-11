@@ -149,7 +149,11 @@ class InvoiceExtractVerifyRequest(BaseModel):
     source_text: str | None = None
     lines: list[dict[str, Any]] = Field(default_factory=list)
     work_orders: list[dict[str, Any]] = Field(default_factory=list)
+    #: An authoritative reference — someone typed it. Wins over the document.
     invoice_ref: str | None = None
+    #: A label to fall back on when the document prints no number: the uploaded filename.
+    #: Never used to identify the invoice, so it can never merge two of them.
+    invoice_ref_fallback: str | None = None
     vendor_id: UUID | None = None
     organization_id: UUID | None = None
     document_id: UUID | None = None

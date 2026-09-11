@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -346,6 +346,7 @@ async def verify_invoice(
     invoice_ref: str | None,
     lines: list[dict[str, Any]],
     work_orders: list[dict[str, Any]],
+    invoice_ref_identifies: bool = False,
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     document_id: UUID | None = None,
@@ -448,20 +449,65 @@ async def verify_invoice(
     # the caller has none rather than leaving the row permanently unplaceable.
     document_id = document_id or uuid4()
 
-    row = InvoiceVerification(
-        id=uuid4(),
-        organization_id=organization_id,
-        vendor_id=vendor_id,
-        invoice_ref=invoice_ref,
-        document_id=document_id,
-        status="completed",
-        matched_count=matched_count,
-        flagged_count=flagged_count,
-        matched_flagged_ratio=Decimal(str(ratio)) if ratio is not None else None,
-        lines_json=results,
-        insights_json=insights,
-    )
-    session.add(row)
+    # The same invoice, uploaded again, is one invoice. Two uploads of one PDF produced two
+    # verifications and two rows in the invoices view — same vendor, same total, same lines
+    # — because the only key was a filename that differed between them. An invoice number
+    # read off the document is the key a supplier, a PM and an accounts system all use.
+    #
+    # Only a ref the document printed counts. Two files that happen to share a name are not
+    # evidence of the same invoice, and merging those would lose one.
+    row = None
+    if invoice_ref_identifies and invoice_ref:
+        existing = (
+            await session.execute(
+                select(InvoiceVerification)
+                .where(
+                    InvoiceVerification.invoice_ref == invoice_ref,
+                    InvoiceVerification.organization_id == organization_id,
+                )
+                .order_by(InvoiceVerification.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            # Re-verified in place. The newer reading replaces the older one: it was made
+            # against whatever the work orders say today, which is the more current answer.
+            log.info("invoice.reverified_existing", invoice_ref=invoice_ref,
+                     verification_id=str(existing.id))
+            existing.vendor_id = vendor_id or existing.vendor_id
+            existing.document_id = document_id or existing.document_id
+            existing.status = "completed"
+            existing.matched_count = matched_count
+            existing.flagged_count = flagged_count
+            existing.matched_flagged_ratio = (
+                Decimal(str(ratio)) if ratio is not None else None
+            )
+            existing.lines_json = results
+            existing.insights_json = insights
+            row = existing
+            # The lines are rewritten from this reading, so the old ones go rather than
+            # doubling the invoice's value in the view that sums them.
+            await session.execute(
+                delete(InvoiceLine).where(
+                    InvoiceLine.invoice_verification_id == existing.id
+                )
+            )
+
+    if row is None:
+        row = InvoiceVerification(
+            id=uuid4(),
+            organization_id=organization_id,
+            vendor_id=vendor_id,
+            invoice_ref=invoice_ref,
+            document_id=document_id,
+            status="completed",
+            matched_count=matched_count,
+            flagged_count=flagged_count,
+            matched_flagged_ratio=Decimal(str(ratio)) if ratio is not None else None,
+            lines_json=results,
+            insights_json=insights,
+        )
+        session.add(row)
     await session.flush()
     await _persist_invoice_lines(
         session,

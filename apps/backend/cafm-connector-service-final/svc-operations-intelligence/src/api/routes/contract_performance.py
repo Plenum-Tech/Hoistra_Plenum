@@ -385,6 +385,7 @@ async def extract_verify_invoice(
         lines=body.lines or None,
         work_orders=body.work_orders or None,
         invoice_ref=body.invoice_ref,
+        invoice_ref_fallback=body.invoice_ref_fallback,
         vendor_id=body.vendor_id,
         organization_id=body.organization_id,
         document_id=body.document_id,
