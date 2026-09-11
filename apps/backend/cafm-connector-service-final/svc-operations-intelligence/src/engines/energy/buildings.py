@@ -19,6 +19,7 @@ how the meter reading arrives, and whether attribution is measured or inferred.
 from __future__ import annotations
 
 import json
+import re
 from statistics import median
 from typing import Any
 from uuid import UUID
@@ -97,14 +98,38 @@ _FALLBACK_PACK = {
 }
 _ROLLING_MIN_COMPARABLES = 2
 
+#: Names that resolve to a country code. Codes and country names, then sub-national names
+#: — a region, emirate or home nation — because the columns this reads are filled by hand
+#: and by import, and a person writing "Dubai" under country means the UAE.
+#:
+#: One rule for adding to the second group: the name must be able to mean exactly ONE
+#: country. That is why the seven emirates are here and "Central Region" is not — Singapore
+#: has one, and so do Ghana, Uganda and Malawi. The bare compass regions are absent for the
+#: same reason: "South West" names a part of a dozen countries, and the two UK sites holding
+#: it are not evidence about the phrase. Unmapped names return None, which is the truth.
 _COUNTRY_ALIASES = {
-    "UK": "UK", "GB": "UK", "GBR": "UK", "UNITED KINGDOM": "UK", "ENGLAND": "UK",
-    "SCOTLAND": "UK", "WALES": "UK", "NORTHERN IRELAND": "UK", "GREAT BRITAIN": "UK",
+    # United Kingdom
+    "UK": "UK", "GB": "UK", "GBR": "UK", "UNITED KINGDOM": "UK", "GREAT BRITAIN": "UK",
+    "ENGLAND": "UK", "SCOTLAND": "UK", "WALES": "UK", "CYMRU": "UK",
+    "NORTHERN IRELAND": "UK", "NORTHERN IRL.": "UK", "NORTHERN IRL": "UK", "NI": "UK",
+    "GREATER LONDON": "UK", "LONDON": "UK", "GREATER MANCHESTER": "UK",
+    "WEST MIDLANDS": "UK", "YORKSHIRE": "UK", "MERSEYSIDE": "UK",
+    "WEST YORKSHIRE": "UK", "SOUTH YORKSHIRE": "UK", "TYNE AND WEAR": "UK",
+    # United States
     "US": "US", "USA": "US", "UNITED STATES": "US", "UNITED STATES OF AMERICA": "US",
-    "AE": "AE", "UAE": "AE", "ARE": "AE", "UNITED ARAB EMIRATES": "AE", "DUBAI": "AE",
-    "ABU DHABI": "AE",
+    "NEW YORK": "US",
+    # United Arab Emirates — all seven emirates, each unambiguous.
+    "AE": "AE", "UAE": "AE", "ARE": "AE", "UNITED ARAB EMIRATES": "AE",
+    "ABU DHABI": "AE", "AJMAN": "AE", "DUBAI": "AE", "FUJAIRAH": "AE",
+    "RAS AL KHAIMAH": "AE", "RAS AL-KHAIMAH": "AE", "SHARJAH": "AE",
+    "UMM AL QUWAIN": "AE", "UMM AL-QUWAIN": "AE",
+    # Singapore
     "SG": "SG", "SGP": "SG", "SINGAPORE": "SG",
 }
+
+#: A bare ISO-style code, which is accepted as itself so a country this table has never
+#: heard of still works when it arrives already coded.
+_ISO_LIKE = re.compile(r"^[A-Z]{2,3}$")
 
 # Fields that make a building row usable on the dashboard. Completeness is the share of
 # these present — a data-quality figure, not a compliance or performance score.
@@ -122,10 +147,23 @@ COMPLETENESS_FIELDS = (
 
 
 def country_code_for(raw: Any) -> str | None:
+    """The country code a name resolves to, or None when it resolves to nothing.
+
+    None is a real answer and the important one. The previous version ended `or s`, which
+    made the `else None` branch unreachable and handed back whatever it was given — so any
+    place name became a country code simply by being passed in, and no caller could tell a
+    resolved code from an unmapped string. `region` now carries Sharjah on 96 production
+    sites; deriving country from it would have written SHARJAH as the code.
+    """
     s = str(raw or "").strip().upper()
     if not s:
         return None
-    return _COUNTRY_ALIASES.get(s, s if len(s) <= 3 else None) or s
+    code = _COUNTRY_ALIASES.get(s)
+    if code:
+        return code
+    # Already a code: accepted as itself, so a country not in the table still works.
+    # Anything else is a name nobody has mapped, and saying so is the whole point.
+    return s if _ISO_LIKE.match(s) else None
 
 
 def tm46_type_for(site_type: Any) -> str | None:
