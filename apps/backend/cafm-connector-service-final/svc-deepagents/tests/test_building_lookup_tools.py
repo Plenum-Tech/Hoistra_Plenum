@@ -193,14 +193,38 @@ def test_meter_readings_does_not_answer_for_an_unresolved_building(monkeypatch):
     assert "meters" not in out
 
 
-@pytest.mark.parametrize(
-    "tool_name",
-    ["list_building_meter_readings", "list_building_documents"],
-)
-def test_the_tools_are_registered_on_the_agent(tool_name: str):
+def test_the_meter_tool_is_on_the_energy_engine():
     # A tool the agent cannot see is a tool that does not exist, and the symptom is the
     # same "no data" answer this was all written to fix.
-    assert tool_name in {t.name for t in energy.ENERGY_INTELLIGENCE_TOOLS}
+    assert "list_building_meter_readings" in {
+        t.name for t in energy.ENERGY_INTELLIGENCE_TOOLS
+    }
+
+
+def test_the_documents_tool_is_on_the_main_list_not_the_energy_engine():
+    """Where a tool lives decides which questions can reach it.
+
+    Phase 2 engine tools are bound only after content selects that engine, so while the
+    documents tool sat on the energy list a question about a building's documents never
+    reached it: the answer fell through to semantic search and reported the documents whose
+    text mentions the building instead of the ones filed against it. It answers a question
+    about any building, so it belongs where every conversation can reach it.
+    """
+    from src.agents.orchestrator import ALL_TOOLS, PHASE2_ENGINE_TOOLS
+
+    assert "list_building_documents" in {t.name for t in ALL_TOOLS}
+    assert "list_building_documents" not in {
+        t.name for t in PHASE2_ENGINE_TOOLS["energy_intelligence"]
+    }
+
+
+def test_the_main_list_stays_under_the_provider_cap():
+    # OpenAI Chat Completions rejects a tool array longer than 128, which is the reason the
+    # engine lists are kept separate in the first place. Adding to the main list spends
+    # that budget, so the limit is stated here rather than discovered in production.
+    from src.agents.orchestrator import ALL_TOOLS
+
+    assert len(ALL_TOOLS) <= 128
 
 
 def test_the_invoice_listing_is_registered_on_its_agent():

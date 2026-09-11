@@ -641,9 +641,12 @@ async def list_building_documents(
     }
 
 
+# list_building_documents is defined above and deliberately NOT listed here: it answers a
+# question about any building rather than about energy, so it lives on the main tool list
+# where every conversation reaches it. Engine lists bind only after content selects that
+# engine, which is precisely why it was unreachable from here.
 ENERGY_INTELLIGENCE_TOOLS = [
     list_building_meter_readings,
-    list_building_documents,
     upsert_energy_meter,
     pull_smart_meter_readings,
     ingest_meter_readings,

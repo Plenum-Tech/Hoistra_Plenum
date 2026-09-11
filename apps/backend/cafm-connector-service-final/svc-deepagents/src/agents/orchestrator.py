@@ -48,7 +48,15 @@ from ..llm_factory import create_chat_model, friendly_openai_error
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
 from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
-from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS
+from .energy_intelligence_agent import (
+    ENERGY_INTELLIGENCE_TOOLS,
+    # Not an energy tool. "Which documents are filed against this building" is asked of
+    # any building in any conversation, and Phase 2 engine tools are bound only once
+    # content has selected that engine — so while it sat on the energy list a documents
+    # question never reached it and fell through to semantic search, which finds
+    # documents whose TEXT mentions a building rather than the ones filed against it.
+    list_building_documents,
+)
 from .doc_rag_agent import (
     delete_document,
     extract_text,
@@ -243,6 +251,7 @@ ALL_TOOLS = [
     find_asset,
     find_location,
     get_asset_documents,
+    list_building_documents,
     udr_agent_query,
     udr_list_tables,
     udr_describe_table,
@@ -362,6 +371,7 @@ _TOOL_DOMAIN: dict[str, str] = {
     "get_schema": "udr", "lookup_user": "udr", "query_table": "udr",
     "find_asset": "udr", "find_location": "udr",
     "get_asset_documents": "udr",
+    "list_building_documents": "udr",
     "udr_agent_query": "udr",
     "udr_list_tables": "udr",
     "udr_describe_table": "udr",
