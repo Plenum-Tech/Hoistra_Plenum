@@ -503,18 +503,46 @@ def _extract_interrupt(result: dict[str, Any]) -> dict | None:
 
 
 def _extract_tool_calls(messages: list) -> list[dict[str, Any]]:
-    """Extract the tool call trace from LangGraph message history."""
+    """Extract the tool call trace from LangGraph message history.
+
+    Paired by tool_call_id, because the orchestrator fires tools in parallel and the id is
+    the only thing that says which answer belongs to which call.
+
+    The previous version attached each result to ``tool_calls[-1]``. With one call in flight
+    that is the right entry by luck; with two it is not. Both entries were appended with no
+    output, the first result back was written onto the LAST entry, and the second was
+    dropped because that entry already had one. The faster agent's answer was therefore
+    filed under the slower agent's name and the faster agent showed null — which is why it
+    always looked like energy_intelligence failing, at 5s against udr's 18s, when in fact
+    its answer was sitting in udr's row.
+
+    A missing output reads as "this source said nothing". A misattributed one reads as "this
+    source said that", and nothing downstream can tell the difference.
+    """
+    outputs: dict[str, Any] = {}
+    for msg in messages:
+        is_tool = (
+            getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage"
+        )
+        tcid = getattr(msg, "tool_call_id", None)
+        if is_tool and tcid is not None:
+            outputs[str(tcid)] = getattr(msg, "content", None)
+
     tool_calls: list[dict[str, Any]] = []
     for msg in messages:
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append({
-                    "tool": tc.get("name"),
-                    "input": tc.get("args", {}),
-                })
-        if hasattr(msg, "name") and msg.name and hasattr(msg, "content"):
-            if tool_calls and "output" not in tool_calls[-1]:
-                tool_calls[-1]["output"] = msg.content
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            get = tc.get if isinstance(tc, dict) else lambda k, d=None: getattr(tc, k, d)
+            entry: dict[str, Any] = {
+                "tool": get("name"),
+                "input": get("args", {}) or {},
+            }
+            tcid = get("id")
+            # Only when the result is actually known. A call still in flight, or one whose
+            # ToolMessage never arrived, leaves the key absent rather than claiming null —
+            # "no answer yet" and "answered with nothing" are different facts.
+            if tcid is not None and str(tcid) in outputs:
+                entry["output"] = outputs[str(tcid)]
+            tool_calls.append(entry)
     return tool_calls
 
 
