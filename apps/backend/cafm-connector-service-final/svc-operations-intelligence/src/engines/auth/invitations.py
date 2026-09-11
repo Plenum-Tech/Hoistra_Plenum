@@ -225,9 +225,15 @@ async def accept(
     if expires <= _now():
         raise InvitationError("expired", "That invitation has expired. Ask to be re-invited.", 410)
 
-    problem = password_engine.validate(password) if hasattr(password_engine, "validate") else None
-    if problem:
-        raise InvitationError("weak_password", str(problem))
+    # validate() returns the normalised password and RAISES for a weak one. It was read as
+    # "return the problem", so every strong password was refused with the password itself
+    # as the message — nobody could accept an invitation, and the refusal echoed the secret.
+    try:
+        password = password_engine.validate(
+            password, email=row["email"], full_name=full_name or "",
+        )
+    except password_engine.WeakPassword as exc:
+        raise InvitationError("weak_password", str(exc)) from None
 
     user = (
         await session.execute(
