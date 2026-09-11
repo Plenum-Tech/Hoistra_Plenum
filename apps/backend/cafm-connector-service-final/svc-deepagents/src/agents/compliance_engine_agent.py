@@ -1192,7 +1192,69 @@ async def get_pack_facts(country_code: str = "UK") -> dict:
         return _err(exc, "get_pack_facts")
 
 
+@tool
+async def get_mees_summary(building_id: str | None = None) -> dict:
+    """A — MEES from the EPC register: per building the EPC band (A–G) and score, how many sit
+    below E (unlettable now) and below B over 1,000 m² (proposed 2030), EPCs current / expiring
+    within 12 months. UK only; an unknown band is reported as unknown, never as compliant."""
+    try:
+        params = {"building_id": building_id} if building_id else {}
+        resp = await _request("GET", _base(), "/api/compliance/mees", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_mees_summary")
+
+
+@tool
+async def record_regulatory_filing(
+    building_id: str,
+    scheme: str,
+    period_year: int,
+    status: str = "filed",
+    filed_at: str | None = None,
+    reference: str | None = None,
+    certification_level: str | None = None,
+    valid_until: str | None = None,
+    submitted_by: str | None = None,
+) -> dict:
+    """A — Record that a filing was made for a building and compliance year. scheme: LL84 (NYC
+    benchmarking, due 1 May of the following year), BCA_BENCHMARKING (Singapore annual return),
+    GREEN_MARK (certification: level Certified | Gold | GoldPlus | Platinum, valid 3 years).
+    Idempotent on (building, scheme, year)."""
+    try:
+        resp = await _request("POST", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              json={"building_id": building_id, "scheme": scheme, "period_year": period_year,
+                                    "status": status, "filed_at": filed_at, "reference": reference,
+                                    "certification_level": certification_level, "valid_until": valid_until,
+                                    "submitted_by": submitted_by})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "record_regulatory_filing")
+
+
+@tool
+async def list_regulatory_filings(building_id: str | None = None, scheme: str | None = None,
+                                  country_code: str | None = None) -> dict:
+    """A — Filings on record (LL84 / BCA / Green Mark) for the caller's buildings; with
+    country_code (US | SG) also the position per scheme: filed / due / overdue, certified / lapsed."""
+    try:
+        params = {k: v for k, v in {"building_id": building_id, "scheme": scheme}.items() if v}
+        out = (await _request("GET", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)).json()
+        if country_code:
+            pos = await _request("GET", _base(), "/api/compliance/filings/position", service=_SERVICE,
+                                 timeout=_TIMEOUT, params={**params, "country_code": country_code})
+            out["position"] = pos.json()
+        return out
+    except Exception as exc:
+        return _err(exc, "list_regulatory_filings")
+
+
 COMPLIANCE_ENGINE_TOOLS = [
+    get_mees_summary,
+    record_regulatory_filing,
+    list_regulatory_filings,
     run_compliance_scan,
     get_pack_facts,
     manage_vector_membership,

@@ -34,6 +34,7 @@ from ...engines.compliance import reverify as reverify_svc
 from ...shared import approvals as approvals_svc
 from ...swarm import adversary as adversary_svc
 from ..schemas.compliance import (
+    FilingRequest,
     ActivateBuildingPackRequest,
     AdversaryRequest,
     ArchiveCertificatesRequest,
@@ -70,6 +71,9 @@ from ..schemas.compliance import (
 
 from ...engines import ingest_gate
 from ...engines.auth import access
+from ...engines.compliance import epc_rating as epc_svc
+from ...engines.compliance import filings as filings_svc
+from ...engines.energy import ratings_position as position_svc
 from .auth import scope
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance"],
@@ -1283,3 +1287,73 @@ async def one_click_redeem(
         decision=body.decision,
         pm_notes=body.pm_notes,
     )
+
+
+# ── B5 · MEES from the EPC register ─────────────────────────────────────────────────────
+
+@router.get("/mees")
+async def mees_summary(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Which buildings sit below EPC E now and below B for 2030, from the EPCs on file."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await epc_svc.mees_summary(session, organization_id=s.organization_id, building_ids=ids)
+
+
+# ── B8 · filings: LL84, BCA benchmarking, Green Mark ────────────────────────────────────
+
+@router.post("/filings", status_code=201)
+async def record_filing(
+    body: FilingRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Record that a filing was made (or a certification awarded) for a building and year.
+    Idempotent on (building, scheme, year): filing the same year again updates the record."""
+    from datetime import date as _date
+    org_id = access.organization_for(s, body.organization_id)
+    access.assert_building(s, body.building_id, action="record a filing for")
+    try:
+        return await filings_svc.record_filing(
+            session, organization_id=org_id, building_id=body.building_id, scheme=body.scheme,
+            period_year=body.period_year, status=body.status,
+            filed_at=_date.fromisoformat(body.filed_at) if body.filed_at else None,
+            reference=body.reference, certification_level=body.certification_level,
+            valid_until=_date.fromisoformat(body.valid_until) if body.valid_until else None,
+            submitted_by=body.submitted_by, evidence_document_id=body.evidence_document_id,
+            detail=body.detail, actor=str(s.user_id), created_by=s.user_id)
+    except filings_svc.FilingError as exc:
+        raise HTTPException(status_code=exc.http_status,
+                            detail={"ok": False, "error": exc.message, "reason": exc.reason})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": str(exc), "reason": "bad_date"})
+
+
+@router.get("/filings")
+async def list_filings(
+    building_id: UUID | None = None,
+    scheme: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    rows = await filings_svc.list_filings(session, organization_id=s.organization_id, building_ids=ids, scheme=scheme)
+    return {"ok": True, "count": len(rows), "filings": rows, "schemes": {
+        k: {"label": v["label"], "country": v["country"], "kind": v["kind"], "note": v["note"]}
+        for k, v in filings_svc.SCHEMES.items()}}
+
+
+@router.get("/filings/position")
+async def filings_position(
+    country_code: str = Query(..., description="US | SG"),
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Where each building stands on the country's filing obligations: filed / due / overdue,
+    certified / lapsed / none."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await filings_svc.filing_positions(session, organization_id=s.organization_id, building_ids=ids,
+                                              country_code=country_code)

@@ -350,7 +350,11 @@ async def scan_energy_anomalies(
     meter_id: str,
     organization_id: str | None = None,
 ) -> dict:
-    """C — Detect weekend spike / baseline drift / asset spike; queue only — no WO."""
+    """C — Run all 13 detection rules on a meter: weekend spike, baseline drift, asset spike,
+    non-occupancy spike, schedule mismatch, baseload creep, peak excursion, data quality,
+    time-of-use, and — when the meter has the inputs — weather residual (degree days),
+    simultaneous heating/cooling (BMS trends), post-works regression (closed work orders).
+    Returns rules_run and which rules were skipped and why. Queue only — no WO."""
     try:
         resp = await _request(
             "POST",
@@ -645,7 +649,127 @@ async def list_building_documents(
 # question about any building rather than about energy, so it lives on the main tool list
 # where every conversation reaches it. Engine lists bind only after content selects that
 # engine, which is precisely why it was unreachable from here.
+@tool
+async def compute_building_rating(
+    building_id: str,
+    scheme: str,
+    months: int = 12,
+    year: int | None = None,
+) -> dict:
+    """C — Compute and snapshot a consumption rating for a building. scheme: "energy_star"
+    (ESTIMATED ENERGY STAR score 1–100 vs the national median for its property type — say
+    "estimate") or "ll97" (NYC emissions vs the occupancy-group cap, tCO2e, $268/t penalty).
+    Needs gross area and ≥3 months of readings; 12 months = actual, fewer = projected."""
+    try:
+        resp = await _request("POST", _base(), "/api/energy/ratings/compute", service=_SERVICE,
+                              timeout=_TIMEOUT,
+                              json={"building_id": building_id, "scheme": scheme, "months": months, "year": year})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "compute_building_rating")
+
+
+@tool
+async def get_ratings_position(country_code: str, building_id: str | None = None) -> dict:
+    """C — The ratings-and-duties tiles for one market, from real records. UK: MEES below E now /
+    below B for 2030 / EPCs on file (from the EPC register). US: LL97 cap, Energy Star estimate,
+    LL84 filing. SG: BCA submission, EUI vs BCA 192 kWh/m², Green Mark. AE: EUI vs rolling
+    benchmark, chiller plant kW/RT. Each tile says its basis (certificate / filing / consumption
+    + months)."""
+    try:
+        params = {"country_code": country_code}
+        if building_id:
+            params["building_id"] = building_id
+        resp = await _request("GET", _base(), "/api/energy/ratings/position", service=_SERVICE,
+                              timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_ratings_position")
+
+
+@tool
+async def record_chiller_design(
+    asset_id: str,
+    design_kw_per_rt: float,
+    design_capacity_rt: float | None = None,
+    design_ambient_c: float | None = None,
+    building_id: str | None = None,
+    source: str | None = None,
+) -> dict:
+    """C — Record a chiller's design kW/RT (e.g. 0.68), capacity in RT and design ambient °C.
+    Every kW/RT reading is judged against this; without it the chiller cannot be assessed."""
+    try:
+        resp = await _request("POST", _base(), f"/api/energy/chillers/{asset_id}/design", service=_SERVICE,
+                              timeout=_TIMEOUT,
+                              json={"design_kw_per_rt": design_kw_per_rt, "design_capacity_rt": design_capacity_rt,
+                                    "design_ambient_c": design_ambient_c, "building_id": building_id, "source": source})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "record_chiller_design")
+
+
+@tool
+async def ingest_chiller_readings(asset_id: str, readings: list[dict], building_id: str | None = None) -> dict:
+    """C — Store chiller BMS / sub-meter samples: [{reading_at, kw_input, cooling_load_rt | cooling_load_kw,
+    ambient_c?, chw_supply_c?, chw_return_c?}]. Requires the ingest right."""
+    try:
+        resp = await _request("POST", _base(), f"/api/energy/chillers/{asset_id}/readings", service=_SERVICE,
+                              timeout=_TIMEOUT, json={"readings": readings, "building_id": building_id})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "ingest_chiller_readings")
+
+
+@tool
+async def scan_chiller_efficiency(asset_id: str | None = None, window_days: int = 14) -> dict:
+    """C — kW/RT over the window against design, at matched ambient and ≥40% load; more than 15%
+    above design is raised as a chiller_efficiency anomaly (queue, no WO). One asset, or every
+    chiller with a design figure when asset_id is omitted."""
+    try:
+        resp = await _request("POST", _base(), "/api/energy/chillers/scan", service=_SERVICE, timeout=_TIMEOUT,
+                              json={"asset_id": asset_id, "window_days": window_days})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "scan_chiller_efficiency")
+
+
+@tool
+async def ingest_degree_days(building_id: str, months: list[dict], base_temp_c: float = 15.5,
+                             station: str | None = None) -> dict:
+    """C — Monthly heating/cooling degree days for a building: [{month: "YYYY-MM-01", hdd, cdd}].
+    The weather-normalised anomaly rule (CUSUM on degree-day regression residuals) needs ≥12
+    months of these beside the meter's monthly kWh. Requires the ingest right."""
+    try:
+        resp = await _request("POST", _base(), "/api/energy/weather/degree-days", service=_SERVICE,
+                              timeout=_TIMEOUT,
+                              json={"building_id": building_id, "months": months, "base_temp_c": base_temp_c,
+                                    "station": station})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "ingest_degree_days")
+
+
+@tool
+async def ingest_bms_trends(building_id: str, samples: list[dict]) -> dict:
+    """C — BMS zone samples: [{recorded_at, zone, heating_pct, cooling_pct, zone_temp_c?, setpoint_c?}].
+    The simultaneous-heating-and-cooling rule reads these (both calling >30 min in one zone).
+    Requires the ingest right."""
+    try:
+        resp = await _request("POST", _base(), "/api/energy/bms/trends", service=_SERVICE, timeout=_TIMEOUT,
+                              json={"building_id": building_id, "samples": samples})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "ingest_bms_trends")
+
+
 ENERGY_INTELLIGENCE_TOOLS = [
+    compute_building_rating,
+    get_ratings_position,
+    record_chiller_design,
+    ingest_chiller_readings,
+    scan_chiller_efficiency,
+    ingest_degree_days,
+    ingest_bms_trends,
     list_building_meter_readings,
     upsert_energy_meter,
     pull_smart_meter_readings,

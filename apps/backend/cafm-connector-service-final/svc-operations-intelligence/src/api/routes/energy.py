@@ -28,8 +28,17 @@ from ...engines.energy import reports as report_svc
 from ...models.energy import EnergyMonthlyReport
 from ...shared import approvals as approvals_svc
 from ...engines.auth import access
+from ...engines.energy import chiller as chiller_svc
+from ...engines.energy import ratings_position as position_svc
+from ...engines.energy import us_ratings as us_svc
 from .auth import scope
 from ..schemas.energy import (
+    BmsTrendsRequest,
+    ChillerDesignRequest,
+    ChillerReadingsRequest,
+    ChillerScanRequest,
+    DegreeDaysRequest,
+    RatingComputeRequest,
     AnomalyActionRequest,
     AnomalyScanRequest,
     BuildingProfileRequest,
@@ -857,3 +866,153 @@ async def decide_approval(
         pm_notes=body.pm_notes,
         prepare_email_handoff=body.prepare_email_handoff,
     )
+
+
+# ── B6 / B7 · ratings, and the per-country position ────────────────────────────────────
+
+@router.post("/ratings/compute")
+async def compute_rating(
+    body: RatingComputeRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Compute and snapshot a consumption rating for one building: an ENERGY STAR score
+    estimate or the LL97 emissions position. Needs the building's gross area and at least
+    three months of readings; twelve makes it actual, fewer makes it projected."""
+    access.organization_for(s, body.organization_id)
+    access.assert_building(s, body.building_id, action="rate")
+    scheme = body.scheme.lower().strip()
+    if scheme == "energy_star":
+        return await us_svc.compute_energy_star(session, building_id=body.building_id, months=body.months)
+    if scheme == "ll97":
+        return await us_svc.compute_ll97(session, building_id=body.building_id, year=body.year, months=body.months)
+    raise HTTPException(status_code=400, detail={"ok": False, "error": "scheme must be energy_star or ll97",
+                                                 "reason": "bad_scheme"})
+
+
+@router.get("/ratings")
+async def list_ratings(
+    building_id: UUID | None = None,
+    scheme: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The latest snapshot per building and scheme, for the caller's buildings."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    rows = await us_svc.latest_ratings(session, building_ids=ids, scheme=scheme)
+    return {"ok": True, "count": len(rows), "ratings": rows}
+
+
+@router.get("/ratings/position")
+async def ratings_position(
+    country_code: str = Query(..., description="UK | US | SG | AE"),
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The ratings-and-duties tiles for one market, from real records: MEES from the EPC
+    register (UK); LL97, Energy Star and LL84 (US); BCA submission, EUI vs the BCA reference
+    and Green Mark (SG); the rolling benchmark and chiller kW/RT (AE). Each tile says what it
+    is based on — a certificate, a filing, or consumption and how many months of it."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await position_svc.position(session, country_code=country_code, organization_id=s.organization_id,
+                                       building_ids=ids)
+
+
+# ── B9 · chillers ───────────────────────────────────────────────────────────────────────
+
+@router.post("/chillers/{asset_id}/design")
+async def chiller_design(
+    asset_id: UUID,
+    body: ChillerDesignRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Record a chiller's design kW/RT (and capacity, design ambient)."""
+    org_id = access.organization_for(s, body.organization_id)
+    if body.building_id is not None:
+        access.assert_building(s, body.building_id, action="record a chiller on")
+    return await chiller_svc.upsert_design_spec(
+        session, asset_id=asset_id, design_kw_per_rt=body.design_kw_per_rt, building_id=body.building_id,
+        organization_id=org_id, design_capacity_rt=body.design_capacity_rt,
+        design_ambient_c=body.design_ambient_c, design_chw_supply_c=body.design_chw_supply_c,
+        source=body.source, notes=body.notes)
+
+
+@router.post("/chillers/{asset_id}/readings")
+async def chiller_readings(
+    asset_id: UUID,
+    body: ChillerReadingsRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Ingest kW / RT / ambient samples for a chiller."""
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
+    if body.building_id is not None:
+        access.assert_building(s, body.building_id, action="ingest chiller readings for")
+    return await chiller_svc.ingest_readings(session, asset_id=asset_id, readings=body.readings,
+                                             building_id=body.building_id, organization_id=org_id, source=body.source)
+
+
+@router.get("/chillers/{asset_id}/efficiency")
+async def chiller_efficiency(
+    asset_id: UUID,
+    window_days: int = Query(14, ge=1, le=90),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """kW/RT over the window against design — the position whether or not it breaches."""
+    out = await chiller_svc.assess(session, asset_id=asset_id, window_days=window_days)
+    if out.get("building_id"):
+        access.assert_building(s, out["building_id"], action="read")
+    return out
+
+
+@router.post("/chillers/scan")
+async def chiller_scan(
+    body: ChillerScanRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Assess one chiller, or every chiller with a design figure, raising breaches as anomalies."""
+    org_id = access.organization_for(s, body.organization_id)
+    if body.asset_id is not None:
+        out = await chiller_svc.scan(session, asset_id=body.asset_id, organization_id=org_id,
+                                     window_days=body.window_days)
+        if out.get("building_id"):
+            access.assert_building(s, out["building_id"], action="scan")
+        return out
+    ids = await position_svc.building_ids_for(session, s, None)
+    return await chiller_svc.scan_all(session, organization_id=org_id, building_ids=ids if s.restricted else None)
+
+
+# ── B10 inputs · degree days and BMS trends ─────────────────────────────────────────────
+
+@router.post("/weather/degree-days")
+async def ingest_degree_days(
+    body: DegreeDaysRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Monthly HDD/CDD for a building — the input the weather-normalised rule needs."""
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
+    access.assert_building(s, body.building_id, action="add weather data to")
+    return await position_svc.ingest_degree_days(session, building_id=body.building_id, organization_id=org_id,
+                                                 months=body.months, base_temp_c=body.base_temp_c,
+                                                 station=body.station, source=body.source)
+
+
+@router.post("/bms/trends")
+async def ingest_bms_trends(
+    body: BmsTrendsRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Zone heating/cooling samples from the BMS — the input the simultaneous-heating-and-cooling rule needs."""
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
+    access.assert_building(s, body.building_id, action="add BMS trends to")
+    return await position_svc.ingest_bms_trends(session, building_id=body.building_id, organization_id=org_id,
+                                                samples=body.samples, source=body.source)

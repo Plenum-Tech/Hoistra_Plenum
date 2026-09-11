@@ -36,6 +36,9 @@ class CertificateUpsertRequest(BaseModel):
     defects_found: str | None = None
     remedial_actions: str | None = None
     remedial_status: str | None = None
+    # EPC asset rating (B5): band A-G and the score behind it. Ignored for other types.
+    energy_rating: str | None = Field(None, max_length=4, description="EPC band A-G")
+    energy_score: int | None = Field(None, ge=0, le=999)
     document_id: UUID | None = None
     country_code: str = "UK"
     issuer: str | None = None
@@ -359,3 +362,19 @@ class RegisterSearchRequest(BaseModel):
     query: str = ""  # alias for name
     mode: str = "auto"  # auto | dump | bot
     limit: int = 25
+
+
+class FilingRequest(BaseModel):
+    """Record that an obligation was discharged: LL84 | BCA_BENCHMARKING | GREEN_MARK."""
+    building_id: UUID
+    scheme: str
+    period_year: int = Field(..., ge=2000, le=2100)
+    status: str = Field("filed", description="filed | submitted | accepted | certified | due | overdue | lapsed")
+    filed_at: str | None = Field(None, description="YYYY-MM-DD")
+    reference: str | None = None
+    certification_level: str | None = Field(None, description="Green Mark: Certified | Gold | GoldPlus | Platinum")
+    valid_until: str | None = None
+    submitted_by: str | None = None
+    evidence_document_id: UUID | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+    organization_id: UUID | None = None

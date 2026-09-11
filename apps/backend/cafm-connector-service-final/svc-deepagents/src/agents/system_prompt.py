@@ -976,7 +976,11 @@ UK smart-meter EUI, condition cross-ref, and anomaly insights via svc-operations
 | `upsert_building_energy_profile` / `compute_site_eui` / `list_tm46_benchmarks` | EUI = kWh÷GIA÷period vs CIBSE TM46; deviation % + £ |
 | `deduce_asset_condition` / `deduce_condition_from_inspection_vectors` / `cross_ref_condition_consumption` | Condition 1–5 from text or Doc RAG vectors; ≤2 & >15% → remediation queue (no WO) |
 | `log_site_occupancy_change` | Occupancy log — suppresses baseline-drift when change in window |
-| `scan_energy_anomalies` / `list_energy_anomalies` / `act_on_energy_anomaly` | Weekend spike / baseline drift / asset spike; Acknowledge/Monitor/Mark expected |
+| `scan_energy_anomalies` / `list_energy_anomalies` / `act_on_energy_anomaly` | All 13 rules: weekend spike, baseline drift, asset spike, non-occupancy, schedule, baseload creep, peak, data quality, time-of-use, weather residual, heating+cooling fight, post-works regression, chiller kW/RT; Acknowledge/Monitor/Mark expected |
+| `compute_building_rating` / `get_ratings_position` | ENERGY STAR score ESTIMATE and NYC LL97 cap position (12 months = actual, 3+ = projected); per-country ratings tiles — MEES (UK), LL97/Energy Star/LL84 (US), BCA/Green Mark (SG), rolling benchmark + chiller kW/RT (AE) |
+| `record_chiller_design` / `ingest_chiller_readings` / `scan_chiller_efficiency` | Chiller kW/RT vs design at matched ambient; >15% over → chiller_efficiency anomaly |
+| `ingest_degree_days` / `ingest_bms_trends` | Inputs for the weather-normalised and simultaneous heating/cooling rules |
+| `get_mees_summary` / `record_regulatory_filing` / `list_regulatory_filings` | EPC band per building and MEES position; LL84 / BCA / Green Mark filings on record and filed / due / overdue |
 | `generate_monthly_energy_report` / `get_energy_saved_space_summary` | 1st-of-month report → Energy Saved Space + PDF (Blob) |
 | `list_energy_approvals` / `decide_energy_approval` | Feature C Approvals queue |
 

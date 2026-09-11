@@ -117,6 +117,13 @@ class ComplianceCertificate(Base):
     authenticity_warning: Mapped[str | None] = mapped_column(Text)
     days_to_expiry: Mapped[int | None] = mapped_column(Integer)
     insurance_risk_flag: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    # An EPC's asset rating: the band (A-G) and the numeric score behind it. MEES is a
+    # question about the band - below E is unlettable now, below B is the proposed 2030
+    # floor - and until these existed the register could not answer it. Filled from the
+    # document at extraction and from the GOV.UK register at verification, whichever comes
+    # first; the register wins when both are present, because it is the issued figure.
+    energy_rating: Mapped[str | None] = mapped_column(String(4))
+    energy_score: Mapped[int | None] = mapped_column(Integer)
     raw_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -252,3 +259,31 @@ class ComplianceRiskSnapshot(Base):
     high_risk_lt_30: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     medium_risk_lt_90: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegulatoryFiling(Base):
+    """An obligation discharged by filing something: LL84 benchmarking (NYC), the BCA
+    Building Energy Benchmarking Report (Singapore), a Green Mark certification (Singapore).
+    One row per building, scheme and compliance year. A filing is actual the day it is on
+    file - the tile does not wait for twelve months of readings the way a score does."""
+
+    __tablename__ = "regulatory_filings"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    scheme: Mapped[str] = mapped_column(String(40), nullable=False)
+    period_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="filed")
+    filed_at: Mapped[date | None] = mapped_column(Date)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    reference: Mapped[str | None] = mapped_column(String(160))
+    certification_level: Mapped[str | None] = mapped_column(String(40))
+    valid_until: Mapped[date | None] = mapped_column(Date)
+    submitted_by: Mapped[str | None] = mapped_column(String(255))
+    evidence_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    detail_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -13,6 +13,7 @@ from ...shared.vendor_identity import find_vendor_id
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
 from ...shared.approvals import enqueue_approval, write_audit
+from . import epc_rating
 from .country_pack import effective_alert_thresholds, get_pack_type, list_pack_types
 from .lifecycle import (
     STATUS_CRITICAL,
@@ -630,6 +631,10 @@ def cert_to_dict(c: ComplianceCertificate) -> dict[str, Any]:
         "status": c.status,
         "days_to_expiry": c.days_to_expiry,
         "insurance_risk_flag": c.insurance_risk_flag,
+        "energy_rating": getattr(c, "energy_rating", None),
+        "energy_score": getattr(c, "energy_score", None),
+        "mees": (epc_rating.mees_position(c.energy_rating)["status"]
+                 if epc_rating.is_epc_type(c.certificate_type_code or c.cert_type) else None),
         "authenticity_warning": c.authenticity_warning,
         "country_code": c.country_code,
         # Sub-national grouping, so the dashboard can scope below country level.
@@ -1470,6 +1475,18 @@ async def upsert_certificate(
     cert.defects_found = data.get("defects_found")
     cert.remedial_actions = data.get("remedial_actions")
     cert.remedial_status = remedial_status
+    # B5: the EPC band and score. Only for certificate types that carry one; a register
+    # figure already on the row is not overwritten by a document's, and a re-file that
+    # says nothing about the band leaves the band alone.
+    if epc_rating.is_epc_type(cert.certificate_type_code or type_code):
+        band, score = epc_rating.rating_from_fields(data)
+        register_band = epc_rating.rating_from_verification(data.get("raw_metadata"))
+        if register_band:
+            band = register_band
+        if band:
+            cert.energy_rating = band
+        if score is not None:
+            cert.energy_score = score
     # The file this certificate was read from. Sticky: a re-file that carries no
     # document_id must not blank the one an earlier pass established. Ingest is an upsert on
     # certificate_number, so the second filing of a certificate — a corrected expiry date, a
