@@ -97,8 +97,9 @@ def test_an_existing_hash_is_never_overwritten():
 
 
 def test_the_survivor_is_the_earliest_row():
+    for sql in (bb._GROUP_BY_CONTENT, bb._GROUP_BY_NAME):
+        assert "ORDER BY d.uploaded_at" in sql
     collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
-    assert "ORDER BY d.uploaded_at" in collapse
     assert "ids[0]" in collapse and "ids[1:]" in collapse
 
 
@@ -155,12 +156,31 @@ def test_only_columns_the_database_has_are_named_in_sql():
         assert re.fullmatch(r"[a-z_][a-z0-9_]*", column)
 
 
-def test_the_filename_fallback_applies_only_without_a_hash():
-    # Two genuinely different files can share a name. The fallback exists for rows written
-    # before hashes were recorded, and COALESCE puts it strictly second.
+def test_content_is_grouped_only_where_a_hash_exists():
+    # Same bytes are one document however the file was named. A null hash groups nothing:
+    # every unhashed row would otherwise land in one bucket together.
+    assert "i.file_hash_sha256 IS NOT NULL" in bb._GROUP_BY_CONTENT
+    assert "i.file_hash_sha256 AS group_key" in bb._GROUP_BY_CONTENT
+
+
+def test_a_name_group_merges_only_when_nothing_proves_the_files_differ():
+    """The rule that the first version got wrong, and the reason it needs two passes.
+
+    Keying on "hash, else name" puts an old unhashed row and a freshly hashed one in
+    different groups — which is the one pair that matters while hashes are being filled in.
+    That version shipped and let a sixth copy of one invoice through.
+
+    count(DISTINCT h) ignores nulls, so {null, 'abc'} counts 1 and merges, while
+    {'abc', 'def'} counts 2 and is left alone: two different files that share a name.
+    """
+    assert "count(DISTINCT i.file_hash_sha256) <= 1" in bb._GROUP_BY_NAME
+    assert "regexp_replace(d.file_name" in bb._GROUP_BY_NAME
+
+
+def test_content_is_tried_before_names():
     collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
-    assert "COALESCE(\n                                   i.file_hash_sha256," in collapse
-    assert "'name:'" in collapse
+    order = collapse.index("for sql in (_GROUP_BY_CONTENT, _GROUP_BY_NAME)")
+    assert order > 0
 
 
 def test_collapsing_never_fails_an_ingest():
@@ -171,14 +191,22 @@ def test_collapsing_never_fails_an_ingest():
     assert "except Exception" in bind
 
 
-def test_the_fallback_does_not_split_on_doc_type():
+def test_neither_pass_splits_on_doc_type():
     """doc_type is derived, and was unstable enough to have earned its own fix earlier.
 
     The same certificate has been filed as `compliance_certificate` on one upload and left
-    NULL on another. Keying the fallback on it splits one file into two documents for a
-    reason that says nothing about the file — Town Hall held the same certificate as an
-    8-row group and a 2-row group purely because of that.
+    NULL on another. Keying on it splits one file into two documents for a reason that says
+    nothing about the file — Town Hall held the same certificate as an 8-row group and a
+    2-row group purely because of that.
     """
-    collapse = SOURCE[SOURCE.index("async def collapse_duplicate_documents"):]
-    group_key = collapse[collapse.index("SELECT COALESCE("):collapse.index("array_agg")]
-    assert "doc_type" not in group_key
+    for sql in (bb._GROUP_BY_CONTENT, bb._GROUP_BY_NAME):
+        assert "doc_type" not in sql
+
+
+def test_both_queries_take_the_building_as_a_bound_parameter():
+    # They are module-level constants, so nothing a caller sends is ever formatted in.
+    for sql in (bb._GROUP_BY_CONTENT, bb._GROUP_BY_NAME):
+        assert "CAST(:b AS uuid)" in sql
+        # No f-string placeholder survived import. Braces themselves are fine and expected:
+        # the name query carries a regex, and "[0-9a-f]{8}" is a quantifier, not a hole.
+        assert "{_" not in sql

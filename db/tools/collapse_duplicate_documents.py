@@ -8,17 +8,24 @@ Going forward the uploader records file_hash_sha256 and collapses on it at inges
 cleans up what was written before that existed — rows whose hash is NULL and can never be
 computed, because the files are long gone from disk.
 
-Grouping, in order:
-  1. file_hash_sha256, when both rows have one.
-  2. otherwise the original filename, with the "{session}_" prefix stripped, within one
-     building. Deliberately NOT split by doc_type: that is a derived classification and an
-     unstable one — the same certificate has been filed as `compliance_certificate` on one
-     upload and left NULL on another — so keying on it splits one file into two documents
-     for a reason that says nothing about the file.
+Two passes, within one building:
+  1. by content — rows that have a hash, grouped by it. The same bytes are one document
+     however the file was named.
+  2. by name — the original filename with the "{session}_" prefix stripped, merging only
+     where the group holds at most one distinct hash. count(DISTINCT h) ignores nulls, so a
+     row written before hashing existed joins a freshly hashed one, while two rows with
+     different hashes are left alone however they are named.
 
-Rule 2 is a migration aid, not the ongoing rule: two genuinely different files can share a
-name, and this would merge them. It is scoped to one building to make that unlikely, and
---dry-run prints every group so a person decides before anything is deleted.
+Keying on "hash, else name" instead looks equivalent and is not: it puts an old unhashed row
+and a new hashed one in different groups, which is the one pair that matters while the
+hashes are being filled in. That version shipped and let a sixth copy of one invoice through.
+
+Neither pass splits on doc_type: that is derived, and unstable enough that the same
+certificate has been filed as `compliance_certificate` on one upload and left NULL on
+another — keying on it splits one file in two for a reason that says nothing about the file.
+
+Pass 2 can still merge two different files that share a name with no hashes between them.
+That is why --dry-run prints every group before anything is deleted.
 
 The earliest row survives and its gaps are filled from the ones it absorbs, so a duplicate
 is never traded for a document that has lost its file. Nothing declares a foreign key to
@@ -54,14 +61,9 @@ REFERENCES: tuple[tuple[str, str], ...] = (
 
 SESSION_PREFIX = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_"
 
-GROUPS_SQL = f"""
+_SELECT = f"""
     SELECT d.building_id::text                                   AS building_id,
            COALESCE(b.name, '(no building)')                     AS building_name,
-           COALESCE(
-               i.file_hash_sha256,
-               'name:' || regexp_replace(d.file_name, '{SESSION_PREFIX}', '')
-           )                                                     AS group_key,
-           (i.file_hash_sha256 IS NOT NULL)                      AS by_hash,
            regexp_replace(d.file_name, '{SESSION_PREFIX}', '')    AS original_name,
            array_agg(d.document_id::text
                      ORDER BY d.uploaded_at NULLS LAST, d.document_id) AS ids
@@ -69,10 +71,25 @@ GROUPS_SQL = f"""
       LEFT JOIN plenum_cafm.buildings b ON b.building_id = d.building_id
       LEFT JOIN plenum_cafm.ingestion_documents i ON i.id = d.document_id
      WHERE d.file_name IS NOT NULL
-     GROUP BY d.building_id, b.name, 3, 4, 5
-    HAVING count(*) > 1
-     ORDER BY 2, 5
 """
+
+#: Same bytes, whatever the file was called.
+BY_CONTENT = _SELECT + """
+       AND i.file_hash_sha256 IS NOT NULL
+     GROUP BY d.building_id, b.name, 3, i.file_hash_sha256
+    HAVING count(*) > 1
+     ORDER BY 2, 3
+"""
+
+#: Same original name, where nothing proves the files differ.
+BY_NAME = _SELECT + """
+     GROUP BY d.building_id, b.name, 3
+    HAVING count(*) > 1
+       AND count(DISTINCT i.file_hash_sha256) <= 1
+     ORDER BY 2, 3
+"""
+
+PASSES = (("content", BY_CONTENT), ("name", BY_NAME))
 
 _SAFE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
@@ -108,23 +125,29 @@ async def main() -> None:
         if missing:
             print(f"not in this database, skipped: {', '.join(missing)}")
 
-        groups = await conn.fetch(GROUPS_SQL)
         total_before = await conn.fetchval("SELECT count(*) FROM plenum_cafm.documents")
-        if not groups:
+        # Content first, so a merge that can be proven from the bytes happens before names
+        # are consulted. In a dry run nothing is written, so the second pass still reports
+        # the groups the first one would have collapsed — they are listed under both.
+        found = [(how, g) for how, sql in PASSES for g in await conn.fetch(sql)]
+        if not found:
             print(f"{total_before} documents, no duplicates.")
             return
 
-        print(f"{total_before} documents; {len(groups)} group(s) hold more than one copy:\n")
+        print(f"{total_before} documents; {len(found)} group(s) hold more than one copy:\n")
         removed = repointed = 0
-        for g in groups:
-            ids = [str(i) for i in g["ids"]]
+        seen: set[str] = set()
+        for how, g in found:
+            ids = [str(i) for i in g["ids"] if str(i) not in seen]
+            if len(ids) < 2:
+                continue  # already collapsed by the pass before this one
             keep, drop = ids[0], ids[1:]
-            how = "hash" if g["by_hash"] else "name"
             print(f"  {g['building_name']:<20} {g['original_name'][:44]:<44} "
                   f"x{len(ids)}  [{how}]")
             print(f"      keep {keep[:8]}   drop {', '.join(i[:8] for i in drop)}")
             if not args.apply:
                 continue
+            seen.update(drop)
             async with conn.transaction():
                 await conn.execute(
                     """UPDATE plenum_cafm.documents k
@@ -158,7 +181,7 @@ async def main() -> None:
             print(f"removed {removed} duplicate document(s), re-pointed {repointed} "
                   f"reference(s). {total_before} -> {after}.")
         else:
-            would = sum(len(g["ids"]) - 1 for g in groups)
+            would = len({str(i) for _, g in found for i in g["ids"][1:]})
             print(f"dry run — nothing written. --apply would remove {would} document(s).")
     finally:
         await conn.close()

@@ -257,6 +257,35 @@ _SESSION_PREFIX = (
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_"
 )
 
+_FROM = """
+      FROM plenum_cafm.documents d
+      LEFT JOIN plenum_cafm.ingestion_documents i ON i.id = d.document_id
+     WHERE d.building_id = CAST(:b AS uuid)
+       AND d.file_name IS NOT NULL
+"""
+_IDS = ("array_agg(d.document_id::text ORDER BY d.uploaded_at NULLS LAST, "
+        "d.document_id) AS ids")
+
+#: Same bytes, whatever the file was called.
+_GROUP_BY_CONTENT = f"""
+    SELECT i.file_hash_sha256 AS group_key, {_IDS}
+    {_FROM}  AND i.file_hash_sha256 IS NOT NULL
+     GROUP BY 1
+    HAVING count(*) > 1
+"""
+
+#: Same original name, where nothing proves the files differ. count(DISTINCT h) ignores
+#: nulls: {{null, 'abc'}} counts 1 and merges — which is how a row written before hashing
+#: joins a freshly hashed one — while {{'abc', 'def'}} counts 2 and is left alone, because
+#: those are two different files that happen to share a name.
+_GROUP_BY_NAME = f"""
+    SELECT regexp_replace(d.file_name, '{_SESSION_PREFIX}', '') AS group_key, {_IDS}
+    {_FROM}
+     GROUP BY 1
+    HAVING count(*) > 1
+       AND count(DISTINCT i.file_hash_sha256) <= 1
+"""
+
 
 def file_sha256(path: str) -> str | None:
     """The content hash of an uploaded file, or None if it cannot be read.
@@ -324,81 +353,73 @@ async def _referencing_columns(session) -> list[tuple[str, str]]:
 async def collapse_duplicate_documents(building_id: str) -> dict[str, Any]:
     """One file filed twice against one building becomes one document.
 
-    Groups this building's documents by content hash, falling back to the original filename
-    for rows written before hashes were recorded — and only when BOTH rows lack a hash,
-    since two different files can share a name.
+    Two passes. By content: rows that have a hash, grouped by it — the same bytes are one
+    document however the file was named. Then by name: grouped by the original filename,
+    merging only where the group holds at most one distinct hash.
 
-    The fallback does not include doc_type. That is a derived classification and an unstable
-    one: the same certificate has been filed as `compliance_certificate` on one upload and
-    left NULL on another, and keying on it would split one file into two documents for a
-    reason that says nothing about the file.
+    That second condition is the whole rule for the transition. count(DISTINCT h) ignores
+    nulls, so a row written before hashes existed ({null}) joins a freshly hashed one
+    ({'abc'}) under the same name, while two rows with different hashes never merge however
+    they are named. An earlier version keyed on `hash, else name` and so refused to merge
+    precisely that pair: one old row, one new, the same file.
+
+    Neither pass includes doc_type. That is a derived classification and an unstable one:
+    the same certificate has been filed as `compliance_certificate` on one upload and left
+    NULL on another, and keying on it would split one file into two documents for a reason
+    that says nothing about the file.
 
     The earliest row is kept and its gaps filled from the ones it absorbs, so a duplicate is
     never traded for a document that has lost its file.
     """
     async with database.AsyncSessionLocal() as session:
-        groups = (
-            await session.execute(
-                text(
-                    f"""SELECT COALESCE(
-                                   i.file_hash_sha256,
-                                   'name:' || regexp_replace(d.file_name, '{_SESSION_PREFIX}', '')
-                               )                                   AS group_key,
-                               array_agg(d.document_id::text ORDER BY d.uploaded_at NULLS LAST,
-                                                                     d.document_id) AS ids
-                          FROM plenum_cafm.documents d
-                          LEFT JOIN plenum_cafm.ingestion_documents i ON i.id = d.document_id
-                         WHERE d.building_id = CAST(:b AS uuid)
-                           AND d.file_name IS NOT NULL
-                         GROUP BY 1
-                        HAVING count(*) > 1"""
-                ),
-                {"b": building_id},
-            )
-        ).all()
-        if not groups:
-            return {"groups": 0, "documents_removed": 0, "references_repointed": 0}
-
         columns = await _referencing_columns(session)
         removed = repointed = 0
-        for group_key, ids in groups:
-            keep, drop = str(ids[0]), [str(i) for i in ids[1:]]
-            # Fill the survivor's gaps before the others go: a later upload may carry the
-            # blob_url or the doc_type that the first one never got.
-            await session.execute(
-                text(
-                    """UPDATE plenum_cafm.documents k
-                          SET blob_url  = COALESCE(k.blob_url,  f.blob_url),
-                              doc_type  = COALESCE(k.doc_type,  f.doc_type),
-                              title     = COALESCE(k.title,     f.title),
-                              file_name = COALESCE(k.file_name, f.file_name)
-                         FROM (SELECT max(blob_url) AS blob_url, max(doc_type) AS doc_type,
-                                      max(title) AS title, max(file_name) AS file_name
-                                 FROM plenum_cafm.documents
-                                WHERE document_id::text = ANY(:ids)) f
-                        WHERE k.document_id::text = :keep"""
-                ),
-                {"ids": drop, "keep": keep},
-            )
-            for table, column in columns:
-                res = await session.execute(
+        group_count = 0
+        # Content first, so a merge that can be proven from the bytes happens before names
+        # are consulted at all.
+        for sql in (_GROUP_BY_CONTENT, _GROUP_BY_NAME):
+            groups = (
+                await session.execute(text(sql), {"b": building_id})
+            ).all()
+            group_count += len(groups)
+            for group_key, ids in groups:
+                keep, drop = str(ids[0]), [str(i) for i in ids[1:]]
+                # Fill the survivor's gaps before the others go: a later upload may carry the
+                # blob_url or the doc_type that the first one never got.
+                await session.execute(
                     text(
-                        f"""UPDATE plenum_cafm.{table}
-                               SET {column} = CAST(:keep AS uuid)
-                             WHERE {column}::text = ANY(:ids)"""
+                        """UPDATE plenum_cafm.documents k
+                              SET blob_url  = COALESCE(k.blob_url,  f.blob_url),
+                                  doc_type  = COALESCE(k.doc_type,  f.doc_type),
+                                  title     = COALESCE(k.title,     f.title),
+                                  file_name = COALESCE(k.file_name, f.file_name)
+                             FROM (SELECT max(blob_url) AS blob_url, max(doc_type) AS doc_type,
+                                          max(title) AS title, max(file_name) AS file_name
+                                     FROM plenum_cafm.documents
+                                    WHERE document_id::text = ANY(:ids)) f
+                            WHERE k.document_id::text = :keep"""
                     ),
-                    {"keep": keep, "ids": drop},
+                    {"ids": drop, "keep": keep},
                 )
-                repointed += res.rowcount or 0
-            res = await session.execute(
-                text("DELETE FROM plenum_cafm.documents WHERE document_id::text = ANY(:ids)"),
-                {"ids": drop},
-            )
-            removed += res.rowcount or 0
-            log.info("ingest.documents_collapsed", building_id=building_id,
-                     kept=keep, removed=len(drop), group=str(group_key)[:60])
+                for table, column in columns:
+                    res = await session.execute(
+                        text(
+                            f"""UPDATE plenum_cafm.{table}
+                                   SET {column} = CAST(:keep AS uuid)
+                                 WHERE {column}::text = ANY(:ids)"""
+                        ),
+                        {"keep": keep, "ids": drop},
+                    )
+                    repointed += res.rowcount or 0
+                res = await session.execute(
+                    text("DELETE FROM plenum_cafm.documents WHERE document_id::text = ANY(:ids)"),
+                    {"ids": drop},
+                )
+                removed += res.rowcount or 0
+                log.info("ingest.documents_collapsed", building_id=building_id,
+                         kept=keep, removed=len(drop), group=str(group_key)[:60])
         await session.commit()
-        return {"groups": len(groups), "documents_removed": removed,
+        return {"groups": group_count, "documents_removed": removed,
                 "references_repointed": repointed}
 
 
