@@ -261,3 +261,61 @@ def test_cert_to_dict_carries_the_band_and_the_mees_word():
     )
     d = cert_to_dict(c)  # type: ignore[arg-type]
     assert d["energy_rating"] == "F" and d["energy_score"] == 132 and d["mees"] == "below_minimum"
+
+
+# ── two failures the unit tests could not see, and now can ──────────────────────────
+
+def test_a_bad_filing_scheme_is_a_400_not_a_500(client):
+    # The compliance router raised HTTPException without importing it: every refusal on
+    # these routes became a 500 with a NameError behind it.
+    as_(principal(role="admin", can_ingest=True))
+    r = client.post("/api/compliance/filings",
+                    json={"building_id": str(MINE), "scheme": "LL9999", "period_year": 2025})
+    assert r.status_code == 400, r.text[:200]
+    assert r.json()["detail"]["reason"] == "unknown_scheme"
+
+
+@pytest.mark.parametrize("module", ["compliance", "energy", "contract_performance", "approvals",
+                                    "admin", "superadmin", "auth"])
+def test_every_router_imports_what_it_raises(module):
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2] / "src" / "api" / "routes" / f"{module}.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    # names the module can legitimately raise: what it imports, and what it defines itself
+    imported = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
+                for a in n.names}
+    imported |= {n.name for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    raised = {n.exc.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call) and isinstance(n.exc.func, ast.Name)}
+    import builtins
+    missing = {name for name in raised if name not in imported and not hasattr(builtins, name)}
+    assert not missing, (module, sorted(missing))
+
+
+def test_a_date_parameter_is_bound_as_a_date_not_a_string():
+    """asyncpg binds CAST(:p AS date) as a date and rejects a str ("no attribute 'toordinal'").
+
+    The twelve-month consumption window passed ISO strings, so every Energy Star and LL97
+    computation answered 500 on the deployed app while passing every unit test.
+    """
+    import asyncio
+    from datetime import date as _date
+    from src.engines.energy import us_ratings as U
+
+    seen: dict[str, object] = {}
+
+    class Result:
+        def mappings(self): return self
+        def all(self): return []
+
+    class Session:
+        async def execute(self, _stmt, params=None):
+            seen.update(params or {})
+            return Result()
+
+    asyncio.run(U.consumption_for_building(Session(), building_id=uuid4(), months=12,
+                                           end=_date(2026, 9, 11)))
+    assert isinstance(seen["s"], _date) and isinstance(seen["e"], _date), seen
+    assert not isinstance(seen["s"], str)

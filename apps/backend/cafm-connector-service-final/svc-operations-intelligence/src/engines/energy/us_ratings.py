@@ -312,7 +312,9 @@ async def consumption_for_building(
           FROM ms JOIN plenum_cafm.meter_readings r ON r.meter_id = ms.id
          WHERE r.reading_at >= CAST(:s AS date) AND r.reading_at < CAST(:e AS date) + 1
          GROUP BY 1, 2
-    """), {"b": str(building_id), "s": start.isoformat(), "e": end.isoformat()})).mappings().all()
+    # start/end are passed as dates, not ISO strings: the driver binds a CAST(:p AS date)
+    # parameter as a date and rejects a str with "no attribute 'toordinal'".
+    """), {"b": str(building_id), "s": start, "e": end})).mappings().all()
     if not rows:
         return None
     by_fuel: dict[str, float] = {}

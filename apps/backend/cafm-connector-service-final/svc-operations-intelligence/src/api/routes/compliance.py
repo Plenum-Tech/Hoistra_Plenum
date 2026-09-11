@@ -5,7 +5,7 @@ from uuid import UUID
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1355,5 +1355,6 @@ async def filings_position(
     """Where each building stands on the country's filing obligations: filed / due / overdue,
     certified / lapsed / none."""
     ids = await position_svc.building_ids_for(session, s, building_id)
+    ids = await position_svc.building_ids_in_country(session, ids, country_code)
     return await filings_svc.filing_positions(session, organization_id=s.organization_id, building_ids=ids,
                                               country_code=country_code)

@@ -53,6 +53,14 @@ async def building_ids_for(
     return [r[0] for r in rows]
 
 
+async def building_ids_in_country(
+    session: AsyncSession, building_ids: list[UUID], country_code: str
+) -> list[UUID]:
+    """Of these buildings, the ones in that market. A New York filing obligation is not a
+    fact about a building in London, and counting them together made every tile wrong."""
+    return [UUID(b["building_id"]) for b in await _buildings_in_country(session, building_ids, country_code)]
+
+
 async def _buildings_in_country(session: AsyncSession, building_ids: list[UUID], country_code: str) -> list[dict[str, Any]]:
     if not building_ids:
         return []
@@ -193,7 +201,7 @@ async def ingest_degree_days(
                    station = coalesce(EXCLUDED.station, plenum_cafm.weather_degree_days.station),
                    source = EXCLUDED.source
         """), {"o": str(organization_id) if organization_id else None, "b": str(building_id),
-               "m": d.isoformat(), "h": hdd, "c": cdd, "t": base_temp_c, "st": station, "src": source})
+               "m": d, "h": hdd, "c": cdd, "t": base_temp_c, "st": station, "src": source})
         stored += 1
     await session.commit()
     return {"ok": True, "building_id": str(building_id), "stored": stored, "rejected": rejected}

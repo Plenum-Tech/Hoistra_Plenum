@@ -253,8 +253,10 @@ async def mees_summary(
              "s": f"below EPC {MEES_PROPOSED_2030} · over {int(MEES_LARGE_BUILDING_M2):,} m²",
              "tone": "risk" if below_b_large else "ok", "basis": "certificate"},
             {"l": "EPCs on file", "v": f"{current} / {len(buildings)}",
-             "s": ("none expiring inside 12 months" if not expiring_12m
+             "s": (f"{len(buildings) - current} expired" if current < len(buildings)
+                   else "none expiring inside 12 months" if not expiring_12m
                    else f"{expiring_12m} expiring inside 12 months"),
-             "tone": "warn" if expiring_12m else "ok", "basis": "certificate"},
+             "tone": ("risk" if current < len(buildings) else "warn" if expiring_12m else "ok"),
+             "basis": "certificate"},
         ],
     }
