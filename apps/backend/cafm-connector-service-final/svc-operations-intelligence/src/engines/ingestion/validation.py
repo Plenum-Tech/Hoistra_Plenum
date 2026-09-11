@@ -96,19 +96,28 @@ def compare(c: Claims, o: BuildingOntology) -> list[Finding]:
             score, name = name_overlap(claim, o.names)
             if score > best:
                 best, matched_name = score, name
+        # Only a name the DOCUMENT states can contradict this building. A file name may
+        # agree with one and may point at a better candidate, but a scan saved as
+        # "scan001.pdf" is not the document claiming to belong somewhere else.
+        authored = c.authored_buildings()
         claimed = c.buildings[0] if len(c.buildings) == 1 else c.buildings
         if best >= NAME_SAME:
             out.append(Finding("building_name", SUPPORTS, 3.0,
                                f"The document names “{matched_name}”, which is this building.",
                                claimed, matched_name))
+        elif not authored:
+            out.append(Finding("building_name", UNKNOWN, 0.0,
+                               "The document does not name a property; only the file name "
+                               "suggests one, which is not evidence either way.",
+                               claimed, o.name))
         elif best <= NAME_DIFFERENT:
             out.append(Finding("building_name", CONFLICTS, 3.0,
-                               f"The document names “{c.buildings[0]}”; this building is "
-                               f"“{o.name}”.", claimed, o.name))
+                               f"The document names “{authored[0]}”; this building is "
+                               f"“{o.name}”.", authored, o.name))
         else:
             out.append(Finding("building_name", UNKNOWN, 1.0,
-                               f"The document names “{c.buildings[0]}”, which is close to but "
-                               f"not clearly “{o.name}”.", claimed, o.name))
+                               f"The document names “{authored[0]}”, which is close to but "
+                               f"not clearly “{o.name}”.", authored, o.name))
     else:
         out.append(Finding("building_name", UNKNOWN, 0.0,
                            "The document does not name a property.", None, o.name))

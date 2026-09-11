@@ -35,8 +35,14 @@ _BUILDING_LABELS = (
     r"(?:building|property|premises|site|location|asset location|place of work|"
     r"site name|building name|property name|premises address|site address)"
 )
+# The value stops at the end of its sentence as well as at a separator: "Site: Raffles
+# Link. Registered in Singapore." claims Raffles Link, not the sentence after it.
 _BUILDING_RE = re.compile(
-    _BUILDING_LABELS + r"\s*(?:name)?\s*[:\-–]\s*([A-Z0-9][^\n;,|]{2,60})", re.IGNORECASE)
+    _BUILDING_LABELS + r"\s*(?:name)?\s*[:\-\u2013]\s*"
+    r"([A-Z0-9][^\n;,|]{2,60}?)(?=\.\s|\.$|[\n;,|]|$)",
+    re.IGNORECASE)
+
+
 _CODE_RE = re.compile(
     r"(?:building|site|property)\s*(?:code|ref|reference|id|no\.?|number)\s*[:\-–]\s*"
     r"([A-Z0-9][A-Z0-9\-/_]{1,20})", re.IGNORECASE)
@@ -91,6 +97,15 @@ class Claims:
     contract_refs: list[str] = field(default_factory=list)
     certificate_numbers: list[str] = field(default_factory=list)
     sources: dict[str, str] = field(default_factory=dict)   # claim → where it came from
+
+    def authored_buildings(self) -> list[str]:
+        """Building names the DOCUMENT states - everything except the file name's guess.
+
+        Only these can contradict a building. A file name can agree with one, and can
+        point at a better candidate, but "scan001.pdf" filed against Riverside Court is
+        not the document saying it belongs somewhere else.
+        """
+        return [b for b in self.buildings if self.sources.get(b) != "filename"]
 
     def is_empty(self) -> bool:
         return not any((self.buildings, self.codes, self.vendors, self.countries,
@@ -168,11 +183,15 @@ def from_document(
         if code:
             _add(c.countries, code, sources=c.sources, origin="text:country")
 
-    # 3. the file name, for a building nobody labelled
+    # 3. the file name, for a building nobody labelled. Weakest by a long way: a file
+    # is named by whoever saved it, not by the document's author, so "scan001.pdf" is
+    # not the document claiming to be about a property called scan001. Recorded with
+    # its origin so the comparison can use it to rank candidates and to agree with a
+    # building, and never to contradict one.
     if file_name:
         stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", file_name)
-        stem = re.sub(r"[_]+", " ", stem)
-        if tokens(stem):
+        stem = re.sub(r"[_\-]+", " ", stem)
+        if any(len(re.sub(r"[^a-z]", "", t)) >= 3 for t in tokens(stem)):
             _add(c.buildings, stem, sources=c.sources, origin="filename")
 
     return c

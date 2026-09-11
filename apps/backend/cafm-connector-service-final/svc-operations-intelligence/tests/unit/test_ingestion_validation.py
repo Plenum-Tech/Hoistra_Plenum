@@ -476,3 +476,50 @@ class TestRoutes:
             src = (root / rel).read_text(encoding="utf-8")
             for marker in ("is_admin", "role ==", 'role in (', "at_least("):
                 assert marker not in src, (rel, marker)
+
+
+# ── two corrections the live run showed ─────────────────────────────────────────────
+
+class TestAFileNameIsAHintNotAnAssertion:
+    """A scan saved as "scan001.pdf" is not the document claiming to belong elsewhere.
+
+    The first live run reported "the document names scan001; this building is Riverside
+    Court" as a CONFLICT on a document whose text named no property at all. A file is named
+    by whoever saved it; only the document can contradict a building.
+    """
+
+    def test_a_meaningless_file_name_never_contradicts(self):
+        c = C.from_document(file_name="scan001.pdf",
+                            text="Invoice for services rendered. Total 1,200.")
+        f = find(V.compare(c, riverside()), "building_name")
+        assert f.direction == V.UNKNOWN
+        assert V.verdict_for(V.compare(c, riverside()), riverside())[0] == V.UNCERTAIN
+
+    def test_a_file_name_naming_another_building_still_does_not_contradict(self):
+        c = C.from_document(file_name="Bishopsgate_Tower_EICR.pdf")
+        assert c.authored_buildings() == []
+        assert find(V.compare(c, riverside()), "building_name").direction == V.UNKNOWN
+
+    def test_but_it_can_still_agree(self):
+        c = C.from_document(file_name="Riverside Court EICR 2026.pdf")
+        assert find(V.compare(c, riverside()), "building_name").direction == V.SUPPORTS
+
+    def test_and_it_can_still_point_at_a_better_candidate(self):
+        # Ranking is allowed to use it — a suggestion is a question, not a verdict.
+        c = C.from_document(file_name="Bishopsgate_Tower_EICR.pdf")
+        assert V.score_candidate(c, PORTFOLIO[1]) > V.score_candidate(c, PORTFOLIO[0])
+
+    def test_a_name_the_document_states_still_contradicts(self):
+        c = C.from_document(text="Site: Bishopsgate Tower", file_name="scan001.pdf")
+        assert find(V.compare(c, riverside()), "building_name").direction == V.CONFLICTS
+
+
+class TestALabelStopsAtItsSentence:
+    def test_the_claim_is_the_name_not_the_rest_of_the_paragraph(self):
+        c = C.from_document(text="Contract for services. Site: Raffles Link. Registered in "
+                                 "Singapore.")
+        assert c.buildings == ["Raffles Link"]
+
+    def test_a_multi_word_name_survives(self):
+        assert C.from_document(text="Property: Bishopsgate Tower, London").buildings == \
+            ["Bishopsgate Tower"]
