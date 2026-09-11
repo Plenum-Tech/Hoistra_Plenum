@@ -662,23 +662,46 @@ def detect_simultaneous_heating_cooling(
         if len(samples) < 2:
             continue
         gaps = [(b[0] - a[0]).total_seconds() / 60 for a, b in zip(samples, samples[1:])]
-        step = median(g for g in gaps if g > 0) if any(g > 0 for g in gaps) else 15.0
-        start: datetime | None = None
-        last: datetime | None = None
-        for t, h, c in samples + [(samples[-1][0] + timedelta(minutes=step * 2), 0.0, 0.0)]:
+        positive = [g for g in gaps if g > 0]
+        step = median(positive) if positive else 15.0
+        # Two trend exports covering the same hours arrive interleaved, and read literally
+        # their timestamps make a five-minute cadence look like a one-minute one — which
+        # chops every run below the threshold. So the zone is put on a regular grid at its
+        # own cadence and each slot takes the STRONGEST signal seen in it: if one export
+        # says heating is calling at 14:20 and another says cooling is, both are calling.
+        slot = max(1.0, step)
+        grid: dict[int, tuple[float, float]] = {}
+        for t, h, c in samples:
+            key = int(round(t.timestamp() / (slot * 60)))
+            prev = grid.get(key, (0.0, 0.0))
+            grid[key] = (max(prev[0], h), max(prev[1], c))
+        keys = sorted(grid)
+        start_key: int | None = None
+        last_key: int | None = None
+        for key in keys + [keys[-1] + 2]:
+            h, c = grid.get(key, (0.0, 0.0))
             both = h > FIGHT_CALL_PCT and c > FIGHT_CALL_PCT
-            contiguous = last is not None and (t - last).total_seconds() / 60 <= step * 1.5
-            if both and (start is None or not contiguous):
-                start, last = t, t
-            elif both:
-                last = t
-            else:
-                if start is not None and last is not None:
-                    minutes = (last - start).total_seconds() / 60 + step
+            contiguous = last_key is not None and key - last_key <= 1
+            if both and (start_key is None or not contiguous):
+                if start_key is not None and last_key is not None:
+                    minutes = (last_key - start_key + 1) * slot
                     if minutes >= FIGHT_MIN_MINUTES:
-                        runs.append({"zone": zone, "from": start.isoformat(),
-                                     "to": last.isoformat(), "minutes": round(minutes, 1)})
-                start = last = None
+                        runs.append({"zone": zone,
+                                     "from": datetime.fromtimestamp(start_key * slot * 60, timezone.utc).isoformat(),
+                                     "to": datetime.fromtimestamp(last_key * slot * 60, timezone.utc).isoformat(),
+                                     "minutes": round(minutes, 1)})
+                start_key = last_key = key
+            elif both:
+                last_key = key
+            else:
+                if start_key is not None and last_key is not None:
+                    minutes = (last_key - start_key + 1) * slot
+                    if minutes >= FIGHT_MIN_MINUTES:
+                        runs.append({"zone": zone,
+                                     "from": datetime.fromtimestamp(start_key * slot * 60, timezone.utc).isoformat(),
+                                     "to": datetime.fromtimestamp(last_key * slot * 60, timezone.utc).isoformat(),
+                                     "minutes": round(minutes, 1)})
+                start_key = last_key = None
     if not runs:
         return None
     longest = max(r["minutes"] for r in runs)

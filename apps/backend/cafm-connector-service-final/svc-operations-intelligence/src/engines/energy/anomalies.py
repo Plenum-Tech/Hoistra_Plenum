@@ -460,6 +460,11 @@ async def scan_meter_anomalies(
     # listed under "skipped" rather than run on nothing.
     meta = meter.raw_metadata or {}
     skipped: dict[str, str] = {}
+    if not meter.is_sub_meter:
+        # Thirteen rules exist; a rule that cannot run on this meter says so rather than
+        # disappearing, so "rules_run" plus "skipped" always accounts for all of them.
+        skipped["asset_spike"] = "this meter is not a sub-meter, so no single asset is isolated"
+
     if readings:
         latest = _aware(max(t for t, _ in readings))
         occupancy = _occupancy_from(meta)

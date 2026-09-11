@@ -354,3 +354,36 @@ def test_every_card_rule_has_a_detector_name():
                 "peak", "fight", "cop", "regress", "dataq", "tou"):
         assert rid in D.RULE_IDS
     assert len(D.RULE_IDS) == 13
+
+
+class TestOverlappingTrendExports:
+    """Two BMS exports covering the same hours must not cancel each other out.
+
+    The live scan found nothing on a zone that was plainly fighting, because the table held
+    two trend uploads for it. Interleaved, their timestamps made a five-minute cadence look
+    like a one-minute one, so every run was chopped below the thirty-minute threshold.
+    Samples are now collapsed onto a grid per zone, each slot taking the strongest signal in
+    it: if one export says heating is calling and another says cooling is, both are.
+    """
+
+    @staticmethod
+    def series(n, fighting, *, offset_min=0, step=5, heat=65.0, cool=58.0):
+        return [(END - timedelta(minutes=step * i + offset_min), "L3-East", heat,
+                 cool if i < fighting else 0.0) for i in range(n)]
+
+    def test_one_export_fires(self):
+        hit = D.detect_simultaneous_heating_cooling(self.series(60, 14), tariff=TARIFF)
+        assert hit and max(r["minutes"] for r in hit["detail"]["runs"]) >= 60
+
+    def test_two_overlapping_exports_still_fire(self):
+        both = self.series(60, 14) + self.series(48, 12, offset_min=3, heat=60.0, cool=55.0)
+        hit = D.detect_simultaneous_heating_cooling(both, tariff=TARIFF)
+        assert hit, "two exports of the same fighting zone must not cancel out"
+        assert max(r["minutes"] for r in hit["detail"]["runs"]) >= 60
+
+    def test_a_second_export_cannot_invent_a_fight(self):
+        quiet = self.series(60, 0) + self.series(48, 0, offset_min=3)
+        assert D.detect_simultaneous_heating_cooling(quiet, tariff=TARIFF) is None
+
+    def test_the_threshold_still_holds_on_a_grid(self):
+        assert D.detect_simultaneous_heating_cooling(self.series(60, 4), tariff=TARIFF) is None
