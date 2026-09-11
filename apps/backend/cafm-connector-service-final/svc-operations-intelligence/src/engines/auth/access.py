@@ -98,6 +98,26 @@ def scope_for(
     )
 
 
+def organization_for(scope: Scope, requested: UUID | None) -> UUID | None:
+    """The company a request acts in, given the one the client named — if any.
+
+    The route-level ``scope`` dependency already applies this rule to the query string.
+    This is the same rule for a company named in a request BODY, or for a route whose
+    query parameter the client left out: the caller's own company by default; a different
+    one is 403 unless the caller is a superadmin, who gets the company they asked for.
+    Without this, an omitted organization_id reached the engines as None, which they read
+    as "every company".
+    """
+    if requested is None or requested == scope.organization_id:
+        return scope.organization_id
+    if not scope.is_superadmin:
+        raise _forbidden(
+            "You can only work within your own company.", "wrong_organization",
+            your_organization_id=str(scope.organization_id) if scope.organization_id else None,
+        )
+    return requested
+
+
 def building_filter(
     scope: Scope, column: str = "building_id", *, prefix: str = "scope"
 ) -> tuple[str, dict[str, Any]]:
@@ -145,6 +165,15 @@ def assert_building(scope: Scope, building_id: UUID | str | None, *, action: str
             "building_not_allocated", building_id=str(bid),
         )
     return bid
+
+
+def assert_admin(scope: Scope, *, action: str = "do that") -> None:
+    """403 unless the caller administers the company. Creating a building is one such
+    action: a user is allocated to buildings, they do not make them."""
+    if not scope.is_admin:
+        raise _forbidden(
+            f"Only a company administrator can {action}.", "admin_required",
+        )
 
 
 def assert_can_ingest(scope: Scope) -> None:

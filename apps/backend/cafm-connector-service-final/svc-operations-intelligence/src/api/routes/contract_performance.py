@@ -52,14 +52,16 @@ router = APIRouter(prefix="/api/contract-performance", tags=["contract-performan
 async def extract_contract(
     body: ContractExtractRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Relationships Agent handoff — extract from document text then draft-ingest."""
+    org_id = access.organization_for(s, body.organization_id)
     return await extract_svc.extract_contract_parameters(
         session,
         source_text=body.source_text,
         pdf_base64=body.pdf_base64,
         extracted_fields=body.extracted_fields or None,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         vendor_id=body.vendor_id,
         document_id=body.document_id,
         contract_ref=body.contract_ref,
@@ -92,11 +94,14 @@ async def reconcile_migration(
 async def ingest_contract(
     body: ContractIngestRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.ingest_contract_parameters(
         session,
         extracted=body.extracted,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         vendor_id=body.vendor_id,
         vendor_name=body.vendor_name,
         contract_id=body.contract_id,
@@ -164,12 +169,14 @@ async def confirm_contract(
 async def upsert_criticality(
     body: AssetCriticalityRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.upsert_asset_criticality(
         session,
         asset_id=body.asset_id,
         asset_code=body.asset_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         proposed=body.proposed,
         load_dependence=body.load_dependence,
         function_type=body.function_type,
@@ -196,9 +203,11 @@ async def approve_criticality(
 async def propose_from_udr(
     body: UdrCriticalityRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.propose_criticality_from_udr(
-        session, organization_id=body.organization_id, limit=body.limit
+        session, organization_id=org_id, limit=body.limit
     )
 
 
@@ -208,7 +217,9 @@ async def list_criticalities(
     approved: bool | None = None,
     limit: int = Query(200, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await params_svc.list_asset_criticalities(
         session, organization_id=organization_id, approved=approved, limit=limit
     )
@@ -222,7 +233,9 @@ async def list_criticalities(
 async def get_weights(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     return {"ok": True, "weights": await score_svc.get_or_create_weights(session, organization_id)}
 
 
@@ -230,9 +243,10 @@ async def get_weights(
 async def put_weights(
     body: WeightsUpdateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     updates = body.model_dump(exclude_none=True)
-    org = updates.pop("organization_id", None)
+    org = access.organization_for(s, updates.pop("organization_id", None))
     result = await score_svc.update_weights(session, updates, organization_id=org)
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result)
@@ -243,12 +257,14 @@ async def put_weights(
 async def score_work_orders(
     body: ScoreWorkOrdersRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await score_svc.score_completed_work_orders(
         session,
         body.work_orders,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         score_month=body.score_month,
     )
 
@@ -257,16 +273,18 @@ async def score_work_orders(
 async def score_from_udr(
     body: ScoreFromUdrRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     B2 — Score work orders ingested via Phase 1 UDR migration
     (`plenum_cafm.work_orders`). Prefer this after CSV/XLS migration instead of
     posting hand-crafted score batches.
     """
+    org_id = access.organization_for(s, body.organization_id)
     if body.all_buckets:
         return await score_svc.score_all_from_udr(
             session,
-            organization_id=body.organization_id,
+            organization_id=org_id,
             vendor_id=body.vendor_id,
             limit_per_month=body.limit,
             allow_default_parameters=body.allow_default_parameters,
@@ -274,7 +292,7 @@ async def score_from_udr(
     return await score_svc.score_work_orders_from_udr(
         session,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         score_month=body.score_month,
         limit=body.limit,
         generate_scorecard=body.generate_scorecard,
@@ -287,8 +305,10 @@ async def udr_work_order_buckets(
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """List vendor×month WO buckets available in migrated UDR tables."""
+    organization_id = access.organization_for(s, organization_id)
     buckets = await score_svc.list_udr_score_months(
         session, vendor_id=vendor_id, organization_id=organization_id
     )
@@ -299,12 +319,14 @@ async def udr_work_order_buckets(
 async def monthly_scorecard(
     body: ScorecardRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await score_svc.generate_monthly_scorecard(
         session,
         vendor_id=body.vendor_id,
         score_month=body.score_month,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         ppm_visits=body.ppm_visits,
     )
 
@@ -315,7 +337,9 @@ async def list_scorecards(
     organization_id: UUID | None = None,
     limit: int = Query(50, le=200),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await score_svc.list_scorecards(
         session, vendor_id=vendor_id, organization_id=organization_id, limit=limit
     )
@@ -326,8 +350,10 @@ async def list_scorecards(
 async def vendors_saved_space_summary(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Vendors Saved Space — scorecards + pending Feature B approvals + weights."""
+    organization_id = access.organization_for(s, organization_id)
     # 20 hid any vendor whose scored months are older than the newest 20 rows
     # portfolio-wide (e.g. a vendor scored from 2023 reports vanished behind
     # three vendors' 2026 months). 200 covers years of monthly cards.
@@ -370,14 +396,16 @@ async def vendors_saved_space_summary(
 async def fm_staleness(
     body: FmStalenessRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await score_svc.upsert_fm_staleness(
         session,
         vendor_id=body.vendor_id,
         last_report_at=body.last_report_at,
         data_as_of=body.data_as_of,
         note=body.note,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -388,8 +416,10 @@ async def fm_staleness(
 async def extract_verify_invoice(
     body: InvoiceExtractVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Orchestrator invoice upload — parse lines then verify vs ingested WOs."""
+    org_id = access.organization_for(s, body.organization_id)
     return await extract_svc.extract_and_verify_invoice(
         session,
         source_text=body.source_text,
@@ -398,7 +428,7 @@ async def extract_verify_invoice(
         invoice_ref=body.invoice_ref,
         invoice_ref_fallback=body.invoice_ref_fallback,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         document_id=body.document_id,
         labour_day_rate=body.labour_day_rate,
         labour_hour_rate=body.labour_hour_rate,
@@ -446,14 +476,16 @@ async def list_invoices(
 async def verify_invoice(
     body: InvoiceVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await invoice_svc.verify_invoice(
         session,
         invoice_ref=body.invoice_ref,
         lines=body.lines,
         work_orders=body.work_orders,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         document_id=body.document_id,
         labour_day_rate=body.labour_day_rate,
         labour_hour_rate=body.labour_hour_rate,
@@ -484,7 +516,9 @@ async def list_approvals(
     status: str = "pending",
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         source_feature="B",
@@ -522,8 +556,10 @@ async def resolve_wo_conflict(
     body: WorkOrderConflictResolveRequest,
     organization_id: UUID | None = Query(None),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """FR-039: PM accepts stored or incoming values for a conflicted WO."""
+    organization_id = access.organization_for(s, organization_id)
     return await conflicts_svc.resolve_wo_conflict(
         session,
         wo_code=wo_code,
@@ -544,8 +580,10 @@ async def get_insights(
     from_date: str | None = Query(None, description="YYYY-MM-DD"),
     to_date: str | None = Query(None, description="YYYY-MM-DD"),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """FR-028: cost variance, labour variance, and matched/flagged trend for a vendor."""
+    organization_id = access.organization_for(s, organization_id)
     from datetime import date as _date
 
     fd = _date.fromisoformat(from_date) if from_date else None

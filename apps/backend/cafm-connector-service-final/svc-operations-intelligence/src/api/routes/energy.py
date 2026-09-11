@@ -54,8 +54,14 @@ router = APIRouter(prefix="/api/energy", tags=["energy-intelligence"],
 
 
 @router.post("/meters")
-async def upsert_meter(body: MeterUpsertRequest, session: AsyncSession = Depends(get_session)):
-    return await meter_svc.upsert_meter(session, body.model_dump(exclude_none=True))
+async def upsert_meter(
+    body: MeterUpsertRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    payload = body.model_dump(exclude_none=True)
+    payload["organization_id"] = access.organization_for(s, body.organization_id)
+    return await meter_svc.upsert_meter(session, payload)
 
 
 @router.get("/meters")
@@ -64,7 +70,9 @@ async def list_meters(
     site_id: UUID | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await meter_svc.list_meters(
         session, organization_id=organization_id, site_id=site_id, limit=limit
     )
@@ -72,24 +80,33 @@ async def list_meters(
 
 
 @router.post("/meters/pull")
-async def pull_meter(body: MeterPullRequest, session: AsyncSession = Depends(get_session)):
+async def pull_meter(
+    body: MeterPullRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
     """Pull half-hourly readings from DCC (MPAN) / gas (MPRN) API for a window."""
+    org_id = access.organization_for(s, body.organization_id)
     return await meter_svc.pull_and_ingest_meter(
         session,
         meter_id=body.meter_id,
         window_start=body.window_start,
         window_end=body.window_end,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
 @router.post("/readings/ingest")
-async def ingest_readings(body: ReadingsIngestRequest, session: AsyncSession = Depends(get_session)):
+async def ingest_readings(
+    body: ReadingsIngestRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
     return await meter_svc.ingest_readings(
         session,
         meter_id=body.meter_id,
         readings=body.readings,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         source=body.source,
         detect_gaps=body.detect_gaps,
     )
@@ -103,8 +120,11 @@ async def ingest_readings_csv(
     source: str = Form("csv"),
     detect_gaps: bool = Form(True),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Half-hourly smart-meter CSV → MeterReading (+ auto-create meter from MPAN/MPRN)."""
+    access.assert_can_ingest(s)
+    organization_id = access.organization_for(s, organization_id)
     raw = await file.read()
     try:
         text = raw.decode("utf-8")
@@ -173,13 +193,17 @@ async def process_gap_retries(session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/buildings/profile")
-async def building_profile(body: BuildingProfileRequest, session: AsyncSession = Depends(get_session)):
+async def building_profile(
+    body: BuildingProfileRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await eui_svc.upsert_building_profile(
         session,
         site_id=body.site_id,
         gia_m2=body.gia_m2,
         building_type=body.building_type,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -262,6 +286,7 @@ async def create_building(
     body: CreateBuildingRequest,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create one building, and return it in the same shape GET /buildings uses.
 
@@ -275,7 +300,14 @@ async def create_building(
     201 on success. 400 with field-keyed errors. 409 when a supplied building_code is taken
     — an existing building is never overwritten.
     """
-    out = await bld_create.create_building(session, body.model_dump(exclude_none=True))
+    # A user is allocated to buildings; only an administrator makes one. And the building
+    # belongs to the caller's company whatever the body said (a superadmin may name one).
+    access.assert_admin(s, action="create a building")
+    requested = UUID(body.organization_id) if body.organization_id else None
+    payload = body.model_dump(exclude_none=True)
+    org_id = access.organization_for(s, requested)
+    payload["organization_id"] = str(org_id) if org_id else None
+    out = await bld_create.create_building(session, payload)
     response.status_code = int(out.get("status") or (201 if out.get("ok") else 400))
     return out
 
@@ -377,6 +409,7 @@ async def delete_building(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     access.assert_building(s, building_id, action="delete")
     """Remove a building. Reports what it would touch unless confirm=true.
 
@@ -558,8 +591,10 @@ async def get_building(
     site_id: str,
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """One building by sites.site_id (VARCHAR(50)) — same columns as the table row."""
+    organization_id = access.organization_for(s, organization_id)
     out = await bld_svc.get_building(session, site_id, organization_id=organization_id)
     if not out.get("ok"):
         raise HTTPException(status_code=404, detail=out)
@@ -572,25 +607,33 @@ async def list_tm46():
 
 
 @router.post("/eui/compute")
-async def compute_eui(body: EuiComputeRequest, session: AsyncSession = Depends(get_session)):
+async def compute_eui(
+    body: EuiComputeRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await eui_svc.compute_site_eui(
         session,
         site_id=body.site_id,
         period_start=body.period_start,
         period_end=body.period_end,
         meter_type=body.meter_type,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
 @router.post("/condition/deduce")
-async def deduce_condition(body: ConditionDeduceRequest, session: AsyncSession = Depends(get_session)):
+async def deduce_condition(
+    body: ConditionDeduceRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     if body.from_vectors or not (body.report_text or "").strip():
         return await cond_svc.deduce_condition_from_vector_layer(
             session,
             asset_id=body.asset_id,
             asset_code=body.asset_code,
-            organization_id=body.organization_id,
+            organization_id=org_id,
             write_to_asset=body.write_to_asset,
             auto_cross_ref=body.auto_cross_ref,
         )
@@ -600,7 +643,7 @@ async def deduce_condition(body: ConditionDeduceRequest, session: AsyncSession =
         report_text=body.report_text or "",
         source_report_ref=body.source_report_ref,
         asset_code=body.asset_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         write_to_asset=body.write_to_asset,
         auto_cross_ref=body.auto_cross_ref,
     )
@@ -608,37 +651,47 @@ async def deduce_condition(body: ConditionDeduceRequest, session: AsyncSession =
 
 @router.post("/condition/deduce-from-vectors")
 async def deduce_from_vectors(
-    body: ConditionFromVectorsRequest, session: AsyncSession = Depends(get_session)
+    body: ConditionFromVectorsRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await cond_svc.deduce_condition_from_vector_layer(
         session,
         asset_id=body.asset_id,
         asset_code=body.asset_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         write_to_asset=body.write_to_asset,
         auto_cross_ref=body.auto_cross_ref,
     )
 
 
 @router.post("/recommendations/cross-ref")
-async def cross_ref(body: CrossRefRequest, session: AsyncSession = Depends(get_session)):
+async def cross_ref(
+    body: CrossRefRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await cond_svc.cross_reference_condition_consumption(
         session,
         asset_id=body.asset_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         days=body.days,
     )
 
 
 @router.post("/occupancy/log")
-async def log_occupancy(body: OccupancyLogRequest, session: AsyncSession = Depends(get_session)):
+async def log_occupancy(
+    body: OccupancyLogRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await occ_svc.log_occupancy_change(
         session,
         site_id=body.site_id,
         occupancy_state=body.occupancy_state,
         changed_at=body.changed_at,
         notes=body.notes,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         source=body.source,
     )
 
@@ -685,9 +738,13 @@ async def simulator_enable(
 
 
 @router.post("/anomalies/scan")
-async def scan_anomalies(body: AnomalyScanRequest, session: AsyncSession = Depends(get_session)):
+async def scan_anomalies(
+    body: AnomalyScanRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await anom_svc.scan_meter_anomalies(
-        session, meter_id=body.meter_id, organization_id=body.organization_id
+        session, meter_id=body.meter_id, organization_id=org_id
     )
 
 
@@ -695,7 +752,9 @@ async def scan_anomalies(body: AnomalyScanRequest, session: AsyncSession = Depen
 async def scan_all_anomalies(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
 
 
@@ -705,7 +764,9 @@ async def list_anomalies(
     organization_id: UUID | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await anom_svc.list_anomalies(
         session, status=status, organization_id=organization_id, limit=limit
     )
@@ -724,12 +785,16 @@ async def act_anomaly(
 
 
 @router.post("/reports/monthly")
-async def monthly_report(body: MonthlyReportRequest, session: AsyncSession = Depends(get_session)):
+async def monthly_report(
+    body: MonthlyReportRequest, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    org_id = access.organization_for(s, body.organization_id)
     return await report_svc.generate_monthly_energy_report(
         session,
         site_id=body.site_id,
         report_month=body.report_month,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         export_pdf=body.export_pdf,
     )
 
@@ -749,7 +814,11 @@ async def download_report_pdf(report_id: UUID, session: AsyncSession = Depends(g
 
 
 @router.get("/saved-space/summary")
-async def saved_space(organization_id: UUID | None = None, session: AsyncSession = Depends(get_session)):
+async def saved_space(
+    organization_id: UUID | None = None, session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    organization_id = access.organization_for(s, organization_id)
     return await report_svc.saved_space_summary(session, organization_id=organization_id)
 
 
@@ -758,7 +827,9 @@ async def list_approvals(
     status: str = "pending",
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session, source_feature="C", status=status, organization_id=organization_id
     )

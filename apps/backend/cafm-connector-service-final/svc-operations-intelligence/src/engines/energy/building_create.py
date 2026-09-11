@@ -450,6 +450,9 @@ async def create_building(
         "gross_area_sqft": clean.get("gross_area_sqft"),
         "site_id": clean.get("site_id"),
         "location_id": loc["location_id"],
+        # The company, when the column exists (access_control.sql adds it). Without it
+        # the building is invisible to every company admin until a superadmin assigns it.
+        "organization_id": clean.get("organization_id"),
         "hoist_score": 0,
         "raw_metadata": json.dumps(extras),
     }
@@ -461,6 +464,7 @@ async def create_building(
 
     casts = {"building_id": "CAST(:building_id AS UUID)",
              "location_id": "CAST(:location_id AS UUID)",
+             "organization_id": "CAST(:organization_id AS UUID)",
              "primary_use": "CAST(:primary_use AS plenum_cafm.building_primary_use)",
              "raw_metadata": "CAST(:raw_metadata AS JSONB)"}
     names = ", ".join(cols)

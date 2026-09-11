@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...shared import approvals as approvals_svc
+from ...engines.auth import access
 from .auth import scope
 from ..schemas.compliance import QueueDecisionRequest
 
@@ -37,11 +38,13 @@ async def list_all_approvals(
     organization_id: UUID | None = None,
     limit: int = Query(150, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     Unified Approvals rail — all Phase 2 sources (A Compliance, B Contract, C Energy)
     unless source_feature is set.
     """
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         organization_id=organization_id,
@@ -60,8 +63,10 @@ async def list_all_approvals(
 async def send_email_draft(
     body: SendEmailDraftRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ) -> dict[str, Any]:
     """Send a compliance alert draft to the PM email entered in the UI."""
+    org_id = access.organization_for(s, body.organization_id)
     return await approvals_svc.send_approval_email_draft(
         session,
         to_address=body.to,
@@ -69,7 +74,7 @@ async def send_email_draft(
         body=body.body,
         cc_address=body.cc,
         queue_item_id=body.queue_item_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 

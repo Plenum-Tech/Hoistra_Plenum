@@ -145,6 +145,7 @@ async def ingest_document_gated(
     body: GatedCertificateRequest,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Validate, then write — and refuse to write until the mandatory fields are there.
 
@@ -157,6 +158,7 @@ async def ingest_document_gated(
     here so far; invoices and contracts validate through /documents/validate and ingest
     through their own routes.
     """
+    access.assert_can_ingest(s)
     merged = ingest_gate.apply_answers(
         body.extracted, body.answers, answered_by=body.answered_by
     )
@@ -202,8 +204,10 @@ async def ingest_document_gated(
 async def upsert_certificate(
     body: CertificateUpsertRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     data = body.model_dump()
+    data["organization_id"] = access.organization_for(s, body.organization_id)
     confirmed = data.pop("confirmed_by_pm", False)
     return await cert_svc.upsert_certificate(session, data, confirmed_by_pm=confirmed)
 
@@ -253,6 +257,7 @@ async def list_certificates(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     # The company is the caller's, not the query string's.
     organization_id = s.organization_id
     rows = await cert_svc.list_certificates(
@@ -325,8 +330,10 @@ async def count_certificates(
     ),
     limit: int = Query(500, le=1000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Deterministic attribute count — use for 'how many have X' questions."""
+    organization_id = access.organization_for(s, organization_id)
     return await cert_svc.count_certificates(
         session,
         cert_scope=cert_scope,
@@ -358,8 +365,10 @@ async def vendors_by_certificate_count(
     ),
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Return vendors grouped by their number of live accreditation certificates."""
+    organization_id = access.organization_for(s, organization_id)
     return await cert_svc.list_vendors_by_certificate_count(
         session,
         min_count=min_count,
@@ -473,14 +482,16 @@ async def extract_vendor_profile(
 async def archive_certificates(
     body: ArchiveCertificatesRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §3 — soft-archive the PM-confirmed certificates (reversible; multi-select)."""
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.archive_certificates(
         session,
         certificate_ids=body.certificate_ids,
         reason=body.reason,
         archived_by=body.archived_by,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -488,13 +499,15 @@ async def archive_certificates(
 async def unarchive_certificates(
     body: UnarchiveCertificatesRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Reverse a soft-archive."""
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.unarchive_certificates(
         session,
         certificate_ids=body.certificate_ids,
         restored_by=body.restored_by,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -515,12 +528,14 @@ async def draft_renewal_email(
 async def building_change(
     body: BuildingChangeRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await cert_svc.building_change_invalidate(
         session,
         site_id=body.site_id,
         change_description=body.change_description,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -528,10 +543,12 @@ async def building_change(
 async def run_scan(
     body: ScanRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await scan_svc.run_compliance_scan(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         scope=body.scope,
         site_id=body.site_id,
         certificate_type_code=body.certificate_type_code,
@@ -542,7 +559,9 @@ async def run_scan(
 async def saved_space_summary(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     return {
         "ok": True,
         **(await cert_svc.saved_space_summary(session, organization_id=organization_id)),
@@ -639,15 +658,17 @@ async def update_pack_type_thresholds(
     certificate_type_code: str,
     body: PackThresholdsUpdateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """PM admin — edit A1 alert ladder thresholds for one Country Pack type."""
+    org_id = access.organization_for(s, body.organization_id)
     return await pack_svc.update_pack_type_thresholds(
         session,
         certificate_type_code=certificate_type_code,
         alert_thresholds=body.alert_thresholds,
         country_code=body.country_code,
         pack_version=body.pack_version,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -683,8 +704,10 @@ async def compliance_catalogue(
 async def ccc_verify(
     body: CccVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC Step 4 — public_api when available, else Verify-now / needs_human."""
+    org_id = access.organization_for(s, body.organization_id)
     return await ccc_verify_svc.verify_certificate_type(
         session,
         certificate_type_code=body.certificate_type_code,
@@ -695,7 +718,7 @@ async def ccc_verify(
         postcode=body.postcode,
         insurer_name=body.insurer_name,
         certificate_id=body.certificate_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         persist=body.persist,
     )
 
@@ -713,14 +736,16 @@ async def document_membership(
     document_id: UUID,
     body: MembershipRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §3.2 — confirm Keep or Remove for a compliance PDF in the vector DB."""
+    org_id = access.organization_for(s, body.organization_id)
     return await membership_svc.decide_membership(
         session,
         document_id=document_id,
         action=body.action,
         actor=body.actor,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         confirmed_by=body.confirmed_by,
     )
 
@@ -729,8 +754,10 @@ async def document_membership(
 async def ingest_verification_dump(
     body: VerificationDumpIngestRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §8.2 — ingest CSV/JSON weekly dump content into local register rows."""
+    access.assert_can_ingest(s)
     return await dump_svc.ingest_dump_text(
         session,
         certificate_type_code=body.certificate_type_code,
@@ -785,11 +812,13 @@ async def register_search_post(
 async def reverify_certificates(
     body: ReverifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """CCC §8.6 — re-verify certificates due for 90-day check (manual trigger)."""
+    org_id = access.organization_for(s, body.organization_id)
     return await reverify_svc.reverify_due_certificates(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
         force=body.force,
     )
@@ -799,11 +828,13 @@ async def reverify_certificates(
 async def auto_verify_listed(
     body: AutoVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Dashboard load — run register bot / dump verify for all listed certificates."""
+    org_id = access.organization_for(s, body.organization_id)
     return await reverify_svc.auto_verify_listed_certificates(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
         skip_verified=body.skip_verified,
     )
@@ -854,11 +885,13 @@ async def document_forensics(body: DocumentForensicsRequest):
 async def vendor_registration_check(
     body: VendorRegistrationCheckRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     Search whether vendor is registered on-platform and currently compliant,
     and return the Verify-now register URL (navigation only — no scrape).
     """
+    org_id = access.organization_for(s, body.organization_id)
     return await verify_svc.check_vendor_registration_compliance(
         session,
         vendor_name=body.vendor_name,
@@ -866,7 +899,7 @@ async def vendor_registration_check(
         accreditation_number=body.accreditation_number,
         cert_scope=body.cert_scope,
         country_code=body.country_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -877,7 +910,9 @@ async def list_approvals(
     organization_id: UUID | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         organization_id=organization_id,
@@ -913,12 +948,14 @@ async def decide_approval(
 async def adversary_check(
     body: AdversaryRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await adversary_svc.run_adversary(
         session,
         check_type=body.check_type,
         payload=body.payload,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -940,16 +977,21 @@ async def extract_fields(
 
 
 @router.post("/ingest-batch")
-async def ingest_batch(body: BatchIngestRequest):
+async def ingest_batch(
+    body: BatchIngestRequest,
+    s: access.Scope = Depends(scope),
+):
     """CCC §3.1 — ingest up to 5 compliance PDFs from the UDR chat in parallel.
 
     Each file is classified, field-extracted, and saved as a draft (one document_id
     each) in its own session; one file failing does not block the others. Drafts await
     PM confirmation and vector-membership Keep/Remove in the Compliance Saved Space.
     """
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
     return await batch_ingest_svc.ingest_batch(
         files=[f.model_dump() for f in body.files],
-        organization_id=body.organization_id,
+        organization_id=org_id,
         country_code=body.country_code,
     )
 
@@ -980,13 +1022,15 @@ async def table_match(
 async def activate_building_pack(
     body: ActivateBuildingPackRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await building_pack_svc.activate_building_pack(
         session,
         site_id=body.site_id,
         country_code=body.country_code,
         pack_version=body.pack_version,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -994,13 +1038,15 @@ async def activate_building_pack(
 async def notify_pack_version(
     body: PackVersionNotifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await building_pack_svc.notify_pack_version_change(
         session,
         country_code=body.country_code,
         new_version=body.new_version,
         change_notes=body.change_notes,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -1008,8 +1054,11 @@ async def notify_pack_version(
 async def upsert_resource_skill(
     body: ResourceSkillRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
-    return await skill_svc.upsert_resource_skill(session, body.model_dump())
+    data = body.model_dump()
+    data["organization_id"] = access.organization_for(s, body.organization_id)
+    return await skill_svc.upsert_resource_skill(session, data)
 
 
 @router.get("/resource-skills")
@@ -1028,11 +1077,13 @@ async def list_resource_skills(
 async def recommend_contractors(
     body: RecommendContractorsRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     rows = await contractor_svc.recommend_contractors(
         session,
         required_accreditation=body.required_accreditation,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         limit=body.limit,
     )
     return {"ok": True, "count": len(rows), "contractors": rows}
@@ -1043,8 +1094,10 @@ async def coverage_buildings(
     organization_id: UUID | None = None,
     country_code: str = "UK",
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Per-building CountryPack coverage %."""
+    organization_id = access.organization_for(s, organization_id)
     return await coverage_svc.building_coverage(
         session, organization_id=organization_id, country_code=country_code
     )
@@ -1059,6 +1112,7 @@ async def backfill_site_links(
     ),
     limit: int = Query(1000, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Link building certificates already in the register to the site they belong to.
 
@@ -1068,6 +1122,7 @@ async def backfill_site_links(
     that matches two sites (never linked — a certificate filed against the wrong building
     misstates both buildings' obligations), and every building that matches no site row.
     """
+    organization_id = access.organization_for(s, organization_id)
     from ...engines.compliance.site_links import backfill_site_links as _backfill
 
     return await _backfill(
@@ -1081,8 +1136,10 @@ async def coverage_vendors(
     country_code: str = "UK",
     trade_category: str | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Per-vendor CountryPack coverage % (optional trade filter)."""
+    organization_id = access.organization_for(s, organization_id)
     return await coverage_svc.vendor_coverage(
         session,
         organization_id=organization_id,
@@ -1098,8 +1155,10 @@ async def evidence_pack_get(
     vendor_id: UUID | None = None,
     include_approvals: bool = True,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """One-click PDF evidence pack for insurers / auditors / BSA."""
+    organization_id = access.organization_for(s, organization_id)
     return await evidence_svc.generate_evidence_pack_file(
         session,
         organization_id=organization_id,
@@ -1113,10 +1172,12 @@ async def evidence_pack_get(
 async def evidence_pack_post(
     body: EvidencePackRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await evidence_svc.generate_evidence_pack_file(
         session,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         site_id=body.site_id,
         vendor_id=body.vendor_id,
         include_approvals=body.include_approvals,
@@ -1128,8 +1189,10 @@ async def vendor_passport(
     vendor_id: str,
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Pre-engagement vendor passport (accreditations + insurance + posture)."""
+    organization_id = access.organization_for(s, organization_id)
     return await passport_svc.build_vendor_passport(
         session, vendor_id, organization_id=organization_id
     )
@@ -1140,13 +1203,15 @@ async def vendor_passport_share(
     vendor_id: str,
     body: PassportShareRequest | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create a time-limited shareable passport link."""
+    org_id = access.organization_for(s, body.organization_id)
     body = body or PassportShareRequest()
     return await passport_svc.share_vendor_passport(
         session,
         vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         ttl_hours=body.ttl_hours,
         recipient=body.recipient,
     )

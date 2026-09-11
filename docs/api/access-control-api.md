@@ -5,9 +5,10 @@ Generated from the running FastAPI schema (`app.openapi()`), so it cannot drift 
 ## The rules every endpoint follows
 
 - **Every** `/api/energy`, `/api/compliance`, `/api/contract-performance` and `/api/approvals` route now requires `Authorization: Bearer <access token>`. No token → `401 {reason: "missing_token"}`.
-- The **company is the caller's**. Do not send `organization_id` from the client on those routes; it is ignored for a user/admin and refused with `403 {reason: "wrong_organization"}` if it names another company. A superadmin may pass `?organization_id=` to act as a company.
+- The **company is the caller's**. Do not send `organization_id` from the client on those routes — not in the query string, not in a JSON body, not in a form field. Omitted, it is the caller's company; naming another company is refused with `403 {reason: "wrong_organization"}` for a user or admin. A superadmin may name a company (`?organization_id=` or in the body) to act as it.
+- **Only an admin creates buildings.** `POST /api/energy/buildings` from a plain user → `403 {reason: "admin_required"}`. The new building belongs to the caller's company.
 - The **building is the access boundary**. A plain user sees only buildings allocated to them; a building named in a path they are not allocated to → `403 {reason: "building_not_allocated"}`. List endpoints (`/api/energy/buildings`, `/api/compliance/certificates`, `/api/contract-performance/contracts`, `/invoices`) are narrowed to their buildings server-side. Admins see their whole company.
-- **Ingestion is per user.** `GET /api/auth/me` returns `can_ingest`; the deep-agents upload endpoint refuses files from a user without it → `403 {reason: "cannot_ingest"}`, and a restricted user must send `building_id` (one of theirs) → else `400 {reason: "building_required"}` / `403 {reason: "building_not_allocated"}`.
+- **Ingestion is per user.** `GET /api/auth/me` returns `can_ingest`; the deep-agents upload endpoint and the direct ingest routes (`/api/energy/readings/ingest`, `/readings/ingest/csv`, `/api/compliance/documents/ingest`, `/ingest-batch`, `/verification-dumps/ingest`, `/api/contract-performance/contracts/ingest`) refuse a user without it → `403 {reason: "cannot_ingest"}`, and a restricted user must send `building_id` (one of theirs) → else `400 {reason: "building_required"}` / `403 {reason: "building_not_allocated"}`.
 - Roles are ranked: `user` < `admin` < `superadmin`. `GET /api/auth/roles` lists them.
 
 ## What `GET /api/auth/me` now returns (drive the shell from this)
