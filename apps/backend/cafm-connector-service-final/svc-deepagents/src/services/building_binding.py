@@ -19,6 +19,7 @@ closes the loop.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -233,6 +234,174 @@ async def bind_documents_to_building(
                 "created": created.rowcount or 0}
 
 
+#: Columns that point at a document without declaring a foreign key. Nothing in the schema
+#: constrains these, so a deleted document silently orphans every one of them unless they
+#: are re-pointed by name. Fixed list, filtered through information_schema before it reaches
+#: SQL — the repo rule about never naming a table this file did not choose itself.
+#: `contracts` and `invoices` are views over these tables and follow them.
+#: `udr_run_versions.document_ids` is an array and is deliberately left alone: rewriting one
+#: element of a recorded run would edit history rather than repair a link.
+_DOCUMENT_REFERENCES: tuple[tuple[str, str], ...] = (
+    ("compliance_certificates", "document_id"),
+    ("compliance_certificates", "source_document_id"),
+    ("compliance_vector_membership_audit", "document_id"),
+    ("contract_documents", "document_id"),
+    ("contract_sla_parameters", "document_id"),
+    ("invoice_verifications", "document_id"),
+    ("ppm_visits", "source_document_id"),
+)
+
+#: A saved upload is "{session_id}_{original name}". The prefix changes on every upload of
+#: the same file, which is exactly why the duplicates were not visible as duplicates.
+_SESSION_PREFIX = (
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_"
+)
+
+
+def file_sha256(path: str) -> str | None:
+    """The content hash of an uploaded file, or None if it cannot be read.
+
+    None rather than an exception: a hash is what lets two uploads be recognised as one
+    file, and failing to compute it should cost that recognition, never the upload.
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError as exc:
+        log.warning("ingest.hash_failed", path=str(path)[-80:], error=str(exc)[:200])
+        return None
+
+
+async def stamp_upload_hashes(session_id: str, file_paths: list[str] | None) -> int:
+    """Record each uploaded file's content hash against its ingestion row.
+
+    Whoever wrote the row — doc-rag for what it indexed, register_uploads for what nothing
+    claimed — the bytes are only ever here, so the hash is computed here and written back.
+    Only a row with no hash is stamped: an existing value was computed from the same bytes
+    and overwriting it could only ever replace it with itself or with a mistake.
+    """
+    paths = [p for p in (file_paths or []) if str(p).strip()]
+    if not paths:
+        return 0
+    stamped = 0
+    async with database.AsyncSessionLocal() as session:
+        for path in paths:
+            digest = file_sha256(path)
+            if not digest:
+                continue
+            res = await session.execute(
+                text(
+                    """UPDATE plenum_cafm.ingestion_documents
+                          SET file_hash_sha256 = CAST(:h AS varchar)
+                        WHERE original_filename = CAST(:n AS varchar)
+                          AND file_hash_sha256 IS NULL"""
+                ),
+                {"h": digest, "n": Path(path).name},
+            )
+            stamped += res.rowcount or 0
+        await session.commit()
+    return stamped
+
+
+async def _referencing_columns(session) -> list[tuple[str, str]]:
+    """The soft references this database actually has, out of the ones listed above."""
+    rows = (
+        await session.execute(
+            text(
+                """SELECT table_name, column_name
+                     FROM information_schema.columns
+                    WHERE table_schema = 'plenum_cafm'"""
+            )
+        )
+    ).all()
+    have = {(str(t), str(c)) for t, c in rows}
+    return [pair for pair in _DOCUMENT_REFERENCES if pair in have]
+
+
+async def collapse_duplicate_documents(building_id: str) -> dict[str, Any]:
+    """One file filed twice against one building becomes one document.
+
+    Groups this building's documents by content hash, falling back to the original filename
+    for rows written before hashes were recorded — and only when BOTH rows lack a hash,
+    since two different files can share a name.
+
+    The fallback does not include doc_type. That is a derived classification and an unstable
+    one: the same certificate has been filed as `compliance_certificate` on one upload and
+    left NULL on another, and keying on it would split one file into two documents for a
+    reason that says nothing about the file.
+
+    The earliest row is kept and its gaps filled from the ones it absorbs, so a duplicate is
+    never traded for a document that has lost its file.
+    """
+    async with database.AsyncSessionLocal() as session:
+        groups = (
+            await session.execute(
+                text(
+                    f"""SELECT COALESCE(
+                                   i.file_hash_sha256,
+                                   'name:' || regexp_replace(d.file_name, '{_SESSION_PREFIX}', '')
+                               )                                   AS group_key,
+                               array_agg(d.document_id::text ORDER BY d.uploaded_at NULLS LAST,
+                                                                     d.document_id) AS ids
+                          FROM plenum_cafm.documents d
+                          LEFT JOIN plenum_cafm.ingestion_documents i ON i.id = d.document_id
+                         WHERE d.building_id = CAST(:b AS uuid)
+                           AND d.file_name IS NOT NULL
+                         GROUP BY 1
+                        HAVING count(*) > 1"""
+                ),
+                {"b": building_id},
+            )
+        ).all()
+        if not groups:
+            return {"groups": 0, "documents_removed": 0, "references_repointed": 0}
+
+        columns = await _referencing_columns(session)
+        removed = repointed = 0
+        for group_key, ids in groups:
+            keep, drop = str(ids[0]), [str(i) for i in ids[1:]]
+            # Fill the survivor's gaps before the others go: a later upload may carry the
+            # blob_url or the doc_type that the first one never got.
+            await session.execute(
+                text(
+                    """UPDATE plenum_cafm.documents k
+                          SET blob_url  = COALESCE(k.blob_url,  f.blob_url),
+                              doc_type  = COALESCE(k.doc_type,  f.doc_type),
+                              title     = COALESCE(k.title,     f.title),
+                              file_name = COALESCE(k.file_name, f.file_name)
+                         FROM (SELECT max(blob_url) AS blob_url, max(doc_type) AS doc_type,
+                                      max(title) AS title, max(file_name) AS file_name
+                                 FROM plenum_cafm.documents
+                                WHERE document_id::text = ANY(:ids)) f
+                        WHERE k.document_id::text = :keep"""
+                ),
+                {"ids": drop, "keep": keep},
+            )
+            for table, column in columns:
+                res = await session.execute(
+                    text(
+                        f"""UPDATE plenum_cafm.{table}
+                               SET {column} = CAST(:keep AS uuid)
+                             WHERE {column}::text = ANY(:ids)"""
+                    ),
+                    {"keep": keep, "ids": drop},
+                )
+                repointed += res.rowcount or 0
+            res = await session.execute(
+                text("DELETE FROM plenum_cafm.documents WHERE document_id::text = ANY(:ids)"),
+                {"ids": drop},
+            )
+            removed += res.rowcount or 0
+            log.info("ingest.documents_collapsed", building_id=building_id,
+                     kept=keep, removed=len(drop), group=str(group_key)[:60])
+        await session.commit()
+        return {"groups": len(groups), "documents_removed": removed,
+                "references_repointed": repointed}
+
+
 async def bind_and_log(
     building_id: str | None, tool_calls: Any, *, where: str, session_id: str = "",
     file_paths: list[str] | None = None,
@@ -251,6 +420,12 @@ async def bind_and_log(
         if made:
             log.info("ingest.registered_uploads", where=where, session_id=session_id,
                      created=made)
+        # The bytes are only ever here. Without this every row's file_hash_sha256 stays
+        # NULL, which is how the same file came to be filed four times.
+        hashed = await stamp_upload_hashes(session_id, file_paths)
+        if hashed:
+            log.info("ingest.hashes_stamped", where=where, session_id=session_id,
+                     stamped=hashed)
     except Exception as exc:  # noqa: BLE001 — see the docstring below
         log.warning("ingest.register_failed", where=where, session_id=session_id,
                     error=str(exc)[:200])
@@ -278,6 +453,18 @@ async def bind_and_log(
         log.warning("ingest.bind_failed", where=where, session_id=session_id,
                     building_id=building_id, error=str(exc)[:200])
         return {"error": str(exc)[:120], "candidates": len(ids)}
+    # Re-uploading a file is not filing a second document. This runs after binding, so the
+    # rows being compared are all on the building by then.
+    try:
+        collapsed = await collapse_duplicate_documents(building_id)
+        if collapsed.get("documents_removed"):
+            log.info("ingest.duplicates_collapsed", where=where, session_id=session_id,
+                     building_id=building_id, **collapsed)
+        bound = dict(bound, **{"collapsed_" + k: v for k, v in collapsed.items()})
+    except Exception as exc:  # noqa: BLE001 — a duplicate is a blemish; losing the upload
+        # over tidying one is not a trade worth making.
+        log.warning("ingest.collapse_failed", where=where, session_id=session_id,
+                    building_id=building_id, error=str(exc)[:200])
     log.info("ingest.bound_to_building", where=where, session_id=session_id,
              building_id=building_id, candidates=len(ids), **bound)
     return dict(bound, candidates=len(ids))
