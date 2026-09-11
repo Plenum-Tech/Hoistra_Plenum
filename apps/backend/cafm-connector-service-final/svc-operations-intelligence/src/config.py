@@ -34,6 +34,11 @@ class Settings(BaseSettings):
         False,
         validation_alias=AliasChoices("SMTP_USE_SSL", "smtp_use_ssl"),
     )
+    # Where invitation links point: the frontend's public origin. Blank means links are
+    # emitted relative and the client resolves them against itself.
+    public_app_url: str = Field(
+        "", validation_alias=AliasChoices("PUBLIC_APP_URL", "public_app_url"),
+    )
     email_dry_run: bool = Field(
         True,
         validation_alias=AliasChoices("EMAIL_DRY_RUN", "email_dry_run"),

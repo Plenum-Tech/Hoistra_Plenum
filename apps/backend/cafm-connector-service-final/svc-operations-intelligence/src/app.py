@@ -11,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    admin_router,
     approvals_router,
     auth_router,
     compliance_router,
     contract_performance_router,
     energy_router,
+    superadmin_router,
 )
 from .config import settings
 from .engines.auth import keys as auth_keys
@@ -138,6 +140,8 @@ async def metrics():
 
 app.include_router(approvals_router)
 app.include_router(auth_router)
+app.include_router(superadmin_router)
+app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(energy_router)

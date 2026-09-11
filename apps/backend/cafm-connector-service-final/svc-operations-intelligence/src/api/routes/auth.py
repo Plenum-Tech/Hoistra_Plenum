@@ -18,7 +18,9 @@ from uuid import UUID
 
 from ...engines.auth import keys
 
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
@@ -27,6 +29,8 @@ from ...core.logging import get_logger
 from ...db import get_session
 from ...engines.auth import accounts as acc
 from ...engines.auth import otp as otp_engine
+from ...engines.auth import access
+from ...engines.auth import invitations
 from ...engines.auth import roles as role_engine
 from ...engines.auth import secrets_store
 from ...engines.auth import tokens as token_engine
@@ -284,7 +288,25 @@ async def me(
             detail={"ok": False, "error": "That account no longer exists.",
                     "reason": "no_account"},
         )
-    return {"ok": True, "user": acc.public_user(row),
+    user = acc.public_user(row)
+    # What the client needs to shape itself: whether this person may ingest, and which
+    # buildings they hold. None means unrestricted (admin); [] means allocated to nothing.
+    user["can_ingest"] = principal.can_ingest
+    user["building_ids"] = (
+        None if principal.building_ids is None else [str(b) for b in principal.building_ids]
+    )
+    user["all_buildings"] = principal.building_ids is None
+    if principal.building_ids:
+        named = (await session.execute(
+            text("""SELECT building_id::text AS id, name, building_code
+                      FROM plenum_cafm.buildings
+                     WHERE building_id = ANY(CAST(:b AS uuid[])) ORDER BY name"""),
+            {"b": [str(b) for b in principal.building_ids]},
+        )).mappings().all()
+        user["buildings"] = [dict(r) for r in named]
+    else:
+        user["buildings"] = []
+    return {"ok": True, "user": user,
             "session_id": str(principal.session_id) if principal.session_id else None}
 
 
@@ -430,6 +452,37 @@ def require_role(minimum: str):
 
 require_admin = require_role(role_engine.ADMIN)
 require_superadmin = require_role(role_engine.SUPERADMIN)
+
+# The building-scope dependencies every other router uses. Bound here because access.py
+# cannot import current_principal without a circular import.
+scope, ingest_scope = access.bind(current_principal)
+
+
+class AcceptInvitation(BaseModel):
+    token: str = Field(min_length=16)
+    password: str = Field(min_length=1)
+    full_name: str | None = None
+
+
+@router.post("/invitations/accept", response_model=None)
+async def accept_invitation(
+    body: AcceptInvitation,
+    session: AsyncSession = Depends(get_session),
+):
+    """Public: follow an invitation link, set a password, activate the account.
+
+    No sign-in yet — the token in the link is the credential, single use and hashed at rest.
+    On success the caller signs in normally; nothing is minted here so an intercepted link
+    is worth exactly one password-set and never a session.
+    """
+    try:
+        out = await invitations.accept(
+            session, token=body.token, password=body.password, full_name=body.full_name,
+        )
+    except invitations.InvitationError as exc:
+        raise HTTPException(status_code=exc.http_status,
+                            detail={"ok": False, "error": exc.message, "reason": exc.reason})
+    return out
 
 
 @router.get("/roles")

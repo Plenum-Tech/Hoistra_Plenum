@@ -60,6 +60,14 @@ class Principal:
     # minted before a demotion still says "admin", and believing it would mean a
     # revoked privilege keeps working until the token expires.
     role: str
+    # Read from the database on every request for the same reason as role. A person whose
+    # ingestion right was withdrawn, or who was removed from a building, must find that out
+    # on their next call and not when their token happens to expire.
+    can_ingest: bool = False
+    # The buildings a plain user is allocated to. None means "not restricted by allocation"
+    # — an admin or superadmin sees their whole company and this list is never consulted.
+    # An EMPTY tuple is a real answer: a user allocated to nothing sees nothing.
+    building_ids: tuple[UUID, ...] | None = None
 
 
 class InvalidToken(Exception):
@@ -190,6 +198,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
             text(
                 """SELECT u.id, u.email, u.organization_id, u.status,
                           u.password_changed_at, u.platform_role AS role,
+                          COALESCE(u.can_ingest, FALSE) AS can_ingest,
                           s.revoked_at, s.expires_at, s.revoked_reason
                    FROM plenum_cafm.users u
                    LEFT JOIN plenum_cafm.auth_sessions s
@@ -231,6 +240,20 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
             if expires <= _now():
                 raise InvalidToken("expired", "Your session has expired. Sign in again.")
 
+    role = str(row["role"] or "user")
+    # Only a plain user is bounded by allocation. Admins see their company, superadmins
+    # see everything, and asking the table for them would mean an admin with no rows sees
+    # nothing — which is the opposite of what "admin" means.
+    building_ids: tuple[UUID, ...] | None = None
+    if role == "user":
+        allocated = (
+            await session.execute(
+                text("SELECT building_id FROM plenum_cafm.user_buildings WHERE user_id = :i"),
+                {"i": row["id"]},
+            )
+        ).scalars().all()
+        building_ids = tuple(UUID(str(b)) for b in allocated)
+
     return Principal(
         user_id=row["id"],
         email=row["email"],
@@ -238,7 +261,9 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         session_id=UUID(sid) if sid else None,
         issued_at=datetime.fromtimestamp(int(claims["iat"]), tz=timezone.utc),
         password_changed_at=int(claims.get("pwd") or 0),
-        role=str(row["role"] or "user"),
+        role=role,
+        can_ingest=bool(row["can_ingest"]) or role in ("admin", "superadmin"),
+        building_ids=building_ids,
     )
 
 
