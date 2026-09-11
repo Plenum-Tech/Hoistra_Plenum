@@ -507,7 +507,143 @@ async def decide_energy_approval(
         return _err(exc, "decide_energy_approval")
 
 
+
+
+async def _resolve_building(
+    building_name: str | None, building_id: str | None
+) -> tuple[str | None, dict | None]:
+    """A building id from whatever the user said, or an explanation of why not.
+
+    Returns (building_id, problem). Exactly one is ever set. The resolver declines an
+    ambiguous name rather than picking one, and that refusal is passed through as the
+    answer — reporting one building's documents under another building's name is worse
+    than saying the name was not specific enough.
+    """
+    if building_id:
+        return str(building_id), None
+    if not (building_name or "").strip():
+        return None, {"error": "building_name or building_id is required"}
+    try:
+        resp = await _request(
+            "GET",
+            _base(),
+            "/api/energy/buildings/resolve",
+            service=_SERVICE,
+            timeout=_TIMEOUT,
+            params={"name": building_name},
+        )
+        body = resp.json()
+    except Exception as exc:
+        return None, _err(exc, "resolve_building")
+    if body.get("outcome") == "resolved" and body.get("building_id"):
+        return str(body["building_id"]), None
+    return None, {
+        "error": "building_not_resolved",
+        "outcome": body.get("outcome"),
+        "reason": body.get("reason"),
+        "asked_for": building_name,
+        "candidates": body.get("candidates") or [],
+        "guidance": (
+            "No building matched that name well enough to answer about. Do NOT substitute "
+            "another building; ask which one is meant, using the candidates if any."
+        ),
+    }
+
+
+@tool
+async def list_building_meter_readings(
+    building_name: str | None = None,
+    building_id: str | None = None,
+) -> dict:
+    """C — Every meter on one building, with its readings counted and totalled.
+
+    **Use this for any question about a building's meters, MPAN/MPRN, half-hourly reading
+    counts, consumption totals or reading coverage** — "how many readings does Riverside
+    Court have", "which MPAN", "how much kWh", "is there a gap in the data".
+
+    Pass `building_name` as the user said it. Returns per meter: `meter_ref` (the MPAN or
+    MPRN), `meter_type`, `readings`, `total_kwh`, `first_reading_at`, `last_reading_at` and
+    `estimated_readings` (readings filled in by gap retry rather than metered), plus
+    `readings_total` and `kwh_total` across the building and any `gaps` on record.
+
+    `registered_without_readings` lists meters on the building's register that have no
+    readings at all. Report those as metered-but-unread; they are NOT an absence of meters.
+    """
+    bid, problem = await _resolve_building(building_name, building_id)
+    if problem:
+        return problem
+    try:
+        resp = await _request(
+            "GET",
+            _base(),
+            f"/api/energy/buildings/{bid}/meter-summary",
+            service=_SERVICE,
+            timeout=_TIMEOUT,
+        )
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "list_building_meter_readings")
+
+
+@tool
+async def list_building_documents(
+    building_name: str | None = None,
+    building_id: str | None = None,
+) -> dict:
+    """Every document FILED AGAINST one building, and what was extracted from each.
+
+    **Use this for "which documents are linked to <building>", "what has been ingested for
+    it", "does it have a contract/certificate/invoice on file".** It reads the building
+    graph — the structured link — and is the right tool even though a semantic document
+    search also exists: that one finds documents whose TEXT mentions a building, which is a
+    different and much weaker claim. A document can mention a building it is not filed
+    against, and a document filed against one need never name it.
+
+    Returns each document's `label` (the file name), `detail` (its doc_type) and `has_file`
+    — false meaning the record exists but no stored original is available to open, which is
+    a fact worth stating rather than a failure. Certificates extracted from those documents
+    come back under `certificates`.
+    """
+    bid, problem = await _resolve_building(building_name, building_id)
+    if problem:
+        return problem
+    try:
+        resp = await _request(
+            "GET",
+            _base(),
+            f"/api/energy/buildings/{bid}/graph",
+            service=_SERVICE,
+            timeout=_TIMEOUT,
+        )
+        graph = resp.json()
+    except Exception as exc:
+        return _err(exc, "list_building_documents")
+
+    def _find(branches, table):
+        for b in branches or []:
+            if b.get("table") == table:
+                return b
+            hit = _find(b.get("children"), table)
+            if hit:
+                return hit
+        return None
+
+    docs = _find(graph.get("branches"), "documents") or {}
+    certs = _find(graph.get("branches"), "compliance_certificates") or {}
+    return {
+        "ok": bool(graph.get("ok")),
+        "building_id": bid,
+        "building": graph.get("name"),
+        "count": docs.get("count") or 0,
+        "documents": docs.get("rows") or [],
+        "certificates": certs.get("rows") or [],
+        "empty_reason": docs.get("empty_reason") if not (docs.get("rows") or []) else None,
+    }
+
+
 ENERGY_INTELLIGENCE_TOOLS = [
+    list_building_meter_readings,
+    list_building_documents,
     upsert_energy_meter,
     pull_smart_meter_readings,
     ingest_meter_readings,

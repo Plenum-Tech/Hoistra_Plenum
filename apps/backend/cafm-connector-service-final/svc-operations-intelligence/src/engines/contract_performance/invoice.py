@@ -618,3 +618,75 @@ async def decide_invoice_line(
     )
     await session.commit()
     return {"ok": True, "verification_id": str(row.id), "line_id": line_id, "decision": decision}
+
+
+async def list_invoices(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    building_id: UUID | None = None,
+    vendor_id: UUID | None = None,
+    invoice_ref: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Verified invoices, with the building and vendor they belong to.
+
+    Reads plenum_cafm.invoices, which is the view that already joins a verification to its
+    building through the document it was extracted from — the same join the building graph
+    draws, so a caller here and a reader of the graph cannot disagree about which invoices
+    a building has.
+
+    Every filter is a bound parameter and the statement is fixed text; nothing a caller
+    sends is ever interpolated into SQL.
+    """
+    sql = """
+        SELECT i.invoice_id::text      AS invoice_id,
+               i.invoice_ref,
+               i.document_id::text     AS document_id,
+               i.building_id::text     AS building_id,
+               b.name                  AS building_name,
+               b.building_code         AS building_reference,
+               i.vendor_id::text       AS vendor_id,
+               v.vendor_name,
+               i.amount,
+               i.line_count,
+               i.currency,
+               i.issued_on,
+               i.status,
+               i.matched_count,
+               i.flagged_count,
+               i.created_at
+          FROM plenum_cafm.invoices i
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = i.building_id
+          LEFT JOIN plenum_cafm.vendors   v ON v.id          = i.vendor_id
+         WHERE (CAST(:org AS uuid) IS NULL OR i.organization_id = CAST(:org AS uuid))
+           AND (CAST(:bld AS uuid) IS NULL OR i.building_id     = CAST(:bld AS uuid))
+           AND (CAST(:ven AS uuid) IS NULL OR i.vendor_id       = CAST(:ven AS uuid))
+           AND (CAST(:ref AS text) IS NULL OR i.invoice_ref ILIKE '%' || CAST(:ref AS text) || '%')
+           AND (CAST(:sts AS text) IS NULL OR i.status = CAST(:sts AS text))
+         ORDER BY i.created_at DESC
+         LIMIT :lim
+    """
+    rows = (
+        await session.execute(
+            text(sql),
+            {
+                "org": str(organization_id) if organization_id else None,
+                "bld": str(building_id) if building_id else None,
+                "ven": str(vendor_id) if vendor_id else None,
+                "ref": invoice_ref or None,
+                "sts": status or None,
+                "lim": max(1, min(int(limit or 100), 500)),
+            },
+        )
+    ).mappings().all()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["amount"] = float(d["amount"]) if d.get("amount") is not None else None
+        # An invoice the graph could not place. Said plainly, because "no building" and
+        # "not this building" read identically to a caller filtering by name.
+        d["building_link"] = "placed" if d.get("building_id") else "unplaced"
+        out.append(d)
+    return out

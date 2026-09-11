@@ -395,6 +395,38 @@ async def extract_verify_invoice(
     )
 
 
+@router.get("/invoices")
+async def list_invoices(
+    organization_id: UUID | None = None,
+    building_id: UUID | None = Query(
+        None, description="Only invoices filed against this building."
+    ),
+    vendor_id: UUID | None = None,
+    invoice_ref: str | None = Query(
+        None, description="Invoice number, partial and case-insensitive."
+    ),
+    status: str | None = None,
+    limit: int = Query(100, le=500),
+    session: AsyncSession = Depends(get_session),
+):
+    """Verified invoices with their building and vendor. Read-only.
+
+    There was no way to read an invoice back: the feature exposed verify and decide and
+    nothing that lists, so a question about a building's invoices could only be answered
+    "none found" however many it had.
+    """
+    rows = await invoice_svc.list_invoices(
+        session,
+        organization_id=organization_id,
+        building_id=building_id,
+        vendor_id=vendor_id,
+        invoice_ref=invoice_ref,
+        status=status,
+        limit=limit,
+    )
+    return {"ok": True, "count": len(rows), "invoices": rows}
+
+
 @router.post("/invoices/verify")
 async def verify_invoice(
     body: InvoiceVerifyRequest,

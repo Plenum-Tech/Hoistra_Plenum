@@ -131,6 +131,20 @@ async def list_meter_readings(
     return {"ok": True, "count": len(rows), "readings": rows}
 
 
+@router.get("/buildings/{building_id}/meter-summary")
+async def building_meter_summary(
+    building_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """Every meter on one building, readings counted and totalled. Read-only.
+
+    Answers "how many half-hourly readings does this building have, on which MPAN, and how
+    much" in one call. The alternative was three chained calls and several thousand reading
+    rows to add up, so the sum is computed where the rows are.
+    """
+    return await meter_svc.building_meter_summary(session, building_id=building_id)
+
+
 @router.get("/gaps")
 async def list_meter_gaps(
     meter_id: UUID | None = None,
