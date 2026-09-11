@@ -91,15 +91,22 @@ def _parse_evaluation(content: Any) -> UdrEvaluation:
 
 
 def _evidence(tool_calls: list[dict[str, Any]]) -> str:
+    """Everything the answer could have been built from — not only the UDR half.
+
+    This used to keep UDR tools and task(agent="udr") and drop every other sub-agent. The
+    orchestrator fires several agents in parallel and synthesises one reply from all of them,
+    so the evaluator was judging a combined answer against one of its sources. When that
+    source was the wrong one — UDR reporting zero readings from a join on the wrong key while
+    energy_intelligence correctly reported fifty — the evaluator called the correct figure
+    ungrounded and degraded the answer. A judge of a combination has to see the combination.
+
+    The gate deciding WHEN the evaluator runs (has_udr_tool_calls) is unchanged.
+    """
     relevant = [
         call
         for call in tool_calls
         if str(call.get("tool") or "") in UDR_TOOL_NAMES
-        or (
-            call.get("tool") == "task"
-            and isinstance(call.get("input"), dict)
-            and call["input"].get("agent") == "udr"
-        )
+        or call.get("tool") == "task"
     ]
     return json.dumps(relevant, ensure_ascii=False, default=str)[:_MAX_EVIDENCE_CHARS]
 

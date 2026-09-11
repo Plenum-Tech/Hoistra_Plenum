@@ -43,8 +43,18 @@ async def get_schema() -> dict:
         "tables": {
           "<table_name>": ["col1 (type)", "col2 (type)", ...],
           ...
-        }
+        },
+        "relationships": [
+          {"from": "<table>.<column>", "to": "<table>.<column>"},   # declared foreign keys
+          ...
+        ]
       }
+
+    JOIN ON `relationships`, NEVER ON TABLE-NAME SIMILARITY. A table named like a parent is
+    not necessarily the parent: `meter_readings.meter_id` references `energy_meters.id`, not
+    `meters.meter_id` — `meters` is a separate register and joining through it returns zero
+    rows for a meter that has thousands of readings. If the column you want to join on is not
+    in `relationships`, say so rather than guessing a key.
 
     Result is cached for 5 minutes so repeated calls within a session are free.
     """
@@ -82,7 +92,40 @@ async def get_schema() -> dict:
         col = f"{row['column_name']} ({row['data_type']})"
         tables.setdefault(tbl, []).append(col)
 
-    result = {"tables": tables}
+    # The declared foreign keys — how the tables actually relate, as opposed to how their
+    # names suggest they relate. Without this the model joined meter_readings to `meters`
+    # because the name fit, and reported zero readings for a building holding fifty; the
+    # real parent is energy_meters and the database has said so all along.
+    relationships: list[dict[str, str]] = []
+    async with database.AsyncSessionLocal() as session:
+        try:
+            fks = (await session.execute(
+                text("""
+                    SELECT kcu.table_name  AS from_table,
+                           kcu.column_name AS from_column,
+                           ccu.table_name  AS to_table,
+                           ccu.column_name AS to_column
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                      ON kcu.constraint_name = tc.constraint_name
+                     AND kcu.table_schema    = tc.table_schema
+                    JOIN information_schema.constraint_column_usage ccu
+                      ON ccu.constraint_name = tc.constraint_name
+                     AND ccu.table_schema    = tc.table_schema
+                    WHERE tc.constraint_type = 'FOREIGN KEY'
+                      AND tc.table_schema    = 'plenum_cafm'
+                    ORDER BY kcu.table_name, kcu.column_name
+                """),
+            )).mappings().all()
+            relationships = [
+                {"from": f"{r['from_table']}.{r['from_column']}",
+                 "to": f"{r['to_table']}.{r['to_column']}"}
+                for r in fks
+            ]
+        except Exception as exc:  # noqa: BLE001 — the column list is still worth having
+            log.warning("udr.get_schema.relationships_failed", error=str(exc)[:200])
+
+    result = {"tables": tables, "relationships": relationships}
     _schema_cache = result
     _schema_cache_at = now
     log.info("udr.get_schema.refreshed", table_count=len(tables))

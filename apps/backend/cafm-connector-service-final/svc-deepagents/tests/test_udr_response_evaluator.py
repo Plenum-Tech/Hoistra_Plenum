@@ -205,3 +205,68 @@ def test_evaluated_defaults_to_true():
 
     v = UdrEvaluation(grounded=True, answers_question=True, count_consistent=True, score=1.0)
     assert v.evaluated is True
+
+
+
+# ── the judge saw only half the evidence ─────────────────────────────────────────────
+
+from src.agents.udr_response_evaluator import _evidence
+
+ENERGY_CALL = {"tool": "task", "input": {"agent": "energy_intelligence"},
+               "output": "50 readings on MPAN-B-006-2 totalling 923.92 kWh"}
+UDR_CALL = {"tool": "task", "input": {"agent": "udr"},
+            "output": "two electricity MPANs, 0 readings, 0.0 kWh"}
+ROUTING = {"tool": "select_skill", "input": {"question": "q"}, "output": "..."}
+
+
+def test_every_sub_agents_output_is_evidence_not_only_udrs():
+    """The orchestrator fired both agents and built one answer from both.
+
+    The evaluator kept only UDR's output and judged the combined answer against it. When UDR
+    was the wrong one — zero readings from a join on the wrong key — the correct "50" from
+    energy_intelligence was ruled ungrounded and the answer degraded, two runs in six.
+    """
+    ev = _evidence([ROUTING, ENERGY_CALL, UDR_CALL])
+    assert "923.92" in ev
+    assert "0 readings" in ev
+
+
+def test_udr_tools_called_directly_are_still_evidence():
+    ev = _evidence([{"tool": "query_table", "input": {"table_name": "meter_readings"},
+                     "output": [{"consumption_kwh": 9.0}]}])
+    assert "consumption_kwh" in ev
+
+
+def test_routing_and_planning_calls_are_not_evidence():
+    # select_skill and write_todos describe what the agent intended to do, not what it
+    # found. Including them would let the judge ground an answer in its own plan.
+    ev = _evidence([ROUTING, {"tool": "write_todos", "input": {"todos": ["x"]}, "output": "Plan"}])
+    assert "select_skill" not in ev and "write_todos" not in ev
+
+
+def test_the_gate_that_decides_when_to_run_is_unchanged():
+    # Widening the evidence must not widen the trigger. A turn with no UDR involvement is
+    # still not this evaluator's business.
+    assert has_udr_tool_calls([UDR_CALL])
+    assert has_udr_tool_calls([ENERGY_CALL, UDR_CALL])
+    assert not has_udr_tool_calls([ENERGY_CALL])
+    assert not has_udr_tool_calls([ROUTING])
+
+
+async def test_a_correct_answer_backed_by_the_other_agent_now_passes():
+    """End to end: UDR says zero, energy says fifty, the answer says fifty.
+
+    With UDR-only evidence the judge could only see "0", so "50" was ungrounded. With both,
+    "50" traces to the energy output and a judge that reads the evidence honestly passes it.
+    """
+    judge = FakeEvaluator(
+        """{"grounded": true, "answers_question": true, "count_consistent": true,
+            "score": 0.96, "issues": [], "corrected_answer": null}"""
+    )
+    answer, evaluation = await evaluate_udr_response(
+        user_message="How many readings does Riverside Court have?",
+        answer="Riverside Court has 50 readings on MPAN-B-006-2, 923.92 kWh.",
+        tool_calls=[ROUTING, ENERGY_CALL, UDR_CALL],
+        llm=judge,
+    )
+    assert "50" in answer and evaluation.passed
