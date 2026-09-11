@@ -15,6 +15,7 @@ files and memory are namespaced per session.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -384,8 +385,10 @@ class _TaskRunner:
                 ),
                 [],
             )
+        # Outside the try, so the cancellation handler can always report how long the
+        # sub-agent had been running — the number that makes a silent death diagnosable.
+        _t0 = time.perf_counter()
         try:
-            _t0 = time.perf_counter()
             if on_event is None:
                 result = await runner.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
@@ -455,6 +458,22 @@ class _TaskRunner:
                     answer = msg.content
                     break
             return answer, tool_calls
+        except asyncio.CancelledError:
+            # Not an Exception — CancelledError derives from BaseException, so the handler
+            # below never saw it. That is why this agent produced `output: null` with no
+            # error logged and no llm.call: it was cancelled between the two, and the tool
+            # returned None into the evidence as though nothing had been asked.
+            #
+            # Logged and re-raised. Swallowing a cancellation would leave the task pretending
+            # to have completed and break the shutdown it belongs to; what was missing was
+            # never the handling, only the record that it happened.
+            log.warning(
+                "meta.task.cancelled",
+                agent=agent,
+                elapsed_ms=round((time.perf_counter() - _t0) * 1000),
+                prompt_len=len(prompt),
+            )
+            raise
         except Exception as exc:
             name = type(exc).__name__
             msg = str(exc)
@@ -529,7 +548,22 @@ async def task(agent: str, prompt: str) -> str:
             "error": "Task runner not initialised. Call init_meta_tools() at startup."
         })
     log.info("meta.task", agent=agent, prompt_len=len(prompt))
-    return await _task_runner.run(agent, prompt)
+    answer = await _task_runner.run(agent, prompt)
+    # Never None, and never blank. The signature says str and the caller is a model: a null
+    # in the evidence is indistinguishable to it from a tool that was never called, so a
+    # sub-agent that produced nothing said nothing about having failed. This says it.
+    if answer is None or not str(answer).strip():
+        log.warning("meta.task.empty_answer", agent=agent, prompt_len=len(prompt))
+        return json.dumps({
+            "error": f"The {agent} sub-agent returned no answer.",
+            "agent": agent,
+            "guidance": (
+                "Treat this as missing evidence, not as an absence of data. Do not report "
+                "that nothing was found on the strength of it — say this source did not "
+                "respond, and answer from the other sources if there are any."
+            ),
+        })
+    return answer
 
 
 @tool
