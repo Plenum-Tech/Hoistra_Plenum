@@ -17,7 +17,8 @@ SQL = (Path(__file__).resolve().parents[2] / "migrations" / "phase3_stamp_single
 
 
 def test_it_only_acts_when_there_is_exactly_one_company():
-    assert "count(*) FROM plenum_cafm.organizations) <> 1" in SQL
+    assert "SELECT count(*) INTO org_count FROM plenum_cafm.organizations" in SQL
+    assert "IF org_count <> 1 THEN" in SQL
     assert "RETURN;" in SQL
 
 
@@ -27,6 +28,20 @@ def test_it_only_ever_fills_nulls():
     assert "WHERE organization_id IS NULL" in SQL
     # nothing may overwrite a company that is already set
     assert "organization_id IS NOT NULL" not in SQL
+
+
+def test_a_table_that_cannot_take_the_stamp_is_skipped_not_fatal():
+    """The first version stamped every table in one statement. compliance_risk_snapshots is
+    unique on (organization_id, snapshot_date) and two unplaced rows shared a date with a
+    placed one, so the UPDATE raised a unique violation — which failed the migration, which
+    stopped operations-intelligence from starting at all and took the whole app down behind
+    a 502. Each table now runs in its own subtransaction and a table that refuses the stamp
+    is left exactly as it was."""
+    assert "EXCEPTION" in SQL and "unique_violation" in SQL
+    # the handler must not swallow the loop: the UPDATE and its handler sit inside BEGIN/END
+    body = SQL[SQL.index("LOOP"):SQL.index("END LOOP")]
+    assert "BEGIN" in body and "EXCEPTION" in body and "RAISE NOTICE" in body
+    assert "foreign_key_violation" in SQL and "check_violation" in SQL
 
 
 @pytest.mark.parametrize("table", ["ops_audit_log", "sites"])
