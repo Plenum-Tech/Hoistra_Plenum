@@ -295,6 +295,9 @@ async def consumption_for_building(
     start = (end.replace(day=1) - timedelta(days=1)).replace(day=1)
     for _ in range(months - 1):
         start = (start - timedelta(days=1)).replace(day=1)
+    # start and end are bound as dates, not ISO strings: the driver binds a CAST(... AS date)
+    # parameter as a date and rejects a str with "no attribute 'toordinal'". And nothing that
+    # looks like a bind parameter may appear in the SQL below — including inside a comment.
     rows = (await session.execute(text("""
         WITH ms AS (
             SELECT em.id, em.meter_type
@@ -312,8 +315,6 @@ async def consumption_for_building(
           FROM ms JOIN plenum_cafm.meter_readings r ON r.meter_id = ms.id
          WHERE r.reading_at >= CAST(:s AS date) AND r.reading_at < CAST(:e AS date) + 1
          GROUP BY 1, 2
-    # start/end are passed as dates, not ISO strings: the driver binds a CAST(:p AS date)
-    # parameter as a date and rejects a str with "no attribute 'toordinal'".
     """), {"b": str(building_id), "s": start, "e": end})).mappings().all()
     if not rows:
         return None

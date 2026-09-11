@@ -319,3 +319,39 @@ def test_a_date_parameter_is_bound_as_a_date_not_a_string():
                                            end=_date(2026, 9, 11)))
     assert isinstance(seen["s"], _date) and isinstance(seen["e"], _date), seen
     assert not isinstance(seen["s"], str)
+
+
+def test_no_sql_literal_carries_a_python_comment():
+    """A `#` line inside a text() string is SQL, not a comment — and `:name` in it is a bind.
+
+    A note added above the closing quotes of the consumption query ended up inside the SQL,
+    and the words "CAST(:p AS date)" in it became a fourth bind parameter the caller never
+    supplied: every rating computation answered 500. Postgres has no `#` comment syntax, so
+    a `#` line inside a SQL literal is always this mistake.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders = []
+    for path in (Path(__file__).resolve().parents[2] / "src").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "text"):
+                continue
+            for arg in node.args:
+                if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                    continue
+                for i, line in enumerate(arg.value.splitlines()):
+                    if line.lstrip().startswith("#"):
+                        offenders.append(f"{path.name}:{node.lineno}+{i}: {line.strip()[:60]}")
+    assert not offenders, offenders
+
+
+def test_the_consumption_window_binds_exactly_its_three_parameters():
+    import inspect
+    from sqlalchemy import text as sa_text
+    from src.engines.energy import us_ratings as U
+
+    src = inspect.getsource(U.consumption_for_building)
+    sql = src[src.index('text("""') + 8: src.index('"""), {')]
+    assert set(sa_text(sql)._bindparams) == {"b", "s", "e"}, sorted(sa_text(sql)._bindparams)
