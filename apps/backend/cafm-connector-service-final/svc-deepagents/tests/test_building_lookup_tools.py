@@ -231,3 +231,37 @@ def test_the_invoice_listing_is_registered_on_its_agent():
     from src.agents.contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
 
     assert "list_invoices" in {t.name for t in CONTRACT_PERFORMANCE_TOOLS}
+
+
+def test_the_doc_rag_subagent_can_read_the_building_linkage():
+    """select_skill routes document questions to doc_rag, so the tool must be reachable there.
+
+    Putting list_building_documents on the main tool list was necessary and not sufficient.
+    select_skill matches "document" and hands the question to the doc_rag sub-agent, whose
+    tools were all semantic — so it answered, correctly and uselessly, "I can't access the
+    building graph/linkage tools in this session", and whether the user got a real answer
+    depended on the main agent happening to call the tool itself afterwards. It did about
+    half the time, which is the worst of both: right often enough to look fine.
+
+    Read off the source because the sub-agents are constructed inside a function, at call
+    time, with an LLM this test has no business building.
+    """
+    from pathlib import Path
+
+    from src.agents import meta_tools
+
+    source = Path(meta_tools.__file__).read_text(encoding="utf-8")
+    block = source[source.index('"doc_rag": create_react_agent'):]
+    block = block[: block.index("prompt=agent_system_prompt")]
+    assert "list_building_documents" in block, (
+        "the doc_rag sub-agent cannot see the building linkage, so a question routed to it "
+        "can only be answered by semantic search over document text"
+    )
+
+
+def test_the_documents_tool_is_importable_where_the_subagent_imports_it():
+    # The sub-agent imports it from energy_intelligence_agent; if it moves, this fails here
+    # rather than at the first document question in production.
+    from src.agents.energy_intelligence_agent import list_building_documents
+
+    assert list_building_documents.name == "list_building_documents"

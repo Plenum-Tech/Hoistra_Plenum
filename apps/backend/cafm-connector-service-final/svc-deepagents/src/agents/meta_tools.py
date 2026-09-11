@@ -178,7 +178,7 @@ class _TaskRunner:
         from .compliance_agent import check_requirements, generate_compliance_report
         from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
         from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
-        from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS
+        from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS, list_building_documents
         from .doc_rag_agent import (
             delete_document,
             extract_text,
@@ -276,6 +276,13 @@ class _TaskRunner:
             "doc_rag": create_react_agent(llm, tools=[
                 index_document, query_docs, semantic_search,
                 extract_text, get_document_metadata, delete_document,
+                # The structured answer to "which documents are linked to this building".
+                # select_skill routes document questions here, and without this the only
+                # tools in reach were semantic ones — so this sub-agent answered, correctly
+                # and uselessly, "I can't access the building graph/linkage tools in this
+                # session". Whether the question got a real answer then depended on the main
+                # agent happening to call the tool itself, which it did about half the time.
+                list_building_documents,
             ], prompt=agent_system_prompt("doc_rag")),
             "wo_engine": create_react_agent(llm, tools=[
                 suggest_approval_chain, request_approval_chain, send_approval_request_email,
