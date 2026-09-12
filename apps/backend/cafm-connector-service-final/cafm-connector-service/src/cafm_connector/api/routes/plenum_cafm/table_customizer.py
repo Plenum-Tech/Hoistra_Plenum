@@ -91,6 +91,65 @@ async def _require_table(table: str, db: AsyncSession) -> None:
         raise HTTPException(404, f"Table '{table}' not found in schema '{_SCHEMA}'")
 
 
+#: Columns this editor will not write and will not return, per table.
+#:
+#: The editor is a deliberate raw hatch: any table, any column, straight into SQL. That
+#: is fine for a rate schedule and not fine for a credential, and the columns below are
+#: credentials — a generic hatch over them is a second, quieter version of the
+#: password_hash hole that POST /users used to have, reachable by anyone who can reach
+#: the table editor.
+#:
+#: Writing is refused rather than filtered, so a caller who tries is told; reading is
+#: filtered rather than refused, so the rest of the row still renders.
+_PROTECTED_COLUMNS: dict[str, frozenset[str]] = {
+    # Set only by the auth service, which applies the password policy and hashes
+    # server-side. A value written here would be a credential nobody checked.
+    "users": frozenset({"password_hash"}),
+    # A live session token and a live one-time code. Both are credentials in flight, and
+    # both are stored hashed precisely so that reading the table gives up nothing.
+    "auth_sessions": frozenset({"refresh_token_hash"}),
+    "auth_otp_codes": frozenset({"code_hash", "salt"}),
+}
+
+#: Not secrets, so they are shown — but not settable here. A role change made through
+#: this hatch is checked against nobody and leaves no audit row, and self-promotion to
+#: superadmin would be one PATCH away. It goes through POST /api/auth/users/{id}/role,
+#: which enforces who may grant what.
+_WRITE_ONLY_ELSEWHERE: dict[str, frozenset[str]] = {
+    "users": frozenset({"role"}),
+}
+
+
+def _protected(table: str) -> frozenset[str]:
+    return _PROTECTED_COLUMNS.get(table, frozenset())
+
+
+def _refuse_protected_writes(table: str, data: dict) -> None:
+    """Raise if the payload touches a column this editor must not set."""
+    blocked = sorted(set(data) & _protected(table))
+    if blocked:
+        raise HTTPException(
+            403,
+            f"{', '.join(blocked)} cannot be set here. It is a credential, and this "
+            "editor cannot apply the checks that make one safe. Use the auth service: "
+            "POST /api/auth/register, or /api/auth/password/forgot then /password/reset.",
+        )
+    audited = sorted(set(data) & _WRITE_ONLY_ELSEWHERE.get(table, frozenset()))
+    if audited:
+        raise HTTPException(
+            403,
+            f"{', '.join(audited)} cannot be set here — a change made this way is not "
+            "checked against who may make it and leaves no audit row. Use "
+            "POST /api/auth/users/{user_id}/role.",
+        )
+
+
+def _redact(table: str, row: dict) -> dict:
+    """Drop protected columns from a row on its way out."""
+    blocked = _protected(table)
+    return {k: v for k, v in row.items() if k not in blocked}
+
+
 async def _valid_columns(table: str, db: AsyncSession) -> set[str]:
     rows = await db.execute(
         text(
@@ -175,12 +234,14 @@ async def list_rows(
         text(f"SELECT * FROM {schema_table} ORDER BY 1 LIMIT :lim OFFSET :off"),
         {"lim": limit, "off": offset},
     )
-    cols = list(data_rows.keys())
-    rows = [dict(zip(cols, r)) for r in data_rows]
+    cols = [c for c in data_rows.keys() if c not in _protected(table)]
+    rows = [_redact(table, dict(zip(data_rows.keys(), r))) for r in data_rows]
     # Serialise non-JSON-safe types
     rows = [{k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
              for k, v in row.items()} for row in rows]
 
+    # `columns` is filtered alongside the rows: a column named in the header with no
+    # values under it reads as data that failed to load rather than as data withheld.
     return {"total": total, "limit": limit, "offset": offset, "columns": cols, "rows": rows}
 
 
@@ -201,6 +262,7 @@ async def create_row(
     data = {k: v for k, v in body.data.items() if k in valid_cols}
     if not data:
         raise HTTPException(422, "No valid columns provided")
+    _refuse_protected_writes(table, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     col_list = ", ".join(_quote(c) for c in data)
@@ -212,8 +274,10 @@ async def create_row(
     await db.commit()
     cols = list(result.keys())
     row = result.fetchone()
-    return {k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
-            for k, v in zip(cols, row)}
+    return _redact(table, {
+        k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
+        for k, v in zip(cols, row)
+    })
 
 
 # ── update row ─────────────────────────────────────────────────────────────────
@@ -230,6 +294,7 @@ async def update_row(
     data = {k: v for k, v in body.data.items() if k in valid_cols and k != "id"}
     if not data:
         raise HTTPException(422, "No valid columns to update")
+    _refuse_protected_writes(table, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     set_clause = ", ".join(f"{_quote(c)} = :{c}" for c in data)
@@ -243,8 +308,10 @@ async def update_row(
     if row is None:
         raise HTTPException(404, f"Row '{row_id}' not found in table '{table}'")
     cols = list(result.keys())
-    return {k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
-            for k, v in zip(cols, row)}
+    return _redact(table, {
+        k: (str(v) if v is not None and not isinstance(v, (str, int, float, bool)) else v)
+        for k, v in zip(cols, row)
+    })
 
 
 # ── delete row ─────────────────────────────────────────────────────────────────

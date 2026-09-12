@@ -479,6 +479,34 @@ def _heuristic_invoice_lines(text: str) -> list[dict[str, Any]]:
     return lines
 
 
+#: "Invoice no.", "Invoice Number:", "Tax Invoice #" and the rest, followed by the value.
+#: The label word is REQUIRED — a bare "INVOICE" heading sits above the supplier's name on
+#: most layouts, and matching that would key the register on "Halden". \s* spans the
+#: newline because a PDF header block routinely prints the label and its value on separate
+#: lines, which is exactly how the invoice that prompted this is laid out.
+_INVOICE_NUMBER = re.compile(
+    r"\b(?:tax\s+|vat\s+)?invoice\s*"
+    r"(?:number|no\.?|num\.?|ref(?:erence)?|#)\s*[:#.\-]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9/\-]{2,31})\b",
+    re.I,
+)
+
+
+def invoice_number_in(source_text: str | None) -> str | None:
+    """The invoice number printed on the document, or None.
+
+    None is an answer, not a failure: a document that does not print its number has none to
+    record, and the caller falls back to a label rather than inventing one.
+    """
+    for m in _INVOICE_NUMBER.finditer(source_text or ""):
+        found = (m.group(1) or "").strip(" .,;:-/")
+        # A real invoice number carries at least one digit. Without this the pattern reads
+        # "Invoice number is not shown" as the number "is".
+        if len(found) >= 3 and any(ch.isdigit() for ch in found):
+            return found
+    return None
+
+
 async def extract_and_verify_invoice(
     session: AsyncSession,
     *,
@@ -486,6 +514,7 @@ async def extract_and_verify_invoice(
     lines: list[dict[str, Any]] | None = None,
     work_orders: list[dict[str, Any]] | None = None,
     invoice_ref: str | None = None,
+    invoice_ref_fallback: str | None = None,
     vendor_id=None,
     organization_id=None,
     document_id=None,
@@ -494,6 +523,16 @@ async def extract_and_verify_invoice(
     parts_pricing_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Orchestrator invoice upload path: parse lines then verify against ingested WOs."""
+    # What this invoice is called. An explicit ref from the caller is a person's answer and
+    # wins; otherwise the document's own number, which is what a supplier, a PM and an
+    # accounts system all quote; and only failing both, a label the caller supplied — the
+    # uploaded filename — which identifies nothing and is never used as a key.
+    ref_from_document = invoice_number_in(source_text)
+    invoice_ref = invoice_ref or ref_from_document or invoice_ref_fallback
+    if ref_from_document:
+        log.info("invoice.ref_read_from_document", invoice_ref=ref_from_document)
+    elif invoice_ref_fallback:
+        log.warning("invoice.ref_not_printed_on_document", fallback=invoice_ref_fallback)
     parsed = list(lines or [])
     if not parsed and source_text:
         if settings.anthropic_api_key:
@@ -635,6 +674,17 @@ async def extract_and_verify_invoice(
             organization_id=organization_id,
         )
         vendor_id = vendor_link.get("vendor_id")
+    if vendor_id is None and source_text:
+        # _invoice_vendor_name reads a CSV-shaped pattern and finds nothing in a PDF, so an
+        # uploaded invoice was attributed to no vendor at all — which also means no contract
+        # is found, and the rate and parts checks are skipped on an invoice that reads as
+        # fully verified. Ask the register instead: which vendor we already have is named
+        # here. It cannot invent one.
+        from ...shared.vendor_identity import vendor_named_in
+
+        vendor_id = await vendor_named_in(session, source_text)
+        if vendor_id:
+            log.info("invoice.vendor_matched_from_document", vendor_id=str(vendor_id))
 
     # Contract-derived thresholds. Work orders already auto-load when the caller does not
     # supply them; these did not, and the chat upload path supplies neither — so the
@@ -671,6 +721,9 @@ async def extract_and_verify_invoice(
     verification = await verify_invoice(
         session,
         invoice_ref=invoice_ref,
+        # Only a number the document printed identifies the invoice well enough to say
+        # "this one again". A filename does not.
+        invoice_ref_identifies=bool(ref_from_document),
         lines=parsed,
         work_orders=wos,
         vendor_id=vendor_id,

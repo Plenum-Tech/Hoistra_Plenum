@@ -31,12 +31,17 @@ import structlog
 from ..config import settings
 from .skills import prompt_doc, skills_dir
 from . import llm_cost
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
-#: Loaded for every compliance question regardless of what the router says. These are the
-#: documents whose absence changes what a word means, not merely what detail is available.
-CORE_DOCS: tuple[str, ...] = ("vocabulary", "tables", "tool-selection", "never")
+#: Loaded for every compliance question regardless of what the router says. `core.md` is the
+#: single compressed document that replaced vocabulary + tables + tool-selection + never and
+#: the recipe index: the words, the tools, the name-matching rules, the data underneath, the
+#: question-shape index and the prohibitions, deduplicated (11K characters where the four
+#: separate files came to 12.7K plus 5.9K of recipes). The four originals stay on disk because
+#: the analyst and reviewer still read vocabulary and tables directly.
+CORE_DOCS: tuple[str, ...] = ("core",)
 
 #: Selectable by the router, with the question shapes each one serves.
 TOPIC_DOCS: dict[str, str] = {
@@ -55,10 +60,26 @@ def selective_loading_enabled() -> bool:
     return str(os.getenv(_ENV_FLAG, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Files in the directory that are not part of the sub-agent's contract. `review` is the
-#: eval agent's own prompt, and `tool-routing` is the pre-split original that vocabulary,
-#: tool-selection and renewals were cut from — loading it would duplicate all three.
-NOT_AGENT_DOCS: frozenset[str] = frozenset({"SKILL", "review", "tool-routing"})
+#: Files in the directory that are not part of the sub-agent's contract. `review` and
+#: `scope-eval` are the reviewer's prompts; `domain_compliance_knowledge` is read by the
+#: analyst and reviewer, not the fetcher; `tool-routing` is the pre-split original that
+#: vocabulary, tool-selection and renewals were cut from; and vocabulary, tables,
+#: tool-selection and never are now folded into `core` — loading any of them alongside it
+#: would say the same thing twice. Excluding them here also keeps them out of the
+#: load-everything fallback.
+NOT_AGENT_DOCS: frozenset[str] = frozenset(
+    {
+        "SKILL",
+        "review",
+        "scope-eval",
+        "tool-routing",
+        "domain_compliance_knowledge",
+        "vocabulary",
+        "tables",
+        "tool-selection",
+        "never",
+    }
+)
 
 
 _PATH_FLAG = "COMPLIANCE_SKILL_PATH"
@@ -129,6 +150,13 @@ async def select_docs(question: str) -> dict:
         f"- {name}: {why}" for name, why in TOPIC_DOCS.items() if name in have
     )
     model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+    _user = f"AVAILABLE DOCUMENTS:\n{catalogue}\n\nQUESTION:\n{(question or '').strip()[:1000]}"
+    activity_log.fire(
+        agent="compliance_router", stage="router", direction="input", model=model,
+        summary=(question or "")[:300],
+        payload={"system_prompt": _ROUTER_PROMPT, "user_message": _user,
+                 "params": {"effort": "low", "max_tokens": 500, "schema": "docs"}},
+    )
     try:
         import anthropic
 
@@ -167,6 +195,11 @@ async def select_docs(question: str) -> dict:
         )
     except Exception as exc:  # noqa: BLE001 — routing must never break the turn
         log.warning("compliance.router.failed", error=str(exc)[:200])
+        activity_log.fire(
+            agent="compliance_router", stage="router", direction="error",
+            summary=str(exc)[:300], ok=False, error=str(exc), model=model,
+            payload={"question": (question or "")[:1000], "fallback_docs": everything},
+        )
         return {"docs": everything, "reason": f"router failed: {type(exc).__name__}", "source": "fallback"}
 
     named = [str(d).strip() for d in (chosen.get("docs") or []) if str(d).strip()]
@@ -175,13 +208,21 @@ async def select_docs(question: str) -> dict:
     dropped = [d for d in named if d not in have]
     if dropped:
         log.warning("compliance.router.unknown_docs", dropped=dropped, kept=kept)
-    if not kept:
-        return {
-            "docs": everything,
-            "reason": "router named nothing that exists",
-            "source": "fallback",
-        }
-    return {"docs": kept, "reason": str(chosen.get("reason") or "")[:200], "source": "router"}
+    result = (
+        {"docs": everything, "reason": "router named nothing that exists", "source": "fallback"}
+        if not kept
+        else {"docs": kept, "reason": str(chosen.get("reason") or "")[:200], "source": "router"}
+    )
+    activity_log.fire(
+        agent="compliance_router", stage="router", direction="output",
+        summary=f"{result['source']}: {', '.join(result['docs'])}"[:300], model=model,
+        latency_ms=(time.perf_counter() - _t0) * 1000,
+        input_tokens=getattr(message.usage, "input_tokens", None),
+        output_tokens=getattr(message.usage, "output_tokens", None),
+        payload={"question": (question or "")[:1000], "chosen": chosen, "dropped": dropped,
+                 "result": result},
+    )
+    return result
 
 
 def compose(docs: list[str]) -> tuple[str, list[str]]:

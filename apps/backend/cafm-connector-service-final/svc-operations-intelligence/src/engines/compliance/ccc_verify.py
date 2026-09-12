@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
+from . import epc_rating
 from ...shared.approvals import enqueue_approval
 from .channels import run_public_api_check
 from .channels.register_search import deep_link, register_for_certificate_code, run_register_search
@@ -485,7 +486,11 @@ async def _persist(
     if not cert:
         return
     meta = dict(cert.raw_metadata or {})
-    verification = {
+    # Merged onto whatever is already there. A register link stored by verify-now lives in
+    # this same block, and replacing it wholesale would erase the link while the status line
+    # kept rendering — a loss nobody would see.
+    verification = dict(meta.get("verification") or {})
+    verification.update({
         "channel": result.get("channel"),
         "source_url": result.get("source_url"),
         "checked_at": result.get("checked_at"),
@@ -493,9 +498,14 @@ async def _persist(
         "status": result.get("status"),
         "evidence": result.get("evidence") or {},
         "canonical_code": result.get("canonical_code"),
-    }
+    })
     meta["verification"] = verification
     cert.raw_metadata = meta
+    # B5: the GOV.UK register reports the current band for an EPC it resolves. The register
+    # is the issued figure, so it overrides whatever the document said.
+    band = epc_rating.rating_from_verification(meta)
+    if band and epc_rating.is_epc_type(cert.certificate_type_code or cert.cert_type):
+        cert.energy_rating = band
     cert.updated_at = datetime.now(timezone.utc)
     await session.flush()
 

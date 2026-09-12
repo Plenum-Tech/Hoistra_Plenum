@@ -48,6 +48,12 @@ async def compute_insights(
         return {
             "ok": True,
             "message": "No data for the requested period",
+            "unavailable": {
+                "cost_variance_pct": "no work order was scored in this period",
+                "labour_variance_pct": "no work order was scored in this period",
+                "matched_flagged_trend": "no work order was scored in this period",
+            },
+            "work_orders_considered": 0,
             "cost_variance_pct": None,
             "labour_variance_pct": None,
             "matched_flagged_trend": [],
@@ -110,9 +116,38 @@ async def compute_insights(
     iv_ratios = (await session.execute(iv_q)).scalars().all()
     matched_flagged_trend = [float(r) if r is not None else None for r in iv_ratios]
 
+    # A figure that could not be computed says why it could not be computed.
+    #
+    # There are three reasons a variance comes back null and they are not the same thing:
+    # nothing was scored in the period, something was scored but no row carried the costs,
+    # or the rows carried costs that sum to nothing. Returned as a bare null with no
+    # message they read identically, and the panel showed an empty percentage beside a
+    # vendor with two thousand scored work orders — which looks like a broken panel rather
+    # than the missing figures it actually is. The count of rows considered is included for
+    # the same reason: "none of 2,113" is a finding, "none of 0" is already covered above.
+    why: dict[str, str] = {}
+    if cost_variance_pct is None:
+        why["cost_variance_pct"] = (
+            f"none of the {len(rows)} scored work orders in this period carry both an "
+            "estimated and an actual cost"
+            if not contributing_wo_ids else
+            "the estimated costs on the scored work orders sum to zero"
+        )
+    if labour_variance_pct is None:
+        why["labour_variance_pct"] = (
+            f"none of the {len(rows)} scored work orders record both labour hours invoiced "
+            "and labour hours attended"
+            if not has_labour_data else
+            "the attended labour hours sum to zero"
+        )
+    if not matched_flagged_trend:
+        why["matched_flagged_trend"] = "no invoice has been verified for this vendor yet"
+
     return {
         "ok": True,
-        "message": None,
+        "message": ("; ".join(why.values()) if len(why) == 3 else None),
+        "unavailable": why,
+        "work_orders_considered": len(rows),
         "cost_variance_pct": cost_variance_pct,
         "labour_variance_pct": labour_variance_pct,
         "matched_flagged_trend": matched_flagged_trend,

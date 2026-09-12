@@ -1,7 +1,60 @@
 // energy — energy scope, ratings, buildings list and the investigate conversation.
+//
+// Live-or-seed, same shape as compliance/vendors/buildings: buildings come from
+// buildingsLive.js's bldData() (bldIsLive() says which), open anomalies from
+// energyLive.js's enAnomalies() once energyLoad() has answered. The seed
+// (src/logic/constants.js BUILDINGS, src/data/hoistway-data.js D.anomalies) is the
+// fallback while the backend has not answered, or has not answered yet for a given
+// building (a live building with no EUI reading shows "—", never a fabricated number).
+//
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { BUILDINGS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, t } from './constants.js';
+import { BUILDINGS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ENC_MIXED_AVAIL, ENC_MIXED_HELD, t } from './constants.js';
 import { HOISTRA_EN } from '../data/hoistra-energy.js';
+import { moneyGBP, IMPLEMENTED_RULE_IDS } from './energyLive.js';
+
+const impactNum = (a) => (typeof a.impactN === "number" ? a.impactN : parseInt(String(a.impact || "0").replace(/[^0-9]/g, ""), 10) || 0);
+
+// Same page size the Buildings page uses. A live portfolio can put 600+ buildings in one
+// country group — rendering all of them inline was the actual bug report.
+const ENERGY_PAGE_SIZE = 20;
+
+// Pure: slice an already-filtered groups array (each with a full `buildings` list) down to
+// one page of ENERGY_PAGE_SIZE buildings total, spanning group boundaries. Each group kept
+// on the page carries its ORIGINAL label/std/meta (computed from its full filtered list, not
+// the trimmed page slice) — a group's header should still say "603 buildings" even when the
+// page only shows 14 of them.
+function paginateBuildingGroups(rawGroups, page) {
+  const flatTotal = rawGroups.reduce((n, g) => n + g.buildings.length, 0);
+  const pageCount = Math.max(1, Math.ceil(flatTotal / ENERGY_PAGE_SIZE));
+  const pageN = Math.min(Math.max(0, page || 0), pageCount - 1);
+  let skip = pageN * ENERGY_PAGE_SIZE, take = ENERGY_PAGE_SIZE;
+  const groups = [];
+  rawGroups.forEach((g) => {
+    if (take <= 0) return;
+    if (skip >= g.buildings.length) { skip -= g.buildings.length; return; }
+    const slice = g.buildings.slice(skip, skip + take);
+    if (slice.length) groups.push(Object.assign({}, g, { buildings: slice }));
+    take -= slice.length;
+    skip = 0;
+  });
+  return { groups: groups, flatTotal: flatTotal, pageCount: pageCount, page: pageN };
+}
+
+// How a ratings-position tile earns the word "actual": a certificate or a filing is actual
+// the day it is on file; a consumption figure is actual only once its 12-month window is
+// complete, projected from 3, and read as insufficient below that. The tile's own `tone`
+// (set server-side, including "dormant" for "nothing computed yet") drives the headline
+// colour; this only derives the badge/confidence-bar underneath it.
+function ratingBadge(r) {
+  if (r.basis === "certificate") return { text: "Actual · from certificate", fg: "var(--st-ok)", conf: 100, show: "none" };
+  if (r.basis === "filing") return { text: "Actual · from filing", fg: "var(--st-ok)", conf: 100, show: "none" };
+  if (r.basis === "scheme") return { text: "No scheme to measure against", fg: "var(--color-neutral-500)", conf: 0, show: "none" };
+  const mo = r.months || 0;
+  if (mo >= 12) return { text: "Actual · 12 of 12 months", fg: "var(--st-ok)", conf: 100, show: "block" };
+  if (mo >= 3) { const c = 45 + (mo - 3) * 5; return { text: "Projected · " + mo + " of 12 months · " + c + "% confidence", fg: "var(--st-warn)", conf: c, show: "block" }; }
+  if (mo > 0) return { text: "Insufficient data · " + mo + " of 12 months · shown from 3", fg: "var(--color-neutral-500)", conf: Math.round(mo * 10), show: "block" };
+  return { text: "Not computed yet", fg: "var(--color-neutral-500)", conf: 0, show: "none" };
+}
 
 export const energyMethods = {
 
@@ -16,23 +69,33 @@ export const energyMethods = {
 
   enVals(s) {
     const sc = this.enScope(s);
-    const bs = BUILDINGS.filter((b) => sc.sel.indexOf(b.cc) > -1);
-    const m2 = (b) => parseInt(String(b.area).replace(/[^0-9]/g, ""), 10) * 0.0929;
-    const area = bs.reduce((q, b) => q + m2(b), 0);
-    const eui = area ? bs.reduce((q, b) => q + b.euiN * m2(b), 0) / area : 0;
-    const bench = area ? bs.reduce((q, b) => q + b.benchN * m2(b), 0) / area : 0;
-    const excess = bs.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * (ENC[b.cc] || ENC.UK).tariff, 0);
-    const D = this.D();
-    const anoms = D.anomalies.filter((a) => sc.sel.indexOf(CC_OF[a.building] || "UK") > -1);
-    const anomSum = anoms.reduce((q, a) => q + parseInt(a.impact.replace(/[^0-9]/g, ""), 10), 0);
+    const isLive = this.bldIsLive();
+    // "All countries" means the whole portfolio, not "whichever of these four codes
+    // matches" — a live building with no country on record is still in scope until a
+    // specific market is picked, at which point it honestly drops out of that market.
+    const allBuildings = isLive ? this.bldData() : BUILDINGS;
+    const bs = sc.isAll ? allBuildings : allBuildings.filter((b) => sc.sel.indexOf(b.cc) > -1);
+    const hasEui = (b) => typeof b.euiN === "number" && typeof b.benchN === "number";
+    const m2 = (b) => isLive ? (typeof b.areaM2 === "number" ? b.areaM2 : 0) : parseInt(String(b.area).replace(/[^0-9]/g, ""), 10) * 0.0929;
+    const measured = bs.filter(hasEui);
+    const area = measured.reduce((q, b) => q + m2(b), 0);
+    const eui = area ? measured.reduce((q, b) => q + b.euiN * m2(b), 0) / area : null;
+    const bench = area ? measured.reduce((q, b) => q + b.benchN * m2(b), 0) / area : null;
+    const excess = measured.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * (ENC[b.cc] || ENC.UK).tariff, 0);
+
+    const allAnoms = isLive ? this.enAnomalies() : this.D().anomalies;
+    const anomCc = (a) => isLive ? a.cc : (CC_OF[a.building] || "UK");
+    const anoms = sc.isAll ? allAnoms : allAnoms.filter((a) => sc.sel.indexOf(anomCc(a)) > -1);
+    const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
     const cc0 = sc.sel[0];
     const P = PACKS[cc0] || PACKS.UK;
     const E = ENC[cc0] || ENC.UK;
-    const money = (n) => "£" + (n >= 1000 ? Math.round(n / 1000) + "k" : Math.round(n));
+    const money = moneyGBP;
     const delta = bench ? Math.round(((eui - bench) / bench) * 100) : 0;
     // Ratings follow a country picker inside the section; it falls back to the
     // first market in scope whenever the previous pick drops out of scope.
     const rcc = sc.single ? cc0 : (sc.sel.indexOf(s.enRatingCc) > -1 ? s.enRatingCc : cc0);
+    const unattributed = isLive ? allBuildings.filter((b) => !b.cc || b.cc === "—").length : 0;
 
     return {
       isEnergy: s.view === "module" && s.module === "energy",
@@ -40,7 +103,7 @@ export const energyMethods = {
         const on = c.cc ? (s.eScope || []).indexOf(c.cc) > -1 : sc.isAll;
         return {
           label: c.flag ? c.flag + " " + c.label : c.label,
-          n: String(c.cc ? BUILDINGS.filter((b) => b.cc === c.cc).length : BUILDINGS.length),
+          n: String(c.cc ? allBuildings.filter((b) => b.cc === c.cc).length : allBuildings.length),
           edge: on ? "var(--color-accent)" : "var(--color-divider)",
           bg: on ? "var(--color-accent-900)" : "transparent",
           fg: on ? "var(--color-accent)" : "var(--color-neutral-400)",
@@ -59,19 +122,25 @@ export const energyMethods = {
       enFidelityFg: sc.single ? "var(--st-ok)" : "var(--st-warn)",
       enFidelityBg: sc.single ? "var(--st-ok-bg)" : "var(--st-warn-bg)",
       enFidelityIcon: sc.single ? "ph-check-circle" : "ph-warning",
-      enFidelityNote: sc.single
+      enFidelityNote: (sc.single
         ? (cc0 === "AE"
             ? "No operational standard — scored against a rolling portfolio benchmark of 228 kWh/m²/yr. "
             : "Benchmarked against " + P.std + " (" + P.note + "). ")
           + "Data arrives by " + E.routes.join(" and ") + " — " + E.grain + ". Tariff " + E.tariffLabel + "."
-        : sc.sel.length + " markets in scope with " + sc.sel.map((cc) => (ENC[cc] || ENC.UK).routes.length).reduce((a, b) => a + b, 0) + " different data routes and " + sc.sel.length + " different benchmark bases. Only metrics that survive the difference are shown; the rest are named below rather than approximated.",
+        : sc.sel.length + " markets in scope with " + sc.sel.map((cc) => (ENC[cc] || ENC.UK).routes.length).reduce((a, b) => a + b, 0) + " different data routes and " + sc.sel.length + " different benchmark bases. Only metrics that survive the difference are shown; the rest are named below rather than approximated.")
+        + (unattributed ? " " + unattributed + " of " + allBuildings.length + " buildings on record have no country attributed yet, so the per-market figures above undercount the portfolio." : ""),
 
       enScopeCards: [
         { l: "Buildings in scope", v: String(bs.length), s: sc.single ? PACKS[cc0].flag + " " + PACKS[cc0].name : sc.sel.map((cc) => PACKS[cc].flag).join(" ") + " " + sc.sel.length + " markets", tone: "ok" },
-        { l: "EUI, area weighted", v: Math.round(eui) + "", s: (delta > 0 ? "+" : "") + delta + "% against " + (sc.single ? (cc0 === "AE" ? "the rolling portfolio benchmark" : P.std) : "each building's own pack"), tone: delta > 8 ? "risk" : delta > 0 ? "warn" : "ok" },
-        { l: "Excess cost", v: money(excess), s: sc.single ? "per year at " + E.tariffLabel : "per year, local tariffs converted to GBP", tone: "risk" },
-        { l: "Anomalies in scope", v: String(anoms.length), s: money(anomSum) + " annualised impact", tone: anoms.length > 4 ? "warn" : "ok" }
-      ].map((c) => ({ l: c.l, v: c.v, s: c.s, color: t(c.tone).color })),
+        { l: "EUI, area weighted", v: eui === null ? "—" : Math.round(eui) + "",
+          s: eui === null ? (isLive ? "no EUI reading on record for any building in scope yet" : "—")
+            : (delta > 0 ? "+" : "") + delta + "% against " + (sc.single ? (cc0 === "AE" ? "the rolling portfolio benchmark" : P.std) : "each building's own pack"),
+          tone: eui === null ? "dormant" : delta > 8 ? "risk" : delta > 0 ? "warn" : "ok" },
+        { l: "Cost above benchmark / year", v: eui === null ? "—" : money(excess),
+          s: eui === null ? "no EUI reading to compare against a benchmark" : "(EUI − reference) × area × tariff",
+          tone: eui === null ? "dormant" : "risk" },
+        { l: "Anomaly cost / year", v: money(anomSum), s: anoms.length + (anoms.length === 1 ? " anomaly" : " anomalies") + " · deviation from own baseline × tariff", tone: anoms.length > 4 ? "warn" : "ok" }
+      ].map((c) => ({ l: c.l, v: c.v, s: c.s, color: c.tone === "dormant" ? "var(--color-neutral-500)" : t(c.tone).color })),
 
       enAvail: (sc.single ? E.avail : ENC_MIXED_AVAIL).map((x) => ({ label: x })),
       enHeld: (sc.single ? E.held : ENC_MIXED_HELD).map((x) => ({ label: x })),
@@ -79,22 +148,22 @@ export const energyMethods = {
         label: PACKS[cc].flag + " " + PACKS[cc].name,
         route: (ENC[cc] || ENC.UK).routes.join(" · "),
         grain: (ENC[cc] || ENC.UK).grain,
-        n: BUILDINGS.filter((b) => b.cc === cc).length + " buildings"
+        n: allBuildings.filter((b) => b.cc === cc).length + " buildings"
       })),
       enHeldTitle: sc.single ? "Limits at this scope" : "Not available across a mixed portfolio",
       enAvailTitle: sc.single ? "Available at this scope" : "Available across every market in scope",
 
       enMatrixCols: "168px repeat(" + sc.sel.length + ", minmax(200px,1fr))",
-      enMatrixHead: sc.sel.map((cc) => { const n = BUILDINGS.filter((b) => b.cc === cc).length; return { label: PACKS[cc].flag + " " + PACKS[cc].name, n: n + (n === 1 ? " building" : " buildings") }; }),
+      enMatrixHead: sc.sel.map((cc) => { const n = allBuildings.filter((b) => b.cc === cc).length; return { label: PACKS[cc].flag + " " + PACKS[cc].name, n: n + (n === 1 ? " building" : " buildings") }; }),
       enSideTitle: sc.single ? (cc0 === "AE" ? "EUI vs rolling portfolio benchmark" : "EUI vs " + P.std) : "EUI vs each building's own pack",
       enSideFoot: sc.single
         ? "Bar length is EUI against " + (cc0 === "AE" ? "the 228 kWh/m²/yr rolling portfolio benchmark" : "the " + P.std + " reference") + ". Over-benchmark buildings carry the " + money(excess) + " gap at " + E.tariffLabel + "."
         : "Bar length is EUI against each building's own country pack. The " + money(excess) + " gap is summed at local tariffs and converted to GBP; the bars are not comparable across markets.",
       enAsks: (sc.single ? ({
-        UK: ["Why did Bishopsgate spike on Saturday?", "Which buildings miss EPC B by 2031?", "Rank UK buildings by cost per m²"],
-        US: ["Where does Northgate sit against its LL97 cap?", "What lifts the Energy Star score to 75?", "Is Con Edison CMD live on every account?"],
-        AE: ["Which chillers drift against cooling degree days?", "What does DEWA bill that the BMS cannot see?", "Rank Marina Heights plant by RTh per m²"],
-        SG: ["Is the BCA submission consistent with the retailer feed?", "Why did Raffles Link AHU-2 drift?", "What does the retail contract say about data at renewal?"]
+        UK: ["Which UK buildings sit over their EUI benchmark?", "Which buildings miss EPC B by 2031?", "Rank UK buildings by cost per m²"],
+        US: ["Which US buildings sit closest to their LL97 cap?", "What would lift the Energy Star position?", "Is the Green Button feed live on every account?"],
+        AE: ["Which chillers drift against cooling degree days?", "What does the DEWA bill show that the BMS cannot see?", "Rank UAE buildings by RT per m²"],
+        SG: ["Is the BCA submission consistent with the retailer feed?", "Which building drifted furthest from its own baseline?", "What does the retail contract say about data at renewal?"]
       })[cc0] : ["Which markets drive the excess cost?", "Which buildings are worst against their own pack?", "Where does the data route limit what I can see?"]),
       enMatrixRows: EN_ATTRS.map((a, i) => ({
         section: i === 0 || EN_ATTRS[i - 1][0] !== a[0] ? a[0] : "",
@@ -119,21 +188,49 @@ export const energyMethods = {
       enRatingOptions: sc.sel.map((cc) => ({ cc: cc, label: PACKS[cc].flag + " " + PACKS[cc].name })),
       enRatingPick: (e) => this.setState({ enRatingCc: e.target.value }),
       enRatingHint: "country-scoped · " + sc.sel.length + " markets in scope",
-      enRatings: (EN_RATINGS[rcc] || []).map((r) => {
-        const st = ratingState(r);
-        return {
-          l: r.l, v: st.ok ? r.v : "—", s: st.ok ? r.s : "not shown until 3 months have landed",
-          color: st.ok ? t(r.tone).color : "var(--color-neutral-500)",
-          badge: st.badge, badgeFg: st.fg, confShow: st.show, confPct: st.conf + "%", confFg: st.fg
-        };
-      })
+      enRatings: this.enRatingsFromPosition(rcc)
     };
   },
 
+  // MEES/EPCs (UK), LL97/Energy Star/LL84 (US), BCA/EUI/Green Mark (SG) and the rolling
+  // benchmark/chiller position (AE) are assembled server-side now, from real records —
+  // GET /api/energy/ratings/position (engines/energy/ratings_position.py), loaded once for
+  // every market by enPositionLoad() at mount. Each tile already carries its own tone; this
+  // only adds the badge/confidence-bar treatment the card shows underneath (the same
+  // actual/projected/insufficient-data language the seed used, now driven by the real
+  // `basis` and `months` the engine reports instead of a hand-written constant).
+  enRatingsFromPosition(cc) {
+    const pos = (this.state.enPosByCc || {})[cc];
+    if (!pos || (pos.loading && !((pos.tiles || []).length))) {
+      return (EN_RATINGS[cc] || []).map((r) => ({
+        l: r.l, v: "…", s: "loading from the ratings engine", color: "var(--color-neutral-500)",
+        badge: "", badgeFg: "var(--color-neutral-500)", confShow: "none", confPct: "0%", confFg: "var(--color-neutral-500)"
+      }));
+    }
+    if (pos.error && !(pos.tiles || []).length) {
+      return [{
+        l: "Ratings", v: "—", s: "could not reach the ratings engine — " + pos.error,
+        color: "var(--color-neutral-500)", badge: "Not sourced", badgeFg: "var(--color-neutral-500)",
+        confShow: "none", confPct: "0%", confFg: "var(--color-neutral-500)"
+      }];
+    }
+    return (pos.tiles || []).map((r) => {
+      const badge = ratingBadge(r);
+      return {
+        l: r.l, v: r.v, s: r.s,
+        color: r.tone === "dormant" ? "var(--color-neutral-500)" : t(r.tone).color,
+        badge: badge.text, badgeFg: badge.fg, confShow: badge.show, confPct: badge.conf + "%", confFg: badge.fg
+      };
+    });
+  },
 
-  /* Investigation. Opens a drawer and plays four stages against the graph:
-     retrieve → findings → cause → actions. Logged as a session like any task. */
+  /* Investigation. A live building or anomaly asks the real orchestrator (askScoped,
+     same as Compliance/Vendors/Buildings) and answers in the Energy page's side dock. A
+     seed one (Assets, Maintenance, or the Energy page before the backend has answered)
+     keeps the scripted four-stage walk below — nothing here reads real data, so it stays
+     out of scope for this pass rather than half-converted. */
   investigate(kind, o) {
+    if (o && o.live) return this.investigateLive(kind, o);
     const EN = HOISTRA_EN;
     if (!EN) return;
     const fill = (str, m) => String(str).replace(/\{(\w+)\}/g, (_, k) => (m[k] != null ? m[k] : "{" + k + "}"));
@@ -220,20 +317,47 @@ export const energyMethods = {
     }, 420);
   },
 
+  // A live building or anomaly: no scripted stages to play, because there is nothing
+  // scripted about it. The question goes to the real orchestrator (deepAgents, through
+  // askScoped → ccAsk) and streams into the Energy page's own side dock, exactly the way
+  // a question typed into its ask bar already does.
+  investigateLive(kind, o) {
+    let q;
+    if (kind === "anomaly") {
+      const where = o.building && o.building !== "Unattributed" ? " at " + o.building : "";
+      q = "Why is " + o.asset + where + " showing a " + String(o.type).toLowerCase() +
+        (o.impact && o.impact !== "—" ? " worth " + o.impact + " a year" : "") + ", and what should I do about it?";
+    } else {
+      const hasEui = typeof o.euiN === "number" && typeof o.benchN === "number";
+      q = hasEui
+        ? "Why is " + o.name + " at " + Math.round(o.euiN) + " kWh/m² against a reference of " + Math.round(o.benchN) + ", and how much of that gap can I act on?"
+        : "What do we know about " + o.name + "'s energy performance, and what is missing to assess it properly?";
+    }
+    this.setState({ flow: null, flowDone: "" });
+    this.askScoped(q);
+  },
+
 
   /* Building-centric energy list: one row per building under its market,
      EUI against its own pack first, its anomalies underneath on open. */
   enBuildingVals(s) {
+    return this.bldIsLive() ? this.enBuildingValsLive(s) : this.enBuildingValsSeed(s);
+  },
+
+  enBuildingValsSeed(s) {
     const sc = this.enScope(s);
     const D = this.D();
     const f = s.filter || "All";
+    const query = String(s.enBldQuery || "").trim().toLowerCase();
     const money = (n) => "£" + (n >= 1000 ? Math.round(n / 1000) + "k" : Math.round(n));
     const anomHit = (a) => f === "New" ? a.status === "New" : f === "Above £20k" ? parseInt(a.impact.replace(/[^0-9]/g, ""), 10) > 20000 : true;
-    const groups = [];
-    let shown = 0, total = 0;
+    const rawGroups = [];
+    let total = 0;
     sc.sel.forEach((cc) => {
       const P = PACKS[cc];
-      const list = BUILDINGS.filter((B) => B.cc === cc).map((B) => {
+      const list = BUILDINGS.filter((B) => B.cc === cc)
+        .filter((B) => !query || B.name.toLowerCase().indexOf(query) > -1)
+        .map((B) => {
         const b = { name: B.name, eui: B.euiN, bench: B.benchN };
         const m2 = (parseInt(String(B.area || "100,000").replace(/[^0-9]/g, ""), 10)) * 0.0929;
         const excess = Math.max(0, b.eui - b.bench) * m2 * (ENC[cc] || ENC.UK).tariff;
@@ -249,10 +373,9 @@ export const energyMethods = {
       }).sort((p, q) => (q.excess + q.anomSum) - (p.excess + p.anomSum));
       total += BUILDINGS.filter((B) => B.cc === cc).length;
       if (!list.length) return;
-      shown += list.length;
       const gExcess = list.reduce((q, x) => q + x.excess, 0);
       const gAnom = list.reduce((q, x) => q + x.anomSum, 0);
-      groups.push({
+      rawGroups.push({
         label: P.flag + " " + P.name,
         std: P.std === "NA" ? "rolling portfolio benchmark" : P.std,
         meta: list.length + (list.length === 1 ? " building" : " buildings") + " · " + money(gExcess) + " above reference · " + money(gAnom) + " in anomalies",
@@ -289,11 +412,133 @@ export const energyMethods = {
         })
       });
     });
+    const paged = paginateBuildingGroups(rawGroups, s.enBldPage);
+    const pageStart = paged.flatTotal ? paged.page * ENERGY_PAGE_SIZE + 1 : 0;
+    const pageEnd = Math.min(paged.flatTotal, (paged.page + 1) * ENERGY_PAGE_SIZE);
     return {
-      enGroups: groups,
-      enListSummary: shown + " of " + total + " buildings" + (f === "All" ? "" : " · filter: " + f),
-      enListEmpty: groups.length ? "none" : "block",
-      isNotEnergy: !(s.view === "module" && s.module === "energy")
+      enGroups: paged.groups,
+      enListSummary: (paged.flatTotal ? pageStart + "–" + pageEnd : "0") + " of " + total + " buildings"
+        + (f === "All" ? "" : " · filter: " + f) + (query ? " · matching “" + s.enBldQuery + "”" : ""),
+      enListEmpty: rawGroups.length ? "none" : "block",
+      enBldQuery: s.enBldQuery || "",
+      setEnBldQuery: (e) => this.setState({ enBldQuery: e.target.value, enBldPage: 0 }),
+      enBldQueryShow: total > ENERGY_PAGE_SIZE ? "flex" : "none",
+      enBldPage: paged.page,
+      enBldPageCount: paged.pageCount,
+      enBldPagerShow: paged.flatTotal > ENERGY_PAGE_SIZE ? "flex" : "none",
+      enBldPagePrevShow: paged.page > 0,
+      enBldPageNextShow: paged.page < paged.pageCount - 1,
+      enBldPagePrev: () => this.setState((p) => ({ enBldPage: Math.max(0, (p.enBldPage || 0) - 1) })),
+      enBldPageNext: () => this.setState((p) => ({ enBldPage: Math.min(paged.pageCount - 1, (p.enBldPage || 0) + 1) })),
+      isNotEnergy: !(s.view === "module" && (s.module === "energy" || s.module === "assets" || s.module === "ops"))
+    };
+  },
+
+  // Live building rows have no fixed per-country membership to iterate — most buildings
+  // in this database carry no country at all — so the buckets are the scope's markets
+  // plus "—" (unattributed) rather than assumed to be exactly the four packs.
+  enBuildingValsLive(s) {
+    const sc = this.enScope(s);
+    const f = s.filter || "All";
+    const query = String(s.enBldQuery || "").trim().toLowerCase();
+    const money = moneyGBP;
+    const anomHit = (a) => f === "New" ? a.status === "New" : f === "Above £20k" ? impactNum(a) > 20000 : true;
+    const allBuildings = this.bldData();
+    const allAnoms = this.enAnomalies();
+    const total = allBuildings.length;
+    const buckets = sc.isAll ? sc.all.concat(["—"]) : sc.sel;
+    const rawGroups = [];
+
+    buckets.forEach((cc) => {
+      const P = PACKS[cc] || { flag: "—", name: "Unattributed — no country on record", std: "no country on record" };
+      const list = allBuildings.filter((b) => (b.cc || "—") === cc)
+        .filter((b) => !query || b.name.toLowerCase().indexOf(query) > -1)
+        .map((b) => {
+        const hasEui = typeof b.euiN === "number" && typeof b.benchN === "number";
+        const m2 = typeof b.areaM2 === "number" ? b.areaM2 : 0;
+        const excess = hasEui ? Math.max(0, b.euiN - b.benchN) * m2 * (ENC[cc] || ENC.UK).tariff : 0;
+        const all = allAnoms.filter((a) => a.buildingUuid && a.buildingUuid === b.uuid);
+        const anoms = all.filter(anomHit);
+        const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
+        return { b: b, hasEui: hasEui, excess: excess, all: all, anoms: anoms, anomSum: anomSum };
+      }).filter((x) => {
+        if (f === "Over benchmark") return x.hasEui && x.b.euiN > x.b.benchN;
+        if (f === "With anomalies") return x.all.length > 0;
+        if (f === "New" || f === "Above £20k") return x.anoms.length > 0;
+        return true;
+      }).sort((p, q) => (q.excess + q.anomSum) - (p.excess + p.anomSum));
+      if (!list.length) return;
+      const gExcess = list.reduce((q, x) => q + x.excess, 0);
+      const gAnom = list.reduce((q, x) => q + x.anomSum, 0);
+      const measured = list.filter((x) => x.hasEui).length;
+      rawGroups.push({
+        label: P.flag + " " + P.name,
+        std: cc === "—" ? "no country on record" : (P.std === "NA" ? "rolling portfolio benchmark" : P.std),
+        meta: list.length + (list.length === 1 ? " building" : " buildings") + " · " +
+          (measured ? money(gExcess) + " above reference (" + measured + " of " + list.length + " with an EUI reading)" : "no EUI reading on record for any of them yet") +
+          " · " + money(gAnom) + " in open anomalies",
+        buildings: list.map((x) => {
+          const b = x.b, hasEui = x.hasEui;
+          const delta = hasEui ? Math.round(((b.euiN - b.benchN) / b.benchN) * 100) : null;
+          const over = hasEui && b.euiN > b.benchN;
+          const open = s.enOpenB === b.name;
+          const tone = !hasEui ? "dormant" : b.euiN > b.benchN + 10 ? "risk" : over ? "warn" : "ok";
+          const toneFg = tone === "dormant" ? "var(--color-neutral-500)" : t(tone).color;
+          return {
+            name: b.name,
+            eui: hasEui ? Math.round(b.euiN) + " kWh/m²" : "no reading",
+            bench: hasEui ? "ref " + Math.round(b.benchN) : "no benchmark yet",
+            delta: delta === null ? "—" : (delta > 0 ? "+" : "") + delta + "%", deltaFg: toneFg,
+            barPct: hasEui ? Math.min(100, Math.round((b.euiN / 260) * 100)) + "%" : "0%", barColor: toneFg,
+            refPct: hasEui ? Math.min(100, Math.round((b.benchN / 260) * 100)) + "%" : "0%",
+            route: (b.route || "meter feed") + " · " + (b.gran || "building-level"),
+            granFg: b.gran === "sub-metered" ? "var(--color-neutral-500)" : "var(--st-warn)",
+            excess: !hasEui ? "no EUI reading on record" : over ? money(x.excess) : "at or under reference",
+            excessFg: !hasEui ? "var(--color-neutral-500)" : over ? "var(--color-text)" : "var(--st-ok)",
+            anomN: x.all.length ? x.all.length + (x.all.length === 1 ? " anomaly" : " anomalies") + " · " + money(x.all.reduce((q, a) => q + impactNum(a), 0)) : "no open anomalies",
+            anomFg: x.all.length ? "var(--st-warn)" : "var(--color-neutral-500)",
+            caret: open ? "ph-caret-down" : "ph-caret-right",
+            openShow: open ? "block" : "none",
+            bg: open ? "var(--color-neutral-900)" : "var(--color-surface)",
+            toggle: () => this.setState((p) => ({ enOpenB: p.enOpenB === b.name ? null : b.name })),
+            investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("building", b); },
+            emptyShow: x.anoms.length ? "none" : "block",
+            emptyText: x.all.length ? "No anomalies match the current filter."
+              : (hasEui ? "No open anomalies. Any gap above reference here is structural — investigate the building to size the capex case."
+                : "No open anomalies, and no EUI reading on record yet to say whether this building is over reference."),
+            anomalies: x.anoms.map((a) => ({
+              asset: a.asset, type: a.type, impact: a.impact, status: a.status,
+              days: a.days == null ? "—" : a.days + " day" + (a.days === 1 ? "" : "s") + " active",
+              color: t(a.tone).color, bg: t(a.tone).bg,
+              open: () => this.setState({ detail: this.anomalyDetail(a) }),
+              investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("anomaly", a); }
+            }))
+          };
+        })
+      });
+    });
+
+    const paged = paginateBuildingGroups(rawGroups, s.enBldPage);
+    const pageStart = paged.flatTotal ? paged.page * ENERGY_PAGE_SIZE + 1 : 0;
+    const pageEnd = Math.min(paged.flatTotal, (paged.page + 1) * ENERGY_PAGE_SIZE);
+    return {
+      enGroups: paged.groups,
+      enListSummary: (paged.flatTotal ? pageStart + "–" + pageEnd : "0") + " of " + total + " buildings"
+        + (f === "All" ? "" : " · filter: " + f) + (query ? " · matching “" + s.enBldQuery + "”" : ""),
+      enListEmpty: rawGroups.length ? "none" : "block",
+      // Search — client-side, over the buildings already loaded and in scope.
+      enBldQuery: s.enBldQuery || "",
+      setEnBldQuery: (e) => this.setState({ enBldQuery: e.target.value, enBldPage: 0 }),
+      enBldQueryShow: total > ENERGY_PAGE_SIZE ? "flex" : "none",
+      // Pagination — ENERGY_PAGE_SIZE buildings a page, spanning country groups.
+      enBldPage: paged.page,
+      enBldPageCount: paged.pageCount,
+      enBldPagerShow: paged.flatTotal > ENERGY_PAGE_SIZE ? "flex" : "none",
+      enBldPagePrevShow: paged.page > 0,
+      enBldPageNextShow: paged.page < paged.pageCount - 1,
+      enBldPagePrev: () => this.setState((p) => ({ enBldPage: Math.max(0, (p.enBldPage || 0) - 1) })),
+      enBldPageNext: () => this.setState((p) => ({ enBldPage: Math.min(paged.pageCount - 1, (p.enBldPage || 0) + 1) })),
+      isNotEnergy: !(s.view === "module" && (s.module === "energy" || s.module === "assets" || s.module === "ops"))
     };
   },
 
@@ -336,8 +581,11 @@ export const energyMethods = {
     const b0 = this.enScope(s);
     const stage = s.invStage || 0;
     const rules = EN ? EN.RULES : [];
-    // Rule coverage for the scope: how many buildings in scope can arm each rule.
-    const bs = BUILDINGS.filter((b) => b0.sel.indexOf(b.cc) > -1);
+    // Rule coverage for the scope: how many buildings in scope can arm each rule, from
+    // the live Buildings table once it has loaded, the seed otherwise.
+    const isLive = this.bldIsLive();
+    const allBuildings = isLive ? this.bldData() : BUILDINGS;
+    const bs = b0.isAll ? allBuildings : allBuildings.filter((b) => b0.sel.indexOf(b.cc) > -1);
     return {
       fInvestigate: s.flow === "investigate" && !!inv,
       inv: inv || { title: "", sub: "", cause: "", costLine: "" },
@@ -374,18 +622,26 @@ export const energyMethods = {
       })) : [],
       invApproveAll: () => { if (!inv) return; inv.actions.forEach((a, i) => { if (!a.done && a.k !== "email" && a.k !== "anoms") this.invAct(i); }); },
 
+      // All 13 specified rules now have a detector actually running in
+      // engines/energy/anomalies.py / engines/energy/detectors.py (LIVE_ANOMALY_TYPES in
+      // energyLive.js maps each anomaly_type the backend emits to the rule id it satisfies).
+      // Coverage still reads "not built" for any rule id that catalogue does not name — a
+      // rule added to the frontend spec ahead of its backend detector should say so, not
+      // show a coverage count that implies it is already watching something.
       enRules: rules.map((r) => {
+        const live = IMPLEMENTED_RULE_IDS.has(r.id);
         const on = bs.filter((b) => (EN.armed(b.gran, b.route).find((x) => x.id === r.id) || {}).on).length;
         return {
           name: r.name, test: r.test, needs: r.needs,
           cls: r.cls === "core" ? "core" : "added",
           clsBg: r.cls === "core" ? "var(--color-accent-900)" : "var(--marker-tint)",
           clsFg: r.cls === "core" ? "var(--color-accent)" : "var(--color-neutral-300)",
-          cover: on + " of " + bs.length,
-          coverFg: on === bs.length ? "var(--st-ok)" : on === 0 ? "var(--st-risk)" : "var(--st-warn)"
+          cover: live ? on + " of " + bs.length : "not built",
+          coverFg: !live ? "var(--color-neutral-500)" : on === bs.length ? "var(--st-ok)" : on === 0 ? "var(--st-risk)" : "var(--st-warn)"
         };
       }),
       enRulesN: String(rules.length),
+      enRulesLiveN: String(IMPLEMENTED_RULE_IDS.size),
       enRulesShow: s.enRulesOpen ? "block" : "none",
       enRulesCaret: s.enRulesOpen ? "ph-caret-down" : "ph-caret-right",
       enRulesToggle: () => this.setState((p) => ({ enRulesOpen: !p.enRulesOpen }))
@@ -393,6 +649,7 @@ export const energyMethods = {
   },
 
   anomalyDetail(a) {
+    if (a.live) return this.anomalyDetailLive(a);
     return {
       module: "Energy", icon: "ph-lightning", tone: a.tone,
       title: a.type + " — " + a.asset + ", " + a.building,
@@ -414,6 +671,38 @@ export const energyMethods = {
         { a: "Quality", t: "Not fired — display-only. The gate applies only if the anomaly auto-dispatches a work order." }
       ],
       refinement: "Two other buildings show a smaller version of this signature. Run a portfolio-wide audit of the same rule?",
+      actions: ["Inspect now", "Monitor", "Override as expected"]
+    };
+  },
+
+  // Live anomaly: every line below is a real field or a real fact about the code that
+  // produced it (engines/energy/anomalies.py, the daily 08:00 energy_anomaly_scan cron in
+  // worker.py) — nothing here is invented to fill the shape the seed used.
+  anomalyDetailLive(a) {
+    return {
+      module: "Energy", icon: "ph-lightning", tone: a.tone,
+      title: a.type + " — " + a.asset + ", " + a.building,
+      meta: a.status + (a.days != null ? " · detected " + a.days + " day" + (a.days === 1 ? "" : "s") + " ago" : "") + " · annualised impact " + a.impact,
+      body: "Detected by the daily 08:00 energy-anomaly scan and translated to cost at the meter's contracted tariff. " +
+        (a.assetResolved ? "" : a.meterType ? "No specific asset is attributed — the reading comes off " + (/^[aeiou]/i.test(a.meterType) ? "an " : "a ") + a.meterType + " meter with no sub-meter or BMS point resolved behind it. " : "No asset or meter is resolved for this anomaly yet. ") +
+        (a.pmAction ? "Recorded action: " + a.pmAction + (a.pmReason ? " — " + a.pmReason : "") + "." : "No action taken yet — this is display-only until you choose to act."),
+      fields: [
+        { l: "Building", v: a.building },
+        { l: "Asset / meter", v: a.asset },
+        { l: "Anomaly type", v: a.type },
+        { l: "Metric", v: a.metricPct != null ? a.metricPct + "% of baseline" : "—" },
+        { l: "Annualised cost", v: a.impact },
+        { l: "Excess energy", v: a.excessKwh != null ? Math.round(a.excessKwh).toLocaleString() + " kWh/yr" : "—" },
+        { l: "Detected", v: a.detectedAt ? new Date(a.detectedAt).toLocaleString() : "—" },
+        { l: "Status", v: a.status }
+      ],
+      chain: [
+        { a: "Scheduler", t: "energy_anomaly_scan · daily 08:00 · scan_all_active_meters()" },
+        { a: "Detector", t: (a.ruleId ? "Rule “" + a.ruleId + "” — " : "") + a.type + ", evaluated against the meter's own reading history" },
+        { a: "Worker", t: a.assetResolved ? "Resolved to " + a.asset + " via plenum_cafm.equipment" : "No equipment resolved — " + (a.meterType ? "meter-level reading only" : "no meter or asset on record") },
+        { a: "Quality", t: "Not fired — display-only. Nothing dispatches automatically from an anomaly." }
+      ],
+      refinement: "Ask the orchestrator to check every open anomaly of this type across the portfolio.",
       actions: ["Inspect now", "Monitor", "Override as expected"]
     };
   }

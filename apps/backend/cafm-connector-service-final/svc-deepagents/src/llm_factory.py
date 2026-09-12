@@ -125,6 +125,25 @@ def _supports_temperature(model_name: str) -> bool:
     return not name.startswith(_NO_TEMPERATURE_PREFIXES)
 
 
+# The same families renamed the token ceiling: `max_tokens` is rejected outright with
+# "Unsupported parameter ... use 'max_completion_tokens' instead", which is a 400 and not a
+# warning. Kept as its own list rather than reusing the temperature one — they happen to
+# match today, and treating two rules as one is how the next divergence becomes a bug.
+_MAX_COMPLETION_TOKENS_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _token_limit_param(model_name: str) -> str:
+    """The name this model wants for its output-token ceiling."""
+    name = (model_name or "").strip().lower()
+    return ("max_completion_tokens"
+            if name.startswith(_MAX_COMPLETION_TOKENS_PREFIXES) else "max_tokens")
+
+
+def token_limit_kwargs(model_name: str, limit: int) -> dict[str, int]:
+    """``{"max_tokens": n}`` or ``{"max_completion_tokens": n}``, for **-splatting."""
+    return {_token_limit_param(model_name): limit}
+
+
 # Only the gpt-5.6 family needs reasoning_effort="none" to accept function tools. Measured
 # against the live endpoint with tools bound:
 #

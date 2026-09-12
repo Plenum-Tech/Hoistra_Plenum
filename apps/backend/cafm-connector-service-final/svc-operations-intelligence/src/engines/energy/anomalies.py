@@ -1,4 +1,7 @@
-"""Feature C — anomaly detection (weekend spike, baseline drift, asset spike)."""
+"""Feature C — anomaly detection: the thirteen rules on the energy page's card.
+
+Three live here (weekend spike, baseline drift, asset spike); the other ten are in
+detectors.py and are bound to their inputs in scan_meter_anomalies."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -13,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...models.energy import EnergyAnomaly, EnergyMeter, MeterReading
 from ...shared.approvals import enqueue_approval, write_audit
+from . import detectors as D
 
 log = get_logger(__name__)
 
@@ -325,6 +329,117 @@ async def _load_readings(
     return [(r[0], float(r[1])) for r in rows]
 
 
+def _occupancy_from(meta: dict[str, Any] | None) -> D.OccupancyHours:
+    """The meter's occupancy calendar from raw_metadata.occupancy_hours, else the default."""
+    oh = (meta or {}).get("occupancy_hours") or {}
+    try:
+        return D.OccupancyHours(
+            start_hour=int(oh.get("start_hour", D.DEFAULT_OCCUPANCY.start_hour)),
+            end_hour=int(oh.get("end_hour", D.DEFAULT_OCCUPANCY.end_hour)),
+            weekdays_only=bool(oh.get("weekdays_only", True)),
+        )
+    except (TypeError, ValueError):
+        return D.DEFAULT_OCCUPANCY
+
+
+def _bands_from(meta: dict[str, Any] | None) -> tuple[list[D.TariffBand], float | None]:
+    """Tariff bands from raw_metadata.tariff_bands [{name,start_hour,end_hour,weekdays_only,rate}]
+    and raw_metadata.offpeak_rate; the UK red band when the meter has none."""
+    raw = (meta or {}).get("tariff_bands")
+    bands: list[D.TariffBand] = []
+    for b in raw or []:
+        try:
+            bands.append(D.TariffBand(str(b.get("name") or "peak"), int(b["start_hour"]), int(b["end_hour"]),
+                                      bool(b.get("weekdays_only", True)),
+                                      float(b["rate"]) if b.get("rate") is not None else None))
+        except (KeyError, TypeError, ValueError):
+            continue
+    off = (meta or {}).get("offpeak_rate")
+    return (bands or list(D.DEFAULT_PEAK_BANDS)), (float(off) if off is not None else None)
+
+
+async def _prior_year_max_kw(session: AsyncSession, meter_id: UUID, latest: datetime) -> float | None:
+    """The highest interval demand in the year before the current window — the peak rule's
+    fallback limit when no agreed capacity is on the meter."""
+    row = (await session.execute(
+        select(func.max(MeterReading.consumption_kwh), func.min(MeterReading.period_minutes)).where(
+            MeterReading.meter_id == meter_id,
+            MeterReading.reading_at < latest - timedelta(days=7),
+            MeterReading.reading_at >= latest - timedelta(days=372),
+        )
+    )).first()
+    if not row or row[0] is None:
+        return None
+    minutes = int(row[1] or 30)
+    return float(row[0]) * 60.0 / max(1, minutes)
+
+
+async def _quality_flags(session: AsyncSession, meter_id: UUID, since: datetime) -> list[tuple[datetime, str | None]]:
+    rows = (await session.execute(
+        select(MeterReading.reading_at, MeterReading.quality_flag).where(
+            MeterReading.meter_id == meter_id, MeterReading.reading_at >= since))).all()
+    return [(r[0], r[1]) for r in rows]
+
+
+async def _closed_work_orders(session: AsyncSession, meter: EnergyMeter, since: datetime) -> list[tuple[datetime, str]]:
+    """Work orders closed on the meter's asset (a sub-meter) or building in the horizon."""
+    from sqlalchemy import text as _text
+    where = []
+    params: dict[str, Any] = {"since": since}
+    if meter.asset_id:
+        where.append("asset_id = CAST(:a AS uuid)"); params["a"] = str(meter.asset_id)
+    if meter.site_id:
+        where.append("building_id = CAST(:b AS uuid)"); params["b"] = str(meter.site_id)
+    if not where:
+        return []
+    try:
+        rows = (await session.execute(_text(f"""
+            SELECT coalesce(closed_at, completed_at) AS closed, coalesce(wo_code, workorder_ref, id::text)
+              FROM plenum_cafm.work_orders
+             WHERE ({' OR '.join(where)}) AND coalesce(closed_at, completed_at) >= :since
+             ORDER BY 1 DESC LIMIT 20"""), params)).all()
+    except Exception as exc:  # noqa: BLE001 — a missing column must not stop the scan
+        log.warning("energy.anomaly.work_orders_unavailable", error=str(exc)[:160])
+        return []
+    return [(r[0], str(r[1])) for r in rows if r[0] is not None]
+
+
+async def _monthly_and_degree_days(session: AsyncSession, meter: EnergyMeter):
+    """Monthly kWh for the meter and the building's degree days, for the weather rule."""
+    if not meter.site_id:
+        return [], []
+    from sqlalchemy import text as _text
+    months = (await session.execute(_text("""
+        SELECT date_trunc('month', reading_at)::date AS m, sum(consumption_kwh)
+          FROM plenum_cafm.meter_readings WHERE meter_id = CAST(:m AS uuid)
+         GROUP BY 1 ORDER BY 1"""), {"m": str(meter.id)})).all()
+    try:
+        dd = (await session.execute(_text("""
+            SELECT month, hdd, cdd FROM plenum_cafm.weather_degree_days
+             WHERE building_id = CAST(:b AS uuid) ORDER BY month"""), {"b": str(meter.site_id)})).all()
+    except Exception:  # noqa: BLE001 — table absent on an old database
+        dd = []
+    # a partial current month would read as a drop; only complete months are compared
+    if months:
+        months = months[:-1]
+    return ([(r[0], float(r[1])) for r in months], [(r[0], float(r[1]), float(r[2])) for r in dd])
+
+
+async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime):
+    if not meter.site_id:
+        return []
+    from sqlalchemy import text as _text
+    try:
+        rows = (await session.execute(_text("""
+            SELECT recorded_at, zone, coalesce(heating_pct, 0), coalesce(cooling_pct, 0)
+              FROM plenum_cafm.bms_trends
+             WHERE building_id = CAST(:b AS uuid) AND recorded_at >= :since
+             ORDER BY zone, recorded_at"""), {"b": str(meter.site_id), "since": since})).all()
+    except Exception:  # noqa: BLE001
+        return []
+    return [(r[0], r[1], float(r[2]), float(r[3])) for r in rows]
+
+
 async def scan_meter_anomalies(
     session: AsyncSession,
     *,
@@ -339,6 +454,58 @@ async def scan_meter_anomalies(
     detectors = [detect_weekend_spike, detect_baseline_drift]
     if meter.is_sub_meter:
         detectors.append(detect_asset_spike)
+
+    # The ten rules from the card. Each is bound to its inputs here so the loop below can
+    # call every detector the same way; a rule whose input this meter does not have is
+    # listed under "skipped" rather than run on nothing.
+    meta = meter.raw_metadata or {}
+    skipped: dict[str, str] = {}
+    if not meter.is_sub_meter:
+        # Thirteen rules exist; a rule that cannot run on this meter says so rather than
+        # disappearing, so "rules_run" plus "skipped" always accounts for all of them.
+        skipped["asset_spike"] = "this meter is not a sub-meter, so no single asset is isolated"
+
+    if readings:
+        latest = _aware(max(t for t, _ in readings))
+        occupancy = _occupancy_from(meta)
+        bands, offpeak = _bands_from(meta)
+        capacity = meta.get("capacity_kw") or meta.get("agreed_capacity_kva")
+        prior_max = None if capacity else await _prior_year_max_kw(session, meter_id, latest)
+        flags = await _quality_flags(session, meter_id, latest - timedelta(days=35))
+        work_orders = await _closed_work_orders(session, meter, latest - timedelta(days=D.REGRESS_HORIZON_DAYS + 7))
+        monthly, degree_days = await _monthly_and_degree_days(session, meter)
+        trends = await _bms_trends(session, meter, latest - timedelta(days=7))
+
+        detectors += [
+            lambda r, *, tariff: D.detect_nonocc_spike(r, tariff=tariff, occupancy=occupancy),
+            lambda r, *, tariff: D.detect_schedule_mismatch(r, tariff=tariff, occupancy=occupancy),
+            lambda r, *, tariff: D.detect_baseload_creep(r, tariff=tariff),
+            lambda r, *, tariff: D.detect_data_quality(r, tariff=tariff, flags=flags),
+            lambda r, *, tariff: D.detect_tou_misalignment(r, tariff=tariff, bands=bands,
+                                                            offpeak_rate=offpeak, occupancy=occupancy),
+        ]
+        if capacity or prior_max:
+            detectors.append(lambda r, *, tariff: D.detect_peak_excursion(
+                r, tariff=tariff, capacity_kw=float(capacity) if capacity else None, prior_year_max_kw=prior_max))
+        else:
+            skipped["peak_excursion"] = "no capacity_kw on the meter and no prior-year readings"
+        if work_orders:
+            detectors.append(lambda r, *, tariff: D.detect_post_works_regression(
+                r, tariff=tariff, closed_work_orders=work_orders))
+        else:
+            skipped["post_works_regression"] = "no work order closed on this asset or building in the last 37 days"
+        if degree_days and len(monthly) >= D.WEATHER_MIN_MONTHS:
+            detectors.append(lambda r, *, tariff: D.detect_weather_residual(monthly, degree_days, tariff=tariff))
+        else:
+            skipped["weather_residual"] = ("no degree days for the building" if not degree_days
+                                           else f"{len(monthly)} complete months; needs {D.WEATHER_MIN_MONTHS}")
+        if trends:
+            zone_kw = meta.get("zone_kw")
+            detectors.append(lambda r, *, tariff: D.detect_simultaneous_heating_cooling(
+                trends, tariff=tariff, zone_kw=float(zone_kw) if zone_kw else None))
+        else:
+            skipped["simultaneous_heating_cooling"] = "no BMS trends for the building in the last 7 days"
+        skipped["chiller_efficiency"] = "runs per chiller asset: POST /api/energy/chillers/scan"
 
     # PRD: baseline drift only when no logged occupancy change in the window
     from .occupancy import has_occupancy_change
@@ -451,7 +618,8 @@ async def scan_meter_anomalies(
         detail={"meter_id": str(meter_id), "created": len(created)},
     )
     await session.commit()
-    return {"ok": True, "meter_id": str(meter_id), "anomalies": created}
+    return {"ok": True, "meter_id": str(meter_id), "anomalies": created,
+            "rules_run": len(detectors), "skipped": skipped if readings else {"all": "no readings"}}
 
 
 async def act_on_anomaly(

@@ -7,8 +7,39 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core.logging import get_logger
 from . import certificates as cert_svc
 from .country_pack import list_pack_types
+from .verification_sources import normalize_country
+
+log = get_logger(__name__)
+
+
+def _in_country(rows: list[dict[str, Any]], country: str) -> tuple[list[dict[str, Any]], int]:
+    """Split certificates into those belonging to ``country`` and a count of the rest.
+
+    Coverage is scored against ONE country's pack, so it may only count that country's
+    certificates. Without this both coverage endpoints scored the whole register against
+    whichever pack was asked for: a UK request measured a Dubai hospital's DCD fire
+    certificate against the UK's 27 types, found none of them, and reported the building
+    at 0% — then labelled it United Kingdom, because the row echoed the REQUESTED country
+    rather than the building's own. One portfolio of UK buildings hid it; the first
+    non-UK building made it visible.
+
+    A certificate with no country recorded is counted in neither. It cannot be scored
+    against a pack it never named, and defaulting it to UK is how a Dubai certificate
+    ends up in a British coverage figure. The count is returned so the caller can say
+    they exist rather than silently dropping them.
+    """
+    keep: list[dict[str, Any]] = []
+    unscoped = 0
+    for r in rows:
+        raw = str(r.get("country_code") or "").strip()
+        if not raw:
+            unscoped += 1
+        elif normalize_country(raw) == country:
+            keep.append(r)
+    return keep, unscoped
 
 
 # What the `required` denominator counts. Today there is exactly one basis: every Building
@@ -54,6 +85,66 @@ async def _site_labels(session: AsyncSession, site_keys: list[str]) -> dict[str,
     from .site_links import site_labels
 
     return await site_labels(session, site_keys)
+
+
+async def _site_regions(
+    session: AsyncSession, site_keys: list[str]
+) -> dict[str, dict[str, str | None]]:
+    """Where each site is, for the scope filter's region tier.
+
+    The console narrows country -> region -> building, but coverage rows carried no place
+    at all, so every building fell back to "<country> - region not recorded" and the middle
+    tier had exactly one entry per country: present, and useless. plenum_cafm.sites has
+    held state and city all along.
+
+    Columns are checked against information_schema rather than assumed: this table's shape
+    varies by deployment, and naming a column it does not have would raise inside a
+    dashboard load.
+    """
+    keys = [str(k).strip() for k in site_keys if str(k or "").strip()]
+    if not keys:
+        return {}
+    try:
+        async with session.begin_nested():
+            cols = {
+                str(r[0])
+                for r in (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = 'plenum_cafm' AND table_name = 'sites'
+                            """
+                        )
+                    )
+                ).all()
+            }
+            key_cols = [c for c in ("site_id", "id", "site_code") if c in cols]
+            want = [c for c in ("state", "region", "city") if c in cols]
+            if not key_cols or not want:
+                return {}
+            select = ", ".join([f"{c}::text AS key_{c}" for c in key_cols]
+                               + [f"{c}::text AS {c}" for c in want])
+            conds = " OR ".join(f"{c}::text = ANY(:ids)" for c in key_cols)
+            rows = (
+                await session.execute(
+                    text(f"SELECT {select} FROM plenum_cafm.sites WHERE {conds}"),
+                    {"ids": keys},
+                )
+            ).mappings().all()
+    except Exception as exc:  # noqa: BLE001 — a missing place must never fail coverage
+        log.warning("coverage.site_regions_failed", error=str(exc)[:200])
+        return {}
+
+    wanted = set(keys)
+    out: dict[str, dict[str, str | None]] = {}
+    for r in rows:
+        place = {c: (r.get(c) or None) for c in ("state", "region", "city")}
+        for c in key_cols:
+            k = str(r.get(f"key_{c}") or "").strip()
+            if k and k in wanted:
+                out[k] = place
+    return out
 
 
 async def _vendor_rows(session: AsyncSession, organization_id: UUID | None) -> list[dict[str, Any]]:
@@ -120,7 +211,8 @@ async def building_coverage(
     """
     from .site_links import coverage_bucket
 
-    pack = await list_pack_types(session, country_code=country_code, scope="Building")
+    country = normalize_country(country_code)
+    pack = await list_pack_types(session, country_code=country, scope="Building")
     required_codes = [
         str(p.certificate_type_code)
         for p in pack
@@ -142,15 +234,24 @@ async def building_coverage(
                     )
                 )
             ).mappings().all()
-        pack_by_site = {str(r["site_id"]): dict(r) for r in pack_sites}
+        # A site whose activated pack is another country's is another country's
+        # obligation. It belongs in that country's coverage, not this one's.
+        pack_by_site = {
+            str(r["site_id"]): dict(r)
+            for r in pack_sites
+            if normalize_country(r["country_code"]) == country
+        }
     except Exception:  # noqa: BLE001
         pack_by_site = {}
 
-    certs = await cert_svc.list_certificates(
-        session,
-        cert_scope="Building",
-        organization_id=organization_id,
-        limit=1000,
+    certs, unscoped = _in_country(
+        await cert_svc.list_certificates(
+            session,
+            cert_scope="Building",
+            organization_id=organization_id,
+            limit=1000,
+        ),
+        country,
     )
 
     buckets: dict[str, dict[str, Any]] = {}
@@ -183,9 +284,9 @@ async def building_coverage(
         )
         b["rows"].append(c)
 
-    labels = await _site_labels(
-        session, [str(b["site_key"]) for b in buckets.values() if b["site_key"]]
-    )
+    _keys = [str(b["site_key"]) for b in buckets.values() if b["site_key"]]
+    labels = await _site_labels(session, _keys)
+    places = await _site_regions(session, _keys)
 
     buildings: list[dict[str, Any]] = []
     for key, b in buckets.items():
@@ -217,8 +318,29 @@ async def building_coverage(
                 # Whether this building is a row in plenum_cafm.sites or only a name on a
                 # document. Per-site reporting means something different for each.
                 "linked": bool(b["linked"]),
+                # Where it is. None for a building that is only a name on a document —
+                # the console then says "region not recorded", which is true of that
+                # building rather than true of every building.
+                "state": (places.get(str(site_key)) or {}).get("state") if site_key else None,
+                "region": (places.get(str(site_key)) or {}).get("region") if site_key else None,
+                "city": (places.get(str(site_key)) or {}).get("city") if site_key else None,
                 "pack_version": (pack_row or {}).get("pack_version"),
-                "country_code": (pack_row or {}).get("country_code") or country_code,
+                # The building's own country, from the certificates in this bucket — every
+                # one of which is in scope, so they agree. Falls back to the activated
+                # pack's country, and only then to the request. It used to be the request
+                # alone, which is what made a Dubai building read "United Kingdom".
+                "country_code": (
+                    next(
+                        (
+                            normalize_country(r.get("country_code"))
+                            for r in rows
+                            if r.get("country_code")
+                        ),
+                        None,
+                    )
+                    or (pack_row or {}).get("country_code")
+                    or country
+                ),
                 "required": len(required_set),
                 "required_basis": REQUIRED_BASIS_COUNTRY_PACK,
                 "on_record": on_record,
@@ -246,7 +368,11 @@ async def building_coverage(
     return {
         "ok": True,
         "scope": "Building",
-        "country_code": country_code,
+        "country_code": country,
+        # Building certificates in the register that name no country. Not counted above:
+        # a certificate that never said which country's rules it answers to cannot be
+        # scored against any country's pack.
+        "certificates_without_country": unscoped,
         "required_types": len(required_set),
         "required_basis": REQUIRED_BASIS_COUNTRY_PACK,
         "required_basis_note": REQUIRED_BASIS_NOTE,
@@ -265,7 +391,8 @@ async def vendor_coverage(
     trade_category: str | None = None,
 ) -> dict[str, Any]:
     """Coverage % per vendor against Vendor CountryPack types (optionally by trade)."""
-    pack = await list_pack_types(session, country_code=country_code, scope="Vendor")
+    country = normalize_country(country_code)
+    pack = await list_pack_types(session, country_code=country, scope="Vendor")
     if trade_category:
         trade_l = trade_category.strip().lower()
         pack = [
@@ -283,11 +410,17 @@ async def vendor_coverage(
     required_set = set(required_codes)
 
     vendors = await _vendor_rows(session, organization_id)
-    certs = await cert_svc.list_certificates(
-        session,
-        cert_scope="Vendor",
-        organization_id=organization_id,
-        limit=1000,
+    # Same rule as buildings: an accreditation is scored against the pack of the country
+    # it was issued under. A firm's Dubai DCD approval is not a gap in the UK pack, and
+    # scoring it as one blocks a vendor for failing a test it was never sitting.
+    certs, unscoped = _in_country(
+        await cert_svc.list_certificates(
+            session,
+            cert_scope="Vendor",
+            organization_id=organization_id,
+            limit=1000,
+        ),
+        country,
     )
     by_vendor: dict[str, list[dict[str, Any]]] = {}
     for c in certs:
@@ -365,7 +498,8 @@ async def vendor_coverage(
     return {
         "ok": True,
         "scope": "Vendor",
-        "country_code": country_code,
+        "country_code": country,
+        "certificates_without_country": unscoped,
         "trade_category": trade_category,
         "average_coverage_pct": avg,
         "vendors": out,

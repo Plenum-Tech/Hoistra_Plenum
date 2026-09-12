@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.contract_sla_parameters (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_csp_vendor ON plenum_cafm.contract_sla_parameters (vendor_id);
-CREATE INDEX IF NOT EXISTS ix_csp_org ON plenum_cafm.contract_sla_parameters (organization_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_csp_vendor ON plenum_cafm.contract_sla_parameters (vendor_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_csp_org ON plenum_cafm.contract_sla_parameters (organization_id);
 
 -- B1: asset criticality (HITL; unapproved default L2)
 CREATE TABLE IF NOT EXISTS plenum_cafm.asset_criticality (
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.asset_criticality (
     UNIQUE (asset_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_ac_org ON plenum_cafm.asset_criticality (organization_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ac_org ON plenum_cafm.asset_criticality (organization_id);
 
 -- B2: admin-editable scoring weights
 CREATE TABLE IF NOT EXISTS plenum_cafm.vendor_score_weight_config (
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.vendor_wo_scores (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_vws_vendor_month ON plenum_cafm.vendor_wo_scores (vendor_id, score_month);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_vws_vendor_month ON plenum_cafm.vendor_wo_scores (vendor_id, score_month);
 
 -- B2: monthly scorecards
 CREATE TABLE IF NOT EXISTS plenum_cafm.vendor_monthly_scorecards (
@@ -147,4 +147,4 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.invoice_verifications (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_iv_vendor ON plenum_cafm.invoice_verifications (vendor_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_iv_vendor ON plenum_cafm.invoice_verifications (vendor_id);

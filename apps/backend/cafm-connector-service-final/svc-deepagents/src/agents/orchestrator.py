@@ -48,7 +48,15 @@ from ..llm_factory import create_chat_model, friendly_openai_error
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
 from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
-from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS
+from .energy_intelligence_agent import (
+    ENERGY_INTELLIGENCE_TOOLS,
+    # Not an energy tool. "Which documents are filed against this building" is asked of
+    # any building in any conversation, and Phase 2 engine tools are bound only once
+    # content has selected that engine — so while it sat on the energy list a documents
+    # question never reached it and fell through to semantic search, which finds
+    # documents whose TEXT mentions a building rather than the ones filed against it.
+    list_building_documents,
+)
 from .doc_rag_agent import (
     delete_document,
     extract_text,
@@ -139,6 +147,7 @@ from .phase2_intents import Phase2AgentId, resolve_phase2_engine
 from .agent_router import as_phase2_engine, select_agent
 from .compliance_facts import compute_pack_facts
 from .compliance_router import compliance_skill_path_enabled
+from . import activity_log
 from . import llm_cost
 from .skills import prompt_doc
 from .system_prompt import build_system_prompt
@@ -242,6 +251,7 @@ ALL_TOOLS = [
     find_asset,
     find_location,
     get_asset_documents,
+    list_building_documents,
     udr_agent_query,
     udr_list_tables,
     udr_describe_table,
@@ -361,6 +371,7 @@ _TOOL_DOMAIN: dict[str, str] = {
     "get_schema": "udr", "lookup_user": "udr", "query_table": "udr",
     "find_asset": "udr", "find_location": "udr",
     "get_asset_documents": "udr",
+    "list_building_documents": "udr",
     "udr_agent_query": "udr",
     "udr_list_tables": "udr",
     "udr_describe_table": "udr",
@@ -430,6 +441,9 @@ _TOOL_DOMAIN: dict[str, str] = {
     # Compliance Engine A1–A5 (11)
     "run_compliance_scan": "compliance",
     "list_building_certificates": "compliance",
+    "get_mees_summary": "compliance",
+    "record_regulatory_filing": "compliance",
+    "list_regulatory_filings": "compliance",
     "list_vendor_accreditations": "compliance",
     "upsert_compliance_certificate": "compliance",
     "set_remedial_status": "compliance",
@@ -473,6 +487,13 @@ _TOOL_DOMAIN: dict[str, str] = {
     "cross_ref_condition_consumption": "energy_intelligence",
     "log_site_occupancy_change": "energy_intelligence",
     "scan_energy_anomalies": "energy_intelligence",
+    "compute_building_rating": "energy_intelligence",
+    "get_ratings_position": "energy_intelligence",
+    "record_chiller_design": "energy_intelligence",
+    "ingest_chiller_readings": "energy_intelligence",
+    "scan_chiller_efficiency": "energy_intelligence",
+    "ingest_degree_days": "energy_intelligence",
+    "ingest_bms_trends": "energy_intelligence",
     "list_energy_anomalies": "energy_intelligence",
     "act_on_energy_anomaly": "energy_intelligence",
     "generate_monthly_energy_report": "energy_intelligence",
@@ -492,18 +513,46 @@ def _extract_interrupt(result: dict[str, Any]) -> dict | None:
 
 
 def _extract_tool_calls(messages: list) -> list[dict[str, Any]]:
-    """Extract the tool call trace from LangGraph message history."""
+    """Extract the tool call trace from LangGraph message history.
+
+    Paired by tool_call_id, because the orchestrator fires tools in parallel and the id is
+    the only thing that says which answer belongs to which call.
+
+    The previous version attached each result to ``tool_calls[-1]``. With one call in flight
+    that is the right entry by luck; with two it is not. Both entries were appended with no
+    output, the first result back was written onto the LAST entry, and the second was
+    dropped because that entry already had one. The faster agent's answer was therefore
+    filed under the slower agent's name and the faster agent showed null — which is why it
+    always looked like energy_intelligence failing, at 5s against udr's 18s, when in fact
+    its answer was sitting in udr's row.
+
+    A missing output reads as "this source said nothing". A misattributed one reads as "this
+    source said that", and nothing downstream can tell the difference.
+    """
+    outputs: dict[str, Any] = {}
+    for msg in messages:
+        is_tool = (
+            getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage"
+        )
+        tcid = getattr(msg, "tool_call_id", None)
+        if is_tool and tcid is not None:
+            outputs[str(tcid)] = getattr(msg, "content", None)
+
     tool_calls: list[dict[str, Any]] = []
     for msg in messages:
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append({
-                    "tool": tc.get("name"),
-                    "input": tc.get("args", {}),
-                })
-        if hasattr(msg, "name") and msg.name and hasattr(msg, "content"):
-            if tool_calls and "output" not in tool_calls[-1]:
-                tool_calls[-1]["output"] = msg.content
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            get = tc.get if isinstance(tc, dict) else lambda k, d=None: getattr(tc, k, d)
+            entry: dict[str, Any] = {
+                "tool": get("name"),
+                "input": get("args", {}) or {},
+            }
+            tcid = get("id")
+            # Only when the result is actually known. A call still in flight, or one whose
+            # ToolMessage never arrived, leaves the key absent rather than claiming null —
+            # "no answer yet" and "answered with nothing" are different facts.
+            if tcid is not None and str(tcid) in outputs:
+                entry["output"] = outputs[str(tcid)]
+            tool_calls.append(entry)
     return tool_calls
 
 
@@ -1304,10 +1353,17 @@ class DeepAgentOrchestrator:
                 "Answer with one of: compliance, contract, energy, general."
             )
         )
+        _t0 = time.perf_counter()
+        _model = getattr(self._llm, "model_name", None) or settings.openai_model
         try:
             resp = await self._llm.ainvoke([system, HumanMessage(content=text[:2000])])
         except Exception as exc:  # noqa: BLE001 — never let routing crash the turn
             log.warning("orchestrator.llm_route.failed", error=str(exc)[:200])
+            activity_log.fire_exchange(
+                agent="orchestrator", stage="classify_engine", system=system.content,
+                user=text[:2000], error=str(exc), model=_model,
+                latency_ms=(time.perf_counter() - _t0) * 1000,
+            )
             return None
         out = getattr(resp, "content", "")
         if isinstance(out, list):
@@ -1323,6 +1379,13 @@ class DeepAgentOrchestrator:
         elif "energy" in out:
             engine = "energy_intelligence"
         log.info("orchestrator.llm_route", classified=out[:40], engine=engine)
+        activity_log.fire_exchange(
+            agent="orchestrator", stage="classify_engine", system=system.content,
+            user=text[:2000], output={"raw": out, "engine": engine}, model=_model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            usage=getattr(resp, "usage_metadata", None),
+            summary_out=f"engine: {engine or 'general'}",
+        )
         return engine
 
     @staticmethod
@@ -1816,6 +1879,15 @@ class DeepAgentOrchestrator:
             blocked=sum(1 for r in rows if r.get("is_blocked")),
             drafts=sum(1 for r in rows if r.get("is_draft")),
         )
+        activity_log.fire(
+            agent="compliance", stage="fetch", direction="output",
+            summary=f"{len(rows)} rows from plenum_cafm.compliance_certificates",
+            payload={
+                "spec": spec, "limit": limit, "rows": len(rows), "by_status": by_status,
+                "columns": sorted(rows[0].keys()) if rows else [],
+                "sample": rows[:5],
+            },
+        )
         if settings.compliance_debug_payloads:
             for r in rows:
                 log.info(
@@ -2154,6 +2226,12 @@ class DeepAgentOrchestrator:
         if settings.compliance_debug_payloads:
             log.info("compliance.stage2.prompt_system", system=system_text)
             log.info("compliance.stage2.prompt_data", data=data_json)
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="input",
+            summary=(user_message or "")[:300],
+            payload={"question": user_message, "system": system_text, "data_json": data_json,
+                     "blocks": [b.get("source") for b in blocks]},
+        )
 
         # Claude first — this call has to apply compound row filters ("forged AND still
         # compliant") across the whole table, and the cheap general-purpose model used for
@@ -2179,6 +2257,12 @@ class DeepAgentOrchestrator:
                 for part in text
             )
         out = text.strip() if isinstance(text, str) and text.strip() else None
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "fallback model returned nothing")[:300], ok=bool(out),
+            model=getattr(self._llm, "model_name", None) or settings.openai_model,
+            payload={"answer": out, "provider": "openai_fallback"},
+        )
         if out:
             # STAGE 3 LOG — fallback model path.
             log.info(
@@ -2617,6 +2701,10 @@ class DeepAgentOrchestrator:
         """
         text = (user_message or "").strip()
         taxonomy = self._is_taxonomy_question(text)
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", summary=text[:300],
+            payload={"question": text, "taxonomy": taxonomy},
+        )
         default = {
             "reason": (
                 "Answer from the country certificate pack — the question is about what is "
@@ -2728,9 +2816,24 @@ class DeepAgentOrchestrator:
         # timeout — the handler below still logs `raw`, and an unbound local would turn a
         # recoverable planning failure into an exception that takes the whole turn with it.
         raw: Any = ""
+        _plan_t0 = time.perf_counter()
+        _plan_model = getattr(self._llm, "model_name", None) or settings.openai_model
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", model=_plan_model,
+            summary="planner prompt", payload={"system_prompt": system.content,
+                                                 "user_message": text[:1200]},
+        )
         try:
             resp = await self._llm.ainvoke(
                 [system, HumanMessage(content=text[:1200])]
+            )
+            # Every other stage of this pipeline records to the llm_cost ledger; the planner
+            # was the one call nobody had wired in, so its own step in the UI panel could
+            # never show a time or a $ figure. `usage_from_langchain_messages` reads whichever
+            # shape this model's client returned (OpenAI or Anthropic via LangChain).
+            _plan_usage, _ = llm_cost.usage_from_langchain_messages([resp])
+            llm_cost.record(
+                "plan", _plan_model, _plan_usage, (time.perf_counter() - _plan_t0) * 1000
             )
             raw = getattr(resp, "content", "") or ""
             if isinstance(raw, list):
@@ -2742,6 +2845,12 @@ class DeepAgentOrchestrator:
         except Exception as exc:  # noqa: BLE001 — planning must never break the turn
             log.warning(
                 "compliance.plan.failed", error=str(exc)[:200], raw=str(raw)[:600]
+            )
+            activity_log.fire(
+                agent="compliance", stage="plan", direction="error", summary=str(exc)[:200],
+                ok=False, error=str(exc), model=_plan_model,
+                latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+                payload={"model_output_raw": str(raw)[:4000], "fallback": default},
             )
             return default
         needs = [n for n in (plan.get("needs") or []) if n in self._PLAN_SOURCES]
@@ -2782,6 +2891,11 @@ class DeepAgentOrchestrator:
             # Kept for the single-question path and for logging.
             "query": subs[0]["query"],
         }
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="output", summary=out["reason"][:300],
+            model=_plan_model, latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+            payload={"plan": out, "model_output_raw": str(raw)},
+        )
         log.info(
             "compliance.stage0.plan",
             reason=out["reason"],
@@ -3700,6 +3814,22 @@ class DeepAgentOrchestrator:
                 else (getattr(settings, "compliance_review_effort", "") or "medium").strip()
             )
             _t0 = time.perf_counter()
+            activity_log.fire(
+                agent="compliance", stage="review", direction="input", model=model,
+                summary="review of: " + (user_message or "")[:250],
+                payload={
+                    "system_prompt": self._REVIEWER_PROMPT,
+                    "user_message": {
+                        "question": user_message[:1000],
+                        "pack_facts": pack_facts or {},
+                        "register_index": self._register_index(rows or []),
+                        "tool_results_digest": self._tool_results_digest(tool_results),
+                        "code_findings": code_findings,
+                        "answer_under_review": answer_text,
+                    },
+                    "params": {"effort": review_effort, "max_tokens": 4000, "schema": "review"},
+                },
+            )
             message = await client.messages.create(
                 model=model,
                 max_tokens=4000,
@@ -3730,6 +3860,10 @@ class DeepAgentOrchestrator:
             )
         except Exception as exc:  # noqa: BLE001 — review must never break the turn
             log.warning("compliance.review.failed", model=model, error=str(exc)[:300])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
         llm_cost.record(
             "reviewer",
@@ -3743,10 +3877,25 @@ class DeepAgentOrchestrator:
             "",
         )
         try:
-            return json.loads(raw)
+            review = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.review.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error",
+                summary="unparsable review", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
+        activity_log.fire(
+            agent="compliance", stage="review", direction="output",
+            summary=str(review.get("verdict") or review.get("summary") or "review")[:300],
+            model=model, latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"review": review, "code_findings": code_findings,
+                     "answer_under_review": answer_text},
+        )
+        return review
 
     @staticmethod
     def _revision_brief(
@@ -3813,6 +3962,9 @@ class DeepAgentOrchestrator:
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
+        Every call is recorded in the activity log — input (question, data, sub-questions)
+        and output (the typed response) — so a wrong answer can be replayed.
+
         When `on_zone` is given it is awaited with (key, value) as each top-level zone
         finishes streaming, so the UI can paint the narrative and KPIs first.
         """
@@ -3833,6 +3985,21 @@ class DeepAgentOrchestrator:
             system_text = "\n\n---\n\n".join(
                 [self._ANALYST_CONTEXT_DOCS, self._ANALYST_PROMPT]
                 + ([self._TAXONOMY_DIRECTIVE] if taxonomy else [])
+            )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="input", model=model,
+                summary=(user_message or "")[:300],
+                payload={
+                    "system_prompt": system_text,
+                    "user_message": {
+                        "question": user_message,
+                        "sub_questions": self._sub_question_brief(sub_questions, user_message),
+                        "query_notes": query_notes,
+                        "data_json": data_json,
+                    },
+                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": 16000,
+                               "thinking": "adaptive", "schema": "compliance_response"},
+                },
             )
             async with client.messages.stream(
                 model=model,
@@ -3876,6 +4043,10 @@ class DeepAgentOrchestrator:
             log.warning(
                 "compliance.analyst.failed", model=model, error=str(exc)[:300]
             )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         llm_cost.record(
@@ -3894,8 +4065,21 @@ class DeepAgentOrchestrator:
             payload = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.analyst.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error",
+                summary="unparsable analyst response", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
 
+        activity_log.fire(
+            agent="compliance", stage=role, direction="output",
+            summary=str(payload.get("narrative") or "")[:300], model=model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"response": payload, "effort": effort, "taxonomy": taxonomy},
+        )
         log.info(
             "compliance.stage3.analyst",
             model=model,
@@ -3940,12 +4124,24 @@ class DeepAgentOrchestrator:
                 model=model,
                 error=str(exc)[:300],
             )
+            activity_log.fire(
+                agent="compliance", stage="summary", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         parts = [
             b.text for b in (message.content or []) if getattr(b, "type", "") == "text"
         ]
         out = "\n".join(p for p in parts if p).strip()
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "empty answer")[:300], ok=bool(out), model=model,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"answer": out, "stop_reason": getattr(message, "stop_reason", None),
+                     "provider": "anthropic"},
+        )
         if not out:
             return None
         # STAGE 3 LOG — the summary the model produced.
@@ -3978,6 +4174,13 @@ class DeepAgentOrchestrator:
         the summary plus the UNFILTERED vendor (and building, when in scope) portfolios, then let
         build_deterministic_compliance_answer group them into Blocked / Lapsed / At-risk sections.
         """
+        # Neither caller (_stateful_preflight_shortcut, run_stateful) opens a ledger before
+        # reaching here, so without this the compliance_pipeline output below always attaches
+        # cost=None — the turn's model calls (routing, any LLM this shortcut itself uses) were
+        # never being recorded at all. Guarded exactly like _invoke_phase2_engine's own
+        # begin_turn call, so a turn that DID start a ledger upstream keeps its entries.
+        if llm_cost.current() is None:
+            llm_cost.begin_turn(session_id)
         if compliance_skill_path_enabled():
             # COMPLIANCE_SKILL_PATH=1 — stand down so the question reaches the orchestrator
             # and, through it, the compliance sub-agent with its own skill files. This
@@ -4058,10 +4261,29 @@ class DeepAgentOrchestrator:
         # and returned on the result so the non-streaming path shows the same thing.
         pipeline: list[dict[str, Any]] = []
 
-        async def _step(step: dict[str, Any]) -> None:
+        async def _step(step: dict[str, Any]) -> dict[str, Any]:
             pipeline.append(step)
             if on_zone is not None:
                 await on_zone(self._STEP_ZONE, step)
+            return step
+
+        def _step_cost(role: str) -> dict[str, Any]:
+            """The most recent ledger entry for `role`, shaped for a step's own badge.
+
+            Read once, right after the call it describes returns — a step whose call has not
+            happened yet (the analyst step is emitted before its own call, so streaming shows
+            it as in progress) gets nothing here; its cost is merged in afterwards instead. A
+            role the ledger never recorded (no API key, the call raised) returns {} — the step
+            shows no badge rather than a guessed one.
+            """
+            ledger = llm_cost.current()
+            entry = ledger.last(role) if ledger else None
+            if not entry:
+                return {}
+            return {
+                "ms": entry.get("ms"), "usd": entry.get("usd"), "model": entry.get("model"),
+                "effort": entry.get("effort"), "cache_hit": entry.get("cache_hit"),
+            }
 
         if on_zone is not None and plan.get("reason"):
             # Streamed ahead of the data so the activity log shows the intent first.
@@ -4084,6 +4306,7 @@ class DeepAgentOrchestrator:
                     }
                     for sq in (plan.get("sub_questions") or [])
                 ],
+                **_step_cost("plan"),
             }
         )
 
@@ -4362,7 +4585,11 @@ class DeepAgentOrchestrator:
 
         answer_source = "analyst"
         answer: str | None = None
-        await _step(
+        # Emitted before the call it describes, unlike every other step here, so a streaming
+        # client sees "the analyst is working" for the ~30-60s this actually takes rather than
+        # nothing at all. Its own time/cost/model are filled in below once the call returns —
+        # the returned dict is the same one already in `pipeline`, so mutating it is enough.
+        analyse_step = await _step(
             {
                 "stage": "analyse",
                 "label": "Compliance analyst reasoning",
@@ -4391,6 +4618,7 @@ class DeepAgentOrchestrator:
             query_notes=query_notes,
             taxonomy=is_taxonomy,
         )
+        analyse_step.update(_step_cost("analyst"))
         if analysis and (analysis.get("narrative") or "").strip():
             # EL gate — the orchestrator re-checks the sub-agent's answer against the rows it
             # was given before any of it reaches the user. Only meaningful on the direct-read
@@ -4525,6 +4753,7 @@ class DeepAgentOrchestrator:
                                 if isinstance(f, dict)
                             ]
                         )[:8],
+                        **_step_cost("reviewer"),
                     }
                 )
                 if needs_revision:
@@ -4574,6 +4803,11 @@ class DeepAgentOrchestrator:
                                     "disagree with the pack — shown below the answer"
                                 ),
                                 "issues": remaining[:8],
+                                # The revision call just above is recorded under the same
+                                # "analyst" role as the first pass; by this point in the
+                                # function it is the newest entry under that name, so `last`
+                                # names this call and not the original one.
+                                **_step_cost("analyst"),
                             }
                         )
                         analysis.setdefault("validation", {})["review"] = {
@@ -4606,7 +4840,18 @@ class DeepAgentOrchestrator:
                 {
                     "tool": "compliance_pipeline",
                     "input": {"question": user_message[:300]},
-                    "output": {"steps": pipeline},
+                    "output": {
+                        "steps": pipeline,
+                        # Every model call in this turn already went through the llm_cost
+                        # ledger (routing, doc selection, any LLM the shortcut itself used);
+                        # the UI's pipeline panel reads this the same way the full
+                        # compose_structured_compliance path already does.
+                        "cost": (
+                            llm_cost.current().log_summary(user_message)
+                            if llm_cost.current()
+                            else None
+                        ),
+                    },
                 }
             )
         log.info(
@@ -5880,11 +6125,26 @@ class DeepAgentOrchestrator:
         """Invoke the agent and normalise the result into our response shape."""
         config = self._config(thread_id)
         set_session_context(thread_id)
+        activity_log.set_current_session(session_id, thread_id)
+        activity_log.ensure_turn()
+        _turn_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input",
+            summary=_latest_user_message(input_)[:300],
+            payload={"input": input_ if not isinstance(input_, dict) else {
+                "message_count": len(input_.get("messages") or []),
+                "latest_user_message": _latest_user_message(input_),
+            }},
+        )
         try:
             result = await self._agent.ainvoke(input_, config)
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+            )
             return {
                 "session_id": session_id,
                 "answer": "",
@@ -5928,6 +6188,18 @@ class DeepAgentOrchestrator:
         if tool_calls:
             tool_name = str(tool_calls[-1].get("tool") or "")
             domain = _TOOL_DOMAIN.get(tool_name, "meta")
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(answer or "")[:300],
+            payload={
+                "answer": answer,
+                "tool_calls": tool_calls,
+                "domain": domain,
+                "interrupted": interrupt_payload is not None,
+                "interrupt_payload": interrupt_payload,
+            },
+            latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+        )
         return attach_route_to_result(
             out,
             session_id,
@@ -6288,6 +6560,13 @@ class DeepAgentOrchestrator:
         sid = session_id or str(uuid.uuid4())
         thread_id = sid
         config = self._config(thread_id)
+        activity_log.set_current_session(sid, thread_id)
+        activity_log.ensure_turn()
+        _stream_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input", summary=user_message[:300],
+            payload={"message": user_message, "extra_context": extra_context, "mode": "stream"},
+        )
         set_session_context(sid)
         record_conversation_turn(sid, "user", user_message)
 
@@ -6485,6 +6764,10 @@ class DeepAgentOrchestrator:
                         }
                     last_domain = domain
 
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="input",
+                        summary=tool_name, payload={"tool": tool_name, "input": tool_input},
+                    )
                     yield {
                         "type": "tool_started",
                         "tool": tool_name,
@@ -6509,6 +6792,10 @@ class DeepAgentOrchestrator:
                             "output": output,
                         }
                     )
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="output",
+                        summary=tool_name, payload={"tool": tool_name, "output": output},
+                    )
                     yield {
                         "type": "tool_completed",
                         "tool": tool_name,
@@ -6532,12 +6819,22 @@ class DeepAgentOrchestrator:
         except GraphInterrupt as gi:
             payload = gi.args[0] if gi.args else {}
             log.info("orchestrator.stream.gate_interrupt", session_id=sid)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="output", summary="gate_interrupt",
+                payload={"gate_interrupt": payload, "tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "gate_interrupt", "payload": payload, "session_id": sid}
             return
 
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.stream.error", session_id=sid, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, payload={"tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "error", "error": err, "session_id": sid}
             return
 
@@ -6549,6 +6846,12 @@ class DeepAgentOrchestrator:
                 llm=self._llm,
             )
         log.info("orchestrator.stream.done", session_id=sid)
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(final_answer or "")[:300],
+            payload={"answer": final_answer, "tool_calls": streamed_tool_calls, "mode": "stream"},
+            latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+        )
         if final_answer.strip():
             record_conversation_turn(sid, "assistant", final_answer)
         yield workflow_stream_completion_payload(

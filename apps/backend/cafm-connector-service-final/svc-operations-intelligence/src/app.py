@@ -11,12 +11,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    admin_router,
     approvals_router,
+    auth_router,
     compliance_router,
     contract_performance_router,
     energy_router,
+    ingestion_router,
+    superadmin_router,
 )
 from .config import settings
+from .engines.auth import keys as auth_keys
 from .core.exceptions import OpsIntelligenceError
 from .core.logging import configure_logging, get_logger
 from .db import AsyncSessionLocal, apply_sql_seed, init_db
@@ -29,6 +34,13 @@ async def lifespan(app: FastAPI):
     configure_logging()
     log.info("service.startup", service=settings.service_name, version="1.2.0")
     await init_db()
+
+    # After the migrations, because on a fresh database plenum_cafm.users does not exist
+    # until create_all has run. Before the first request, because a key type is a property
+    # of the deployment: knowable now, unchanging while this process lives, and fatal to
+    # get wrong. A service that cannot read it cannot serve auth, so it does not start.
+    async with AsyncSessionLocal() as session:
+        await auth_keys.resolve(session)
     if settings.auto_seed_portfolio_buildings:
         try:
             await apply_sql_seed("portfolio_buildings.sql")
@@ -128,6 +140,10 @@ async def metrics():
 
 
 app.include_router(approvals_router)
+app.include_router(auth_router)
+app.include_router(superadmin_router)
+app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(energy_router)
+app.include_router(ingestion_router)

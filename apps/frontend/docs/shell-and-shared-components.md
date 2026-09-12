@@ -5,33 +5,42 @@
 ## Shell and shared components
 
 ### 4.1 Sign-in gate
-Email field + Continue. Session opens in **user view**.
+The right column is one panel with five modes (`GatePanel.jsx`, driven by `logic/auth.js` against svc-operations-intelligence's `/api/auth`). The marketing column beside it is unchanged.
+
+- **Sign in** — email + password, **Continue**. `Single sign-on` is inert (a toast; no SSO endpoint exists yet). Links: *Forgot password?* · *Create an account* (hidden when `GET /api/auth/config` says self-registration is off). A wrong password and an unknown address get the same server line; eight failures lock the account for 15 minutes and the panel counts down beside a *Reset your password* link; a correct password on an unconfirmed address jumps to **Enter the code** (the server has already sent one).
+- **Create an account** — full name, email, password (the minimum length comes from `/config`), phone (optional). 202 → **Enter the code**. An address that already has an account gets the same 202 — the mailbox owner is told, the screen is not.
+- **Enter the code** — six digits, ten minutes, five guesses. A miss keeps the digits and shows the attempts left; an expired, exhausted or superseded code clears the field and makes **Resend code** the emphasised button. Resend is disabled with a countdown while the 60-second cooldown runs; a resend kills the older code, so the typed digits go. The right code confirms the address **and signs in**.
+- **Forgot your password?** — email → 202 (identical whether or not an account exists) → **Set a new password**.
+- **Set a new password** — code + new password on one screen (there is no "check the code" step by design). A rejected password keeps the code; only the password is retyped. Success returns to **Sign in** with the server's line — a reset ends every session and deliberately does not sign in.
+
+Tokens: the access token (30 min) lives in memory; the refresh token (14 days, rotated on every use) is the persisted credential (`logic/session.js`). A reload renders the shell on the stored account and refreshes once; every backend call carries `Authorization: Bearer`; a 401 `expired` is refreshed and retried once; a 401 whose reason says the session is finished (revoked, password changed, replayed, disabled, account gone, invalid token) signs out with the server's line. Session opens in **user view**.
 
 ### 4.2 Top bar
-Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pill (decision queue count, pulsing) · tenant · orchestrator icon · **account avatar "A"**.
+Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pill (decision queue count, pulsing) · tenant · orchestrator icon · **account avatar (the signed-in person's initial)**.
 
-**Account menu (Aasim):** header line states the current mode ("User view · Planum Technologies"). Items: **Pricing**, **Support**, and a mode toggle that reads **Admin view** in user mode and **User view** in admin mode. **Sign out** as a separated last row. The click-away layer sits below the header's stacking context so menu rows stay clickable.
+**Account menu:** the avatar shows the signed-in person's initial; the header shows their name, their email, and the current mode ("User view · Planum Technologies"). Items: **Pricing**, **Support**, the mode toggle (**Admin view** in user mode, **User view** in admin mode — offered only to accounts whose real role is `admin` or `superadmin`; a `user` account has User view and no toggle), **Change password** (a modal: current + new password; success ends every session, this one included, so it returns to the gate with the server's line), **Sign out everywhere** (`POST /api/auth/logout {everywhere:true}`; a toast says how many sessions ended). **Sign out** as a separated last row. The click-away layer sits below the header's stacking context so menu rows stay clickable.
 
 ### 4.3 Navigator (left)
 Collapsed rail (icons) or open panel (248px). Open panel shows: **New query** · **Reports** group · **Spaces** · **Sessions**.
 
 Reports group is scoped by mode:
-- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then saved custom reports (e.g. Risky Buildings · 30 min).
+- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then the saved custom reports with their cadence badge.
 - **Admin view:** Buildings (Admin), Integrations (Admin) · 15 min — only these.
 
 Active state follows the actual page and role. Order: Vendors sits above Energy.
 
-**Spaces:** Compliance (3 lapsed), Energy (6 anomalies), Vendor performance (3 below 80), Vendor operations (14 to approve) — each opens its module.
-**Sessions:** every query and every orchestrator task, newest first; a task reopens the orchestrator, a query re-runs, "What needs my approval today?" opens the decision queue.
+**Spaces:** the four built-in spaces — Compliance, Energy, Vendor performance, Vendor operations — carry live badges (lapsed certificates, open anomalies, vendors below 80, approvals pending; `—` until the engine answers) and open a space page: figures, the sessions filed there, an ask bar. **+** adds a saved space (svc-udr `saved_spaces`); saved spaces can be renamed and deleted from their page.
+**Sessions:** every conversation with the orchestrator and every orchestrator task, newest first with a real elapsed time; a chat session reopens the conversation page on its transcript and continues the same thread, a task reopens the dock on its chain. **All sessions** opens the Sessions page (search, by day, delete, file in a space).
 
-**+ New report:** build a saved report from a session — source query, refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name.
+**+ New report:** build a saved report from a session — source (a recent session's question), refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name. The first refresh runs on creation; the badge is the cadence, or Pending / Running / Failed.
 
 ### 4.4 Ask bar (query first)
 Sits directly under the breadcrumb on every non-admin report: Compliance, Vendors, Energy / Assets / Work orders modules, custom reports, Buildings (user view). Sparkle icon, page-scoped placeholder, **Ask** button, three suggested questions for that page. Enter or Ask runs through the query interface and lands on the answer view. Admin pages (Buildings admin, Integrations) do not carry it.
 
 ### 4.5 Orchestrator dock
 Fixed left panel (280px; 420px during an investigation) opened by any action that makes the platform *do* something. Shows the task as intent, the **Orchestrator → Planner → Worker → Quality** chain playing in, then an armed flow:
-- **declare** — hoist a building (3 steps: record → schema → documents)
+- **declare** — Hoist a building / Edit building (`HoistBuildingCard.jsx`, `logic/buildingsCrud.js`): the real form as a card. Hoist runs as three steps — the record (**Write the record** → `POST /api/energy/buildings`), the schema it landed in with the allocated code (**Next steps**), then documents (**Ingest documents now** → the **ingest** flow with that building preselected, or **Do it later**, which leaves the keyed-as line in the dock). Edit is the same card as one step (`PATCH`, only the changed fields). Field-keyed errors from the service render under their own input. Opening either clears a stale conversation already in the dock (`ccChatReset()`) — a new task gets a fresh panel; the old one is still reachable from Recent tasks / Sessions.
+- **ingest** — Ingest documents (`logic/renderVals.js`, the `fIngest` block in `OrchestratorDock.jsx`): reachable on its own from a page-level "Ingest documents" button (no building preselected — nothing is guessed), or from the hoist card's step 3. A real upload: the attach control stages files into the same tray the composer's paperclip uses (`ccFiles`/`ccAddFiles`), "Start ingestion" is disabled with an inline reason until at least one file and a building are chosen, and it then sends a real question — `askScoped("Ingest N document(s) for <building>.")` — through `deepAgentsApi.runStatefulWithFiles`, the same multipart call the composer's own attach makes. The card closes immediately; the real answer streams into the transcript like any other turn.
 - **booking**, **pick** (contractor swap), **new** (new vendor), **email** (draft with To / Subject / Body, Approve & send)
 - **investigate** — the conversational investigation (see §9.6)
 

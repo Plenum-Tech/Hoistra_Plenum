@@ -253,7 +253,11 @@ async def route_contract_performance_upload(
                 "source_text": source_text,
                 "organization_id": organization_id,
                 "document_id": document_id,
-                "invoice_ref": Path(file_path).stem,
+                # The filename, offered as a label of last resort and not as the invoice's
+                # identity. It carries the session id and changes on every upload, so it
+                # keyed the register on how a file happened to be named and made the same
+                # invoice look like two. The server reads the number off the document.
+                "invoice_ref_fallback": Path(file_path).stem,
             },
         )
         body = resp.json()

@@ -35,7 +35,7 @@ An AI-native property management platform for the person accountable for a portf
 
 ## Roles
 
-`role` is session state: `"user"` (default) or `"admin"`. Toggled from the account menu; Buildings (Admin) and Integrations set admin on open. Admin gates: Hoist a building, Update the graph, Integrations page, admin navigator. Everything else is user. Built once, driven by state, so the two views cannot drift.
+`role` is session state: `"user"` (default) or `"admin"`. Toggled from the account menu; Buildings (Admin) and Integrations set admin on open. Admin gates: Update the graph, Integrations page, admin navigator (hoisting, editing and removing a building are open to either role). Everything else is user. Built once, driven by state, so the two views cannot drift.
 
 
 ---

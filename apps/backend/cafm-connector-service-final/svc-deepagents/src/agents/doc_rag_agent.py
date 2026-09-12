@@ -14,9 +14,43 @@ import structlog
 from langchain_core.tools import tool
 
 from ..config import settings
-from ..http_client import request as _request
+from ..http_client import request as _http_request
 
 log = structlog.get_logger(__name__)
+
+#: An nginx location, not a path doc-rag serves. `/backend/doc-rag/` exists so a browser can
+#: reach the service through the one ingress, and nginx strips it before proxying to
+#: 127.0.0.1:8004 — so a service calling that port directly must not send it. Every path in
+#: this module carried it, which 404s everything except the two calls that happened to have
+#: been given a fallback, and the agent reported that to the user as "the document retrieval
+#: service returned an error".
+_NGINX_PREFIX = "/doc-rag"
+
+
+async def _request(method: str, base: str, path: str, **kwargs):
+    """doc-rag's own path first, the nginx-prefixed one second.
+
+    Both are tried because doc_rag_base_url is a setting: it points at port 8004 here and
+    could point at the front door elsewhere, and one wrong guess costs a whole capability
+    silently. Trying both makes this module right either way, and answers the prefix
+    question once rather than at each of a dozen call sites.
+
+    Only a 404 falls through — that is the shape of a wrong path. A 500, a timeout or a
+    refused connection is the service's answer to the right path and is raised as it was,
+    so a real fault is never retried into a confusing second error.
+    """
+    unprefixed = path[len(_NGINX_PREFIX):] if path.startswith(_NGINX_PREFIX + "/") else path
+    candidates = [unprefixed] if unprefixed == path else [unprefixed, path]
+    last: Exception | None = None
+    for candidate in candidates:
+        try:
+            return await _http_request(method, base, candidate, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404 or candidate is candidates[-1]:
+                raise
+            log.info("doc_rag.path_not_found_trying_prefixed", tried=candidate)
+            last = exc
+    raise last  # unreachable: the loop either returns or raises
 
 _TIMEOUT = 60.0
 _INDEX_TIMEOUT = 180.0

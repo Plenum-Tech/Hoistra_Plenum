@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from uuid import UUID
+from ... import database
+from sqlalchemy import text
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from pydantic import BaseModel, Field
 
@@ -29,6 +33,11 @@ from ...agents.single_door_flow import (
 )
 from ...limiter import limiter
 from ..deps import get_orchestrator
+from ...agents import activity_log
+from ...services import building_binding, usage_events
+from ...services import ingestion_validation as validation_gate
+from ...services.principal import Principal, current_principal
+from ...http_client import caller_authorization
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/workflow", tags=["Workflow"])
@@ -104,6 +113,12 @@ class WorkflowResponse(BaseModel):
     ingested_schema_mapping_ids: list[str] = Field(default_factory=list)
     # Structured citations for chat UI (source file + confidence + quote)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    # The ingestion check, one case per uploaded file: verdict, findings, the question put
+    # to the uploader and the building suggested instead. `validation_held` names the cases
+    # that stopped this upload — those files are indexed and registered but NOT bound to a
+    # building, and will not be until somebody answers.
+    validation_cases: list[dict[str, Any]] = Field(default_factory=list)
+    validation_held: list[str] = Field(default_factory=list)
 
 
 class ResumeRequest(BaseModel):
@@ -219,6 +234,8 @@ def _to_response(result: dict[str, Any]) -> WorkflowResponse:
         ingested_migration_ids=list(migration_ids or []),
         ingested_schema_mapping_ids=list(schema_ids or []),
         citations=list(result.get("citations") or []),
+        validation_cases=list(result.get("validation_cases") or []),
+        validation_held=[str(x) for x in (result.get("validation_held") or []) if x],
     )
 
 
@@ -232,6 +249,7 @@ async def run_workflow(
     request: Request,
     body: WorkflowRequest,
     orchestrator=Depends(get_orchestrator),
+    principal: Principal = Depends(current_principal),
 ) -> WorkflowResponse:
     """
     Execute a natural language CAFM request through the DeepAgent (stateless).
@@ -240,11 +258,22 @@ async def run_workflow(
     Use /run-stateful when you need HITL interrupt support.
     Rate limited to 20 requests/minute per IP.
     """
-    log.info("workflow.run", message_len=len(body.message), session_id=body.session_id)
+    # Every call this turn makes to operations-intelligence carries the caller's own token,
+    # so what comes back is scoped to their company and buildings — not to whatever
+    # organization_id a client chose to send, and not to a service credential that sees all.
+    caller_authorization.set(request.headers.get("authorization"))
+    activity_log.set_current_session(body.session_id, body.session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
+    log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
+             user_id=str(principal.user_id), role=principal.role)
     result = await orchestrator.run(
         user_message=body.message,
         session_id=body.session_id,
         extra_context=body.context,
+    )
+    await usage_events.record_usage(
+        kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
+        detail={"session_id": body.session_id, "chars": len(body.message)},
     )
     return _to_response(result)
 
@@ -255,6 +284,7 @@ async def run_stateful_workflow(
     request: Request,
     body: WorkflowRequest,
     orchestrator=Depends(get_orchestrator),
+    principal: Principal = Depends(current_principal),
 ) -> WorkflowResponse:
     """
     Execute a CAFM request with persistent state (HITL-capable).
@@ -269,11 +299,18 @@ async def run_stateful_workflow(
     Rate limited to 20 requests/minute per IP.
     """
     sid = body.session_id
+    caller_authorization.set(request.headers.get("authorization"))
+    await usage_events.record_usage(
+        kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
+        detail={"session_id": sid, "chars": len(body.message), "stateful": True},
+    )
     if not sid:
         raise HTTPException(
             status_code=400,
             detail="session_id is required for stateful (HITL-capable) workflow runs.",
         )
+    activity_log.set_current_session(sid, sid)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run_stateful", session_id=sid, message_len=len(body.message))
     result = await orchestrator.run_stateful(
         user_message=body.message,
@@ -291,6 +328,7 @@ async def run_stateful_workflow_with_files(
     session_id: str = Form(...),
     context: str | None = Form(None),
     organization_id: str | None = Form(None),
+    building_id: str | None = Form(None),
     cmms_name: str = Form("Custom"),
     ingest_source: str = Form("files"),
     schema_mapping_id: str | None = Form(None),
@@ -298,6 +336,7 @@ async def run_stateful_workflow_with_files(
     interactive_migration: bool = Form(False),
     files: list[UploadFile] = File(default_factory=list),
     orchestrator=Depends(get_orchestrator),
+    principal: Principal = Depends(current_principal),
 ) -> WorkflowResponse:
     """
     Single-door endpoint for chat + batch file ingestion.
@@ -310,7 +349,67 @@ async def run_stateful_workflow_with_files(
       3) Continue orchestrator chat in same session
     """
     source = (ingest_source or "files").strip().lower()
-    org = organization_id or "00000000-0000-0000-0000-000000000001"
+    caller_authorization.set(request.headers.get("authorization"))
+
+    # The company is the caller's. It used to be whatever organization_id the form carried,
+    # with a hard-coded default when it carried none — so any client could file documents
+    # into any tenant. A superadmin may still name one; anyone else naming another is a bug
+    # worth a 403 rather than a silent substitution.
+    is_super = principal.role == "superadmin"
+    if principal.organization_id is None and not is_super:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "error": "This account belongs to no company.",
+            "reason": "no_organization"})
+    named_org = (organization_id or "").strip() or None
+    if named_org and not is_super and named_org != str(principal.organization_id):
+        raise HTTPException(status_code=403, detail={
+            "ok": False, "error": "You can only ingest into your own company.",
+            "reason": "wrong_organization"})
+    org = named_org if (named_org and is_super) else str(principal.organization_id)
+
+    # Whether this person may add data at all. Read-only users see their buildings and stop
+    # there; the message says who can change that rather than just refusing.
+    if files and not principal.can_ingest:
+        raise HTTPException(status_code=403, detail={
+            "ok": False, "reason": "cannot_ingest",
+            "error": "Your account can view its buildings but cannot ingest data. "
+                     "Ask your company administrator to grant ingestion."})
+
+    # Checked before a byte is written to disk. A building that does not exist is a caller
+    # mistake worth an error, not something to discover after the file has been indexed and
+    # the row has nowhere to hang.
+    building = (building_id or "").strip() or None
+    if building:
+        try:
+            building = str(UUID(building))
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="building_id is not a UUID.") from None
+        if not await building_binding.building_exists(building):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No building {building} — nothing to file this against.")
+        # And it must be one of theirs. This is the boundary: a user allocated to Riverside
+        # Court cannot file a document against Bishopsgate Tower however the form is filled.
+        if not principal.allows_building(building):
+            await usage_events.record_ingestion_audit(
+                outcome="rejected", organization_id=principal.organization_id,
+                actor_user_id=principal.user_id, actor_role=principal.role,
+                document_name=", ".join((f.filename or "?") for f in files)[:500] or None,
+                building_id=UUID(building), warning="building not allocated to this user",
+                detail={"session_id": session_id},
+            )
+            raise HTTPException(status_code=403, detail={
+                "ok": False, "reason": "building_not_allocated", "building_id": building,
+                "error": "You are not allocated to that building, so you cannot ingest "
+                         "its data."})
+    elif files and principal.building_ids is not None:
+        # A restricted user must say which of their buildings this is for. Filing against
+        # nothing would leave the document unbound, which for them is invisible.
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "building_required",
+            "error": "Choose which of your buildings these files belong to.",
+            "buildings": list(principal.buildings)})
 
     if source == "fiix":
         from ...agents.session_workspace import ROUTE_FIIX_SYNC, set_pending_fiix_confirm
@@ -396,7 +495,14 @@ async def run_stateful_workflow_with_files(
                 )
                 batch_id = str(batch["batch_id"])
                 orchestrator.register_active_batch(session_id, batch_id, len(files))
-                schedule_ingest_batch(batch_id)
+                # The building travels with the batch. Without it, "multiple documents"
+                # would bind up to the inline threshold and silently stop above it.
+                schedule_ingest_batch(
+                    batch_id, building_id=building,
+                    authorization=request.headers.get("authorization"),
+                    actor={"user_id": str(principal.user_id), "role": principal.role,
+                           "email": principal.email},
+                )
                 log.info(
                     "workflow.bulk_batch.started",
                     session_id=session_id,
@@ -445,6 +551,63 @@ async def run_stateful_workflow_with_files(
                 skip_row_match=interactive_doc_match,
                 interactive_migration=interactive_migration,
             )
+            # ── the check that runs before the building owns it ──────────────────────
+            # Indexing is reversible; binding is what makes a document evidence — from that
+            # moment it counts in the building's compliance position and its reports. So
+            # each file is checked against the building that was selected first, and a file
+            # that does not clearly belong there is HELD: registered, indexed, not bound,
+            # and put to the uploader as a question. The protocol is the same for an admin.
+            validation_cases: list[dict] = []
+            if building:
+                _extracted = building_binding.extracted_fields_by_file(flow.tool_calls)
+                for _p in saved_paths:
+                    _name = Path(_p).name
+                    _case = await validation_gate.validate(
+                        building_id=building, document_name=_name,
+                        doc_type=building_binding.doc_type_for(_name, flow.tool_calls),
+                        extracted=_extracted.get(_name) or {},
+                        text=building_binding.document_text(_p),
+                        session_id=session_id,
+                        authorization=request.headers.get("authorization"),
+                    )
+                    _case.setdefault("document_name", _name)
+                    validation_cases.append(_case)
+            held = validation_gate.blocking(validation_cases)
+
+            # The link the caller asked for, made by the caller. Failure here is reported
+            # and does not fail the ingest: the file is indexed either way, and an unbound
+            # document is recoverable while a lost upload is not.
+            bound = {} if held else await building_binding.bind_and_log(
+                building, flow.tool_calls, where="inline", session_id=session_id,
+                file_paths=saved_paths)
+            if held:
+                # Registration and hashing still happen — the rows must exist for the
+                # release to find them — but no building_id is written.
+                await building_binding.bind_and_log(
+                    None, flow.tool_calls, where="inline-held", session_id=session_id,
+                    file_paths=saved_paths)
+            # The receipt. One ingest event for the turn and one audit row per file, so the
+            # trail can answer "who put this here" and the bill "what did it cost".
+            await usage_events.record_usage(
+                kind="ingest", organization_id=principal.organization_id,
+                user_id=principal.user_id,
+                building_id=UUID(building) if building else None,
+                detail={"session_id": session_id, "files": len(saved_paths),
+                        "bound": {k: v for k, v in (bound or {}).items()
+                                  if isinstance(v, int)}},
+            )
+            _held_names = {c.get("document_name") for c in held}
+            for _p in saved_paths:
+                if Path(_p).name in _held_names:
+                    continue  # the validation service already recorded why it was held
+                await usage_events.record_ingestion_audit(
+                    outcome="accepted", organization_id=principal.organization_id,
+                    actor_user_id=principal.user_id, actor_role=principal.role,
+                    document_name=Path(_p).name,
+                    building_id=UUID(building) if building else None,
+                    detail={"session_id": session_id, "where": "inline"},
+                )
+
             orchestrator.mark_single_door_ingestion(
                 session_id=session_id,
                 ingested_count=len(files),
@@ -538,6 +701,16 @@ async def run_stateful_workflow_with_files(
                     result["answer"] = preface
             else:
                 result["citations"] = extract_chat_citations(merged_tool_calls)
+            # A held document is the first thing the uploader needs to read, and the cases
+            # travel with the answer so the interface can run the conversation without
+            # going looking for them.
+            if held:
+                notice = validation_gate.summarise(validation_cases)
+                _prev = (result.get("answer") or "").strip()
+                result["answer"] = notice + ('\n\n---\n\n' + _prev if _prev else "")
+            if validation_cases:
+                result["validation_cases"] = validation_cases
+                result["validation_held"] = [c.get("id") for c in held]
             return _to_response(result)
         finally:
             if not use_bulk:
@@ -564,6 +737,10 @@ async def resume_workflow(
         {"confirmed": true}   ← proceeds with the destructive rollback
         {"confirmed": false}  ← cancels the rollback
     """
+    activity_log.set_current_session(session_id, session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
+    activity_log.set_current_session(session_id, session_id)
+    activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.resume", session_id=session_id, decision_keys=list(body.decision.keys()))
     result = await orchestrator.resume(
         session_id=session_id,
@@ -674,6 +851,8 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             }))
             return
 
+        activity_log.set_current_session(session_id, session_id)
+        activity_log.start_turn()  # one transaction per request; every row below shares it
         log.info("ws_workflow.start", session_id=session_id, message_len=len(message))
 
         async for event in orchestrator.stream(
@@ -696,3 +875,63 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+
+# ── Activity log — the replayable trail of every agent input and output ───────────────
+
+
+class ActivityEntry(BaseModel):
+    """One entry posted by a client (the UI's own compliance actions), stored alongside the
+    server-side stages so a session's trail is complete end to end."""
+
+    session_id: str = Field(..., max_length=120)
+    turn_id: str | None = Field(None, max_length=64, description="Groups the rows of one action")
+    agent: str = Field("frontend", max_length=60)
+    stage: str = Field(..., max_length=60)
+    direction: str = Field(..., pattern="^(input|output|error)$")
+    summary: str | None = Field(None, max_length=4000)
+    payload: dict[str, Any] | None = None
+    ok: bool = True
+    error: str | None = Field(None, max_length=4000)
+    latency_ms: float | None = None
+
+
+@router.get("/activity")
+async def activity_sessions(limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    """Sessions with recorded activity, newest first."""
+    return {"ok": True, "sessions": await activity_log.recent_sessions(limit=limit)}
+
+
+@router.get("/activity/{session_id}")
+async def activity_for_session(
+    session_id: str,
+    agent: str | None = Query(None, description="orchestrator | compliance | compliance_router | tool:<domain> | frontend"),
+    stage: str | None = Query(None, description="turn | plan | fetch | summary | analyst | review | router | tool | action"),
+    turn_id: str | None = Query(None, description="Only the rows of one transaction"),
+    limit: int = Query(200, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Every recorded input/output for one session, oldest first — for troubleshooting a turn."""
+    rows = await activity_log.list_activity(session_id, agent=agent, stage=stage, turn_id=turn_id, limit=limit)
+    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "count": len(rows), "entries": rows}
+
+
+@router.get("/activity/{session_id}/turns")
+async def activity_turns(session_id: str, limit: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
+    """The transactions of one session: per turn, its first input, final output, the stages it
+    passed through, token totals and whether every step succeeded."""
+    turns = await activity_log.list_turns(session_id, limit=limit)
+    return {"ok": True, "session_id": session_id, "count": len(turns), "turns": turns}
+
+
+@router.post("/activity", status_code=201)
+async def activity_append(entry: ActivityEntry) -> dict[str, Any]:
+    """Append one client-side activity entry (e.g. the compliance console's scan / verify /
+    renewal calls with their responses)."""
+    row_id = await activity_log.record(
+        agent=entry.agent, stage=entry.stage, direction=entry.direction,
+        summary=entry.summary, payload=entry.payload, ok=entry.ok, error=entry.error,
+        latency_ms=entry.latency_ms, session_id=entry.session_id, thread_id=entry.session_id,
+        turn_id=entry.turn_id,
+    )
+    return {"ok": row_id is not None, "id": row_id}

@@ -296,6 +296,17 @@ def _heuristic_extract(text: str, fields: list[str]) -> tuple[dict[str, Any], di
             out["inspector_accreditation_number"] = num
             conf["inspector_accreditation_number"] = "high"
 
+    # EPC band and score (B5). Looked for on every certificate type: the key is only kept
+    # for EPC-type packs downstream, and a fire-alarm certificate never says "Asset rating".
+    from .epc_rating import _BAND_RE as _epc_band_re  # local: avoids a cycle at import
+    m_band = _epc_band_re.search(text)
+    if m_band and "energy_rating" not in out:
+        out["energy_rating"] = m_band.group(1).upper()
+        conf["energy_rating"] = "high" if m_band.group(2) else "medium"
+        if m_band.group(2):
+            out["energy_score"] = int(m_band.group(2))
+            conf["energy_score"] = "high"
+
     if "certificate_number" in fields and "certificate_number" not in out:
         typed = re.search(
             r"\b((?:FRA|EICR|PAS|LGSR|L8|FAS|AOV|EWS|FRAEW|BAFE|BPCA)[-/]?\d{3,})\b",
@@ -454,6 +465,9 @@ async def _claude_extract(
             # the model correctly returned would otherwise be silently dropped.
             "state",
             "region",
+            # EPC asset rating: the band letter and its score, as two keys.
+            "energy_rating",
+            "energy_score",
         ]
         want = list(dict.fromkeys([*fields, *extra_keys]))
         prompt = (
@@ -467,6 +481,9 @@ async def _claude_extract(
             f"(often shown as the 'Authorised Insurer' or in the 'regulated by the "
             f"Financial Conduct Authority' footer) — this is DIFFERENT from `company_name` "
             f"/ `vendor_name`, which is the policyholder being insured.\n"
+            f"`energy_rating` is an EPC's asset-rating BAND, a single letter A-G, and "
+            f"`energy_score` the number beside it (e.g. 'C 63' -> 'C', 63); both null unless "
+            f"the document is an energy certificate.\n"
             f"`state` is the first-level division of the address on the document, spelled "
             f"out IN FULL and never abbreviated — for the UK one of England, Scotland, "
             f"Wales or Northern Ireland (infer from the address, city or postcode area); "

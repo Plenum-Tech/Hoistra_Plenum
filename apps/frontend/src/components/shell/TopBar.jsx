@@ -36,17 +36,20 @@ export default function TopBar({ vals }) {
             {vals.tenant}
           </span>
         </div>
-        <i className="ph ph-cpu hv6" onClick={vals.openOrch} title="Orchestrator" style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+        <i className="ph ph-cpu hv6" onClick={vals.openOrch} title="Open the orchestrator — ask anything beside this page" style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
         <div style={{ position: "relative", flexShrink: "0" }}>
-          <div className="hv3" onClick={vals.toggleAcct} title="Aasim" style={{ width: "28px", height: "28px", borderRadius: "50%", background: vals.acctBg, color: vals.acctFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12.5px", cursor: "pointer", border: `1px solid ${vals.acctEdge}` }}>
-            {"A"}
+          <div className="hv3" onClick={vals.toggleAcct} title={vals.acctName} style={{ width: "28px", height: "28px", borderRadius: "50%", background: vals.acctBg, color: vals.acctFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12.5px", cursor: "pointer", border: `1px solid ${vals.acctEdge}` }}>
+            {vals.acctInitial}
           </div>
           {vals.acctOpen ? (
             <>
               <div style={{ position: "absolute", top: "36px", right: "0", zIndex: "70", width: "212px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-lg)", overflow: "hidden", animation: "fadeUp 0.16s ease both" }}>
                 <div style={{ padding: "11px 13px", borderBottom: "1px solid var(--color-divider)" }}>
-                  <div style={{ fontSize: "12.5px" }}>
-                    {"Aasim"}
+                  <div style={{ fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {vals.acctName}
+                  </div>
+                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {vals.acctEmail}
                   </div>
                   <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
                     {vals.acctRole}{" · Planum Technologies"}

@@ -11,5 +11,5 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.site_occupancy_logs (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_sol_site_at
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sol_site_at
     ON plenum_cafm.site_occupancy_logs (site_id, changed_at);

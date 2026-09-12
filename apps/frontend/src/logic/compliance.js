@@ -1,7 +1,8 @@
 // compliance — compliance console model and certificate actions.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { TAG, MK } from './constants.js';
-import { relDays } from './complianceLive.js';
+import { relDays, countryMeta } from './complianceLive.js';
+import { documentUrl } from '../api/docRag.js';
 
 export const complianceMethods = {
   // ── Compliance console ──────────────────────────────────────────────
@@ -12,15 +13,19 @@ export const complianceMethods = {
       const next = a.indexOf(val) > -1 ? a.filter((v) => v !== val) : a.concat([val]);
       const out = { [key]: next };
       // prune downstream selections that fall out of the new scope
+      // Regions and buildings are read off the certificate rows, so a selection is
+      // pruned when no in-scope certificate carries it any more.
+      const reg = (c) => String(c.state || "").trim();
       if (key === "ccCountries") {
-        const live = CC.states.filter((st) => !next.length || next.indexOf(st.country) > -1).map((st) => st.name);
+        const rows = CC.certs.filter((c) => !next.length || next.indexOf(c.cc) > -1);
+        const live = rows.map(reg).filter(Boolean);
         out.ccStates = p.ccStates.filter((x) => live.indexOf(x) > -1);
-        const lb = CC.buildings.filter((b) => out.ccStates.length ? out.ccStates.indexOf(b.state) > -1 : live.indexOf(b.state) > -1).map((b) => b.name);
-        out.ccBuildings = p.ccBuildings.filter((x) => lb.indexOf(x) > -1);
+        const holders = rows.filter((c) => c.kind === "building" && (!out.ccStates.length || out.ccStates.indexOf(reg(c)) > -1)).map((c) => c.holder);
+        out.ccBuildings = p.ccBuildings.filter((x) => holders.indexOf(x) > -1);
       }
       if (key === "ccStates") {
-        const lb = CC.buildings.filter((b) => next.indexOf(b.state) > -1).map((b) => b.name);
-        out.ccBuildings = next.length ? p.ccBuildings.filter((x) => lb.indexOf(x) > -1) : p.ccBuildings;
+        const holders = CC.certs.filter((c) => c.kind === "building" && next.indexOf(reg(c)) > -1).map((c) => c.holder);
+        out.ccBuildings = next.length ? p.ccBuildings.filter((x) => holders.indexOf(x) > -1) : p.ccBuildings;
       }
       return out;
     });
@@ -32,16 +37,49 @@ export const complianceMethods = {
     // Live rows carry their own gap list; the seed derives one from req - on.
     const gapsOf = (b) => Array.isArray(b.gaps) ? b.gaps : CC.gapTypes.slice(0, Math.max(0, b.req - b.on));
     const gapLine = (b) => { const g = gapsOf(b); return g.length ? "missing: " + g[0] + (g.length > 1 ? " +" + (g.length - 1) + " more" : "") : ""; };
-    const inCountry = (st) => !s.ccCountries.length || s.ccCountries.indexOf(st.country) > -1;
-    const liveStates = CC.states.filter(inCountry);
-    const stateNames = s.ccStates.length ? s.ccStates : liveStates.map((st) => st.name);
-    const scoped = CC.buildings.filter((b) => stateNames.indexOf(b.state) > -1);
+    // Scope, built the way the plenum console builds it: the certificate rows are the
+    // thing filtered, and the region list is derived from those rows rather than from a
+    // building's recorded state.
+    //
+    //  - regions come from the certificates in the selected countries, so the same region
+    //    name can never appear twice (you have already narrowed to one country);
+    //  - a certificate with no region recorded contributes no region option, instead of a
+    //    "region not recorded" row nothing can usefully be filtered by;
+    //  - nothing is listed until a country is picked, which is what the column's own
+    //    "Pick a country first." empty state already promised.
+    const regionOf = (c) => String(c.state || "").trim();
+    const inCC = (c) => !s.ccCountries.length || s.ccCountries.indexOf(c.cc) > -1;
+    const inRegion = (c) => !s.ccStates.length || s.ccStates.indexOf(regionOf(c)) > -1;
+
+    const regionMap = {};
+    if (s.ccCountries.length) {
+      CC.certs.filter(inCC).forEach((c) => {
+        const n = regionOf(c);
+        if (!n) return;
+        const e = regionMap[n] || (regionMap[n] = { name: n, country: c.cc, certs: 0, lapsed: 0 });
+        e.certs += 1;
+        if (c.days < 0) e.lapsed += 1;
+      });
+    }
+    const liveStates = Object.keys(regionMap).map((k) => regionMap[k])
+      .sort((a, b) => b.certs - a.certs || a.name.localeCompare(b.name));
+
+    // Buildings in scope are the ones the in-scope certificates actually name. With no
+    // country or region picked the whole register is in scope, so every building shows —
+    // including any that coverage knows about but holds no certificate yet.
+    const ccScoped = CC.certs.filter((c) => inCC(c) && inRegion(c));
+    const named = {};
+    ccScoped.filter((c) => c.kind === "building").forEach((c) => { named[c.holder] = true; });
+    const scoped = (!s.ccCountries.length && !s.ccStates.length)
+      ? CC.buildings.slice()
+      : CC.buildings.filter((b) => named[b.name]);
+
     const bs = s.ccBuildings.length ? scoped.filter((b) => s.ccBuildings.indexOf(b.name) > -1) : scoped;
     const names = bs.map((b) => b.name);
     // A vendor named on a building certificate is scoped by that building; one that is not
     // (portfolio-wide accreditation) is scoped by its country, so live vendors never vanish.
     let vs = CC.vendors.filter((v) => v.serves.length ? v.serves.some((x) => names.indexOf(x) > -1) : (!v.cc || !s.ccCountries.length || s.ccCountries.indexOf(v.cc) > -1));
-    let certs = CC.certs.filter((c) => c.kind === "building" ? names.indexOf(c.holder) > -1 : vs.some((v) => v.name === c.holder));
+    let certs = ccScoped.filter((c) => c.kind === "building" ? names.indexOf(c.holder) > -1 : vs.some((v) => v.name === c.holder));
 
     // The metric card always reads the whole scope; only the register and the
     // runway narrow when a tile is active, so the card can never contradict itself.
@@ -84,7 +122,7 @@ export const complianceMethods = {
       { title: "States and regions", hint: "Within the countries above.",
         empty: s.ccCountries.length ? "No region matches." : "Pick a country first.",
         emptyShow: liveStates.length ? "none" : "block",
-        items: liveStates.map((st) => opt(st.name, s.ccStates.indexOf(st.name) > -1, st.certs, st.lapsed, () => this.ccToggle("ccStates", st.name))) },
+        items: liveStates.map((st) => opt(countryMeta(st.country).flag + "  " + st.name, s.ccStates.indexOf(st.name) > -1, st.certs, st.lapsed, () => this.ccToggle("ccStates", st.name))) },
       { title: "Buildings", hint: "Within the regions above.",
         empty: "Pick a region first.", emptyShow: scoped.length ? "none" : "block",
         items: scoped.map((b) => opt(b.name, s.ccBuildings.indexOf(b.name) > -1, b.cov + "%", b.high, () => this.ccToggle("ccBuildings", b.name))) }
@@ -148,6 +186,18 @@ export const complianceMethods = {
       };
     });
 
+    // Runway counts, taken from the same rows the pins are drawn from so a dot and a
+    // number can never disagree. `sev` is what decides a pin's shape, so it decides the
+    // legend count too; the band is a time window, so it counts by days instead.
+    const pinCounts = {
+      risk: certs.filter((c) => c.sev === "risk").length,
+      warn: certs.filter((c) => c.sev === "warn").length,
+      ok: certs.filter((c) => c.sev !== "risk" && c.sev !== "warn").length,
+      lapsed: certs.filter((c) => isFinite(c.days) && c.days < 0).length,
+      band: certs.filter((c) => isFinite(c.days) && c.days >= 0 && c.days <= 90).length,
+      total: certs.length
+    };
+
     const covColor = (p) => p >= 60 ? "var(--st-ok)" : p >= 30 ? "var(--st-warn)" : "var(--st-risk)";
     const tg = (label, k) => Object.assign({ label: label }, { bg: TAG[k].bg, fg: TAG[k].fg });
 
@@ -161,7 +211,12 @@ export const complianceMethods = {
         else tags.push(tg("clear", "ok"));
         const active = s.ccFocus.kind === "building" && s.ccFocus.name === b.name;
         return {
-          name: b.name, meta: b.state + " · " + b.use + " · " + b.certs + " certificates",
+          name: b.name,
+          // The count of obligations with no document behind them sits next to the count
+          // of obligations. Coverage already says how many pack types are on file; this
+          // says how many of those are backed by something anyone can open.
+          meta: b.state + " · " + b.use + " · " + b.certs + " certificates"
+                + (b.noDoc ? " · " + b.noDoc + " with no document" : ""),
           gap: gapLine(b),
           gapShow: gapsOf(b).length ? "block" : "none",
           cov: b.cov + "%", frac: b.on + "/" + b.req, covColor: covColor(b.cov),
@@ -177,7 +232,11 @@ export const complianceMethods = {
         if (v.block === "Blocked") tags.push(tg("blocked", "risk"));
         const active = s.ccFocus.kind === "vendor" && s.ccFocus.name === v.name;
         return {
-          name: v.name, meta: v.spec + " · " + v.serves.filter((x) => names.indexOf(x) > -1).length + " of " + v.serves.length + " served in scope",
+          name: v.name,
+          meta: v.spec + " · " + v.serves.filter((x) => names.indexOf(x) > -1).length
+                + " of " + v.serves.length + " served in scope"
+                + (v.noDoc ? " · " + v.noDoc + " accreditation"
+                   + (v.noDoc === 1 ? "" : "s") + " with no document" : ""),
           gap: v.gaps.length ? "pending: " + v.gaps[0] + (v.gaps.length > 1 ? " +" + (v.gaps.length - 1) + " more" : "") : "",
           gapShow: v.gaps.length ? "block" : "none",
           cov: v.cov + "%", frac: v.on + "/" + v.req, covColor: covColor(v.cov),
@@ -274,7 +333,11 @@ export const complianceMethods = {
       return {
         nm: c.nm, holder: c.holder,
         kind: c.kind === "vendor" ? "vendor accreditation" : "building certificate",
-        meta: c.exp + " · " + relDays(c.days, true) + " · " + c.ver,
+        // "no document on file" sits in the same line as the expiry and the verification
+        // state, because it is the same kind of fact about the record: an obligation whose
+        // evidence nobody can open is not evidenced, however current the date looks.
+        meta: c.exp + " · " + relDays(c.days, true) + " · " + c.ver
+              + (c.doc ? "" : " · no document on file"),
         risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
         auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
         caret: open ? "ph-caret-up" : "ph-caret-down",
@@ -327,7 +390,7 @@ export const complianceMethods = {
       closeCCQueue: () => this.setState({ ccQueue: null, ccQueueOpenId: null, ccTile: null }),
       nCountries: s.ccCountries.length || CC.countries.length,
       live: !!CC.live, mxTypes: CC.mxTypes, mxShort: CC.mxShort, mxLabel: CC.mxLabel, mxGlyph: CC.mxGlyph,
-      bs: bs, vs: vs, certs: certs, chips: chips, cols: cols, tiles: tiles, pins: pins, rows: rows, mxRows: mxRows,
+      bs: bs, vs: vs, certs: certs, chips: chips, cols: cols, tiles: tiles, pins: pins, pinCounts: pinCounts, rows: rows, mxRows: mxRows,
       focus: focus, crumb: crumb,
       facts: facts,
       tabs: tabs.map((t, i) => ({
@@ -341,14 +404,25 @@ export const complianceMethods = {
         const subject = c.nm + " — " + c.holder;
         const ven = c.kind === "vendor" ? c.holder : (CC.vendors.find((v) => v.serves.indexOf(c.holder) > -1) || {}).name || "the responsible vendor";
         const urgent = c.days <= 30 || /suspect/.test(c.auth);
+        // Once an evidence request has been approved for this certificate the action
+        // reports that instead of offering the same request again — the row is the only
+        // place that state is visible.
+        const sent = !!(s.ccRequested || {})[c.id];
         return {
           nm: c.nm, exp: c.exp, rel: relDays(c.days, false),
           risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
-          auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg, ver: c.ver,
-          actLabel: acts[0],
-          actBorder: urgent ? "var(--color-accent)" : "var(--color-divider)",
-          actFg: urgent ? "var(--color-accent)" : "var(--color-neutral-400)",
-          act: () => this.ccRunCertAction(acts[0], c, subject, ven)
+          auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
+          ver: c.doc ? c.ver : c.ver + " · no document",
+          // The real file behind this certificate — GET /api/documents/{id}/download on
+          // svc-deepagents, which redirects to the stored original (or its extracted text
+          // when no original was kept). Null when nothing was ever ingested for this row.
+          downloadUrl: c.documentId ? documentUrl(c.documentId) : null,
+          actLabel: sent ? "Sent for approval" : acts[0],
+          actBorder: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-divider)"),
+          actFg: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-neutral-400)"),
+          act: sent
+            ? () => this.flash("Evidence request for " + c.nm + " is queued for approval — open it from the approvals card.")
+            : () => this.ccRunCertAction(acts[0], c, subject, ven)
         };
       }),
       vendorRows: vendorRows.map((v) => ({

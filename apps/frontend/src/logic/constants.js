@@ -2,65 +2,12 @@
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { HOISTRA_VP } from '../data/hoistra-vendors.js';
 
-const SESSIONS = [
-  { label: "Which buildings put me at risk this month?", when: "12 min ago", k: "compliance" },
-  { label: "Why did Bishopsgate spike on Saturday?", when: "2 hours ago", k: "energy" },
-  { label: "Rank vendors by first-time fix", when: "Yesterday", k: "vendors" },
-  { label: "What needs my approval today?", when: "Yesterday", k: null },
-  { label: "Energy report — August", when: "Mon", k: "energy" }
-];
-
 const KL = {
   Outlier: { c: "var(--st-risk)", b: "var(--st-risk-bg)" },
   Anomaly: { c: "var(--st-warn)", b: "var(--st-warn-bg)" },
   Deficit: { c: "var(--st-dormant)", b: "var(--st-dormant-bg)" },
   "Within band": { c: "var(--st-ok)", b: "var(--st-ok-bg)" }
 };
-
-// Refresh cadences: interval-based and timestamp-based in one list, since the
-// user thinks of them the same way — "how often does this re-read the graph".
-const CADENCES = [
-  { label: "Refresh every 30 minutes", badge: "30 min", last: "14:12 today" },
-  { label: "Refresh every 1 hour", badge: "1 hr", last: "14:00 today" },
-  { label: "Refresh every 6 hours", badge: "6 hr", last: "12:00 today" },
-  { label: "Refresh every 12 hours", badge: "12 hr", last: "06:00 today" },
-  { label: "Refresh every 24 hours", badge: "24 hr", last: "02:00 today" },
-  { label: "Refresh daily at 02:00", badge: "Daily", last: "02:00 today" },
-  { label: "Refresh on chosen days", badge: "Days", last: "14:00 on 31 Aug", pickDays: true }
-];
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// A day-picked cadence reads back as the days and time actually chosen.
-const CADENCE_LABEL = (s) => {
-  const c = CADENCES[s.reportCad] || CADENCES[1];
-  if (!c.pickDays) return c.label;
-  const d = (s.reportDays || []).map((i) => DAYS[i]);
-  return d.length
-    ? "Refresh " + (d.length === 7 ? "every day" : d.join(", ")) + " at " + (s.reportTime || "14:00")
-    : "Refresh on chosen days — pick at least one";
-};
-const CADENCE_BADGE = (s) => {
-  const c = CADENCES[s.reportCad] || CADENCES[1];
-  if (!c.pickDays) return c.badge;
-  const d = (s.reportDays || []).map((i) => DAYS[i]);
-  return d.length === 7 ? "Daily" : d.length ? d.join(" · ") : "Days";
-};
-
-const ASSET_RISK = [
-  { asset: "CHILLER-101", building: "Bishopsgate Tower", section: "Cooling", kwh: "18,420", variance: "+34%", klass: "Outlier", risk: "Yes", why: "Consumption sits 3.4σ above the cooling peer group at comparable floor area and occupancy. Compressor 2 has not modulated below 80% since 14 Aug." },
-  { asset: "AHU-3", building: "Bishopsgate Tower", section: "Ventilation", kwh: "9,180", variance: "+21%", klass: "Anomaly", risk: "Yes", why: "Within the peer band, but broken from its own 12-week baseline: overnight fan speed no longer drops to setback. Likely a BMS schedule override." },
-  { asset: "Boiler-22", building: "Town Hall", section: "Heating", kwh: "12,640", variance: "+47%", klass: "Outlier", risk: "Yes", why: "Highest deviation in the portfolio. The CP12 for this asset is lapsed, so the burner has not been serviced — combustion efficiency is the probable cause." },
-  { asset: "CHILLER-102", building: "Bishopsgate Tower", section: "Cooling", kwh: "14,050", variance: "+4%", klass: "Within band", risk: "No", why: "Tracks its peer group and its own baseline. No action." },
-  { asset: "Boiler-14", building: "Meridian Quay", section: "Heating", kwh: "7,910", variance: "+9%", klass: "Anomaly", risk: "No", why: "Mild baseline drift over three weeks, below the action threshold. Watch rather than act." },
-  { asset: "Main distribution", building: "AN Other House", section: "Electrical", kwh: "21,700", variance: "+28%", klass: "Outlier", risk: "Yes", why: "Landlord-supply draw is well above peer buildings of this size. The EICR is overdue, so the circuit split cannot currently be verified." },
-  { asset: "AHU-7", building: "Kingsway House", section: "Ventilation", kwh: "8,460", variance: "+16%", klass: "Anomaly", risk: "Yes", why: "Baseline break coinciding with a filter change deferred twice. Static pressure has risen steadily since 03 Aug." },
-  { asset: "Basement plant", building: "Kingsway House", section: "Mixed", kwh: "6,930", variance: "+52%", klass: "Outlier", risk: "Yes", why: "Largest proportional deviation. Sub-metering cannot separate pumps from lighting here, so the reading is flagged for a metering fix as well as an energy fix." },
-  { asset: "Wet riser pump", building: "Riverside Court", section: "Fire", kwh: "640", variance: "−31%", klass: "Deficit", risk: "Yes", why: "Running well under design load. On a life-safety asset that reads as under-delivery, not saving — the weekly test may not be completing." },
-  { asset: "Lift Asset-4471", building: "Bishopsgate Tower", section: "Transport", kwh: "2,340", variance: "−18%", klass: "Deficit", risk: "No", why: "Below design load but consistent with reduced footfall on floors 8–14. No fault signature in the LOLER record." },
-  { asset: "Domestic water", building: "Building 5", section: "Water heating", kwh: "5,220", variance: "−12%", klass: "Deficit", risk: "No", why: "Under design load following the L8 flushing regime change. Expected." },
-  { asset: "CHILLER-204", building: "Meridian Quay", section: "Cooling", kwh: "11,380", variance: "+19%", klass: "Anomaly", risk: "No", why: "Baseline break tracks the August heat event across the whole peer group. Weather-corrected, the asset is flat." }
-];
 
 // Floor-area use tints — one accent for the dominant commercial use, the rest
 // a neutral ladder, so a mixed building reads as proportion not as a palette.
@@ -618,17 +565,59 @@ const MODULES = {
     filters: ["All", "Below 80", "Declining"],
     asks: ["Which vendor is costing me money?", "Show every invoice line flagged this quarter", "What service credits can I recover?"]
   },
+  assets: {
+    name: "Assets", kicker: "Feature E · asset-condition-engine", icon: "ph-cube", answer: "energy",
+    blurb: "Condition inferred from energy before a fault shows. Each section's EUI is read against its reference to find where the load is; anomalies attributed to an asset say which one. Both signals together are a threat, one alone is a watch. Actions go to the vendor who holds the asset, as an inspection request or a work order.",
+    scanLabel: "Run condition scan", exportLabel: "Export asset register",
+    tableTitle: "Buildings · EUI against reference, sections and assets beneath",
+    head: [],
+    tableFoot: "",
+    sideTitle: "", sideFoot: "",
+    filters: ["All", "Threat", "Watch", "In control", "Above 10%", "Above 30%"],
+    asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which sections have gone over reference since last month?"]
+  },
   ops: {
-    name: "Vendor operations", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",
-    blurb: "Optional section, depending on the operating structure of the building management chain. Work orders are generated here — from PPM cycles mapped to assets, ad-hoc triggers from EUI asset status, and requests read from Outlook — not raised by the FM operative. The FM company works inside the parameters you set.",
-    scanLabel: "Predictive maintenance scan", exportLabel: "Open PPM calendar",
+    name: "Maintenance", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",
+    blurb: "Work orders are not raised by the FM operative; they arrive here from triggers — a vendor blocked, a certificate expiring, an asset flagged, an anomaly priced — and wait for your decision. Completed orders bring inspection reports, which are read together rather than one at a time. Planned maintenance is checked against plan.",
+    scanLabel: "Re-read inspection reports", exportLabel: "Open PPM calendar",
     tableTitle: "Live work orders",
     head: ["Work order", "Asset", "Building", "Estimate", "Status", "Next step"],
     tableFoot: "Lifecycle: Draft → Approved → Assigned → In Progress → Completed → Verified → Closed. Invoices and completion photographs are ingested through the query bar; statutory jobs require a certificate, which lands in the Hoist Graph.",
     sideTitle: "Building health score", sideFoot: "Composite of PPM compliance, open reactive volume and compliance coverage per building.",
-    filters: ["All", "Awaiting approval", "Blocked"],
-    asks: ["What is awaiting my approval?", "Which assets failed twice in 90 days?", "Show the PPM calendar for October"]
+    filters: ["All", "Blocked", "To raise", "Awaiting approval", "Deviation", "Compliance", "Vendors", "Assets", "Energy"],
+    asks: ["Which decisions are statutory?", "Which recommendations were never converted to orders?", "Which PPM contracts are behind plan?"]
   }
 };
 
-export { SESSIONS, KL, CADENCES, DAYS, CADENCE_LABEL, CADENCE_BADGE, ASSET_RISK, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES };
+/* Platform value ledger, 2026 YTD. A line exists only where a cost was detected,
+   an action was approved, and the cost afterwards is measured or contractually
+   fixed. Estimated lines are marked; nothing is claimed for detection alone. */
+const VALUE_LEDGER = [
+  { mod: "Energy", detected: "£312k", saved: "£286k", tone: "ok", items: [
+    { what: "Car park lighting · Building 5 · non-occupancy spike", action: "Schedule reset, Feb", detected: "£4.1k/yr", saved: "£4.1k/yr", basis: "measured · 4 weeks of readings" },
+    { what: "AHU-1 · Kingsway House · schedule overrun", action: "BMS schedule corrected, Mar", detected: "£31k/yr", saved: "£29k/yr", basis: "measured" },
+    { what: "Server room · Meridian Quay · CRAC sequencing", action: "Sequencing changed, Apr", detected: "£44k/yr", saved: "£41k/yr", basis: "measured" },
+    { what: "Bishopsgate chillers · re-benchmark on actual hours", action: "Pack corrected, May", detected: "£118k excess", saved: "£96k", basis: "benchmark fit — not waste, but not a gap either" },
+    { what: "11 further anomalies closed Jan–Aug", action: "Work orders", detected: "£115k/yr", saved: "£116k/yr", basis: "measured" }
+  ] },
+  { mod: "Vendors", detected: "£188k", saved: "£164k", tone: "ok", items: [
+    { what: "Service credits · L1 and L2 breaches", action: "Claimed against 6 contracts", detected: "£71k", saved: "£62k", basis: "credited on invoice" },
+    { what: "Invoice lines outside rate schedule", action: "Held and re-issued", detected: "£54k", saved: "£54k", basis: "invoice corrected" },
+    { what: "Duplicate call-outs consolidated", action: "Visits merged per building", detected: "£63k", saved: "£48k", basis: "invoiced vs prior run rate" }
+  ] },
+  { mod: "Maintenance", detected: "£212k", saved: "£148k", tone: "ok", items: [
+    { what: "Warranty claims found in inspection reports", action: "Claimed", detected: "£18k", saved: "£16k", basis: "credited" },
+    { what: "Reactive orders averted by predictive orders", action: "9 predictive orders raised", detected: "£94k", saved: "£67k", basis: "estimated · reactive cost avoided less predictive cost" },
+    { what: "Replacements deferred by remediation", action: "3 remediations", detected: "£100k", saved: "£65k", basis: "estimated · capex deferred 24+ months, discounted" }
+  ] },
+  { mod: "Compliance", detected: "£140k", saved: "£122k", tone: "ok", items: [
+    { what: "Lapsed statutory certificates renewed inside window", action: "31 bookings from the ladder", detected: "£96k exposure", saved: "£96k", basis: "estimated · penalty and void-insurance exposure at lapse" },
+    { what: "Forged certificate rejected · AN Other House EICR", action: "Re-inspection ordered", detected: "£26k", saved: "£26k", basis: "estimated · exposure had it been accepted" },
+    { what: "Blocked vendors kept off regulated work", action: "4 swaps", detected: "£18k", saved: "—", basis: "not counted — no measurable cost after" }
+  ] },
+  { mod: "Assets", detected: "£118k", saved: "£80k", tone: "ok", items: [
+    { what: "Asset value preserved by early remediation", action: "CH-2, Boiler-14, AHU-1 remediated", detected: "£118k at risk", saved: "£80k", basis: "estimated · value-at-risk model, before vs after" }
+  ] }
+];
+
+export { KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER };

@@ -18,10 +18,10 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_meters (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_em_site ON plenum_cafm.energy_meters (site_id);
-CREATE INDEX IF NOT EXISTS ix_em_asset ON plenum_cafm.energy_meters (asset_id);
-CREATE INDEX IF NOT EXISTS ix_em_mpan ON plenum_cafm.energy_meters (mpan);
-CREATE INDEX IF NOT EXISTS ix_em_mprn ON plenum_cafm.energy_meters (mprn);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_site ON plenum_cafm.energy_meters (site_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_asset ON plenum_cafm.energy_meters (asset_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_mpan ON plenum_cafm.energy_meters (mpan);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_mprn ON plenum_cafm.energy_meters (mprn);
 
 -- Half-hourly (and other) readings — UDR MeterReading entity
 CREATE TABLE IF NOT EXISTS plenum_cafm.meter_readings (
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.meter_readings (
     UNIQUE (meter_id, reading_at)
 );
 
-CREATE INDEX IF NOT EXISTS ix_mr_meter_at ON plenum_cafm.meter_readings (meter_id, reading_at);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_mr_meter_at ON plenum_cafm.meter_readings (meter_id, reading_at);
 
 -- Reading gaps + retry escalation
 CREATE TABLE IF NOT EXISTS plenum_cafm.meter_reading_gaps (
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.meter_reading_gaps (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_mrg_status ON plenum_cafm.meter_reading_gaps (status);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_mrg_status ON plenum_cafm.meter_reading_gaps (status);
 
 -- Building GIA + type for EUI / TM46
 CREATE TABLE IF NOT EXISTS plenum_cafm.building_energy_profiles (
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.eui_snapshots (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_eui_site_period ON plenum_cafm.eui_snapshots (site_id, period_start);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_eui_site_period ON plenum_cafm.eui_snapshots (site_id, period_start);
 
 -- Asset condition scores (1–5) with provenance
 CREATE TABLE IF NOT EXISTS plenum_cafm.asset_condition_scores (
@@ -156,8 +156,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_anomalies (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_ea_status ON plenum_cafm.energy_anomalies (status);
-CREATE INDEX IF NOT EXISTS ix_ea_type ON plenum_cafm.energy_anomalies (anomaly_type);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ea_status ON plenum_cafm.energy_anomalies (status);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ea_type ON plenum_cafm.energy_anomalies (anomaly_type);
 
 -- Monthly energy reports
 CREATE TABLE IF NOT EXISTS plenum_cafm.energy_monthly_reports (

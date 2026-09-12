@@ -12,5 +12,14 @@ arq>=0.26
 reportlab>=4.0
 anthropic>=0.40
 azure-storage-blob>=12.20
+# Auth. Declared in pyproject.toml too, but the Dockerfile installs from THIS file, so
+# without them here the image has no bcrypt and the service dies on import — the whole
+# auth engine is unreachable in Docker while passing every test on a dev box.
+# bcrypt direct rather than through passlib: passlib 1.7.4 reads bcrypt.__about__ to
+# detect its backend and bcrypt removed that in 4.1, so the pair raises on any hash.
+bcrypt>=4.1
+PyJWT>=2.8
+# EmailStr in the auth schemas needs it; pydantic raises on import without it.
+email-validator>=2.0
 pytest>=8.0
 pytest-asyncio>=0.23

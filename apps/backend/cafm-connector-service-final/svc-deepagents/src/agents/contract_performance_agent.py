@@ -293,6 +293,12 @@ async def list_contract_parameters(
 
     Each row carries `vendor_name` — ALWAYS refer to vendors by name in answers
     (fall back to the contract_ref); never present a raw vendor_id UUID to the user.
+
+    Each row also carries `building_name` and `building_reference` — the property the
+    contract covers, resolved through the document it was extracted from. Use these to
+    answer "what contracts are on <building>". A null building_name means that contract
+    could not be placed against a property, NOT that it belongs to whichever building was
+    asked about: say it is unplaced rather than attributing it.
     """
     try:
         params: dict[str, Any] = {}
@@ -406,6 +412,81 @@ async def update_score_weights(
         return resp.json()
     except Exception as exc:
         return _err(exc, "update_score_weights")
+
+
+@tool
+async def list_invoices(
+    building_name: str | None = None,
+    building_id: str | None = None,
+    vendor_name: str | None = None,
+    invoice_ref: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """B3 — Verified invoices with the building and vendor each belongs to. Read-only.
+
+    **Use this for any question about invoices: what a building has been billed, what an
+    invoice is worth, how many lines matched or were flagged.** Until this existed the
+    feature could verify an invoice and decide its lines but never read one back, so every
+    question about a building's invoices was answered "none found" however many it had.
+
+    Filters: `building_name` as the user said it, `vendor_name`, `invoice_ref` (the invoice
+    number, partial and case-insensitive), `status`.
+
+    Each row carries `invoice_ref` (the number printed on the document), `building_name`,
+    `vendor_name`, `amount`, `line_count`, `matched_count`, `flagged_count` and
+    `building_link`. `building_link: "unplaced"` means that invoice could not be tied to any
+    property — say so; it does NOT belong to whichever building was asked about.
+    """
+    try:
+        params: dict[str, Any] = {"limit": limit}
+        if building_id:
+            params["building_id"] = building_id
+        elif building_name:
+            resolved = await _request(
+                "GET",
+                _base(),
+                "/api/energy/buildings/resolve",
+                service=_SERVICE,
+                timeout=_TIMEOUT,
+                params={"name": building_name},
+            )
+            body = resolved.json()
+            if body.get("outcome") != "resolved" or not body.get("building_id"):
+                return {
+                    "error": "building_not_resolved",
+                    "outcome": body.get("outcome"),
+                    "asked_for": building_name,
+                    "candidates": body.get("candidates") or [],
+                    "guidance": (
+                        "No building matched that name. Do NOT report another building's "
+                        "invoices; ask which one is meant."
+                    ),
+                }
+            params["building_id"] = body["building_id"]
+        if invoice_ref:
+            params["invoice_ref"] = invoice_ref
+        if status:
+            params["status"] = status
+        resp = await _request(
+            "GET",
+            _base(),
+            "/api/contract-performance/invoices",
+            service=_SERVICE,
+            timeout=_TIMEOUT,
+            params=params,
+        )
+        out = resp.json()
+        if vendor_name:
+            needle = vendor_name.strip().lower()
+            rows = [
+                r for r in (out.get("invoices") or [])
+                if needle in str(r.get("vendor_name") or "").lower()
+            ]
+            out = dict(out, invoices=rows, count=len(rows), vendor_name_filter=vendor_name)
+        return out
+    except Exception as exc:
+        return _err(exc, "list_invoices")
 
 
 @tool
@@ -590,6 +671,7 @@ async def propose_asset_criticality_from_udr(
 
 
 CONTRACT_PERFORMANCE_TOOLS = [
+    list_invoices,
     extract_contract_from_document,
     ingest_contract_parameters,
     update_contract_parameters,

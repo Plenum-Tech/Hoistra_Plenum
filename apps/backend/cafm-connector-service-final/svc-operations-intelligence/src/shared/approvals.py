@@ -130,6 +130,12 @@ def _hash_payload(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+#: ops_audit_log.source_feature is CHAR(1): A/B/C are the three product features. Platform
+#: administration (companies, invitations, allocation) is none of them, so it gets its own
+#: letter. Anything longer than one character is rejected by the database, not stored.
+PLATFORM_FEATURE = "P"
+
+
 async def write_audit(
     session: AsyncSession,
     *,
@@ -528,15 +534,25 @@ async def send_platform_email(
     cc_address: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     commit: bool = True,
+    log_body: str | None = None,
 ) -> dict[str, Any]:
-    """Platform sends email — Microsoft Graph (preferred) or SMTP."""
+    """Platform sends email — Microsoft Graph (preferred) or SMTP.
+
+    ``log_body`` is what gets written to ops_email_log in place of the message itself.
+    Every email is recorded here, which is right for an audit trail and wrong for a
+    message whose entire content is a live credential: a one-time code stored in a table
+    anyone with read access can query is not one-time in any useful sense, and it outlives
+    the ten minutes it was supposed to exist for. Callers sending a secret pass a redacted
+    stand-in, so the record still proves an email went out and no longer contains the
+    thing it was carrying.
+    """
     row = OpsEmailLog(
         id=uuid4(),
         organization_id=organization_id,
         queue_item_id=queue_item_id,
         to_address=to_address,
         subject=subject,
-        body=body,
+        body=log_body if log_body is not None else body,
         status="queued",
     )
     session.add(row)

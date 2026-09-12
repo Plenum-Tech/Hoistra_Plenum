@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -213,33 +213,58 @@ def _discrepancy_code(result: dict[str, Any]) -> str | None:
 async def _resolve_wo_ids(
     session: AsyncSession, wo_codes: list[str]
 ) -> dict[str, str]:
-    """Map wo_code -> work_orders.wo_uuid so invoice lines link to real records.
+    """Map wo_code -> the work order's uuid, so invoice lines link by key and not by string.
 
-    wo_uuid rather than id: work_orders.id is an integer serial in tenants built
-    through svc-work-order-management, and invoice_lines.work_order_id is a UUID.
+    Which column holds that uuid depends on how the tenant was built. Tenants built through
+    svc-work-order-management have an integer serial `id` and carry the uuid in `wo_uuid`;
+    the canonical schema has no wo_uuid at all and `id` is itself a uuid. Selecting wo_uuid
+    unconditionally, as this did, raises `column "wo_uuid" does not exist` on the second
+    kind — and the except below turned that into an empty map at debug level, so every
+    invoice line came out with work_order_id NULL and the failure was invisible.
+
+    Introspected instead, and the log says which column answered.
     """
     codes = [c for c in {c for c in wo_codes if c}]
     if not codes:
         return {}
     try:
         async with session.begin_nested():
+            cols = {
+                r[0] for r in (
+                    await session.execute(
+                        text(
+                            """SELECT column_name FROM information_schema.columns
+                                WHERE table_schema = 'plenum_cafm'
+                                  AND table_name = 'work_orders'"""
+                        )
+                    )
+                ).all()
+            }
+            key = "wo_uuid" if "wo_uuid" in cols else ("id" if "id" in cols else None)
+            if key is None:
+                log.warning("invoice.wo_resolve_no_key_column")
+                return {}
+            code_expr = ("COALESCE(wo_code, workorder_ref)"
+                         if "workorder_ref" in cols else "wo_code")
             rows = (
                 await session.execute(
                     text(
-                        """
-                        SELECT COALESCE(wo_code, workorder_ref) AS code,
-                               wo_uuid::text AS id
+                        f"""
+                        SELECT {code_expr} AS code, {key}::text AS id
                         FROM plenum_cafm.work_orders
-                        WHERE COALESCE(wo_code, workorder_ref) = ANY(:codes)
-                          AND wo_uuid IS NOT NULL
+                        WHERE {code_expr} = ANY(:codes)
+                          AND {key} IS NOT NULL
                         """
                     ),
                     {"codes": codes},
                 )
             ).mappings().all()
-        return {r["code"]: r["id"] for r in rows}
-    except Exception as exc:  # noqa: BLE001
-        log.debug("invoice.wo_resolve_failed", error=str(exc)[:200])
+        out = {r["code"]: r["id"] for r in rows}
+        log.info("invoice.wo_resolved", key_column=key, asked=len(codes), found=len(out))
+        return out
+    except Exception as exc:  # noqa: BLE001 — a missing link must not fail the verification
+        # Warning, not debug: every line losing its work order is worth seeing in a log.
+        log.warning("invoice.wo_resolve_failed", error=str(exc)[:200])
         return {}
 
 
@@ -321,9 +346,15 @@ async def verify_invoice(
     invoice_ref: str | None,
     lines: list[dict[str, Any]],
     work_orders: list[dict[str, Any]],
+    invoice_ref_identifies: bool = False,
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     document_id: UUID | None = None,
+    building_name: str | None = None,
+    building_reference: str | None = None,
+    site_name: str | None = None,
+    site_id: str | None = None,
+    file_name: str | None = None,
     labour_day_rate: float | None = None,
     labour_hour_rate: float | None = None,
     parts_pricing_json: dict[str, Any] | None = None,
@@ -413,20 +444,70 @@ async def verify_invoice(
     flagged_count = insights["flagged_count"]
     ratio = insights["matched_flagged_ratio"]
 
-    row = InvoiceVerification(
-        id=uuid4(),
-        organization_id=organization_id,
-        vendor_id=vendor_id,
-        invoice_ref=invoice_ref,
-        document_id=document_id,
-        status="completed",
-        matched_count=matched_count,
-        flagged_count=flagged_count,
-        matched_flagged_ratio=Decimal(str(ratio)) if ratio is not None else None,
-        lines_json=results,
-        insights_json=insights,
-    )
-    session.add(row)
+    # The invoices view reaches a building through plenum_cafm.documents, joined on this
+    # column. A verification with no document_id can never join, so one is minted here when
+    # the caller has none rather than leaving the row permanently unplaceable.
+    document_id = document_id or uuid4()
+
+    # The same invoice, uploaded again, is one invoice. Two uploads of one PDF produced two
+    # verifications and two rows in the invoices view — same vendor, same total, same lines
+    # — because the only key was a filename that differed between them. An invoice number
+    # read off the document is the key a supplier, a PM and an accounts system all use.
+    #
+    # Only a ref the document printed counts. Two files that happen to share a name are not
+    # evidence of the same invoice, and merging those would lose one.
+    row = None
+    if invoice_ref_identifies and invoice_ref:
+        existing = (
+            await session.execute(
+                select(InvoiceVerification)
+                .where(
+                    InvoiceVerification.invoice_ref == invoice_ref,
+                    InvoiceVerification.organization_id == organization_id,
+                )
+                .order_by(InvoiceVerification.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            # Re-verified in place. The newer reading replaces the older one: it was made
+            # against whatever the work orders say today, which is the more current answer.
+            log.info("invoice.reverified_existing", invoice_ref=invoice_ref,
+                     verification_id=str(existing.id))
+            existing.vendor_id = vendor_id or existing.vendor_id
+            existing.document_id = document_id or existing.document_id
+            existing.status = "completed"
+            existing.matched_count = matched_count
+            existing.flagged_count = flagged_count
+            existing.matched_flagged_ratio = (
+                Decimal(str(ratio)) if ratio is not None else None
+            )
+            existing.lines_json = results
+            existing.insights_json = insights
+            row = existing
+            # The lines are rewritten from this reading, so the old ones go rather than
+            # doubling the invoice's value in the view that sums them.
+            await session.execute(
+                delete(InvoiceLine).where(
+                    InvoiceLine.invoice_verification_id == existing.id
+                )
+            )
+
+    if row is None:
+        row = InvoiceVerification(
+            id=uuid4(),
+            organization_id=organization_id,
+            vendor_id=vendor_id,
+            invoice_ref=invoice_ref,
+            document_id=document_id,
+            status="completed",
+            matched_count=matched_count,
+            flagged_count=flagged_count,
+            matched_flagged_ratio=Decimal(str(ratio)) if ratio is not None else None,
+            lines_json=results,
+            insights_json=insights,
+        )
+        session.add(row)
     await session.flush()
     await _persist_invoice_lines(
         session,
@@ -440,6 +521,38 @@ async def verify_invoice(
         parts_framework=parts_pricing_json or {},
         adversary_threshold=adversary_threshold,
     )
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # Record the source file in plenum_cafm.documents and place it on a building, so this
+    # invoice reads back against a property instead of hanging off nothing. An invoice
+    # seldom names its building, so the work orders it bills are the usual route.
+    # Best-effort throughout: an invoice that cannot be placed is still verified.
+    graph: dict[str, Any] = {}
+    try:
+        from ..energy.graph_ingest import attach_to_graph
+
+        graph = await attach_to_graph(
+            session,
+            document_id=document_id,
+            building_name=building_name,
+            building_reference=building_reference,
+            site_name=site_name,
+            site_id=site_id,
+            work_order_codes=[
+                r.get("wo_code") for r in results if r.get("wo_code")
+            ],
+            doc_type="vendor_invoice",
+            title=invoice_ref,
+            file_name=file_name,
+        )
+        insights["building_link"] = {
+            "building_id": graph.get("building_id"),
+            "outcome": graph.get("building_link_outcome"),
+            "reason": graph.get("building_link_reason"),
+        }
+        row.insights_json = insights
+    except Exception as exc:  # noqa: BLE001 — the graph must never fail a verification
+        log.warning("invoice.graph_attach_failed", error=str(exc)[:200])
+
     await write_audit(
         session,
         actor="system",
@@ -462,6 +575,7 @@ async def verify_invoice(
         "matched_flagged_ratio": ratio,
         "lines": results,
         "insights": insights,
+        "building_link": insights.get("building_link"),
     }
 
 
@@ -504,3 +618,79 @@ async def decide_invoice_line(
     )
     await session.commit()
     return {"ok": True, "verification_id": str(row.id), "line_id": line_id, "decision": decision}
+
+
+async def list_invoices(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    building_id: UUID | None = None,
+    vendor_id: UUID | None = None,
+    invoice_ref: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Verified invoices, with the building and vendor they belong to.
+
+    Reads plenum_cafm.invoices, which is the view that already joins a verification to its
+    building through the document it was extracted from — the same join the building graph
+    draws, so a caller here and a reader of the graph cannot disagree about which invoices
+    a building has.
+
+    Every filter is a bound parameter and the statement is fixed text; nothing a caller
+    sends is ever interpolated into SQL.
+    """
+    sql = """
+        SELECT i.invoice_id::text      AS invoice_id,
+               i.invoice_ref,
+               i.document_id::text     AS document_id,
+               i.building_id::text     AS building_id,
+               b.name                  AS building_name,
+               b.building_code         AS building_reference,
+               i.vendor_id::text       AS vendor_id,
+               v.vendor_name,
+               i.amount,
+               i.line_count,
+               i.currency,
+               i.issued_on,
+               i.status,
+               i.matched_count,
+               i.flagged_count,
+               i.created_at
+          FROM plenum_cafm.invoices i
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = i.building_id
+          -- vendors.id is a uuid on one deployment and a VARCHAR on another, while an
+          -- invoice always names its vendor as a uuid. Compared as text the join works on
+          -- both; compared directly it raises "operator does not exist: character varying
+          -- = uuid" and takes the whole invoice list down with it.
+          LEFT JOIN plenum_cafm.vendors   v ON v.id::text    = i.vendor_id::text
+         WHERE (CAST(:org AS uuid) IS NULL OR i.organization_id = CAST(:org AS uuid))
+           AND (CAST(:bld AS uuid) IS NULL OR i.building_id     = CAST(:bld AS uuid))
+           AND (CAST(:ven AS uuid) IS NULL OR i.vendor_id       = CAST(:ven AS uuid))
+           AND (CAST(:ref AS text) IS NULL OR i.invoice_ref ILIKE '%' || CAST(:ref AS text) || '%')
+           AND (CAST(:sts AS text) IS NULL OR i.status = CAST(:sts AS text))
+         ORDER BY i.created_at DESC
+         LIMIT :lim
+    """
+    rows = (
+        await session.execute(
+            text(sql),
+            {
+                "org": str(organization_id) if organization_id else None,
+                "bld": str(building_id) if building_id else None,
+                "ven": str(vendor_id) if vendor_id else None,
+                "ref": invoice_ref or None,
+                "sts": status or None,
+                "lim": max(1, min(int(limit or 100), 500)),
+            },
+        )
+    ).mappings().all()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["amount"] = float(d["amount"]) if d.get("amount") is not None else None
+        # An invoice the graph could not place. Said plainly, because "no building" and
+        # "not this building" read identically to a caller filtering by name.
+        d["building_link"] = "placed" if d.get("building_id") else "unplaced"
+        out.append(d)
+    return out

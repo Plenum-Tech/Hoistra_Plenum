@@ -22,17 +22,107 @@ engine = create_async_engine(
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+#: How many times a failing migration is retried after create_all. Three covers a chain of
+#: three dependent migrations; a loop that never terminates would hang startup, which is
+#: worse than a named unapplied file.
+_MAX_MIGRATION_PASSES = 3
+
+#: A concurrent index build has to run outside a transaction, so it is routed differently.
+# UNIQUE sits between CREATE and INDEX, so a pattern without it routes
+# "CREATE UNIQUE INDEX CONCURRENTLY" into a transaction, where Postgres refuses it
+# outright — the index is then reported as a skipped statement and never exists,
+# which for a uniqueness constraint means the thing it was guarding is unguarded.
+_CONCURRENT_INDEX = re.compile(r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY", re.IGNORECASE)
+
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 _SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"
 
 
 async def init_db() -> None:
+    """Migrate, create the ORM tables, then re-run whatever the first pass could not apply.
+
+    The two passes exist because the ordering is genuinely circular. Some migrations create
+    things `create_all` needs — the schema itself, tables the ORM does not model — so they
+    have to run first. Others ALTER tables the ORM owns, which on a fresh database do not
+    exist until `create_all` has run, so those are skipped on the way past.
+
+    Nobody noticed because the second boot fixed it: by then the tables existed and the
+    ALTERs applied. A first-boot deployment ran with columns missing and failed with a 500
+    that looked like a code fault — `compliance_certificates.site_ref does not exist` — until
+    somebody restarted the service and it mysteriously healed.
+
+    Only the files that actually failed are retried, so a healthy start still costs one pass.
+    Every migration is written idempotent, which is what makes a second attempt safe.
+    """
     log.info("db.init", status="starting")
+    retry: dict[Path, str] = {}
     if settings.auto_migrate_on_startup:
-        await apply_sql_migrations()
+        # Swept before the run, so an index left unfinished by a previous concurrent build
+        # is rebuilt on this one rather than skipped forever by IF NOT EXISTS.
+        swept = await _drop_invalid_indexes()
+        if swept:
+            log.warning("db.invalid_indexes_dropped", indexes=swept,
+                        note="left unfinished by an earlier concurrent build; rebuilding")
+        retry = await apply_sql_migrations()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Retried until nothing more succeeds, not just once. Filename order does not express
+    # dependencies BETWEEN migrations: compliance_certificates_region.sql indexes a column
+    # that compliance_certificates_state.sql adds, and `region` sorts before `state`, so in
+    # any single pass that index can never build. Looping while the failure set shrinks
+    # resolves those without anyone having to rename files into a working order — which is
+    # a trap that re-opens every time a migration is added.
+    passes = 0
+    while retry and passes < _MAX_MIGRATION_PASSES:
+        passes += 1
+        log.info("db.init.migration_retry", pass_no=passes,
+                 files=[f.name for f in retry])
+        still_failing = await apply_sql_migrations(only=list(retry))
+        if len(still_failing) >= len(retry):
+            retry = still_failing
+            break          # no progress: another pass will not help
+        retry = still_failing
+    if retry:
+        # Converged and still failing. Some of these are genuinely fine — a migration for a
+        # table another service owns will never apply here — but that has to be declared
+        # per file, not assumed for all of them.
+        allowed = {
+            n.strip()
+            for n in str(settings.migrations_allowed_to_fail or "").split(",")
+            if n.strip()
+        }
+        permitted = {f: e for f, e in retry.items() if f.name in allowed}
+        blocking = {f: e for f, e in retry.items() if f.name not in allowed}
+        if permitted:
+            log.warning(
+                "db.init.migration_unapplied_permitted",
+                files=[f.name for f in permitted],
+                note="listed in MIGRATIONS_ALLOWED_TO_FAIL",
+            )
+        if blocking:
+            detail = "; ".join(f"{f.name}: {e}" for f, e in blocking.items())
+            log.error(
+                "db.init.migration_failed",
+                files=[f.name for f in blocking],
+                errors={f.name: e for f, e in blocking.items()},
+                note="refusing to start — the schema is half-applied",
+            )
+            raise MigrationError(
+                f"{len(blocking)} migration(s) could not be applied after "
+                f"{passes} retry pass(es): {detail}. Fix the migration, or name the file "
+                f"in MIGRATIONS_ALLOWED_TO_FAIL if it belongs to another service."
+            )
     log.info("db.init", status="complete")
+
+
+class MigrationError(RuntimeError):
+    """A migration could not be applied and the service must not serve traffic.
+
+    Raised from init_db after the retry passes have converged. Starting anyway is how a
+    half-applied schema reaches production looking healthy: the statements that succeeded
+    stay, the ones that failed are a warning in a log nobody reads during a deploy, and
+    the first request to touch a missing column returns a 500 that looks like a code fault.
+    """
 
 
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z0-9_]*\$")
@@ -75,13 +165,84 @@ def _split_sql(sql: str) -> list[str]:
     return statements
 
 
-async def apply_sql_migrations() -> None:
-    """Apply all idempotent *.sql migrations in migrations/ (sorted by name)."""
+async def exec_migration_statements(statements: list[str]) -> tuple[int, list[str]]:
+    """Run migration statements, sending concurrent index builds outside a transaction.
+
+    The single place that knows how to execute this kind of SQL. Three call sites applied
+    migration files with ``engine.begin()`` of their own, and converting the index builds to
+    CONCURRENTLY broke two of them at once — the SQL is shared, so the knowledge of how to
+    run it has to be too, or the next change breaks them again.
+
+    Returns ``(applied, errors)``. Each statement runs on its own so one failure cannot
+    abort the rest.
+    """
+    applied = 0
+    errors: list[str] = []
+    for stmt in statements:
+        if not str(stmt).strip():
+            continue
+        try:
+            if _CONCURRENT_INDEX.search(stmt):
+                async with engine.connect() as conn:
+                    raw = await conn.get_raw_connection()
+                    await raw.driver_connection.execute(stmt)
+            else:
+                async with engine.begin() as conn:
+                    await conn.exec_driver_sql(stmt)
+            applied += 1
+        except Exception as exc:  # noqa: BLE001 — one bad statement must not lose the file
+            errors.append(str(exc)[:300])
+    return applied, errors
+
+
+async def _drop_invalid_indexes() -> list[str]:
+    """Remove indexes a concurrent build left behind unfinished.
+
+    This is the trap that comes with CREATE INDEX CONCURRENTLY. When a concurrent build
+    fails part-way, Postgres keeps the index in an INVALID state: it exists, so
+    ``IF NOT EXISTS`` skips it on every later run, and no query will use it. The result is
+    an index that is permanently missing while looking permanently present.
+
+    Dropping one is safe by definition — an invalid index is unusable, so nothing can be
+    relying on it — and it lets the next migration pass build it properly.
+    """
+    dropped: list[str] = []
+    try:
+        async with engine.connect() as conn:
+            raw = await conn.get_raw_connection()
+            rows = await raw.driver_connection.fetch(
+                """SELECT c.relname AS name
+                   FROM pg_index i
+                   JOIN pg_class c ON c.oid = i.indexrelid
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'plenum_cafm' AND NOT i.indisvalid"""
+            )
+            for r in rows:
+                name = r["name"]
+                await raw.driver_connection.execute(
+                    f'DROP INDEX IF EXISTS plenum_cafm."{name}"'
+                )
+                dropped.append(str(name))
+    except Exception as exc:  # noqa: BLE001 — housekeeping must not stop startup
+        log.warning("db.invalid_index_sweep_failed", error=str(exc)[:200])
+    return dropped
+
+
+async def apply_sql_migrations(
+    only: list[Path] | None = None,
+) -> dict[Path, str]:
+    """Apply the idempotent *.sql migrations in filename order.
+
+    Returns {file: last error} for every file that had at least one statement fail, so the
+    caller can retry them once the ORM tables exist — and, when they still fail, say why
+    rather than just which. ``only`` restricts the run to a previous pass's failures.
+    """
     if not _MIGRATIONS_DIR.exists():
         log.warning("db.migration.dir_missing", path=str(_MIGRATIONS_DIR))
-        return
-    files = sorted(_MIGRATIONS_DIR.glob("*.sql"))
+        return []
+    files = list(only) if only is not None else sorted(_MIGRATIONS_DIR.glob("*.sql"))
     total = 0
+    failed: dict[Path, str] = {}
     for mig in files:
         statements = _split_sql(mig.read_text(encoding="utf-8"))
         for stmt in statements:
@@ -91,17 +252,40 @@ async def apply_sql_migrations() -> None:
             # exec_driver_sql (raw DBAPI) — NOT text(): several seeds use PostgreSQL
             # ``::jsonb`` casts, which text() misreads as ``:jsonb`` bind params.
             try:
-                async with engine.begin() as conn:
-                    await conn.exec_driver_sql(stmt)
+                if _CONCURRENT_INDEX.search(stmt):
+                    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block,
+                    # and it is concurrent precisely so building an index on a live table
+                    # does not hold a lock that blocks every write to it for the duration —
+                    # on a register being ingested into, that is an outage.
+                    #
+                    # Run on the raw asyncpg connection rather than through SQLAlchemy.
+                    # Neither engine.execution_options(isolation_level="AUTOCOMMIT") nor
+                    # setting it on an open connection took effect on this pooled engine:
+                    # the statement still arrived inside a transaction and every index
+                    # build failed, silently, as a skipped migration. asyncpg's own execute
+                    # opens no transaction, which is the behaviour actually needed.
+                    async with engine.connect() as conn:
+                        raw = await conn.get_raw_connection()
+                        await raw.driver_connection.execute(stmt)
+                else:
+                    async with engine.begin() as conn:
+                        await conn.exec_driver_sql(stmt)
                 total += 1
             except Exception as exc:  # noqa: BLE001
+                # Tolerated HERE on purpose: within a pass, a statement can fail only
+                # because the thing it needs has not been created yet, and the caller
+                # retries. What must not be tolerated is a failure that survives the
+                # retries — that is handled in init_db.
+                failed[mig] = str(exc)[:300]
                 log.warning(
                     "db.migration.stmt_skipped",
                     file=mig.name,
                     error=str(exc)[:300],
                 )
         log.info("db.migration.file_applied", file=mig.name, statements=len(statements))
-    log.info("db.migration.applied", statements=total, files=len(files))
+    log.info("db.migration.applied", statements=total, files=len(files),
+             files_with_failures=len(failed))
+    return failed
 
 
 async def apply_sql_seed(name: str) -> int:

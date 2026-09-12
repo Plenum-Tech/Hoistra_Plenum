@@ -256,6 +256,11 @@ async def ingest_contract_parameters(
     document_id: UUID | None = None,
     contract_ref: str | None = None,
     signed_date: date | str | None = None,
+    building_name: str | None = None,
+    building_reference: str | None = None,
+    site_name: str | None = None,
+    site_id: str | None = None,
+    file_name: str | None = None,
 ) -> dict[str, Any]:
     """
     B1 — Relationships Agent handoff: merge extraction + defaults into draft
@@ -336,6 +341,36 @@ async def ingest_contract_parameters(
         raw_extraction=extracted or {},
     )
 
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # The contracts view reaches a building through plenum_cafm.documents, joined on
+    # document_id. With no row there the column is NULL for every contract, so the source
+    # file is recorded and placed on a building here. Best-effort: a contract that cannot
+    # be placed is still ingested, with the basis of the attempt kept beside it.
+    async def _attach_graph(target: Any, doc_id: Any) -> dict[str, Any]:
+        if doc_id is None:
+            return {}
+        try:
+            from ..energy.graph_ingest import attach_to_graph
+
+            out = await attach_to_graph(
+                session,
+                document_id=doc_id,
+                building_name=building_name,
+                building_reference=building_reference,
+                site_name=site_name,
+                site_id=site_id,
+                doc_type="service_contract",
+                title=effective_ref,
+                file_name=file_name,
+            )
+            sources = dict(target.field_sources or {})
+            sources["building_link"] = out.get("building_link_reason") or "unresolved"
+            target.field_sources = sources
+            return out
+        except Exception as exc:  # noqa: BLE001 — the graph must never fail an ingest
+            log.warning("contract_params.graph_attach_failed", error=str(exc)[:200])
+            return {}
+
     existing = await _existing_draft_for(
         session, contract_ref=effective_ref, vendor_id=vendor_id
     )
@@ -370,6 +405,7 @@ async def ingest_contract_parameters(
             d for d in defaults_used if d.split(":", 1)[0].strip() not in pm_decided
         ]
         await session.flush()
+        await _attach_graph(existing, existing.document_id)
         await write_audit(
             session,
             actor="system",
@@ -406,6 +442,8 @@ async def ingest_contract_parameters(
     )
     session.add(row)
     await session.flush()
+    row.document_id = row.document_id or uuid4()
+    await _attach_graph(row, row.document_id)
 
     if has_confirmed:
         # A confirmed contract already governs this reference. It is not overwritten — the
@@ -640,6 +678,45 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001
             for d in out:
                 d.setdefault("document_name", None)
+
+        # Which building this contract covers. contract_sla_parameters has no building
+        # column; the link runs through the document it was extracted from, which is the
+        # join plenum_cafm.contracts makes and the building graph draws. Without it every
+        # row reaching a caller was silent about the building, and a question about one
+        # could only be answered "no contract is linked to it".
+        try:
+            from sqlalchemy import text as _text
+
+            res3 = await session.execute(
+                _text(
+                    "SELECT d.document_id::text AS did, d.building_id::text AS bid, "
+                    "       b.name AS building_name, b.building_code "
+                    "  FROM plenum_cafm.documents d "
+                    "  JOIN plenum_cafm.buildings b ON b.building_id = d.building_id "
+                    " WHERE d.document_id::text = ANY(:ids)"
+                ),
+                {"ids": doc_ids},
+            )
+            placed = {
+                row.did: {
+                    "building_id": row.bid,
+                    "building_name": row.building_name,
+                    "building_reference": row.building_code,
+                }
+                for row in res3
+            }
+            for d in out:
+                d.update(
+                    placed.get(str(d.get("document_id") or ""))
+                    or {"building_id": None, "building_name": None,
+                        "building_reference": None}
+                )
+        except Exception:  # noqa: BLE001 — a contract that cannot be placed is still a
+            # contract; losing the listing over it would be worse.
+            for d in out:
+                d.setdefault("building_id", None)
+                d.setdefault("building_name", None)
+                d.setdefault("building_reference", None)
     return out
 
 

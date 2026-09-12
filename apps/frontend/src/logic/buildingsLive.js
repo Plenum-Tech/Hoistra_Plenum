@@ -18,6 +18,7 @@ import { normCountry, countryMeta, fmtTime } from './complianceLive.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
+export const PAGE_SIZE = 20;
 
 const STANDING_LABEL = {
   enacted: "enacted", guidance: "guidance", mandatory_submission: "submission mandatory", none: "no operational standard"
@@ -25,6 +26,58 @@ const STANDING_LABEL = {
 // Tone of the standing line: enacted/mandatory read as a duty (ok), guidance as a warning,
 // no standard as dormant. Same palette PACKS uses for the seed.
 const STANDING_TONE = { enacted: "ok", mandatory_submission: "ok", guidance: "warn", none: "dormant" };
+
+// How a figure was arrived at, in one word, shown under the number.
+//
+// A tooltip is not enough for this. Whether an EUI was metered or typed onto a row by hand
+// is the difference between a measurement and somebody's estimate, and a table that renders
+// both as plain "212 kWh/m²" has already told the reader they are the same thing. You should
+// not have to hover to find out which one you are looking at.
+const SOURCE_WORD = {
+  // area
+  spaces_sum: "counted",
+  sites: "surveyed",
+  buildings_recorded: "surveyed",
+  energy_profile: "profile",
+  // floors
+  floors_table: "counted",
+  // eui
+  eui_snapshot: "metered",
+  sites_recorded: "recorded",
+  // benchmark
+  tm46: "TM46",
+  tm46_combined_by_use: "TM46",
+  tm46_by_site_type: "TM46 default",
+  portfolio_rolling: "portfolio median"
+};
+
+// "recorded" and "surveyed" are somebody's number. They are not wrong, but they are not
+// measured either, and the difference is worth a colour.
+const SOFT_SOURCES = new Set(["recorded", "surveyed", "profile", "TM46 default"]);
+
+// The same key means different things in different columns. `buildings_recorded` on a floor
+// area is a survey somebody carried out; on an EUI it is a number typed onto the row. Calling
+// the second one "surveyed" would dress up an estimate as a measurement.
+const EUI_SOURCE_WORD = {
+  eui_snapshot: "metered",
+  buildings_recorded: "recorded",
+  sites_recorded: "recorded",
+  energy_profile: "profile"
+};
+
+const sourceWord = (key) => (key ? SOURCE_WORD[key] || String(key).replace(/_/g, " ") : "");
+const euiSourceWord = (key) => (key ? EUI_SOURCE_WORD[key] || sourceWord(key) : "");
+const sourceTone = (key) => {
+  const w = sourceWord(key);
+  return !w ? "var(--color-neutral-500)" : SOFT_SOURCES.has(w) ? "var(--st-warn)" : "var(--color-neutral-500)";
+};
+
+// Which table the rows actually came from. The endpoint reports it; before this the
+// screen asserted "sites" whichever it was.
+const ROOT_TABLE = (state) => ((state.bldMeta || {}).root === "buildings" ? "buildings" : "sites");
+const ROOT_NOUN = (state, n) => (ROOT_TABLE(state) === "buildings"
+  ? (n === 1 ? "building" : "buildings")
+  : (n === 1 ? "site" : "sites"));
 
 const titleCase = (s) => String(s || "").replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const fmtInt = (n) => Math.round(n).toLocaleString("en-GB");
@@ -45,9 +98,23 @@ export function shapeLiveBuilding(r, i) {
     : [[use, 100]];
   return {
     live: true,
-    key: r.site_id || r.site_key || r.site_uuid || String(i),
-    // Building ID is sites.site_id (VARCHAR(50)); the code is shown when it differs.
-    id: r.site_id || r.code || r.site_uuid || String(i + 1),
+    key: r.building_id || r.site_id || r.site_key || r.site_uuid || String(i),
+    // Building ID is buildings.building_id when the graph is the root, else sites.site_id.
+    id: r.building_id || r.site_id || r.code || r.site_uuid || String(i + 1),
+    // The delete and the edit key on the building's own uuid. `id` above falls back to a
+    // site_id for older rows, and addressing by that would hit the wrong thing or nothing.
+    buildingId: r.building_id || null,
+    // The energy and compliance tables key on the site's UUID where the CMMS tables key on
+    // site_id; the Hoist Graph counts rows against both.
+    uuid: r.site_uuid || null,
+    city: r.city || null,
+    // Raw values the edit form prefills from. `site_type` is the primary_use enum verbatim;
+    // `use_type` above is a resolved TM46-style category ("office"), not the enum member, so
+    // editing off it would silently change the building's use on save.
+    postcode: r.postcode || null,
+    siteId: r.site_id || null,
+    siteTypeRaw: r.site_type || null,
+    useMixRaw: Array.isArray(r.use_mix) ? r.use_mix : null,
     code: r.code || null,
     name: r.name || "Unnamed site",
     cc: cc,
@@ -73,6 +140,18 @@ export function shapeLiveBuilding(r, i) {
     missing: r.completeness_missing || [],
     euiSource: r.eui_source || null,
     meteringSource: r.metering_source || null,
+    // Where the graph counted each figure, so the cell can say so rather than just show it.
+    floorsSource: r.floors_source || null,
+    useMixSource: r.use_mix_source || null,
+    spaces: typeof r.spaces === "number" ? r.spaces : null,
+    counts: r.graph_counts || {},
+    buildingsOnSite: typeof r.buildings_on_site === "number" ? r.buildings_on_site : 1,
+    // Non-empty means the graph holds only PART of this building — three spaces recorded on
+    // a twenty-four storey tower. The most useful prompt there is for deciding what to
+    // ingest next, so it is carried to the row rather than left in the payload.
+    partial: Array.isArray(r.partial_counts) ? r.partial_counts : [],
+    gfaCounted: typeof r.gfa_counted_sqm === "number" ? r.gfa_counted_sqm : null,
+    updatedAt: r.updated_at || null,
     mix: mix,
     route: r.metering_route || (gran === "none" ? "No meter on record" : "Meter on record · route not stated"),
     gran: gran === "sub-metered" ? "sub-metered" : gran === "none" ? "none" : "building-level",
@@ -84,6 +163,16 @@ export function shapeLiveBuilding(r, i) {
 export function shapeLiveBuildings(payload) {
   const rows = (payload && payload.buildings) || [];
   return rows.map(shapeLiveBuilding).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Pure: the search bar's match, case-insensitive substring against the fields the table
+// itself shows for a row — name, building ID (code or the fallback key), country and state.
+// A blank query matches everything, so the table's own row order is untouched.
+export function filterBuildings(rows, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((b) => [b.name, b.code, b.id, b.cc, b.city, b.state]
+    .some((v) => v && String(v).toLowerCase().indexOf(q) > -1));
 }
 
 export const buildingsLiveMethods = {
@@ -100,8 +189,10 @@ export const buildingsLiveMethods = {
       const res = await energyApi.listBuildings();
       const shaped = shapeLiveBuildings(res);
       this._bldAttempts = 0;
-      this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit } });
+      this.setState({ bldLive: shaped, bldLoading: false, bldError: "", bldLoadedAt: new Date().toISOString(), bldMeta: { sitesRows: res.sites_table_rows, unit: res.benchmark_unit, root: res.root } });
       if (opts && opts.announce) this.flash("Building table loaded — " + shaped.length + " sites");
+      this.bldLoadShape();
+      this.glLoadTables();
     } catch (e) {
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;
@@ -114,6 +205,22 @@ export const buildingsLiveMethods = {
   },
 
   bldRetryNow() { this._bldAttempts = 0; return this.bldLoad({ announce: true }); },
+
+  // The Hoist Graph panel is a picture of the schema. Read it rather than compiling it in:
+  // a hardcoded table count goes stale the first time a migration runs, silently, because
+  // nothing compares it to anything.
+  async bldLoadShape() {
+    if (this._shapeLoading) return;
+    this._shapeLoading = true;
+    try {
+      const res = await energyApi.graphShape();
+      if (res && res.ok) this.setState({ bldShape: res });
+    } catch (e) {
+      // A stale panel is better than a broken page; the figures fall back to the row data.
+    } finally {
+      this._shapeLoading = false;
+    }
+  },
 
   // One table row. Handles both the seed record (numbers always present) and a live
   // record (any figure may be missing, and every figure carries its provenance).
@@ -136,29 +243,70 @@ export const buildingsLiveMethods = {
       : b.benchSource === "sites_recorded" ? "Recorded on the site row"
       : std;
     return {
-      id: b.id, idTip: b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id",
+      // Carried through so the drawer can read them without a second lookup.
+      counts: b.counts, spaces: b.spaces, partial: b.partial,
+      buildingsOnSite: b.buildingsOnSite, missing: b.missing, euiN: b.euiN,
+      // The human reference is the code; the uuid is the key edit and delete address it by.
+      id: b.id, buildingId: b.buildingId, idText: b.code || b.id,
+      idTip: b.buildingId ? "building_id " + b.buildingId + (b.code ? " · building_code " + b.code : "") + (b.siteId ? " · site " + b.siteId : "")
+        : (b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id"),
+      row: b,
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
+      floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " rows in plenum_cafm.floors"
+        : b.floorsSource === "buildings_recorded" ? "Recorded on the building row — no floor rows on record"
+        : "No floors on record",
       area: b.area,
+      areaTip: b.areaSource === "spaces_sum" ? "Summed from " + (b.spaces || 0) + " spaces"
+        : b.areaSource === "sites" || b.areaSource === "buildings_recorded" ? "Recorded on the building row"
+        : b.areaSource === "energy_profile" ? "GIA from the building's energy profile"
+        : "No floor area on record",
       flag: pack.flag, country: pack.name, state: b.state,
       eui: hasEui ? Math.round(b.euiN) + " kWh/m²" : "—",
       euiTip: hasEui ? (b.euiSource === "sites_recorded" ? "Recorded on the site row (no meter feed yet) — not a computed reading" : b.euiPeriod ? "Annualised from meter readings, " + b.euiPeriod : "annualised EUI") : "No EUI: no meter reading and nothing recorded on the site",
       bench: hasBench ? Math.round(b.benchN) + " kWh/m²" : "—",
       benchTip: benchTip,
-      delta: deltaN === null ? "—" : (deltaN > 0 ? "+" : "") + Math.round(deltaN) + "%",
-      deltaWord: deltaN === null ? (hasEui ? "no benchmark" : "no reading") : deltaN > 0 ? "over" : deltaN < 0 ? "under" : "at benchmark",
+      delta: deltaN === null ? "—" : (Math.round(deltaN) > 0 ? "+" : "") + Math.round(deltaN) + "%",
+      // Read off the ROUNDED figure so the word never contradicts the number beside it. A
+      // building 0.2% over its benchmark displays "0%", and "0% over" reads as a fault where
+      // "0% at benchmark" reads as what it is.
+      deltaWord: deltaN === null ? (hasEui ? "no benchmark" : "no reading")
+        : Math.round(deltaN) > 0 ? "over" : Math.round(deltaN) < 0 ? "under" : "at benchmark",
       std: std, stdNote: stdNote,
       stdFg: stdTone === "ok" ? "var(--st-ok)" : stdTone === "warn" ? "var(--st-warn)" : "var(--st-dormant)",
       route: b.route,
       routeGran: gran === "sub-metered" ? "sub-metered" + (b.metersSimulated ? " · simulated feed" : "") : gran === "none" ? "no meter · nothing inferred" : "building-level · inferred" + (b.metersSimulated ? " · simulated feed" : ""),
-      routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-dormant)",
+      // Amber is reserved for INFERENCE, not for a threshold. Building-level metering is
+      // marked because attribution to a plant item there is inferred rather than measured —
+      // a statement about how the reading was obtained, not about whether it is bad. A
+      // sub-metered building over its benchmark is a problem and reads red; a building-level
+      // building at its benchmark is amber, because the number rests on an inference.
+      routeGranFg: gran === "sub-metered" ? "var(--color-neutral-500)" : gran === "none" ? "var(--color-neutral-500)" : "var(--st-warn)",
+      inferred: gran !== "sub-metered" && gran !== "none",
       routeTip: b.route + " · " + gran + (b.metersActive ? " · " + b.metersActive + " active meter" + (b.metersActive === 1 ? "" : "s") : "") + (b.meteringSource === "sites_recorded" ? " · as recorded on the site" : ""),
       mixText: b.mix.length > 1 ? b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ") : "single use",
-      mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · "),
+      mixTip: b.mix.map((m) => m[0] + " " + m[1] + "%").join(" · ")
+        + (b.useMixSource === "spaces_by_type" ? " · grouped from " + (b.spaces || 0) + " spaces by area" : ""),
       mix: b.mix.map((m) => {
         const t = USE_TINT[m[0]] || { color: "var(--color-neutral-700)" };
         return { pct: m[1] + "%", color: t.color, hatch: t.hatch || "none", border: "0", tip: m[0] + " — " + m[1] + "% of floor area" };
       }),
+      // Rendered, not hidden in a tooltip. See SOURCE_WORD.
+      floorsSrc: sourceWord(b.floorsSource),
+      floorsSrcFg: sourceTone(b.floorsSource),
+      areaSrc: sourceWord(b.areaSource),
+      areaSrcFg: sourceTone(b.areaSource),
+      euiSrc: hasEui ? euiSourceWord(b.euiSource) : "",
+      euiSrcFg: SOFT_SOURCES.has(euiSourceWord(b.euiSource)) ? "var(--st-warn)" : "var(--color-neutral-500)",
+      benchSrc: hasBench ? sourceWord(b.benchSource) : "",
+
+      // The graph holds only part of this building. The most actionable thing on the row
+      // for anyone deciding what to ingest next, so it gets a badge rather than a tooltip.
+      partialShow: (b.partial || []).length ? "inline-block" : "none",
+      partialLabel: !(b.partial || []).length ? "" : (b.partial.length === 1 ? "part counted" : "partly counted"),
+      partialTip: (b.partial || []).join(" · ")
+        + " — the graph holds part of this building, so the surveyed figure stands.",
+
       score: hoist === null ? "—" : String(hoist),
       scoreTip: b.live
         ? "Hoist Score" + (hoist === null ? " not recorded on the site" : "") + (typeof b.completeness === "number" ? " · record completeness " + b.completeness + "%" + (b.missing && b.missing.length ? " — missing: " + b.missing.join(", ") : "") : "")
@@ -172,22 +320,69 @@ export const buildingsLiveMethods = {
   bldVals() {
     const s = this.state;
     const rows = this.bldData();
+    const query = s.bldQuery || "";
+    const filtered = filterBuildings(rows, query);
+    const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    // Clamped rather than reset on every render, so a table that shrinks (a search, or the
+    // register itself losing rows on reload) never leaves the page past the end.
+    const page = Math.min(Math.max(0, s.bldPage || 0), pageCount - 1);
+    const pageStart = filtered.length ? page * PAGE_SIZE + 1 : 0;
+    const pageEnd = Math.min(filtered.length, (page + 1) * PAGE_SIZE);
+    const pageRows = filtered.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
     return {
-      buildingRows: rows.map((b) => this.bldRow(b)),
+      buildingRows: pageRows.map((b) => this.bldRow(b)),
       bldLive: !!s.bldLive,
       bldCount: rows.length,
-      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + (rows.length === 1 ? " site" : " sites") + (s.bldError ? " · refresh failed" : "")
+      // The register is rooted on buildings where the graph has them and falls back to
+      // sites where it does not, and the endpoint says which in `root`. Naming the wrong
+      // one is not cosmetic: on a fresh database the header read "1 site" while
+      // plenum_cafm.sites held nothing, which sends whoever is checking to an empty table.
+      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + " " + ROOT_NOUN(s, rows.length) + (s.bldError ? " · refresh failed" : "")
         : s.bldLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
       bldSourceDot: s.bldLive ? (s.bldError ? "var(--st-warn)" : "var(--st-ok)") : s.bldLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
       bldRetryShow: !s.bldLoading && (!s.bldLive || !!s.bldError) ? "inline" : "none",
       bldRetry: () => this.bldRetryNow(),
-      bldEmptyShow: rows.length ? "none" : "block",
+
+      // Search — client-side, over the rows already loaded (name, ID, country, state).
+      bldQuery: query,
+      setBldQuery: (e) => this.setState({ bldQuery: e.target.value, bldPage: 0 }),
+      bldQueryShow: rows.length ? "flex" : "none",
+
+      // Pagination — 20 rows a page, computed after the search filter.
+      bldPage: page,
+      bldPageCount: pageCount,
+      bldPageLabel: filtered.length ? pageStart + "–" + pageEnd + " of " + filtered.length + (query ? " matching" : "") : "0 of 0",
+      bldPagerShow: filtered.length > PAGE_SIZE ? "flex" : "none",
+      bldPagePrevShow: page > 0,
+      bldPageNextShow: page < pageCount - 1,
+      bldPagePrev: () => this.setState((p) => ({ bldPage: Math.max(0, (p.bldPage || 0) - 1) })),
+      bldPageNext: () => this.setState((p) => ({ bldPage: Math.min(pageCount - 1, (p.bldPage || 0) + 1) })),
+
+      bldEmptyShow: filtered.length ? "none" : "block",
       bldEmptyText: s.bldLoading ? "Reading plenum_cafm.sites…"
         : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
-        : s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
-        : "Waiting for svc-operations-intelligence.",
-      bldKicker: "Every row is a plenum_cafm.sites record, keyed on site_id, read against its country's regulation pack"
+        : !rows.length && s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
+        : !rows.length ? "Waiting for svc-operations-intelligence."
+        : "No buildings match “" + query + "”. Try a name, building ID, country or state.",
+      bldKicker: "Every row is a plenum_cafm." + ROOT_TABLE(s) + " record, keyed on "
+        + (ROOT_TABLE(s) === "buildings" ? "building_id" : "site_id")
+        + ", read against its country's regulation pack",
+
+      // Five figures, all read. `buildings` and `bound documents` come from the rows already
+      // loaded; the schema three come from the database itself.
+      graphStatsLive: (() => {
+        const sh = s.bldShape;
+        const docs = rows.reduce((t, b) => t + (((b.counts || {}).documents) || 0), 0);
+        return [
+          { value: sh ? String(sh.tables) : "—", label: "tables", color: "var(--color-text)" },
+          { value: sh ? String(sh.columns) : "—", label: "columns", color: "var(--color-text)" },
+          { value: sh ? String(sh.relationships) : "—", label: "relationships", color: "var(--color-text)" },
+          { value: String(rows.length), label: "buildings", color: "var(--color-accent)" },
+          { value: String(docs), label: "bound documents", color: "var(--color-text)" }
+        ];
+      })(),
+      graphStatsLiveShow: !!s.bldLive
     };
   }
 };

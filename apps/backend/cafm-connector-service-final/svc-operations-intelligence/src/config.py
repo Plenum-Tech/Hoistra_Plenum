@@ -34,6 +34,18 @@ class Settings(BaseSettings):
         False,
         validation_alias=AliasChoices("SMTP_USE_SSL", "smtp_use_ssl"),
     )
+    # Where invitation links point: the frontend's public origin. Blank means links are
+    # emitted relative and the client resolves them against itself.
+    # The kill switch, not the default. Every domain route requires a signed-in caller and
+    # scopes to their company and buildings. Set false ONLY to recover a live deployment
+    # where a client has not yet learned to send a token; every request then logs that the
+    # boundary is off, so it cannot quietly stay that way.
+    auth_enforce_scope: bool = Field(
+        True, validation_alias=AliasChoices("AUTH_ENFORCE_SCOPE", "auth_enforce_scope"),
+    )
+    public_app_url: str = Field(
+        "", validation_alias=AliasChoices("PUBLIC_APP_URL", "public_app_url"),
+    )
     email_dry_run: bool = Field(
         True,
         validation_alias=AliasChoices("EMAIL_DRY_RUN", "email_dry_run"),
@@ -73,6 +85,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTO_SEED_PORTFOLIO_BUILDINGS", "auto_seed_portfolio_buildings"),
     )
     auto_migrate_on_startup: bool = True
+
+    #: Migration files permitted to remain unapplied without stopping the service.
+    #:
+    #: Comma-separated filenames. A migration for a table another service owns will never
+    #: apply here, and that is not a fault — but it has to be SAID, per file, so that an
+    #: allowance is a deliberate statement someone can read and challenge. A blanket
+    #: "ignore migration errors" boolean would be used once in a hurry and never removed,
+    #: which is the behaviour this replaces.
+    migrations_allowed_to_fail: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "MIGRATIONS_ALLOWED_TO_FAIL", "migrations_allowed_to_fail"),
+    )
 
     public_base_url: str = Field(
         "http://localhost:8009",
@@ -173,6 +198,112 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "AZURE_BLOB_CONTAINER_NAME",
             "azure_blob_container_name",
+        ),
+    )
+
+    # ── Authentication ──────────────────────────────────────────────────────────────
+    #
+    # Email is the account identifier: there is no separate username to lose or collide.
+    #
+    # Both secrets below are DELIBERATELY empty by default rather than carrying a
+    # development fallback. A shipped default signing key is the same key in every
+    # deployment that forgot to set it, and anyone holding it can mint a token for any
+    # account. Empty means the service refuses to start in production and generates an
+    # ephemeral per-process key in development — where restarting invalidates every
+    # token, which is annoying exactly often enough to be noticed and set properly.
+    auth_jwt_secret: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_JWT_SECRET", "JWT_SECRET", "auth_jwt_secret"),
+    )
+    auth_jwt_algorithm: str = Field(
+        "HS256",
+        validation_alias=AliasChoices("AUTH_JWT_ALGORITHM", "auth_jwt_algorithm"),
+    )
+    # Keyed hash for one-time codes. Separate from the signing key so that disclosure of
+    # one does not hand over the other, and so the signing key can be rotated (ending
+    # sessions) without invalidating every code in flight, or the reverse.
+    auth_otp_pepper: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_OTP_PEPPER", "auth_otp_pepper"),
+    )
+
+    # Short, because an access token cannot be revoked — it is only ever outlived.
+    auth_access_token_ttl_minutes: int = Field(
+        30,
+        validation_alias=AliasChoices("AUTH_ACCESS_TOKEN_TTL_MINUTES", "auth_access_token_ttl_minutes"),
+    )
+    # Long, because a refresh token IS a row and can be revoked the moment it needs to be.
+    auth_refresh_token_ttl_days: int = Field(
+        14,
+        validation_alias=AliasChoices("AUTH_REFRESH_TOKEN_TTL_DAYS", "auth_refresh_token_ttl_days"),
+    )
+
+    auth_otp_length: int = Field(
+        6,
+        validation_alias=AliasChoices("AUTH_OTP_LENGTH", "auth_otp_length"),
+    )
+    # Long enough to fetch an email, short enough that a code read over someone's shoulder
+    # is worthless by the time it is typed somewhere else.
+    auth_otp_ttl_minutes: int = Field(
+        10,
+        validation_alias=AliasChoices("AUTH_OTP_TTL_MINUTES", "auth_otp_ttl_minutes"),
+    )
+    # Six digits is a million combinations, which is a great many at one guess per request
+    # and none at all without a cap.
+    auth_otp_max_attempts: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_ATTEMPTS", "auth_otp_max_attempts"),
+    )
+    # Resending is also an attack: on the mailbox owner, whose inbox fills, and on the
+    # code space, since every send is a fresh million-to-one draw.
+    auth_otp_resend_cooldown_seconds: int = Field(
+        60,
+        validation_alias=AliasChoices("AUTH_OTP_RESEND_COOLDOWN_SECONDS", "auth_otp_resend_cooldown_seconds"),
+    )
+    auth_otp_max_per_hour: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_PER_HOUR", "auth_otp_max_per_hour"),
+    )
+
+    # NIST SP 800-63B: length is what matters; composition rules push people towards
+    # Passw0rd! and no further.
+    auth_password_min_length: int = Field(
+        12,
+        validation_alias=AliasChoices("AUTH_PASSWORD_MIN_LENGTH", "auth_password_min_length"),
+    )
+    auth_login_max_failures: int = Field(
+        8,
+        validation_alias=AliasChoices("AUTH_LOGIN_MAX_FAILURES", "auth_login_max_failures"),
+    )
+    auth_lockout_minutes: int = Field(
+        15,
+        validation_alias=AliasChoices("AUTH_LOCKOUT_MINUTES", "auth_lockout_minutes"),
+    )
+
+    # Which organisation a self-registered account joins. Left empty, registration uses
+    # the only organisation on the platform, and refuses to guess when there is more than
+    # one — putting a new account in the wrong tenant is not a mistake that announces
+    # itself.
+    auth_default_organization_id: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_DEFAULT_ORGANIZATION_ID", "auth_default_organization_id"),
+    )
+    # Open sign-up. Off means an account can only be created by an existing operator.
+    auth_allow_self_registration: bool = Field(
+        True,
+        validation_alias=AliasChoices("AUTH_ALLOW_SELF_REGISTRATION", "auth_allow_self_registration"),
+    )
+
+    # The chicken-and-egg of a fresh deployment: only a superadmin can appoint a
+    # superadmin, and a new platform has none. The FIRST account registered with this
+    # address becomes one — and only while the platform still has no superadmin at all,
+    # so setting it later, or leaving it set afterwards, grants nothing. The address
+    # still has to be confirmed by email like any other, so setting this does not hand
+    # the platform to whoever types it first; they must hold the mailbox.
+    auth_bootstrap_superadmin_email: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "AUTH_BOOTSTRAP_SUPERADMIN_EMAIL", "auth_bootstrap_superadmin_email",
         ),
     )
 

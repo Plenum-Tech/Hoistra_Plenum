@@ -1,0 +1,359 @@
+# A complete Hoistra testing environment, from nothing, in one command.
+#
+#   docker compose -f docker-compose.testenv.yml up -d --build
+#   open http://localhost:3000
+#
+# Everything is here: the database with its schema and a demo portfolio already loaded,
+# the six backend services, and the frontend behind a gateway that serves all of it on one
+# port. There is no .env to fill in and nothing to run by hand afterwards.
+#
+# ── why this is a standalone file and not an overlay ────────────────────────────────
+#
+# docker-compose.single-url.local.yml reads ${PLENUM_DB_DSN} from .env — the AZURE
+# PRODUCTION database — and loads apps/backend/.env into most services, which carries live
+# Azure, Anthropic and Fiix credentials. Handing that stack to someone hands them those.
+#
+# So nothing here is inherited. Every value is declared in this file, which is also why it
+# works on a machine that has never had a .env at all: clone, run, done.
+#
+# ── the secrets below are deliberately public ───────────────────────────────────────
+#
+# AUTH_JWT_SECRET and AUTH_OTP_PEPPER are fixed dev values, in the open, on purpose: a
+# testing environment that generates new ones on every restart invalidates every session
+# and every outstanding code each time it comes up, which makes testing sign-in
+# frustrating for no security gain on a throwaway stack.
+#
+# They are NOT usable anywhere real. The service refuses to start in production without
+# its own, and anyone reading this file can forge a token for this environment — which is
+# fine for a box holding invented buildings, and is why no real data must ever be loaded
+# into one started this way.
+#
+# ── what you get ────────────────────────────────────────────────────────────────────
+#
+#   9 buildings across UK, UAE, US and Singapore
+#   83 compliance certificates, both scopes, spread across every lifecycle state
+#   6 vendors, 12 contracts, 108 work orders
+#   6 accounts that demonstrate the platform-role / job-title split and CANNOT sign in
+#
+# To sign in, register an account — the code is never emailed with EMAIL_DRY_RUN=true, so
+# read it from the log:
+#
+#   curl -X POST http://localhost:3000/backend/ops-intelligence/api/auth/register \
+#     -H 'Content-Type: application/json' \
+#     -d '{"email":"you@example.com","password":"a-long-enough-passphrase"}'
+#   docker compose -f docker-compose.testenv.yml logs svc-operations-intelligence | grep otp
+#
+# ── starting over ───────────────────────────────────────────────────────────────────
+#
+#   docker compose -f docker-compose.testenv.yml down -v
+#
+# -v matters: the database only loads db/*.sql on FIRST boot, into an empty volume. Keep
+# the volume and you keep whatever the last run left in it.
+
+name: hoistra-testenv
+
+x-db: &db postgresql+asyncpg://cafm:cafm@postgres:5432/hoistra
+
+services:
+  postgres:
+    # pgvector, not plain postgres: document_chunks uses the vector extension. On plain
+    # postgres that one statement fails and you get a database that is complete apart from
+    # one table, which is worse than an obvious failure because everything else works.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: cafm
+      POSTGRES_PASSWORD: cafm
+      POSTGRES_DB: hoistra
+    # Mounted file by file, NOT the whole db/ directory: the postgres entrypoint executes
+    # every .sh it finds there, and db/setup.sh drives docker from the host. It would run
+    # inside the database container, where there is no docker, and the failure would be
+    # confusing rather than instructive.
+    #
+    # Alphabetical order is the load order, which is what the numeric prefixes are for.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/02_reference_data.sql:/docker-entrypoint-initdb.d/02_reference_data.sql:ro
+      - ./db/03_bootstrap.sql:/docker-entrypoint-initdb.d/03_bootstrap.sql:ro
+      - ./db/04_demo_data.sql:/docker-entrypoint-initdb.d/04_demo_data.sql:ro
+    healthcheck:
+      # The database is not ready when the port opens — the init scripts run after that,
+      # and a service connecting in between finds a schema that is half there.
+      #
+      # Testing for ROWS, not for the table. 04_demo_data.sql runs in one transaction, so a
+      # single bad statement rolls the whole file back — and a healthcheck that only asks
+      # whether plenum_cafm.buildings EXISTS goes green on the empty schema left behind,
+      # which is how an environment comes up looking healthy with nothing in it.
+      test: ["CMD-SHELL", "psql -U cafm -d hoistra -tAc 'SELECT count(*) FROM plenum_cafm.buildings' 2>/dev/null | grep -qv '^0$'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  svc-operations-intelligence:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-operations-intelligence
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: *db
+      DB_URL: *db
+      db_url: *db
+      REDIS_URL: redis://redis:6379/0
+      # Never send. The addresses in a test environment are invented, and the one-time
+      # code is the entire content of the message — it is not logged or stored either, so
+      # read it from the service log.
+      EMAIL_DRY_RUN: "true"
+      AUTO_SEND_LADDER_EMAILS: "false"
+      AUTO_SEED_UK_PACK: "true"
+      AUTO_MIGRATE_ON_STARTUP: "true"
+      AUTH_JWT_SECRET: testenv-jwt-secret-not-for-production-x
+      AUTH_OTP_PEPPER: testenv-otp-pepper-not-for-production-x
+      AUTH_DEFAULT_ORGANIZATION_ID: "00000000-0000-0000-0000-000000000001"
+      PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
+      FRONTEND_PUBLIC_URL: http://localhost:3000
+      OTEL_SDK_DISABLED: "true"
+      ENVIRONMENT: development
+      DEBUG: "false"
+    # --root-path: the gateway serves this behind a prefix, and without it every
+    # URL the service generates for itself is wrong.
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8009"
+      - --root-path
+      - /backend/ops-intelligence
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  connector-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/cafm-connector-service
+      dockerfile: docker/Dockerfile
+    environment:
+      DB_URL: *db
+      PLENUM_DB_URL: *db
+      db_url: *db
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+      DEBUG: "true"
+      # 03_bootstrap.sql already created it; this is belt and braces and idempotent.
+      SEED_DEFAULT_PLENUM_ORG: "true"
+      OTEL_SDK_DISABLED: "true"
+    # cafm_shared lives one directory up from this service's build context, so the
+    # image cannot contain it — the Dockerfile has no way to COPY a path above itself.
+    # Mounted and pip-installed at start instead, which is how the other compose files
+    # here do it too. Without this the container exits on
+    # "ModuleNotFoundError: No module named 'cafm_shared'".
+    volumes:
+      - ./apps/backend/cafm-connector-service-final/shared-lib:/app/shared-lib
+    command:
+      - bash
+      - -c
+      - "pip install -q -e /app/shared-lib && uvicorn cafm_connector.api.app:app --host 0.0.0.0 --port 8000 --root-path /backend/connector --proxy-headers --forwarded-allow-ips=*"
+    # This one takes ~30s longer than the rest to become useful, because the pip install
+    # above runs at start rather than at build. Without a healthcheck `docker compose ps`
+    # reports it Up while it is still installing, and /backend/connector/ answers 502 —
+    # which reads as broken rather than as not-ready-yet.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-work-order-management
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: *db
+      DB_URL: *db
+      db_url: *db
+      APPROVAL_EMAIL_POLL_ENABLED: "false"
+      # This service constructs an OpenAI client at import, so without a key it does not
+      # start at all — it was getting one from apps/backend/.env, which this file
+      # deliberately does not load. A placeholder lets it serve work orders and approvals,
+      # which is what the environment is for; the AI features fail at call time with an
+      # auth error instead of taking the container down at boot. Export a real key before
+      # `up` to exercise them.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-not-set-ai-features-unavailable}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Off: its script writes to a work_orders shaped the way an older schema had it —
+      # work_order_id, source, asset, location, issue_description, requester_email. The
+      # canonical table has none of those, so the container crash-loops before it serves.
+      SEED_APPROVAL_DEMO: "false"
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        python scripts/migrate_startup.py
+        exec uvicorn src.app:app --host 0.0.0.0 --port 8007 --root-path /backend/work-order
+    expose:
+      - "8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  schema-mapper-app:
+    build:
+      context: ./apps/backend/cafm-connector-service-final
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    environment:
+      DB_URL: *db
+      db_url: *db
+      USE_SQLITE_DEV: "false"
+      PLENUM_CMMS_SCHEMA: plenum_cafm
+      LANGSMITH_TRACING: "false"
+      OTEL_SDK_DISABLED: "true"
+      ENVIRONMENT: development
+      DEBUG: "false"
+    # --root-path: the gateway serves this behind a prefix, and without it every
+    # URL the service generates for itself is wrong.
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8003"
+      - --root-path
+      - /backend/schema-mapper
+    expose:
+      - "8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  svc-udr:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-udr
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: *db
+      db_url: *db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MAX_QUERY_ROWS: "500"
+      MAX_AGENT_ITERATIONS: "6"
+      DEBUG: "false"
+    # --root-path: the gateway serves this behind a prefix, and without it every
+    # URL the service generates for itself is wrong.
+    command:
+      - uvicorn
+      - src.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8006"
+      - --root-path
+      - /backend/udr
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  svc-deepagents:
+    build:
+      context: ./apps/backend/cafm-connector-service-final/svc-deepagents
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: *db
+      db_url: *db
+      ORCHESTRATOR_LLM_ROUTING: "false"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-not-set-ai-features-unavailable}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      UDR_BASE_URL: http://svc-udr:8006
+      WO_MANAGEMENT_BASE_URL: http://backend-app:8007
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
+      PORT: "8008"
+      DEBUG: "false"
+    # --root-path: the gateway serves this behind a prefix, and without it every
+    # URL the service generates for itself is wrong.
+    command:
+      - uvicorn
+      - src.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8008"
+      - --root-path
+      - /backend/deep-agents
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    expose:
+      - "8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend-app:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+      args:
+        # Same-origin paths, resolved by the gateway. Nothing points at a host port, so
+        # the environment works unchanged behind a tunnel or on another machine.
+        VITE_OPS_INTELLIGENCE_BASE_URL: /backend/ops-intelligence
+        VITE_WO_BASE_URL: /backend/work-order
+        VITE_CONNECTOR_BASE_URL: /backend/connector
+        VITE_SCHEMA_MAPPER_BASE_URL: /backend/schema-mapper
+        VITE_DEEP_AGENTS_BASE_URL: /backend/deep-agents
+    expose:
+      - "3000"
+    depends_on:
+      - svc-operations-intelligence
+    restart: unless-stopped
+
+  gateway-app:
+    build:
+      context: ./apps/frontend/infra/single-url
+      dockerfile: Dockerfile.gateway
+    # The only published port. One URL for the frontend and every backend it calls.
+    ports:
+      - "3000:8080"
+    depends_on:
+      - frontend-app
+      - backend-app
+      - schema-mapper-app
+      - connector-app
+      - svc-udr
+      - svc-deepagents
+      - svc-operations-intelligence
+    restart: unless-stopped
+
+volumes:
+  pgdata:

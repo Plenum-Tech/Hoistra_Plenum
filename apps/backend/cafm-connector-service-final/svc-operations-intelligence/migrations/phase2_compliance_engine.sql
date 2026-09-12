@@ -37,9 +37,9 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.country_certificate_packs (
     UNIQUE (country_code, certificate_type_code, pack_version)
 );
 
-CREATE INDEX IF NOT EXISTS ix_ccp_country_scope
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ccp_country_scope
     ON plenum_cafm.country_certificate_packs (country_code, certificate_scope);
-CREATE INDEX IF NOT EXISTS ix_ccp_code
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ccp_code
     ON plenum_cafm.country_certificate_packs (certificate_type_code);
 
 -- ── Ensure base compliance_certificates exists (UDR Phase 1 stub) ─────────────
@@ -82,13 +82,13 @@ ALTER TABLE plenum_cafm.compliance_certificates
     ADD COLUMN IF NOT EXISTS insurance_risk_flag BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS raw_metadata JSONB DEFAULT '{}'::jsonb;
 
-CREATE INDEX IF NOT EXISTS ix_cc_org ON plenum_cafm.compliance_certificates (organization_id);
-CREATE INDEX IF NOT EXISTS ix_cc_vendor ON plenum_cafm.compliance_certificates (vendor_id);
-CREATE INDEX IF NOT EXISTS ix_cc_scope_status
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cc_org ON plenum_cafm.compliance_certificates (organization_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cc_vendor ON plenum_cafm.compliance_certificates (vendor_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cc_scope_status
     ON plenum_cafm.compliance_certificates (cert_scope, status);
-CREATE INDEX IF NOT EXISTS ix_cc_type_code
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cc_type_code
     ON plenum_cafm.compliance_certificates (certificate_type_code);
-CREATE INDEX IF NOT EXISTS ix_cc_expiry2 ON plenum_cafm.compliance_certificates (expiry_date);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cc_expiry2 ON plenum_cafm.compliance_certificates (expiry_date);
 
 -- ── Vendor block state (A3) — forward-compatible for WO Engine ────────────────
 ALTER TABLE plenum_cafm.vendors
@@ -97,7 +97,7 @@ ALTER TABLE plenum_cafm.vendors
     ADD COLUMN IF NOT EXISTS block_date TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS blocked_accreditation_type VARCHAR(160);
 
-CREATE INDEX IF NOT EXISTS ix_vendors_block_state
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_vendors_block_state
     ON plenum_cafm.vendors (block_state);
 
 -- ── Approvals & Notifications queue (replaces Activity Log UI dependency) ─────
@@ -120,9 +120,9 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.approvals_queue_items (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_aqi_org_status
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_aqi_org_status
     ON plenum_cafm.approvals_queue_items (organization_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS ix_aqi_source
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_aqi_source
     ON plenum_cafm.approvals_queue_items (source_feature, severity);
 
 -- ── Immutable ops audit log ───────────────────────────────────────────────────
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.ops_audit_log (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_ops_audit_org_ts
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ops_audit_org_ts
     ON plenum_cafm.ops_audit_log (organization_id, created_at DESC);
 
 -- ── Compliance scan run receipts ──────────────────────────────────────────────
