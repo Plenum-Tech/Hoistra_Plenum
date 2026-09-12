@@ -193,12 +193,12 @@ async def load(session: AsyncSession, building_id: UUID | str) -> BuildingOntolo
     vendors = await _rows(session, """
         SELECT DISTINCT v.vendor_name
           FROM plenum_cafm.vendors v
-         WHERE v.id IN (
-                 SELECT vendor_id FROM plenum_cafm.compliance_certificates
+         WHERE v.id::text IN (
+                 SELECT vendor_id::text FROM plenum_cafm.compliance_certificates
                   WHERE building_id = CAST(:b AS uuid) AND vendor_id IS NOT NULL
-           UNION SELECT vendor_id FROM plenum_cafm.work_orders
+           UNION SELECT vendor_id::text FROM plenum_cafm.work_orders
                   WHERE building_id = CAST(:b AS uuid) AND vendor_id IS NOT NULL
-           UNION SELECT p.vendor_id FROM plenum_cafm.contract_sla_parameters p
+           UNION SELECT p.vendor_id::text FROM plenum_cafm.contract_sla_parameters p
                   JOIN plenum_cafm.documents d ON d.document_id = p.document_id
                  WHERE d.building_id = CAST(:b AS uuid) AND p.vendor_id IS NOT NULL
          ) LIMIT 200""", {"b": bid})
@@ -265,9 +265,9 @@ async def vendor_buildings(session: AsyncSession, vendor_name: str) -> list[dict
           FROM plenum_cafm.buildings b
           JOIN plenum_cafm.vendors v ON lower(v.vendor_name) = lower(:v)
          WHERE b.building_id IN (
-                 SELECT building_id FROM plenum_cafm.compliance_certificates WHERE vendor_id = v.id
-           UNION SELECT building_id FROM plenum_cafm.work_orders WHERE vendor_id = v.id
+                 SELECT building_id FROM plenum_cafm.compliance_certificates WHERE vendor_id::text = v.id::text
+           UNION SELECT building_id FROM plenum_cafm.work_orders WHERE vendor_id::text = v.id::text
            UNION SELECT d.building_id FROM plenum_cafm.documents d
                   JOIN plenum_cafm.contract_sla_parameters p ON p.document_id = d.document_id
-                 WHERE p.vendor_id = v.id
+                 WHERE p.vendor_id::text = v.id::text
          ) LIMIT 20""", {"v": vendor_name})

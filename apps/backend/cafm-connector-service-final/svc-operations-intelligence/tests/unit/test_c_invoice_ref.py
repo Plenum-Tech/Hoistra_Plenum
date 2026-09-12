@@ -94,3 +94,19 @@ def test_it_reads_a_whole_document_not_just_the_head():
     # Some layouts print the number in a footer block under the line items.
     body = "\n".join(f"{i:02}. WO-B-006-{i} Annual service 385.00" for i in range(1, 40))
     assert invoice_number_in(body + "\nInvoice No. HAL-B006-0042") == "HAL-B006-0042"
+
+
+def test_the_vendor_join_survives_a_varchar_vendor_key():
+    """vendors.id is a uuid on one deployment and a VARCHAR on another.
+
+    An invoice always names its vendor as a uuid, so a direct comparison raises "operator
+    does not exist: character varying = uuid" — which took the entire invoice list down on
+    production the first time it ran there. Compared as text it works on both shapes.
+    """
+    import inspect
+    from src.engines.contract_performance import invoice as invoice_svc
+
+    src = inspect.getsource(invoice_svc.list_invoices)
+    join = next(l for l in src.splitlines() if "plenum_cafm.vendors" in l)
+    assert "::text" in join, join
+    assert "v.id          = i.vendor_id" not in src

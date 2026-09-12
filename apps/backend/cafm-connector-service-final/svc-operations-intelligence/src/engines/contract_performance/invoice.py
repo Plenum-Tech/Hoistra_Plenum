@@ -659,7 +659,11 @@ async def list_invoices(
                i.created_at
           FROM plenum_cafm.invoices i
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = i.building_id
-          LEFT JOIN plenum_cafm.vendors   v ON v.id          = i.vendor_id
+          -- vendors.id is a uuid on one deployment and a VARCHAR on another, while an
+          -- invoice always names its vendor as a uuid. Compared as text the join works on
+          -- both; compared directly it raises "operator does not exist: character varying
+          -- = uuid" and takes the whole invoice list down with it.
+          LEFT JOIN plenum_cafm.vendors   v ON v.id::text    = i.vendor_id::text
          WHERE (CAST(:org AS uuid) IS NULL OR i.organization_id = CAST(:org AS uuid))
            AND (CAST(:bld AS uuid) IS NULL OR i.building_id     = CAST(:bld AS uuid))
            AND (CAST(:ven AS uuid) IS NULL OR i.vendor_id       = CAST(:ven AS uuid))
