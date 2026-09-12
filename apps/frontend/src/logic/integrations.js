@@ -100,6 +100,16 @@ export const integrationsMethods = {
         color: s.view === "integ" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "integ" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "integ", role: "admin", navOpen: true, detail: null }); }
+      }, {
+        label: "Users & access", icon: "ph-users-three", badge: String(s.users.length),
+        color: s.view === "users" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "users" ? "var(--color-accent-900)" : "transparent",
+        click: () => { window.scrollTo(0, 0); this.setState({ view: "users", role: "admin", navOpen: true, detail: null }); }
+      }, {
+        label: "Audit trail", icon: "ph-scroll", badge: String(s.audit.length),
+        color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",
+        click: () => { window.scrollTo(0, 0); this.setState({ view: "audit", role: "admin", navOpen: true, detail: null }); }
       }],
 
       intTiles: [

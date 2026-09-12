@@ -798,7 +798,11 @@ export default function Buildings({ vals }) {
                         {vals.docBlurb}
                       </p>
                     </div>
-                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", flexShrink: "0" }}>
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", flexShrink: "0", alignItems: "center" }}>
+                      <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
+                        <i className="ph ph-upload-simple" style={{ fontSize: "13px" }}></i>
+                        <span>{"Ingest data"}</span>
+                      </div>
                       {(vals.docStats || []).map((d, $index) => (
                         <React.Fragment key={$index}>
                           <div>

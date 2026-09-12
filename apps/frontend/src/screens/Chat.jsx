@@ -17,6 +17,7 @@ import Markdown from '../components/shell/Markdown.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
 import { useFollowBottom } from '../components/shell/useFollowBottom.js';
+import { useTraceSpy } from '../components/shell/useTraceSpy.js';
 
 const KICKER = { fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)" };
 // Buttons carry the browser's own font and chrome; these strip it back to the surrounding
@@ -34,6 +35,9 @@ export default function Chat({ vals }) {
   // Follow the answer as it streams in — the page scrolls, the composer does not. Scrolling
   // up to read an earlier turn pauses the following; the next question resumes it.
   useFollowBottom({ container: null, end: endRef, busy: vals.orchBusy, count: count });
+  // Which turn's trace the rail shows follows the reader's scroll position, not just
+  // whichever question finished most recently — see useTraceSpy for how.
+  useTraceSpy(vals.orchTraceFollow, [count, vals.orchBusy]);
 
   return (
     <div style={{ flex: "1", display: "flex", justifyContent: "center", padding: "0 32px" }}>
@@ -110,7 +114,7 @@ export default function Chat({ vals }) {
                     </button>
                   </div>
                 ) : (
-                  <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start", animation: "fadeUp 0.25s ease both" }}>
+                  <div data-trace-turn={m.traceShow === "inline-flex" ? m.key : undefined} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start", animation: "fadeUp 0.25s ease both" }}>
                     <div style={{ width: "30px", height: "30px", borderRadius: "8px", background: m.isNote && m.error ? "var(--st-risk-bg)" : "var(--color-accent-900)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <i className={`ph ${m.error ? "ph-warning-circle" : (DOMAIN_ICON[m.domain] || "ph-cpu")}`} style={{ fontSize: "15px", color: m.error ? "var(--st-risk)" : "var(--color-accent)" }}></i>
                     </div>

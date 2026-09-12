@@ -1,6 +1,6 @@
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES } from './constants.js';
+import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER } from './constants.js';
 import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
@@ -437,6 +437,11 @@ export const renderValsMethods = {
 
       // Portfolio P&L. No backend holds a budget ledger, so this tile is the seed and says so.
       pnlSaved: "£390k",
+      pvTotal: "£800k",
+      pvRows: VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected, saved: r.saved, color: t(r.tone).color })),
+      pvOpen: () => this.orchWith("Platform value ledger · 2026", "All modules", "value", {}),
+      fValue: s.flow === "value",
+      pvLedger: VALUE_LEDGER.map((r) => ({ mod: r.mod, saved: r.saved, detected: r.detected, items: r.items.map((i) => Object.assign({}, i, { est: /estimated/.test(i.basis) ? "est." : "", estShow: /estimated/.test(i.basis) ? "inline" : "none" })) })),
       pnlTop: D.pnl.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: TONE[r.tone] ? TONE[r.tone].color : "var(--color-neutral-400)" })),
       pnlNote: "Seed figures · no budget ledger is connected yet",
       cronCount: String(CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length),
@@ -1016,6 +1021,10 @@ export const renderValsMethods = {
       ...this.enVals(s),
       ...this.invVals(s),
       ...this.enBuildingVals(s),
+      ...this.usersVals(s),
+      ...this.auditVals(s),
+      ...this.ingestionVals(s),
+      ...this.saVals(s),
 
       /* Query-first: every non-admin report opens with the ask bar above the
          analysis, scoped to the page you are on. Admin pages (Buildings admin,
@@ -1673,10 +1682,25 @@ export const renderValsMethods = {
           orchTraceTitle: busy ? "Working" : "Run trace",
           orchTraceFor: forQ,
           orchTraceCount: rows.length + (busy ? 1 : 0),
+          // Which turn's trace is on screen, as one value the rail can key its swap
+          // animation on — distinct from orchTraceRows, which also changes shape as a
+          // live run's rows grow (that growth should not replay the swap).
+          orchTraceKey: busy ? "live" : (picked >= 0 ? "turn-" + picked : "empty"),
           // Only offered once a past turn is pinned, so it never appears on the live run.
           orchTraceUnpinShow: !busy && typeof s.ccTraceIdx === "number" && s.ccTraceIdx !== lastIdx,
-          orchTraceUnpin: () => this.setState({ ccTraceIdx: null }),
-          orchTraceStop: () => this.ccStop()
+          // "Follow latest": drop the pin and bring the newest turn back into view — clearing
+          // the pin alone would do nothing visible while the reader is still scrolled up.
+          orchTraceUnpin: () => {
+            this.setState({ ccTraceIdx: null });
+            if (typeof window === "undefined" || !window.scrollTo) return;
+            const reduce = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+            window.scrollTo({ top: document.documentElement.scrollHeight, behavior: reduce ? "auto" : "smooth" });
+          },
+          orchTraceStop: () => this.ccStop(),
+          // The scroll-spy's write path (Chat.jsx): which traced turn is currently under the
+          // rail's focus line becomes the one the rail shows, the same state a manual "Show
+          // the run" click sets — so scrolling and clicking can never disagree with each other.
+          orchTraceFollow: (i) => { if (this.state.ccTraceIdx !== i) this.setState({ ccTraceIdx: i }); }
         };
       })(),
 
@@ -1745,6 +1769,8 @@ export const renderValsMethods = {
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
       fEmail: s.flow === "email", fDone: !!s.flowDone, fDoneText: s.flowDone,
+      fScan: s.flow === "scan",
+      ...this.scanVals(s),
       fCancel: () => this.setState({ flow: null, flowDone: "" }),
       fNewVendor: () => this.setState({ flow: "new" }),
 
@@ -1927,8 +1953,8 @@ export const renderValsMethods = {
         { label: "Compliance", icon: "ph-shield-check", key: "compliance", count: spm.byKey.compliance.count === null ? "" : spm.byKey.compliance.badge.split(" ")[0] },
         { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: spm.byKey.vendors.count === null ? "" : spm.byKey.vendors.badge.split(" ")[0] },
         { label: "Energy", icon: "ph-lightning", key: "energy", count: spm.byKey.energy.count === null ? "" : spm.byKey.energy.badge.split(" ")[0] },
-        { label: "Assets (Pending)", icon: "ph-cube", key: "assets" },
-        { label: "Work orders (Pending)", icon: "ph-wrench", key: "ops", count: spm.byKey.ops.count === null ? "" : spm.byKey.ops.badge.split(" ")[0] }
+        { label: "Assets", icon: "ph-cube", key: "assets", count: this.asVals(s).asThreatN },
+        { label: "Maintenance", icon: "ph-wrench", key: "ops", count: spm.byKey.ops.count === null ? "" : spm.byKey.ops.badge.split(" ")[0] }
       ].filter((n) => s.role === "admin" ? n.key === "buildings" : n.key !== "buildings").map((n) => {
         const active = (s.view === "module" && s.module === n.key)
           || (s.view === "buildings" && n.key === "buildings" && s.role === "admin")
@@ -1944,8 +1970,6 @@ export const renderValsMethods = {
             if (n.key === "buildings_user") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "user", navOpen: true, detail: null }); }
             if (n.key === "compliance") { window.scrollTo(0, 0); return this.setState({ view: "cc", navOpen: true, detail: null }); }
             if (n.key === "vendors") { window.scrollTo(0, 0); return this.setState({ view: "vp", navOpen: true, detail: null }); }
-            // Asset registers hang off the buildings in the Hoist Graph; that page is where they are.
-            if (n.key === "assets") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "user", navOpen: true, detail: null }); }
             return this.openModule(n.key);
           }
         };
@@ -1954,6 +1978,9 @@ export const renderValsMethods = {
       isReport: s.signedIn && s.view === "report",
       isSessions: s.signedIn && s.view === "sessions",
       isSpace: s.signedIn && s.view === "space",
+      isAssets: s.signedIn && s.view === "module" && s.module === "assets",
+      isMaint: s.signedIn && s.view === "module" && s.module === "ops",
+      isInsp: s.signedIn && s.view === "insp",
 
       // The Sessions page: every conversation and task in this browser, grouped by day,
       // searchable, filterable by space; a row reopens, deletes or files its session.
@@ -2290,6 +2317,8 @@ export const renderValsMethods = {
       mod: mod || { name: "", head: [] },
       modMetrics: !mod ? [] : modKey === "energy"
         ? this.enVals(s).enScopeCards
+        : modKey === "assets" ? this.asVals(s).asCards
+        : modKey === "ops" ? this.mxVals(s).mxCards
         : D.answers[mod.answer].metrics.map((m) => ({ ...m, color: t(m.tone).color })),
       modFilters: mod ? mod.filters.map((f) => ({
         label: f,
@@ -2304,6 +2333,11 @@ export const renderValsMethods = {
       modInvHead: modKey === "energy" ? "table-cell" : "none",
 
       detail: detail ? { ...detail, color: t(detail.tone).color } : { chain: [], color: "var(--color-accent)" },
+      // DetailDrawer's scrim and its own × both fire this — neither had a handler behind it,
+      // so the drawer opened by every cron row / anomaly / certificate could only be
+      // dismissed with Escape (core.js's keydown handler). Same `detail: null` every other
+      // dismissal in this file already uses (toggleQueue, goHome, the nav clicks above).
+      closeDetail: () => this.setState({ detail: null }),
       detailFields: detail ? (detail.fields || []).map((f) => ({
         l: f.l, v: f.v,
         fg: f.editable ? "var(--color-accent)" : "var(--color-neutral-200)",
@@ -2313,7 +2347,12 @@ export const renderValsMethods = {
         iconOp: f.editable ? "1" : "0.3",
         edit: () => f.editable ? this.orch("Edit " + f.l.toLowerCase(), detail.title) : this.flash(f.l + " is a fixed parameter you cannot change.")
       })) : [],
-      detailActions: detail ? mkActions(detail.actions || []) : []
+      detailActions: detail ? mkActions(detail.actions || []) : [],
+      // The refinement box's click had no handler either. Every other "accept this
+      // suggestion" moment in the app (Answer.jsx's refinements, a queue action) turns the
+      // suggestion into a task the same way: opens the dock, logs it as a session, plays the
+      // chain — nothing here writes anything on its own, same as clicking any other action.
+      acceptRefinement: () => detail && this.orch(detail.refinement, detail.title)
     };
 
     if (mod) {
@@ -2322,11 +2361,15 @@ export const renderValsMethods = {
         vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
         vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
       }
+      if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s), this.asLiveVals(s));
+      if (modKey === "ops") Object.assign(vals, this.mxVals(s), this.mxLiveVals(s));
       vals.mod = {
         ...mod,
         sideTitle: en ? en.enSideTitle : mod.sideTitle,
         sideFoot: en ? en.enSideFoot : mod.sideFoot,
-        scan: () => this.orch(mod.scanLabel, mod.name),
+        scan: () => modKey === "assets"
+          ? this.orchWith(mod.scanLabel, mod.name, "scan", { asScanStage: 0, asScanDone: 0, asScanReport: null, asScanB: [], asScanSec: [], asScanAllSec: true })
+          : this.orch(mod.scanLabel, mod.name),
         export: () => this.orch(mod.exportLabel, mod.name)
       };
     }

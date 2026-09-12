@@ -565,17 +565,59 @@ const MODULES = {
     filters: ["All", "Below 80", "Declining"],
     asks: ["Which vendor is costing me money?", "Show every invoice line flagged this quarter", "What service credits can I recover?"]
   },
+  assets: {
+    name: "Assets", kicker: "Feature E · asset-condition-engine", icon: "ph-cube", answer: "energy",
+    blurb: "Condition inferred from energy before a fault shows. Each section's EUI is read against its reference to find where the load is; anomalies attributed to an asset say which one. Both signals together are a threat, one alone is a watch. Actions go to the vendor who holds the asset, as an inspection request or a work order.",
+    scanLabel: "Run condition scan", exportLabel: "Export asset register",
+    tableTitle: "Buildings · EUI against reference, sections and assets beneath",
+    head: [],
+    tableFoot: "",
+    sideTitle: "", sideFoot: "",
+    filters: ["All", "Threat", "Watch", "In control", "Above 10%", "Above 30%"],
+    asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which sections have gone over reference since last month?"]
+  },
   ops: {
-    name: "Vendor operations", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",
-    blurb: "Optional section, depending on the operating structure of the building management chain. Work orders are generated here — from PPM cycles mapped to assets, ad-hoc triggers from EUI asset status, and requests read from Outlook — not raised by the FM operative. The FM company works inside the parameters you set.",
-    scanLabel: "Predictive maintenance scan", exportLabel: "Open PPM calendar",
+    name: "Maintenance", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",
+    blurb: "Work orders are not raised by the FM operative; they arrive here from triggers — a vendor blocked, a certificate expiring, an asset flagged, an anomaly priced — and wait for your decision. Completed orders bring inspection reports, which are read together rather than one at a time. Planned maintenance is checked against plan.",
+    scanLabel: "Re-read inspection reports", exportLabel: "Open PPM calendar",
     tableTitle: "Live work orders",
     head: ["Work order", "Asset", "Building", "Estimate", "Status", "Next step"],
     tableFoot: "Lifecycle: Draft → Approved → Assigned → In Progress → Completed → Verified → Closed. Invoices and completion photographs are ingested through the query bar; statutory jobs require a certificate, which lands in the Hoist Graph.",
     sideTitle: "Building health score", sideFoot: "Composite of PPM compliance, open reactive volume and compliance coverage per building.",
-    filters: ["All", "Awaiting approval", "Blocked"],
-    asks: ["What is awaiting my approval?", "Which assets failed twice in 90 days?", "Show the PPM calendar for October"]
+    filters: ["All", "Blocked", "To raise", "Awaiting approval", "Deviation", "Compliance", "Vendors", "Assets", "Energy"],
+    asks: ["Which decisions are statutory?", "Which recommendations were never converted to orders?", "Which PPM contracts are behind plan?"]
   }
 };
 
-export { KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES };
+/* Platform value ledger, 2026 YTD. A line exists only where a cost was detected,
+   an action was approved, and the cost afterwards is measured or contractually
+   fixed. Estimated lines are marked; nothing is claimed for detection alone. */
+const VALUE_LEDGER = [
+  { mod: "Energy", detected: "£312k", saved: "£286k", tone: "ok", items: [
+    { what: "Car park lighting · Building 5 · non-occupancy spike", action: "Schedule reset, Feb", detected: "£4.1k/yr", saved: "£4.1k/yr", basis: "measured · 4 weeks of readings" },
+    { what: "AHU-1 · Kingsway House · schedule overrun", action: "BMS schedule corrected, Mar", detected: "£31k/yr", saved: "£29k/yr", basis: "measured" },
+    { what: "Server room · Meridian Quay · CRAC sequencing", action: "Sequencing changed, Apr", detected: "£44k/yr", saved: "£41k/yr", basis: "measured" },
+    { what: "Bishopsgate chillers · re-benchmark on actual hours", action: "Pack corrected, May", detected: "£118k excess", saved: "£96k", basis: "benchmark fit — not waste, but not a gap either" },
+    { what: "11 further anomalies closed Jan–Aug", action: "Work orders", detected: "£115k/yr", saved: "£116k/yr", basis: "measured" }
+  ] },
+  { mod: "Vendors", detected: "£188k", saved: "£164k", tone: "ok", items: [
+    { what: "Service credits · L1 and L2 breaches", action: "Claimed against 6 contracts", detected: "£71k", saved: "£62k", basis: "credited on invoice" },
+    { what: "Invoice lines outside rate schedule", action: "Held and re-issued", detected: "£54k", saved: "£54k", basis: "invoice corrected" },
+    { what: "Duplicate call-outs consolidated", action: "Visits merged per building", detected: "£63k", saved: "£48k", basis: "invoiced vs prior run rate" }
+  ] },
+  { mod: "Maintenance", detected: "£212k", saved: "£148k", tone: "ok", items: [
+    { what: "Warranty claims found in inspection reports", action: "Claimed", detected: "£18k", saved: "£16k", basis: "credited" },
+    { what: "Reactive orders averted by predictive orders", action: "9 predictive orders raised", detected: "£94k", saved: "£67k", basis: "estimated · reactive cost avoided less predictive cost" },
+    { what: "Replacements deferred by remediation", action: "3 remediations", detected: "£100k", saved: "£65k", basis: "estimated · capex deferred 24+ months, discounted" }
+  ] },
+  { mod: "Compliance", detected: "£140k", saved: "£122k", tone: "ok", items: [
+    { what: "Lapsed statutory certificates renewed inside window", action: "31 bookings from the ladder", detected: "£96k exposure", saved: "£96k", basis: "estimated · penalty and void-insurance exposure at lapse" },
+    { what: "Forged certificate rejected · AN Other House EICR", action: "Re-inspection ordered", detected: "£26k", saved: "£26k", basis: "estimated · exposure had it been accepted" },
+    { what: "Blocked vendors kept off regulated work", action: "4 swaps", detected: "£18k", saved: "—", basis: "not counted — no measurable cost after" }
+  ] },
+  { mod: "Assets", detected: "£118k", saved: "£80k", tone: "ok", items: [
+    { what: "Asset value preserved by early remediation", action: "CH-2, Boiler-14, AHU-1 remediated", detected: "£118k at risk", saved: "£80k", basis: "estimated · value-at-risk model, before vs after" }
+  ] }
+];
+
+export { KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER };

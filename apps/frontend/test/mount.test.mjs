@@ -45,10 +45,13 @@ beforeEach(() => {
 // of exiting, rather than a suite that fails loudly.
 const cleanup = (x) => {
   const k = x || c;
-  clearInterval(k._orchTick); clearInterval(k._cronTimer); clearInterval(k._frameTimer);
+  clearInterval(k._orchTick); clearInterval(k._cronTimer); clearInterval(k._frameTimer); clearInterval(k._iotTimer);
   clearTimeout(k._ccRetry); clearTimeout(k._homeRetry); clearTimeout(k._homeRefresh);
   clearTimeout(k._vpRetry); clearTimeout(k._vpRefresh); clearTimeout(k._bldRetry);
   clearTimeout(k._gphRetry); clearTimeout(k._gphRefresh); clearTimeout(k._spRetry);
+  clearTimeout(k._enRetry); clearTimeout(k._enPosRetry); clearTimeout(k._asLiveRetry); clearTimeout(k._mxLiveRetry);
+  clearTimeout(k._usLiveRetry); clearTimeout(k._usLiveRefresh); clearTimeout(k._auLiveRetry);
+  clearTimeout(k._saLiveRetry); clearTimeout(k._saLiveRefresh);
   clearTimeout(k._tt);
   k.rpStop();
 };

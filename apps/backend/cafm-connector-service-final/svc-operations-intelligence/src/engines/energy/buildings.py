@@ -820,6 +820,14 @@ async def _energy_by_site(
     session: AsyncSession, organization_id: UUID | None
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """Energy profile, latest EUI snapshot and active meters, keyed by site/building id text."""
+    # organization_id arrives as access.Scope's raw value — on this production database
+    # that is the legacy integer organizations.id, not the uuid these two tables' own
+    # organization_id columns hold. Comparing an int against a uuid column raises
+    # UndefinedFunctionError ("operator does not exist: uuid = integer"); that used to be
+    # swallowed by the try/except below and silently dropped every profile and EUI snapshot
+    # on this database. as_uuid() folds the mismatch to None — no filter — before it can
+    # reach either query.
+    organization_id = as_uuid(organization_id)
     pq = select(BuildingEnergyProfile)
     if organization_id:
         pq = pq.where(BuildingEnergyProfile.organization_id == organization_id)

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ..auth import access
 from ..compliance import epc_rating, filings
+from ..compliance.site_links import as_uuid
 from ...models.energy import BmsTrend, WeatherDegreeDays
 from . import chiller as chiller_svc
 from . import us_ratings
@@ -47,9 +48,16 @@ async def building_ids_for(
         return [building_id]
     if scope.restricted:
         return list(scope.building_ids or ())
-    where = "WHERE organization_id = CAST(:o AS uuid)" if scope.organization_id else ""
+    # buildings.organization_id is the uuid column access_control.sql added; it is not
+    # backfilled everywhere yet (two organizations exist, so the migration's single-org
+    # backfill did not fire — see docs/api/access-control-api.md). A caller whose own
+    # organization_id is still the legacy integer organizations.id (pre-dating that column,
+    # as production's is) can never match a uuid column by CAST — every building is in
+    # scope for them, exactly as if no organization were set, rather than a 500.
+    org_uuid = as_uuid(scope.organization_id)
+    where = "WHERE organization_id = CAST(:o AS uuid)" if org_uuid else ""
     rows = (await session.execute(text(f"SELECT building_id FROM plenum_cafm.buildings {where}"),
-                                  {"o": str(scope.organization_id)} if scope.organization_id else {})).all()
+                                  {"o": str(org_uuid)} if org_uuid else {})).all()
     return [r[0] for r in rows]
 
 
@@ -83,6 +91,14 @@ async def position(
     session: AsyncSession, *, country_code: str, organization_id: UUID | None, building_ids: list[UUID]
 ) -> dict[str, Any]:
     cc = country_code.upper()
+    # access.Scope.organization_id is typed UUID | None, but on this production database
+    # users/organizations are still integer-keyed (see auth/keys.py) — the value that
+    # actually arrives here at runtime is an int. Every uuid-typed organization_id column
+    # downstream (compliance_certificates, regulatory_filings, buildings itself) can never
+    # match that int, so as_uuid() folds it to None here — no organisation filter, same as
+    # if the caller had none. Not narrower than the caller's real access, and the only value
+    # that will not crash the query.
+    organization_id = as_uuid(organization_id)
     blds = await _buildings_in_country(session, building_ids, cc)
     ids = [UUID(b["building_id"]) for b in blds]
     out: dict[str, Any] = {"ok": True, "country_code": cc, "buildings": len(ids), "tiles": [], "detail": {}}

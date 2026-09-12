@@ -130,6 +130,50 @@ export default function Home({ vals }) {
                 ))}
               </div>
             </div>
+            <div className="hv19" onClick={vals.pvOpen} style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0", cursor: "pointer" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                  {"Platform value · 2026"}
+                </span>
+                <i className="ph ph-arrow-up-right" style={{ fontSize: "11px", color: "var(--color-accent)" }}></i>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: "6px", marginTop: "9px" }}>
+                <span style={{ fontSize: "22px", lineHeight: "1", fontVariantNumeric: "tabular-nums", color: "var(--st-ok)" }}>
+                  {vals.pvTotal}
+                </span>
+                <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>
+                  {"saved after action"}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginTop: "10px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 46px 40px", gap: "7px", alignItems: "baseline" }}>
+                  <span style={{ fontSize: "9px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                    {"Module"}
+                  </span>
+                  <span style={{ fontSize: "9px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", textAlign: "right" }}>
+                    {"Detected"}
+                  </span>
+                  <span style={{ fontSize: "9px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", textAlign: "right" }}>
+                    {"Saved"}
+                  </span>
+                </div>
+                {(vals.pvRows || []).map((r, $index) => (
+                  <React.Fragment key={$index}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 46px 40px", gap: "7px", alignItems: "baseline" }}>
+                      <span style={{ fontSize: "9.5px", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.head}
+                      </span>
+                      <span style={{ fontSize: "9.5px", fontFamily: "ui-monospace,monospace", textAlign: "right", color: "var(--color-neutral-500)" }}>
+                        {r.detected}
+                      </span>
+                      <span style={{ fontSize: "9.5px", fontFamily: "ui-monospace,monospace", textAlign: "right", color: r.color }}>
+                        {r.saved}
+                      </span>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
           </div>
           <div style={{ padding: "64px 0 0", display: "flex", flexDirection: "column", gap: "9px", alignItems: "center", textAlign: "center" }}>
             <h1 style={{ fontSize: "37px", margin: "0", lineHeight: "1.1" }}>

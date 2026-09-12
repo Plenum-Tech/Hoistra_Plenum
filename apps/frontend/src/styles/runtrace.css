@@ -78,6 +78,21 @@
   flex-shrink: 0;
 }
 
+/* Which turn is on screen — swaps on a scroll-spy pick or a "Show the run" click. Keyed by
+   the caller so this only plays on an actual swap, never on a live run's rows growing.
+   A flex column of its own (not just a wrapper), so .rt-scroll keeps the same "shrink to
+   whatever room .rt has left, then scroll" behaviour it had as a direct child of .rt. */
+.rt-body-swap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: rtSwap 0.18s ease both;
+}
+@keyframes rtSwap {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ── the shaft ────────────────────────────────────────────────────────── */
 .rt-scroll { overflow-y: auto; overflow-x: hidden; padding: 4px 0 10px; }
 .rt-list { position: relative; margin: 0; padding: 0; list-style: none; }
@@ -214,6 +229,7 @@
 @media (prefers-reduced-motion: reduce) {
   .rt-row.is-car .rt-mark { animation: none; }
   .rt-row.is-car::after { animation: none; background-position: 0 0; }
+  .rt-body-swap { animation: none; }
 }
 
 /* ── footer ───────────────────────────────────────────────────────────── */

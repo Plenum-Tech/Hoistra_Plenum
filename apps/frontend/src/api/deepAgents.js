@@ -15,6 +15,8 @@ const B = BASES.deepAgents;
 
 // LLM round-trips plus tool calls: the ask bar is not a 20-second request.
 const T_ASK = 180000;
+// Case actions forward to ops-intelligence (60s there); clarify runs an LLM assessment.
+const T_CASE = 60000;
 
 // One browser session id per page load, so the UI's own compliance actions land in the same
 // trail as the server-side stages when troubleshooting.
@@ -83,11 +85,62 @@ export const deepAgentsApi = {
     });
   },
 
-  resume: (sessionId, body) =>
+  // Submits the human's decision for an interrupt() gate — mapping_approval:
+  // {approved, corrections}, rollback_confirmation: {confirmed}. The route's ResumeRequest
+  // wants that decision nested under a `decision` key, not posted as the body itself.
+  resume: (sessionId, decision) =>
     apiFetch(B, '/api/workflow/resume/' + encodeURIComponent(sessionId), {
       method: 'POST',
-      body: body || {},
+      body: { decision: decision || {} },
       timeoutMs: T_ASK
+    }),
+
+  // ── ingestion validation cases ──────────────────────────────────────────
+  // Routes: .../svc-deepagents/src/api/routes/ingestion_cases.py (prefix /api/ingestion).
+  // A held upload comes back from runStatefulWithFiles as validation_cases +
+  // validation_held; this is the conversation that decides those cases. Each call forwards
+  // to ops-intelligence (the authority that ran the check) with the caller's own bearer,
+  // and decide is HERE and not there because on a yes this service performs the bind it
+  // withheld — the response then carries bound: {documents, certificates, created}.
+  // Ops-intelligence unreachable is 503 {reason: 'validation_unavailable'}: the document
+  // stays held, nothing is lost.
+
+  // Cases waiting on somebody (open_only defaults true on the server). Rows are the case
+  // object minus its heavy fields (claims, ontology, events) — getCase returns those.
+  listCases: (opts) => {
+    const o = opts || {};
+    return apiFetch(B, '/api/ingestion/cases', {
+      query: { open_only: o.openOnly, building_id: o.buildingId }
+    });
+  },
+
+  // One case in full: verdict, findings, claims, ontology, candidates, question, the
+  // conversation (events) and may_ingest — the permission a decision grants.
+  getCase: (caseId) =>
+    apiFetch(B, '/api/ingestion/cases/' + encodeURIComponent(caseId)),
+
+  // The uploader's reason → the agent's assessment. Always ends in a question
+  // (requires_confirmation: true) — nothing is filed by this call, whatever it makes of
+  // the explanation. The assessment is an LLM read, so it gets the case timeout.
+  clarifyCase: (caseId, explanation) =>
+    apiFetch(B, '/api/ingestion/cases/' + encodeURIComponent(caseId) + '/clarify', {
+      method: 'POST', body: { explanation: explanation }, timeoutMs: T_CASE
+    }),
+
+  // Move the case to another building — and the check RE-RUNS there before agreeing, so a
+  // document that does not match the new building either says so rather than inheriting
+  // an approval.
+  reassignCase: (caseId, buildingId) =>
+    apiFetch(B, '/api/ingestion/cases/' + encodeURIComponent(caseId) + '/reassign', {
+      method: 'POST', body: { building_id: buildingId }, timeoutMs: T_CASE
+    }),
+
+  // The explicit yes or no — approve is required, there is no default. On a yes the
+  // withheld filing happens and the response carries bound; a bind that fails after the
+  // decision is reported in bound.error and can be retried, the decision stands.
+  decideCase: (caseId, d) =>
+    apiFetch(B, '/api/ingestion/cases/' + encodeURIComponent(caseId) + '/decide', {
+      method: 'POST', body: { approve: d.approve, note: d.note || null }, timeoutMs: T_CASE
     }),
 
   workspace: (sessionId) =>

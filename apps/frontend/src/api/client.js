@@ -82,12 +82,19 @@ export async function apiFetch(base, path, opts) {
 
 // One attempt plus, at most, one refreshed retry. The retry comes back through here so a
 // terminal 401 on it is reported the same way as on the first try.
+//
+// `missing_token` retries the same way `expired` does: componentDidMount fires every page's
+// load in one breath, and the access token — never persisted, only rebuilt by authBoot()'s
+// refresh — is not back from that refresh yet on the very first requests of a session. That
+// used to mean every page loaded seed-only on first paint, live backend or not; a request
+// that gets no token together is exactly a request that should ask for one and go again.
+const RETRY_ONCE_401 = new Set(['expired', 'missing_token']);
 async function attempt(base, path, o, token, useAuth) {
   try {
     return await request(base, path, o, token);
   } catch (e) {
     if (!(e instanceof ApiError) || e.status !== 401 || !useAuth) throw e;
-    if (e.reason === 'expired' && hooks.refresh && !o._retried) {
+    if (RETRY_ONCE_401.has(e.reason) && hooks.refresh && !o._retried) {
       let fresh;
       try { fresh = await hooks.refresh(); } catch (e2) { throw e; }
       return attempt(base, path, Object.assign({}, o, { _retried: true }), fresh, useAuth);

@@ -59,11 +59,10 @@ test('a follow-up stays in the same session; New query starts another', async ()
   const firstId = c.state.sessionId;
   c.newQuery();
   assert.equal(c.state.sessionId, null);
-  assert.equal(c.state.view, 'chat', 'New query opens the main orchestrator');
+  assert.equal(c.state.view, 'home', 'New query drops the thread and returns to the home ask bar');
   assert.deepEqual(c.state.ccChat, []);
   assert.equal(c.state.orchOpen, false, 'and not the side dock');
   assert.equal(c.state.orchTask, null);
-  assert.equal(c.renderVals().orchPlaceholder, 'Message the orchestrator…');
   await c.askScoped('third');
   await settle();
   assert.equal(c.state.sessions.length, 2);

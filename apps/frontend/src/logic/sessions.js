@@ -287,20 +287,16 @@ export const sessionsMethods = {
   },
 
   // A fresh thread: the next question starts a new session on the server too.
-  // "+ New query": a fresh thread on the chat page — the main orchestrator — with its
-  // composer ready and the side dock closed. The dock is for asking beside a page; a new
-  // query is the page.
+  // "+ New query": drops any conversation in progress and returns to the home ask bar —
+  // the chat page only opens once a question is actually asked (askScoped → openChat).
   newQuery() {
     if (this._ccAbort) this._ccAbort.abort();
     clearInterval(this._orchTick);
     this.setState({
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, ccTraceIdx: null, ccStepsOpen: {},
-      view: 'chat', query: '', detail: null, flow: null, flowDone: '', queueOpen: false, paletteOpen: false,
+      view: 'home', query: '', detail: null, flow: null, flowDone: '', queueOpen: false, paletteOpen: false,
       orchOpen: false, orchTask: null, orchDone: 0, orchQuery: ''
     });
     if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
-    if (typeof this.chatConnect === 'function') this.chatConnect();
-    if (typeof document === 'undefined') return;
-    setTimeout(() => { const el = document.getElementById('chat-composer'); if (el) el.focus(); }, 80);
   }
 };

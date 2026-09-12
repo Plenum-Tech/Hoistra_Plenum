@@ -24,3 +24,4 @@
 .hv23:hover { background:var(--color-accent) !important; color:var(--accent-ink) !important; border-color:var(--color-accent) !important; }
 .hv24:hover { opacity:0.8 !important; }
 .hv25:hover { background:var(--color-accent-900) !important; }
+.hv26:hover { background:var(--marker-tint) !important; color:var(--color-text) !important; }

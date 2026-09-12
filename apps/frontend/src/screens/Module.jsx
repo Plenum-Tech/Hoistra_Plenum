@@ -1,6 +1,8 @@
-// Module — Energy, Assets (Pending), Work orders (Pending)
+// Module — Energy, Assets, Maintenance
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import Assets from './Assets.jsx';
+import Maintenance from './Maintenance.jsx';
 
 export default function Module({ vals }) {
   return (
@@ -420,6 +422,8 @@ export default function Module({ vals }) {
               </div>
             </>
           ) : null}
+          {vals.isAssets ? <Assets vals={vals} /> : null}
+          {vals.isMaint ? <Maintenance vals={vals} /> : null}
           {vals.isEnergy ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: "9px", marginTop: "32px", flexWrap: "wrap" }}>
@@ -436,6 +440,13 @@ export default function Module({ vals }) {
                 <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
                   {vals.enListSummary}
                 </span>
+              </div>
+              <div style={{ display: vals.enBldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "12px", maxWidth: "420px" }}>
+                <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                <input className="input" value={vals.enBldQuery} onChange={vals.setEnBldQuery} placeholder="Search buildings by name…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+                {vals.enBldQuery ? (
+                  <i className="ph ph-x hv11" onClick={() => vals.setEnBldQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+                ) : null}
               </div>
               {(vals.enGroups || []).map((g, $index) => (
                 <React.Fragment key={$index}>
@@ -553,6 +564,14 @@ export default function Module({ vals }) {
               <div style={{ display: vals.enListEmpty, marginTop: "18px", padding: "22px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", fontSize: "12.5px", color: "var(--color-neutral-400)", lineHeight: "1.6" }}>
                 {"No building in scope matches this filter."}
               </div>
+              <div style={{ display: vals.enBldPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", marginTop: "14px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
+                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.enListSummary}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div className="hv13" onClick={vals.enBldPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.enBldPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.enBldPagePrevShow ? "pointer" : "default", opacity: vals.enBldPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.enBldPage + 1) + " of " + vals.enBldPageCount}</span>
+                  <div className="hv13" onClick={vals.enBldPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.enBldPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.enBldPageNextShow ? "pointer" : "default", opacity: vals.enBldPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                </div>
+              </div>
               <div style={{ fontSize: "11px", color: "var(--color-neutral-600)", marginTop: "12px", lineHeight: "1.55" }}>
                 {vals.mod.sideFoot}{" The marker on each bar is the building's reference; open a building to see the anomalies beneath its number, and investigate either the building or a single anomaly."}
               </div>
@@ -563,7 +582,7 @@ export default function Module({ vals }) {
                     {"Detection rules"}
                   </span>
                   <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
-                    {vals.enRulesN}{" rules · coverage shown per building in scope"}
+                    {vals.enRulesLiveN}{" of "}{vals.enRulesN}{" implemented · coverage shown per building in scope for those"}
                   </span>
                 </div>
                 <div style={{ display: vals.enRulesShow }}>

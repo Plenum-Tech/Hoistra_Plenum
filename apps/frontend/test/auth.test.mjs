@@ -41,7 +41,9 @@ const requests = (path) => calls.filter((c) => c.path === path);
 
 let c;
 const fresh = () => { const x = new HoistraLogic(); x.authBoot(); return x; };
-const cleanup = (x) => { const k = x || c; k.authStop(); clearTimeout(k._tt); };
+// authEnter kicks the admin reads (usLiveLoad/auLiveLoad) for an admin account; their
+// routes are not mocked here, so the failure's retry timers must be cleared like _tt.
+const cleanup = (x) => { const k = x || c; k.authStop(); clearTimeout(k._tt); clearTimeout(k._usLiveRetry); clearTimeout(k._usLiveRefresh); clearTimeout(k._auLiveRetry); };
 beforeEach(() => {
   Object.keys(mem).forEach((k) => { delete mem[k]; });
   calls = []; handlers = { ['GET ' + A + '/config']: [200, CONFIG] };

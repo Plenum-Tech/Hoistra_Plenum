@@ -127,6 +127,13 @@ export const authMethods = {
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null, authRetryAt: 0,
       password: '', code: '', newPassword: '', fullName: '', phone: ''
     }));
+    // The eager admin reads (core.js mount) deliberately arm no retry timer on a 403, so
+    // an admin landing in a session that first loaded below admin is re-kicked here —
+    // fresh rows and navigator badges on sign-in and on every refresh alike.
+    if (admin) {
+      if (typeof this.usLiveLoad === 'function') this.usLiveLoad();
+      if (typeof this.auLiveLoad === 'function') this.auLiveLoad();
+    }
     if (resp.message && !o.keepView) this.flash(resp.message);
   },
 
@@ -386,6 +393,13 @@ export const authMethods = {
       acctItems: [
         { label: 'Pricing', icon: 'ph-tag', click: () => this.setState({ acctOpen: false }, () => this.flash('Pricing and plan usage open in the billing workspace — seats, buildings hoisted and ingest volume.')) },
         { label: 'Support', icon: 'ph-lifebuoy', click: () => this.setState({ acctOpen: false }, () => this.flash('Support: a Hoister is on call for this portfolio. Every request carries the page and the graph state you were on.')) },
+        /* The platform operator's console, not a company surface: superadmin only —
+           canAdmin is deliberately not enough. Opening it fires the on-open companies
+           load (superAdminLive.js); nothing superadmin reads at mount. */
+        a.role === 'superadmin' ? {
+          label: 'Super Admin console', icon: 'ph-lock-key', tick: false,
+          click: () => this.setState({ saOn: true, acctOpen: false }, () => { if (typeof this.saLiveLoad === 'function') this.saLiveLoad(); })
+        } : null,
         admin ? {
           label: s.role === 'admin' ? 'User view' : 'Admin view',
           icon: s.role === 'admin' ? 'ph-user-focus' : 'ph-shield-star', tick: false,

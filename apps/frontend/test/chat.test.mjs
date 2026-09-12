@@ -228,6 +228,12 @@ test('a reload onto the chat page re-checks the orchestrator connection', () => 
   c.bldLoad = async () => {};
   c.gphLoad = async () => {};
   c.spLoad = async () => {};
+  c.energyLoad = async () => {};
+  c.enPositionLoad = async () => {};
+  c.asLiveLoad = async () => {};
+  c.mxLiveLoad = async () => {};
+  c.usLiveLoad = async () => {};
+  c.auLiveLoad = async () => {};
   c.componentDidMount();
   assert.notEqual(c.state.chatLink, 'idle');
   c.componentWillUnmount();

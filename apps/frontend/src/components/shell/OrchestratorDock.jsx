@@ -595,6 +595,239 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
+        {vals.fScan ? (
+          <>
+            <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
+              <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
+                {"Condition scan"}
+              </div>
+              {vals.scStage0 ? (
+                <>
+                  <div style={{ fontSize: "12px", marginTop: "8px", lineHeight: "1.5" }}>
+                    {"Which buildings should I read? Pick one or more."}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "10px" }}>
+                    {(vals.scBuildings || []).map((b, $index) => (
+                      <React.Fragment key={$index}>
+                        <div onClick={b.pick} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", fontSize: "11.5px", padding: "6px 9px", borderRadius: "7px", border: `1px solid ${b.edge}`, background: b.bg, color: b.fg, cursor: "pointer" }}>
+                          <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {b.name}
+                          </span>
+                          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                            {b.n}
+                          </span>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "10px" }}>
+                    <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                      {vals.scBCount}
+                    </span>
+                    <span onClick={vals.scAllB} style={{ fontSize: "10.5px", color: "var(--color-accent)", cursor: "pointer" }}>
+                      {"Select all"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
+                    <div className="hv7" onClick={vals.scToSections} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                      {"Next · sections"}
+                    </div>
+                    <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                      {"Cancel"}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {vals.scStage1 ? (
+                <>
+                  <div style={{ fontSize: "12px", marginTop: "8px", lineHeight: "1.5" }}>
+                    {"All sections in those buildings, or a selection?"}
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+                    <div onClick={vals.scAllSec} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", border: `1px solid ${vals.scAllSecOn.edge}`, background: vals.scAllSecOn.bg, color: vals.scAllSecOn.fg, cursor: "pointer" }}>
+                      {"All sections"}
+                    </div>
+                    <div onClick={vals.scPickSec} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", border: `1px solid ${vals.scPickSecOn.edge}`, background: vals.scPickSecOn.bg, color: vals.scPickSecOn.fg, cursor: "pointer" }}>
+                      {"Pick sections"}
+                    </div>
+                  </div>
+                  <div style={{ display: vals.scSecListShow, flexDirection: "column", gap: "5px", marginTop: "10px", maxHeight: "260px", overflowY: "auto" }}>
+                    {(vals.scSections || []).map((x, $index) => (
+                      <React.Fragment key={$index}>
+                        <div onClick={x.pick} style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11.5px", padding: "6px 9px", borderRadius: "7px", border: `1px solid ${x.edge}`, background: x.bg, color: x.fg, cursor: "pointer" }}>
+                          <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {x.name}
+                          </span>
+                          <span style={{ fontSize: "10px", color: "var(--color-neutral-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {x.b}{" · "}{x.meter}
+                          </span>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "10px" }}>
+                    {vals.scSecCount}
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
+                    <div className="hv7" onClick={vals.scRun} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                      {"Run scan"}
+                    </div>
+                    <div onClick={vals.scBack} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                      {"Back"}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {vals.scStage2 ? (
+                <>
+                  <div style={{ fontSize: "12px", marginTop: "8px", lineHeight: "1.5" }}>
+                    {"Reading sections against their reference and re-attributing anomalies."}
+                  </div>
+                  <div style={{ height: "3px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden", marginTop: "10px" }}>
+                    <div style={{ height: "100%", width: vals.scProgress, background: "var(--color-accent)", transition: "width 0.4s ease" }}></div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px", maxHeight: "260px", overflowY: "auto" }}>
+                    {(vals.scRunRows || []).map((r, $index) => (
+                      <React.Fragment key={$index}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: r.fg }}>
+                          <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: r.dot, flexShrink: "0" }}></span>
+                          <span style={{ flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {r.b}{" · "}{r.name}
+                          </span>
+                          <span style={{ fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                            {r.state}
+                          </span>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+              {vals.scStage3 ? (
+                <>
+                  <div style={{ fontSize: "12.5px", marginTop: "8px" }}>
+                    {vals.scReport.title}
+                  </div>
+                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "3px" }}>
+                    {vals.scReport.when}
+                  </div>
+                  <div style={{ fontSize: "11.5px", lineHeight: "1.5", marginTop: "8px", color: "var(--color-neutral-300)" }}>
+                    {vals.scReport.summary}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px", maxHeight: "300px", overflowY: "auto" }}>
+                    {(vals.scRepRows || []).map((r, $index) => (
+                      <React.Fragment key={$index}>
+                        <div style={{ padding: "8px 9px", borderRadius: "7px", background: "var(--color-surface)", border: "1px solid var(--color-divider)" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "11.5px", flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {r.name}
+                            </span>
+                            <span style={{ fontSize: "10px", padding: "2px 7px", borderRadius: "5px", whiteSpace: "nowrap", color: r.color, background: r.bg }}>
+                              {r.cond}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {r.b}{" · "}{r.sec}
+                          </div>
+                          <div style={{ fontSize: "10.5px", color: "var(--color-neutral-300)", marginTop: "5px", lineHeight: "1.45" }}>
+                            {r.why}
+                          </div>
+                          <div style={{ fontSize: "10.5px", color: "var(--color-accent)", marginTop: "4px" }}>
+                            {"→ "}{r.act}
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                    <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", display: vals.scRepEmpty }}>
+                      {"Every asset in scope is in control at the current thresholds."}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "10px", lineHeight: "1.5" }}>
+                    {"Last run updated and the page re-read. Actions are on each asset row."}
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
+                    <div className="hv7" onClick={vals.scClose} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                      {"Done"}
+                    </div>
+                    <div onClick={vals.scAgain} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                      {"Scan again"}
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+        {vals.fValue ? (
+          <>
+            <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
+              <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
+                {"Platform value · 2026 ledger"}
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: "6px", marginTop: "8px" }}>
+                <span style={{ fontSize: "22px", lineHeight: "1", color: "var(--st-ok)" }}>
+                  {vals.pvTotal}
+                </span>
+                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                  {"saved to date"}
+                </span>
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--color-neutral-400)", lineHeight: "1.5", marginTop: "6px" }}>
+                {"A line counts only when a cost was detected, you approved an action, and the cost afterwards is measured or fixed by contract. Lines marked "}
+                <span style={{ color: "var(--color-accent)" }}>
+                  {"est."}
+                </span>
+                {" rest on a model; detection alone earns nothing."}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px", maxHeight: "420px", overflowY: "auto" }}>
+                {(vals.pvLedger || []).map((m, $index) => (
+                  <React.Fragment key={$index}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: "8px", paddingBottom: "5px", borderBottom: "1px solid var(--color-divider)" }}>
+                        <span style={{ fontSize: "12px", flex: "1" }}>
+                          {m.mod}
+                        </span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)" }}>
+                          {m.detected}{" detected"}
+                        </span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", color: "var(--st-ok)" }}>
+                          {m.saved}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "6px" }}>
+                        {(m.items || []).map((i, $index) => (
+                          <React.Fragment key={$index}>
+                            <div style={{ fontSize: "10.5px", lineHeight: "1.45" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+                                <span style={{ flex: "1", minWidth: "0" }}>
+                                  {i.what}
+                                </span>
+                                <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--st-ok)", whiteSpace: "nowrap" }}>
+                                  {i.saved}
+                                </span>
+                              </div>
+                              <div style={{ color: "var(--color-neutral-500)" }}>
+                                {i.action}{" · detected "}{i.detected}{" · "}{i.basis}{" "}
+                                <span style={{ color: "var(--color-accent)", display: i.estShow }}>
+                                  {i.est}
+                                </span>
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
+                <div className="hv7" onClick={vals.fCancel} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                  {"Done"}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
         {vals.fDone ? (
           <>
             <div style={{ marginTop: "16px", padding: "11px 12px", borderRadius: "9px", background: "var(--st-ok-bg)", display: "flex", gap: "9px", alignItems: "flex-start" }}>

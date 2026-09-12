@@ -54,60 +54,64 @@ export default function RunTrace({ vals }) {
         </span>
       </div>
 
-      {vals.orchTraceFor ? (
-        <div className="rt-for">{vals.orchTraceFor}</div>
-      ) : null}
-
       {idle ? (
         <p className="rt-empty">
           {'Ask a question and the route appears here — every stage the orchestrator ran, every tool it called, in the order it happened.'}
         </p>
       ) : (
-        <div className="rt-scroll" ref={scrollRef}>
-          <ol className={live ? 'rt-list is-live' : 'rt-list'} ref={listRef} style={{ '--rt-travelled': travelled + 'px' }}>
-            {rows.map((r) => (
-              <li key={r.key} className={r.mono ? 'rt-row is-tool' : 'rt-row'}>
-                <span className="rt-mark" aria-hidden="true">
-                  <i className={`ph ${r.icon}`}></i>
-                </span>
-                <div className="rt-body">
-                  <div className="rt-line">
-                    <span className="rt-label">{r.title}</span>
-                    {r.meta ? <span className="rt-meta">{r.meta}</span> : null}
-                  </div>
-                  {r.detail ? <div className="rt-detail">{r.detail}</div> : null}
-                  {r.parts.length ? (
-                    <div className="rt-parts">
-                      {r.parts.map((p) => (
-                        <div key={p.key} className="rt-part">
-                          {p.text}
-                          {p.scope ? <span className="rt-part-scope">{' — ' + p.scope}</span> : null}
-                        </div>
-                      ))}
+        // Keyed on which turn is shown (not on the rows themselves) so switching turns
+        // — by scroll or by a "Show the run" click — crossfades in place, while a live
+        // run's rows growing under the same key never replay that swap.
+        <div className="rt-body-swap" key={vals.orchTraceKey}>
+          {vals.orchTraceFor ? (
+            <div className="rt-for">{vals.orchTraceFor}</div>
+          ) : null}
+          <div className="rt-scroll" ref={scrollRef}>
+            <ol className={live ? 'rt-list is-live' : 'rt-list'} ref={listRef} style={{ '--rt-travelled': travelled + 'px' }}>
+              {rows.map((r) => (
+                <li key={r.key} className={r.mono ? 'rt-row is-tool' : 'rt-row'}>
+                  <span className="rt-mark" aria-hidden="true">
+                    <i className={`ph ${r.icon}`}></i>
+                  </span>
+                  <div className="rt-body">
+                    <div className="rt-line">
+                      <span className="rt-label">{r.title}</span>
+                      {r.meta ? <span className="rt-meta">{r.meta}</span> : null}
                     </div>
-                  ) : null}
-                  {r.issues.map((x, j) => (
-                    <div key={j} className="rt-issue">{x}</div>
-                  ))}
-                </div>
-              </li>
-            ))}
-
-            {/* The car. Announced politely so a screen reader hears the run move on
-                without the whole rail being re-read each time a landing lands. */}
-            {live ? (
-              <li className="rt-row is-car">
-                <span className="rt-mark" aria-hidden="true">
-                  <i className="ph ph-caret-double-down"></i>
-                </span>
-                <div className="rt-body">
-                  <div className="rt-line">
-                    <span className="rt-label" aria-live="polite">{liveLabel}</span>
+                    {r.detail ? <div className="rt-detail">{r.detail}</div> : null}
+                    {r.parts.length ? (
+                      <div className="rt-parts">
+                        {r.parts.map((p) => (
+                          <div key={p.key} className="rt-part">
+                            {p.text}
+                            {p.scope ? <span className="rt-part-scope">{' — ' + p.scope}</span> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {r.issues.map((x, j) => (
+                      <div key={j} className="rt-issue">{x}</div>
+                    ))}
                   </div>
-                </div>
-              </li>
-            ) : null}
-          </ol>
+                </li>
+              ))}
+
+              {/* The car. Announced politely so a screen reader hears the run move on
+                  without the whole rail being re-read each time a landing lands. */}
+              {live ? (
+                <li className="rt-row is-car">
+                  <span className="rt-mark" aria-hidden="true">
+                    <i className="ph ph-caret-double-down"></i>
+                  </span>
+                  <div className="rt-body">
+                    <div className="rt-line">
+                      <span className="rt-label" aria-live="polite">{liveLabel}</span>
+                    </div>
+                  </div>
+                </li>
+              ) : null}
+            </ol>
+          </div>
         </div>
       )}
 

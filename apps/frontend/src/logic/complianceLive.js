@@ -584,11 +584,16 @@ export const complianceLiveMethods = {
   // buildings page keep their side dock (DOCK_VIEWS) so the data stays in view beside the
   // answer; home and the chat page make the conversation the page.
   // A space's ask bar starts a conversation filed in that space, so it is a chat view too.
-  chatView() { return ["cc", "home", "chat", "space"].concat(DOCK_VIEWS).indexOf(this.state.view) > -1; },
+  // The Energy module keeps its own side dock too — same reason as Buildings: the scope
+  // chips, ratings and building list stay in view beside the answer. It is a module page
+  // (view "module", not its own view name), so it is checked alongside DOCK_VIEWS rather
+  // than added to it.
+  isEnergyDock() { return this.state.view === "module" && this.state.module === "energy"; },
+  chatView() { return this.isEnergyDock() || ["cc", "home", "chat", "space"].concat(DOCK_VIEWS).indexOf(this.state.view) > -1; },
   // Where the answer lands: the dock on the dock pages (Home included), the chat page
   // everywhere else. A task carried onto a dock page (the Hoist a building form, say) stays
   // in view and the question is answered beside it.
-  dockAnswers() { return DOCK_VIEWS.indexOf(this.state.view) > -1; },
+  dockAnswers() { return this.isEnergyDock() || DOCK_VIEWS.indexOf(this.state.view) > -1; },
   askScoped(q) {
     if (this.chatView()) return this.ccAsk(q);
     return this.ask(q);
@@ -629,6 +634,28 @@ export const complianceLiveMethods = {
       }
       const t = this.glTable(s.gTable);
       if (t) parts.push("Selected table: plenum_cafm." + t.table + (typeof t.rows === "number" ? " (" + t.rows + " rows)" : "") + ".");
+      return parts.join(" ");
+    }
+    if (this.isEnergyDock()) {
+      const bs = this.bldData();
+      const en = this.enAnomalies();
+      const parts = ["The user is on the Hoistra Energy module page."];
+      if (this.bldIsLive()) {
+        const withEui = bs.filter((b) => typeof b.euiN === "number").length;
+        const withCc = bs.filter((b) => b.cc && b.cc !== "—").length;
+        parts.push("Live from svc-operations-intelligence: " + bs.length + " buildings on record, " +
+          withEui + " with an EUI reading, " + withCc + " with a country attributed.");
+      } else {
+        parts.push("The buildings register has not loaded from the backend yet, so it is showing seed data.");
+      }
+      if (this.enAnomIsLive()) {
+        parts.push(en.length + " open anomal" + (en.length === 1 ? "y" : "ies") + " from GET /api/energy/anomalies" +
+          (en.length ? ": " + en.slice(0, 6).map((a) => a.type + " at " + a.building + " (" + a.impact + "/yr)").join("; ") + "." : "."));
+      } else {
+        parts.push("Anomalies have not loaded from the backend yet.");
+      }
+      const sc = this.enScope(s);
+      if (!sc.isAll) parts.push("Scope filter — " + sc.sel.join(", ") + ".");
       return parts.join(" ");
     }
     if (s.view === "cc") {

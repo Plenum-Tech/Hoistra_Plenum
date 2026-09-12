@@ -2,10 +2,13 @@
 // every table in the plenum_cafm schema. Routes: apps/backend/.../svc-udr/src/api/routes/tables.py,
 // mounted behind the gateway at /backend/udr/.
 //
-// Reads only. The Buildings page draws the Hoist Graph from these — which tables exist, how
-// they key into each other, and how many rows hang off a building. `select` is the service's
-// SELECT-only endpoint (anything else is rejected server-side); the statements this UI sends
-// are built in src/logic/graphLive.js from information_schema and validated identifiers.
+// Reads only. `select` is the service's SELECT-only endpoint (anything else is rejected
+// server-side); today its one caller is energyLive.js's enResolveEquipment, a one-off lookup
+// of plenum_cafm.equipment rows by uuid. The Hoist Graph moved off this module — it now reads
+// counts from ops-intelligence's /api/energy/graph/* routes (src/api/energy.js, read by
+// src/logic/graphLive.js), not from svc-udr. `tables`, `schema` and `records` wrap the service's
+// introspection/read endpoints one-to-one but have no caller yet; kept for the next thing that
+// needs generic table access rather than a hand-built SELECT.
 import { BASES, apiFetch } from './client.js';
 
 const B = BASES.udr;

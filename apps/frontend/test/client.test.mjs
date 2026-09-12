@@ -78,20 +78,30 @@ test('a refresh that fails rethrows the original 401; a still-401 retry is not r
   assert.equal(calls.length, 2, 'exactly one retry');
 });
 
-test('terminal reasons report through onTerminal and are not retried; missing_token is neither', async () => {
+test('terminal reasons report through onTerminal and are not retried', async () => {
   const seen = [];
-  let refreshes = 0;
-  configureAuth({ getToken: () => 'acc-1', refresh: async () => { refreshes += 1; return 'x'; }, onTerminal: (r, m) => seen.push([r, m]) });
+  configureAuth({ getToken: () => 'acc-1', refresh: async () => 'x', onTerminal: (r, m) => seen.push([r, m]) });
   for (const reason of TERMINAL_401) {
     handlers['GET ' + B + '/api/a'] = fail(401, reason, 'gone: ' + reason);
     await assert.rejects(apiFetch(B, '/api/a'), (e) => e.reason === reason);
   }
   assert.deepEqual(seen.map((x) => x[0]), [...TERMINAL_401]);
   assert.equal(seen[0][1], 'gone: ' + [...TERMINAL_401][0]);
+});
+
+test('missing_token retries once via refresh, same as expired, and is not terminal even when the retry also 401s', async () => {
+  // componentDidMount fires every page's load in one breath; on the very first requests of a
+  // session the access token is not back from authBoot()'s refresh yet, and those requests
+  // go out with no Authorization header at all — a missing_token 401, not an expired one.
+  // Treating the two differently would leave every page seed-only on first paint.
+  const seen = [];
+  let refreshes = 0;
+  configureAuth({ getToken: () => null, refresh: async () => { refreshes += 1; return 'acc-new'; }, onTerminal: (r, m) => seen.push([r, m]) });
   handlers['GET ' + B + '/api/a'] = fail(401, 'missing_token', 'Send a header.');
-  await assert.rejects(apiFetch(B, '/api/a'));
-  assert.equal(refreshes, 0);
-  assert.equal(seen.length, TERMINAL_401.size, 'missing_token is not terminal');
+  await assert.rejects(apiFetch(B, '/api/a'), (e) => e.reason === 'missing_token');
+  assert.equal(refreshes, 1, 'missing_token retries once via refresh, same as expired');
+  assert.equal(calls.length, 2, 'the original attempt plus exactly one retry');
+  assert.equal(seen.length, 0, 'missing_token is not terminal, even once the retry also 401s');
 });
 
 test('a terminal 401 on the retried request still reports through onTerminal', async () => {
