@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import random
 import uuid
 from calendar import monthrange
@@ -32,8 +33,22 @@ from pathlib import Path
 # Deterministic seed for reproducible datasets
 RNG = random.Random(42)
 
-ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
-PM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
+# The company every generated row is stamped with, and the PM it acts as.
+#
+# These were ...00b1 and ...00f1 — ids this file invented and nothing ever created. Seeded
+# onto a real deployment that produced 2,915 rows naming a company that is not in
+# organizations and a PM who is not in users: scoped reads filter on the company, a company
+# that does not exist matches nobody, and the rows sat there belonging to no one. The
+# dataset's own three vendors were meanwhile moved under Feature B Demo Org, so half of it
+# resolved and half did not.
+#
+# ORG_ID is now that same organisation. Override both with the environment where this data
+# is wanted under a different tenant — but whatever they are set to must be a company and a
+# user that exist before the seeder runs, or the rows are orphans again.
+ORG_ID = uuid.UUID(os.environ.get(
+    "FEATURE_B_ORG_ID", "00000000-0000-0000-0000-000000000005"))
+PM_ID = uuid.UUID(os.environ.get(
+    "FEATURE_B_PM_ID", "00000000-0000-0000-0000-0000000000f1"))
 
 VENDORS = [
     {
