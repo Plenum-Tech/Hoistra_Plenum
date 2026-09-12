@@ -78,14 +78,14 @@ DERIVATIONS: list[tuple[str, str, str]] = [
         UPDATE {SCHEMA}.vendor_monthly_scorecards s SET organization_id = v.organization_id
           FROM {SCHEMA}.vendors v
          WHERE s.organization_id IS NULL AND v.organization_id IS NOT NULL
-           AND v.id = s.vendor_id""",
+           AND v.id::text = s.vendor_id::text""",
      "the vendor's company"),
 
     ("vendor_wo_scores", f"""
         UPDATE {SCHEMA}.vendor_wo_scores s SET organization_id = v.organization_id
           FROM {SCHEMA}.vendors v
          WHERE s.organization_id IS NULL AND v.organization_id IS NOT NULL
-           AND v.id = s.vendor_id""",
+           AND v.id::text = s.vendor_id::text""",
      "the vendor's company"),
 
     ("compliance_certificates", f"""
@@ -134,10 +134,23 @@ async def run(dsn: str, expect_db: str, apply: bool) -> int:
     print(f"database: {db}")
 
     before = await counts(c)
+    # A derivation is only attempted where every column it joins on exists. Deployments
+    # differ — compliance_risk_snapshots has no building_id here — and one impossible join
+    # inside the transaction would roll back every sound one with it.
+    skipped: dict[str, str] = {}
+    for table, sql, _ in DERIVATIONS:
+        if table not in before:
+            continue
+        try:
+            await c.execute(f"EXPLAIN {sql}")
+        except Exception as exc:  # noqa: BLE001
+            skipped[table] = str(exc).splitlines()[0][:90]
     print(f"\n{'table':<30} {'rows':>7} {'no company':>11} {'resolves':>9}")
     for t, (total, nulls, real) in before.items():
         print(f"  {t:<28} {total:>7} {nulls:>11} {real:>9}")
 
+    for table, why in skipped.items():
+        print(f"  {table:<28} skipped — {why}")
     if not apply:
         print("\ndry run — nothing written. Re-run with --apply.")
         await c.close()
@@ -149,7 +162,7 @@ async def run(dsn: str, expect_db: str, apply: bool) -> int:
     try:
         filled: list[tuple[str, int, str]] = []
         for table, sql, why in DERIVATIONS:
-            if table not in before:
+            if table not in before or table in skipped:
                 continue
             result = await c.execute(sql)
             n = int(result.split()[-1]) if result.split()[-1].isdigit() else 0
