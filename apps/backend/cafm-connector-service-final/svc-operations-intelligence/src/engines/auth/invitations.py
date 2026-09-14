@@ -25,6 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import settings
 from ...core.logging import get_logger
 from ...shared.approvals import send_platform_email
+from ...shared.email_template import wrap_html
+from . import accounts as account_engine
+from . import otp as otp_engine
 from . import passwords as password_engine
 from . import roles as role_engine
 
@@ -53,22 +56,35 @@ def _accept_url(token: str) -> str:
 
 
 def _invite_email(*, name: str, company: str, role: str, url: str, days: int,
-                  inviter: str | None) -> tuple[str, str, str]:
-    """Subject, body, and the redacted body for the email log."""
+                  inviter: str | None) -> tuple[str, str, str, str]:
+    """Subject, plain-text body, HTML body, and the redacted body for the email log."""
     who = (name or "").split(" ")[0] or "there"
     what = ("administer" if role_engine.at_least(role, role_engine.ADMIN)
             else "use")
     by = f" {inviter} has" if inviter else " You have been"
+    lead = f"{by.strip()} invited you to {what} {company} on Hoistra."
+    # The account is not fully set up on this link alone: setting a password here starts
+    # it, and a short confirmation code — sent right after — finishes it. Said up front so
+    # the code that follows a minute later reads as the next step, not a second, unrelated
+    # email arriving out of nowhere.
+    next_step = ("After you set a password, we'll send a short code to this address to "
+                "confirm it — enter it and you're signed in.")
+    validity = (f"The link is valid for {days} days and can be used once. If you were not "
+               "expecting this, you can ignore it.")
     subject = f"You're invited to {company} on Hoistra"
     body = (
-        f"Hello {who},\n\n"
-        f"{by.strip()} invited you to {what} {company} on Hoistra.\n\n"
+        f"Hello {who},\n\n{lead}\n\n"
         f"Accept the invitation and set your password here:\n{url}\n\n"
-        f"The link is valid for {days} days and can be used once. If you were not "
-        f"expecting this, you can ignore it.\n"
+        f"{next_step}\n\n{validity}\n"
+    )
+    html = wrap_html(
+        heading=subject,
+        lines=[f"Hello {who},", lead, next_step],
+        cta_label="Accept invitation", cta_url=url,
+        footnote=validity,
     )
     redacted = body.replace(url, "<invitation link redacted>")
-    return subject, body, redacted
+    return subject, body, html, redacted
 
 
 async def _company_name(session: AsyncSession, organization_id: UUID) -> str:
@@ -178,35 +194,60 @@ async def create(
 
     company = await _company_name(session, organization_id)
     url = _accept_url(token)
-    subject, body, redacted = _invite_email(
+    subject, body, html, redacted = _invite_email(
         name=full_name or "", company=company, role=role, url=url,
         days=INVITE_TTL_DAYS, inviter=inviter_name,
     )
-    sent = await send_platform_email(
-        session, to_address=addr, subject=subject, body=body,
-        organization_id=organization_id, commit=False, log_body=redacted,
-    )
+    # The reader of this email is a mail client, not the app: a relative link in it is
+    # dead on arrival. With no PUBLIC_APP_URL the message is not sent at all — the caller
+    # gets the link (and the reason) instead of the invitee getting one that cannot work.
+    # In dry-run nothing leaves anyway, so the relative form is harmless there.
+    no_base = not (getattr(settings, "public_app_url", None) or "").strip()
+    if no_base and not settings.email_dry_run:
+        sent: dict[str, Any] = {
+            "ok": False, "status": "not_sent",
+            "error": "PUBLIC_APP_URL is not set — refusing to email a link that would be relative.",
+        }
+        log.warning("invitations.email_skipped_no_public_app_url", user_id=str(user_id))
+    else:
+        sent = await send_platform_email(
+            session, to_address=addr, subject=subject, body=body, html_body=html,
+            organization_id=organization_id, commit=False, log_body=redacted,
+        )
     await session.commit()
+    # send_platform_email() returns ok=True for a dry-run AND for "no transport configured"
+    # — both of which mean nobody received anything. Only status == "sent" is a delivery;
+    # anything else must hand the link back or the invitation is unreachable and the
+    # account sits in `invited` for ever, while the UI reports it as sent.
+    delivered = sent.get("status") == "sent"
     log.info("invitations.created", organization_id=str(organization_id), role=role,
-             user_id=str(user_id), sent=bool(sent.get("sent") or sent.get("ok")))
+             user_id=str(user_id), delivered=delivered, delivery_status=sent.get("status"))
     out: dict[str, Any] = {
         "ok": True, "invitation_id": str(invitation_id), "user_id": str(user_id),
         "email": addr, "role": role, "can_ingest": bool(can_ingest),
         "building_ids": [str(b) for b in building_ids],
-        "expires_at": expires.isoformat(), "email_sent": sent,
+        "expires_at": expires.isoformat(), "email_sent": sent, "delivered": delivered,
     }
-    if settings.email_dry_run or not (sent.get("sent") or sent.get("ok")):
-        # Nobody received a link, so the caller gets it — otherwise the invitation is
-        # unreachable and the account is stuck in `invited` for ever.
+    if not delivered:
         out["accept_url"] = url
-        out["note"] = "Email was not delivered; share this link with the invitee directly."
+        out["note"] = (
+            sent.get("error") if sent.get("status") == "not_sent"
+            else "Email was not delivered; share this link with the invitee directly."
+        )
     return out
 
 
 async def accept(
     session: AsyncSession, *, token: str, password: str, full_name: str | None = None,
+    request_ip: str | None = None,
 ) -> dict[str, Any]:
-    """Follow the link: set the password, activate the account, apply the allocation."""
+    """Follow the link: set the password, apply the allocation, and leave the account
+    ``pending_verification`` with a confirmation code already on its way — the same OTP
+    mechanism register() uses, not a second one. The invited person types the code next
+    (POST /verify-email) and that call signs them in; nobody re-enters the password they
+    just set. An account that never comes back to verify is not stuck, either: sign_in()
+    already resends a fresh code and asks for it the moment such an account tries to log in.
+    """
     row = (
         await session.execute(
             text("""SELECT id, organization_id, email, role, can_ingest, building_ids,
@@ -247,8 +288,8 @@ async def accept(
 
     await session.execute(
         text("""UPDATE plenum_cafm.users
-                   SET password_hash = :ph, status = 'active', email_verified = TRUE,
-                       email_verified_at = now(), activated_at = now(),
+                   SET password_hash = :ph, status = 'pending_verification', email_verified = FALSE,
+                       activated_at = now(),
                        password_changed_at = now(), platform_role = :r, can_ingest = :ci,
                        full_name = COALESCE(:n, full_name), updated_at = now()
                  WHERE id = :i"""),
@@ -273,9 +314,19 @@ async def accept(
                      WHERE id = :o AND lifecycle <> 'active'"""),
             {"o": row["organization_id"]},
         )
+    # Issued and sent BEFORE the commit below, so the code and the account it belongs to
+    # land together — a crash between the two would otherwise leave an account that can
+    # never be verified against a code nobody has.
+    code_outcome = await account_engine._send_code(
+        session, email=str(row["email"]), purpose=otp_engine.EMAIL_VERIFICATION,
+        name=full_name or "", user_id=user_id, organization_id=row["organization_id"],
+        request_ip=request_ip,
+    )
     await session.commit()
-    log.info("invitations.accepted", user_id=str(user_id), role=row["role"])
+    log.info("invitations.accepted", user_id=str(user_id), role=row["role"],
+             code_sent=bool(code_outcome.get("sent")))
     return {"ok": True, "user_id": str(user_id), "email": row["email"], "role": row["role"],
+            "verification_required": True, "otp": otp_engine.describe_limits(),
             "organization_id": str(row["organization_id"]) if row["organization_id"] else None}
 
 

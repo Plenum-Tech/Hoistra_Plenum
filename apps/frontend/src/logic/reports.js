@@ -1,136 +1,137 @@
-// reports — a custom report is a pinned prompt re-run on a cadence.
+// reports — a custom report card is a pinned prompt, re-run on a cadence.
 //
-// Built from a session: the session's question becomes the report's prompt, the cadence says
+// Built from a session: the session's question becomes the card's prompt, the cadence says
 // how often it is asked again, and each run is the orchestrator's answer to that prompt on a
-// fresh thread. This is the Plenum shell's "pinned run" — the plenum_cafm.pinned_run table
-// has no route yet, so the reports live in this browser's localStorage and are re-run by the
-// app while it is open. The page says so.
+// fresh thread. This used to live entirely in this browser (localStorage + a 30s client
+// timer); svc-operations-intelligence now owns it for real — engines/reports/cards.py is the
+// engine, engines/reports/scheduler.py is the server-side refresh loop (FOR UPDATE SKIP
+// LOCKED, decoupled from any tab being open), and api/routes/reports.py is the REST contract.
+// This module is now a thin client over that API: it loads the caller's reports+cards,
+// creates/runs/deletes cards through the backend, and polls so a refresh the SERVER made
+// while this tab was idle still shows up here.
 //
 // The pure functions are tested in test/reports.test.mjs; the methods at the bottom are mixed
 // into HoistraLogic.prototype and `this` is the controller.
-import { deepAgentsApi } from '../api/deepAgents.js';
-import { extractComplianceAnswer } from './complianceLive.js';
-import { errorFromAnswer } from './chat.js';
+import { reportsApi } from '../api/reports.js';
 import { fmtDateTime } from './homeLive.js';
+import { saveHidden, withHidden, withNoneHidden } from './reportCards.js';
 
-export const REPORTS_KEY = 'hoistra.reports.v1';
-export const MAX_RUNS = 3;
-const TICK_MS = 30000;
-const T_RUN = 180000;
-
-// Interval-based and clock-based cadences in one list, since the user thinks of them the
-// same way — "how often does this re-read the graph".
-export const CADENCES = [
-  { label: 'Refresh every 30 minutes', badge: '30 min', everyMs: 30 * 60000 },
-  { label: 'Refresh every 1 hour', badge: '1 hr', everyMs: 60 * 60000 },
-  { label: 'Refresh every 6 hours', badge: '6 hr', everyMs: 6 * 3600000 },
-  { label: 'Refresh every 12 hours', badge: '12 hr', everyMs: 12 * 3600000 },
-  { label: 'Refresh every 24 hours', badge: '24 hr', everyMs: 24 * 3600000 },
-  { label: 'Refresh daily at 02:00', badge: 'Daily', daily: '02:00' },
-  { label: 'Refresh on chosen days', badge: 'Days', pickDays: true }
-];
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DEFAULT_CAD = 1;
 
-const cadOf = (cad) => CADENCES[cad && Number.isInteger(cad.i) ? cad.i : -1] || CADENCES[DEFAULT_CAD];
-const daysOf = (cad) => ((cad && Array.isArray(cad.days)) ? cad.days : []).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).sort();
+// Mirrors engines/reports/cards.py's PRESETS — used until GET /api/reports/refresh-options
+// answers, and as a safety net if it never does, so the "Create report" menu always has
+// something to show. The server's own list (same keys) wins the moment it loads.
+export const FALLBACK_PRESETS = [
+  { key: '30m', label: 'Refresh every 30 minutes', badge: '30 min' },
+  { key: '1h', label: 'Refresh every 1 hour', badge: '1 hr' },
+  { key: '6h', label: 'Refresh every 6 hours', badge: '6 hr' },
+  { key: '12h', label: 'Refresh every 12 hours', badge: '12 hr' },
+  { key: '24h', label: 'Refresh every 24 hours', badge: '24 hr' },
+  { key: 'daily', label: 'Refresh daily at 02:00', badge: 'Daily' },
+  { key: 'days', label: 'Refresh on chosen days', badge: 'Days', pick_days: true }
+];
 
-// 'HH:MM' → [h, m]; anything unreadable is 14:00.
-function parseTime(t) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
-  if (!m) return [14, 0];
-  const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
-  if (h > 23 || mi > 59) return [14, 0];
-  return [h, mi];
-}
+// The zone a clock cadence ("daily at 02:00") is read in. Browsers still report the LEGACY
+// IANA alias for a good many zones — Chrome on an Indian Mac says "Asia/Calcutta", never
+// "Asia/Kolkata" — and a server whose tzdata ships without the backward-compatibility links
+// (Debian moved them out into tzdata-legacy) refuses those names outright, which 422'd the
+// entire create. Canonicalise the aliases a browser actually emits; rpCreate's UTC retry
+// covers whatever is left.
+const TZ_ALIASES = {
+  'Asia/Calcutta': 'Asia/Kolkata', 'Asia/Saigon': 'Asia/Ho_Chi_Minh', 'Asia/Katmandu': 'Asia/Kathmandu',
+  'Asia/Rangoon': 'Asia/Yangon', 'Asia/Dacca': 'Asia/Dhaka', 'Asia/Macao': 'Asia/Macau',
+  'Asia/Chungking': 'Asia/Shanghai', 'Asia/Chongqing': 'Asia/Shanghai', 'Asia/Harbin': 'Asia/Shanghai',
+  'Asia/Istanbul': 'Europe/Istanbul', 'Asia/Thimbu': 'Asia/Thimphu', 'Asia/Ulan_Bator': 'Asia/Ulaanbaatar',
+  'Europe/Kiev': 'Europe/Kyiv', 'Europe/Uzhgorod': 'Europe/Kyiv', 'Europe/Zaporozhye': 'Europe/Kyiv',
+  'Europe/Nicosia': 'Asia/Nicosia', 'Atlantic/Faeroe': 'Atlantic/Faroe',
+  'America/Buenos_Aires': 'America/Argentina/Buenos_Aires', 'America/Catamarca': 'America/Argentina/Catamarca',
+  'America/Cordoba': 'America/Argentina/Cordoba', 'America/Jujuy': 'America/Argentina/Jujuy',
+  'America/Mendoza': 'America/Argentina/Mendoza', 'America/Rosario': 'America/Argentina/Cordoba',
+  'America/Indianapolis': 'America/Indiana/Indianapolis', 'America/Fort_Wayne': 'America/Indiana/Indianapolis',
+  'America/Louisville': 'America/Kentucky/Louisville', 'America/Godthab': 'America/Nuuk',
+  'America/Atka': 'America/Adak', 'America/Ensenada': 'America/Tijuana', 'America/Santa_Isabel': 'America/Tijuana',
+  'Africa/Asmera': 'Africa/Asmara', 'Africa/Timbuktu': 'Africa/Bamako',
+  'Pacific/Ponape': 'Pacific/Pohnpei', 'Pacific/Truk': 'Pacific/Chuuk', 'Pacific/Samoa': 'Pacific/Pago_Pago',
+  'Australia/Canberra': 'Australia/Sydney', 'Australia/ACT': 'Australia/Sydney', 'Australia/NSW': 'Australia/Sydney',
+  'Australia/Queensland': 'Australia/Brisbane', 'Australia/Victoria': 'Australia/Melbourne',
+  'Australia/West': 'Australia/Perth', 'Australia/South': 'Australia/Adelaide',
+  'GMT': 'UTC', 'UCT': 'UTC', 'Universal': 'UTC', 'Zulu': 'UTC', 'Etc/UTC': 'UTC', 'Etc/GMT': 'UTC'
+};
 
-// A day-picked cadence reads back as the days and time actually chosen.
-export function cadenceLabel(cad) {
-  const c = cadOf(cad);
-  if (!c.pickDays) return c.label;
-  const d = daysOf(cad).map((i) => DAYS[i]);
-  const [h, m] = parseTime(cad && cad.time);
-  const hm = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-  return d.length
-    ? 'Refresh ' + (d.length === 7 ? 'every day' : d.join(', ')) + ' at ' + hm
-    : 'Refresh on chosen days — pick at least one';
-}
-
-export function cadenceBadge(cad) {
-  const c = cadOf(cad);
-  if (!c.pickDays) return c.badge;
-  const d = daysOf(cad).map((i) => DAYS[i]);
-  return d.length === 7 ? 'Daily' : d.length ? d.join(' · ') : 'Days';
-}
-
-// When the next run falls, strictly after `from`, in local time. null when a days cadence
-// has no days.
-export function nextRunAt(cad, from) {
-  const c = cadOf(cad);
-  const f = typeof from === 'number' ? from : Date.now();
-  if (c.everyMs) return f + c.everyMs;
-  const d0 = new Date(f);
-  if (c.daily) {
-    const [h, m] = parseTime(c.daily);
-    const cand = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate(), h, m, 0, 0);
-    if (cand.getTime() <= f) cand.setDate(cand.getDate() + 1);
-    return cand.getTime();
+export function browserTimezone(raw) {
+  let z = raw;
+  if (z === undefined) {
+    try { z = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { z = null; }
   }
-  const days = daysOf(cad);
-  if (!days.length) return null;
-  const [h, m] = parseTime(cad && cad.time);
-  for (let off = 0; off <= 7; off++) {
-    const cand = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + off, h, m, 0, 0);
-    if (cand.getTime() > f && days.indexOf(cand.getDay()) > -1) return cand.getTime();
-  }
-  return null;
+  const name = String(z || '').trim();
+  if (!name) return 'UTC';
+  return TZ_ALIASES[name] || name;
 }
 
-export function makeReport(o) {
-  const now = o.now === undefined ? Date.now() : o.now;
-  return {
-    key: String(o.key),
-    name: String(o.name || 'Untitled report'),
-    prompt: String(o.prompt || ''),
-    sessionId: o.sessionId || null,
-    page: o.page || 'Home',
-    cad: Object.assign({ i: DEFAULT_CAD, days: [], time: '14:00' }, o.cad || {}),
-    createdAt: now,
-    lastRunAt: null,
-    lastTriedAt: null,
-    // Due at once: the first refresh runs as soon as the report exists.
-    nextRunAt: now,
-    status: 'pending',
-    error: '',
-    runs: []
-  };
+// Only a clock cadence is read in the owner's zone. An interval one ("every 30 minutes") is
+// plain arithmetic, so falling back to UTC changes nothing a person would notice — worth
+// knowing, because it decides whether a zone fallback is worth interrupting them about.
+export function cadenceIsClockBound(refresh) {
+  if (typeof refresh === 'string') return refresh === 'daily' || refresh === 'days';
+  return !!(refresh && (refresh.daily_at || refresh.days || refresh.time));
+}
+
+const STATUS_BADGE = { pending: 'Pending', running: 'Running', error: 'Failed', paused: 'Paused' };
+
+// The compact cadence, for the sidebar's badge column. The server sends `refresh_label` as
+// a sentence fragment ("every 30 minutes") meant for a line of prose — in a 60px badge it
+// truncates to nothing useful — so the short form is derived from the `refresh` object the
+// same response carries, matching the badge vocabulary the server's own PRESETS use.
+export function refreshBadge(refresh) {
+  if (!refresh || typeof refresh !== 'object') return '';
+  if (refresh.daily_at) return 'Daily';
+  if (Array.isArray(refresh.days)) {
+    const d = refresh.days.filter((x) => x >= 0 && x <= 6).map((x) => DAYS[x]);
+    return d.length === 7 ? 'Daily' : d.length ? d.join(' · ') : 'Days';
+  }
+  const n = Number(refresh.every_minutes);
+  if (!isFinite(n) || n <= 0) return '';
+  if (n < 60) return n + ' min';
+  if (n >= 2880 && n % 1440 === 0) return (n / 1440) + ' d';
+  return (n % 60 === 0 ? n / 60 : (n / 60).toFixed(1)) + ' hr';
+}
+
+export function cardStatusBadge(card) {
+  if (!card) return '';
+  return STATUS_BADGE[card.status] || refreshBadge(card.refresh) || card.refresh_label || '';
+}
+
+const POLL_MS = 30000;
+
+// Every report's cards, flattened into one array — each keeps its own id/report_id, plus
+// the parent report's name for display. The grid and the sidebar list both read this.
+export function flattenCards(reports) {
+  const out = [];
+  (reports || []).forEach((r) => {
+    (r.cards || []).forEach((c) => out.push(Object.assign({ report_name: r.name }, c)));
+  });
+  return out;
 }
 
 const uniq = (xs) => (xs || []).filter((x, i, a) => x && a.indexOf(x) === i);
 const cell = (v) => String(v === null || v === undefined ? '' : v).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 
-// What the orchestrator is told about a scheduled run.
-export function reportContext(rep) {
-  return 'This question is a saved Hoistra custom report named “' + rep.name + '”, ' +
-    cadenceLabel(rep.cad).replace(/^Refresh /, 're-run ') + '. It was pinned from the ' + rep.page +
-    ' page. Answer it as a standalone report against the current data: lead with the findings, then the figures ' +
-    'and the records behind them. Do not ask follow-up questions.';
-}
-
 // The export. Markdown, because the answers are markdown; a structured compliance answer is
-// flattened into headings, a figure list and a certificate table.
-export function reportMarkdown(rep, run) {
-  const lines = ['# ' + rep.name, ''];
-  lines.push('_Custom report · built from the session “' + rep.prompt + '” · ' + cadenceLabel(rep.cad) + '_');
+// flattened into headings, a figure list and a certificate table. `card`/`run` are the
+// server's own shapes (card_to_dict / run_to_dict in engines/reports/cards.py).
+export function cardMarkdown(card, run) {
+  const lines = ['# ' + (card.name || 'Untitled report'), ''];
+  lines.push('_Custom report · asks “' + card.prompt + '” · ' + (card.refresh_label || '') + '_');
   if (!run) {
     lines.push('', 'This report has not run yet.');
     return lines.join('\n') + '\n';
   }
-  lines.push('_Refreshed ' + fmtDateTime(run.at ? new Date(run.at).toISOString() : null) +
-    (typeof run.ms === 'number' ? ' · ' + Math.round(run.ms / 1000) + ' s' : '') +
-    (uniq(run.calls).length ? ' · tools: ' + uniq(run.calls).join(', ') : '') + '_', '');
-  if (run.error) {
-    lines.push('**This refresh did not complete.** ' + run.error);
+  const calls = uniq((run.tool_calls || []).map((t) => (t && t.tool) || t));
+  lines.push('_Refreshed ' + fmtDateTime(run.ran_at) +
+    (typeof run.duration_ms === 'number' ? ' · ' + Math.round(run.duration_ms / 1000) + ' s' : '') +
+    (calls.length ? ' · tools: ' + calls.join(', ') : '') + '_', '');
+  if (run.error || run.ok === false) {
+    lines.push('**This refresh did not complete.** ' + (run.error || ''));
     return lines.join('\n') + '\n';
   }
   const r = run.rich;
@@ -167,174 +168,284 @@ export function reportMarkdown(rep, run) {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
 }
 
-// ── storage ──────────────────────────────────────────────────────────────────
-const store = () => {
-  try { return (typeof window !== 'undefined' && window.localStorage) || null; } catch (e) { return null; }
-};
-
-export function loadReports(storage) {
-  const st = storage || store();
-  if (!st) return [];
-  let raw = null;
-  try { raw = st.getItem(REPORTS_KEY); } catch (e) { return []; }
-  if (!raw) return [];
-  let d = null;
-  try { d = JSON.parse(raw); } catch (e) { return []; }
-  if (!Array.isArray(d)) return [];
-  const out = [];
-  d.forEach((r) => {
-    if (!r || typeof r !== 'object' || typeof r.key !== 'string' || !r.key) return;
-    const rep = makeReport({ key: r.key, name: r.name, prompt: r.prompt, sessionId: r.sessionId, page: r.page, cad: r.cad, now: Number(r.createdAt) || Date.now() });
-    rep.lastRunAt = Number(r.lastRunAt) || null;
-    rep.lastTriedAt = Number(r.lastTriedAt) || null;
-    rep.nextRunAt = Number(r.nextRunAt) || rep.createdAt;
-    rep.runs = (Array.isArray(r.runs) ? r.runs : []).filter((x) => x && typeof x === 'object').slice(0, MAX_RUNS);
-    rep.error = typeof r.error === 'string' ? r.error : '';
-    // A run that was in flight when the page closed never finished: back to pending, and
-    // due, so the scheduler picks it up.
-    rep.status = r.status === 'ready' || r.status === 'error' ? r.status : 'pending';
-    if (r.status === 'running') rep.nextRunAt = Math.min(rep.nextRunAt, Date.now());
-    out.push(rep);
-  });
-  return out;
-}
-
-export function saveReports(list, storage) {
-  const st = storage || store();
-  if (!st) return false;
-  const l = (list || []).map((r) => Object.assign({}, r, { runs: (r.runs || []).slice(0, MAX_RUNS) }));
-  try {
-    st.setItem(REPORTS_KEY, JSON.stringify(l));
-    return true;
-  } catch (e) {
-    // Too big: keep one run per report, then give up quietly.
-    try {
-      st.setItem(REPORTS_KEY, JSON.stringify(l.map((r) => Object.assign({}, r, { runs: (r.runs || []).slice(0, 1) }))));
-      return true;
-    } catch (e2) { return false; }
-  }
+function patchCardInReports(reports, cardId, patch) {
+  return (reports || []).map((r) => Object.assign({}, r, {
+    cards: (r.cards || []).map((c) => (c.id === cardId ? Object.assign({}, c, patch) : c))
+  }));
 }
 
 // ── controller ───────────────────────────────────────────────────────────────
 export const reportsMethods = {
-  rpPatch(key, patch) {
-    this.setState((p) => ({
-      reports: (p.reports || []).map((r) => (r.key === key ? Object.assign({}, r, typeof patch === 'function' ? patch(r) : patch) : r))
-    }));
+  async rpLoad(opts) {
+    if (this._rpLoading) return;
+    this._rpLoading = true;
+    this.setState({ reportsLoading: true });
+    try {
+      const r = await reportsApi.list();
+      const reports = (r && Array.isArray(r.reports)) ? r.reports : [];
+      this.setState({ reports: reports, reportsLoading: false, reportsError: '', reportsLoadedAt: Date.now() });
+      if (opts && opts.announce) this.flash('Reports refreshed.');
+    } catch (e) {
+      this.setState({ reportsLoading: false, reportsError: (e && e.message) || String(e) });
+      if (opts && opts.announce) this.flash('Could not refresh reports — ' + ((e && e.message) || String(e)));
+    } finally {
+      this._rpLoading = false;
+    }
+  },
+
+  // GET /api/reports/refresh-options answers {ok, options, days, min_every_minutes,
+  // max_every_minutes} — `options`, not `presets`. Reading the wrong key here meant the
+  // server's own cadence menu never loaded and the hardcoded fallback silently stood in
+  // for it forever.
+  async rpLoadPresets() {
+    try {
+      const r = await reportsApi.refreshOptions();
+      const presets = (r && Array.isArray(r.options)) ? r.options : [];
+      if (presets.length) this.setState({ reportPresets: presets });
+    } catch (e) { /* the fallback list already in state keeps the menu usable */ }
+  },
+
+  // Mount: load once, then poll — the server's own scheduler (engines/reports/scheduler.py)
+  // refreshes due cards independently of this tab, so a plain load-once would show a card
+  // stuck on "pending" long after the server actually answered it.
+  rpStart() {
+    this.rpStop();
+    this.rpLoad();
+    this.rpLoadPresets();
+    this._rpTimer = setInterval(() => { if (this.state.signedIn) this.rpLoad(); }, POLL_MS);
+  },
+  rpStop() { clearInterval(this._rpTimer); clearTimeout(this._rpArmTimer); },
+
+  // Deleting is the one report action the server cannot undo — the row is soft-removed and
+  // never comes back through any route here — so a click arms a 4s confirm window instead of
+  // firing, and a second click on the SAME control inside it is the confirm. Same shape as
+  // the Users screen's suspend/delete (users.js's usArm), for the same reason.
+  rpArm(key) {
+    clearTimeout(this._rpArmTimer);
+    this.setState({ rpArmed: key });
+    this._rpArmTimer = setTimeout(() => this.setState((p) => (p.rpArmed === key ? { rpArmed: null } : {})), 4000);
+  },
+  rpDisarm() {
+    clearTimeout(this._rpArmTimer);
+    this.setState({ rpArmed: null });
   },
 
   // The navigator menu's Create report. Source = a chat session (its question is the prompt).
-  rpCreate() {
+  async rpCreate() {
     const s = this.state;
     const chats = (s.sessions || []).filter((q) => q.kind === 'chat');
     const src = chats.find((q) => q.id === s.reportSrcId) || chats[0] || null;
-    if (!src) return this.flash('Ask something first — a report is built from a session’s question.');
-    const cad = { i: s.reportCad, days: (s.reportDays || []).slice(), time: s.reportTime || '14:00' };
-    if ((CADENCES[cad.i] || {}).pickDays && !cad.days.length) return this.flash('Pick at least one day for the refresh.');
-    const key = 'r' + Date.now().toString(36);
-    const rep = makeReport({ key: key, name: (s.reportName || '').trim() || src.title, prompt: src.title, sessionId: src.id, page: src.page, cad: cad, now: Date.now() });
-    this.setState((p) => ({
-      reports: (p.reports || []).concat([rep]),
-      reportMenu: false, reportName: '', view: 'report', reportKey: key, reportRunIdx: 0, detail: null, navOpen: true
-    }));
-    if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
-    this.rpRun(key);
-  },
-
-  // One refresh: the prompt on a fresh thread, so no earlier conversation colours the report.
-  // run-stateful, not run — the compliance preflight that produces the structured answer only
-  // sits on the stateful path (see ccAsk).
-  async rpRun(key) {
-    const rep = (this.state.reports || []).find((r) => r.key === key);
-    if (!rep) return;
-    if (this._rpRunning) {
-      if (this._rpRunning !== key) this.flash('Another report is refreshing — this one runs next.');
-      return;
+    if (!src) return this.flash('Ask something first — a report card is built from a session’s question.');
+    const presets = (s.reportPresets && s.reportPresets.length) ? s.reportPresets : FALLBACK_PRESETS;
+    const preset = presets[s.reportCad] || presets[0];
+    if (!preset) return this.flash('Refresh options have not loaded yet — try again in a moment.');
+    let refresh = preset.key;
+    if (preset.pick_days) {
+      if (!(s.reportDays || []).length) return this.flash('Pick at least one day for the refresh.');
+      refresh = { days: s.reportDays.slice(), time: s.reportTime || '14:00' };
     }
-    this._rpRunning = key;
-    const t0 = Date.now();
-    this.rpPatch(key, { status: 'running', error: '' });
+    const body = {
+      prompt: src.title,
+      name: (s.reportName || '').trim() || src.title,
+      refresh: refresh,
+      timezone: browserTimezone(),
+      source_session_id: src.id,
+      source_page: src.page,
+      run_now: true
+    };
+    this.setState({ reportMenu: false, reportName: '' });
+    let out;
     try {
-      const sid = 'report-' + key + '-' + t0.toString(36);
-      const r = await deepAgentsApi.runStateful(rep.prompt, sid, reportContext(rep), null);
-      if (r && r.success === false) throw new Error(r.error || 'the orchestrator returned no answer');
-      const answer = (r && r.answer) || '';
-      const toolCalls = (r && r.tool_calls) || [];
-      const engineError = errorFromAnswer(answer);
-      if (engineError) throw new Error(engineError);
-      const rich = extractComplianceAnswer(toolCalls) || null;
-      if (!answer && !rich) throw new Error('the orchestrator returned an empty answer');
-      const at = Date.now();
-      this.rpPatch(key, (p) => ({
-        status: 'ready', error: '', lastRunAt: at, lastTriedAt: at, nextRunAt: nextRunAt(p.cad, at),
-        runs: [{ at: at, ms: at - t0, answer: answer, calls: uniq(toolCalls.map((t) => t.tool)), rich: rich }].concat(p.runs || []).slice(0, MAX_RUNS)
-      }));
-      if (this.state.view === 'report' && this.state.reportKey === key) this.setState({ reportRunIdx: 0 });
+      out = await this.rpPostCard(body);
     } catch (e) {
-      const msg = (e && e.message) || String(e);
-      const at = Date.now();
-      const unreachable = (e && (e.status === 502 || e.status === 503 || e.status === 504)) || /ECONNREFUSED|ENOTFOUND|network|failed to fetch|timed out/i.test(msg);
-      const text = msg + (unreachable ? ' — svc-deepagents is not reachable at /backend/deep-agents.' : '');
-      this.rpPatch(key, (p) => ({
-        status: 'error', error: text, lastTriedAt: at, nextRunAt: nextRunAt(p.cad, at),
-        runs: [{ at: at, ms: at - t0, error: text }].concat(p.runs || []).slice(0, MAX_RUNS)
-      }));
-    } finally {
-      this._rpRunning = null;
+      return this.flash('Could not create the report card — ' + ((e && e.message) || String(e)));
+    }
+    // POST /api/reports/cards answers {ok, report, card} — the card is nested, and reading
+    // the envelope as the card itself left rpOpen with an undefined id.
+    const card = out.card;
+    this.flash(out.tzFellBack && cadenceIsClockBound(refresh)
+      ? 'Report card created, but this server does not recognise your timezone (' + body.timezone + ') — the refresh time is read as UTC.'
+      : 'Report card created — the first refresh is running.');
+    await this.rpLoad();
+    if (card && card.id) this.rpOpen(card.id);
+  },
+
+  // One create, with a single retry on a zone the server will not accept. A cadence that is
+  // pure arithmetic ("every hour") does not care which zone it is stamped with, and a card
+  // the person asked for is worth more than the zone field — so the card gets made either
+  // way, and rpCreate says so out loud when the zone actually changes what time it runs.
+  async rpPostCard(body) {
+    try {
+      return { card: (await reportsApi.createCard(body)).card, tzFellBack: false };
+    } catch (e) {
+      if (!(e && e.reason === 'bad_timezone') || body.timezone === 'UTC') throw e;
+      const r = await reportsApi.createCard(Object.assign({}, body, { timezone: 'UTC' }));
+      return { card: r.card, tzFellBack: true };
     }
   },
 
-  // The scheduler: while the app is open and signed in, due reports refresh one at a time.
-  //
-  // Mount issues reads only. A report left overdue from a previous visit — loadReports even
-  // forces an interrupted run back to due — used to be caught up 4 seconds after every
-  // mount with no one having asked for anything: open the tab, and the orchestrator ran a
-  // write-capable turn against production on its own. `_rpBootAt` is the line: a report due
-  // before this boot stays parked (Run now clears it explicitly, or it simply waits for its
-  // own next cadence, which lands after boot and ticks normally) — only a cadence that
-  // comes due *while this tab is open and being watched* fires unattended.
-  rpStart() {
-    this.rpStop();
-    this._rpBootAt = Date.now();
-    this._rpTimer = setInterval(() => this.rpTick(), TICK_MS);
-  },
-  rpStop() { clearInterval(this._rpTimer); },
-  rpTick() {
-    if (!this.state.signedIn || this._rpRunning) return;
-    const now = Date.now();
-    const bootAt = typeof this._rpBootAt === 'number' ? this._rpBootAt : 0;
-    const due = (this.state.reports || [])
-      .filter((r) => r.status !== 'running' && typeof r.nextRunAt === 'number' && r.nextRunAt <= now && r.nextRunAt >= bootAt)
-      .sort((a, b) => a.nextRunAt - b.nextRunAt);
-    if (due.length) this.rpRun(due[0].key);
+  // Refresh now — hits the same route the server's own scheduler calls, so the result is
+  // wired through the identical run_card() lifecycle (owner-scoped token, audit trail, etc).
+  async rpRunCard(cardId) {
+    if (this._rpRunBusy) return;
+    this._rpRunBusy = cardId;
+    this.setState((p) => ({ reports: patchCardInReports(p.reports, cardId, { status: 'running' }) }));
+    try {
+      await reportsApi.runCard(cardId);
+    } catch (e) {
+      // 409 already_running is the server's own scheduler having claimed this card first —
+      // not a failure, and the reload below shows the run it is already doing.
+      if (!(e && e.reason === 'already_running')) this.flash('Refresh failed — ' + ((e && e.message) || String(e)));
+    } finally {
+      this._rpRunBusy = null;
+      await this.rpLoad();
+    }
   },
 
-  rpOpen(key) {
-    this.setState({ view: 'report', reportKey: key, reportRunIdx: 0, navOpen: true, detail: null, queueOpen: false, paletteOpen: false });
+  rpOpen(cardId) {
+    this.setState({ view: 'report', reportKey: cardId, reportRunIdx: 0, navOpen: true, detail: null, queueOpen: false, paletteOpen: false });
     if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
   },
 
-  rpDelete(key) {
+  async rpDeleteCard(cardId) {
+    // One DELETE per card at a time: the confirm click can be repeated faster than the
+    // round trip, and the second request would 404 against a card the first already removed.
+    const busy = this._rpDeleting || (this._rpDeleting = {});
+    if (busy[cardId]) return;
+    busy[cardId] = true;
+    try {
+      await reportsApi.deleteCard(cardId);
+    } catch (e) {
+      delete busy[cardId];
+      return this.flash('Could not delete — ' + ((e && e.message) || String(e)));
+    }
+    delete busy[cardId];
+    clearTimeout(this._rpArmTimer);
+    // The card is gone, so its curation is dead weight — prune it rather than leave the
+    // hidden-set growing by one entry for every card the account ever had.
+    const pruned = withNoneHidden(this.state.reportHidden, this.state.account, cardId);
+    saveHidden(pruned);
     this.setState((p) => Object.assign(
-      { reports: (p.reports || []).filter((r) => r.key !== key) },
-      p.view === 'report' && p.reportKey === key ? { view: 'home', reportKey: null } : {}
+      {
+        reports: (p.reports || []).map((r) => Object.assign({}, r, { cards: (r.cards || []).filter((c) => c.id !== cardId) })),
+        reportSelected: (p.reportSelected || []).filter((id) => id !== cardId),
+        reportHidden: pruned,
+        rpArmed: null
+      },
+      // Back to the grid of what is left, not out to Home — the person was working in
+      // reports and deleting one card is no reason to leave.
+      p.view === 'report' && p.reportKey === cardId ? { reportKey: null } : {}
     ));
-    this.flash('Report deleted.');
+    this.flash('Report card deleted.');
+  },
+
+  // The report itself — the container the cards sit in. DELETE /api/reports/{id} takes every
+  // card on it with it, which is why this is the one delete that says how many.
+  async rpDeleteReport(reportId) {
+    const report = (this.state.reports || []).find((r) => r.id === reportId);
+    const goneIds = report ? (report.cards || []).map((c) => c.id) : [];
+    try {
+      await reportsApi.remove(reportId);
+    } catch (e) {
+      return this.flash('Could not delete the report — ' + ((e && e.message) || String(e)));
+    }
+    clearTimeout(this._rpArmTimer);
+    this.setState((p) => Object.assign(
+      {
+        reports: (p.reports || []).filter((r) => r.id !== reportId),
+        reportSelected: (p.reportSelected || []).filter((id) => goneIds.indexOf(id) === -1),
+        rpArmed: null
+      },
+      // The card on the page went with it — fall back to the grid rather than a page bound
+      // to an id the server no longer has.
+      p.view === 'report' && goneIds.indexOf(p.reportKey) > -1 ? { reportKey: null } : {}
+    ));
+    this.flash(goneIds.length
+      ? 'Report deleted, with ' + goneIds.length + ' card' + (goneIds.length === 1 ? '' : 's') + ' on it.'
+      : 'Report deleted.');
+  },
+
+  // ── curating the cards inside one report ───────────────────────────────────
+  // A view preference, not a server fact: the backend has no notion of a hidden section, and
+  // the answer itself is never altered — Export still writes the whole thing. Stored per
+  // account, per report card, so it survives every refresh and every reload.
+  rcHide(key) {
+    const id = this.state.reportKey;
+    if (!id || !key) return;
+    const next = withHidden(this.state.reportHidden, this.state.account, id, key, true);
+    this.setState({ reportHidden: next });
+    saveHidden(next);
+  },
+  rcRestore(key) {
+    const id = this.state.reportKey;
+    if (!id || !key) return;
+    const next = withHidden(this.state.reportHidden, this.state.account, id, key, false);
+    this.setState({ reportHidden: next });
+    saveHidden(next);
+  },
+  rcRestoreAll() {
+    const id = this.state.reportKey;
+    if (!id) return;
+    const next = withNoneHidden(this.state.reportHidden, this.state.account, id);
+    this.setState({ reportHidden: next, reportTrayOpen: false });
+    saveHidden(next);
+  },
+  rcToggleTray() { this.setState((p) => ({ reportTrayOpen: !p.reportTrayOpen })); },
+
+  // A card shows its picture and its headline; the sentences behind it open on demand. Not
+  // persisted — which paragraph you had open is not a preference, it is where you were
+  // looking a moment ago.
+  rcToggleOpen(key) {
+    this.setState((p) => {
+      const open = p.reportOpenBlocks || [];
+      return { reportOpenBlocks: open.indexOf(key) > -1 ? open.filter((k) => k !== key) : open.concat(key) };
+    });
+  },
+
+  rpToggleSelect(cardId) {
+    this.setState((p) => ({
+      reportSelected: (p.reportSelected || []).indexOf(cardId) > -1
+        ? p.reportSelected.filter((id) => id !== cardId)
+        : (p.reportSelected || []).concat(cardId)
+    }));
+  },
+  rpClearSelection() { this.setState({ reportSelected: [] }); },
+
+  // Bulk delete — every selected card, in one round of requests. A card that fails to
+  // delete server-side stays in the list (and selected), so the user can see and retry it.
+  async rpDeleteSelected() {
+    const ids = (this.state.reportSelected || []).slice();
+    if (!ids.length) return;
+    const results = await Promise.allSettled(ids.map((id) => reportsApi.deleteCard(id)));
+    const ok = [], failed = [];
+    ids.forEach((id, i) => (results[i].status === 'fulfilled' ? ok : failed).push(id));
+    clearTimeout(this._rpArmTimer);
+    this.setState((p) => Object.assign(
+      {
+        reports: (p.reports || []).map((r) => Object.assign({}, r, { cards: (r.cards || []).filter((c) => ok.indexOf(c.id) === -1) })),
+        reportSelected: failed,
+        rpArmed: null
+      },
+      p.view === 'report' && ok.indexOf(p.reportKey) > -1 ? { reportKey: null } : {}
+    ));
+    this.flash(failed.length
+      ? ok.length + ' deleted, ' + failed.length + ' failed — try again.'
+      : ok.length + ' report card' + (ok.length === 1 ? '' : 's') + ' deleted.');
   },
 
   // Saves the run in view as a markdown file, client-side.
-  rpExport(key, runIdx) {
-    const rep = (this.state.reports || []).find((r) => r.key === key);
-    if (!rep) return;
-    const run = (rep.runs || [])[runIdx || 0] || (rep.runs || [])[0] || null;
-    const md = reportMarkdown(rep, run);
+  rpExport(cardId, runIdx) {
+    const card = flattenCards(this.state.reports).find((c) => c.id === cardId);
+    if (!card) return;
+    const run = (card.runs || [])[runIdx || 0] || card.latest_run || null;
+    const md = cardMarkdown(card, run);
     if (typeof document === 'undefined' || typeof window === 'undefined' || !window.URL || !window.URL.createObjectURL) {
       return this.flash('Export needs a browser.');
     }
     const url = window.URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = (rep.name || 'report').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() + '.md';
+    a.download = (card.name || 'report').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() + '.md';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     this.flash('Saved ' + a.download);

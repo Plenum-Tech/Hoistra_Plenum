@@ -22,3 +22,5 @@ apps/backend/config.toml
 .idea/
 .vscode/
 graphify-out/
+# local plugin working state — config + a hook cache, regenerated on demand
+.impeccable/

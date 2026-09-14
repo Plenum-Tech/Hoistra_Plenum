@@ -119,6 +119,10 @@ services:
       AUTH_JWT_SECRET: testenv-jwt-secret-not-for-production-x
       AUTH_OTP_PEPPER: testenv-otp-pepper-not-for-production-x
       AUTH_DEFAULT_ORGANIZATION_ID: "00000000-0000-0000-0000-000000000001"
+      # Same reason as the local stack: config.py's 127.0.0.1:8008 default only holds for the
+      # all-in-one image. Here deep-agents is its own container, and the report scheduler
+      # calls it server-side to refresh a card.
+      DEEP_AGENTS_BASE_URL: http://svc-deepagents:8008
       PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
       FRONTEND_PUBLIC_URL: http://localhost:3000
       OTEL_SDK_DISABLED: "true"
@@ -155,6 +159,12 @@ services:
       PLENUM_DB_URL: *db
       db_url: *db
       REDIS_URL: redis://redis:6379/0
+      # Where this container validates a caller's token: it resolves the principal
+      # against OPS /api/auth/me and defaults to 127.0.0.1:8009 — correct only for the
+      # all-in-one image, where both run under one supervisord. Here ops-intelligence is
+      # a separate container, so the default points at this container's own port 8009,
+      # where nothing listens, and every authenticated route answers 503.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       ENVIRONMENT: development
       DEBUG: "true"
       # 03_bootstrap.sql already created it; this is belt and braces and idempotent.
@@ -197,6 +207,12 @@ services:
       DB_URL: *db
       db_url: *db
       APPROVAL_EMAIL_POLL_ENABLED: "false"
+      # Where this container validates a caller's token: it resolves the principal
+      # against OPS /api/auth/me and defaults to 127.0.0.1:8009 — correct only for the
+      # all-in-one image, where both run under one supervisord. Here ops-intelligence is
+      # a separate container, so the default points at this container's own port 8009,
+      # where nothing listens, and every authenticated route answers 503.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       # This service constructs an OpenAI client at import, so without a key it does not
       # start at all — it was getting one from apps/backend/.env, which this file
       # deliberately does not load. A placeholder lets it serve work orders and approvals,

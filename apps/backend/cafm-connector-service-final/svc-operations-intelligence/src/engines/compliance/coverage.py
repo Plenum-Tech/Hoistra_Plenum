@@ -223,17 +223,33 @@ async def building_coverage(
 
     # Sites with an activated pack — they belong in coverage at 0% even with no certificate
     # on file, because a pack activated on a site is an obligation the site has.
+    #
+    # building_country_packs carries its own organization_id (activating a pack is a
+    # per-company action), so it is filtered the same way the certs below are — without
+    # this, every company's activated packs surfaced as placeholder rows in every other
+    # company's "buildings in scope", each showing a real site name at 0% coverage.
+    #
+    # KNOWN GAP: these rows are still not narrowed for a building-restricted caller within
+    # their own org. This table keys on plenum_cafm.sites.site_id (VARCHAR), and
+    # scope.allows_building() checks against plenum_cafm.buildings.building_id (UUID) — the
+    # two are not the same identifier space here, and there is no site_id -> building_id
+    # join in this function to bridge them safely. In practice this only surfaces an empty
+    # "0% coverage, no certificates on file" placeholder row for an unallocated building
+    # that has a pack activated but nothing filed against it yet — no certificate detail
+    # leaks through it, unlike the certs filtered above. Close this once that join is
+    # available.
     try:
         async with session.begin_nested():
+            pack_query = (
+                "SELECT site_id::text AS site_id, pack_version, country_code "
+                "FROM plenum_cafm.building_country_packs"
+            )
+            pack_params: dict[str, Any] = {}
+            if organization_id:
+                pack_query += " WHERE organization_id = :oid"
+                pack_params["oid"] = str(organization_id)
             pack_sites = (
-                await session.execute(
-                    text(
-                        """
-                        SELECT site_id::text AS site_id, pack_version, country_code
-                        FROM plenum_cafm.building_country_packs
-                        """
-                    )
-                )
+                await session.execute(text(pack_query), pack_params)
             ).mappings().all()
         # A site whose activated pack is another country's is another country's
         # obligation. It belongs in that country's coverage, not this one's.

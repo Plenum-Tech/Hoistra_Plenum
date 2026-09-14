@@ -118,6 +118,29 @@ ENV DOC_RAG_BASE_URL=http://127.0.0.1:8004 \
     WO_MANAGEMENT_BASE_URL=http://127.0.0.1:8007 \
     OPERATIONS_INTELLIGENCE_BASE_URL=http://127.0.0.1:8009
 
+# Where THIS deployment is actually reached from a browser — not another service inside
+# the container, a person's mail client. Three settings build links that leave the container
+# in an email, and all three default to a localhost that is dead the moment it is read
+# anywhere but a developer's laptop:
+#
+#   PUBLIC_APP_URL       engines/auth/invitations.py  -> {url}/accept-invitation?token=...
+#   FRONTEND_PUBLIC_URL  engines/compliance/{tokens,passport,certificates,scan}.py, and
+#                        api/routes/compliance.py — every emailed link back into the UI
+#   PUBLIC_BASE_URL      engines/compliance/tokens.py -> the one-click approval URL, which
+#                        must reach the BACKEND, served here under /backend/ops-intelligence
+#                        (deploy/allinone/nginx.conf:33)
+#
+# Only PUBLIC_APP_URL was set; the other two still emitted http://localhost:3000/... and
+# http://localhost:8009/... to vendors and approvers. All three share one browser-facing
+# origin, so they are stated together and move together.
+#
+# A Container Apps revision can override any of these at the platform level (environment
+# variables in the portal/CLI take precedence over an image's own ENV at container start),
+# so these are the production defaults, not the only place they can be set.
+ENV PUBLIC_APP_URL=https://hoistra-frontend.gentlesmoke-fd81e91e.uaenorth.azurecontainerapps.io \
+    FRONTEND_PUBLIC_URL=https://hoistra-frontend.gentlesmoke-fd81e91e.uaenorth.azurecontainerapps.io \
+    PUBLIC_BASE_URL=https://hoistra-frontend.gentlesmoke-fd81e91e.uaenorth.azurecontainerapps.io/backend/ops-intelligence
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     OTEL_SDK_DISABLED=true

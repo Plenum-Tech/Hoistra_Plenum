@@ -96,8 +96,53 @@ export default function HoistBuildingCard({ vals }) {
             <Field label="Building code" error={vals.bcErr("building_code")}>
               <input className="input" value={f.building_code} onChange={vals.bcSet("building_code")} placeholder="allocated as B-NN" style={INPUT} />
             </Field>
-            <Field label="Site it belongs to" error={vals.bcErr("site_id")}>
-              <input className="input" value={f.site_id} onChange={vals.bcSet("site_id")} placeholder="S-01 — optional, must already exist" style={INPUT} />
+            <Field label="Site it belongs to" hint={vals.bcSitesLoading ? "Loading sites…" : "Optional — leave blank if this building stands on its own"} error={vals.bcErr("site_id")}>
+              <div style={{ position: "relative" }}>
+                <div className="hv2" onClick={vals.bcSiteToggle} style={{ display: "flex", alignItems: "center", gap: "8px", ...INPUT, cursor: "pointer" }}>
+                  <i className="ph ph-map-pin" style={{ fontSize: "12px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                  <span style={{ flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: f.site_id ? "var(--color-text)" : "var(--color-neutral-500)" }}>
+                    {vals.bcSiteLabel}
+                  </span>
+                  <i className={`ph ${vals.bcSiteOpen ? "ph-caret-up" : "ph-caret-down"}`} style={{ fontSize: "10px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                </div>
+                {vals.bcSiteOpen ? (
+                  <>
+                    <div onClick={vals.bcSiteClose} style={{ position: "fixed", inset: "0", zIndex: "64" }}></div>
+                    <div style={{ position: "absolute", top: "calc(100% + 4px)", left: "0", right: "0", zIndex: "65", borderRadius: "9px", background: "var(--color-surface)", border: "1px solid var(--color-divider)", boxShadow: "var(--shadow-lg)", overflow: "hidden", animation: "fadeUp 0.16s ease both" }}>
+                      <div style={{ padding: "8px 9px", borderBottom: "1px solid var(--color-divider)" }}>
+                        <input value={vals.bcSiteQuery} onChange={vals.bcSiteSetQuery} placeholder={vals.bcSitePlaceholder} autoFocus style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", outline: "none", fontFamily: "inherit" }} />
+                      </div>
+                      <div className="hv2" onClick={vals.bcSiteNoneRow.click} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "7px 9px", fontSize: "11.5px", color: vals.bcSiteNoneRow.fg, cursor: "pointer", borderBottom: "1px solid var(--color-divider)" }}>
+                        <span style={{ flex: "1" }}>{"No site"}</span>
+                        <i className="ph ph-check" style={{ fontSize: "11px", color: "var(--color-accent)", display: vals.bcSiteNoneRow.tickShow }}></i>
+                      </div>
+                      <div style={{ maxHeight: "220px", overflowY: "auto" }}>
+                        {(vals.bcSiteRows || []).map((r) => (
+                          <React.Fragment key={r.key}>
+                            <div className="hv2" onClick={r.click} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "7px 9px", fontSize: "11.5px", color: r.fg, cursor: "pointer" }}>
+                              <span style={{ flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {r.label}
+                              </span>
+                              <span style={{ fontSize: "10px", color: "var(--color-neutral-400)", fontFamily: "ui-monospace,monospace", flexShrink: "0" }}>
+                                {r.code}
+                              </span>
+                              <i className="ph ph-check" style={{ fontSize: "11px", color: "var(--color-accent)", display: r.tickShow, flexShrink: "0" }}></i>
+                            </div>
+                          </React.Fragment>
+                        ))}
+                        {vals.bcSiteNoMatch ? (
+                          <div style={{ padding: "10px 9px", fontSize: "11px", color: "var(--color-neutral-500)" }}>{"No site matches that."}</div>
+                        ) : null}
+                        {vals.bcSiteMore ? (
+                          <div style={{ padding: "7px 9px", fontSize: "10px", color: "var(--color-neutral-500)", borderTop: "1px solid var(--color-divider)" }}>
+                            {vals.bcSiteMore + " more — keep typing to narrow it down"}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
             </Field>
           </div>
 
@@ -155,6 +200,36 @@ export default function HoistBuildingCard({ vals }) {
               <div style={{ fontSize: "12px" }}>{"Do it later"}</div>
               <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", lineHeight: "1.4" }}>{"Hoist the record only — live and waiting"}</div>
             </div>
+          </div>
+
+          {/* Optional and skippable either way: neither card above is gated on this, and
+              picking Ingest now / Do it later works exactly as before whether or not a
+              user was assigned here first. */}
+          <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid var(--color-divider)" }}>
+            <span style={LABEL}>{"Assign to a user"}</span>
+            <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "5px" }}>
+              {"Optional — gives one person this building in their own scope right away. Skip it and allocate access later from Admin → Users."}
+            </div>
+            {vals.bcAssignedTo ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "9px", padding: "7px 9px", borderRadius: "7px", background: "var(--st-ok-bg)", fontSize: "11px", color: "var(--st-ok)" }}>
+                <i className="ph ph-check-circle" style={{ fontSize: "13px" }}></i>
+                {"Assigned to " + vals.bcAssignedTo + "."}
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: "6px", marginTop: "9px" }}>
+                <select className="input" value={vals.bcAssignUserId} onChange={vals.bcSetAssignUser} disabled={vals.bcUsersLoading} style={{ ...INPUT, flex: "1" }}>
+                  <option value="">{vals.bcUsersLoading ? "Loading the team…" : "No one — skip this"}</option>
+                  {(vals.bcAssignOptions || []).map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}
+                </select>
+                <div
+                  className="hv7"
+                  onClick={vals.bcAssignReady ? vals.bcAssignSubmit : undefined}
+                  style={{ fontSize: "11.5px", padding: "6px 14px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.bcAssignReady ? "pointer" : "default", opacity: vals.bcAssignReady ? "1" : "0.45", whiteSpace: "nowrap" }}
+                >
+                  {vals.bcAssigning ? "Assigning…" : "Assign"}
+                </div>
+              </div>
+            )}
           </div>
         </>
       ) : null}

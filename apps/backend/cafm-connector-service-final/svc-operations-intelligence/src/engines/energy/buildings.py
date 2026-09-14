@@ -708,6 +708,63 @@ async def get_building(
     return {"ok": False, "error": "building_not_found", "site_id": needle}
 
 
+async def site_to_buildings(session: AsyncSession) -> dict[str, list[str]]:
+    """The energy tables' ``site_id`` -> the ``buildings.building_id``(s) on that site.
+
+    Meters, anomalies and the rest of Feature C's readings key on a site, not a building —
+    a site can hold more than one building, which is exactly why _list_from_graph() above
+    refuses to attribute a shared site's energy to either one rather than guess. Any caller
+    narrowing a site-keyed row to a single building should apply the same rule: zero or more
+    than one entry for a site means "cannot attribute", not "pick one."
+    """
+    rows = await building_rollup.load_buildings(session, limit=5000)
+    out: dict[str, list[str]] = {}
+    for b in rows:
+        sid = str(b.get("site_id") or "").strip()
+        bid = str(b.get("building_id") or "").strip()
+        if sid and bid:
+            out.setdefault(sid, []).append(bid)
+    return out
+
+
+async def restrict_by_site(
+    session: AsyncSession, rows: list[dict[str, Any]], scope: Any, *, site_key: str = "site_id"
+) -> list[dict[str, Any]]:
+    """Narrows site-keyed rows (meters, anomalies, …) to a building-restricted caller's
+    allocated buildings. A no-op for an unrestricted caller or an empty scope.
+
+    ``site_id`` is not always a site. On this schema ``energy_meters.site_id`` and
+    ``energy_anomalies.site_id`` carry the BUILDING — stated at meters.py:839, relied on by
+    ``market_profiles.py``'s ``JOIN buildings b ON b.building_id = m.site_id`` and by
+    ``detection_coverage.py``'s ``site_id::text AS building_id``. Mapping those through
+    site_to_buildings() looks a building id up in a site-keyed map, misses every time, and
+    drops every row: a building-allocated person saw an empty meter and anomaly list
+    instead of their own. So the id is tried as a building first.
+
+    The site reading is kept as the fallback for a genuinely site-keyed caller, and there it
+    still refuses to guess: a site holding zero or more than one building cannot be
+    attributed, and an unattributable row is dropped rather than shown.
+    """
+    if not rows or scope is None or not getattr(scope, "restricted", False):
+        return rows
+    site_map: dict[str, list[str]] | None = None
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sid = str(r.get(site_key) or "").strip()
+        if not sid:
+            continue
+        if scope.allows_building(sid):
+            out.append(r)
+            continue
+        if site_map is None:
+            site_map = await site_to_buildings(session)
+        bids = site_map.get(sid) or []
+        if len(bids) == 1 and scope.allows_building(bids[0]):
+            out.append(r)
+    return out
+
+
+
 async def _list_from_graph(
     session: AsyncSession,
     buildings: list[dict[str, Any]],
@@ -760,6 +817,33 @@ async def _list_from_graph(
     }
 
 
+async def _org_building_ids(
+    session: AsyncSession, organization_id: UUID | None
+) -> set[str] | None:
+    """Building ids plenum_cafm.buildings itself says belong to this company, or ``None``
+    when there is no company to narrow to (an internal/unscoped caller) — the caller then
+    leaves its rows untouched, the same "no filter" default every org-scoped query here
+    already falls back to. Guarded with as_uuid() for the same reason _energy_by_site is:
+    a legacy integer organizations.id cannot equal this table's uuid column, and comparing
+    them raises rather than matching nothing.
+    """
+    org_uuid = as_uuid(organization_id)
+    if org_uuid is None:
+        return None
+    try:
+        async with session.begin_nested():
+            rows = (
+                await session.execute(
+                    text("SELECT building_id::text AS id FROM plenum_cafm.buildings WHERE organization_id = :o"),
+                    {"o": str(org_uuid)},
+                )
+            ).scalars().all()
+    except Exception as exc:  # noqa: BLE001 — a failed lookup must never leak every company's buildings
+        log.warning("energy.buildings.org_ids_failed", error=str(exc)[:200])
+        return set()
+    return {str(r) for r in rows}
+
+
 async def list_buildings(
     session: AsyncSession,
     *,
@@ -772,6 +856,16 @@ async def list_buildings(
     graph_buildings = await building_rollup.load_buildings(session, limit=limit)
     roll = await building_rollup.rollups(session, limit=limit) if graph_buildings else {}
     if graph_buildings:
+        # The branch decision above is a deployment-wide fact (does plenum_cafm.buildings
+        # have rows at all); which of those rows this caller may see is a company-scoped
+        # one, applied after — load_buildings() itself carries no organization_id, so this
+        # was returning every company's buildings to whoever asked, admin and superadmin
+        # alike, with nothing else in this path narrowing it back down.
+        org_ids = await _org_building_ids(session, organization_id)
+        if org_ids is not None:
+            graph_buildings = [
+                b for b in graph_buildings if str(b.get("building_id") or "") in org_ids
+            ]
         return await _list_from_graph(
             session, graph_buildings, roll, organization_id=organization_id
         )

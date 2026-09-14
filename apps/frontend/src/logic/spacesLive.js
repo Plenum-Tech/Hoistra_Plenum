@@ -17,6 +17,7 @@
 // HoistraLogic.prototype and `this` is the controller.
 import { spacesApi } from '../api/spaces.js';
 import { spaceKeyOf, BUILTIN_SPACE_KEYS } from './sessions.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -121,11 +122,20 @@ function ops(b, ap) {
   return out;
 }
 
-// input: { home: homeRaw|null, vendors: vpModel(), saved: rows|null, sessions, savedError, savedLoading }
+// input: { home: homeRaw|null, vendors: vpModel(), saved: rows|null, sessions, savedError,
+// savedLoading, owner }
+//
+// `owner` is the signed-in account's email. The saved-spaces list is one shared svc-udr
+// table for the whole organisation — GET /api/spaces has no per-user filter server-side —
+// and `sessions` is the same shared browser array logic/sessions.js's makeSession()
+// documents, so both are narrowed here to the account asking: a custom space only shows
+// if IT created it, and a session only counts toward a space's tally if IT asked it. No
+// owner (not signed in) shows no custom spaces and no session counts, never everyone's.
 export function shapeSpaces(input) {
   const inp = input || {};
   const home = inp.home || {};
-  const sessions = inp.sessions || [];
+  const owner = inp.owner ? String(inp.owner).trim().toLowerCase() : null;
+  const sessions = (inp.sessions || []).filter((s) => !!owner && s && s.owner === owner);
   const chats = sessions.filter((s) => s && s.kind === 'chat');
   const builtin = BUILTIN_SPACES.map((b) => {
     const e = b.key === 'compliance' ? compliance(b, home.compliance)
@@ -137,6 +147,7 @@ export function shapeSpaces(input) {
   });
   const savedLive = Array.isArray(inp.saved);
   const custom = (savedLive ? inp.saved : []).slice()
+    .filter((r) => !!owner && String((r && r.created_by) || '').trim().toLowerCase() === owner)
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     .map((r) => ({
       id: String(r.id), name: r.name || 'Untitled space', createdAt: r.created_at || null, createdBy: r.created_by || null,
@@ -158,10 +169,14 @@ export const spacesMethods = {
   spModel() {
     const s = this.state;
     const vm = this.vpModel();
-    const key = [s.homeRaw, vm, s.spaces, s.sessions, s.spError, s.spLoading];
+    const owner = (s.account && s.account.email) ? String(s.account.email).trim().toLowerCase() : null;
+    // owner is in the memo key too — an account switch in the same tab (view-as-company
+    // included) must invalidate the cached model, not keep showing the previous
+    // account's spaces and session counts until something else happens to change.
+    const key = [s.homeRaw, vm, s.spaces, s.sessions, s.spError, s.spLoading, owner];
     const m = this._spMemo;
     if (m && m.key.every((k, i) => k === key[i])) return m.model;
-    const model = shapeSpaces({ home: s.homeRaw, vendors: vm, saved: s.spaces, sessions: s.sessions || [], savedError: s.spError, savedLoading: s.spLoading });
+    const model = shapeSpaces({ home: s.homeRaw, vendors: vm, saved: s.spaces, sessions: s.sessions || [], savedError: s.spError, savedLoading: s.spLoading, owner: owner });
     this._spMemo = { key: key, model: model };
     return model;
   },
@@ -178,6 +193,10 @@ export const spacesMethods = {
       this._spAttempts = 0;
       this.setState({ spaces: Array.isArray(r && r.spaces) ? r.spaces : [], spLoading: false, spError: '' });
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._spAttempts = (this._spAttempts || 0) + 1;
       this.setState({ spLoading: false, spError: msg });
@@ -199,7 +218,9 @@ export const spacesMethods = {
     if (!Array.isArray(this.state.spaces)) return this.flash('Saved spaces are unavailable — svc-udr did not answer.');
     this.setState({ spBusy: true });
     try {
-      const row = await spacesApi.create(name, this.state.email || null);
+      // The account's real, server-verified email — not state.email, the sign-in form
+      // field, which can be stale or belong to whoever last typed into the gate.
+      const row = await spacesApi.create(name, (this.state.account && this.state.account.email) || null);
       this.setState((p) => ({ spaces: [row].concat((p.spaces || []).filter((x) => x.id !== row.id)), spNew: false, spNewName: '', spBusy: false }));
       this.flash('Space “' + name + '” saved.');
       this.openSpace(String(row.id));

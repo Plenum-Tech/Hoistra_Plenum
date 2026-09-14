@@ -40,23 +40,6 @@ export default function OrchestratorDock({ vals }) {
         <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "4px" }}>
           {vals.orchStatus}
         </div>
-        <div style={{ display: vals.orchStepsShow, flexDirection: "column", gap: "0", marginTop: "18px" }}>
-          {(vals.orchSteps || []).map((st, $index) => (
-            <React.Fragment key={$index}>
-              <div style={{ display: "grid", gridTemplateColumns: "16px 1fr", gap: "10px", padding: "9px 0", borderTop: "1px solid var(--color-divider)" }}>
-                <i className={`ph ${st.icon}`} style={{ fontSize: "13px", color: st.dot, marginTop: "2px" }}></i>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <span style={{ fontSize: "10.5px", padding: "1px 6px", borderRadius: "4px", background: "var(--color-accent-900)", color: "var(--color-accent-300)", alignSelf: "flex-start" }}>
-                    {st.a}
-                  </span>
-                  <span style={{ fontSize: "11.5px", lineHeight: "1.5", color: st.fg }}>
-                    {st.t}
-                  </span>
-                </div>
-              </div>
-            </React.Fragment>
-          ))}
-        </div>
         {/* Hoist / edit a building — the real form, as a dock flow (HoistBuildingCard.jsx). */}
         {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
         {vals.fUpdate ? (
@@ -918,34 +901,6 @@ export default function OrchestratorDock({ vals }) {
                   </div>
                 </div>
               ) : null}
-            </div>
-          </>
-        ) : null}
-
-        {vals.orchHasRecent ? (
-          <>
-            <div style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "20px" }}>
-              {"Recent tasks"}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", marginTop: "6px" }}>
-              {(vals.orchRecent || []).map((r, $index) => (
-                <React.Fragment key={$index}>
-                  <div className="hv2" onClick={r.click} title={r.hint + " — " + r.label} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "8px", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--color-divider)", cursor: "pointer" }}>
-                    <div style={{ minWidth: "0" }}>
-                      <span style={{ display: "block", fontSize: "11.5px", color: "var(--color-neutral-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {r.label}
-                      </span>
-                      <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>
-                        {r.when}
-                      </span>
-                    </div>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "10px", color: "var(--color-accent)", flexShrink: "0", whiteSpace: "nowrap" }}>
-                      <i className="ph ph-arrow-counter-clockwise" style={{ fontSize: "10px" }}></i>
-                      {r.hint}
-                    </span>
-                  </div>
-                </React.Fragment>
-              ))}
             </div>
           </>
         ) : null}

@@ -39,6 +39,11 @@ export default function App() {
               <div onClick={vals.closeAcct} style={{ position: "fixed", inset: "0", zIndex: "30" }}></div>
             </>
           ) : null}
+          {vals.bldOpen ? (
+            <>
+              <div onClick={vals.bldClose} style={{ position: "fixed", inset: "0", zIndex: "30" }}></div>
+            </>
+          ) : null}
           <Navigator vals={vals} />
           <TopBar vals={vals} />
           {vals.orchOpen ? <OrchestratorDock vals={vals} /> : null}

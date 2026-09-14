@@ -558,29 +558,108 @@ export default function Assets({ vals }) {
           <span className="hv11" onClick={vals.asLiveRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.asLiveRetryShow }}>{"Retry"}</span>
         </span>
       </div>
-      <div style={{ borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden", marginTop: "10px" }}>
-        {(vals.asLiveRows || []).map((r, $index) => (
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "10px" }}>
+        {(vals.asLiveTreeGroups || []).map((g, $index) => (
           <React.Fragment key={$index}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px 18px", flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)" }}>
-              <div style={{ flex: "1 1 200px", minWidth: "0" }}>
-                <span style={{ fontSize: "12.5px" }}>{r.name}</span>
-                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginLeft: "8px" }}>{r.manufacturer}{" · "}{r.model}{" · "}{r.serial}</span>
+            <div style={{ borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+              <div className="hv19" onClick={g.toggle} style={{ display: "flex", alignItems: "center", gap: "10px 18px", flexWrap: "wrap", padding: "12px 16px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer" }}>
+                <div style={{ flex: "1 1 200px", minWidth: "0", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <i className={`ph ${g.caret}`} style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
+                  <span style={{ fontSize: "13.5px" }}>{g.name}</span>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{g.assetCount}</span>
+                </div>
+                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+                  {g.counts}
+                </span>
               </div>
-              <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: r.status === "active" ? "var(--st-ok)" : "var(--color-neutral-500)", background: "var(--color-bg)" }}>
-                {r.status}
-              </span>
-              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: r.openWorkOrders ? "var(--color-accent)" : "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                {r.openWorkOrders}{r.openWorkOrders === 1 ? " open work order" : " open work orders"}
-              </span>
+              {g.open ? (
+                <>
+                  <div style={{ padding: "10px 16px", display: g.costShow, borderBottom: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                    <div style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                      {"Cost drivers · svc-operations-intelligence"}
+                    </div>
+                    {g.costLoading ? (
+                      <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "5px" }}>{"Reading…"}</div>
+                    ) : g.costError ? (
+                      <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "5px" }}>{g.costError}</div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: "11.5px", marginTop: "5px" }}>{g.costTotalText}</div>
+                        {(g.costRows || []).map((cr, $i2) => (
+                          <React.Fragment key={$i2}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "11px", color: "var(--color-neutral-400)", marginTop: "4px" }}>
+                              <span>{cr.name}</span>
+                              <span style={{ fontFamily: "ui-monospace,monospace" }}>{cr.billed}{cr.overContract ? " · " + cr.overContract : ""}</span>
+                            </div>
+                          </React.Fragment>
+                        ))}
+                        <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "5px", display: g.costEmpty }}>
+                          {"No billed lines attributed to plant on this building yet."}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {(g.rows || []).map((r, $i2) => (
+                    <React.Fragment key={$i2}>
+                      <div className="hv19" onClick={r.open} style={{ display: "flex", alignItems: "center", gap: "10px 18px", flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)", borderLeft: `3px solid ${r.color}`, cursor: "pointer" }}>
+                        <div style={{ flex: "1 1 200px", minWidth: "0" }}>
+                          <span style={{ fontSize: "12.5px" }}>{r.name}</span>
+                          {r.code ? (
+                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginLeft: "8px" }}>{r.code}</span>
+                          ) : null}
+                          <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginLeft: "8px" }}>{r.manufacturer}{" · "}{r.model}{" · "}{r.serial}</span>
+                        </div>
+                        {r.categoryName ? (
+                          <span style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+                            {r.categoryName}
+                          </span>
+                        ) : null}
+                        <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: r.color, background: r.bg }}>
+                          {r.condLabel}
+                        </span>
+                        {r.criticality ? (
+                          <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: "var(--color-neutral-300)", background: "var(--color-bg)" }}>
+                            {r.criticality}
+                          </span>
+                        ) : null}
+                        <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: r.status === "active" ? "var(--st-ok)" : "var(--color-neutral-500)", background: "var(--color-bg)" }}>
+                          {r.status}
+                        </span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: r.openWorkOrders ? "var(--color-accent)" : "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                          {r.openWorkOrders}{r.openWorkOrders === 1 ? " open work order" : " open work orders"}
+                        </span>
+                      </div>
+                    </React.Fragment>
+                  ))}
+                </>
+              ) : null}
             </div>
           </React.Fragment>
         ))}
-        <div style={{ padding: "16px", fontSize: "12px", color: "var(--color-neutral-500)", display: vals.asLiveEmpty }}>
+        <div style={{ display: vals.asLiveTreeUnlinkedShow, flexDirection: "column", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", color: "var(--color-neutral-400)" }}>
+            {"Not linked to a building"}{" · "}{(vals.asLiveTreeUnlinked || []).length}
+          </div>
+          {(vals.asLiveTreeUnlinked || []).map((r, $index) => (
+            <React.Fragment key={$index}>
+              <div className="hv19" onClick={r.open} style={{ display: "flex", alignItems: "center", gap: "10px 18px", flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer" }}>
+                <div style={{ flex: "1 1 200px", minWidth: "0" }}>
+                  <span style={{ fontSize: "12.5px" }}>{r.name}</span>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginLeft: "8px" }}>{r.manufacturer}{" · "}{r.model}{" · "}{r.serial}</span>
+                </div>
+                <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: r.color, background: r.bg }}>
+                  {r.condLabel}
+                </span>
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
+        <div style={{ padding: "16px", fontSize: "12px", color: "var(--color-neutral-500)", display: vals.asLiveEmpty, textAlign: "center", borderRadius: "10px", background: "var(--color-surface)" }}>
           {vals.asLiveEmptyText}
         </div>
       </div>
       <div style={{ fontSize: "11px", color: "var(--color-neutral-600)", marginTop: "12px", lineHeight: "1.55" }}>
-        {"plenum_cafm.assets, joined to open work orders by asset name. Separate from the condition-scan section above — the two data models are not linked in the database, so building/section, install date, class, vendor and asset value stay from the reference model above until that join exists."}
+        {"plenum_cafm.assets, portfolio-wide and already scoped to your building allocation, grouped by its real building_id. Category names are resolved server-side; open work orders are matched by asset name (work_orders.asset is free text, not a foreign key); cost-drivers, work history and certificates join on the shared assets.id. Condition here is health_score, not the energy-deviation rule the section above uses — this table has no per-section reference, no real anomaly-to-asset attribution and no replacement-value curve, so those stay from the reference model above. Click a row for work history and certificates on file."}
       </div>
     </>
   );

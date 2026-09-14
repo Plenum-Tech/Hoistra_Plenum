@@ -44,7 +44,7 @@ export default function Navigator({ vals }) {
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px 7px" }}>
-                <span style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                <span className="hv6" onClick={vals.openReportsGrid} title="All report cards" style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", cursor: "pointer" }}>
                   {"Reports"}
                 </span>
                 <i className="ph ph-plus hv6" onClick={vals.toggleReportMenu} title="New report" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
@@ -135,16 +135,19 @@ export default function Navigator({ vals }) {
               ))}
               {(vals.navReports || []).map((r, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={r.click} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 8px", padding: "7px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "13px", color: r.color, background: r.chip }}>
+                  <div className="hv2" onClick={r.click} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 8px", padding: "7px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "13px", color: r.color, background: r.armed ? "var(--st-risk-bg)" : r.chip }}>
                     <span title="Custom report" style={{ width: "15px", height: "15px", borderRadius: "4px", border: "1px solid currentColor", fontSize: "9.5px", lineHeight: "1", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: "0" }}>
                       {"C"}
                     </span>
-                    <span style={{ flex: "1" }}>
+                    <span style={{ flex: "1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {r.name}
                     </span>
-                    <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>
+                    <span style={{ fontSize: "10px", color: r.armed ? "var(--st-risk)" : "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
                       {r.badge}
                     </span>
+                    <button type="button" className="hv11" onClick={r.remove} title={r.removeTitle} style={{ font: "inherit", background: "transparent", border: "none", padding: "2px", margin: "0", cursor: "pointer", color: r.removeColor, display: "flex", flexShrink: "0" }}>
+                      <i className="ph ph-trash" style={{ fontSize: "12px" }}></i>
+                    </button>
                   </div>
                 </React.Fragment>
               ))}
@@ -204,7 +207,7 @@ export default function Navigator({ vals }) {
               ) : null}
               {(vals.navSessions || []).map((q, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={q.click} title={q.label} style={{ display: "grid", gridTemplateColumns: "14px 1fr", gap: "8px", alignItems: "start", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", background: q.active ? "var(--color-accent-900)" : "transparent" }}>
+                  <div className="hv2" onClick={q.click} title={q.label} style={{ display: "grid", gridTemplateColumns: "14px 1fr auto", gap: "8px", alignItems: "start", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", background: q.active ? "var(--color-accent-900)" : "transparent" }}>
                     <i className={`ph ${q.icon}`} style={{ fontSize: "12px", color: q.active ? "var(--color-accent)" : "var(--color-neutral-500)", marginTop: "3px" }}></i>
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", minWidth: "0" }}>
                       <span style={{ fontSize: "12.5px", color: q.active ? "var(--color-accent)" : "var(--color-neutral-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -214,6 +217,9 @@ export default function Navigator({ vals }) {
                         {q.when}
                       </span>
                     </div>
+                    <button type="button" onClick={q.remove} title="Delete this session from this browser" style={{ font: "inherit", background: "transparent", border: "none", padding: "2px", margin: "0", cursor: "pointer", color: "var(--color-neutral-500)", opacity: "0.7", display: "flex", alignSelf: "start" }}>
+                      <i className="ph ph-trash" style={{ fontSize: "12px" }}></i>
+                    </button>
                   </div>
                 </React.Fragment>
               ))}

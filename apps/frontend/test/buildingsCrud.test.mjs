@@ -63,12 +63,30 @@ const cleanup = () => { clearInterval(c._orchTick); clearTimeout(c._tt); clearTi
 
 // ── who may hoist / edit / remove ──
 
-test('both admin and a facilities-manager user can hoist, edit and remove; a signed-out session cannot', () => {
+test('admin and superadmin can hoist, edit and remove; a plain user and a signed-out session cannot', () => {
   c.setState({ role: 'user' });
-  assert.equal(c.renderVals().bcCanHoist, true);
+  assert.equal(c.renderVals().bcCanHoist, false);
   c.setState({ role: 'admin' });
   assert.equal(c.renderVals().bcCanHoist, true);
+  c.setState({ role: 'superadmin' });
+  assert.equal(c.renderVals().bcCanHoist, true);
   c.setState({ signedIn: false });
+  assert.equal(c.renderVals().bcCanHoist, false);
+  cleanup();
+});
+
+test('an admin previewing "User view" still keeps Hoist — the toggle relabels the screen, not the account', () => {
+  // auth.js's toggle only ever sets s.role to 'user' for a real admin account; it never
+  // touches s.account. bcCanHoist must follow the account, not the preview label.
+  c.setState({ account: { role: 'admin' }, role: 'user' });
+  assert.equal(c.renderVals().bcCanHoist, true);
+  c.setState({ account: { role: 'superadmin' }, role: 'user' });
+  assert.equal(c.renderVals().bcCanHoist, true);
+  cleanup();
+});
+
+test('a real user-role account has no Hoist even with an account object present', () => {
+  c.setState({ account: { role: 'user' }, role: 'user' });
   assert.equal(c.renderVals().bcCanHoist, false);
   cleanup();
 });

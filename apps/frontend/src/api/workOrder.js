@@ -10,10 +10,21 @@ import { BASES, apiFetch } from './client.js';
 const B = BASES.workOrder;
 
 export const workOrderApi = {
-  // plenum_cafm.assets — name/code/manufacturer/model/serial/status only; no building,
-  // section, install date, criticality or vendor on this table (see assetsLive.js).
+  // plenum_cafm.assets, portfolio-wide: every asset the caller may see across all their
+  // buildings, already narrowed to their allocation. Per asset: name, code, manufacturer,
+  // model, serial, status, building_id, category_id AND category_name (resolved server-side
+  // by services/asset_catalogue.py, so no second service call to turn a key into a word),
+  // location_id, criticality, health_score (float), installation_date.
+  // Optional filters: building_id, category_id, criticality, status, q (name/code/serial
+  // substring), page. Server caps limit at 200 and returns the pre-paging total in
+  // X-Total-Count. Still not on this table: vendor, replacement value, and there is no
+  // `section` concept anywhere in the schema (see assetsLive.js).
   assets: (query) =>
     apiFetch(B, '/api/assets', { query: Object.assign({ limit: 200 }, query || {}) }),
+  // The register behind assets.category_id — {category_id, name, description,
+  // parent_category_id, asset_count}. Company-wide: the table carries no building column.
+  assetCategories: (query) =>
+    apiFetch(B, '/api/asset-categories', { query: Object.assign({ limit: 500 }, query || {}) }),
   locations: (query) =>
     apiFetch(B, '/api/locations', { query: Object.assign({ limit: 200 }, query || {}) }),
   // plenum_cafm.work_orders, newest first. Note: the response has no estimated_cost field

@@ -86,18 +86,19 @@ export default function Users({ vals }) {
           </span>
         </div>
         <div style={{ marginTop: "10px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "22px minmax(180px,1.3fr) minmax(140px,1fr) 130px minmax(150px,1fr) 92px", gap: "12px", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "22px minmax(180px,1.3fr) minmax(140px,1fr) 130px minmax(150px,1fr) 92px 28px", gap: "12px", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
             <span></span>
             <span>{"User"}</span>
             <span>{"Buildings"}</span>
             <span>{"Can ingest data"}</span>
             <span>{"Usage"}</span>
             <span>{"Status"}</span>
+            <span></span>
           </div>
           {(vals.axUsers || []).map((u, $index) => (
             <React.Fragment key={$index}>
               <div style={{ borderBottom: "1px solid var(--color-divider)" }}>
-                <div className="hv2" onClick={u.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(180px,1.3fr) minmax(140px,1fr) 130px minmax(150px,1fr) 92px", gap: "12px", alignItems: "center", padding: "11px 16px", cursor: "pointer" }}>
+                <div className="hv2" onClick={u.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(180px,1.3fr) minmax(140px,1fr) 130px minmax(150px,1fr) 92px 28px", gap: "12px", alignItems: "center", padding: "11px 16px", cursor: "pointer" }}>
                   <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-500)" }}>{u.arrow}</span>
                   <div style={{ minWidth: "0" }}>
                     <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</div>
@@ -117,7 +118,12 @@ export default function Users({ vals }) {
                     {u.usage}
                     <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{"last active "}{u.last}</div>
                   </div>
-                  <span style={{ fontSize: "10.5px", padding: "3px 9px", borderRadius: "5px", background: u.stBg, color: u.stFg, textAlign: "center", whiteSpace: "nowrap" }}>{u.status}</span>
+                  <span onClick={u.stClick} title={u.stTitle} style={{ fontSize: "10.5px", padding: "3px 9px", borderRadius: "5px", background: u.stBg, color: u.stFg, textAlign: "center", whiteSpace: "nowrap", cursor: u.isMe ? "default" : "pointer" }}>{u.status}</span>
+                  {u.delShow ? (
+                    <button type="button" onClick={u.delClick} title={u.delTitle} style={{ font: "inherit", background: "transparent", border: "none", padding: "2px", margin: "0", cursor: "pointer", color: u.delArmed ? "var(--st-risk)" : "var(--color-neutral-500)", opacity: u.delArmed ? "1" : "0.6", display: "flex", justifySelf: "center" }}>
+                      <i className="ph ph-trash" style={{ fontSize: "13px" }}></i>
+                    </button>
+                  ) : <span></span>}
                 </div>
                 <div style={{ display: u.panelShow, flexDirection: "column", gap: "9px", padding: "13px 16px 15px 50px", background: "var(--color-bg)", borderTop: "1px solid var(--color-divider)" }}>
                   <div style={{ fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Building allocation — "}{u.name}{" sees and ingests only here"}</div>

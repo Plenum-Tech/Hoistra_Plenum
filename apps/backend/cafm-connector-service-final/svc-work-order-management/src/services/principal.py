@@ -23,6 +23,11 @@ import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from sqlalchemy import column as sa_col
+from sqlalchemy import false as sa_false
+from sqlalchemy import select as sa_select
+from sqlalchemy import table as sa_table
 from uuid import UUID
 
 import httpx
@@ -145,19 +150,46 @@ def building_clause(principal: Principal, column: str, *, param: str = "scope_bu
     return f" AND {column} = ANY(CAST(:{param} AS uuid[]))", {param: [str(b) for b in principal.building_ids]}
 
 
+#: plenum_cafm.buildings, named rather than modelled — this service owns no buildings table
+#: and needs exactly two of its columns. Both are uuid, so the comparison below is a straight
+#: uuid = uuid with no cast.
+_BUILDINGS = sa_table(
+    "buildings",
+    sa_col("building_id"),
+    sa_col("organization_id"),
+    schema="plenum_cafm",
+)
+
+
 def scope_select(q, principal: Principal, column):
     """Narrow a SQLAlchemy select on a building column to this caller.
 
-    Unchanged for an admin; a predicate that matches no row for a user allocated to
-    nothing; otherwise ``column IN (their buildings)``. The column is the route's choice.
-    """
-    if principal.building_ids is None:
-        return q
-    if not principal.building_ids:
-        from sqlalchemy import false
+    ``building_ids`` None means "every building in the company" — the company, as this
+    module's own docstring says, not every company. It used to return the query untouched,
+    which is not the whole company but the whole DATABASE: any admin listing assets, work
+    orders or locations got every other tenant's rows too, and the Assets screen presented
+    them as "scoped to your building allocation". The rows carry no organization of their
+    own, so the boundary is drawn through the buildings that do.
 
-        return q.where(false())
-    return q.where(column.in_(list(principal.building_ids)))
+    A superadmin is the one caller meant to read across companies, and keeps doing so. A
+    principal with no company at all matches nothing rather than everything: failing closed
+    is the only safe default for a tenancy boundary, and no active account is in that state.
+    """
+    if principal.building_ids is not None:
+        if not principal.building_ids:
+            return q.where(sa_false())
+        return q.where(column.in_(list(principal.building_ids)))
+    if (principal.role or "").strip().lower() == "superadmin":
+        return q
+    if principal.organization_id is None:
+        return q.where(sa_false())
+    return q.where(
+        column.in_(
+            sa_select(_BUILDINGS.c.building_id).where(
+                _BUILDINGS.c.organization_id == principal.organization_id
+            )
+        )
+    )
 
 
 def assert_building(principal: Principal, building_id, *, action: str = "read") -> None:

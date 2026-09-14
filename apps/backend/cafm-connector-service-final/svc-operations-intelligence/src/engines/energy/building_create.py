@@ -74,9 +74,26 @@ PACK_STANDARD_FOR = {
 GRANULARITIES = {"none", "building-level", "sub-metered"}
 
 
+#: buildings.location_id is a real uuid column; on a deployment where cafm-connector-
+#: service created plenum_cafm.locations first, its id is that service's legacy integer
+#: primary key (see plan_location_insert below). Rather than migrate a table this platform
+#: does not own — cafm-connector-service is production-ready and only ever extended, never
+#: rewritten — an integer id is embedded into a deterministic, reversible uuid shape that
+#: buildings.location_id can actually hold. building_rollup.py's location join matches on
+#: this same shape, so the two must never drift apart.
+_LOCATION_PSEUDO_PREFIX = "00000000-0000-0000-0000-"
+
+
+def _int_location_id_to_uuid(n: int) -> str:
+    """An integer plenum_cafm.locations.id → the pseudo-uuid stored in a building's
+    location_id. Reversible by _uuid_to_int_location_id, and matched in SQL by the same
+    zero-padding building_rollup.py's join performs on locations.id."""
+    return f"{_LOCATION_PSEUDO_PREFIX}{n:012d}"
+
+
 def plan_location_insert(id_data_type: str | None) -> dict[str, Any]:
-    """Whether a new row can be inserted into ``plenum_cafm.locations`` right now, given the
-    real, introspected type of its ``id`` column.
+    """How ``plenum_cafm.locations`` can be linked right now, given the real, introspected
+    type of its ``id`` column.
 
     ``locations`` predates this feature on a deployment where cafm-connector-service created
     it first: ``id`` is that service's legacy integer primary key. This engine's own
@@ -85,18 +102,21 @@ def plan_location_insert(id_data_type: str | None) -> dict[str, Any]:
     already exists, so ``id`` never becomes uuid there. Generating a fresh ``uuid4()`` and
     inserting it into an integer column is refused by Postgres outright
     (``DatatypeMismatchError: column "id" is of type integer but expression is of type
-    uuid``), which is what a hoist attempt hit before this check existed. Anything other
-    than a confirmed ``uuid`` column refuses the insert — a missing or unexpected type is
-    exactly the situation this exists to catch, not a case to guess through.
+    uuid``), which is what a hoist attempt hit before this fix. A uuid column writes a real
+    uuid4() as before; an integer column lets its own sequence assign the id and wraps it in
+    the pseudo-uuid shape above. Anything else — a missing or unrecognised type — still
+    refuses outright: that is exactly the situation worth catching, not guessing through.
     """
-    can_insert = (id_data_type or "").lower() == "uuid"
+    t = (id_data_type or "").lower()
+    id_kind = "uuid" if t == "uuid" else "integer" if t in ("integer", "bigint", "smallint") else None
     return {
-        "can_insert": can_insert,
-        "reason": None if can_insert else (
+        "can_insert": id_kind is not None,
+        "id_kind": id_kind,
+        "reason": None if id_kind else (
             "No location could be linked — plenum_cafm.locations.id is "
             + (id_data_type or "of an unrecognised type")
-            + " on this deployment, not uuid, so a new location cannot be created until it "
-            "is migrated. The building was created without one."
+            + " on this deployment, which this engine does not yet know how to write. "
+            "The building was created without one."
         ),
     }
 
@@ -303,19 +323,9 @@ async def _resolve_location(
         ).first()
         pack_id = row[0] if row else None
 
-    existing = (
-        await session.execute(
-            text(
-                """SELECT id::text FROM plenum_cafm.locations
-                   WHERE upper(country_code) = :cc AND lower(coalesce(region,'')) = :rg
-                   LIMIT 1"""
-            ),
-            {"cc": country_code, "rg": (region or "").lower()},
-        )
-    ).first()
-    if existing:
-        return {"location_id": existing[0], "created": False, "pack_id": pack_id}
-
+    # Checked before the existing-row lookup, not just before the insert: an integer id
+    # read straight off an existing row needs the same pseudo-uuid wrapping a freshly
+    # inserted one gets, or a match here would fail exactly the same way a create would.
     id_type = (
         await session.execute(
             text(
@@ -330,6 +340,21 @@ async def _resolve_location(
         log.warning("building_create.location_skipped", id_data_type=id_type, reason=plan["reason"])
         return {"location_id": None, "created": False, "pack_id": pack_id,
                 "skipped_reason": plan["reason"]}
+    is_int_pk = plan["id_kind"] == "integer"
+
+    existing = (
+        await session.execute(
+            text(
+                """SELECT id::text FROM plenum_cafm.locations
+                   WHERE upper(country_code) = :cc AND lower(coalesce(region,'')) = :rg
+                   LIMIT 1"""
+            ),
+            {"cc": country_code, "rg": (region or "").lower()},
+        )
+    ).first()
+    if existing:
+        found_id = _int_location_id_to_uuid(int(existing[0])) if is_int_pk else existing[0]
+        return {"location_id": found_id, "created": False, "pack_id": pack_id}
 
     # organization_id is written when the column demands it. plenum_cafm.locations is
     # declared twice — cafm-connector-service's ORM makes it NOT NULL, this service's
@@ -358,16 +383,31 @@ async def _resolve_location(
         ).first()
         organization_id = row[0] if row else None
 
-    loc_id = str(uuid4())
-    cols = "id, name, type, country_code, region, pack_id"
-    vals = "CAST(:id AS UUID), :nm, 'region', :cc, :rg, CAST(:pk AS UUID)"
+    cols = "name, type, country_code, region, pack_id"
+    vals = ":nm, 'region', :cc, :rg, CAST(:pk AS UUID)"
     params: dict[str, Any] = {
-        "id": loc_id, "nm": city or region, "cc": country_code, "rg": region, "pk": pack_id,
+        "nm": city or region, "cc": country_code, "rg": region, "pk": pack_id,
     }
+    # A uuid column: generate the id exactly as before. An integer column: leave it to the
+    # column's own sequence — a generated uuid4() is exactly what Postgres refuses there.
+    loc_id = None if is_int_pk else str(uuid4())
+    if not is_int_pk:
+        cols = "id, " + cols
+        vals = "CAST(:id AS UUID), " + vals
+        params["id"] = loc_id
     if want_org:
         cols += ", organization_id"
         vals += ", CAST(:org AS UUID)"
         params["org"] = organization_id
+
+    if is_int_pk:
+        row = (
+            await session.execute(
+                text(f"INSERT INTO plenum_cafm.locations ({cols}) VALUES ({vals}) RETURNING id"),
+                params,
+            )
+        ).first()
+        return {"location_id": _int_location_id_to_uuid(int(row[0])), "created": True, "pack_id": pack_id}
 
     await session.execute(
         text(f"INSERT INTO plenum_cafm.locations ({cols}) VALUES ({vals})"), params,

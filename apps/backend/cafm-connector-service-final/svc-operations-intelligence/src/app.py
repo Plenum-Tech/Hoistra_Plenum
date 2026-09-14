@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 import uuid as _uuid
+from urllib.parse import urlparse
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -99,14 +100,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+def _cors_origins() -> list[str]:
+    """The browser origins allowed to call this service, credentials included.
+
+    The local ports are the developer defaults. The rest are wherever this deployment has
+    been told it is actually reached from — PUBLIC_APP_URL is the origin invitation links
+    are built on, FRONTEND_PUBLIC_URL the one emailed links point back to. Hardcoding only
+    localhost meant that on any real deployment whose UI is served from its own origin, the
+    browser refused every call before it left the page: the accept-invitation screen would
+    fail with a CORS error and nothing in the service log to show for it, because the
+    request never arrived.
+
+    Only the scheme://host:port is kept — a path (PUBLIC_BASE_URL carries one) is not an
+    origin and Starlette matches these exactly. `allow_credentials=True` forbids "*", which
+    is the whole reason this has to be an explicit list.
+    """
+    out = [
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+    ]
+    for raw in (settings.public_app_url, settings.frontend_public_url):
+        parsed = urlparse((raw or "").strip())
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in out:
+            out.append(origin)
+    return out
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

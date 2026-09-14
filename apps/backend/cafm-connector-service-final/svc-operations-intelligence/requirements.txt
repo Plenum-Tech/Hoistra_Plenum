@@ -21,5 +21,11 @@ bcrypt>=4.1
 PyJWT>=2.8
 # EmailStr in the auth schemas needs it; pydantic raises on import without it.
 email-validator>=2.0
+# The full IANA database for zoneinfo, backward-compatibility links included. The base image
+# carries only the canonical zones — Debian split the legacy links out into tzdata-legacy —
+# so ZoneInfo("Asia/Calcutta") raised, and engines/reports' parse_timezone refused it. That
+# is the exact name Chrome reports on an Indian Mac, so pinning a report card 422'd on a
+# perfectly valid IANA identifier. PEP 615 names this package as the fallback data source.
+tzdata>=2024.1
 pytest>=8.0
 pytest-asyncio>=0.23

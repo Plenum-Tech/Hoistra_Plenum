@@ -172,7 +172,10 @@ export const ingestionLiveMethods = {
   // here), else the signed-in account's own allocation, else the seed names.
   ingBldList() {
     const s = this.state;
-    if (Array.isArray(s.axBldsLive) && s.axBldsLive.length) return s.axBldsLive.map((b) => b && b.name).filter(Boolean);
+    // A real, loaded axBldsLive is authoritative even when it is empty — a company with
+    // zero buildings on file has zero to offer here, not the account's own allocation or
+    // the eight seed demo names read back as though they were real chips to pick from.
+    if (Array.isArray(s.axBldsLive)) return s.axBldsLive.map((b) => b && b.name).filter(Boolean);
     const acc = s.account && s.account.buildings;
     if (Array.isArray(acc) && acc.length) return acc.map((b) => (typeof b === "string" ? b : b && b.name)).filter(Boolean);
     return AX_BUILDINGS;

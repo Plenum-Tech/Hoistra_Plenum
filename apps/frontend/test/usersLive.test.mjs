@@ -168,6 +168,18 @@ test('usLiveLoad replaces the seed in place: rows, summary tiles, live building 
   assert.equal(susp.stBg, 'var(--st-warn-bg)');
 });
 
+test('a company with genuinely zero buildings shows no allocation chips at all — not the seed demo names', async () => {
+  routes = {
+    'GET /backend/ops-intelligence/api/admin/users': () => reply(200, USERS_RES),
+    'GET /backend/ops-intelligence/api/admin/buildings': () => reply(200, { ok: true, count: 0, buildings: [] })
+  };
+  const c = new HoistraLogic();
+  await c.usLiveLoad();
+  assert.deepEqual(c.state.axBldsLive, [], 'a real, loaded, empty array — not null');
+  const v = c.usersVals(c.state);
+  assert.deepEqual(v.usFormBlds, [], 'no chips to allocate to — the seed\'s eight demo names must not appear for a real, empty company');
+});
+
 test('a forbidden users read keeps the seed, records the error and does not arm a retry timer', async () => {
   routes = {
     'GET /backend/ops-intelligence/api/admin/users': () => reply(403, { detail: { ok: false, error: 'Admin role required — your role is user.', reason: 'forbidden', required_role: 'admin', your_role: 'user' } }),
@@ -214,6 +226,35 @@ test('usSend goes to POST /api/admin/users/invite when live and appends the serv
   assert.equal(c.state.usInviteOpen, false, 'the form closed and cleared');
   assert.equal(c.state.usName, '');
   assert.match(c.state.toast, /accept-invitation\?token=tok-123/, 'the undelivered-email link is surfaced');
+  clearTimeout(c._usLiveRefresh);
+  clearTimeout(c._tt);
+});
+
+test('an invitation with no buildings picked is allowed — a brand-new company invites its first admin before hoisting anything', async () => {
+  let sent = null;
+  routes = {
+    'GET /backend/ops-intelligence/api/admin/users': () => reply(200, USERS_RES),
+    'GET /backend/ops-intelligence/api/admin/buildings': () => reply(200, { ok: true, count: 0, buildings: [] }),
+    'POST /backend/ops-intelligence/api/admin/users/invite': (url, init) => {
+      sent = JSON.parse(init.body);
+      return reply(201, {
+        ok: true, invitation_id: 'aaaaaaaa-0000-4000-8000-000000000000', user_id: 'bbbbbbbb-0000-4000-8000-000000000000',
+        email: 'first-admin@co.com', role: 'admin', can_ingest: true, building_ids: [],
+        expires_at: '2026-09-19T14:00:00Z',
+        email_sent: { ok: true, status: 'sent' },
+        note: 'No buildings allocated: this user will see no data until some are.',
+        buildings: []
+      });
+    }
+  };
+  const c = new HoistraLogic();
+  await c.usLiveLoad();
+  c.setState({ usInviteOpen: true, usName: 'First Admin', usEmail: 'first-admin@co.com', usBlds: [], usIngest: true });
+  await c.usersVals(c.state).usSend();
+  assert.deepEqual(sent, { full_name: 'First Admin', email: 'first-admin@co.com', building_ids: [], can_ingest: true });
+  assert.ok(c.state.users.find((u) => u.id === 'bbbbbbbb-0000-4000-8000-000000000000'), 'the invitation went through, not blocked locally');
+  assert.equal(c.state.usInviteOpen, false);
+  assert.match(c.state.toast, /see no data until some are/, 'the server\'s own note is surfaced, not a generic success line');
   clearTimeout(c._usLiveRefresh);
   clearTimeout(c._tt);
 });
@@ -278,4 +319,124 @@ test('without a live load the screen stays the offline demo: local invite, local
   c.usersVals(c.state).axUsers[0].toggleIngest(null);
   assert.notEqual(c.state.users[0].ingest, undefined, 'the seed toggle flips locally without a network call');
   clearTimeout(c._tt);
+});
+
+test('the offline demo also allows an invite with no buildings picked', async () => {
+  routes = {};
+  const c = new HoistraLogic();
+  const before = c.state.users.length;
+  c.setState({ usName: 'Demo', usEmail: 'demo@co.com', usBlds: [] });
+  c.usersVals(c.state).usSend();
+  assert.equal(c.state.users.length, before + 1);
+  assert.deepEqual(c.state.users[before].buildings, []);
+  assert.match(c.state.toast, /no buildings allocated/i);
+  clearTimeout(c._tt);
+});
+
+// ── status pill: suspend (armed) and reactivate (not armed) ──
+
+test('suspending is a two-click confirm: the first click only arms it, no PATCH sent yet', async () => {
+  routes = {}; // an unarmed click must never reach the network
+  const c = new HoistraLogic();
+  c.setState({ users: [liveRow()], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings });
+  c.usersVals(c.state).axUsers[0].stClick(null);
+  assert.equal(c.state.usArmed, 'susp:' + U1);
+  assert.equal(c.usersVals(c.state).axUsers[0].status, 'Confirm?', 'the pill itself shows the armed state');
+  clearTimeout(c._usArmTimer);
+});
+
+test('the second click on the armed pill sends PATCH {status: suspended} and settles the row', async () => {
+  let sent = null;
+  routes = {
+    ['PATCH /backend/ops-intelligence/api/admin/users/' + U1]: (url, init) => {
+      sent = JSON.parse(init.body);
+      return reply(200, { ok: true, user_id: U1, changed: { status: 'suspended' } });
+    }
+  };
+  const c = new HoistraLogic();
+  c.setState({ users: [liveRow()], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings });
+  c.usersVals(c.state).axUsers[0].stClick(null); // arm
+  const p = c.usersVals(c.state).axUsers[0].stClick(null); // confirm
+  assert.equal(c.state.usArmed, null, 'disarmed the moment the confirm click fires');
+  assert.equal(c.state.users[0].status, 'Suspended', 'flipped optimistically before the call answers');
+  await p;
+  assert.deepEqual(sent, { status: 'suspended' });
+  assert.equal(c.state.users[0].status, 'Suspended');
+  clearTimeout(c._tt);
+});
+
+test('reactivating a suspended row fires on the first click — no arm, no confirm', async () => {
+  let sent = null;
+  routes = {
+    ['PATCH /backend/ops-intelligence/api/admin/users/' + U1]: (url, init) => {
+      sent = JSON.parse(init.body);
+      return reply(200, { ok: true, user_id: U1, changed: { status: 'active' } });
+    }
+  };
+  const c = new HoistraLogic();
+  c.setState({ users: [{ ...liveRow(), status: 'Suspended' }], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings });
+  const p = c.usersVals(c.state).axUsers[0].stClick(null);
+  assert.equal(c.state.usArmed, null, 'reactivating never arms');
+  assert.equal(c.state.users[0].status, 'Active');
+  await p;
+  assert.deepEqual(sent, { status: 'active' });
+});
+
+test('a failed suspend PATCH reverts the row and flashes the ApiError message', async () => {
+  routes = {
+    ['PATCH /backend/ops-intelligence/api/admin/users/' + U1]: () => reply(500, { detail: { ok: false, error: 'database unavailable', reason: 'db_down' } })
+  };
+  const c = new HoistraLogic();
+  c.setState({ users: [liveRow()], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings });
+  c.usersVals(c.state).axUsers[0].stClick(null); // arm
+  const p = c.usersVals(c.state).axUsers[0].stClick(null); // confirm
+  await p;
+  assert.equal(c.state.users[0].status, 'Active', 'reverted to what the server last acknowledged');
+  assert.match(c.state.toast, /Could not change status .* database unavailable/);
+  clearTimeout(c._tt);
+});
+
+// ── the trash icon: deactivate = suspend, same two-click confirm. NOT DELETE — the
+//    backend redefined DELETE /api/admin/users/{id} to a real, irreversible soft-delete
+//    (email/name/phone scrubbed), so the button that promises "nothing is deleted" must
+//    call POST .../deactivate instead, which is what stayed reversible. ──
+
+test('the trash icon is a two-click confirm that calls deactivate, not DELETE', async () => {
+  let called = false;
+  routes = {
+    ['POST /backend/ops-intelligence/api/admin/users/' + U1 + '/deactivate']: () => {
+      called = true;
+      return reply(200, { ok: true, user_id: U1, status: 'inactive' });
+    },
+    ['DELETE /backend/ops-intelligence/api/admin/users/' + U1]: () => {
+      throw new Error('the trash icon must never call the real, irreversible delete');
+    }
+  };
+  const c = new HoistraLogic();
+  c.setState({ users: [liveRow()], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings });
+  c.usersVals(c.state).axUsers[0].delClick(null); // arm
+  assert.equal(called, false, 'the first click must not touch the network');
+  assert.equal(c.state.usArmed, 'del:' + U1);
+  const p = c.usersVals(c.state).axUsers[0].delClick(null); // confirm
+  assert.equal(c.state.users[0].status, 'Suspended', 'flipped optimistically');
+  await p;
+  assert.equal(called, true);
+  assert.match(c.state.toast, /suspended.*nothing is deleted/, 'the copy must not claim a real delete');
+});
+
+// ── a row cannot act on itself — matches the server's own self-guard on both routes ──
+
+test('your own row offers neither the status pill click nor the trash icon', async () => {
+  routes = {}; // any call here would mean the self-guard failed
+  const c = new HoistraLogic();
+  c.setState({
+    account: { email: 'AMARA@plenum.co' }, // case-insensitive match against the row email
+    users: [liveRow()], usLiveLoadedAt: NOW, axBldsLive: BLDS_RES.buildings
+  });
+  const row = c.usersVals(c.state).axUsers[0];
+  assert.equal(row.isMe, true);
+  assert.equal(row.delShow, false, 'no trash icon on your own row at all');
+  row.stClick(null);
+  assert.equal(c.state.usArmed, null, 'clicking your own status pill never arms it');
+  assert.match(c.state.toast, /cannot change your own status/);
 });

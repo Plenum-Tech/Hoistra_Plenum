@@ -4,7 +4,8 @@ import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_B
 import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
-import { CADENCES, DAYS, cadenceLabel, cadenceBadge } from './reports.js';
+import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
+import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { documentUrl } from '../api/docRag.js';
@@ -121,6 +122,16 @@ export const renderValsMethods = {
     const D = this.D();
     const s = this.state;
     if (!D) return {};
+    // Sessions and reports are one shared browser store, not per-account (see
+    // makeSession()'s own comment) — every account that has ever signed in in this tab,
+    // superadmin's view-as-company included, left its own rows in the same arrays. These
+    // two are the "mine" views everything below reads instead of the raw state arrays, so
+    // nobody sees another account's questions, tasks or pinned reports.
+    const myEmail = (s.account && s.account.email) ? String(s.account.email).trim().toLowerCase() : null;
+    const mySessions = myEmail ? s.sessions.filter((r) => r.owner === myEmail) : [];
+    // Reports are server-owned and already scoped to the caller (every route in
+    // api/routes/reports.py filters on s.user_id) — no client-side owner filter needed.
+    const myCards = flattenCards(s.reports);
     // The pages that render the live orchestrator transcript: the dock pages (in their dock)
     // and the chat page (as the page). Home is a dock page too, but it has no dock until a
     // question or a carried-over task opens one, so it only counts once that has happened.
@@ -172,7 +183,7 @@ export const renderValsMethods = {
     const modKey = s.module;
     const mod = modKey ? MODULES[modKey] : null;
     const answer = s.answerKey ? D.answers[s.answerKey] : null;
-    const rep = s.reports.find((r) => r.key === s.reportKey) || null;
+    const rep = myCards.find((c) => c.id === s.reportKey) || null;
     // Vendors: the live model from svc-operations-intelligence once it has loaded, the seed
     // otherwise (vendorsLive.js). Both expose the same shape — a directory, a record per
     // vendor and the scorecard rows behind each published score — so the vp* section renders
@@ -208,8 +219,8 @@ export const renderValsMethods = {
     const vpScore = VD.score;
     const SC = vpR ? vpScore(vpV.id) : { rows: [], raw: 0, score: null };
     const score = vpR ? SC.score : 0;
-    // The refresh of the report in view (newest unless an older one was picked).
-    const repRun = rep ? ((rep.runs || [])[s.reportRunIdx || 0] || (rep.runs || [])[0] || null) : null;
+    // The refresh of the card in view (newest unless an older one was picked).
+    const repRun = rep ? ((rep.runs || [])[s.reportRunIdx || 0] || (rep.runs || [])[0] || rep.latest_run || null) : null;
     // Spaces: the four engines with their live figures plus the saved spaces (spacesLive.js).
     const spm = this.spModel();
     const toneColor = (tone) => (tone && tone !== "none" ? t(tone).color : "var(--color-neutral-500)");
@@ -247,7 +258,12 @@ export const renderValsMethods = {
     const docPageRows = docFiltered.slice(docPage * PAGE_SIZE, docPage * PAGE_SIZE + PAGE_SIZE);
 
     const vals = {
-      tenant: "Planum Technologies",
+      // The signed-in account's real company, from login/refresh — never the seed
+      // portfolio's name. Blank rather than a placeholder before the account has loaded.
+      // While a superadmin is viewing as another company (superAdmin.js's
+      // viewAsCompany), that company's name takes over here too — this sits in the
+      // TopBar itself, so it stays visible on every page without opening the account menu.
+      tenant: (s.viewOrgId && s.viewOrgName) || (s.account && s.account.organization_name) || '',
       scopeLine: D.portfolio.buildings + " buildings · " + D.portfolio.area + " · 4 regulation packs",
       // The line under "Ask. Run. Anything." — the live register when it has answered, the
       // seed portfolio otherwise. Floor area has no source yet, so the live line counts
@@ -300,11 +316,11 @@ export const renderValsMethods = {
         this.setState({ query: "" });
         this.askScoped(q);
       },
-      // Saved reports first — they are the pinned runs proper, re-run on a cadence — then
-      // the questions the portfolio is most often asked.
-      pinned: s.reports.map((r) => ({
-        label: r.name,
-        run: () => this.rpOpen(r.key)
+      // Saved report cards first — they are the pinned runs proper, re-run on a cadence by
+      // the server — then the questions the portfolio is most often asked.
+      pinned: myCards.map((c) => ({
+        label: c.name,
+        run: () => this.rpOpen(c.id)
       })).concat([
         "Which buildings put me at risk this month?",
         "What needs my approval today?",
@@ -1870,7 +1886,7 @@ export const renderValsMethods = {
         // is why the list read empty. `task` carries the raw instruction when the dock
         // recorded it; a seeded row's label IS the question.
         const seen = {};
-        return s.sessions
+        return mySessions
           .filter((q) => q !== s.orchTask)
           .filter((q) => { const k = q.task || q.label; if (seen[k]) return false; seen[k] = 1; return true; })
           .slice(0, 6)
@@ -1885,7 +1901,7 @@ export const renderValsMethods = {
             };
           });
       })(),
-      orchHasRecent: s.sessions.some((q) => q !== s.orchTask),
+      orchHasRecent: mySessions.some((q) => q !== s.orchTask),
 
       // The composer's button becomes Stop while a turn is running.
       orchSendBusy: !!s.ccBusy && chatView,
@@ -1935,30 +1951,34 @@ export const renderValsMethods = {
         : s.spError ? "Saved spaces unavailable — svc-udr did not answer." : "",
       navSpaceNoteTip: s.spError || "",
 
-      navSessions: s.sessions.slice(0, 8).map((q) => ({
+      navSessions: mySessions.slice(0, 8).map((q) => ({
         label: q.title || q.label,
         when: ago(q.at),
         icon: sessionIcon(q),
         active: q.kind === "chat" && s.sessionId === q.id && s.view === "chat",
-        click: () => this.openSession(q.id)
+        click: () => this.openSession(q.id),
+        remove: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.deleteSession(q.id); }
       })),
-      navSessionsEmpty: !s.sessions.length,
-      navSessionsMore: s.sessions.length > 8 ? "All sessions · " + s.sessions.length : "All sessions",
+      navSessionsEmpty: !mySessions.length,
+      navSessionsMore: mySessions.length > 8 ? "All sessions · " + mySessions.length : "All sessions",
 
       // Section badges are the spaces' live figures (the number off the badge) and the live
       // site count; nothing shows until its source has answered.
-      navSections: [
-        { label: "Buildings", icon: "ph-buildings", key: "buildings", count: this.bldIsLive() ? this.bldData().length : "" },
+      //
+      // Admin view shows none of these — Buildings, Compliance, Vendors, Energy, Assets,
+      // Maintenance are all User-view reports. Admin view's own nav is navAdmin below
+      // (Integrations, Users & access, Audit trail); the two are mutually exclusive on
+      // s.role, never a mix of both lists at once.
+      navSections: s.role === "admin" ? [] : [
         { label: "Buildings", icon: "ph-buildings", key: "buildings_user", count: "" },
         { label: "Compliance", icon: "ph-shield-check", key: "compliance", count: spm.byKey.compliance.count === null ? "" : spm.byKey.compliance.badge.split(" ")[0] },
         { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: spm.byKey.vendors.count === null ? "" : spm.byKey.vendors.badge.split(" ")[0] },
         { label: "Energy", icon: "ph-lightning", key: "energy", count: spm.byKey.energy.count === null ? "" : spm.byKey.energy.badge.split(" ")[0] },
         { label: "Assets", icon: "ph-cube", key: "assets", count: this.asVals(s).asThreatN },
         { label: "Maintenance", icon: "ph-wrench", key: "ops", count: spm.byKey.ops.count === null ? "" : spm.byKey.ops.badge.split(" ")[0] }
-      ].filter((n) => s.role === "admin" ? n.key === "buildings" : n.key !== "buildings").map((n) => {
+      ].map((n) => {
         const active = (s.view === "module" && s.module === n.key)
-          || (s.view === "buildings" && n.key === "buildings" && s.role === "admin")
-          || (s.view === "buildings" && n.key === "buildings_user" && s.role !== "admin")
+          || (s.view === "buildings" && n.key === "buildings_user")
           || (s.view === "cc" && n.key === "compliance")
           || (s.view === "vp" && n.key === "vendors");
         return {
@@ -1966,7 +1986,6 @@ export const renderValsMethods = {
           color: active ? "var(--color-accent)" : "var(--color-neutral-300)",
           chip: active ? "var(--color-accent-900)" : "transparent",
           click: () => {
-            if (n.key === "buildings") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "admin", navOpen: true, detail: null }); }
             if (n.key === "buildings_user") { window.scrollTo(0, 0); return this.setState({ view: "buildings", role: "user", navOpen: true, detail: null }); }
             if (n.key === "compliance") { window.scrollTo(0, 0); return this.setState({ view: "cc", navOpen: true, detail: null }); }
             if (n.key === "vendors") { window.scrollTo(0, 0); return this.setState({ view: "vp", navOpen: true, detail: null }); }
@@ -1976,6 +1995,10 @@ export const renderValsMethods = {
       }),
 
       isReport: s.signedIn && s.view === "report",
+      // No card picked → the grid of every card ("cards, easy to view"); a picked card →
+      // the single-card detail page (the original CustomReport layout, per-card now).
+      reportGridMode: s.signedIn && s.view === "report" && !s.reportKey,
+      openReportsGrid: () => { this.setState({ view: "report", reportKey: null, navOpen: true, detail: null, queueOpen: false, paletteOpen: false }); if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); },
       isSessions: s.signedIn && s.view === "sessions",
       isSpace: s.signedIn && s.view === "space",
       isAssets: s.signedIn && s.view === "module" && s.module === "assets",
@@ -1986,18 +2009,18 @@ export const renderValsMethods = {
       // searchable, filterable by space; a row reopens, deletes or files its session.
       sessionsPage: (() => {
         const filter = s.sessionsFilter || null;
-        const groups = shapeSessionList(s.sessions, { query: s.sessionsQuery, space: filter });
+        const groups = shapeSessionList(mySessions, { query: s.sessionsQuery, space: filter, owner: myEmail });
         const chips = [{ key: null, label: "All" }]
           .concat(spm.builtin.map((b) => ({ key: b.key, label: b.name })))
           .concat(spm.custom.map((c) => ({ key: c.id, label: c.name })));
         return {
-          count: s.sessions.length + (s.sessions.length === 1 ? " session" : " sessions") + " · stored in this browser, threads on svc-deepagents",
+          count: mySessions.length + (mySessions.length === 1 ? " session" : " sessions") + " · stored in this browser, threads on svc-deepagents",
           query: s.sessionsQuery || "",
           setQuery: (e) => this.setState({ sessionsQuery: e.target.value }),
           chips: chips.map((c) => ({ label: c.label, on: filter === c.key, pick: () => this.setState({ sessionsFilter: c.key }) })),
           groups: dayGroups(groups),
           empty: !groups.length,
-          emptyText: s.sessions.length ? "Nothing matches." : "No sessions yet. Ask anything from the home bar — every conversation lands here.",
+          emptyText: mySessions.length ? "Nothing matches." : "No sessions yet. Ask anything from the home bar — every conversation lands here.",
           newQuery: () => this.newQuery()
         };
       })(),
@@ -2013,7 +2036,7 @@ export const renderValsMethods = {
             back: () => this.openSessions(null)
           };
         }
-        const groups = shapeSessionList(s.sessions, { space: e.custom ? e.id : e.key });
+        const groups = shapeSessionList(mySessions, { space: e.custom ? e.id : e.key, owner: myEmail });
         return {
           missing: false,
           isCustom: !!e.custom,
@@ -2051,15 +2074,15 @@ export const renderValsMethods = {
       })(),
 
       // The conversation page's header: which session this is and where it is filed.
-      chatSessionTitle: (() => { const rec = s.sessions.find((x) => x.id === s.sessionId); return rec ? rec.title : ""; })(),
+      chatSessionTitle: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return rec ? rec.title : ""; })(),
       chatSessionMeta: (() => {
-        const rec = s.sessions.find((x) => x.id === s.sessionId);
+        const rec = mySessions.find((x) => x.id === s.sessionId);
         if (!rec) return "";
         const sp = rec.spaceId ? spm.byKey[rec.spaceId] : null;
         return ["Asked from " + rec.page, sp ? "filed in " + sp.name : null, ago(rec.at)].filter(Boolean).join(" · ");
       })(),
       chatCanFile: !!s.sessionId && spm.custom.length > 0,
-      chatFileValue: (() => { const rec = s.sessions.find((x) => x.id === s.sessionId); return (rec && rec.spaceId) || ""; })(),
+      chatFileValue: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return (rec && rec.spaceId) || ""; })(),
       chatFileOptions: [{ value: "", label: "Not in a space" }].concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
       chatFileTo: (e) => { if (s.sessionId) this.fileSession(s.sessionId, e.target.value || null); },
       isCC: s.signedIn && s.view === "cc",
@@ -2141,44 +2164,96 @@ export const renderValsMethods = {
       qModeCerts: cc.qModeCerts, qModeBuildings: cc.qModeBuildings, qModeGaps: cc.qModeGaps,
       qBuildingRows: cc.qBuildingRows, qGapRows: cc.qGapRows,
       qItems: cc.qItems, qEmpty: cc.qEmpty, closeCCQueue: cc.closeCCQueue,
-      // The report page reads the refresh in view (reports.js). Status is explicit: pending
-      // (never run), running, ready, or failed — and a failed refresh keeps the last good one.
+      // The report page reads the card in view (reports.js / api/routes/reports.py's
+      // card_to_dict). Status is explicit: pending (never run), running, ready, or failed —
+      // and a failed refresh keeps the last good run visible in the history strip.
       report: (() => {
-        const cadL = rep ? cadenceLabel(rep.cad) : "";
-        const next = rep && rep.nextRunAt ? fmtDateTime(iso(rep.nextRunAt)) : null;
+        const next = rep && rep.next_run_at ? fmtDateTime(rep.next_run_at) : null;
         return {
           title: rep ? rep.name : "",
-          kicker: rep ? "Built from the session “" + rep.prompt + "”" + (rep.page ? ", asked from " + rep.page : "") + "." : "",
+          kicker: rep ? "Asks “" + rep.prompt + "”" + (rep.source_page ? ", pinned from " + rep.source_page : "") + "." : "",
           lastRun: !rep ? ""
             : rep.status === "running" ? "Refreshing now…"
-            : rep.lastRunAt ? "Last refreshed " + fmtDateTime(iso(rep.lastRunAt))
-            : rep.lastTriedAt ? "Last attempt failed " + fmtDateTime(iso(rep.lastTriedAt))
+            : rep.last_run_at ? "Last refreshed " + fmtDateTime(rep.last_run_at)
+            : rep.last_tried_at ? "Last attempt failed " + fmtDateTime(rep.last_tried_at)
             : "First refresh pending",
-          meta: !rep ? "" : cadL + (next && rep.status !== "running" ? " · next " + next : "") + " · re-run while Hoistra is open",
-          status: rep ? rep.status : "",
-          runAt: repRun ? fmtDateTime(iso(repRun.at)) : "",
-          runMs: repRun && typeof repRun.ms === "number" ? Math.round(repRun.ms / 1000) + " s" : "",
-          tools: repRun && (repRun.calls || []).length ? repRun.calls.join(" · ") : "",
-          answer: repRun && !repRun.error ? (repRun.answer || "") : "",
-          rich: repRun && !repRun.error && repRun.rich
-            ? Object.assign({}, repRun.rich, { overdue: overdueBars(repRun.rich.certificates || [], this.ccData()), offers: [] })
-            : null,
+          meta: !rep ? "" : (rep.refresh_label || "") + (next && rep.status !== "running" ? " · next " + next : "") + " · refreshed by the server, not this browser",
+          runAt: repRun ? fmtDateTime(repRun.ran_at) : "",
+          runMs: repRun && typeof repRun.duration_ms === "number" ? Math.round(repRun.duration_ms / 1000) + " s" : "",
+          tools: repRun && (repRun.tool_calls || []).length ? repRun.tool_calls.map((t) => (t && t.tool) || t).join(" · ") : "",
+          // `status`, `answer` and `rich` used to live here for the single prose block the
+          // page rendered. ReportCards reads the run itself now (reportBlocks below), so
+          // nothing consumed them — and building `rich` re-ran overdueBars() over every
+          // certificate a second time on every render to populate a key no one read.
           runs: rep ? (rep.runs || []).map((r, k) => ({
-            label: fmtDateTime(iso(r.at)) + (r.error ? " · failed" : ""),
+            label: fmtDateTime(r.ran_at) + (r.error || r.ok === false ? " · failed" : ""),
             active: k === (s.reportRunIdx || 0),
             pick: () => this.setState({ reportRunIdx: k })
           })) : []
         };
       })(),
+      // The answer, as cards. Each one can go in the tray and come back; the tray is the
+      // side panel beside the grid. Hiding never touches the answer itself — Export still
+      // writes every section — so nothing is ever actually lost.
+      ...(() => {
+        const all = repRun && !repRun.error ? answerCards(
+          repRun.rich ? Object.assign({}, repRun.rich, { overdue: overdueBars((repRun.rich.certificates || []), this.ccData()), offers: repRun.rich.offers || [] }) : null,
+          repRun.answer
+        ) : [];
+        const hidden = rep ? hiddenFor(s.reportHidden, s.account, rep.id) : [];
+        const isHidden = (c) => hidden.indexOf(c.key) > -1;
+        const shown = all.filter((c) => !isHidden(c));
+        // Order the tray the way the answer orders the cards, not the order they were hidden
+        // — a reader looking for what they put away is looking for where it used to sit.
+        const away = all.filter(isHidden);
+        // A key in the hidden set with no card behind it: the section was in a previous
+        // refresh and this one does not have it. Kept in storage (it may come back) but
+        // shown in the tray as gone, so the count never lies about what can be restored.
+        const orphans = hidden.filter((k) => !all.some((c) => c.key === k));
+        return {
+          reportBlocks: shown.map((c) => ({
+            key: c.key, kind: c.kind, title: c.title, span: c.span, data: c.data,
+            open: (s.reportOpenBlocks || []).indexOf(c.key) > -1,
+            toggleOpen: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.rcToggleOpen(c.key); },
+            hide: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.rcHide(c.key); }
+          })),
+          reportBlocksEmpty: all.length > 0 && shown.length === 0,
+          reportHasBlocks: all.length > 0,
+          reportTrayOpen: !!s.reportTrayOpen,
+          reportTrayCount: away.length + orphans.length,
+          toggleReportTray: () => this.rcToggleTray(),
+          restoreAllReportBlocks: () => this.rcRestoreAll(),
+          reportTrayItems: away.map((c) => ({
+            key: c.key, title: c.title || "Untitled section", kind: c.kind, gone: false,
+            restore: () => this.rcRestore(c.key)
+          })).concat(orphans.map((k) => ({
+            key: k, title: k.replace(/^[a-z]+:/, "").replace(/-/g, " "), kind: "gone", gone: true,
+            restore: () => this.rcRestore(k)
+          })))
+        };
+      })(),
       reportPending: !!rep && !repRun && rep.status !== "running",
       reportRunning: !!rep && rep.status === "running",
-      reportReady: !!repRun && !repRun.error,
-      reportFailed: !!repRun && !!repRun.error,
+      reportReady: !!repRun && !repRun.error && repRun.ok !== false,
+      reportFailed: !!repRun && (!!repRun.error || repRun.ok === false),
       reportFailedText: repRun && repRun.error ? repRun.error : "",
       reportHasRuns: !!rep && (rep.runs || []).length > 1,
-      runReport: () => { if (rep) this.rpRun(rep.key); },
-      exportReport: () => { if (rep) this.rpExport(rep.key, s.reportRunIdx || 0); },
-      deleteReport: () => { if (rep) this.rpDelete(rep.key); },
+      runReport: () => { if (rep) this.rpRunCard(rep.id); },
+      exportReport: () => { if (rep) this.rpExport(rep.id, s.reportRunIdx || 0); },
+      // Server-side and permanent, so the first click only arms it (reports.js's rpArm).
+      deleteReport: () => {
+        if (!rep) return;
+        if (s.rpArmed !== "detail:" + rep.id) return this.rpArm("detail:" + rep.id);
+        return this.rpDeleteCard(rep.id);
+      },
+      deleteReportLabel: rep && s.rpArmed === "detail:" + rep.id ? "Click again to delete" : "Delete",
+      deleteReportTitle: rep && s.rpArmed === "detail:" + rep.id
+        ? "This removes the card and its refresh history for good"
+        : "Delete this report card",
+      deleteReportArmed: !!rep && s.rpArmed === "detail:" + rep.id,
+
+      reportsLoading: s.reportsLoading,
+      reportsError: s.reportsError,
 
       reportMenu: s.reportMenu,
       reportName: s.reportName,
@@ -2186,14 +2261,14 @@ export const renderValsMethods = {
       toggleReportMenu: () => this.setState((p) => ({ reportMenu: !p.reportMenu, reportName: "" })),
       cancelReport: () => this.setState({ reportMenu: false, reportName: "" }),
       createReport: () => this.rpCreate(),
-      reportCadences: CADENCES.map((c, k) => ({
+      reportCadences: (s.reportPresets || []).map((c, k) => ({
         label: c.label,
         tick: k === s.reportCad ? "ph-radio-button" : "ph-circle",
         color: k === s.reportCad ? "var(--color-accent)" : "var(--color-neutral-500)",
         chip: k === s.reportCad ? "var(--color-accent-900)" : "transparent",
         pick: () => this.setState({ reportCad: k })
       })),
-      reportDaysShow: (CADENCES[s.reportCad] || {}).pickDays ? "flex" : "none",
+      reportDaysShow: ((s.reportPresets || [])[s.reportCad] || {}).pick_days ? "flex" : "none",
       reportDays: DAYS.map((d, k) => {
         const on = s.reportDays.indexOf(k) > -1;
         return {
@@ -2209,10 +2284,10 @@ export const renderValsMethods = {
       }),
       reportTime: s.reportTime,
       setReportTime: (e) => this.setState({ reportTime: e.target.value }),
-      reportCadenceNote: "The session's question is pinned and re-run " + cadenceLabel({ i: s.reportCad, days: s.reportDays, time: s.reportTime }).replace(/^Refresh /, "") + " while Hoistra is open. The first refresh runs as soon as the report is created.",
-      // Sources are the chat sessions in this browser — a report is a pinned question.
+      reportCadenceNote: "The session's question is pinned and re-run by the server on this cadence — no browser tab needs to stay open. The first refresh runs as soon as the card is created.",
+      // Sources are the chat sessions in this browser — a report card is a pinned question.
       reportSources: (() => {
-        const chats = s.sessions.filter((q) => q.kind === "chat").slice(0, 5);
+        const chats = mySessions.filter((q) => q.kind === "chat").slice(0, 5);
         const cur = chats.some((q) => q.id === s.reportSrcId) ? s.reportSrcId : (chats[0] ? chats[0].id : null);
         return chats.map((q) => ({
           label: q.title || q.label,
@@ -2222,16 +2297,103 @@ export const renderValsMethods = {
           pick: () => this.setState({ reportSrcId: q.id })
         }));
       })(),
-      reportSourcesEmpty: !s.sessions.some((q) => q.kind === "chat"),
+      reportSourcesEmpty: !mySessions.some((q) => q.kind === "chat"),
 
-      navReports: (s.role === "admin" ? [] : s.reports).map((r) => {
-        const active = s.view === "report" && s.reportKey === r.key;
+      navReports: (s.role === "admin" ? [] : myCards).map((c) => {
+        const active = s.view === "report" && s.reportKey === c.id;
+        const armed = s.rpArmed === "nav:" + c.id;
         return {
-          name: r.name,
-          badge: r.status === "running" ? "Running" : r.status === "pending" ? "Pending" : (r.status === "error" && !r.lastRunAt) ? "Failed" : cadenceBadge(r.cad),
+          name: c.name,
+          badge: armed ? "Delete?" : cardStatusBadge(c),
           color: active ? "var(--color-accent)" : "var(--color-neutral-300)",
           chip: active ? "var(--color-accent-900)" : "transparent",
-          click: () => this.rpOpen(r.key)
+          click: () => this.rpOpen(c.id),
+          // The list is where a person actually looks at their reports, so it is where
+          // deleting one belongs — no need to open it first. Armed, then confirmed.
+          armed: armed,
+          removeColor: armed ? "var(--st-risk)" : "var(--color-neutral-500)",
+          removeTitle: armed ? "Click again to delete " + c.name + " for good" : "Delete " + c.name,
+          remove: (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            if (!armed) return this.rpArm("nav:" + c.id);
+            return this.rpDeleteCard(c.id);
+          }
+        };
+      }),
+
+      // The grid every report card renders in — "cards, easy to view", with a checkbox per
+      // card so several can be picked at once and removed together. Feeds both the sidebar's
+      // header click (into a grid view) and the top of the single-card detail page.
+      // Empty means no REPORTS, not no cards: a report whose cards have all been deleted
+      // still has to render, or the only thing that can delete it is off the screen.
+      reportGridEmpty: !(s.reports || []).length,
+      reportSelectedCount: (s.reportSelected || []).length,
+      reportAnySelected: (s.reportSelected || []).length > 0,
+      reportAllSelected: myCards.length > 0 && (s.reportSelected || []).length === myCards.length,
+      toggleSelectAllReports: () => this.setState((p) => ({
+        reportSelected: (p.reportSelected || []).length === myCards.length ? [] : myCards.map((c) => c.id)
+      })),
+      deleteSelectedReports: () => {
+        if (s.rpArmed !== "bulk") return this.rpArm("bulk");
+        return this.rpDeleteSelected();
+      },
+      deleteSelectedLabel: s.rpArmed === "bulk"
+        ? "Click again to delete " + (s.reportSelected || []).length
+        : "Delete selected",
+      deleteSelectedArmed: s.rpArmed === "bulk",
+      clearReportSelection: () => { this.rpDisarm(); this.rpClearSelection(); },
+
+      // The reports themselves — the containers the cards sit in. The backend has always had
+      // two levels (a report holds cards) but nothing here ever showed the outer one, which
+      // left DELETE /api/reports/{id} unreachable and an emptied report impossible to clear.
+      reportGroups: (s.reports || []).map((r) => {
+        const cards = r.cards || [];
+        const armed = s.rpArmed === "report:" + r.id;
+        return {
+          id: r.id,
+          name: r.name,
+          count: cards.length + (cards.length === 1 ? " card" : " cards"),
+          armed: armed,
+          cardIds: cards.map((c) => c.id),
+          deleteLabel: armed
+            ? (cards.length ? "Click again — deletes " + cards.length + " card" + (cards.length === 1 ? "" : "s") : "Click again to delete")
+            : "Delete report",
+          deleteTitle: armed
+            ? "This deletes the report and every card on it, for good"
+            : "Delete this whole report" + (cards.length ? " and its " + cards.length + " card" + (cards.length === 1 ? "" : "s") : ""),
+          remove: (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            if (!armed) return this.rpArm("report:" + r.id);
+            return this.rpDeleteReport(r.id);
+          }
+        };
+      }),
+      reportCards: myCards.map((c) => {
+        const run = (c.runs || [])[0] || c.latest_run || null;
+        const failed = run && (run.error || run.ok === false);
+        const snippet = run && !failed ? (run.answer || "").slice(0, 140) : (failed ? (run.error || "").slice(0, 140) : "");
+        return {
+          id: c.id,
+          name: c.name,
+          prompt: c.prompt,
+          badge: cardStatusBadge(c),
+          statusColor: c.status === "error" ? "var(--st-risk)" : c.status === "running" ? "var(--color-accent)" : c.status === "paused" ? "var(--color-neutral-500)" : "var(--st-ok)",
+          snippet: snippet,
+          lastRun: c.status === "running" ? "Refreshing now…" : c.last_run_at ? fmtDateTime(c.last_run_at) : "Not run yet",
+          active: s.view === "report" && s.reportKey === c.id,
+          selected: (s.reportSelected || []).indexOf(c.id) > -1,
+          reportId: c.report_id,
+          open: () => this.rpOpen(c.id),
+          toggleSelect: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.rpToggleSelect(c.id); },
+          runNow: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.rpRunCard(c.id); },
+          armed: s.rpArmed === "grid:" + c.id,
+          removeColor: s.rpArmed === "grid:" + c.id ? "var(--st-risk)" : "var(--color-neutral-400)",
+          removeTitle: s.rpArmed === "grid:" + c.id ? "Click again to delete for good" : "Delete this card",
+          remove: (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
+            if (s.rpArmed !== "grid:" + c.id) return this.rpArm("grid:" + c.id);
+            return this.rpDeleteCard(c.id);
+          }
         };
       }),
 
@@ -2361,7 +2523,7 @@ export const renderValsMethods = {
         vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
         vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
       }
-      if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s), this.asLiveVals(s));
+      if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s), this.asLiveVals(s), this.asLiveGroups(s));
       if (modKey === "ops") Object.assign(vals, this.mxVals(s), this.mxLiveVals(s));
       vals.mod = {
         ...mod,

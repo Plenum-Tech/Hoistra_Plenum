@@ -20,7 +20,10 @@ const COPY = {
   register: { kicker: "New account", title: "Create an account", blurb: "Set a password you can remember. You'll confirm your email with a six-digit code." },
   verify:   { kicker: "Confirm your email", title: "Enter the code", blurb: null },
   forgot:   { kicker: "Password reset", title: "Forgot your password?", blurb: "Enter your email and we'll send a code to reset it." },
-  reset:    { kicker: "Password reset", title: "Set a new password", blurb: null }
+  reset:    { kicker: "Password reset", title: "Set a new password", blurb: null },
+  // Reached only from an invitation link (?token=…): the token is the credential, so the
+  // form asks for nothing that identifies the person — just the password they will use.
+  invite:   { kicker: "You're invited", title: "Set your password", blurb: "Choose a password to activate your account. You'll sign in with it and the email address the invitation was sent to." }
 };
 
 function Field(p) {
@@ -77,6 +80,12 @@ export default function GatePanel({ vals }) {
           <div style={HINT}>{minHint}</div>
           <Button label={busy ? "Setting…" : "Set password"} onClick={vals.authReset} disabled={busy} secondary={vals.authDeadCode} />
           <Button label={resendLabel} onClick={vals.authResend} disabled={busy || vals.authCoolingDown} secondary={!vals.authDeadCode} />
+        </> : null}
+        {m === "invite" ? <>
+          <Field value={vals.fullName} onChange={vals.setFullName} onKey={vals.authKey} placeholder="Your name (optional)" auto="name" />
+          <Field value={vals.password} onChange={vals.setPassword} onKey={vals.authKey} placeholder="Choose a password" auto="new-password" type="password" />
+          <div style={HINT}>{minHint}</div>
+          <Button label={busy ? "Activating…" : "Activate account"} onClick={vals.authAcceptInvite} disabled={busy || !vals.authInviteReady} />
         </> : null}
       </div>
       {vals.authError ? <div style={ERROR}>{vals.authError}</div> : null}

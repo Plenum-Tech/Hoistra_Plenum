@@ -17,6 +17,7 @@
 // and `this` is the controller.
 import { opsApi } from '../api/opsIntelligence.js';
 import { complianceApi } from '../api/compliance.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -248,6 +249,11 @@ export const homeLiveMethods = {
       if (r.status === "fulfilled") { raw[keys[i]] = r.value; answered += 1; }
       else { raw[keys[i]] = null; raw.errors[keys[i]] = (r.reason && r.reason.message) || String(r.reason); }
     });
+    // A company switch mid-load: api/client.js disowned every read that was in flight,
+    // and resetLiveData()/loadLiveData() have already started correctly-scoped ones.
+    // Counting these as unanswered would put a spurious error on the new company's
+    // register and arm a retry against a company nobody is looking at any more.
+    if (settled.some((r) => r.status === 'rejected' && isStaleScope(r.reason))) return;
     this._homeLoading = false;
     if (!answered) {
       const msg = raw.errors[keys[0]] || "unreachable";

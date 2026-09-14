@@ -5,7 +5,18 @@
 // create/invite delegate to the API for live rows — the seed keeps its local-only
 // behaviour so the demo still works offline. saLiveLoad() fires when the overlay
 // opens (the account-menu item), never at app mount.
+//
+// viewAsCompany()/exitViewAsCompany(): a superadmin's own Admin/User view (auth.js) is a
+// lens on their own company only — this is the separate capability to act as a DIFFERENT
+// one instead. Every route that honours it (api/client.js's currentOrgId()/getActingOrg())
+// enforces server-side that only a superadmin gets the company they ask for; this just
+// chooses, for a live row only (a seed/demo row has no real organization_id to act as).
+// Buildings, Compliance, Vendors, Home, Users & access and Audit trail all switch to the
+// chosen company; Assets and Maintenance do not (svc-work-order-management has no
+// per-company scoping yet) and keep showing this deployment's own data regardless.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { setActingOrg } from '../api/client.js';
+import { authApi } from '../api/auth.js';
 
 // A live list can be genuinely empty (a fresh platform) — the header still needs a
 // subject, so an empty list renders this placeholder instead of throwing.
@@ -21,7 +32,6 @@ export const superAdminMethods = {
     return {
       saOn: s.saOn,
       saOpen: () => this.setState({ saOn: true, acctOpen: false }),
-      saClose: () => this.setState({ saOn: false }),
       // Live once the companies read has answered; until then the seed is on show, and
       // the overlay says so next to the retry control.
       saLiveError: s.saLiveError
@@ -69,7 +79,12 @@ export const superAdminMethods = {
           // an instruction rather than an API call (the create form is where it enters).
           if (co.live && typeof this.saLiveInvite === "function") return this.saLiveInvite(co);
           this.setState((p) => ({ saCompanies: p.saCompanies.map((x) => x.id === co.id ? { ...x, invited: true, status: x.status === "Created" ? "Onboarding" : x.status } : x) })); this.flash("Admin invitation sent for " + co.name + " — they activate, set a password and land in the company admin application.");
-        }
+        },
+        // Only a live row has a real organization_id to act as — the seed/demo rows
+        // (offline console) have nothing a backend override could resolve.
+        viewAsShow: !!(co.live && co.id),
+        viewAsCurrent: s.viewOrgId === co.id,
+        viewAs: () => { if (co.live && co.id && typeof this.viewAsCompany === "function") this.viewAsCompany(co.id, co.name); }
       },
       saTiles: [
         { value: nn(co.buildings), label: "Buildings created", hint: "access boundary per user", color: "var(--color-accent)" },
@@ -87,5 +102,72 @@ export const superAdminMethods = {
         fg: c.id === s.saSel ? "var(--color-accent)" : "var(--color-neutral-500)"
       }))
     };
+  },
+
+  // Switches every reader that honours currentOrgId()/getActingOrg() (Buildings,
+  // Compliance, Vendors, Home, Users & access, Audit trail, company usage) onto this
+  // company's data, and drops out of the console into that company's Admin view — same
+  // landing a fresh admin sign-in gets. Assets and Maintenance do not switch (see the
+  // file header) and keep reading this deployment's own data regardless.
+  viewAsCompany(orgId, name) {
+    if (!orgId) return;
+    // A selected building (docs/api/building-scope-api.md) is validated ONLY against the
+    // superadmin's own company when it is set — PATCH /api/auth/me/selected-building has
+    // no acting-as override at all — but engines/auth/access.py's scope_for() re-applies
+    // whatever is already stored regardless of which org is being acted as. Left in place,
+    // a selection made earlier on the superadmin's own company would silently narrow every
+    // read of THIS company to a building id that belongs to neither — not an error, just
+    // quietly empty or wrong results. Cleared here, before anything reads as this company,
+    // and best-effort/silent: a failure to clear it server-side is no worse than not
+    // having tried, and must not block getting into the view at all.
+    //
+    // Captured only on the FIRST entry (viewOrgId not already set) — picking a second
+    // company directly from within the console, without exiting back to "my account" in
+    // between, must not overwrite this with the null the first entry already cleared it
+    // to, or the superadmin's own selection is lost for good rather than restored on the
+    // eventual exitViewAsCompany().
+    if (!this.state.viewOrgId) {
+      const ownSelection = this.state.account && this.state.account.selected_building_id;
+      this._ownSelectionBeforeViewAs = ownSelection || null;
+      if (ownSelection) {
+        authApi.selectBuilding(null).catch(() => {});
+        this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: null }) } : {}));
+      }
+    }
+    setActingOrg(orgId);
+    this.setState({
+      viewOrgId: orgId, viewOrgName: name || null,
+      saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null
+    });
+    if (typeof this.resetLiveData === "function") this.resetLiveData();
+    if (typeof this.loadLiveData === "function") this.loadLiveData();
+    if (typeof this.usLiveLoad === "function") this.usLiveLoad();
+    if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    this.flash("Viewing as " + (name || "the selected company") + " — every report now reads its data.");
+  },
+
+  // Back to the superadmin's own account: every subsequent read is the caller's own
+  // company again (or unscoped, inside the console itself). Restores whatever building
+  // selection viewAsCompany() cleared on the way in — exiting must give back exactly what
+  // was there before, not leave the superadmin's own working selection gone for good.
+  exitViewAsCompany() {
+    if (!this.state.viewOrgId) return;
+    const was = this.state.viewOrgName;
+    setActingOrg(null);
+    const restore = this._ownSelectionBeforeViewAs || null;
+    this._ownSelectionBeforeViewAs = null;
+    if (restore) {
+      authApi.selectBuilding(restore).catch(() => {});
+      this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: restore }) } : {}));
+    }
+    this.setState({
+      viewOrgId: null, viewOrgName: null,
+      role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null
+    });
+    if (typeof this.resetLiveData === "function") this.resetLiveData();
+    if (typeof this.loadLiveData === "function") this.loadLiveData();
+    if (typeof this.usLiveLoad === "function") this.usLiveLoad();
+    if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    this.flash("Back to your own account" + (was ? " — no longer viewing " + was : "") + ".");
   }
 };

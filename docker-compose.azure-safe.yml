@@ -50,6 +50,26 @@ services:
       # the INSERT against Azure on boot; it only failed because production's sites table
       # has no building_name column (db.seed.stmt_skipped, statements=0).
       AUTO_SEED_PORTFOLIO_BUILDINGS: "false"
-      # Production contact rows are real people. Never let a local run mail them.
-      EMAIL_DRY_RUN: "true"
+      # Live delivery is OPT-IN, not the default. This overlay exists to make a laptop safe
+      # to point at the production database, and mail is the one action that reaches past
+      # the database to a real person: with it hardcoded off, any local run that registered
+      # an address already on file, or invited anyone, sent real mail to a real mailbox —
+      # and did it with a localhost activation link (PUBLIC_APP_URL below), which is useless
+      # to whoever received it.
+      #
+      # To test live auth mail deliberately, set it in your shell for that run:
+      #     EMAIL_DRY_RUN=false docker compose -f docker-compose.single-url.local.yml \
+      #       -f docker-compose.azure-safe.yml up -d
+      # and use your own mailbox. Otherwise the code is written to the service log instead.
+      EMAIL_DRY_RUN: ${EMAIL_DRY_RUN:-true}
+      # The report scheduler is a WRITER, and unlike the four startup writers this file
+      # stands down it never stops: engines/reports/scheduler.py claims a due card and
+      # UPDATEs plenum_cafm.report_cards every 30 seconds for as long as the container is
+      # up. Against the production database from a developer's machine that is a continuous
+      # background write nobody asked for — and now that DEEP_AGENTS_BASE_URL resolves, it
+      # can also spend orchestrator calls doing it. Opt in the same way when testing refresh.
+      REPORT_SCHEDULER_ENABLED: ${REPORT_SCHEDULER_ENABLED:-false}
+      # Invitation links are built on this origin. Without it the engine refuses to email
+      # a relative link and hands the activation URL back to the inviter instead.
+      PUBLIC_APP_URL: "http://localhost:5174"
       AUTO_SEND_LADDER_EMAILS: "false"

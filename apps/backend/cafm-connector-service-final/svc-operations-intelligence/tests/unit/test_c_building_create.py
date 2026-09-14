@@ -4,6 +4,8 @@ Validation is pure, so all of this runs without a database.
 """
 from __future__ import annotations
 
+import uuid
+
 from src.engines.energy.building_create import (
     MAX_FLOORS,
     USE_TYPE_STORES_AS,
@@ -197,21 +199,46 @@ def test_a_uuid_locations_id_permits_the_insert():
     assert plan["reason"] is None
 
 
-def test_an_integer_locations_id_refuses_the_insert_with_a_clear_reason():
+def test_an_integer_locations_id_is_linked_through_the_pseudo_uuid_shape():
+    """An integer ``locations.id`` no longer refuses the link. On a deployment where
+    cafm-connector-service created the table first, its id is that service's legacy integer
+    primary key; rather than migrate a table this platform does not own, the sequence
+    assigns the id and it is wrapped in a deterministic uuid-shaped stand-in that
+    ``buildings.location_id`` can actually hold."""
     from src.engines.energy.building_create import plan_location_insert
 
-    plan = plan_location_insert("integer")
-    assert plan["can_insert"] is False
-    assert "integer" in plan["reason"]
-    assert "locations.id" in plan["reason"]
+    for t in ("integer", "bigint", "smallint", "INTEGER"):
+        plan = plan_location_insert(t)
+        assert plan["can_insert"] is True, t
+        assert plan["id_kind"] == "integer", t
+        assert plan["reason"] is None, t
 
 
 def test_an_unrecognised_or_missing_locations_id_type_refuses_defensively():
-    """Anything other than a confirmed uuid column refuses the insert — a missing or
+    """A type the engine does not know how to write still refuses outright — a missing or
     unexpected type is exactly the situation this check exists to catch, not a case to
     guess through."""
     from src.engines.energy.building_create import plan_location_insert
 
-    assert plan_location_insert(None)["can_insert"] is False
-    assert plan_location_insert("bigint")["can_insert"] is False
-    assert plan_location_insert("")["can_insert"] is False
+    for t in (None, "", "text", "character varying", "jsonb"):
+        plan = plan_location_insert(t)
+        assert plan["can_insert"] is False, t
+        assert plan["id_kind"] is None, t
+        assert "locations.id" in plan["reason"], t
+
+
+def test_the_pseudo_uuid_is_the_exact_shape_the_rollup_join_matches():
+    """building_rollup.py joins locations to buildings with
+    ``'00000000-0000-0000-0000-' || lpad(l.id::text, 12, '0')``. If the padding here and the
+    padding there ever drift apart, every building silently loses its location — so the two
+    are pinned together by this test rather than by a comment alone."""
+    from src.engines.energy.building_create import _int_location_id_to_uuid
+
+    assert _int_location_id_to_uuid(1) == "00000000-0000-0000-0000-000000000001"
+    assert _int_location_id_to_uuid(42) == "00000000-0000-0000-0000-000000000042"
+    assert _int_location_id_to_uuid(999999999999) == "00000000-0000-0000-0000-999999999999"
+    # Same zero-padding width as the SQL lpad(..., 12, '0'), and a valid uuid either way.
+    for n in (0, 7, 1234, 999999999999):
+        out = _int_location_id_to_uuid(n)
+        assert len(out) == 36, out
+        assert uuid.UUID(out)

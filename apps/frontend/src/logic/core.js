@@ -3,6 +3,17 @@
 import { GB, PACKS, CC_OF, ENC, ACTION_SPECS, TONE, t, MODULES } from './constants.js';
 import { HOISTWAY } from '../data/hoistway-data.js';
 import { makeSession, newSessionId, trimSessions } from './sessions.js';
+import { flattenCards } from './reports.js';
+
+// The re-entry guards loadLiveData()'s loaders set while a read is in flight. Instance
+// flags, not state — resetLiveData() has to release them together, or a company switch
+// leaves the register showing the previous company's rows. A loader added with a new
+// guard and not listed here is a register that will silently fail to switch.
+const IN_FLIGHT_GUARDS = [
+  '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
+  '_enLoading', '_enPosLoading', '_asLiveLoading', '_mxLiveLoading', '_spLoading',
+  '_glTablesLoading', '_usLiveLoading', '_rpLoading'
+];
 
 export const coreMethods = {
   componentDidMount() {
@@ -24,29 +35,16 @@ export const coreMethods = {
       if (this.state.signedIn && this.state.view === "module" && this.state.module === "assets") this.setState((p) => ({ iotTick: p.iotTick + 1 }));
     }, 2000);
     this.authBoot();
-    // Pull the compliance register, the home tiles and the vendor scorecards from the
-    // backend; the seed stays until each answers.
-    this.ccLoad();
-    this.homeLoad();
-    this.vpLoad();
-    // The Buildings table; buildingsLive.js loads the per-table graph counts once it answers.
-    this.bldLoad();
-    // Open energy anomalies and active meters for the Energy module, and the
-    // ratings-and-duties tiles for every market (real records now, not seed constants).
-    this.energyLoad();
-    this.enPositionLoad();
-    // The Assets page's live asset register and the Maintenance page's live decisions/KPIs,
-    // both from svc-work-order-management.
-    this.asLiveLoad();
-    this.mxLiveLoad();
+    // Every account-scoped register: compliance, home tiles, vendor scorecards, buildings,
+    // energy, assets, maintenance, saved spaces. Shared with authEnter, which calls the same
+    // loadLiveData() whenever a fresh sign-in swaps the account within one tab.
+    this.loadLiveData();
     // The admin surfaces: users + audit read /api/admin eagerly like everything above —
     // a non-admin's 403 lands in the error slice and deliberately arms no retry timer,
     // and authEnter re-kicks both the moment an admin account signs in. The Super Admin
     // console loads on open (the account-menu item in auth.js), never here.
     this.usLiveLoad();
     this.auLiveLoad();
-    // Saved spaces from svc-udr, and the scheduler that refreshes the custom reports.
-    this.spLoad();
     this.rpStart();
     // A reload that lands on the conversation page re-checks the orchestrator link.
     if (this.state.view === "chat") this.chatConnect();
@@ -65,6 +63,62 @@ export const coreMethods = {
     clearTimeout(this._auLiveRetry);
     clearTimeout(this._saLiveRetry); clearTimeout(this._saLiveRefresh);
     clearInterval(this._ingT);
+  },
+
+  // The account-scoped reads: the Buildings table, compliance register, home tiles,
+  // vendor scorecards, energy anomalies/meters/ratings, the Assets and Maintenance
+  // pages' live registers, and saved spaces. Fired once at mount, and again by
+  // authEnter for a fresh sign-in — both call sites must fire the same set, or a
+  // page reload and an in-tab account switch would load different data.
+  loadLiveData() {
+    this.ccLoad();
+    this.homeLoad();
+    this.vpLoad();
+    // buildingsLive.js loads the per-table graph counts once bldLoad answers.
+    this.bldLoad();
+    this.energyLoad();
+    this.enPositionLoad();
+    this.asLiveLoad();
+    this.mxLiveLoad();
+    this.spLoad();
+  },
+
+  // Clears every register loadLiveData() fills, and cancels any retry/refresh timer
+  // still armed from whoever was signed in before, so a sign-in that swaps accounts
+  // in the same tab never shows — even for a moment — a register scoped to the
+  // previous account (e.g. its buildings, its compliance certificates). Not called on
+  // a reload's silent token refresh (authEnter's keepView): componentDidMount already
+  // loads fresh at mount, and the account there never changes.
+  resetLiveData() {
+    // Every loader below guards re-entry with an INSTANCE flag (this._bldLoading and the
+    // rest) — not the state.*Loading mirrors reset further down, which only drive the
+    // spinners. Left set, each loader returns at its own guard and loadLiveData() becomes
+    // a no-op: the switch fires no read at all for that register, and whatever was already
+    // in flight lands and repaints the PREVIOUS company's rows. That is the whole of the
+    // bug where Buildings showed 619 buildings belonging to another company while the
+    // header named the one being viewed as — Buildings has the longest read timeout
+    // (30s), so it was the register most often still in flight when the company changed.
+    // The request itself is disowned by the orgEpoch stamp in api/client.js; releasing
+    // the guard here is what lets the correctly-scoped read actually go out.
+    IN_FLIGHT_GUARDS.forEach((k) => { this[k] = false; });
+    clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
+    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._spRetry);
+    this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
+    this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
+    this._mxLiveAttempts = 0; this._spAttempts = 0;
+    this.setState({
+      ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
+      homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
+      vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null,
+      bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
+      enAnomLive: null, enMetersLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
+      asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
+      asLiveOpenB: [], asLiveCost: {},
+      mxStatsLive: null, mxWosLive: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
+      spaces: null, spLoading: false, spError: ""
+    });
   },
 
   D() { return HOISTWAY; },
@@ -109,7 +163,7 @@ export const coreMethods = {
     ];
     // A task is a session record (logic/sessions.js): `task`/`ctx` keep the raw
     // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
-    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now() });
+    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now(), owner: this.state.account && this.state.account.email });
     const record = !(opts && opts.record === false);
     clearInterval(this._orchTick);
     this.setState((p) => Object.assign({
@@ -169,7 +223,7 @@ export const coreMethods = {
     if (s.view === "cc") return "Compliance";
     if (s.view === "vp") return "Vendors";
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
-    if (s.view === "report") { const r = s.reports.find((x) => x.key === s.reportKey); return r ? r.name : "Reports"; }
+    if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
     if (s.view === "answer") return "Query";
     if (s.view === "chat") return "Orchestrator";

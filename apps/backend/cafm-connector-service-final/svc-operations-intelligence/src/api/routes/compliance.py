@@ -570,7 +570,7 @@ async def saved_space_summary(
     organization_id = access.organization_for(s, organization_id)
     return {
         "ok": True,
-        **(await cert_svc.saved_space_summary(session, organization_id=organization_id)),
+        **(await cert_svc.saved_space_summary(session, organization_id=organization_id, scope=s)),
     }
 
 
@@ -925,6 +925,7 @@ async def list_approvals(
         status=status,
         source_feature=source_feature,
         limit=limit,
+        scope=s,
     )
     return {
         "ok": True,

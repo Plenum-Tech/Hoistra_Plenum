@@ -16,7 +16,6 @@ globalThis.WebSocket = class { constructor() { throw new Error('no sockets in te
 
 const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
 const { SESSIONS_KEY } = await import('../src/logic/sessions.js');
-const { REPORTS_KEY } = await import('../src/logic/reports.js');
 
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 30));
 let c;
@@ -24,10 +23,15 @@ let c;
 // itself, a slice without one lands on the gate instead of the page under test.
 const fresh = () => { const x = new HoistraLogic(); x.setState({ signedIn: true, refreshToken: 'ref-test', view: 'home' }); return x; };
 beforeEach(() => { Object.keys(mem).forEach((k) => { delete mem[k]; }); c = fresh(); });
+// authEnter (the sign-in test below) fires resetLiveData()/loadLiveData() for a fresh
+// sign-in — every one of those routes fails instantly against this file's dead fetch, and
+// every failure arms a retry timer that must be cleared here or the suite hangs on it.
 const cleanup = (x) => {
   const k = x || c;
   clearInterval(k._orchTick); clearTimeout(k._tt); clearTimeout(k._homeRetry); clearTimeout(k._ccRetry);
-  clearTimeout(k._spRetry); k.rpStop();
+  clearTimeout(k._spRetry); clearTimeout(k._vpRetry); clearTimeout(k._vpRefresh); clearTimeout(k._bldRetry);
+  clearTimeout(k._enRetry); clearTimeout(k._enPosRetry); clearTimeout(k._asLiveRetry); clearTimeout(k._mxLiveRetry);
+  k.rpStop();
 };
 
 test('the first question opens a session keyed by the orchestrator thread and stores the transcript', async () => {
@@ -87,6 +91,36 @@ test('opening a session restores its transcript without counting as activity', a
   cleanup();
 });
 
+test('reopening the session that is already active works even while it is still answering — navigating away and back must not get stuck', async () => {
+  await c.askScoped('running');
+  await settle();
+  const id = c.state.sessionId;
+  // Simulate: the answer is still streaming, and the person has navigated to another page.
+  const liveTranscript = c.state.ccChat.concat([{ role: 'assistant', text: 'partial…' }]);
+  c.setState({ view: 'buildings', ccBusy: true, ccChat: liveTranscript });
+  c.openSession(id); // the same session, clicked again from the sidebar
+  assert.equal(c.state.view, 'chat', 'returns to the chat page instead of refusing');
+  assert.equal(c.state.sessionId, id, 'still the same thread');
+  assert.equal(c.state.ccChat, liveTranscript, 'the live, in-progress transcript is kept — not swapped for the stale record snapshot');
+  assert.equal(c.state.ccBusy, true, 'the in-flight answer is undisturbed');
+  cleanup();
+});
+
+test('opening a DIFFERENT session while one is still answering is still refused', async () => {
+  await c.askScoped('first');
+  await settle();
+  const firstId = c.state.sessionId;
+  c.newQuery();
+  await c.askScoped('second');
+  await settle();
+  const secondId = c.state.sessionId;
+  c.setState({ ccBusy: true });
+  c.openSession(firstId); // a genuinely different session than the active one
+  assert.equal(c.state.sessionId, secondId, 'refused — still on the busy session');
+  assert.match(c.state.toast, /Still answering/);
+  cleanup();
+});
+
 test('deleting the active session clears the page', async () => {
   await c.askScoped('gone');
   await settle();
@@ -139,6 +173,20 @@ test('a reload brings the sessions and the open transcript back', async () => {
   cleanup(); cleanup(c2);
 });
 
+test('a reload never reopens the side dock on its own — the transcript comes back, the dock stays closed', async () => {
+  c.setState({ view: 'cc' });
+  await c.askScoped('Which lapses void insurance?');
+  await settle();
+  assert.equal(c.state.orchOpen, true, 'asking from the dock opens it live');
+  const id = c.state.sessionId;
+  const c2 = new HoistraLogic();
+  assert.equal(c2.state.view, 'cc', 'the page itself is still restored');
+  assert.equal(c2.state.sessionId, id);
+  assert.equal(c2.state.ccChat.length, 2, 'the thread is still there the moment the dock is opened');
+  assert.equal(c2.state.orchOpen, false, 'but a reload does not pop the dock open uninvited');
+  cleanup(); cleanup(c2);
+});
+
 test('filing a session in a space and opening the list filtered to it', async () => {
   await c.askScoped('file me');
   await settle();
@@ -176,56 +224,40 @@ test('a dead svc-udr leaves the built-in spaces in place and reports the failure
   cleanup();
 });
 
-test('a report is built from a session, runs at once, and a dead backend leaves it failed but scheduled', async () => {
+// Report cards are server-owned now (svc-operations-intelligence's /api/reports) — creation,
+// runs and the refresh cadence itself all go through the backend, not this browser. Against
+// this file's dead fetch, that means every one of those calls fails the same way every other
+// route in this suite does, and the client must fail cleanly rather than fabricate a card.
+test('creating a report card against a dead backend fails cleanly, with nothing added client-side', async () => {
   await c.askScoped('Which buildings put me at risk this month?');
   await settle();
   c.setState({ reportName: 'Risky buildings', reportCad: 0 });
-  c.rpCreate();
-  assert.equal(c.state.view, 'report');
-  assert.equal(c.state.reports.length, 1);
-  const key = c.state.reportKey;
-  assert.equal(c.state.reports[0].key, key);
-  assert.equal(c.state.reports[0].prompt, 'Which buildings put me at risk this month?');
-  assert.equal(c.state.reports[0].status, 'running');
-  await settle(60);
-  const r = c.state.reports[0];
-  assert.equal(r.status, 'error');
-  assert.match(r.runs[0].error, /Failed to fetch/);
-  assert.equal(r.lastRunAt, null, 'no successful refresh yet');
-  assert.ok(r.nextRunAt > r.lastTriedAt, 'still on its schedule');
-  assert.equal(JSON.parse(mem[REPORTS_KEY])[0].key, key, 'persisted');
-  c.rpDelete(key);
-  assert.equal(c.state.reports.length, 0);
-  assert.equal(c.state.view, 'home');
+  await c.rpCreate();
+  assert.equal(c.state.reports.length, 0, 'no report was fabricated locally');
+  assert.match(c.state.toast, /Could not create the report card/);
   cleanup();
 });
 
-test('a report cannot be created without a session to build it from', () => {
+test('a report card cannot be created without a session to build it from', async () => {
   c.setState({ reportName: 'Nothing' });
-  c.rpCreate();
+  await c.rpCreate();
   assert.equal(c.state.reports.length, 0);
   assert.match(c.state.toast, /Ask something first/);
   cleanup();
 });
 
-test('the scheduler runs a due report and leaves the rest alone', async () => {
-  await c.askScoped('q');
-  await settle();
-  c.setState({ reportName: 'A', reportCad: 0 });
-  c.rpCreate();
-  await settle(60);
-  const key = c.state.reportKey;
-  const before = c.state.reports[0].lastTriedAt;
-  // Not due yet: nothing happens.
-  c.rpTick();
-  await settle(60);
-  assert.equal(c.state.reports[0].lastTriedAt, before);
-  // Due: it runs again.
-  c.rpPatch(key, { nextRunAt: Date.now() - 1 });
-  c.rpTick();
-  await settle(60);
-  assert.ok(c.state.reports[0].lastTriedAt > before);
-  assert.equal(c.state.reports[0].runs.length, 2);
+test('loading reports against a dead backend surfaces the failure without crashing', async () => {
+  await c.rpLoad();
+  assert.deepEqual(c.state.reports, []);
+  assert.match(c.state.reportsError, /Failed to fetch/);
+  cleanup();
+});
+
+test('rpStart loads report cards on mount and arms a poll timer, which rpStop (via cleanup) stops', async () => {
+  c.rpStart();
+  await settle(30);
+  assert.match(c.state.reportsError, /Failed to fetch/, 'the mount-time load ran and failed the same way as a direct call');
+  assert.ok(c._rpTimer, 'a poll timer is armed so a server-side refresh made while this tab is open still surfaces');
   cleanup();
 });
 
@@ -249,7 +281,7 @@ test('the navigator behaves the same on Home as everywhere else: it stays as it 
   cleanup();
 });
 
-test('the navigator state survives a reload and sign-in opens it', () => {
+test('the navigator state survives a reload and sign-in opens it', async () => {
   c.setState({ navOpen: true });
   const c2 = new HoistraLogic();
   assert.equal(c2.state.navOpen, true);
@@ -263,5 +295,9 @@ test('the navigator state survives a reload and sign-in opens it', () => {
     tokens: { access_token: 'acc-test', refresh_token: 'ref-test', token_type: 'Bearer', expires_in: 1800 }
   });
   assert.equal(c4.state.navOpen, true);
+  // authEnter fires loadLiveData() on c4 (a fresh, non-keepView sign-in); every one of its
+  // reads fails against this file's dead fetch and arms a retry timer a moment later, not
+  // synchronously — settle() lets every one of them land before cleanup(c4) clears them.
+  await settle();
   cleanup(); cleanup(c2); cleanup(c3); cleanup(c4);
 });

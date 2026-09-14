@@ -317,6 +317,12 @@ test('the setup chips come from the live register when it is loaded, the account
   assert.equal(c.ingBldList().length, 8, 'the AX seed names remain the last resort');
 });
 
+test('a real, loaded, empty axBldsLive wins outright — no fallback to the account allocation or the seed', () => {
+  const c = new HoistraLogic();
+  c.setState({ axBldsLive: [], account: { ...ACCOUNT, buildings: [{ id: B_SUG, name: 'Bishopsgate Tower' }] } });
+  assert.deepEqual(c.ingBldList(), [], 'a company with zero buildings on file has zero to offer here');
+});
+
 test('picking a sample doc puts a chosen real file aside, and the picker exposes its name', () => {
   const c = new HoistraLogic();
   c.setState({ ingOn: true, ingPhase: 'setup' });

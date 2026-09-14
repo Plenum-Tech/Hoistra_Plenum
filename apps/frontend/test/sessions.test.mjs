@@ -118,28 +118,35 @@ test('saveSessions shrinks what it stores when the browser refuses the size', ()
   assert.equal(saveSessions(list, { setItem: () => { throw new Error('nope'); } }), false);
 });
 
-test('shapeSessionList groups by day, newest first, and filters by text and space', () => {
-  const s1 = syncTurns(makeSession({ id: '1', title: 'Which vendors are blocked?', page: 'Vendors', at: NOW - 5 * MIN }),
+test('shapeSessionList groups by day, newest first, and filters by text, space and owner', () => {
+  const ME = 'sam@example.com';
+  const s1 = syncTurns(makeSession({ id: '1', title: 'Which vendors are blocked?', page: 'Vendors', at: NOW - 5 * MIN, owner: ME }),
     [{ role: 'you', text: 'Which vendors are blocked?' }, { role: 'bot', text: 'a', calls: ['get_vendor_scorecards'] }], NOW - 5 * MIN);
-  const s2 = syncTurns(makeSession({ id: '2', title: 'Why did Bishopsgate spike?', page: 'Home', at: NOW - DAY }),
+  const s2 = syncTurns(makeSession({ id: '2', title: 'Why did Bishopsgate spike?', page: 'Home', at: NOW - DAY, owner: ME }),
     [{ role: 'you', text: 'Why did Bishopsgate spike?' }, { role: 'bot', text: 'a', calls: ['get_energy_anomalies'] }], NOW - DAY);
-  const s3 = Object.assign(makeSession({ id: '3', title: 'Tower 3 certificates', page: 'Home', at: NOW - 3 * DAY }), { spaceId: 'space-uuid' });
-  const t1 = makeSession({ id: 't', title: 'Create report', page: 'Reports', at: NOW - 2 * MIN, kind: 'task' });
+  const s3 = Object.assign(makeSession({ id: '3', title: 'Tower 3 certificates', page: 'Home', at: NOW - 3 * DAY, owner: ME }), { spaceId: 'space-uuid' });
+  const t1 = makeSession({ id: 't', title: 'Create report', page: 'Reports', at: NOW - 2 * MIN, kind: 'task', owner: ME });
+  // Another account's own session, same shared array — never shown against ME's owner.
+  const other = makeSession({ id: 'x', title: 'Someone else entirely', page: 'Home', at: NOW - MIN, owner: 'other@example.com' });
 
-  const all = shapeSessionList([s2, s3, s1, t1], { nowMs: NOW });
+  const all = shapeSessionList([s2, s3, s1, t1, other], { nowMs: NOW, owner: ME });
   assert.deepEqual(all.map((g) => g.day), ['Today', 'Yesterday', '04 Sep']);
   assert.deepEqual(all[0].rows.map((r) => r.id), ['t', '1']);
   assert.equal(all[0].rows[1].when, '5 mins ago');
   assert.equal(all[0].rows[1].domain, 'Vendors');
   assert.equal(all[0].rows[1].turns, 1);
   assert.equal(all[0].rows[1].page, 'Vendors');
+  assert.ok(!all.some((g) => g.rows.some((r) => r.id === 'x')), 'another account\'s session never shows, owner filter or not');
 
-  const q = shapeSessionList([s1, s2, s3], { query: 'bishops', nowMs: NOW });
+  const q = shapeSessionList([s1, s2, s3], { query: 'bishops', nowMs: NOW, owner: ME });
   assert.deepEqual(q.flatMap((g) => g.rows.map((r) => r.id)), ['2']);
 
-  const byBuiltin = shapeSessionList([s1, s2, s3], { space: 'vendors', nowMs: NOW });
+  const byBuiltin = shapeSessionList([s1, s2, s3], { space: 'vendors', nowMs: NOW, owner: ME });
   assert.deepEqual(byBuiltin.flatMap((g) => g.rows.map((r) => r.id)), ['1']);
 
-  const byCustom = shapeSessionList([s1, s2, s3], { space: 'space-uuid', nowMs: NOW });
+  const byCustom = shapeSessionList([s1, s2, s3], { space: 'space-uuid', nowMs: NOW, owner: ME });
   assert.deepEqual(byCustom.flatMap((g) => g.rows.map((r) => r.id)), ['3']);
+
+  assert.deepEqual(shapeSessionList([s1, s2, s3], { nowMs: NOW }), [], 'no owner given shows nothing, never everyone\'s');
+  assert.deepEqual(shapeSessionList([s1, s2, s3], { nowMs: NOW, owner: 'nobody@example.com' }), [], 'a non-matching owner shows nothing too');
 });

@@ -1,9 +1,12 @@
-// componentDidMount must never write. A full-branch review (2026-09-09) found rpStart()
-// firing an unattended POST to the orchestrator on load and every 30s after — a report left
-// overdue from a previous visit (loadReports even forces an interrupted run back to due) was
-// caught up 4 seconds after the tab opened, with nobody having asked for anything. This file
-// is the regression test that keeps mount a read-only surface, and locks in the fix:
-// `_rpBootAt` parks anything overdue from before this boot rather than auto-running it.
+// componentDidMount must never write. A full-branch review (2026-09-09) found the old
+// client-side report scheduler firing an unattended POST to the orchestrator on load and
+// every 30s after — a report left overdue from a previous visit was caught up 4 seconds
+// after the tab opened, with nobody having asked for anything. Report cards are server-owned
+// now (svc-operations-intelligence's /api/reports engine + its own scheduler loop —
+// engines/reports/scheduler.py) — refreshing a due card is the SERVER's job, never this
+// browser's, so mount only ever reads the cards' current state (GET /api/reports) and polls
+// the same way. This file is the regression test that keeps mount (and its poll) a
+// read-only surface for reports too, whatever status a card comes back with.
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -30,7 +33,6 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
-const { REPORTS_KEY } = await import('../src/logic/reports.js');
 
 let c;
 beforeEach(() => {
@@ -56,10 +58,11 @@ const cleanup = (x) => {
   k.rpStop();
 };
 
-const REPORT = (over) => Object.assign({
-  key: 'r1', name: 'A report', prompt: 'Which vendors are blocked?', sessionId: null, page: 'Home',
-  cad: { i: 0 }, createdAt: Date.now(), lastRunAt: null, lastTriedAt: null, nextRunAt: Date.now(),
-  runs: [], error: '', status: 'pending'
+const CARD = (over) => Object.assign({
+  id: 'c1', report_id: 'r1', name: 'A report', prompt: 'Which vendors are blocked?',
+  refresh_label: 'Refresh every 30 minutes', status: 'pending',
+  last_run_at: null, last_tried_at: null, next_run_at: new Date(Date.now() - 90000).toISOString(),
+  runs: [], latest_run: null
 }, over || {});
 
 test('mounting the controller issues only reads, never a write', async () => {
@@ -70,34 +73,17 @@ test('mounting the controller issues only reads, never a write', async () => {
   cleanup();
 });
 
-test('an overdue report from a previous visit does not auto-run the moment the tab reopens', async () => {
-  // What loadReports() actually hands back for a report left running when the tab closed:
-  // status forced to pending, nextRunAt forced to the past — exactly the shape that used to
-  // trigger the 4-second mount catch-up.
-  mem[REPORTS_KEY] = JSON.stringify([REPORT({ nextRunAt: Date.now() - 90000 })]);
-  handlers['POST /backend/deep-agents/api/workflow/run-stateful'] = () => [200, { session_id: 's', answer: 'ok', tool_calls: [], success: true }];
-  c = new HoistraLogic();
-  c.setState({ signedIn: true, view: 'home' });
+test('a card overdue from a previous visit does not get auto-run by this tab — that is the server scheduler\'s job', async () => {
+  // A card GET /api/reports hands back with next_run_at already well in the past — exactly
+  // the shape a card left overdue while this tab was closed would carry. The server's own
+  // scheduler (engines/reports/scheduler.py) is the only thing allowed to act on that.
+  handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { reports: [{ id: 'r1', name: 'A report', cards: [CARD()] }] }];
+  handlers['GET /backend/ops-intelligence/api/reports/refresh-options'] = () => [200, { presets: [] }];
+  handlers['POST /backend/ops-intelligence/api/reports/cards/c1/run'] = () => [200, CARD({ status: 'ready' })];
   c.componentDidMount();
-  // The worst case: the recurring tick fires immediately, not 30 seconds from now.
-  c.rpTick();
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(calls.some((w) => /run-stateful/.test(w)), false,
-    'a report overdue from before this boot must wait for the user (Run now, or its own next cadence) — not fire unattended the instant the tab opens');
-  assert.equal(c.state.reports[0].status, 'pending', 'left exactly as it was');
-  cleanup();
-});
-
-test('a cadence that comes due while the tab is open still runs, unattended, as designed', async () => {
-  handlers['POST /backend/deep-agents/api/workflow/run-stateful'] = () => [200, { session_id: 's', answer: 'ok', tool_calls: [], success: true }];
-  c.componentDidMount();
-  // Due a moment from boot, not before it — this is the case the feature exists for: "the
-  // orchestrator runs it against the current Hoist Graph at the next due time while Hoistra
-  // is open" (the report page's own copy).
-  c.setState({ reports: [REPORT({ nextRunAt: c._rpBootAt + 5 })] });
-  await new Promise((r) => setTimeout(r, 20));
-  c.rpTick();
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(c.state.reports[0].status, 'ready', 'a cadence due after boot fires on its own, exactly as the report page promises');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(calls.some((w) => /cards\/c1\/run/.test(w)), false,
+    'an overdue card must wait for the server\'s own scheduler tick (or an explicit Run now) — this browser never calls the run route on its own');
+  assert.equal(c.state.reports[0].cards[0].status, 'pending', 'read back exactly as the backend sent it, untouched');
   cleanup();
 });

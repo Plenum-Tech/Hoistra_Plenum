@@ -91,6 +91,9 @@ class PublicUser(BaseModel):
     email: str
     full_name: str
     organization_id: str | None = None
+    # Only set on routes whose row carries the join (login, refresh) — null elsewhere,
+    # which a client reads as "not fetched here", not "no company".
+    organization_name: str | None = None
     status: str
     email_verified: bool
     role: str = "user"

@@ -13,6 +13,8 @@ accident.
 """
 from __future__ import annotations
 
+import re
+import secrets
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -47,6 +49,29 @@ class InviteAdmin(BaseModel):
     full_name: str | None = None
 
 
+_CODE_STRIP = re.compile(r"[^A-Z0-9]+")
+
+
+async def _unique_code(session: AsyncSession, name: str) -> str:
+    """A short slug for organizations.code — NOT NULL and UNIQUE in the live schema, but
+    the create-company form never asked for one (nor should it: existing rows are hand-picked
+    slugs like TC-FMGMT, not something worth a form field). Every creation 500'd on the
+    NOT NULL violation before this — the company, and with it the admin invitation and its
+    email, never happened. Derived from the name, so it reads the same way the existing
+    rows do; a collision (same name-prefix twice) gets a short random suffix rather than
+    failing the whole creation over a cosmetic field.
+    """
+    base = _CODE_STRIP.sub("-", name.strip().upper()).strip("-")[:40] or "COMPANY"
+    for candidate in [base] + [f"{base}-{secrets.token_hex(2).upper()}" for _ in range(5)]:
+        taken = (await session.execute(
+            text("SELECT 1 FROM plenum_cafm.organizations WHERE code = :c"), {"c": candidate},
+        )).scalar()
+        if not taken:
+            return candidate
+    # Astronomically unlikely past the five retries above; a fully random code always works.
+    return secrets.token_hex(8).upper()
+
+
 def _country(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -78,17 +103,18 @@ async def create_company(
             detail={"ok": False, "error": "A company with that name already exists.",
                     "reason": "duplicate_name", "organization_id": dup},
         )
+    org_code = await _unique_code(session, body.name)
     org_id = (await session.execute(
         # organizations.id has no default in the live schema (unlike users, invitations
         # and the ledgers), so the key is generated here rather than left to the database.
         text("""INSERT INTO plenum_cafm.organizations
-                    (id, name, industry, country, country_code, timezone, status, lifecycle,
+                    (id, name, code, industry, country, country_code, timezone, status, lifecycle,
                      admin_email, created_by, created_at, updated_at)
-                VALUES (gen_random_uuid(), :n, :ind, :c, :cc, :tz, 'active', 'created',
+                VALUES (gen_random_uuid(), :n, :code, :ind, :c, :cc, :tz, 'active', 'created',
                         :ae, :by, now(), now())
                 RETURNING id"""),
-        {"n": body.name.strip(), "ind": body.industry, "c": body.country_code, "cc": code,
-         "tz": body.timezone, "ae": str(body.admin_email) if body.admin_email else None,
+        {"n": body.name.strip(), "code": org_code, "ind": body.industry, "c": body.country_code,
+         "cc": code, "tz": body.timezone, "ae": str(body.admin_email) if body.admin_email else None,
          "by": principal.user_id},
     )).scalar()
     await write_audit(

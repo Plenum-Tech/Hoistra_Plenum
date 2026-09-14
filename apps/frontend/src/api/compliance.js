@@ -15,12 +15,14 @@
 // The transport is api/client.js — non-2xx throws ApiError, network failure throws a plain
 // Error, and the caller decides how to fall back. Nothing in this file holds state or
 // touches the store.
-import { BASES, ORG_ID, apiFetch } from './client.js';
+import { BASES, currentOrgId, apiFetch } from './client.js';
 
 const B = BASES.opsIntelligence;
-const withOrg = (q) => (ORG_ID ? Object.assign({ organization_id: ORG_ID }, q || {}) : (q || {}));
+// currentOrgId() is ORG_ID (the build's default tenant) unless a superadmin is viewing
+// as another company, in which case that company's id takes over for every read here.
+const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
 // Same for a POST/PATCH body: the tenant scope goes in the payload, not the query string.
-const withOrgBody = (b) => (ORG_ID ? Object.assign({ organization_id: ORG_ID }, b || {}) : (b || {}));
+const withOrgBody = (b) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, b || {}) : (b || {}); };
 const enc = encodeURIComponent;
 
 // Writes that run a worker, an LLM extraction or an outbound register call need more than
@@ -82,7 +84,7 @@ export const complianceApi = {
   runScan: (body) =>
     apiFetch(B, '/api/compliance/scan', {
       method: 'POST',
-      body: Object.assign({ scope: 'all' }, ORG_ID ? { organization_id: ORG_ID } : {}, body || {}),
+      body: Object.assign({ scope: 'all' }, withOrgBody(body)),
       timeoutMs: T_SCAN
     }),
 

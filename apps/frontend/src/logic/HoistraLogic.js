@@ -1,5 +1,6 @@
 // The controller: one state object, methods split by domain and mixed in.
 import { Controller } from './Controller.js';
+import { setActingOrg } from '../api/client.js';
 import { coreMethods } from './core.js';
 import { complianceMethods } from './compliance.js';
 import { vendorsMethods } from './vendors.js';
@@ -8,7 +9,7 @@ import { assetsMethods } from './assets.js';
 import { maintenanceMethods } from './maintenance.js';
 import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
-import { complianceLiveMethods, DOCK_VIEWS } from './complianceLive.js';
+import { complianceLiveMethods } from './complianceLive.js';
 import { homeLiveMethods } from './homeLive.js';
 import { vendorsLiveMethods } from './vendorsLive.js';
 import { buildingsLiveMethods } from './buildingsLive.js';
@@ -20,7 +21,8 @@ import { chatMethods } from './chat.js';
 import { loadSession, saveSession } from './session.js';
 import { loadSessions, saveSessions, sessionsMethods } from './sessions.js';
 import { spacesMethods } from './spacesLive.js';
-import { loadReports, saveReports, reportsMethods } from './reports.js';
+import { FALLBACK_PRESETS, reportsMethods } from './reports.js';
+import { loadHidden } from './reportCards.js';
 import { buildingsCrudMethods } from './buildingsCrud.js';
 import { buildingsGraphMethods } from './buildingsGraph.js';
 import { AUTH_DEFAULTS, authMethods, canAdmin } from './auth.js';
@@ -40,11 +42,18 @@ export class HoistraLogic extends Controller {
     view: "home", module: null, answerKey: null, askedQuery: "",
     query: "", queueOpen: false, paletteOpen: false, detail: null,
     chainOpen: true, toast: "", filter: "All", navOpen: false,
-    // Custom reports (logic/reports.js): the saved reports, the one on the page and which of
-    // its refreshes is in view, and the new-report menu's fields.
+    // Custom reports (logic/reports.js): server-owned now (svc-operations-intelligence's
+    // /api/reports) — reports[] holds each report with its cards and latest runs, as the
+    // backend shaped them; reportKey is the card id on the page. The new-card menu's fields
+    // (reportMenu..reportTime) stay local until Create is pressed. reportSelected is the
+    // multi-select set the grid's bulk delete acts on.
     reportMenu: false, reportName: "", reportSrcId: null, reportCad: 1, reportKey: null, reportRunIdx: 0,
     reportDays: [1, 4], reportTime: "14:00",
-    reports: [],
+    reports: [], reportsLoading: false, reportsError: "", reportsLoadedAt: null,
+    reportPresets: FALLBACK_PRESETS, reportSelected: [], rpArmed: null,
+    // Which cards INSIDE a report the reader has put in the tray, and whether the tray is
+    // open (logic/reportCards.js). A view preference, per account, per report card.
+    reportHidden: loadHidden(), reportTrayOpen: false, reportOpenBlocks: [],
     // Sessions (logic/sessions.js): every conversation and task, the active thread's id, and
     // the Sessions page's search and space filter.
     sessions: [], sessionId: null, sessionsQuery: "", sessionsFilter: null,
@@ -78,6 +87,11 @@ export class HoistraLogic extends Controller {
     flow: null, flowDone: "", fSubject: "", fVendor: "", fSpec: "", fLabel: "", fiVals: {}, bkLocked: true,
     // No building is guessed for a general "Ingest documents" open — the person picks one.
     role: "user", acctOpen: false, declStep: 0, declFor: "",
+    // The building scope picker in the TopBar (logic/auth.js): whether its menu is open and
+    // what has been typed into its search. A company can hold hundreds of buildings, so the
+    // list is searched rather than scrolled; neither field is persisted, since a reload
+    // should reopen on the current scope, not on a half-typed search.
+    bldOpen: false, bldQuery: "",
     pq: "", asPct: 10, asWeeks: 3, asOpenB: [], asOpenS: [], iotTick: 0, iotOpen: "AS-1042", inspQ: "", inspDraft: "", asScanB: [], asScanSec: [], asScanAllSec: true, asScanStage: 0, asScanDone: 0, asScanReport: null, asLastRun: "02:14 today", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
     bkDate: "2026-09-16", bkWindow: "08:00–12:00",
     nv: { name: "", email: "", id: "", phone: "" }, nvSpec: "Lifts — LOLER",
@@ -115,6 +129,10 @@ export class HoistraLogic extends Controller {
     // Assets page's live asset register from svc-work-order-management (assetsLive.js) —
     // null = not loaded, the condition-scan section below it stays seed-only regardless.
     asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
+    // Assets page's real buildings→assets tree (asLiveGroups in assetsLive.js): which
+    // building groups are expanded, and the per-building cost-drivers cache (fetched lazily
+    // the first time a group opens, keyed by building_id).
+    asLiveOpenB: [], asLiveCost: {},
     // Maintenance page's live decisions grid and KPI tiles from svc-work-order-management
     // (maintenanceLive.js) — null = not loaded, the seed decisions/cards render until it is.
     mxStatsLive: null, mxWosLive: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
@@ -124,7 +142,7 @@ export class HoistraLogic extends Controller {
     // Users & access (logic/users.js) — every user is invited and allocated to buildings
     // in local state; the building is the access boundary for viewing and ingestion alike.
     users: AX_USERS.map((u) => ({ ...u, buildings: u.buildings.slice() })), usOpen: null, usInviteOpen: false,
-    usName: "", usEmail: "", usBlds: [], usIngest: false,
+    usName: "", usEmail: "", usBlds: [], usIngest: false, usArmed: null,
     // The live read behind them (logic/usersLive.js): the /api/admin/users summary object
     // (drives the header tiles) and the company's canonical live buildings list
     // [{id, name, building_code}] every admin domain resolves names against — usersLive
@@ -149,6 +167,10 @@ export class HoistraLogic extends Controller {
     // separate from any single company's own admin app: onboards companies, does not operate them.
     saOn: false, saSel: "c1", saNew: false, saName: "", saCc: "UK", saEmail: "",
     saCompanies: SA_COMPANIES.map((c) => ({ ...c })),
+    // Set only while a superadmin is viewing/acting as a company other than their own
+    // (superAdmin.js's viewAsCompany/exitViewAsCompany) — null the rest of the time,
+    // including for every non-superadmin account.
+    viewOrgId: null, viewOrgName: null,
     // The live console behind it (logic/superAdminLive.js): raw {companies, credits}
     // responses (month_total/billing_note ride here) and the usage cards keyed by
     // organization_id — loaded when the overlay opens (auth.js's menu item), never at mount.
@@ -165,21 +187,30 @@ export class HoistraLogic extends Controller {
     // Admin view is only ever offered to an account whose real role allows it; a stored
     // mode from before the role model, or from another account, is reset.
     if (this.state.role === "admin" && !canAdmin(this.state.account)) this.state.role = "user";
-    // The session list and the saved reports have their own stores. The active session's
-    // transcript comes back from its record, so the conversation page resumes as it was.
+    // Same check for the Super Admin console: a stored saOn from a different, since-
+    // switched-to account must not open it for whoever is actually signed in now.
+    if (this.state.saOn && !(this.state.account && this.state.account.role === "superadmin")) this.state.saOn = false;
+    if (this.state.viewOrgId && !(this.state.account && this.state.account.role === "superadmin")) {
+      this.state.viewOrgId = null; this.state.viewOrgName = null;
+    }
+    // getActingOrg() (api/client.js) is a plain in-memory variable, not itself persisted —
+    // every API call reads it directly, so a restored viewOrgId must be primed back into
+    // it here, or every report keeps reading the account's own company regardless of what
+    // state.viewOrgId now says.
+    setActingOrg(this.state.viewOrgId || null);
+    // The session list has its own store. The active session's transcript comes back from
+    // its record, so the conversation page resumes as it was. Reports are server-owned now
+    // (logic/reports.js's rpLoad, kicked off from componentDidMount) — nothing to restore
+    // here; a reload that lands on "report" just waits for that load like any other page.
     this.state.sessions = loadSessions();
-    this.state.reports = loadReports();
     const active = this.state.sessionId ? this.state.sessions.find((x) => x.id === this.state.sessionId) : null;
     if (active && active.kind === "chat") {
+      // The transcript comes back into state either way, so the chat page still shows it
+      // and the dock continues the same thread the moment it is opened — but a reload never
+      // opens the dock itself; only asking something, or the orchestrator icon, does that.
       this.state.ccChat = active.turns || [];
-      // On a dock page the conversation lives in the dock, so a reload reopens it with the
-      // transcript where it was; the chat page shows the same transcript as the page.
-      if (this.state.ccChat.length && DOCK_VIEWS.indexOf(this.state.view) > -1) this.state.orchOpen = true;
     } else {
       this.state.sessionId = null;
-    }
-    if (this.state.view === "report" && !this.state.reports.some((r) => r.key === this.state.reportKey)) {
-      this.state.view = "home"; this.state.reportKey = null;
     }
   }
 
@@ -191,11 +222,11 @@ export class HoistraLogic extends Controller {
     super.setState(patch, cb);
     if (prev.ccChat !== this.state.ccChat) this.sessionSync();
     if (prev.sessions !== this.state.sessions) saveSessions(this.state.sessions);
-    if (prev.reports !== this.state.reports) saveReports(this.state.reports);
     // Only a signed-in tab owns the stored session. A tab sitting on the gate writes nothing —
     // its animation ticks would otherwise erase the refresh token another tab is signed in with —
-    // and the key is removed exactly once, on the way out.
-    if (this.state.signedIn || prev.signedIn) saveSession(this.state);
+    // and the key is removed exactly once, on the way out. `prev` lets saveSession tell,
+    // on that way out, whether the SHARED slot still belongs to this tab's own account.
+    if (this.state.signedIn || prev.signedIn) saveSession(this.state, prev);
   }
 }
 

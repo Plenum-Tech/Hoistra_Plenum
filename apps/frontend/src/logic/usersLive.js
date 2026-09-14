@@ -13,6 +13,8 @@
 //   Invite             POST /api/admin/users/invite            (usLiveInvite, from usSend)
 //   Can-ingest         PATCH /api/admin/users/{id} {can_ingest}
 //   Allocation         PATCH /api/admin/users/{id} {building_ids}  — FULL replacement
+//   Status pill        PATCH /api/admin/users/{id} {status}        — active|suspended
+//   Trash icon         POST  /api/admin/users/{id}/deactivate      — NOT DELETE; see usLiveDelete
 //
 // Mutations are optimistic: the row flips first, the PATCH follows, a failure reverts
 // and flashes the ApiError message. Only rows the server shaped (live: true) reach the
@@ -68,7 +70,9 @@ export function statusLabel(raw) {
 // A GET /api/admin/users row → exactly the seed shape users.js renders, plus live: true
 // so mutations know the id is the server's. Building names come off the row itself
 // ({id, name} pairs); `bldNameById` (from GET /api/admin/buildings) fills any entry
-// that arrives id-only. An admin's buildings are [] by design — admins are not allocated.
+// that arrives id-only. An admin's buildings are [] by design — admins are not allocated,
+// they see the whole company (all_buildings rides along so the table does not render
+// "0 buildings" against them).
 export function shapeLiveUser(u, bldNameById, now) {
   const usage = u.usage || {};
   return {
@@ -190,9 +194,13 @@ export const usersLiveMethods = {
       };
       this.setState((p) => ({ users: p.users.concat(u), usInviteOpen: false, usName: "", usEmail: "", usBlds: [], usIngest: false }));
       // accept_url only rides back when the email was not delivered (dry-run/undelivered)
-      // — then the link is the only way in, so the admin is told to share it.
+      // — then the link is the only way in, so the admin is told to share it. note rides
+      // back instead when zero buildings were allocated (engines/auth's own wording) —
+      // said out loud rather than left for the admin to notice from an empty chip list.
       this.flash(r.accept_url
         ? "Invitation created for " + u.email + " — the email was not delivered. Share the activation link: " + r.accept_url
+        : r.note
+        ? "Invitation sent to " + u.email + " — " + r.note
         : "Invitation sent to " + u.email + " — they activate the account and set a password from the email.");
       clearTimeout(this._usLiveRefresh);
       this._usLiveRefresh = setTimeout(() => this.usLiveLoad(), REFRESH_AFTER_WRITE_MS);
@@ -264,6 +272,60 @@ export const usersLiveMethods = {
     // Serialised: the server applies full-replacement lists in ARRIVAL order, so a stale
     // list landing last would silently clobber the newer one there while the ledger acks
     // the newest here. One PATCH in flight per row makes dispatch order arrival order.
+    return (pend.chain = (pend.chain || Promise.resolve()).then(send, send));
+  },
+
+  // Status: PATCH {status: 'active'|'suspended'} — the only two values the server
+  // accepts (there is no PATCH path back to 'invited'). Same optimistic/serialised shape
+  // as ingest and allocation above, and shares one pend kind with usLiveDelete below since
+  // both mutate the same field and must not race each other.
+  usLiveSetStatus(u, nextStatus) {
+    const row = this.state.users.find((x) => x.id === u.id) || u;
+    const pend = this.usPendOf(u.id, "status");
+    if (pend.seq === pend.done || pend.base === null) pend.base = row.status;
+    const nextLabel = statusLabel(nextStatus);
+    this.usSetU(u.id, (x) => ({ ...x, status: nextLabel }));
+    this.flash(nextStatus === "suspended"
+      ? u.name + " is suspended — their session ends now and they cannot sign back in."
+      : u.name + " is active again and can sign back in.");
+    const seq = ++pend.seq;
+    const send = () => adminApi.patchUser(u.id, { status: nextStatus }).then(() => {
+      if (seq > pend.ack) { pend.ack = seq; pend.base = nextLabel; }
+      if (seq === pend.seq) pend.done = seq;
+    }).catch((e) => {
+      if (seq !== pend.seq) return;
+      pend.done = seq;
+      this.usSetU(u.id, (x) => ({ ...x, status: pend.base }));
+      this.flash("Could not change status for " + u.name + " — " + ((e && e.message) || String(e)));
+    });
+    return (pend.chain = (pend.chain || Promise.resolve()).then(send, send));
+  },
+
+  // Delete = suspend, never a real delete. THIS IS DELIBERATELY NOT adminApi.deleteUser —
+  // DELETE /api/admin/users/{id} used to mean exactly this suspend, but the backend
+  // redefined it: it now soft-deletes the person for real (email/name/phone scrubbed,
+  // irreversible). adminApi.deactivateUser is the endpoint that still means what this
+  // button promises. The confirmation copy in users.js must keep saying "suspends, does
+  // not delete" — it is only true as long as this stays deactivateUser, not deleteUser.
+  // Shares the "status" pend kind with usLiveSetStatus — one is the row's quick action,
+  // the other is how a suspended row comes back, and a click of one while the other is in
+  // flight must still resolve to a single, serialised, correct end state.
+  usLiveDelete(u) {
+    const row = this.state.users.find((x) => x.id === u.id) || u;
+    const pend = this.usPendOf(u.id, "status");
+    if (pend.seq === pend.done || pend.base === null) pend.base = row.status;
+    this.usSetU(u.id, (x) => ({ ...x, status: "Suspended" }));
+    this.flash(u.name + "'s access is suspended — their record and history stay on the account, nothing is deleted.");
+    const seq = ++pend.seq;
+    const send = () => adminApi.deactivateUser(u.id).then(() => {
+      if (seq > pend.ack) { pend.ack = seq; pend.base = "Suspended"; }
+      if (seq === pend.seq) pend.done = seq;
+    }).catch((e) => {
+      if (seq !== pend.seq) return;
+      pend.done = seq;
+      this.usSetU(u.id, (x) => ({ ...x, status: pend.base }));
+      this.flash("Could not suspend " + u.name + " — " + ((e && e.message) || String(e)));
+    });
     return (pend.chain = (pend.chain || Promise.resolve()).then(send, send));
   }
 };

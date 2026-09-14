@@ -30,6 +30,28 @@ export const BASES = {
 // Optional tenant scope. Empty = the backend's default organisation.
 export const ORG_ID = String(env.VITE_ORGANIZATION_ID || '').trim();
 
+// The company a superadmin has chosen to view as, overriding ORG_ID for the rest of the
+// tab's session — null means no override (the caller's own company). This only chooses
+// what the client SENDS; every route that reads it enforces server-side
+// (access.organization_for) that only a superadmin gets the company they asked for, so
+// setting this from a non-superadmin session would just get every request 403'd, not
+// grant access. Cleared back to null on sign-out.
+let actingOrgId = null;
+// Bumped every time the acting company changes. A request is stamped with the value in
+// force when it was ISSUED; if that has moved by the time it comes back, the response
+// describes the company the caller was looking at before the switch, and handing it to
+// the register that asked would repaint the previous company's rows under the new
+// company's name. That is exactly how the Buildings table came to show one company's 619
+// buildings while the header said another's.
+let orgEpoch = 0;
+export function setActingOrg(id) { actingOrgId = id ? String(id) : null; orgEpoch += 1; }
+// True for the error thrown when a response outlived the company it was issued under.
+// Loaders check it to stay quiet: the switch has already started a correctly-scoped read,
+// so there is nothing to report and nothing to retry.
+export function isStaleScope(e) { return !!(e && e.staleScope); }
+export function getActingOrg() { return actingOrgId; }
+export function currentOrgId() { return actingOrgId || ORG_ID || ''; }
+
 let hooks = { getToken: () => null, refresh: null, onTerminal: null };
 export function configureAuth(h) { hooks = Object.assign({}, hooks, h || {}); }
 
@@ -77,7 +99,16 @@ export class ApiError extends Error {
 export async function apiFetch(base, path, opts) {
   const o = opts || {};
   const useAuth = o.auth !== false;
-  return attempt(base, path, o, useAuth ? hooks.getToken() : null, useAuth);
+  const issuedUnder = orgEpoch;
+  const out = await attempt(base, path, o, useAuth ? hooks.getToken() : null, useAuth);
+  // Checked AFTER the await, on the way back — the company can change while this is in
+  // flight, and this is the one place every register's reads pass through.
+  if (issuedUnder !== orgEpoch) {
+    const stale = new Error('the company changed while this request was in flight');
+    stale.staleScope = true;
+    throw stale;
+  }
+  return out;
 }
 
 // One attempt plus, at most, one refreshed retry. The retry comes back through here so a

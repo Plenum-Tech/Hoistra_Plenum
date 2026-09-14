@@ -27,6 +27,7 @@
 import { opsApi } from '../api/opsIntelligence.js';
 import { complianceApi } from '../api/compliance.js';
 import { normCountry, countryMeta } from './complianceLive.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -521,14 +522,20 @@ export const vendorsLiveMethods = {
     const settled = await Promise.allSettled(keys.map((k) => reads[k]()));
     const raw = { fetchedAt: new Date().toISOString(), errors: {} };
     let answered = 0;
+    // Set by any read that outlived the company it was issued under (api/client.js). Carried
+    // as a flag rather than sniffed out of the message later, so the check survives a reword.
+    let stale = false;
     settled.forEach((r, i) => {
       if (r.status === "fulfilled") { raw[keys[i]] = r.value; answered += 1; }
-      else { raw[keys[i]] = null; raw.errors[keys[i]] = (r.reason && r.reason.message) || String(r.reason); }
+      else {
+        raw[keys[i]] = null; raw.errors[keys[i]] = (r.reason && r.reason.message) || String(r.reason);
+        if (isStaleScope(r.reason)) stale = true;
+      }
     });
     // The summary is the scorecards read; only when it failed is the list worth a second call.
     if (!raw.summary) {
       try { raw.scorecards = await opsApi.scorecards({ limit: 200 }); answered += 1; }
-      catch (e) { raw.scorecards = null; raw.errors.scorecards = (e && e.message) || String(e); }
+      catch (e) { raw.scorecards = null; raw.errors.scorecards = (e && e.message) || String(e); if (isStaleScope(e)) stale = true; }
     }
     const certRows = (raw.certificates && raw.certificates.certificates) || null;
     raw.certificates = certRows;
@@ -544,8 +551,15 @@ export const vendorsLiveMethods = {
       // and `null.vendors` would throw here rather than fall back to the empty list below.
       raw.coverage[cc] = v.status === "fulfilled" ? ((v.value && v.value.vendors) || []) : [];
       raw.packs[cc] = p.status === "fulfilled" ? ((p.value && p.value.types) || []) : [];
-      if (v.status === "rejected") raw.errors["coverage:" + cc] = (v.reason && v.reason.message) || String(v.reason);
+      if (v.status === "rejected") {
+        raw.errors["coverage:" + cc] = (v.reason && v.reason.message) || String(v.reason);
+        if (isStaleScope(v.reason)) stale = true;
+      }
     }));
+    // A company switch mid-load: api/client.js disowned every read that was in flight and
+    // loadLiveData() has already started correctly-scoped ones. Reporting these would put a
+    // spurious error on the new company's register and retry against the old one.
+    if (stale) return;
     this._vpLoading = false;
     if (!answered) {
       const msg = raw.errors[keys[0]] || "unreachable";

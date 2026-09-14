@@ -24,6 +24,7 @@
 // HoistraLogic.prototype and `this` is the controller.
 import { adminApi } from '../api/admin.js';
 import { humanise } from './homeLive.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -168,6 +169,10 @@ export const auditLiveMethods = {
       });
       if (opts && opts.announce) this.flash("Audit trail refreshed — " + entries.length + " of " + (res.count || entries.length) + " entries");
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._auLiveAttempts = (this._auLiveAttempts || 0) + 1;
       this.setState({ auLiveLoading: false, auLiveError: msg });

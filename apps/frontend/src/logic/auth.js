@@ -5,11 +5,23 @@
 // (user | admin); whether it may ever be admin is decided by the account's real role.
 // The access token lives in state only; the refresh token is the persisted credential.
 import { authApi } from '../api/auth.js';
-import { configureAuth } from '../api/client.js';
-import { loadSession, SESSION_KEY } from './session.js';
+import { adminApi } from '../api/admin.js';
+import { configureAuth, setActingOrg } from '../api/client.js';
+import { loadSharedSession, SESSION_KEY } from './session.js';
 
 export const ADMIN_ROLES = new Set(['admin', 'superadmin']);
 export const canAdmin = (account) => !!account && ADMIN_ROLES.has(account.role);
+
+// A signed-in plain user allocated to no building at all. GET /api/auth/me reports
+// building_ids and all_buildings, so the page can tell this apart from "nothing loaded yet"
+// and from "the table really is empty" — three states that look identical on screen and are
+// fixed in completely different places. An account like this sees nothing from any
+// building-scoped endpoint, and every screen that stays silent about it sends the reader
+// looking for a bug in the data instead of asking an admin for an allocation.
+// all_buildings (admin/superadmin) is never unallocated, whatever building_ids says.
+export const isUnallocated = (account) =>
+  !!account && !!account.id && account.all_buildings !== true
+  && Array.isArray(account.building_ids) && account.building_ids.length === 0;
 
 // The reference's published defaults, used until GET /config answers (or if it never does).
 export const AUTH_FALLBACK_CONFIG = {
@@ -29,6 +41,9 @@ export const AUTH_DEFAULTS = {
   authMode: 'signin', authBusy: false, authError: '', authNotice: '', authReason: '',
   authAttemptsLeft: null, authRetryAt: 0, authTick: 0, authConfig: null,
   password: '', fullName: '', phone: '', code: '', newPassword: '',
+  // The token off an invitation link, held only while authMode is 'invite'. Never stored:
+  // it is a one-shot credential, and the link itself is the only copy that should exist.
+  inviteToken: '',
   pwOpen: false, pwCurrent: '', pwNext: '', pwBusy: false, pwError: ''
 };
 
@@ -54,6 +69,9 @@ export const authMethods = {
   // rendered the shell (loadSession restored signedIn), so the refresh only has to swap in
   // fresh tokens; a 401 here drops to the gate, a network failure leaves things as they are.
   authBoot() {
+    // An invitation link opened in this tab takes precedence over any stored session:
+    // it is for setting up the invited account, so the gate shows that form first.
+    this.authInviteFromUrl();
     configureAuth({
       getToken: () => this.state.accessToken,
       refresh: () => this.authRefresh(),
@@ -80,27 +98,54 @@ export const authMethods = {
     authApi.config().then((cfg) => { if (cfg && cfg.ok) this.setState({ authConfig: cfg }); }).catch(() => {});
   },
 
-  // Two tabs share the stored refresh token but each keeps its own access token. When the
-  // other tab rotates, this one adopts the new token so its next refresh is not a replay;
-  // when the other tab signs out, this one follows. Same-tab writes never fire this event.
+  // Two tabs on the SAME account share the stored refresh token but each keeps its own
+  // access token. When the other tab rotates, this one adopts the new token so its next
+  // refresh is not a replay; when the other tab signs out, this one follows. Same-tab
+  // writes never fire this event.
+  //
+  // The shared slot now routinely belongs to a DIFFERENT account, though — company-
+  // switchable accounts mean one tab is routinely TechCorp while another is Plenum Tech,
+  // both writing the one slot localStorage has room for. Without the account check below,
+  // one tab signing in (or just rotating its token) fired this listener in every other
+  // tab, and a tab reading a different account's token here silently adopted it — a live
+  // hijack of an in-use session, worse than the same mix-up surfacing only on reload.
   authStorageChanged(e) {
     if (e && e.key && e.key !== SESSION_KEY) return;
     // Only a signed-in tab follows the store. A tab on the gate is not part of the session
     // another tab opened; adopting its token there would only leave a stale credential behind.
     if (!this.state.signedIn) return;
-    const s = loadSession();
-    if (!s.refreshToken) { this.authSignedOut(''); return; }
+    // Read the shared slot directly — loadSession() now prefers this tab's own
+    // sessionStorage copy, which is exactly the wrong thing to consult about a change to
+    // the other, shared store this listener exists to react to.
+    const s = loadSharedSession();
+    // A different account occupying the shared slot is a different tab's own business.
+    if (s.account && this.state.account && s.account.id !== this.state.account.id) return;
+    if (!s.refreshToken) {
+      // The shared slot went empty. A real browser storage event carries what was just
+      // cleared in e.oldValue; only treat this as OUR account signing out if that old
+      // value was ours (or nothing conclusive is available) — never assume it on a value
+      // that was provably a different account's.
+      let oldToken = null;
+      try { oldToken = e && e.oldValue ? JSON.parse(e.oldValue).refreshToken : null; } catch (err) { oldToken = null; }
+      if (!oldToken || oldToken === this.state.refreshToken) this.authSignedOut('');
+      return;
+    }
     if (s.refreshToken !== this.state.refreshToken) {
       this.setState({ refreshToken: s.refreshToken, account: s.account || this.state.account });
     }
   },
 
   // Single-flight: the 401 interceptor, boot and a second caller all await one promise.
-  // The token is re-read from storage because another tab may have rotated it; presenting
-  // the stale copy is a replay, and a replay revokes every session on the account.
+  // The token is re-read from the SHARED slot, because another tab of the SAME account
+  // may have rotated it there; presenting the stale copy is a replay, and a replay
+  // revokes every session on the account. Only consulted when that shared slot is still
+  // this account's, though — a different account's token sitting there (another company
+  // entirely, in another tab) is irrelevant to this refresh and must never be presented.
   authRefresh() {
     if (this._refreshing) return this._refreshing;
-    const token = loadSession().refreshToken || this.state.refreshToken;
+    const shared = loadSharedSession();
+    const sameAccount = shared.account && this.state.account && shared.account.id === this.state.account.id;
+    const token = (sameAccount && shared.refreshToken) || this.state.refreshToken;
     if (!token) return Promise.reject(new Error('no refresh token'));
     this._refreshing = authApi.refresh(token)
       .then((resp) => { this.authEnter(resp, { keepView: true }); return resp.tokens.access_token; })
@@ -119,14 +164,36 @@ export const authMethods = {
   authEnter(resp, opts) {
     const o = opts || {};
     const admin = canAdmin(resp.user);
+    const isSuperadmin = resp.user.role === 'superadmin';
+    // Where each role lands, on a FRESH sign-in only (keepView is the reload refresh,
+    // which must not move the page — a refresh keeps whatever view/mode was already
+    // open). A user is always 'user'; an admin always opens in admin view rather than
+    // inheriting whatever mode a previous session left behind; a superadmin goes
+    // straight into the platform console instead of the company app underneath it.
+    // A fresh sign-in never inherits a previous account's viewAsCompany() override —
+    // that is a superadmin-only, explicitly-chosen state, never something the next
+    // account to sign in in this tab should find itself silently still scoped to.
+    if (!o.keepView) setActingOrg(null);
     this.setState((p) => ({
       account: resp.user, accessToken: resp.tokens.access_token, refreshToken: resp.tokens.refresh_token,
       signedIn: true,
-      role: admin ? p.role : 'user',
+      role: o.keepView ? p.role : (admin ? 'admin' : 'user'),
+      saOn: o.keepView ? p.saOn : isSuperadmin,
       view: o.keepView ? p.view : 'home', navOpen: o.keepView ? p.navOpen : true,
+      viewOrgId: o.keepView ? p.viewOrgId : null, viewOrgName: o.keepView ? p.viewOrgName : null,
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null, authRetryAt: 0,
       password: '', code: '', newPassword: '', fullName: '', phone: ''
     }));
+    // A fresh sign-in (not the reload's silent token refresh) can swap the account
+    // within the same tab — sign out of one, straight into another. Every register
+    // core.js's mount loaded is scoped to whoever was signed in then, so it is cleared
+    // and re-fetched now rather than left showing the previous account's buildings,
+    // compliance rows and the rest until whatever retry/refresh timer they happened
+    // to have armed eventually comes back around.
+    if (!o.keepView) {
+      if (typeof this.resetLiveData === 'function') this.resetLiveData();
+      if (typeof this.loadLiveData === 'function') this.loadLiveData();
+    }
     // The eager admin reads (core.js mount) deliberately arm no retry timer on a 403, so
     // an admin landing in a session that first loaded below admin is re-kicked here —
     // fresh rows and navigator badges on sign-in and on every refresh alike.
@@ -134,15 +201,107 @@ export const authMethods = {
       if (typeof this.usLiveLoad === 'function') this.usLiveLoad();
       if (typeof this.auLiveLoad === 'function') this.auLiveLoad();
     }
+    // this.state.saOn already covers both cases: true on a fresh superadmin sign-in (line
+    // 136 above) and true on a reload that restored an open console (session.js) — either
+    // way the overlay is about to be on screen and needs its companies read, same as the
+    // admin reads above refresh on every entry, not just the first one.
+    if (this.state.saOn && typeof this.saLiveLoad === 'function') this.saLiveLoad();
     if (resp.message && !o.keepView) this.flash(resp.message);
+    // Building scope (docs/api/building-scope-api.md) is not in resp.user at all — login
+    // and refresh never carry it, only GET /me does — so both a fresh sign-in and a silent
+    // reload refresh fetch it separately here. Fire-and-forget: a failure leaves whatever
+    // scope the stored/previous account already had rather than blocking entry over it.
+    this.authLoadScope();
+  },
+
+  // Refreshes building_ids/all_buildings/selected_building_id/buildings from GET /me onto
+  // the account already in state (which resp.user alone never carries — see authEnter).
+  // Best-effort and silent: called on every sign-in/refresh and after every building
+  // switch, so a transient failure here is invisible rather than a flashed error on top of
+  // whatever else just succeeded.
+  authLoadScope() {
+    return authApi.me().then((r) => {
+      if (!r || !r.ok || !r.user) return;
+      const u = r.user;
+      // GET /me only ever populates `buildings` for a RESTRICTED caller — the backend
+      // builds that list from principal.building_ids, and an admin/superadmin's
+      // building_ids is null (all_buildings: true), so /me's own list is always [] for
+      // them even though their company has buildings to pick from. GET /api/admin/buildings
+      // is the admin-only route that actually lists those, so an admin/superadmin's
+      // switcher is built from that instead — the same list, and the same orgQuery()
+      // acting-as company, the invite form's chips already use.
+      const unrestrictedNeedsCompanyList = (u.role === 'admin' || u.role === 'superadmin')
+        && !(Array.isArray(u.buildings) && u.buildings.length);
+      const buildings = unrestrictedNeedsCompanyList
+        ? adminApi.listBuildings().then((br) => (br && Array.isArray(br.buildings) ? br.buildings : [])).catch(() => [])
+        : Promise.resolve(Array.isArray(u.buildings) ? u.buildings : []);
+      return buildings.then((list) => {
+        // Guarded by id, not just "an account is signed in": this fires from authEnter and
+        // from authSelectBuilding as a fire-and-forget request, so a slow reply can still be
+        // in flight after a sign-out and a DIFFERENT sign-in. Applying it unguarded would
+        // merge one account's building scope onto whichever account happens to be in state
+        // by the time it lands — silently showing someone else's allocation.
+        this.setState((p) => (p.account && u.id && p.account.id === u.id ? {
+          account: Object.assign({}, p.account, {
+            building_ids: u.building_ids === undefined ? p.account.building_ids : u.building_ids,
+            all_buildings: u.all_buildings === true,
+            selected_building_id: u.selected_building_id || null,
+            buildings: list
+          })
+        } : {}));
+      });
+    }).catch(() => {});
+  },
+
+  // The building switcher in the account menu. Selecting narrows every screen to that one
+  // building from here on (resetLiveData + loadLiveData, same re-fetch a fresh sign-in
+  // does — every register on the page now means something different); buildingId: null
+  // clears it back to every building the account holds. Optimistic, because the PATCH only
+  // ever narrows or is refused — there is no state this can move the header to that the
+  // server would not also allow — but still reverted with a reason on a 403 or network
+  // failure, so the chip never shows a selection that did not actually take.
+  authSelectBuilding(buildingId) {
+    const prevAccount = this.state.account;
+    if (!prevAccount) return Promise.resolve();
+    // Captured once, up front — this whole call is a request in flight, and everywhere it
+    // touches state below checks against THIS id before applying anything. Someone signing
+    // out and into a different account while the PATCH is still on the wire must never have
+    // this call's optimistic set, its revert, or its "couldn't switch" flash land on them.
+    const accountId = prevAccount.id;
+    const stillSameAccount = () => this.state.account && this.state.account.id === accountId;
+    const id = buildingId || null;
+    this.setState((p) => (p.account && p.account.id === accountId
+      ? { account: Object.assign({}, p.account, { selected_building_id: id }) } : {}));
+    return authApi.selectBuilding(id).then(() => this.authLoadScope()).then(() => {
+      if (!stillSameAccount()) return;
+      if (typeof this.resetLiveData === 'function') this.resetLiveData();
+      if (typeof this.loadLiveData === 'function') this.loadLiveData();
+    }).catch((e) => {
+      if (!stillSameAccount()) return;
+      this.setState({ account: prevAccount });
+      const msg = e && e.reason === 'building_not_allocated' ? "You aren't allocated to that building."
+        : e && e.reason === 'building_not_in_company' ? 'That building is outside your company.'
+        : (e && e.message) || String(e);
+      this.flash("Couldn't switch building — " + msg);
+    });
   },
 
   // Local sign-out. `notice` is what the gate shows — the server's own line when it ended
   // the session, nothing when the person chose to leave.
   authSignedOut(notice) {
+    // A viewAsCompany() override belongs to the session that chose it — never left
+    // armed for whoever signs into this tab next.
+    setActingOrg(null);
     this.setState({
       account: null, accessToken: null, refreshToken: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
+      // The Super Admin console is a fixed, full-screen overlay keyed on saOn alone — App.jsx
+      // renders it with no signedIn check at all. Without resetting it here, signing out from
+      // inside the console (its own Sign out button, a 401, another tab signing out) cleared
+      // the session underneath but left the exact same overlay covering the screen, which
+      // read as sign-out doing nothing.
+      saOn: false,
+      viewOrgId: null, viewOrgName: null,
       pwOpen: false, pwCurrent: '', pwNext: '', pwBusy: false, pwError: '',
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null,
       authNotice: notice || '', password: '', code: '', newPassword: ''
@@ -306,6 +465,69 @@ export const authMethods = {
     }
   },
 
+  // ── invitations ────────────────────────────────────────────────────────
+  // The emailed link is {PUBLIC_APP_URL}/accept-invitation?token=…  (engines/auth/
+  // invitations.py). Read the token off the URL once at boot, hold it in state, and put
+  // the gate straight into 'invite' mode. `?invite=…` is accepted too so a static host with
+  // no path fallback can still deliver the SPA at "/". The token is then scrubbed from the
+  // address bar so a reload, a screenshot or the browser history never carries it.
+  authInviteFromUrl() {
+    let loc = null;
+    try { loc = window.location; } catch (e) { return false; }
+    if (!loc) return false;
+    let params;
+    try { params = new URLSearchParams(loc.search || ''); } catch (e) { return false; }
+    const onPath = /\/accept-invitation\/?$/.test(String(loc.pathname || ''));
+    const token = (onPath ? params.get('token') : null) || params.get('invite') || '';
+    if (!token) return false;
+    // A stored session in this tab belongs to whoever used it last, not to the invitee.
+    if (this.state.signedIn) this.authSignedOut('');
+    this.setState({ authMode: 'invite', inviteToken: token, password: '', fullName: '', authError: '', authReason: '', authNotice: '' });
+    try {
+      if (window.history && typeof window.history.replaceState === 'function') {
+        window.history.replaceState(null, '', onPath ? '/' : (loc.pathname || '/'));
+      }
+    } catch (e) { /* history unavailable — the token stays in the bar, nothing else changes */ }
+    return true;
+  },
+
+  async authAcceptInvite() {
+    const s = this.state;
+    if (s.authBusy) return;
+    if (!s.inviteToken) {
+      return this.setState({ authError: 'This invitation link is incomplete. Open the link from the email again.', authReason: 'invalid' });
+    }
+    const cfg = s.authConfig || AUTH_FALLBACK_CONFIG;
+    const min = (cfg.password && cfg.password.min_length) || AUTH_FALLBACK_CONFIG.password.min_length;
+    if (!s.password || s.password.length < min) {
+      return this.setState({ authError: 'Use at least ' + min + ' characters.', authReason: 'password' });
+    }
+    this.setState({ authBusy: true, authError: '', authReason: '' });
+    try {
+      const resp = await authApi.acceptInvitation(s.inviteToken, s.password, (s.fullName || '').trim() || null);
+      // The invitation token is spent either way; drop it. The account is not signed in
+      // yet — accept() (engines/auth/invitations.py) leaves it pending a confirmation
+      // code, the same one register() sends, so this goes straight to the verify screen
+      // rather than back to sign-in: entering the code IS what signs the invitee in, no
+      // retyping the password they just chose.
+      this.setState({
+        authBusy: false, authMode: 'verify', inviteToken: '', password: '', fullName: '', code: '',
+        email: (resp && resp.email) || s.email,
+        authNotice: 'Check your email for a code to confirm this address and finish signing in.',
+        authError: '', authReason: ''
+      });
+    } catch (e) {
+      const patch = Object.assign({ authBusy: false }, failurePatch(e));
+      // used / expired / invalid: the link cannot be retried — send them to sign in (or to
+      // ask for a fresh invitation) rather than leaving a dead form up.
+      if (e && (e.status === 404 || e.status === 409 || e.status === 410)) {
+        Object.assign(patch, { authMode: 'signin', inviteToken: '', authNotice: e.message || patch.authError, authError: '' });
+      }
+      if (e && e.reason === 'weak_password') patch.password = '';
+      this.setState(patch);
+    }
+  },
+
   // ── cooldowns and lockouts ─────────────────────────────────────────────
   authArm(seconds) {
     const n = Number(seconds) || 0;
@@ -348,10 +570,40 @@ export const authMethods = {
     const admin = canAdmin(s.account);
     const cfg = s.authConfig || AUTH_FALLBACK_CONFIG;
     const cooling = this.authCooling();
-    const primary = { signin: 'authSignIn', register: 'authRegister', verify: 'authVerify', forgot: 'authForgot', reset: 'authReset' }[s.authMode] || 'authSignIn';
+    const primary = { signin: 'authSignIn', register: 'authRegister', verify: 'authVerify', forgot: 'authForgot', reset: 'authReset', invite: 'authAcceptInvite' }[s.authMode] || 'authSignIn';
     const field = (k) => (e) => this.setState({ [k]: e.target.value });
     const a = s.account || {};
     const name = a.full_name || a.email || '';
+    // The building scope picker (docs/api/building-scope-api.md). Its OWN control in the
+    // TopBar, deliberately not rows in the account menu: an admin's list is every building
+    // in the company, which here is hundreds, and inlining it buried Sign out and the view
+    // toggle under a scrolling wall of names. It also sits better beside the company name,
+    // which is the other thing saying what this screen is scoped to.
+    //
+    // Nothing to switch between with zero or one building, so no control at all then.
+    // Withheld inside the Super Admin console (saOn): that overlay spans every company, so
+    // a company-scoped selection has no meaning there, the same reason acctOrgName is
+    // suppressed below. Withheld while viewing as another company (viewOrgId,
+    // superAdmin.js): PATCH /api/auth/me/selected-building validates a choice against the
+    // caller's OWN company with no acting-as override, so every choice there would 403.
+    const allBuildings = Array.isArray(a.buildings) ? a.buildings : [];
+    const bldShow = !s.saOn && !s.viewOrgId && allBuildings.length > 1;
+    // Names are not unique in this data — three buildings called "MixedUse 004" is normal —
+    // so the code is searched alongside the name and shown beside it, or the list offers
+    // rows that cannot be told apart.
+    const bldQuery = String(s.bldQuery || '').trim().toLowerCase();
+    const bldMatches = bldQuery
+      ? allBuildings.filter((b) =>
+          String(b.name || '').toLowerCase().includes(bldQuery)
+          || String(b.building_code || '').toLowerCase().includes(bldQuery))
+      : allBuildings;
+    const bldSelected = a.selected_building_id
+      ? allBuildings.find((b) => b.id === a.selected_building_id) || null
+      : null;
+    const bldPick = (id) => () => {
+      this.setState({ bldOpen: false, bldQuery: '' });
+      this.authSelectBuilding(id);
+    };
     return {
       // the gate
       email: s.email, setEmail: field('email'),
@@ -373,6 +625,10 @@ export const authMethods = {
       authSignIn: () => this.authSignIn(), authSSO: () => this.authSSO(),
       authRegister: () => this.authRegister(), authVerify: () => this.authVerify(), authResend: () => this.authResend(),
       authForgot: () => this.authForgot(), authReset: () => this.authReset(),
+      authAcceptInvite: () => this.authAcceptInvite(),
+      // The invite form's button is only live once there is a token to spend and a
+      // password long enough to be accepted — the same rule the server applies.
+      authInviteReady: !!s.inviteToken && !!s.password && s.password.length >= ((cfg.password && cfg.password.min_length) || AUTH_FALLBACK_CONFIG.password.min_length),
       authGoSignin: () => this.authGo('signin'), authGoRegister: () => this.authGo('register'), authGoForgot: () => this.authGo('forgot'),
       signOut: () => this.authSignOut(),
 
@@ -385,20 +641,80 @@ export const authMethods = {
       closeAcct: () => this.setState({ acctOpen: false }),
       acctName: name || 'Account', acctEmail: a.email || '',
       acctInitial: (name || '?').trim().charAt(0).toUpperCase(),
+      // The real company the signed-in account belongs to (from login/refresh — the
+      // server names it, the client never guesses it). Null while the account hasn't
+      // loaded yet, or the rare row with no organization_id at all; the header omits the
+      // suffix rather than showing a placeholder company that isn't this account's.
+      // Suppressed while the Super Admin console is open — it spans every company, so
+      // naming one here would read as though the console were scoped to it. While a
+      // superadmin is viewing as a different company (superAdmin.js's viewAsCompany),
+      // that company's name takes over from the account's own.
+      acctOrgName: s.saOn ? null : (s.viewOrgId ? s.viewOrgName : (a.organization_name || null)),
+      /* The building scope picker, its own TopBar control beside the company name. Always
+         says which building the screen is answering for, because that is not something a
+         person should have to open a menu to find out. */
+      bldShow,
+      bldLabel: bldSelected ? bldSelected.name : 'All buildings',
+      // A narrowed scope is the state worth noticing, so it takes the accent; "All
+      // buildings" is the resting state and stays quiet.
+      bldScoped: !!bldSelected,
+      bldOpen: !!s.bldOpen,
+      bldToggle: () => this.setState((p) => ({ bldOpen: !p.bldOpen, bldQuery: '', acctOpen: false })),
+      bldClose: () => this.setState({ bldOpen: false, bldQuery: '' }),
+      bldQuery: s.bldQuery || '',
+      bldSetQuery: field('bldQuery'),
+      bldPlaceholder: 'Search ' + allBuildings.length + ' buildings',
+      // Pinned above the searched list rather than inside it: it is the way back to the
+      // whole portfolio, not one more result to filter away by typing.
+      bldAllRow: {
+        label: 'All buildings', tick: !bldSelected,
+        tickShow: !bldSelected ? 'block' : 'none',
+        fg: !bldSelected ? 'var(--color-accent)' : 'var(--color-text)',
+        click: bldPick(null)
+      },
+      bldRows: bldMatches.map((b) => ({
+        id: b.id,
+        label: b.name || 'Unnamed building',
+        code: b.building_code || '',
+        tick: bldSelected ? bldSelected.id === b.id : false,
+        tickShow: bldSelected && bldSelected.id === b.id ? 'block' : 'none',
+        fg: bldSelected && bldSelected.id === b.id ? 'var(--color-accent)' : 'var(--color-text)',
+        click: bldPick(b.id)
+      })),
+      bldNoMatch: bldShow && bldMatches.length === 0,
       canAdmin: admin,
-      acctRole: s.role === 'admin' ? 'Admin view' : 'User view',
-      acctBg: s.role === 'admin' ? 'var(--color-accent)' : 'var(--color-neutral-900)',
-      acctFg: s.role === 'admin' ? 'var(--accent-ink)' : 'var(--color-neutral-300)',
-      acctEdge: s.role === 'admin' ? 'var(--color-accent)' : 'var(--color-divider)',
+      // A superadmin's own Admin/User toggle is a lens on their own company (see below),
+      // but their badge names what they actually are — never demoted to plain "Admin".
+      // Viewing as another company overrides even that, since it is the more specific,
+      // more consequential state to be in.
+      acctRole: s.viewOrgId ? 'Viewing as' : a.role === 'superadmin' ? 'Super Admin' : (s.role === 'admin' ? 'Admin view' : 'User view'),
+      // The warn colour while viewing as another company — the one visual cue that is
+      // impossible to miss no matter which page is open, since acctOrgName only shows
+      // once the account menu is opened.
+      acctBg: s.viewOrgId ? 'var(--st-warn)' : s.role === 'admin' ? 'var(--color-accent)' : 'var(--color-neutral-900)',
+      acctFg: s.viewOrgId ? 'var(--accent-ink)' : s.role === 'admin' ? 'var(--accent-ink)' : 'var(--color-neutral-300)',
+      acctEdge: s.viewOrgId ? 'var(--st-warn)' : s.role === 'admin' ? 'var(--color-accent)' : 'var(--color-divider)',
       acctItems: [
+        // Shown only while superAdmin.js's viewAsCompany() is active — first in the list,
+        // since it is the one action that matters most to see while it applies.
+        s.viewOrgId ? {
+          label: 'Exit — return to my account', icon: 'ph-arrow-u-down-left', tick: false,
+          click: () => { this.setState({ acctOpen: false }); if (typeof this.exitViewAsCompany === 'function') this.exitViewAsCompany(); }
+        } : null,
         { label: 'Pricing', icon: 'ph-tag', click: () => this.setState({ acctOpen: false }, () => this.flash('Pricing and plan usage open in the billing workspace — seats, buildings hoisted and ingest volume.')) },
         { label: 'Support', icon: 'ph-lifebuoy', click: () => this.setState({ acctOpen: false }, () => this.flash('Support: a Hoister is on call for this portfolio. Every request carries the page and the graph state you were on.')) },
         /* The platform operator's console, not a company surface: superadmin only —
            canAdmin is deliberately not enough. Opening it fires the on-open companies
-           load (superAdminLive.js); nothing superadmin reads at mount. */
+           load (superAdminLive.js); nothing superadmin reads at mount. Always leaves any
+           viewAsCompany() behind first — the console spans every company, so every report
+           underneath it must go back to reading the caller's own, not still be scoped to
+           whichever one was last viewed. */
         a.role === 'superadmin' ? {
           label: 'Super Admin console', icon: 'ph-lock-key', tick: false,
-          click: () => this.setState({ saOn: true, acctOpen: false }, () => { if (typeof this.saLiveLoad === 'function') this.saLiveLoad(); })
+          click: () => {
+            if (this.state.viewOrgId && typeof this.exitViewAsCompany === 'function') this.exitViewAsCompany();
+            this.setState({ saOn: true, acctOpen: false }, () => { if (typeof this.saLiveLoad === 'function') this.saLiveLoad(); });
+          }
         } : null,
         admin ? {
           label: s.role === 'admin' ? 'User view' : 'Admin view',

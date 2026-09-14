@@ -40,6 +40,14 @@ export function newSessionId() {
 
 // The record. `label` and `task` duplicate `title` because the dock's Recent tasks and the
 // report menu already read those names.
+//
+// `owner` is the signed-in account's email at the moment the session was created — this
+// store is one shared browser localStorage array, not per-account, and more than one
+// account has always been able to sign in and out of the same tab (superadmin's own
+// view-as-company mode makes that routine, not exotic). Without an owner tag every
+// session ever created in this browser — by every account that ever tested from it —
+// shows up in everyone's navigator. shapeSessionList() below is what actually hides a
+// session whose owner does not match who is looking; this just stamps it at birth.
 export function makeSession(o) {
   const at = o.at === undefined ? Date.now() : o.at;
   const kind = o.kind === 'task' ? 'task' : 'chat';
@@ -58,7 +66,8 @@ export function makeSession(o) {
     turns: [],
     calls: [],
     domain: 'Orchestrator',
-    spaceId: null
+    spaceId: null,
+    owner: typeof o.owner === 'string' && o.owner ? o.owner.trim().toLowerCase() : null
   };
 }
 
@@ -125,7 +134,7 @@ export function loadSessions(storage) {
   const out = [];
   d.forEach((r) => {
     if (!r || typeof r !== 'object' || typeof r.id !== 'string' || typeof r.title !== 'string' || !r.title) return;
-    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps });
+    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps, owner: r.owner });
     rec.createdAt = Number(r.createdAt) || rec.at;
     rec.turns = Array.isArray(r.turns) ? r.turns.filter((m) => m && typeof m === 'object' && typeof m.role === 'string') : [];
     rec.calls = Array.isArray(r.calls) ? r.calls.filter((x) => typeof x === 'string') : [];
@@ -165,14 +174,21 @@ export function saveSessions(list, storage) {
 
 // ── the list ─────────────────────────────────────────────────────────────────
 // Grouped by day, newest first. `space` narrows to a built-in key (matched on the engine)
-// or a saved space id (matched on where the session was filed). Handlers are added by the
-// view model; this only shapes.
+// or a saved space id (matched on where the session was filed). `owner` narrows to the
+// signed-in account that created the session — this store is one shared browser array
+// across every account that has ever signed in in this tab (see makeSession()'s own
+// comment), so every caller must pass the current account's email or an unrelated
+// account's test sessions leak into view. No owner (not signed in yet) shows nothing,
+// same as an owner that matches no session — an empty list is the safe default, never
+// "show everyone's". Handlers are added by the view model; this only shapes.
 export function shapeSessionList(sessions, opts) {
   const o = opts || {};
   const now = o.nowMs === undefined ? Date.now() : o.nowMs;
   const q = String(o.query || '').trim().toLowerCase();
   const space = o.space || null;
+  const owner = o.owner ? String(o.owner).trim().toLowerCase() : null;
   const rows = trimSessions(sessions).filter((r) => {
+    if (!owner || r.owner !== owner) return false;
     if (space) {
       const builtin = spaceKeyOf(r.domain) === space && r.kind === 'chat';
       if (!builtin && r.spaceId !== space) return false;
@@ -214,7 +230,7 @@ export const sessionsMethods = {
     const list = s.sessions || [];
     if (s.sessionId && list.some((x) => x.id === s.sessionId)) return s.sessionId;
     const id = s.sessionId || newSessionId();
-    const rec = makeSession({ id: id, title: q, page: this.ctxLabel(), at: Date.now() });
+    const rec = makeSession({ id: id, title: q, page: this.ctxLabel(), at: Date.now(), owner: s.account && s.account.email });
     // Asked from inside a saved space: the session is filed there from the start.
     if (s.view === 'space' && s.spaceKey && BUILTIN_SPACE_KEYS.indexOf(s.spaceKey) < 0) rec.spaceId = s.spaceKey;
     this.setState((p) => ({ sessionId: id, sessions: trimSessions([rec].concat((p.sessions || []).filter((x) => x.id !== id))) }));
@@ -255,6 +271,11 @@ export const sessionsMethods = {
       this.setState(patch);
       return;
     }
+    // Reopening the session that is already active — including one still streaming, after
+    // navigating away to another page and back — just returns to the chat page as it
+    // stands. It must NOT fall into the reset below: that would swap the live transcript
+    // for the stale snapshot still on the record and drop the in-flight stream.
+    if (id === this.state.sessionId) return this.openChat();
     if (this.state.ccBusy) return this.flash('Still answering — stop it first, or wait for it to finish.');
     this.setState({
       sessionId: id, ccChat: rec.turns || [], ccTraceIdx: null, ccStepsOpen: {}, ccEditIdx: null, ccEditText: '',

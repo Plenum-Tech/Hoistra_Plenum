@@ -17,7 +17,7 @@ globalThis.fetch = async (url, opts) => {
   return { ok: status >= 200 && status < 300, status, statusText: String(status), text: async () => JSON.stringify(body) };
 };
 
-const { apiFetch, ApiError, configureAuth, errorMessage, TERMINAL_401 } = await import('../src/api/client.js');
+const { apiFetch, ApiError, configureAuth, errorMessage, TERMINAL_401, ORG_ID, setActingOrg, getActingOrg, currentOrgId } = await import('../src/api/client.js');
 
 const B = '/backend/ops-intelligence';
 const fail = (status, reason, error) => [status, { detail: { ok: false, error, reason } }];
@@ -25,6 +25,28 @@ const fail = (status, reason, error) => [status, { detail: { ok: false, error, r
 beforeEach(() => {
   calls = []; handlers = {};
   configureAuth({ getToken: () => null, refresh: null, onTerminal: null });
+  setActingOrg(null); // module-level, so a leftover override from one test cannot leak into the next
+});
+
+// ── the superadmin view-as-company override ─────────────────────────────────
+test('currentOrgId() is ORG_ID until a superadmin override is set, then the override wins', () => {
+  assert.equal(getActingOrg(), null);
+  assert.equal(currentOrgId(), ORG_ID || '');
+  setActingOrg('11111111-1111-1111-1111-111111111111');
+  assert.equal(getActingOrg(), '11111111-1111-1111-1111-111111111111');
+  assert.equal(currentOrgId(), '11111111-1111-1111-1111-111111111111');
+  setActingOrg(null);
+  assert.equal(getActingOrg(), null);
+  assert.equal(currentOrgId(), ORG_ID || '');
+});
+
+test('setActingOrg coerces to a string id or null, never leaving a falsy non-null override', () => {
+  setActingOrg(123);
+  assert.equal(getActingOrg(), '123');
+  setActingOrg('');
+  assert.equal(getActingOrg(), null);
+  setActingOrg(undefined);
+  assert.equal(getActingOrg(), null);
 });
 
 test('ApiError carries the reason and shows detail.error, not the JSON of the object', async () => {

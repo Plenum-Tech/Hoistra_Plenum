@@ -12,6 +12,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { energyApi } from '../api/energy.js';
 import { udrApi } from '../api/udr.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -161,6 +162,10 @@ export const energyLiveMethods = {
       });
       if (opts && opts.announce) this.flash("Energy anomalies loaded — " + anomalies.length + " open, " + meters.length + " meters");
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._enAttempts = (this._enAttempts || 0) + 1;
       this.setState({ enLoading: false, enError: msg });
@@ -198,6 +203,9 @@ export const energyLiveMethods = {
           [cc]: { loading: false, error: "", tiles: (res && res.tiles) || [], buildings: res && res.buildings, loadedAt: new Date().toISOString() }
         }) }));
       } catch (e) {
+        // Not a failure of this country's read — the company moved underneath it, so it
+        // must not be pushed onto `failed` and retried against the new one.
+        if (isStaleScope(e)) return;
         failed.push(cc);
         const msg = (e && e.message) || String(e);
         this.setState((p) => ({ enPosByCc: Object.assign({}, p.enPosByCc, {

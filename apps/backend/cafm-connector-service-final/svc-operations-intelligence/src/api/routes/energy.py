@@ -88,6 +88,8 @@ async def list_meters(
     rows = await meter_svc.list_meters(
         session, organization_id=organization_id, site_id=site_id, limit=limit
     )
+    if s.restricted:
+        rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "meters": rows}
 
 
@@ -221,6 +223,7 @@ async def building_profile(
 
 @router.get("/buildings")
 async def list_buildings(
+    organization_id: UUID | None = Query(None),
     limit: int = Query(500, ge=1, le=5000),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
@@ -229,9 +232,13 @@ async def list_buildings(
     the benchmark it is read against (and where that benchmark came from) and a record
     completeness figure. See engines/energy/buildings.py.
 
-    The caller's company, and for a plain user only their allocated buildings. The company
-    used to be whatever the client sent."""
-    out = await bld_svc.list_buildings(session, organization_id=s.organization_id, limit=limit)
+    The caller's company by default, and for a plain user only their allocated buildings.
+    A superadmin may pass organization_id to view another company's table instead —
+    access.organization_for() enforces that only a superadmin gets the company they
+    asked for; the company used to be whatever ANY client sent, which is what this and
+    organization_for() both replaced."""
+    org_id = access.organization_for(s, organization_id)
+    out = await bld_svc.list_buildings(session, organization_id=org_id, limit=limit)
     if s.restricted and isinstance(out, dict):
         # The engine returns the table under "buildings". The filter first looked for
         # "rows", found nothing, and let a one-building user read the whole portfolio.
@@ -799,6 +806,8 @@ async def list_anomalies(
     rows = await anom_svc.list_anomalies(
         session, status=status, organization_id=organization_id, limit=limit
     )
+    if s.restricted:
+        rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}
 
 
@@ -848,7 +857,7 @@ async def saved_space(
     s: access.Scope = Depends(scope),
 ):
     organization_id = access.organization_for(s, organization_id)
-    return await report_svc.saved_space_summary(session, organization_id=organization_id)
+    return await report_svc.saved_space_summary(session, organization_id=organization_id, scope=s)
 
 
 @router.get("/approvals")
@@ -860,7 +869,7 @@ async def list_approvals(
 ):
     organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
-        session, source_feature="C", status=status, organization_id=organization_id
+        session, source_feature="C", status=status, organization_id=organization_id, scope=s
     )
     return {
         "ok": True,

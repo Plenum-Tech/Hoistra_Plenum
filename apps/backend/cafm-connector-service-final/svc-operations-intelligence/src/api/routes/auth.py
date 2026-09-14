@@ -508,17 +508,20 @@ class AcceptInvitation(BaseModel):
 @router.post("/invitations/accept", response_model=None)
 async def accept_invitation(
     body: AcceptInvitation,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ):
-    """Public: follow an invitation link, set a password, activate the account.
+    """Public: follow an invitation link, set a password, and confirm the address.
 
     No sign-in yet — the token in the link is the credential, single use and hashed at rest.
-    On success the caller signs in normally; nothing is minted here so an intercepted link
-    is worth exactly one password-set and never a session.
+    The account is left pending a confirmation code (the same one register() sends); the
+    caller verifies it next (POST /verify-email), and THAT call signs them in. Nothing is
+    minted here, so an intercepted link is worth exactly one password-set, never a session.
     """
     try:
         out = await invitations.accept(
             session, token=body.token, password=body.password, full_name=body.full_name,
+            request_ip=_client_ip(request),
         )
     except invitations.InvitationError as exc:
         raise HTTPException(status_code=exc.http_status,

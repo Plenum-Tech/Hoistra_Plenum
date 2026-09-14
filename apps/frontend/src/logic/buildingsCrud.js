@@ -24,6 +24,9 @@
 // Errors come back keyed by field on both routes, so each one renders against its own input
 // instead of a banner the reader has to match back to a box by guessing.
 import { energyApi } from '../api/energy.js';
+import { udrApi } from '../api/udr.js';
+import { adminApi } from '../api/admin.js';
+import { currentOrgId } from '../api/client.js';
 
 // What the form offers. `Mall` is deliberately here: a facilities manager calls it a mall,
 // and the service maps it to the Retail enum member and says so in the response. `Laboratory`
@@ -46,21 +49,31 @@ export const GRANULARITIES = [
   { value: 'sub-metered', label: 'Sub-metered', hint: 'Consumption is measured per circuit or plant item.' }
 ];
 
-// Who may change the register. Two roles exist in this app — `admin`, and `user`, which is
-// the everyday facilities-manager view — and both hoist and remove buildings: adding a
-// property you have taken on, and removing one entered by mistake, are the work, not an
-// administrative exception to it.
+// Who may change the register: admin and superadmin only. Adding a building to the
+// portfolio, or removing one entered by mistake, is a company-wide action, not something a
+// building-restricted user does from their own scoped view.
 //
 // This is an affordance, not a permission. The service does not authorise these routes, so
 // hiding the button never stopped anyone who could reach the API; what the gate decides is
 // whose screen is uncluttered. When a real role model arrives, this set is the one line to
 // change — and the check belongs on the service at the same time.
-// Every platform role, because all three may hoist a building — a facilities manager
-// is the person who actually does it. Listed rather than left implicit: the backend
-// now issues 'superadmin' as well (svc-operations-intelligence/engines/auth/roles.py),
-// and a set that omits it would deny the platform owner the one action every lesser
-// role is allowed, which reads as a broken screen rather than as a permission.
-export const HOIST_ROLES = new Set(['superadmin', 'admin', 'user']);
+export const HOIST_ROLES = new Set(['superadmin', 'admin']);
+
+// auth.js's Admin/User view toggle only ever relabels s.role for an account that is really
+// an admin (canAdmin gates the toggle itself) — it previews the restricted reports layout,
+// it does not actually demote the session. So the gate here reads the account's real role
+// first and only falls back to s.role when there is no live account to ask (seed/demo data,
+// and the test harness, which drives this off role directly) — otherwise an admin who opens
+// "User view" to see what a user's screen looks like would lose their own Hoist button along
+// with it, rather than just previewing what a user cannot do.
+const realBuildingsRole = (s) => (s.account && s.account.role) || s.role;
+
+// Which company's sites the "Site it belongs to" picker offers. currentOrgId() is only
+// ever set while a superadmin is viewing as another company (superAdmin.js) — for every
+// other sign-in it is empty, and the account's own organization_id (from login/me, never
+// guessed client-side) is the real scope. Empty only for an account with no company on
+// record, in which case the query below runs unfiltered rather than showing nothing.
+const sitesOrgId = (s) => currentOrgId() || (s.account && s.account.organization_id) || '';
 
 const BLANK = {
   site_name: '', country_code: 'UK', state: '', city: '', postcode: '',
@@ -124,8 +137,9 @@ export const buildingsCrudMethods = {
     this.orchWith('Hoist building', this.ctxLabel(), 'declare', {
       bcMode: 'create', bcTarget: null, bcStep: 0, bcResult: null,
       bcOpen: true, bcForm: Object.assign({}, BLANK), bcMix: BLANK_MIX.map((m) => Object.assign({}, m)),
-      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: ''
+      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: ''
     });
+    this.bcSitesLoad();
   },
 
   // Opening Edit on a row. `bcTarget` carries the building_id the PATCH addresses and the
@@ -142,14 +156,49 @@ export const buildingsCrudMethods = {
       bcMode: 'edit', bcTarget: { buildingId: row.buildingId, updatedAt: row.updatedAt || null, name: row.name },
       bcStep: 0, bcResult: null,
       bcOpen: true, bcForm: Object.assign({}, this._bcOriginal), bcMix: mixFromRow(row),
-      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: ''
+      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: ''
     });
+    this.bcSitesLoad();
   },
 
   bcCloseForm() { this.setState({ bcOpen: false, flow: null, bcErrors: {}, bcTopError: '' }); },
 
+  // The "Site it belongs to" picker's options — every plenum_cafm.sites row for this
+  // account's own company, so it only ever offers sites the signed-in person could
+  // actually mean. Loaded once per dock-open rather than kept globally: the company in
+  // scope can change between opens (a superadmin switching "view as company").
+  async bcSitesLoad() {
+    const org = sitesOrgId(this.state);
+    if (this._bcSitesOrg === org && this.state.bcSites) return;
+    this._bcSitesOrg = org;
+    this.setState({ bcSitesLoading: true });
+    try {
+      const res = org
+        ? await udrApi.select('SELECT site_id, site_name FROM plenum_cafm.sites WHERE organization_id = :org ORDER BY site_name', { org: org })
+        : await udrApi.select('SELECT site_id, site_name FROM plenum_cafm.sites ORDER BY site_name', {});
+      // Only apply it if this is still the scope in question — a slow response from a
+      // superadmin's previous company should never land after they have switched away.
+      if (this._bcSitesOrg === org) this.setState({ bcSites: (res && res.rows) || [], bcSitesLoading: false });
+    } catch (e) {
+      if (this._bcSitesOrg === org) this.setState({ bcSites: this.state.bcSites || [], bcSitesLoading: false });
+    }
+  },
+
+  // Search-and-pick, the same interaction the building-scope switcher in TopBar already
+  // uses (auth.js's bldToggle/bldQuery/bldRows) — a trigger row that opens a small panel
+  // with a filter box, rather than one native <select> holding 600+ options.
+  bcSiteToggle() { this.setState((p) => ({ bcSiteOpen: !p.bcSiteOpen, bcSiteQuery: '' })); },
+  bcSiteClose() { this.setState({ bcSiteOpen: false, bcSiteQuery: '' }); },
+  bcSiteSetQuery(e) { this.setState({ bcSiteQuery: e && e.target ? e.target.value : e }); },
+  bcSitePick(id) {
+    this.bcSet('site_id', id || '');
+    this.setState({ bcSiteOpen: false, bcSiteQuery: '' });
+  },
+
   // Step 2 → 3. The record is already written by now, so there is no way back from here.
-  bcNext() { this.setState({ bcStep: 2 }); },
+  // The user picker on step 3 needs the company's people, fetched lazily right as it is
+  // about to be shown rather than on every form open (most opens never reach step 3).
+  bcNext() { this.setState({ bcStep: 2 }); this.bcUsersLoad(); },
 
   // Step 3's two exits. Ingest hands the new building to the dock's ingest flow; later leaves
   // the keyed-as line in the dock so the outcome is still on screen after the card goes.
@@ -164,6 +213,52 @@ export const buildingsCrudMethods = {
       flow: null, bcOpen: false,
       flowDone: (r.name || 'The building') + ' is hoisted and keyed as ' + (r.code || '—') + '. No documents ingested — its Hoist Score stays at 0% until they arrive. Run Ingest documents whenever you are ready.'
     });
+  },
+
+  // ── assign the new building to a user (step 3, optional) ───────────────────
+  //
+  // Entirely skippable: nothing on step 3 requires touching this, and both its exits
+  // (Ingest now / Do it later) work exactly as before whether or not an assignment was
+  // made. adminApi already scopes /api/admin/users to the caller's own company server
+  // side, so — unlike the raw UDR site read — there is no client-side org filter to get
+  // right here.
+  async bcUsersLoad() {
+    if (this.state.bcUsers || this.state.bcUsersLoading) return;
+    this.setState({ bcUsersLoading: true });
+    try {
+      const res = await adminApi.listUsers();
+      this.setState({ bcUsers: (res && res.users) || [], bcUsersLoading: false });
+    } catch (e) {
+      this.setState({ bcUsers: [], bcUsersLoading: false });
+    }
+  },
+
+  bcSetAssignUser(e) {
+    this.setState({ bcAssignUserId: e && e.target ? e.target.value : e, bcAssignedTo: '' });
+  },
+
+  // building_ids is a full replacement (adminApi.patchUser), so this reads the picked
+  // user's current allocation and sends it back with the new building appended — never
+  // just [newBuildingId], which would silently strip every building they already held.
+  async bcAssignSubmit() {
+    const s = this.state;
+    if (s.bcAssigning) return;
+    const userId = s.bcAssignUserId;
+    const r = s.bcResult || {};
+    if (!userId || !r.buildingId) return;
+    const u = (s.bcUsers || []).find((x) => String(x.id) === String(userId));
+    const label = (u && (u.full_name || u.email)) || 'that user';
+    const existing = ((u && u.buildings) || []).map((b) => b.id);
+    const ids = existing.includes(r.buildingId) ? existing : existing.concat([r.buildingId]);
+    this.setState({ bcAssigning: true });
+    try {
+      await adminApi.patchUser(userId, { building_ids: ids });
+      this.setState({ bcAssigning: false, bcAssignedTo: label });
+      this.flash((r.name || 'The building') + ' is now assigned to ' + label + '.');
+    } catch (e) {
+      this.setState({ bcAssigning: false });
+      this.flash('Could not assign ' + (r.name || 'the building') + ' to ' + label + ' — ' + ((e && e.message) || String(e)));
+    }
   },
 
   bcSet(field, value) {
@@ -268,7 +363,7 @@ export const buildingsCrudMethods = {
       this.setState(edit
         ? { bcSaving: false, bcOpen: false, flow: null, bcWarnings: res.warnings || [] }
         : { bcSaving: false, bcStep: 1, bcWarnings: res.warnings || [],
-            bcResult: { name: name, code: res.building_code || '—', storedAs: res.stored_as || null, warnings: res.warnings || [] } });
+            bcResult: { name: name, code: res.building_code || '—', buildingId: res.building_id || null, storedAs: res.stored_as || null, warnings: res.warnings || [] } });
       this.flash(edit
         ? 'Saved ' + name + ((res.changed || []).length ? ' — ' + res.changed.join(', ') + ' changed' : '') + (res.relocated ? ' · relocated to its new market’s regulation pack' : '')
         : 'Hoisted ' + name + ' as ' + (res.building_code || '—'));
@@ -340,6 +435,16 @@ export const buildingsCrudMethods = {
     const err = s.bcErrors || {};
     const d = s.bcDel;
 
+    // "Site it belongs to" — filtered once here so the picker's row list and its
+    // "nothing matches" state (below) never disagree with each other.
+    const siteQ = String(s.bcSiteQuery || '').trim().toLowerCase();
+    const siteAll = s.bcSites || [];
+    const siteMatches = siteQ
+      ? siteAll.filter((x) =>
+          String(x.site_name || '').toLowerCase().includes(siteQ)
+          || String(x.site_id || '').toLowerCase().includes(siteQ))
+      : siteAll;
+
     const attachedText = d && d.total
       ? Object.entries(d.attached || {})
           .map(([t, n]) => n + ' ' + (n === 1 ? t.replace(/s$/, '') : t).replace(/_/g, ' '))
@@ -350,9 +455,8 @@ export const buildingsCrudMethods = {
     const step = s.bcStep || 0;
     const r = s.bcResult || {};
     return {
-      // Both roles, so a facilities manager is not blocked from the register they keep.
-      bcCanHoist: !!s.signedIn && HOIST_ROLES.has(s.role),
-      bcCanRemove: !!s.signedIn && HOIST_ROLES.has(s.role),
+      bcCanHoist: !!s.signedIn && HOIST_ROLES.has(realBuildingsRole(s)),
+      bcCanRemove: !!s.signedIn && HOIST_ROLES.has(realBuildingsRole(s)),
       // The card is a dock flow: it shows while the dock is on it, and goes with the dock.
       bcOpen: !!s.bcOpen && s.flow === 'declare',
       bcMode: s.bcMode || 'create',
@@ -383,9 +487,53 @@ export const buildingsCrudMethods = {
       bcIngestNow: () => this.bcIngestNow(),
       bcLater: () => this.bcLater(),
 
+      // Step 3's optional third card: assign the just-hoisted building to one person on
+      // the team. An unrestricted admin/superadmin already sees every building, so
+      // offering them here would be a picker entry that does nothing — left out.
+      bcUsersLoading: !!s.bcUsersLoading,
+      bcAssignUserId: s.bcAssignUserId || '',
+      bcAssigning: !!s.bcAssigning,
+      bcAssignedTo: s.bcAssignedTo || '',
+      bcAssignOptions: (s.bcUsers || [])
+        .filter((u) => !u.all_buildings)
+        .map((u) => ({ value: String(u.id), label: (u.full_name || u.email || String(u.id)) + (u.full_name && u.email ? '  ·  ' + u.email : '') })),
+      bcAssignReady: !!(s.bcAssignUserId && r.buildingId && !s.bcAssigning),
+      bcSetAssignUser: (e) => this.bcSetAssignUser(e),
+      bcAssignSubmit: () => this.bcAssignSubmit(),
+
       bcUseTypes: USE_TYPES,
       bcCountries: COUNTRIES,
       bcGranularities: GRANULARITIES,
+
+      // "Site it belongs to" — a search-and-pick trigger + panel, the same pattern the
+      // TopBar building switcher already uses (auth.js's bldToggle/bldQuery/bldRows), so
+      // 600+ sites are a type-to-narrow list rather than one very long native <select>.
+      bcSitesLoading: !!s.bcSitesLoading,
+      bcSiteOpen: !!s.bcSiteOpen,
+      bcSiteQuery: s.bcSiteQuery || '',
+      bcSiteSetQuery: (e) => this.bcSiteSetQuery(e),
+      bcSiteToggle: () => this.bcSiteToggle(),
+      bcSiteClose: () => this.bcSiteClose(),
+      bcSitePlaceholder: siteAll.length ? 'Search ' + siteAll.length + ' sites' : 'Search sites',
+      // The trigger's own label: the matched site's name when one is known, the raw id
+      // when it isn't (an edit prefilled from a row outside the current company scope),
+      // or the empty-state placeholder.
+      bcSiteLabel: !f.site_id ? 'No site' : ((siteAll.find((x) => x.site_id === f.site_id) || {}).site_name || f.site_id),
+      bcSiteNoneRow: {
+        tickShow: !f.site_id ? 'inline' : 'none',
+        fg: !f.site_id ? 'var(--color-accent)' : 'var(--color-text)',
+        click: () => this.bcSitePick('')
+      },
+      bcSiteRows: siteMatches.slice(0, 60).map((x) => ({
+        key: x.site_id,
+        label: x.site_name,
+        code: x.site_id,
+        fg: f.site_id === x.site_id ? 'var(--color-accent)' : 'var(--color-text)',
+        tickShow: f.site_id === x.site_id ? 'inline' : 'none',
+        click: () => this.bcSitePick(x.site_id)
+      })),
+      bcSiteMore: Math.max(0, siteMatches.length - 60),
+      bcSiteNoMatch: !!siteQ && !siteMatches.length,
 
       // The standard the building will be read against, shown while they pick the market —
       // it is a consequence of the country and nobody would guess it from a dropdown.

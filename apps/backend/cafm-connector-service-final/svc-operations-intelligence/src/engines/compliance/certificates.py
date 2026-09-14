@@ -3504,6 +3504,7 @@ async def saved_space_summary(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
+    scope: Any | None = None,
 ) -> dict[str, Any]:
     """Compliance Saved Space summary rows for Building + Vendor sections + WoW trend.
 
@@ -3519,6 +3520,12 @@ async def saved_space_summary(
         Medium <90d         = 31 ≤ dte ≤ 90
         Accreditations      = total vendor certificates
     Days/status are recomputed from expiry_date so counts stay accurate between scans.
+
+    ``scope`` (an ``access.Scope``, kept as ``Any`` to avoid an import cycle): when the
+    caller is building-restricted, the Building KPI buckets are counted only from
+    certificates against an allocated building — the Vendor buckets are untouched, since
+    vendor accreditation is not building-scoped (same rule as list_certificates() and
+    coverage.building_coverage()).
     """
     from datetime import date as date_cls, timedelta
     from uuid import uuid4
@@ -3566,6 +3573,13 @@ async def saved_space_summary(
             or (c.raw_metadata or {}).get("archived")
         )
     ]
+    if scope is not None and getattr(scope, "restricted", False):
+        rows = [
+            c
+            for c in rows
+            if str(c.cert_scope or "").strip().lower() != "building"
+            or scope.allows_building(c.building_id)
+        ]
 
     # Prefetch vendor block states (case-insensitive) for accurate blocked KPIs
     vendor_block: dict[str, str] = {}

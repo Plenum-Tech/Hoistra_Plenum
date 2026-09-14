@@ -389,7 +389,19 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
     if shape["locations"]["exists"] and "location_id" in have:
         lkey = shape["locations"]["key"]
         cols += ["l.country_code::text AS loc_country_code", "l.region::text AS loc_region"]
-        joins += f" LEFT JOIN plenum_cafm.locations l ON l.{lkey}::text = b.location_id::text"
+        # b.location_id is uuid. l.{lkey} matches it directly on a deployment where
+        # locations.id is itself uuid; on one where it is still cafm-connector-service's
+        # legacy integer primary key, building_create.py's _int_location_id_to_uuid wraps
+        # the integer in a deterministic '00000000-0000-0000-0000-<12-digit id>' stand-in
+        # instead — the second clause reconstructs that same shape from the integer id and
+        # matches on it. The two must stay in lockstep; there is no third place this format
+        # is written.
+        joins += (
+            f" LEFT JOIN plenum_cafm.locations l ON ("
+            f"l.{lkey}::text = b.location_id::text"
+            f" OR '00000000-0000-0000-0000-' || lpad(l.{lkey}::text, 12, '0') = b.location_id::text"
+            f")"
+        )
         if shape["regulation_packs"]["exists"]:
             pkey = shape["regulation_packs"]["key"]
             cols += [

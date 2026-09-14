@@ -9,10 +9,12 @@
 // Vendors page into its scorecards (src/logic/vendorsLive.js), the way the Plenum AI shell's
 // saved-space panels read the same summaries. Nothing here holds state or touches the
 // store; the transport is api/client.js.
-import { BASES, ORG_ID, apiFetch } from './client.js';
+import { BASES, currentOrgId, apiFetch } from './client.js';
 
 const B = BASES.opsIntelligence;
-const withOrg = (q) => (ORG_ID ? Object.assign({ organization_id: ORG_ID }, q || {}) : (q || {}));
+// currentOrgId() is ORG_ID (the build's default tenant) unless a superadmin is viewing
+// as another company, in which case that company's id takes over for every read here.
+const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
 
 export const opsApi = {
   // ── Approvals ───────────────────────────────────────────────────────────

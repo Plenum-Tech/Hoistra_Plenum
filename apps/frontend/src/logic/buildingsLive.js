@@ -15,6 +15,8 @@
 import { PACKS, USE_TINT } from './constants.js';
 import { energyApi } from '../api/energy.js';
 import { normCountry, countryMeta, fmtTime } from './complianceLive.js';
+import { isStaleScope } from '../api/client.js';
+import { isUnallocated } from './auth.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -198,6 +200,10 @@ export const buildingsLiveMethods = {
       this.bldLoadShape();
       this.glLoadTables();
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._bldAttempts = (this._bldAttempts || 0) + 1;
       this.setState({ bldLoading: false, bldError: msg });
@@ -341,7 +347,8 @@ export const buildingsLiveMethods = {
       // sites where it does not, and the endpoint says which in `root`. Naming the wrong
       // one is not cosmetic: on a fresh database the header read "1 site" while
       // plenum_cafm.sites held nothing, which sends whoever is checking to an empty table.
-      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + " " + ROOT_NOUN(s, rows.length) + (s.bldError ? " · refresh failed" : "")
+      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + " " + ROOT_NOUN(s, rows.length)
+          + (s.bldError ? " · refresh failed" : "")
         : s.bldLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
       bldSourceDot: s.bldLive ? (s.bldError ? "var(--st-warn)" : "var(--st-ok)") : s.bldLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
@@ -366,6 +373,12 @@ export const buildingsLiveMethods = {
       bldEmptyShow: filtered.length ? "none" : "block",
       bldEmptyText: s.bldLoading ? "Reading plenum_cafm.sites…"
         : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
+        // An empty allocation and an empty table look identical here, and the fix for each
+        // is in a different place — one is an admin granting access, the other is hoisting a
+        // building. Saying "the table has no rows yet" to someone who simply cannot see any
+        // of them sends them hunting for missing data that is sitting right there.
+        : !rows.length && isUnallocated(s.account)
+          ? "You are not allocated to any building yet, so this table is empty for your account — the portfolio itself may be full. Ask an admin to allocate you, or to change your role to admin."
         : !rows.length && s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
         : !rows.length ? "Waiting for svc-operations-intelligence."
         : "No buildings match “" + query + "”. Try a name, building ID, country or state.",

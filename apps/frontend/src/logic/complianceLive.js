@@ -11,6 +11,7 @@ import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
 import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 import { errorFromAnswer } from './chat.js';
+import { isStaleScope } from '../api/client.js';
 
 // The backend spells the Emirates "UAE"; the shell spells it "AE" (PACKS, CC_OF).
 const COUNTRY = {
@@ -565,6 +566,10 @@ export const complianceLiveMethods = {
       });
       if (opts && opts.announce) this.flash("Compliance register loaded — " + certificates.length + " certificates");
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._ccAttempts = (this._ccAttempts || 0) + 1;
       this.setState({ ccLoading: false, ccError: msg });

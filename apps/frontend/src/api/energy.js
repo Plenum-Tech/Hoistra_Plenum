@@ -3,11 +3,14 @@
 // the Energy module uses (anomalies, meters). Routes:
 // apps/backend/.../svc-operations-intelligence/src/api/routes/energy.py, mounted at
 // /backend/ops-intelligence/.
-import { BASES, ORG_ID, apiFetch } from './client.js';
+import { BASES, currentOrgId, apiFetch } from './client.js';
 
 const B = BASES.opsIntelligence;
 const enc = encodeURIComponent;
-const withOrg = (q) => (ORG_ID ? Object.assign({ organization_id: ORG_ID }, q || {}) : (q || {}));
+// currentOrgId() is ORG_ID (the build's default tenant) unless a superadmin is viewing
+// as another company, in which case that company's id takes over for every read here —
+// including listBuildings(), now that /api/energy/buildings accepts the override too.
+const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
 
 export const energyApi = {
   // Every site with its energy profile, latest EUI, the benchmark it reads against (and
@@ -49,6 +52,10 @@ export const energyApi = {
   // Which plant is driving spend on this building, ranked by billed-vs-contracted gap.
   costDrivers: (buildingId, limit) =>
     apiFetch(B, '/api/energy/buildings/' + enc(buildingId) + '/cost-drivers', { query: { limit: limit || 25 }, timeoutMs: 20000 }),
+  // Every work order billed against one asset, with billed vs. over-contract amounts.
+  // Billed and over-contract are different numbers and are never added together.
+  assetWorkHistory: (assetId) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/work-history', { timeoutMs: 20000 }),
 
   // ── Energy module reads ──────────────────────────────────────────────────
   // Open anomalies, newest first. Rows carry raw site_id / asset_id / meter_id (UUIDs), no

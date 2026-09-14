@@ -51,6 +51,7 @@ async def list_all_approvals(
         status=status,
         source_feature=source_feature,
         limit=limit,
+        scope=s,
     )
     return {
         "ok": True,

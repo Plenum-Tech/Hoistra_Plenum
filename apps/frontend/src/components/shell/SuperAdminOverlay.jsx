@@ -10,9 +10,9 @@ export default function SuperAdminOverlay({ vals }) {
         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "12px", color: "var(--color-neutral-300)" }}>{"superadmin.hoistra.com"}</span>
         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.09em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: "var(--color-accent)", color: "var(--accent-ink)" }}>{"Platform operator"}</span>
         <div style={{ flex: "1" }}></div>
-        <div className="hv4" onClick={vals.saClose} style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", padding: "6px 13px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-          <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
-          <span>{"Back to Hoistra"}</span>
+        <div className="hv4" onClick={vals.signOut} style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", padding: "6px 13px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+          <i className="ph ph-power" style={{ fontSize: "12px" }}></i>
+          <span>{"Sign out"}</span>
         </div>
       </div>
       <div style={{ maxWidth: "1280px", margin: "0 auto", padding: "28px 40px 90px" }}>
@@ -67,9 +67,22 @@ export default function SuperAdminOverlay({ vals }) {
                 <h2 style={{ fontSize: "22px", margin: "0", lineHeight: "1.15" }}>{vals.saCo.name}</h2>
                 <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.saCo.cc}{" · "}{vals.saCo.status}</span>
               </div>
-              <div className="hv25" onClick={vals.saCo.invite} style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
-                <i className="ph ph-paper-plane-tilt" style={{ fontSize: "13px" }}></i>
-                <span>{vals.saCo.inviteLabel}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {vals.saCo.viewAsShow ? (
+                  <div
+                    className="hv25"
+                    onClick={vals.saCo.viewAsCurrent ? undefined : vals.saCo.viewAs}
+                    title={vals.saCo.viewAsCurrent ? "You are viewing this company's data now" : "See Buildings, Compliance, Vendors, Home, Users & access and Audit trail as this company"}
+                    style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: vals.saCo.viewAsCurrent ? "var(--color-neutral-500)" : "var(--color-neutral-300)", cursor: vals.saCo.viewAsCurrent ? "default" : "pointer" }}
+                  >
+                    <i className="ph ph-eye" style={{ fontSize: "13px" }}></i>
+                    <span>{vals.saCo.viewAsCurrent ? "Currently viewing" : "View as this company"}</span>
+                  </div>
+                ) : null}
+                <div className="hv25" onClick={vals.saCo.invite} style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
+                  <i className="ph ph-paper-plane-tilt" style={{ fontSize: "13px" }}></i>
+                  <span>{vals.saCo.inviteLabel}</span>
+                </div>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: "11px", marginTop: "16px" }}>

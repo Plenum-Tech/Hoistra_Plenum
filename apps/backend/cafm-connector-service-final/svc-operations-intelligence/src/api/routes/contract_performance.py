@@ -363,7 +363,7 @@ async def vendors_saved_space_summary(
     )
     weights = await score_svc.get_or_create_weights(session, organization_id)
     approvals = await approvals_svc.list_queue(
-        session, source_feature="B", status="pending", organization_id=organization_id
+        session, source_feature="B", status="pending", organization_id=organization_id, scope=s
     )
     crit = await params_svc.list_asset_criticalities(
         session, organization_id=organization_id, approved=False, limit=50,
@@ -527,6 +527,7 @@ async def list_approvals(
         source_feature="B",
         status=status,
         organization_id=organization_id,
+        scope=s,
     )
     return {
         "ok": True,

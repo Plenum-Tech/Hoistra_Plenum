@@ -14,6 +14,7 @@
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { workOrderApi } from '../api/workOrder.js';
+import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -101,6 +102,10 @@ export const maintenanceLiveMethods = {
       });
       if (opts && opts.announce) this.flash('Work order register loaded — ' + ((workOrders || []).length) + ' on record');
     } catch (e) {
+      // The company changed while this read was in flight: api/client.js disowned the
+      // response, and the switch has already started a correctly-scoped read. Reporting
+      // it would put a spurious error on a register that is loading perfectly well.
+      if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._mxLiveAttempts = (this._mxLiveAttempts || 0) + 1;
       this.setState({ mxLiveLoading: false, mxLiveError: msg });

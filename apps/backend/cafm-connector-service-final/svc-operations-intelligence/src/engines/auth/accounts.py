@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import settings
 from ...core.logging import get_logger
 from ...shared.approvals import send_platform_email
+from ...shared.email_template import wrap_html
 from . import otp as otp_engine
 from . import roles as role_engine
 from .otp import EMAIL_VERIFICATION, PASSWORD_RESET, normalise_email
@@ -100,10 +101,12 @@ def _aware(value: datetime | None) -> datetime | None:
 # role. users.role is CAFM's column and holds the JOB TITLE — 'HVAC Specialist',
 # 'Maintenance Planner' — which is a different question about the same person and was
 # never this service's to read, let alone to constrain.
-_SELECT = """SELECT id, email, full_name, organization_id, status, email_verified,
-                    password_hash, password_changed_at, failed_login_count, locked_until,
-                    platform_role AS role, last_login_at
-             FROM plenum_cafm.users"""
+_SELECT = """SELECT u.id, u.email, u.full_name, u.organization_id, u.status,
+                    u.email_verified, u.password_hash, u.password_changed_at,
+                    u.failed_login_count, u.locked_until,
+                    u.platform_role AS role, u.last_login_at, o.name AS organization_name
+             FROM plenum_cafm.users u
+             LEFT JOIN plenum_cafm.organizations o ON o.id = u.organization_id"""
 
 
 def _account(row: Any) -> Account:
@@ -122,7 +125,7 @@ async def find_by_email(session: AsyncSession, email: str, *, lock: bool = False
     """The account for an address, matched case-insensitively, or None."""
     row = (
         await session.execute(
-            text(f"{_SELECT} WHERE lower(email) = :e" + (" FOR UPDATE" if lock else "")),
+            text(f"{_SELECT} WHERE lower(u.email) = :e" + (" FOR UPDATE OF u" if lock else "")),
             {"e": normalise_email(email)},
         )
     ).mappings().first()
@@ -210,8 +213,8 @@ async def resolve_organization(
 # ── the emails ───────────────────────────────────────────────────────────────────────
 
 
-def _code_email(code: str, minutes: int, *, purpose: str, name: str) -> tuple[str, str, str]:
-    """Subject, body, and the redacted body that goes in the email log."""
+def _code_email(code: str, minutes: int, *, purpose: str, name: str) -> tuple[str, str, str, str]:
+    """Subject, plain-text body, HTML body, and the redacted body that goes in the email log."""
     who = (name or "").split(" ")[0] or "there"
     if purpose == EMAIL_VERIFICATION:
         subject = "Confirm your Hoistra email address"
@@ -221,18 +224,25 @@ def _code_email(code: str, minutes: int, *, purpose: str, name: str) -> tuple[st
         subject = "Reset your Hoistra password"
         lead = ("Someone asked to reset the Hoistra password for this address. "
                 "Use this code to set a new one:")
+    footnote = ("If this was not you, ignore this message — nothing has changed, and "
+                "whoever asked cannot proceed without the code.")
     body = (
         f"Hello {who},\n\n{lead}\n\n"
         f"    {code}\n\n"
         f"The code is valid for {minutes} minutes and can be used once.\n\n"
-        "If this was not you, ignore this message — nothing has changed, and whoever "
-        "asked cannot proceed without the code.\n\n"
+        f"{footnote}\n\n"
         "Hoistra"
+    )
+    html = wrap_html(
+        heading=subject,
+        lines=[f"Hello {who},", lead, f"The code is valid for {minutes} minutes and can be used once."],
+        code=code,
+        footnote=footnote,
     )
     # What the audit row keeps. The code is the one part that must not survive the ten
     # minutes it is alive for.
     redacted = body.replace(code, "[code redacted — not stored]")
-    return subject, body, redacted
+    return subject, body, html, redacted
 
 
 async def _send_code(
@@ -248,14 +258,19 @@ async def _send_code(
                 "retry_after_seconds": issued.retry_after_seconds,
                 "message": issued.message}
 
-    subject, body, redacted = _code_email(
+    subject, body, html, redacted = _code_email(
         issued.code, issued.ttl_minutes, purpose=purpose, name=name,
     )
     delivery = await send_platform_email(
-        session, to_address=email, subject=subject, body=body,
+        session, to_address=email, subject=subject, body=body, html_body=html,
         organization_id=_mail_org(organization_id), commit=False, log_body=redacted,
     )
-    return {"sent": True, "rate_limited": False,
+    # `sent` says whether the code actually LEFT — not merely that the send was attempted.
+    # send_platform_email() answers ok=True for a dry run and for "no transport configured"
+    # alike, so a caller that trusted the call's success logged code_sent=True while the
+    # mailbox got nothing. No caller branches on this for control flow (only a log line
+    # reads it), so the honest value costs nothing and makes a silent non-delivery visible.
+    return {"sent": delivery.get("status") == "sent", "rate_limited": False,
             "delivery_status": delivery.get("status"),
             "expires_at": issued.expires_at.isoformat(),
             "ttl_minutes": issued.ttl_minutes}
@@ -798,7 +813,7 @@ async def change_password(
     """Change a password from inside a signed-in session, using the current one."""
     row = (
         await session.execute(
-            text(f"{_SELECT} WHERE id = :i FOR UPDATE"),
+            text(f"{_SELECT} WHERE u.id = :i FOR UPDATE OF u"),
             {"i": await keys.user_key(session, user_id)},
         )
     ).mappings().first()
@@ -865,6 +880,11 @@ def public_user(row: Any) -> dict[str, Any]:
         "email": row["email"],
         "full_name": row["full_name"],
         "organization_id": str(row["organization_id"]) if row["organization_id"] else None,
+        # Only _SELECT's own row carries this (the join lives there, not on every caller
+        # of public_user) — absent elsewhere is a real "not fetched", not "no company".
+        "organization_name": (
+            row["organization_name"] if "organization_name" in row.keys() else None
+        ),
         "status": row["status"],
         "email_verified": bool(row["email_verified"]),
         "role": str(row["role"] or role_engine.DEFAULT_ROLE),
@@ -916,7 +936,7 @@ async def set_role(
 
     row = (
         await session.execute(
-            text(f"{_SELECT} WHERE id = :i FOR UPDATE"),
+            text(f"{_SELECT} WHERE u.id = :i FOR UPDATE OF u"),
             {"i": await keys.user_key(session, target_user_id)},
         )
     ).mappings().first()

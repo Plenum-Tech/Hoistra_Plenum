@@ -99,10 +99,14 @@ export function useFollowBottom({ container, end, busy, count }) { // eslint-dis
     target.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("keydown", onKey);
 
-    // Content that grows between renders (streamed text, late layout) starts the glide too.
+    // Content that grows between renders (streamed text, late layout) starts the glide too —
+    // but only while an answer is actually streaming. The dock's scroll region also holds
+    // forms (the Hoist Building card, use-mix totals, etc.), and those mutate on every
+    // keystroke; without the busy gate, editing a field anywhere would yank the reader back
+    // to the bottom mid-edit instead of leaving them where they are.
     const watched = el || document.body;
     const mo = typeof MutationObserver !== "undefined" && watched
-      ? new MutationObserver(() => follow()) : null;
+      ? new MutationObserver(() => { if (busyRef.current) follow(); }) : null;
     if (mo) mo.observe(watched, { childList: true, subtree: true, characterData: true });
 
     follow();

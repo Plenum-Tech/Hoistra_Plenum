@@ -32,15 +32,21 @@ const vendors = {
     { id: 'v4', name: 'Unscored', score: null, blocked: false }
   ]
 };
+// This whole fixture set is one account's view — ME. shapeSpaces() narrows both the saved
+// spaces list and the session counts to whoever is asking (svc-udr's own list has no
+// per-user filter, and the session array is one shared browser store — see the comment
+// on shapeSpaces() itself), so every row below that should be visible to the tests is
+// owned by ME; ownership exclusion itself gets its own test further down.
+const ME = 'me@example.com';
 const saved = [
-  { id: 'sp-1', organization_id: null, name: 'Tower 3 certificates', kind: 'custom', created_by: null, created_at: '2026-09-08T10:00:00+00:00' },
-  { id: 'sp-2', organization_id: null, name: 'Vendor X', kind: 'custom', created_by: 'a@b.c', created_at: '2026-09-07T10:00:00+00:00' }
+  { id: 'sp-1', organization_id: null, name: 'Tower 3 certificates', kind: 'custom', created_by: ME, created_at: '2026-09-08T10:00:00+00:00' },
+  { id: 'sp-2', organization_id: null, name: 'Vendor X', kind: 'custom', created_by: ME, created_at: '2026-09-07T10:00:00+00:00' }
 ];
 const sessions = [
-  { id: 's1', kind: 'chat', domain: 'Compliance', spaceId: null },
-  { id: 's2', kind: 'chat', domain: 'Compliance', spaceId: 'sp-1' },
-  { id: 's3', kind: 'chat', domain: 'Energy', spaceId: null },
-  { id: 's4', kind: 'task', domain: 'Orchestrator', spaceId: null }
+  { id: 's1', kind: 'chat', domain: 'Compliance', spaceId: null, owner: ME },
+  { id: 's2', kind: 'chat', domain: 'Compliance', spaceId: 'sp-1', owner: ME },
+  { id: 's3', kind: 'chat', domain: 'Energy', spaceId: null, owner: ME },
+  { id: 's4', kind: 'task', domain: 'Orchestrator', spaceId: null, owner: ME }
 ];
 
 test('the four built-in spaces are always present, in the navigator order', () => {
@@ -58,7 +64,7 @@ test('the four built-in spaces are always present, in the navigator order', () =
 });
 
 test('compliance badge is the lapsed certificates across buildings and vendors', () => {
-  const m = shapeSpaces({ home: { compliance }, vendors: { live: false, vendors: [] }, saved: null, sessions });
+  const m = shapeSpaces({ home: { compliance }, vendors: { live: false, vendors: [] }, saved: null, sessions, owner: ME });
   const c = m.byKey.compliance;
   assert.equal(c.badge, '15 lapsed');
   assert.equal(c.count, 15);
@@ -71,7 +77,7 @@ test('compliance badge is the lapsed certificates across buildings and vendors',
 });
 
 test('energy badge is the open anomalies with their annualised exposure', () => {
-  const m = shapeSpaces({ home: { anomalies }, vendors: { live: false, vendors: [] }, saved: null, sessions });
+  const m = shapeSpaces({ home: { anomalies }, vendors: { live: false, vendors: [] }, saved: null, sessions, owner: ME });
   const e = m.byKey.energy;
   assert.equal(e.badge, '3 anomalies');
   assert.equal(e.tone, 'warn');
@@ -101,13 +107,26 @@ test('vendor operations badge is the pending approvals, marked when the page cap
 });
 
 test('saved spaces from svc-udr list newest first with the sessions filed in them', () => {
-  const m = shapeSpaces({ home: null, vendors: { live: false, vendors: [] }, saved, sessions });
+  const m = shapeSpaces({ home: null, vendors: { live: false, vendors: [] }, saved, sessions, owner: ME });
   assert.equal(m.savedLive, true);
   assert.deepEqual(m.custom.map((c) => c.name), ['Tower 3 certificates', 'Vendor X']);
   assert.equal(m.custom[0].sessions, 1);
   assert.equal(m.custom[1].sessions, 0);
   assert.equal(m.byKey['sp-1'].name, 'Tower 3 certificates');
   assert.equal(m.byKey['sp-1'].custom, true);
+});
+
+test('a space created by, or a session asked by, a different account never shows — svc-udr and the browser store are both shared, not per-user', () => {
+  const theirs = [
+    { id: 'sp-9', organization_id: null, name: 'Not mine', kind: 'custom', created_by: 'someone.else@example.com', created_at: '2026-09-09T10:00:00+00:00' }
+  ];
+  const m = shapeSpaces({ home: { compliance }, vendors: { live: false, vendors: [] }, saved: saved.concat(theirs), sessions, owner: ME });
+  assert.deepEqual(m.custom.map((c) => c.name), ['Tower 3 certificates', 'Vendor X'], 'the other account\'s space is filtered out, not just re-sorted');
+  assert.equal(m.byKey.compliance.sessions, 2, 'the session counts are still MY sessions only');
+
+  const noOwner = shapeSpaces({ home: null, vendors: { live: false, vendors: [] }, saved, sessions });
+  assert.deepEqual(noOwner.custom, [], 'not signed in (no owner) shows no custom spaces, never everyone\'s');
+  assert.equal(noOwner.byKey.compliance.sessions, 0);
 });
 
 test('a svc-udr failure is reported without hiding the built-in spaces', () => {

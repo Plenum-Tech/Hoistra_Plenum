@@ -484,6 +484,7 @@ async def saved_space_summary(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
+    scope: Any | None = None,
 ) -> dict[str, Any]:
     rq = select(EnergyMonthlyReport).order_by(EnergyMonthlyReport.report_month.desc()).limit(12)
     if organization_id:
@@ -499,6 +500,23 @@ async def saved_space_summary(
     if organization_id:
         rq_rec = rq_rec.where(EnergyRecommendation.organization_id == organization_id)
     open_recs = list((await session.execute(rq_rec)).scalars().all())
+
+    # Both reports and anomalies key on site_id, same as /meters and /anomalies — narrow
+    # them to a building-restricted caller's allocation before the KPI counts below are
+    # computed, so the counts and the lists they summarise never disagree. open_recs is
+    # NOT narrowed here: EnergyRecommendation keys on asset_id, not a site, and resolving
+    # that to a building needs an assets join this function does not have — a known gap.
+    if scope is not None and getattr(scope, "restricted", False):
+        from . import buildings as bld_svc
+
+        site_map = await bld_svc.site_to_buildings(session)
+
+        def _site_allowed(site_id: Any) -> bool:
+            bids = site_map.get(str(site_id or "").strip()) or []
+            return len(bids) == 1 and scope.allows_building(bids[0])
+
+        reports = [r for r in reports if _site_allowed(r.site_id)]
+        open_anom = [a for a in open_anom if _site_allowed(a.site_id)]
 
     return {
         "ok": True,

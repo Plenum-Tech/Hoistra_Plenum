@@ -64,9 +64,33 @@ def test_allocated_to_nothing_is_an_empty_tuple_not_none():
 
 # ── the predicate ─────────────────────────────────────────────────────────────
 
-def test_scope_select_leaves_an_admin_query_alone():
+def test_scope_select_bounds_an_admin_to_their_own_company():
+    """`building_ids is None` means "every building in the company" — the company, not every
+    company (services/principal.py's own docstring). This used to return the query untouched,
+    so any admin listing work orders, assets or locations received every other tenant's rows.
+    The rows carry no organization of their own, so the boundary runs through
+    plenum_cafm.buildings, which does."""
+    org = uuid4()
+    p = P.Principal(user_id=uuid4(), email="x@example.com", organization_id=org,
+                    role="admin", building_ids=None)
+    sql = compiled(P.scope_select(select(WorkOrder), p, WorkOrder.building_id))
+    assert "WHERE" in sql, "an admin query must carry a boundary"
+    assert "plenum_cafm.buildings" in sql
+    assert "organization_id" in sql
+
+
+def test_scope_select_still_lets_a_superadmin_read_across_companies():
+    """The one role meant to see every tenant keeps doing so."""
     q = select(WorkOrder)
-    assert P.scope_select(q, make(None), WorkOrder.building_id) is q
+    p = P.Principal(user_id=uuid4(), email="x@example.com", organization_id=uuid4(),
+                    role="superadmin", building_ids=None)
+    assert P.scope_select(q, p, WorkOrder.building_id) is q
+
+
+def test_scope_select_fails_closed_for_a_principal_with_no_company():
+    """Failing closed is the only safe default for a tenancy boundary. No active account is
+    in this state, so nothing legitimate is refused by it."""
+    assert "WHERE false" in compiled(P.scope_select(select(WorkOrder), make(None), WorkOrder.building_id))
 
 
 def test_scope_select_narrows_a_user_to_their_buildings():

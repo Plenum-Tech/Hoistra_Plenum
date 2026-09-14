@@ -182,23 +182,65 @@ globalThis.fetch = (url, opts) => {
 
 const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
 const { superAdminLiveMethods } = await import('../src/logic/superAdminLive.js');
+const { getActingOrg, setActingOrg } = await import('../src/api/client.js');
 Object.assign(HoistraLogic.prototype, superAdminLiveMethods);
 
 const B = '/backend/ops-intelligence/api/superadmin';
+const settle = (ms) => new Promise((r) => setTimeout(r, ms || 10));
 let c;
+// viewAsCompany()/exitViewAsCompany() fire loadLiveData()/usLiveLoad()/auLiveLoad() —
+// the same full set core.js's mount fires — none of which this file's own tests await, so
+// every one of their timer fields must be cleared here too, not just the superadmin ones.
 function drop() {
   if (!c) return;
   clearTimeout(c._tt); clearTimeout(c._saLiveRetry); clearTimeout(c._saLiveRefresh);
+  clearTimeout(c._ccRetry); clearTimeout(c._homeRetry); clearTimeout(c._homeRefresh);
+  clearTimeout(c._vpRetry); clearTimeout(c._vpRefresh); clearTimeout(c._bldRetry);
+  clearTimeout(c._enRetry); clearTimeout(c._enPosRetry);
+  clearTimeout(c._asLiveRetry); clearTimeout(c._mxLiveRetry); clearTimeout(c._spRetry);
+  clearTimeout(c._usLiveRetry); clearTimeout(c._usLiveRefresh); clearTimeout(c._auLiveRetry);
   c = null;
 }
 function fresh(r) {
   drop();
   routes = r || {};
   calls = [];
+  setActingOrg(null);
   c = new HoistraLogic();
   return c;
 }
 afterEach(drop);
+
+// Every route loadLiveData()/usLiveLoad()/auLiveLoad() touch, all answering clean so
+// viewAsCompany()'s reload never arms a retry timer in these tests. Bodies shaped only as
+// far as each loader destructures — see auth.test.mjs's liveMock() for the same list.
+const OI = '/backend/ops-intelligence';
+const WO = '/backend/work-order';
+const ADM = OI + '/api/admin';
+const liveRoutes = () => ({
+  ['GET ' + OI + '/api/approvals']: { ok: true, items: [] },
+  ['GET ' + OI + '/api/compliance/saved-space/summary']: { ok: true },
+  ['GET ' + OI + '/api/contract-performance/contracts']: { ok: true, contracts: [] },
+  ['GET ' + OI + '/api/energy/meters']: { ok: true, meters: [] },
+  ['GET ' + OI + '/api/energy/anomalies']: { ok: true, anomalies: [] },
+  ['GET ' + OI + '/api/compliance/certificates']: { ok: true, certificates: [] },
+  ['GET ' + OI + '/api/compliance/coverage/buildings']: { ok: true, buildings: [] },
+  ['GET ' + OI + '/api/compliance/coverage/vendors']: { ok: true, vendors: [] },
+  ['GET ' + OI + '/api/compliance/country-pack']: { ok: true, types: [] },
+  ['GET ' + OI + '/api/contract-performance/saved-space/summary']: { ok: true },
+  ['GET ' + OI + '/api/contract-performance/admin/weights']: { ok: true },
+  ['GET ' + OI + '/api/contract-performance/approvals']: { ok: true, items: [] },
+  ['GET ' + OI + '/api/energy/buildings']: { ok: true, buildings: [] },
+  ['GET ' + OI + '/api/energy/graph/shape']: { ok: true },
+  ['GET ' + OI + '/api/energy/graph/tables']: { ok: true, tables: [] },
+  ['GET ' + OI + '/api/energy/ratings/position']: { ok: true, tiles: [] },
+  ['GET ' + WO + '/api/assets']: [],
+  ['GET ' + WO + '/api/work-orders/']: [],
+  ['GET ' + WO + '/api/dashboard/stats']: {},
+  ['GET ' + ADM + '/users']: { ok: true, count: 0, summary: { users: 0, can_ingest: 0, pending_invites: 0, access_boundary: 'building' }, users: [] },
+  ['GET ' + ADM + '/buildings']: { ok: true, count: 0, buildings: [] },
+  ['GET ' + ADM + '/ingestion-audit']: { ok: true, count: 0, entries: [] }
+});
 
 test('saLiveLoad replaces the seed in place, re-points the selection and pulls the selected card', async () => {
   fresh({
@@ -321,4 +363,182 @@ test('a failed load keeps the seed, surfaces the error and schedules a retry —
   await c.saLiveLoad();
   assert.match(c.state.saLiveError, /superadmin role/);
   assert.ok(!c._saLiveRetry, 'a role refusal is not retried on a timer');
+});
+
+// ── viewAsCompany / exitViewAsCompany ─────────────────────────────────────────────────
+
+test("saVals' saCo only offers View as on a live row, and marks the one currently viewed", () => {
+  fresh({});
+  // The seed's selected row ("c1") is not live — no real organization_id to act as.
+  assert.equal(c.saVals(c.state).saCo.viewAsShow, false);
+  c.setState({
+    saCompanies: [{ id: ORG1, name: 'Plenum Group', cc: 'UK', status: 'Active', live: true, credits: 100 }],
+    saSel: ORG1
+  });
+  let v = c.saVals(c.state);
+  assert.equal(v.saCo.viewAsShow, true);
+  assert.equal(v.saCo.viewAsCurrent, false);
+  c.setState({ viewOrgId: ORG1 });
+  v = c.saVals(c.state);
+  assert.equal(v.saCo.viewAsCurrent, true, 'the row being acted as is marked, once it is');
+});
+
+test('viewAsCompany switches the override, re-fetches every reader that honours it, and lands in Admin view', async () => {
+  fresh(Object.assign(
+    { ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1 },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.setState({ saOn: true }); // as if the console were already open
+  assert.equal(getActingOrg(), null);
+
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+
+  assert.equal(getActingOrg(), ORG1, 'the api layer now sends this company on every read');
+  assert.equal(c.state.viewOrgId, ORG1);
+  assert.equal(c.state.viewOrgName, 'Plenum Group');
+  assert.equal(c.state.saOn, false, 'drops out of the console');
+  assert.equal(c.state.role, 'admin');
+  assert.equal(c.state.view, 'home');
+  assert.match(c.state.toast, /Viewing as Plenum Group/);
+
+  const users = calls.find((x) => x.key === 'GET ' + ADM + '/users');
+  const buildings = calls.find((x) => x.key === 'GET ' + OI + '/api/energy/buildings');
+  assert.ok(users && users.search.includes('organization_id=' + ORG1), 'Users & access re-read as the chosen company');
+  assert.ok(buildings && buildings.search.includes('organization_id=' + ORG1), 'the Buildings report re-read as the chosen company too');
+
+  assert.equal(c._ccRetry, undefined, 'every reader answered clean — nothing left to retry');
+});
+
+// PATCH /api/auth/me/selected-building validates a choice against the caller's OWN
+// company, with no acting-as override at all — engines/auth/access.py's scope_for()
+// still re-applies whatever is already stored, regardless of which org is being acted
+// as. A selection made earlier on the superadmin's own company, left in place, would
+// silently narrow every read of the ACTED-AS company to a building id that belongs to
+// neither: not an error, just quietly empty or wrong results. viewAsCompany must clear
+// it, both locally and on the server, before the switch takes effect.
+test('viewAsCompany clears a stale selected_building_id — it would otherwise narrow the acted-as company to the superadmin\'s own building', async () => {
+  const OWN_BUILDING = '99999999-9999-4999-8999-999999999999';
+  fresh(Object.assign(
+    {
+      ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1,
+      ['PATCH ' + OI + '/api/auth/me/selected-building']: { ok: true, selected_building_id: null }
+    },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.setState({
+    saOn: true,
+    account: {
+      id: 'sa-1', email: 'sadie@example.com', full_name: 'Sadie Superadmin', role: 'superadmin', status: 'active',
+      selected_building_id: OWN_BUILDING, buildings: [{ id: OWN_BUILDING, name: 'Sadie\'s HQ' }]
+    }
+  });
+
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+
+  assert.equal(c.state.account.selected_building_id, null, 'cleared before the switch takes effect');
+  const patch = calls.find((x) => x.key === 'PATCH ' + OI + '/api/auth/me/selected-building');
+  assert.ok(patch, 'cleared on the server too, not just in local state');
+  assert.deepEqual(patch.body, { building_id: null });
+});
+
+test('exitViewAsCompany gives the superadmin their own building selection back', async () => {
+  const OWN_BUILDING = '99999999-9999-4999-8999-999999999999';
+  fresh(Object.assign(
+    {
+      ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1,
+      ['PATCH ' + OI + '/api/auth/me/selected-building']: { ok: true, selected_building_id: null }
+    },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.setState({
+    saOn: true,
+    account: { id: 'sa-1', email: 'sadie@example.com', full_name: 'Sadie', role: 'superadmin', status: 'active', selected_building_id: OWN_BUILDING }
+  });
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+  assert.equal(c.state.account.selected_building_id, null, 'suppressed while acting as someone else');
+
+  calls = [];
+  c.exitViewAsCompany();
+  await settle();
+
+  assert.equal(c.state.account.selected_building_id, OWN_BUILDING, 'handed back on the way out, not lost');
+  const patch = calls.find((x) => x.key === 'PATCH ' + OI + '/api/auth/me/selected-building');
+  assert.ok(patch, 'restored on the server too');
+  assert.deepEqual(patch.body, { building_id: OWN_BUILDING });
+});
+
+test('switching straight from one company to another keeps the original selection for the eventual exit', async () => {
+  const OWN_BUILDING = '99999999-9999-4999-8999-999999999999';
+  fresh(Object.assign(
+    {
+      ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+      ['GET ' + B + '/companies/' + ORG1]: CARD1, ['GET ' + B + '/companies/' + ORG2]: CARD2,
+      ['PATCH ' + OI + '/api/auth/me/selected-building']: { ok: true, selected_building_id: null }
+    },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.setState({
+    saOn: true,
+    account: { id: 'sa-1', email: 'sadie@example.com', full_name: 'Sadie', role: 'superadmin', status: 'active', selected_building_id: OWN_BUILDING }
+  });
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+  c.viewAsCompany(ORG2, 'Gulf Estates FZ'); // straight across, never exiting in between
+  await settle();
+  assert.equal(c.state.viewOrgId, ORG2);
+  assert.equal(c.state.account.selected_building_id, null);
+
+  c.exitViewAsCompany();
+  await settle();
+  assert.equal(c.state.account.selected_building_id, OWN_BUILDING, 'the second switch must not have overwritten what the first one saved');
+});
+
+test('viewAsCompany with no prior selection sends no clearing PATCH at all', async () => {
+  fresh(Object.assign(
+    { ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1 },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.setState({ saOn: true, account: { id: 'sa-1', email: 'sadie@example.com', full_name: 'Sadie', role: 'superadmin', status: 'active', selected_building_id: null } });
+
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+
+  assert.equal(calls.some((x) => x.key === 'PATCH ' + OI + '/api/auth/me/selected-building'), false);
+});
+
+test('exitViewAsCompany clears the override and goes back to reading the caller\'s own company', async () => {
+  fresh(Object.assign(
+    { ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1 },
+    liveRoutes()
+  ));
+  await c.saLiveLoad();
+  c.viewAsCompany(ORG1, 'Plenum Group');
+  await settle();
+  assert.equal(getActingOrg(), ORG1);
+
+  calls = [];
+  c.exitViewAsCompany();
+  await settle();
+
+  assert.equal(getActingOrg(), null);
+  assert.equal(c.state.viewOrgId, null);
+  assert.equal(c.state.viewOrgName, null);
+  assert.match(c.state.toast, /Back to your own account.*Plenum Group/);
+  const users = calls.find((x) => x.key === 'GET ' + ADM + '/users');
+  assert.ok(users && !users.search.includes('organization_id='), 'no longer overriding the company on reads');
+});
+
+test('exitViewAsCompany is a no-op when nothing is being viewed as', () => {
+  fresh({});
+  assert.equal(c.state.viewOrgId, null);
+  c.exitViewAsCompany();
+  assert.equal(c.state.toast, '', 'no flash, no state churn, when there was nothing to exit');
 });

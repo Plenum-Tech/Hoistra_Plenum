@@ -10,6 +10,7 @@ long it took, or why it failed.
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -448,6 +449,47 @@ async def _ask_orchestrator(card: ReportCard, token: str, *, http: httpx.AsyncCl
     return body
 
 
+def rich_from_tool_calls(tool_calls: list[Any]) -> dict[str, Any] | None:
+    """The structured answer, lifted out of the orchestrator's tool OUTPUTS.
+
+    The compliance preflight returns its whole card-shaped payload — kpis, groups, actions,
+    insights, certificates, pending — as the output of the `compliance_response` tool, and
+    the pipeline trace as the output of `compliance_pipeline`. Only the answer prose lives
+    in `answer`. So a run that keeps the prose and drops the outputs keeps the least useful
+    half: the report page can then only render a wall of text, which is exactly what it did.
+
+    This mirrors the frontend's extractComplianceAnswer (logic/complianceLive.js) so a
+    server-refreshed card and a chat answer carry the same shape.
+    """
+    def find(name: str) -> dict[str, Any] | None:
+        for t in tool_calls:
+            if not isinstance(t, dict) or t.get("tool") != name:
+                continue
+            out = t.get("output")
+            if isinstance(out, str):
+                try:
+                    out = json.loads(out)
+                except (ValueError, TypeError):
+                    return None
+            return out if isinstance(out, dict) else None
+        return None
+
+    res = find("compliance_response")
+    pipe = find("compliance_pipeline")
+    if res is None and pipe is None:
+        return None
+    r, p = res or {}, pipe or {}
+    lst = lambda v: v if isinstance(v, list) else []  # noqa: E731
+    return {
+        "narrative": r.get("narrative") or "",
+        "sections": lst(r.get("sections")), "groups": lst(r.get("groups")),
+        "kpis": lst(r.get("kpis")), "actions": lst(r.get("actions")),
+        "insights": lst(r.get("insights")), "certificates": lst(r.get("certificates")),
+        "pending": lst(r.get("pending")), "offers": lst(r.get("offers")),
+        "validation": r.get("validation"), "steps": lst(p.get("steps")), "cost": p.get("cost"),
+    }
+
+
 async def run_card(session: AsyncSession, card_id: UUID, *, trigger: str = "schedule",
                    claimed: bool = False, http: httpx.AsyncClient | None = None) -> ReportCardRun | None:
     """One refresh of one card, recorded whatever happens.
@@ -479,6 +521,7 @@ async def run_card(session: AsyncSession, card_id: UUID, *, trigger: str = "sche
         tool_calls = list(body.get("tool_calls") or [])
         if not answer and not tool_calls:
             raise RuntimeError("the orchestrator returned an empty answer")
+        rich = rich_from_tool_calls(tool_calls)
     except OwnerUnavailable as exc:
         error = f"The report's owner cannot be acted for ({exc}); the card is paused."
     except Exception as exc:  # noqa: BLE001 — every failure is a run row, never a lost refresh
