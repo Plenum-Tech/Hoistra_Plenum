@@ -316,9 +316,11 @@ async def plant_position(
             "s": ("no chiller design figures on file" if not ids else "no readings in the window"),
             "tone": "dormant", "basis": "consumption"}}
     worst = max(positions, key=lambda p: p["deviation_pct"] or -999)
+    # assets.id is varchar on one deployment and uuid on another; compared as text the lookup
+    # works on both, where `id = ANY(uuid[])` raised on the varchar one and took the tile down.
     names = (await session.execute(text(
-        "SELECT id::text, asset_code, asset_name FROM plenum_cafm.assets WHERE id = ANY(CAST(:ids AS uuid[]))"),
-        {"ids": [p["asset_id"] for p in positions]})).mappings().all()
+        "SELECT id::text, asset_code, asset_name FROM plenum_cafm.assets WHERE id::text = ANY(CAST(:ids AS text[]))"),
+        {"ids": [str(p["asset_id"]) for p in positions]})).mappings().all()
     label = {n["id"]: (n["asset_code"] or n["asset_name"]) for n in names}
     months = max(1, round(worst["window_days"] / 30))
     return {"ok": True, "chillers": len(ids), "assessed": len(positions), "worst": worst, "positions": positions,
