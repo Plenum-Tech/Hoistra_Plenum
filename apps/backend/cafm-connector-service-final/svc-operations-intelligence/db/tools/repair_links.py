@@ -185,6 +185,104 @@ STEPS = [
            AND NOT EXISTS (SELECT 1 FROM plenum_cafm.energy_meters m WHERE m.site_id = p.site_id)"""),
 ]
 
+# ── Synthetic placement ──────────────────────────────────────────────────────
+# The rows below carry nothing that names a building or a vendor — no site, no location, no
+# placed asset — and the owner has confirmed the whole dataset is synthetic. They are placed by
+# a STABLE spread: md5 of the row's own key modulo the number of candidate buildings/vendors,
+# so the same row lands on the same building every run, every database, and a re-run changes
+# nothing. Candidates are the organisation's named UK buildings (the MixedUse triplicates are
+# excluded) and its uuid-keyed vendors. This is a test-data rule, and it is labelled as one.
+UK_BUILDINGS = """
+    uk AS (
+        SELECT b.building_id, b.organization_id,
+               ROW_NUMBER() OVER (PARTITION BY b.organization_id ORDER BY b.name, b.building_id) - 1 AS slot,
+               COUNT(*) OVER (PARTITION BY b.organization_id) AS n
+          FROM plenum_cafm.buildings b
+          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+         WHERE coalesce(s.country_code, b.raw_metadata->>'country_code') IN ('UK', 'GB')
+           AND b.name NOT LIKE 'MixedUse%')
+"""
+UUID_VENDORS = """
+    vend AS (
+        SELECT v.id::text AS vendor_id, v.organization_id,
+               ROW_NUMBER() OVER (PARTITION BY v.organization_id ORDER BY v.vendor_name, v.id::text) - 1 AS slot,
+               COUNT(*) OVER (PARTITION BY v.organization_id) AS n
+          FROM plenum_cafm.vendors v
+         WHERE v.id::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-')
+"""
+
+
+def _spread(key_expr: str) -> str:
+    """A stable 0..2^31 integer from a row key — the same key always gives the same slot."""
+    return f"(('x' || substr(md5({key_expr}), 1, 8))::bit(32)::int & 2147483647)"
+
+
+SYNTHETIC_STEPS = [
+    ("9 [synthetic] assets.building_id ← stable spread over the organisation's UK buildings",
+     f"""WITH {UK_BUILDINGS}
+         SELECT count(*) FROM plenum_cafm.assets a
+          WHERE a.building_id IS NULL
+            AND EXISTS (SELECT 1 FROM uk WHERE uk.organization_id::text = a.organization_id::text OR a.organization_id IS NULL)""",
+     f"""WITH {UK_BUILDINGS}
+         UPDATE plenum_cafm.assets a SET building_id = uk.building_id
+           FROM uk
+          WHERE a.building_id IS NULL
+            AND (uk.organization_id::text = a.organization_id::text
+                 OR (a.organization_id IS NULL AND uk.organization_id = (SELECT organization_id FROM uk GROUP BY 1 ORDER BY count(*) DESC LIMIT 1)))
+            AND uk.slot = {_spread('a.id::text')} % uk.n"""),
+
+    ("10 [synthetic] work_orders.building_id ← its asset's building, else a stable spread over UK buildings",
+     f"""WITH {UK_BUILDINGS}
+         SELECT count(*) FROM plenum_cafm.work_orders w
+          WHERE w.building_id IS NULL
+            AND (EXISTS (SELECT 1 FROM plenum_cafm.assets a WHERE a.id::text = w.asset_id::text AND a.building_id IS NOT NULL)
+                 OR EXISTS (SELECT 1 FROM uk WHERE uk.organization_id::text = w.organization_id::text OR w.organization_id IS NULL))""",
+     f"""WITH {UK_BUILDINGS},
+         target AS (
+            SELECT w.id, coalesce(
+                (SELECT a.building_id FROM plenum_cafm.assets a WHERE a.id::text = w.asset_id::text),
+                (SELECT uk.building_id FROM uk
+                  WHERE (uk.organization_id::text = w.organization_id::text
+                         OR (w.organization_id IS NULL AND uk.organization_id = (SELECT organization_id FROM uk GROUP BY 1 ORDER BY count(*) DESC LIMIT 1)))
+                    AND uk.slot = {_spread('w.id::text')} % uk.n LIMIT 1)) AS building_id
+              FROM plenum_cafm.work_orders w WHERE w.building_id IS NULL)
+         UPDATE plenum_cafm.work_orders w SET building_id = t.building_id
+           FROM target t WHERE t.id = w.id AND t.building_id IS NOT NULL"""),
+
+    ("11 [synthetic] work_orders.vendor_id ← stable spread over the organisation's uuid-keyed vendors",
+     f"""WITH {UUID_VENDORS}
+         SELECT count(*) FROM plenum_cafm.work_orders w
+          WHERE w.vendor_id IS NULL
+            AND EXISTS (SELECT 1 FROM vend WHERE vend.organization_id::text = w.organization_id::text OR w.organization_id IS NULL)""",
+     f"""WITH {UUID_VENDORS}
+         UPDATE plenum_cafm.work_orders w SET vendor_id = CAST(vend.vendor_id AS uuid)
+           FROM vend
+          WHERE w.vendor_id IS NULL
+            AND (vend.organization_id::text = w.organization_id::text
+                 OR (w.organization_id IS NULL AND vend.organization_id = (SELECT organization_id FROM vend GROUP BY 1 ORDER BY count(*) DESC LIMIT 1)))
+            AND vend.slot = {_spread('w.id::text')} % vend.n"""),
+
+    ("12 [synthetic] vendor_wo_scores.work_order_id that can never resolve by type → cleared (wo_code is the key)",
+     """SELECT count(*) FROM plenum_cafm.vendor_wo_scores s
+         WHERE s.work_order_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.work_orders w WHERE w.id::text = s.work_order_id::text)
+           AND EXISTS (SELECT 1 FROM plenum_cafm.work_orders w WHERE w.work_order_id = s.wo_code)""",
+     """UPDATE plenum_cafm.vendor_wo_scores s SET work_order_id = NULL
+         WHERE s.work_order_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.work_orders w WHERE w.id::text = s.work_order_id::text)
+           AND EXISTS (SELECT 1 FROM plenum_cafm.work_orders w WHERE w.work_order_id = s.wo_code)"""),
+
+    ("13 [synthetic] organizations ← a retired row for every tenant the append-only audit log still names",
+     """SELECT count(DISTINCT a.organization_id) FROM plenum_cafm.ops_audit_log a
+         WHERE a.organization_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)""",
+     """INSERT INTO plenum_cafm.organizations (id, name, status)
+        SELECT DISTINCT a.organization_id, 'Retired scratch tenant ' || right(a.organization_id::text, 4), 'inactive'
+          FROM plenum_cafm.ops_audit_log a
+         WHERE a.organization_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)"""),
+]
+
 REPORT_ONLY = [
     ("audit rows naming an organization that does not exist (append-only; reported, not changed)",
      "SELECT count(*) FROM plenum_cafm.ops_audit_log a WHERE a.organization_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)"),
@@ -201,14 +299,17 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--synthetic", action="store_true",
+                    help="also run the stable-spread placement steps (test data only — see SYNTHETIC_STEPS)")
     args = ap.parse_args()
+    steps = STEPS + (SYNTHETIC_STEPS if args.synthetic else [])
     conn = await asyncpg.connect(dsn_for(args.db), database=args.db, timeout=30)
     print(f"== {args.db} — {'APPLY' if args.apply else 'dry run'}")
     total = 0
     tx = conn.transaction()
     await tx.start()
     try:
-        for name, count_sql, apply_sql in STEPS:
+        for name, count_sql, apply_sql in steps:
             # Each step in its own savepoint: a column one database lacks skips that step, not
             # every step after it (a failed statement otherwise aborts the whole transaction).
             sp = conn.transaction()
