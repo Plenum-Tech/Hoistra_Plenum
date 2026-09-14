@@ -72,12 +72,25 @@ async def building_ids_in_country(
 async def _buildings_in_country(session: AsyncSession, building_ids: list[UUID], country_code: str) -> list[dict[str, Any]]:
     if not building_ids:
         return []
+    # The EUI is the latest derived snapshot (benchmarks.validate writes one per building
+    # from its readings) and only then the figure recorded on the site row — the same
+    # precedence the buildings table applies, so a tile and the table never disagree.
     rows = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name, b.gross_area_sqft,
                coalesce(s.country_code, b.raw_metadata->>'country_code') AS country_code,
-               s.eui_kwh_per_m2, s.benchmark_kwh_per_m2, s.use_type, b.primary_use::text AS primary_use
+               coalesce(snap.eui_kwh_per_m2, s.eui_kwh_per_m2) AS eui_kwh_per_m2,
+               coalesce(snap.benchmark_kwh_per_m2, s.benchmark_kwh_per_m2) AS benchmark_kwh_per_m2,
+               CASE WHEN snap.eui_kwh_per_m2 IS NOT NULL THEN 'derived'
+                    WHEN s.eui_kwh_per_m2 IS NOT NULL THEN 'recorded' END AS eui_source,
+               s.use_type, b.primary_use::text AS primary_use
           FROM plenum_cafm.buildings b
           LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN LATERAL (
+               SELECT e.eui_kwh_per_m2, e.benchmark_kwh_per_m2
+                 FROM plenum_cafm.eui_snapshots e
+                WHERE e.site_id = b.building_id
+                ORDER BY e.period_end DESC, e.created_at DESC
+                LIMIT 1) snap ON true
          WHERE b.building_id = ANY(CAST(:ids AS uuid[]))
     """), {"ids": [str(b) for b in building_ids]})).mappings().all()
     return [dict(r) for r in rows if (r["country_code"] or "").upper() == country_code.upper()]

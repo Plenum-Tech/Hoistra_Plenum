@@ -30,6 +30,7 @@ from ...shared import approvals as approvals_svc
 from ...engines.auth import access
 from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
+from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
@@ -918,6 +919,41 @@ async def ratings_position(
     ids = await position_svc.building_ids_for(session, s, building_id)
     return await position_svc.position(session, country_code=country_code, organization_id=s.organization_id,
                                        building_ids=ids)
+
+
+@router.get("/benchmarks/validation")
+async def benchmark_validation(
+    building_id: UUID | None = None,
+    window_months: int = Query(bench_svc.WINDOW_MONTHS, ge=1, le=36),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Every building in scope against its market's benchmark rule — read-only.
+
+    Per market: how many buildings validate, how many EUIs are derived from readings versus
+    recorded by hand, the priced excess, which ratings tiles have the inputs to show a figure,
+    and for every building that does not validate, exactly what it still needs (meters,
+    readings, floor area, use type, an EPC, comparable buildings, chiller design figures).
+    Nothing is written; POST /benchmarks/validate persists the derived positions."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await bench_svc.validate(session, building_ids=ids, organization_id=s.organization_id,
+                                    persist=False, window_months=window_months)
+
+
+@router.post("/benchmarks/validate")
+async def benchmark_validate(
+    building_id: UUID | None = None,
+    window_months: int = Query(bench_svc.WINDOW_MONTHS, ge=1, le=36),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Run the benchmark validation and persist what it derives: an EUI snapshot per building
+    with readings (so the buildings table, the country tiles and the market profiles all read
+    the same figure), and LL97 / Energy Star positions for US buildings with enough months.
+    The scheduler runs this daily; this is the same run on demand."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await bench_svc.validate(session, building_ids=ids, organization_id=s.organization_id,
+                                    persist=True, window_months=window_months)
 
 
 # ── B9 · chillers ───────────────────────────────────────────────────────────────────────

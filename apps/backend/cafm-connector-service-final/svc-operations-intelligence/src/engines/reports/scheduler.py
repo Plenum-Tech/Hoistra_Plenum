@@ -10,6 +10,7 @@ period rather than left "running" for ever.
 from __future__ import annotations
 
 import asyncio
+import time
 from uuid import UUID
 
 from sqlalchemy import text
@@ -64,9 +65,46 @@ async def recover_stale(session: AsyncSession, *, stale_minutes: int = STALE_RUN
     return len(rows)
 
 
+#: When the benchmark validation last ran in this process (monotonic seconds); None = never.
+_benchmarks_last_run: float | None = None
+
+
+async def validate_benchmarks_if_due(*, force: bool = False) -> dict | None:
+    """Run the portfolio-wide benchmark validation once per configured interval.
+
+    Every building in the database, no caller: the derived EUI is a fact about the building,
+    not about who is looking, and the scoped routes narrow what each caller sees afterwards.
+    The first tick after startup runs it, so a fresh deployment has positions within a minute.
+    """
+    global _benchmarks_last_run
+    if not settings.benchmark_validation_enabled and not force:
+        return None
+    every = max(1, int(settings.benchmark_validation_every_hours)) * 3600
+    now = time.monotonic()
+    if not force and _benchmarks_last_run is not None and now - _benchmarks_last_run < every:
+        return None
+    _benchmarks_last_run = now
+    from sqlalchemy import text as _text
+    from ..energy import benchmarks as bench_engine
+
+    async with AsyncSessionLocal() as session:
+        ids = [UUID(str(r)) for r in (await session.execute(
+            _text("SELECT building_id FROM plenum_cafm.buildings"))).scalars().all()]
+        report = await bench_engine.validate(session, building_ids=ids, organization_id=None, persist=True)
+    log.info("benchmark_validation.run", buildings=report["summary"]["buildings"],
+             validated=report["summary"]["validated"], derived=report["summary"]["derived_from_readings"],
+             snapshots_written=report["snapshots_written"])
+    return report
+
+
 async def tick(*, max_cards: int = 3) -> int:
-    """One pass: recover stale runs, then refresh up to ``max_cards`` due cards in turn."""
+    """One pass: recover stale runs, refresh up to ``max_cards`` due cards, and run the
+    benchmark validation when its interval has elapsed."""
     ran = 0
+    try:
+        await validate_benchmarks_if_due()
+    except Exception as exc:  # noqa: BLE001 — a failed validation must not stop the cards
+        log.warning("benchmark_validation.failed", error=str(exc)[:300])
     async with AsyncSessionLocal() as session:
         await recover_stale(session)
     for _ in range(max_cards):

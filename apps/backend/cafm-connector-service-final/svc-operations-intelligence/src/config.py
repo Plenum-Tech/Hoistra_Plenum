@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     report_run_timeout_seconds: int = Field(
         180, validation_alias=AliasChoices("REPORT_RUN_TIMEOUT_SECONDS", "report_run_timeout_seconds"),
     )
+    # Benchmark validation — every building against its market's rule, derived from its
+    # readings, run by the same in-service scheduler so the Energy page never waits on a click.
+    benchmark_validation_enabled: bool = Field(
+        True, validation_alias=AliasChoices("BENCHMARK_VALIDATION_ENABLED", "benchmark_validation_enabled"),
+    )
+    benchmark_validation_every_hours: int = Field(
+        24, validation_alias=AliasChoices("BENCHMARK_VALIDATION_EVERY_HOURS", "benchmark_validation_every_hours"),
+    )
 
     #: Migration files permitted to remain unapplied without stopping the service.
     #:
