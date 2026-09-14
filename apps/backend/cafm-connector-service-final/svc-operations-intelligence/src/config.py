@@ -86,6 +86,22 @@ class Settings(BaseSettings):
     )
     auto_migrate_on_startup: bool = True
 
+    # Custom reports — cards refreshed on a cadence by the in-service scheduler, each run
+    # asked of the orchestrator as the card's owner.
+    deep_agents_base_url: str = Field(
+        "http://127.0.0.1:8008",
+        validation_alias=AliasChoices("DEEP_AGENTS_BASE_URL", "deep_agents_base_url"),
+    )
+    report_scheduler_enabled: bool = Field(
+        True, validation_alias=AliasChoices("REPORT_SCHEDULER_ENABLED", "report_scheduler_enabled"),
+    )
+    report_scheduler_tick_seconds: int = Field(
+        30, validation_alias=AliasChoices("REPORT_SCHEDULER_TICK_SECONDS", "report_scheduler_tick_seconds"),
+    )
+    report_run_timeout_seconds: int = Field(
+        180, validation_alias=AliasChoices("REPORT_RUN_TIMEOUT_SECONDS", "report_run_timeout_seconds"),
+    )
+
     #: Migration files permitted to remain unapplied without stopping the service.
     #:
     #: Comma-separated filenames. A migration for a table another service owns will never

@@ -5,6 +5,7 @@ from .compliance import router as compliance_router
 from .contract_performance import router as contract_performance_router
 from .energy import router as energy_router
 from .ingestion import router as ingestion_router
+from .reports import router as reports_router
 from .superadmin import router as superadmin_router
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "contract_performance_router",
     "energy_router",
     "ingestion_router",
+    "reports_router",
     "superadmin_router",
 ]

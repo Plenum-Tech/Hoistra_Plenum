@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 import uuid as _uuid
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,7 @@ from .api.routes import (
     contract_performance_router,
     energy_router,
     ingestion_router,
+    reports_router,
     superadmin_router,
 )
 from .config import settings
@@ -68,7 +70,21 @@ async def lifespan(app: FastAPI):
             log.warning(
                 "country_pack.startup_seed_failed", country=country, error=str(exc)
             )
+    # The report clock: due cards refresh on their cadence whether or not a browser is open.
+    # One task per process; several replicas coordinate through the claim query.
+    scheduler_stop = asyncio.Event()
+    scheduler_task = None
+    if settings.report_scheduler_enabled:
+        from .engines.reports import scheduler as report_scheduler
+
+        scheduler_task = asyncio.create_task(report_scheduler.run_forever(scheduler_stop))
     yield
+    scheduler_stop.set()
+    if scheduler_task is not None:
+        try:
+            await asyncio.wait_for(scheduler_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            scheduler_task.cancel()
     log.info("service.shutdown", service=settings.service_name)
 
 
@@ -147,3 +163,4 @@ app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(energy_router)
 app.include_router(ingestion_router)
+app.include_router(reports_router)
