@@ -451,11 +451,18 @@ async def _closed_work_orders(session: AsyncSession, meter: EnergyMeter, since: 
     if not where:
         return []
     try:
-        rows = (await session.execute(_text(f"""
-            SELECT coalesce(closed_at, completed_at) AS closed, coalesce(wo_code, workorder_ref, id::text)
-              FROM plenum_cafm.work_orders
-             WHERE ({' OR '.join(where)}) AND coalesce(closed_at, completed_at) >= :since
-             ORDER BY 1 DESC LIMIT 20"""), params)).all()
+        # In a savepoint: on the deployment where completed_at is a plain timestamp and
+        # closed_at a timestamptz, the bare coalesce raised — and because the error was
+        # caught here, the session was left aborted and every later query in the scan
+        # (weather, BMS trends, the write itself) failed with "transaction is aborted".
+        # The savepoint releases cleanly either way; the casts make both columns one type.
+        async with session.begin_nested():
+            rows = (await session.execute(_text(f"""
+                SELECT coalesce(closed_at, completed_at::timestamptz) AS closed,
+                       coalesce(wo_code, workorder_ref, id::text)
+                  FROM plenum_cafm.work_orders
+                 WHERE ({' OR '.join(where)}) AND coalesce(closed_at, completed_at::timestamptz) >= :since
+                 ORDER BY 1 DESC LIMIT 20"""), params)).all()
     except Exception as exc:  # noqa: BLE001 — a missing column must not stop the scan
         log.warning("energy.anomaly.work_orders_unavailable", error=str(exc)[:160])
         return []
@@ -503,7 +510,14 @@ async def scan_meter_anomalies(
     *,
     meter_id: UUID,
     organization_id: UUID | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
+    """Run every rule this meter's data can arm.
+
+    ``persist=False`` is the same run with nothing written: the hits come back in
+    ``anomalies`` (marked ``dry_run``) and nothing is opened, re-stamped or queued — what the
+    detection-coverage report uses to say which rules fire where, without side effects.
+    """
     meter = await session.get(EnergyMeter, meter_id)
     if not meter:
         return {"ok": False, "error": "meter_not_found"}
@@ -598,6 +612,12 @@ async def scan_meter_anomalies(
         # And every row leads with a named measure. Most rules mean annualised cost by that;
         # one that could not be priced says what it did measure instead of showing a blank.
         hit.setdefault("impact", D.money_impact(hit))
+
+        if not persist:
+            created.append({"anomaly_type": hit["anomaly_type"], "metric_pct": hit["metric_pct"],
+                            "financial_gbp": hit.get("financial_gbp"), "currency": hit["currency"],
+                            "impact": hit.get("impact"), "dry_run": True})
+            continue
 
         # A spike stays in the readings, so every later scan detects it again. Without this
         # guard each run wrote another anomaly AND another approval for the same event: one
@@ -694,7 +714,8 @@ async def scan_meter_anomalies(
         organization_id=organization_id or meter.organization_id,
         detail={"meter_id": str(meter_id), "created": len(created)},
     )
-    await session.commit()
+    if persist:
+        await session.commit()
     return {"ok": True, "meter_id": str(meter_id), "anomalies": created,
             "rules_run": len(detectors), "skipped": skipped if readings else {"all": "no readings"}}
 

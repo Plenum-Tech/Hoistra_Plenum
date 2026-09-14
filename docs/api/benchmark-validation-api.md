@@ -99,3 +99,35 @@ readings (electricity + gas since June 2026), none of the buildings in that user
 recorded EUI, and no EPC certificate is linked to a building — so the UK MEES tiles read
 `0 / 0` and the headline EUI had nothing to derive from. This validation makes each of those
 gaps a named `needs` item per building instead of a dash; the data still has to be filed.
+
+## Detection coverage — which anomaly rules can run, did run, and fired
+
+### `GET /api/energy/detection/coverage?building_id=`
+Asks the thirteen detectors themselves, in a dry run that writes nothing: every active meter
+in scope is scanned with `persist=False`, every chiller with a design figure is assessed.
+
+```json
+{ "ok": true,
+  "summary": {"buildings": 17, "meters": 62, "sub_meters": 34, "chillers": 3,
+              "rules_firing_somewhere": 13, "rules_armed_somewhere": 13, "open_anomalies": 145},
+  "rules": [{"rule": "asset_spike", "id": "spike", "label": "Single-asset spike",
+             "armed": 17, "fired": 10, "clear": 7, "skipped": 0, "skipped_reasons": {},
+             "buildings_fired": ["AN Other House", "Building 5", "…"]}, "…"],
+  "buildings": [{"building_id": "…", "name": "Business Quarter", "country_code": "UK",
+                 "meters": 2, "sub_meters": 2, "chillers": 0, "open_anomalies": 9,
+                 "rules": {"asset_spike": {"status": "fired", "hits": 1, "metric_pct": 231.4, "meter": "AHU-01 supply fan"},
+                           "chiller_efficiency": {"status": "skipped", "reason": "no chiller design figures on file"},
+                           "baseload_creep": {"status": "clear"}, "…": "…"},
+                 "fired": ["asset_spike", "…"], "armed": 11,
+                 "meter_rows": [{"label": "SYN-1A2B3C4D", "fuel": "electricity", "sub_meter": false,
+                                 "fired": ["nonocc_spike"], "ran": 11, "skipped": {"chiller_efficiency": "runs per chiller asset…"}}]}]}
+```
+`rules[*].id` matches the shell's `RULES[].id` (nonocc, spike, drift, schedule, baseload,
+calendar, weather, peak, fight, cop, regress, dataq, tou). A `skipped` cell names the input
+the rule lacks — `no BMS trends for the building in the last 7 days`, `no chiller design
+figures on file`, `no work order closed … in the last 37 days`, `n complete months; needs 12`,
+`no capacity_kw on the meter and no prior-year readings` — which is the fix.
+
+`db/tools/seed_detection_demo.py` seeds those inputs for the named buildings on a synthetic
+dataset (half-hourly feeds with two injected faults each, sub-meters on assets, BMS zone
+trends, degree days, a closed work order) and `--validate` prints this report.

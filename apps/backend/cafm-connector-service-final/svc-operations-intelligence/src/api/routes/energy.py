@@ -31,6 +31,7 @@ from ...engines.auth import access
 from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
+from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
@@ -771,6 +772,19 @@ async def scan_all_anomalies(
 ):
     organization_id = access.organization_for(s, organization_id)
     return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+
+
+@router.get("/detection/coverage")
+async def detection_coverage(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Which of the thirteen anomaly rules can run, did run and fired — per building, per
+    meter and per chiller asset, from a dry run of the detectors themselves (nothing is
+    written). A skipped rule names the input it lacks, which is the fix."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await coverage_svc.coverage(session, building_ids=ids, organization_id=s.organization_id)
 
 
 @router.get("/anomalies")
