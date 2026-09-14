@@ -156,7 +156,11 @@ export function shapeLiveBuilding(r, i) {
     route: r.metering_route || (gran === "none" ? "No meter on record" : "Meter on record · route not stated"),
     gran: gran === "sub-metered" ? "sub-metered" : gran === "none" ? "none" : "building-level",
     metersActive: r.meters_active || 0,
-    metersSimulated: !!r.meters_simulated
+    metersSimulated: !!r.meters_simulated,
+    // Not just WHETHER the feed is simulated but which part of the history is: this
+    // building's meters carry real reads to 31 August and a simulated feed after it, and a
+    // reader told only "simulated" discounts five real months.
+    simulated: r.simulated || { any: !!r.meters_simulated }
   };
 }
 

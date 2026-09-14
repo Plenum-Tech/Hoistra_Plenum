@@ -404,6 +404,7 @@ export const energyMethods = {
             emptyText: x.all.length ? "No anomalies match the current filter." : "No open anomalies. Any gap above reference here is structural — investigate the building to size the capex case.",
             anomalies: x.anoms.map((a) => ({
               asset: a.asset, type: a.type, impact: a.impact, status: a.status, days: a.days + " days active",
+              simulatedShow: "none",
               color: t(a.tone).color, bg: t(a.tone).bg,
               open: () => this.setState({ detail: this.anomalyDetail(a) }),
               investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("anomaly", a); }
@@ -417,6 +418,9 @@ export const energyMethods = {
     const pageEnd = Math.min(paged.flatTotal, (paged.page + 1) * ENERGY_PAGE_SIZE);
     return {
       enGroups: paged.groups,
+      enSimulatedShow: "none",
+      enSimulatedText: "",
+
       enListSummary: (paged.flatTotal ? pageStart + "–" + pageEnd : "0") + " of " + total + " buildings"
         + (f === "All" ? "" : " · filter: " + f) + (query ? " · matching “" + s.enBldQuery + "”" : ""),
       enListEmpty: rawGroups.length ? "none" : "block",
@@ -508,6 +512,7 @@ export const energyMethods = {
                 : "No open anomalies, and no EUI reading on record yet to say whether this building is over reference."),
             anomalies: x.anoms.map((a) => ({
               asset: a.asset, type: a.type, impact: a.impact, status: a.status,
+              simulatedShow: a.simulated ? "inline-block" : "none",
               days: a.days == null ? "—" : a.days + " day" + (a.days === 1 ? "" : "s") + " active",
               color: t(a.tone).color, bg: t(a.tone).bg,
               open: () => this.setState({ detail: this.anomalyDetail(a) }),
@@ -521,8 +526,22 @@ export const energyMethods = {
     const paged = paginateBuildingGroups(rawGroups, s.enBldPage);
     const pageStart = paged.flatTotal ? paged.page * ENERGY_PAGE_SIZE + 1 : 0;
     const pageEnd = Math.min(paged.flatTotal, (paged.page + 1) * ENERGY_PAGE_SIZE);
+    // What of the data in view is simulated, said once above the list rather than left for
+    // a reader to infer from a row. A figure computed from an invented reading is invented,
+    // and the page is the only place that can say so before somebody acts on it.
+    const simBuildings = allBuildings.filter((b) => b && b.simulated && b.simulated.any);
+    const simNote = simBuildings.length ? (simBuildings[0].simulated.note || "") : "";
+    const simSame = simBuildings.every((b) => (b.simulated.note || "") === simNote);
     return {
       enGroups: paged.groups,
+      enSimulatedShow: simBuildings.length ? "flex" : "none",
+      enSimulatedText: simBuildings.length
+        ? (simBuildings.length === 1
+            ? simBuildings[0].name + ": " + simNote
+            : simBuildings.length + " buildings carry a simulated feed"
+              + (simSame && simNote ? " — " + simNote : ""))
+        : "",
+
       enListSummary: (paged.flatTotal ? pageStart + "–" + pageEnd : "0") + " of " + total + " buildings"
         + (f === "All" ? "" : " · filter: " + f) + (query ? " · matching “" + s.enBldQuery + "”" : ""),
       enListEmpty: rawGroups.length ? "none" : "block",

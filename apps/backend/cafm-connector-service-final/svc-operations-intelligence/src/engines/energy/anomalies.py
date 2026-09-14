@@ -786,10 +786,41 @@ async def list_anomalies(
     if organization_id:
         q = q.where(EnergyAnomaly.organization_id == organization_id)
     rows = list((await session.execute(q)).scalars().all())
+
+    # Which of these were detected on a simulated feed. An anomaly reads as a finding about
+    # a building; one raised on invented readings is a finding about the simulator, and the
+    # money figure beside it is invented too. Asked once for the whole page rather than per
+    # row, and never allowed to fail the list — a missing marker is worse than no list only
+    # if the list is the thing that breaks.
+    simulated: set[str] = set()
+    meter_ids = [r.meter_id for r in rows if r.meter_id]
+    if meter_ids:
+        try:
+            async with session.begin_nested():
+                found = (await session.execute(text("""
+                    SELECT DISTINCT a.id::text
+                      FROM plenum_cafm.energy_anomalies a
+                      JOIN plenum_cafm.meter_readings r ON r.meter_id = a.meter_id
+                     WHERE a.id = ANY(CAST(:ids AS uuid[]))
+                       AND r.source = 'simulator'
+                       AND r.reading_at <= a.detected_at
+                       AND r.reading_at > a.detected_at - interval '30 days'
+                       -- What the detector could actually see. A reading stamped inside the
+                       -- window but WRITTEN afterwards was not available when the anomaly
+                       -- was raised, and marking the anomaly simulated because of it would
+                       -- discredit a finding that came off real data.
+                       AND r.created_at <= a.detected_at
+                """), {"ids": [str(r.id) for r in rows]})).all()
+            simulated = {x[0] for x in found}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("energy.anomaly.simulated_lookup_failed", error=str(exc)[:200])
+
     return [
         {
             "id": str(r.id),
             "anomaly_type": r.anomaly_type,
+            # True means the window this was detected in contains simulated readings.
+            "simulated": str(r.id) in simulated,
             "status": r.status,
             "metric_pct": float(r.metric_pct) if r.metric_pct is not None else None,
             # financial_gbp keeps its name for callers that already read it; the column has

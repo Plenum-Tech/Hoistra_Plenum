@@ -52,10 +52,36 @@ const ANOM_TONE = {
   post_works_regression: "risk", chiller_efficiency: "risk"
 };
 
-export function moneyGBP(n) {
+// Currency symbols for the markets the platform prices in. A code we do not have a symbol
+// for is printed as the code — "MXN 1.2k" reads correctly, "£1.2k" on a Mexican building
+// does not.
+const CURRENCY_SYMBOL = { GBP: "£", USD: "$", AED: "AED ", SGD: "S$", EUR: "€" };
+
+// The API used to return only financial_gbp and this used to hardcode a pound sign, so a
+// Dubai building's dirhams were printed as sterling. The row now carries its own currency.
+export function money(n, currency) {
+  const code = String(currency || "GBP").toUpperCase();
+  const sym = CURRENCY_SYMBOL[code] || code + " ";
   const v = Math.round(Math.abs(n || 0));
-  const s = "£" + (v >= 1000 ? Math.round(v / 1000) + "k" : String(v));
+  const s = sym + (v >= 1000 ? Math.round(v / 1000) + "k" : String(v));
   return (n || 0) < 0 ? "−" + s : s;
+}
+
+// Kept so existing callers do not change meaning: sterling, said explicitly.
+export function moneyGBP(n) {
+  return money(n, "GBP");
+}
+
+// What a row leads with. Money where the rule could price the finding; the rule's own
+// measure where it could not — simultaneous heating and cooling reports hours of plant
+// fighting itself, and showing a dash there loses the only number it has.
+export function impactLabel(a) {
+  if (typeof a.financial_gbp === "number") return money(a.financial_gbp, a.currency);
+  const im = a.impact || {};
+  if (im.value !== null && im.value !== undefined) {
+    return String(im.value) + (im.unit ? " " + im.unit : "");
+  }
+  return "—";
 }
 
 // Pure: one raw anomaly row + the already-loaded buildings/meters/equipment lookups → the
@@ -84,7 +110,14 @@ export function shapeLiveAnomaly(a, buildingsByUuid, metersById, equipmentByUuid
     anomalyType: a.anomaly_type,
     ruleId: LIVE_ANOMALY_TYPES[a.anomaly_type] || null,
     status: a.status === "open" ? "New" : (a.status ? a.status.charAt(0).toUpperCase() + a.status.slice(1) : "—"),
-    impact: typeof a.financial_gbp === "number" ? moneyGBP(a.financial_gbp) : "—",
+    impact: impactLabel(a),
+    impactPriced: typeof a.financial_gbp === "number",
+    currency: a.currency || "GBP",
+    impactMeasure: (a.impact && a.impact.measure) || null,
+    impactNote: (a.impact && a.impact.note) || null,
+    // Detected on a simulated feed: the finding is about invented readings, and so is the
+    // figure beside it.
+    simulated: !!a.simulated,
     impactN: typeof a.financial_gbp === "number" ? a.financial_gbp : 0,
     excessKwh: typeof a.annualised_excess_kwh === "number" ? a.annualised_excess_kwh : null,
     metricPct: typeof a.metric_pct === "number" ? a.metric_pct : null,

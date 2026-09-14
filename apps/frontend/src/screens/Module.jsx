@@ -441,6 +441,12 @@ export default function Module({ vals }) {
                   {vals.enListSummary}
                 </span>
               </div>
+              <div style={{ display: vals.enSimulatedShow, alignItems: "center", gap: "9px", padding: "9px 13px", borderRadius: "10px", marginTop: "12px", border: "1px solid var(--color-warn-border, #e0b877)", background: "var(--color-warn-bg, #fdf6e7)", color: "var(--color-warn-fg, #8a6116)", fontSize: "11.5px" }}>
+                <i className="ph ph-flask" style={{ fontSize: "14px", flexShrink: "0" }}></i>
+                <span>
+                  {"Simulated data in view — "}{vals.enSimulatedText}{". Anomalies and costs from this period are about generated readings, not metered ones."}
+                </span>
+              </div>
               <div style={{ display: vals.enBldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "12px", maxWidth: "420px" }}>
                 <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
                 <input className="input" value={vals.enBldQuery} onChange={vals.setEnBldQuery} placeholder="Search buildings by name…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
@@ -538,6 +544,9 @@ export default function Module({ vals }) {
                                         {a.days}
                                       </div>
                                     </div>
+                                    <span style={{ display: a.simulatedShow, whiteSpace: "nowrap", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", border: "1px solid var(--color-warn-border, #e0b877)", color: "var(--color-warn-fg, #8a6116)", background: "var(--color-warn-bg, #fdf6e7)", flex: "0 0 auto" }} title="Detected on a simulated feed — the figure beside it is generated, not metered">
+                                      {"simulated"}
+                                    </span>
                                     <span style={{ display: "inline-block", whiteSpace: "nowrap", fontSize: "11px", padding: "3px 8px", borderRadius: "5px", color: a.color, background: a.bg, flex: "0 0 auto" }}>
                                       {a.status}
                                     </span>

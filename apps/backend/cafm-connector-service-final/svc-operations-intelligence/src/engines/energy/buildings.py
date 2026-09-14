@@ -724,6 +724,7 @@ async def _list_from_graph(
     row says the reading is unattributed rather than showing half of it twice.
     """
     profiles, snapshots, meters = await _energy_by_site(session, organization_id)
+    sim = await simulated_coverage(session)
     per_site: dict[str, int] = {}
     for b in buildings:
         sid = str(b.get("site_id") or "").strip()
@@ -742,6 +743,7 @@ async def _list_from_graph(
         row["site_id"] = sid or None
         row["buildings_on_site"] = per_site.get(sid, 1) if sid else 1
         row["energy_attribution"] = attribution
+        row["simulated"] = sim.get(bid) or {"any": False}
         rows.append(apply_graph_rollup(row, roll.get(bid)))
     apply_rolling_benchmarks(rows)
     tm46 = load_tm46()
@@ -818,6 +820,9 @@ async def list_buildings(
             )
         )
 
+    sim = await simulated_coverage(session)
+    for r in rows:
+        r["simulated"] = sim.get(str(r.get("building_id") or r.get("site_key") or "")) or {"any": False}
     apply_rolling_benchmarks(rows)
 
     tm46 = load_tm46()
@@ -832,6 +837,55 @@ async def list_buildings(
         "completeness_fields": list(COMPLETENESS_FIELDS),
         "buildings": rows,
     }
+
+
+async def simulated_coverage(session: AsyncSession) -> dict[str, dict[str, Any]]:
+    """Per building: how much of its meter history is a simulated feed, and over what dates.
+
+    ``meters_simulated`` already says a building HAS a simulated feed, and that is not the
+    question a reader has. Harbour View's meters carry real half-hourly reads to 31 August
+    and a simulated feed from 1 September: told only "simulated", a person discounts the
+    real five months; told nothing, they act on invented ones. The dates are the answer, so
+    the row carries them.
+
+    Counted from the readings themselves rather than from the meter's flag — the flag says
+    what the feed is doing now, the rows say what the history actually contains.
+    """
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text("""
+                SELECT m.site_id::text AS building_id,
+                       count(*) AS readings,
+                       count(*) FILTER (WHERE r.source = 'simulator') AS simulated,
+                       min(r.reading_at) FILTER (WHERE r.source = 'simulator') AS sim_from,
+                       max(r.reading_at) FILTER (WHERE r.source = 'simulator') AS sim_to,
+                       max(r.reading_at) FILTER (WHERE r.source <> 'simulator') AS real_to
+                  FROM plenum_cafm.energy_meters m
+                  JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
+                 WHERE m.site_id IS NOT NULL
+                 GROUP BY 1
+            """))).mappings().all()
+    except Exception as exc:  # noqa: BLE001 — a marker must never take the page down
+        log.warning("energy.buildings.simulated_coverage_failed", error=str(exc)[:200])
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not r["simulated"]:
+            out[r["building_id"]] = {"any": False}
+            continue
+        out[r["building_id"]] = {
+            "any": True,
+            "readings": int(r["simulated"]),
+            "readings_total": int(r["readings"]),
+            "from": r["sim_from"].isoformat() if r["sim_from"] else None,
+            "to": r["sim_to"].isoformat() if r["sim_to"] else None,
+            "real_to": r["real_to"].isoformat() if r["real_to"] else None,
+            # Said in words as well as dates, because this is what a banner prints.
+            "note": (f"{r['sim_from'].day} {r['sim_from']:%b} to "
+                     f"{r['sim_to'].day} {r['sim_to']:%b} is a simulated feed"
+                     if r["sim_from"] and r["sim_to"] else "part of this feed is simulated"),
+        }
+    return out
 
 
 async def _energy_by_site(
