@@ -101,3 +101,46 @@ def test_the_closed_work_order_lookup_runs_in_its_own_savepoint():
     import inspect
     src = inspect.getsource(anomalies._closed_work_orders)
     assert "begin_nested()" in src and "completed_at::timestamptz" in src
+
+
+def _seeder():
+    """The seeder lives in db/tools, outside the package — load it by path."""
+    import importlib.util, pathlib, sys
+    p = pathlib.Path(__file__).resolve().parents[2] / "db" / "tools" / "seed_detection_demo.py"
+    sys.path.insert(0, str(p.parent))
+    spec = importlib.util.spec_from_file_location("seed_detection_demo", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_every_fault_lands_on_a_building_that_can_show_it():
+    # Two faults drawn from nine left baseload creep on nobody: the rule looked dead when
+    # it simply had nothing to find. The top-up fills the gaps — and never puts a fault on
+    # a feed whose other faults would mask it.
+    S = _seeder()
+    ids = [f"00000000-0000-0000-0000-{i:012d}" for i in range(9)]
+    plan = S.assign_faults(ids)
+    # Covered means: landed somewhere its own feed does not mask it.
+    covered = {f for v in plan.values() for f in v if not S.CONFLICTS.get(f, set()) & set(v)}
+    assert set(S.FAULTS) <= covered, sorted(set(S.FAULTS) - covered)
+    # and the top-up itself never adds a fault the building's other faults would hide
+    for b, faults in plan.items():
+        for f in faults[2:]:
+            assert not S.CONFLICTS.get(f, set()) & set(faults), (b, faults)
+
+
+def test_a_building_keeps_the_pair_the_hash_gave_it():
+    S = _seeder()
+    ids = [f"00000000-0000-0000-0000-{i:012d}" for i in range(9)]
+    plan = S.assign_faults(ids)
+    for b in ids:
+        assert plan[b][:2] == S.faults_for(b)
+    # adding a building only ever appends to others — it never rewrites their first two
+    more = S.assign_faults(ids + ["00000000-0000-0000-0000-000000000099"])
+    for b in ids:
+        assert more[b][:2] == plan[b][:2]
+
+
+def test_an_empty_estate_assigns_nothing():
+    assert _seeder().assign_faults([]) == {}

@@ -63,6 +63,39 @@ def faults_for(building_id: str) -> list[str]:
     return [FAULTS[a], FAULTS[b]]
 
 
+#: Faults that hide another fault on the same feed, so the top-up never pairs them.
+#: Baseload creep is the one that matters: the detector only reports a rising overnight
+#: floor while weekday daytime stays within 5%, and both the drift step and the
+#: post-works dip move daytime well past that — inject them together and the rule can
+#: never fire, which reads as a dead detector rather than a masked one.
+CONFLICTS: dict[str, set[str]] = {"baseload": {"drift", "regress"}}
+
+
+def assign_faults(building_ids: list[str]) -> dict[str, list[str]]:
+    """The hash pair per building, then a top-up so every fault lands somewhere it can fire.
+
+    Two faults drawn from nine leaves gaps: on a nine-building estate the hash gave baseload
+    creep to nobody, so that rule had nothing to find and the report read as a hole in the
+    detector rather than a quiet estate. The top-up only ever appends, and deals in a hash
+    order of its own, so a building keeps the pair it was seeded with and adding a building
+    to the set never rewrites another building's feed.
+    """
+    out = {b: faults_for(b) for b in building_ids}
+    if not out:
+        return out
+    order = sorted(building_ids, key=lambda b: h(f"{b}:topup", 1_000_003))
+    # A fault sitting on a feed that masks it is not covered — that is how baseload creep
+    # went missing while the hash swore it had been dealt.
+    covered = {f for v in out.values() for f in v if not CONFLICTS.get(f, set()) & set(v)}
+    for f in [f for f in FAULTS if f not in covered]:
+        clash = CONFLICTS.get(f, set())
+        free = [b for b in order if not clash & set(out[b])]
+        bid = (free or order)[h(f"topup:{f}", len(free or order))]
+        if f not in out[bid]:
+            out[bid].append(f)
+    return out
+
+
 class DetectionSeeder:
     def __init__(self, conn: asyncpg.Connection, apply: bool, regen_gas: bool = False) -> None:
         self.c, self.apply, self.regen_gas = conn, apply, regen_gas
@@ -199,7 +232,7 @@ class DetectionSeeder:
                AND summary LIKE '%' || $1::text || '%'""", str(meter_id))
         self.note("stale anomalies dismissed", int(n.split()[-1]) if n else 0)
 
-    async def regenerate_gas(self, b: dict) -> None:
+    async def regenerate_gas(self, b: dict, faults: list[str] | None = None) -> None:
         """The gas feed carried a season so strong the drift rule fired on every UK meter.
         Half-hourly now, a mild winter shape, and a step drift only where the building's
         faults include one — so gas anomalies are findings, not background."""
@@ -213,7 +246,7 @@ class DetectionSeeder:
         meta = json.loads(meta) if isinstance(meta, str) else (meta or {})
         if meta.get("detection_regenerated") and not self.regen_gas:
             return
-        drift = "drift" in faults_for(str(b["building_id"]))
+        drift = "drift" in (faults if faults is not None else faults_for(str(b["building_id"])))
         hourly = self.hourly_base(b, "gas")
         self.note("gas meter regenerated half-hourly")
         self.note("gas half-hour rows", DAYS * 48)
@@ -331,6 +364,10 @@ class DetectionSeeder:
                 round(hdd, 1), round(cdd, 1))
 
     async def run(self, targets: list[dict]) -> None:
+        # First pass: find each building's main meter, so the fault top-up is dealt only
+        # among the feeds this tool may rewrite — a fault landed on a real meter is a fault
+        # nobody ever sees.
+        mains: list[tuple[dict, dict]] = []
         for b in targets:
             b["tariff"] = await self.c.fetchval(
                 "SELECT tariff_gbp_per_kwh FROM plenum_cafm.energy_meters WHERE site_id = $1 AND active ORDER BY is_sub_meter, created_at LIMIT 1",
@@ -339,19 +376,31 @@ class DetectionSeeder:
             if not m:
                 self.plan.append(f"{b['name']}: no electricity meter — run seed_energy_demo first")
                 continue
-            faults = faults_for(str(b["building_id"]))
+            mains.append((b, m))
+        plan = assign_faults([str(b["building_id"]) for b, m in mains if m["synthetic"]])
+        for b, m in mains:
+            faults = list(plan.get(str(b["building_id"])) or faults_for(str(b["building_id"])))
             if b["cc"] == "AE" or h(f"{b['building_id']}:fight", 3) == 0:
                 faults.append("fight")
             if h(f"{b['building_id']}:spike", 2) == 0:
                 faults.append("spike")
             already = (m["raw_metadata"] or {}).get("detection_faults")
-            if m["synthetic"] and not already:
-                await self.regenerate_main(b, m, [f for f in faults if f in FAULTS])
+            want = [f for f in faults if f in FAULTS]
+            if "regress" in want and not await self.c.fetchval(
+                    "SELECT 1 FROM plenum_cafm.work_orders WHERE building_id = $1 LIMIT 1", b["building_id"]):
+                # No work order to close, so the dip is never injected and the marker would
+                # never match the plan — which used to re-feed the building on every run.
+                want = [f for f in want if f != "regress"]
+                faults = [f for f in faults if f != "regress"]
+            if m["synthetic"] and set(want) - set(already or []):
+                # The marker records what was injected. When the plan gains a fault the
+                # feed is re-fed, not patched, so the readings and the marker agree.
+                await self.regenerate_main(b, m, want)
             elif already:
                 self.plan.append(f"{b['name']}: already seeded ({', '.join(already)})")
             else:
                 self.plan.append(f"{b['name']}: real meter, readings left alone")
-            await self.regenerate_gas(b)
+            await self.regenerate_gas(b, faults)
             await self.sub_meters(b, self.hourly_base(b, "electricity"), "spike" in faults)
             if "fight" in faults:
                 await self.bms(b)
