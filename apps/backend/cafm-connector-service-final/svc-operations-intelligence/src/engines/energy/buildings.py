@@ -492,24 +492,42 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
                   or b.get("site_region") or b.get("site_city"),
         "postcode": b.get("postcode"),
         "status": b.get("status"),
-        "site_type": b.get("primary_use") or b.get("use_type"),
-        "use_type": b.get("primary_use") or b.get("use_type"),
-        "use_mix": None,
-        "floors": b.get("floors") if b.get("floors") is not None else b.get("floors_recorded"),
-        # The canonical area is square feet; the row model works in m².
-        "gfa_sqm": sqft_to_sqm(b.get("gross_area_sqft")) or b.get("gfa_sqm_recorded"),
+        # The survey — what the structure is, how big it is, how it scores — with the site
+        # as the last fallback, the same shape as country/region/metering above. A site may
+        # hold several buildings, and where it does this is the estate's figure standing in
+        # for the building's: shape_building_row labels the source so a reader can see that,
+        # and anything counted from the graph overrides it in apply_graph_rollup.
+        "site_type": b.get("primary_use") or b.get("use_type") or b.get("site_site_type"),
+        "use_type": b.get("primary_use") or b.get("use_type") or b.get("site_use_type"),
+        "use_mix": b.get("site_use_mix"),
+        "floors": (b.get("floors") if b.get("floors") is not None
+                   else b.get("floors_recorded") or b.get("site_floors")),
+        # The canonical area is square feet; the row model works in m². The site already
+        # records m², so it is taken as it stands rather than converted twice.
+        "gfa_sqm": (sqft_to_sqm(b.get("gross_area_sqft")) or b.get("gfa_sqm_recorded")
+                    or b.get("site_gfa_sqm")),
         # How the reading arrives. Recorded on the site, not the building — the same
         # fallback shape as country/region above.
         "metering_route": b.get("metering_route") or b.get("site_metering_route"),
         "metering_granularity": (b.get("metering_granularity")
                                  or b.get("site_metering_granularity")),
-        "benchmark_standard": b.get("pack_standard") or b.get("benchmark_standard"),
-        "benchmark_standing": b.get("pack_standing") or b.get("benchmark_standing"),
-        "benchmark_standing_note": b.get("pack_standing_note") or b.get("benchmark_standing_note"),
+        # The standard still comes from the location's regulation pack first — a pack
+        # inferred from an estate's address is a guess with a legal claim attached. The site
+        # column is not that inference: it is a standard somebody recorded against the site,
+        # and it is read only when neither the pack nor the building states one.
+        "benchmark_standard": (b.get("pack_standard") or b.get("benchmark_standard")
+                               or b.get("site_benchmark_standard")),
+        "benchmark_standing": (b.get("pack_standing") or b.get("benchmark_standing")
+                               or b.get("site_benchmark_standing")),
+        "benchmark_standing_note": (b.get("pack_standing_note")
+                                    or b.get("benchmark_standing_note")
+                                    or b.get("site_benchmark_standing_note")),
         "benchmark_source_label": b.get("pack_benchmark_source"),
-        "eui_kwh_per_m2": b.get("eui_kwh_m2") or b.get("eui_kwh_per_m2"),
-        "benchmark_kwh_per_m2": b.get("benchmark_kwh_per_m2"),
-        "hoist_score": b.get("hoist_score"),
+        "eui_kwh_per_m2": (b.get("eui_kwh_m2") or b.get("eui_kwh_per_m2")
+                           or b.get("site_eui_kwh_per_m2")),
+        "benchmark_kwh_per_m2": (b.get("benchmark_kwh_per_m2")
+                                 or b.get("site_benchmark_kwh_per_m2")),
+        "hoist_score": b.get("hoist_score") or b.get("site_hoist_score"),
     }
 
 

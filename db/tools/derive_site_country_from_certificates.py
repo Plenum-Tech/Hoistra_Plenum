@@ -40,11 +40,16 @@ import asyncpg
 
 SCHEMA = "plenum_cafm"
 
-#: What the certificate says → the column on the site it fills. Only ever into a NULL.
+#: (column of the EVIDENCE query below, column on sites it fills). Only ever into a NULL.
+#:
+#: Spelled as the query's own aliases rather than as the certificate's column names: they
+#: differ (`cert_country` carries `compliance_certificates.country_code`), and a lookup
+#: built by pasting a prefix onto the wrong half quietly found nothing, set nothing, and
+#: was caught only by the verification at the end of the transaction.
 CARRY: tuple[tuple[str, str], ...] = (
-    ("country_code", "country_code"),
-    ("state", "state"),
-    ("region", "region"),
+    ("cert_country", "country_code"),
+    ("cert_state", "state"),
+    ("cert_region", "region"),
 )
 
 #: One row per site whose country can be read off its own building-scope certificates.
@@ -118,8 +123,11 @@ async def run(dsn: str, expect_db: str, apply: bool) -> int:
         filled = 0
         for r in agreed:
             sets, params = [], [r["site_id"]]
+            # `x in record` on an asyncpg Record tests its VALUES, not its keys — so a
+            # membership test spelled that way answers False for every column name there is.
+            available = set(r.keys())
             for src, dst in CARRY:
-                value = r[f"cert_{src}"] if f"cert_{src}" in r else None
+                value = r[src] if src in available else None
                 if value in (None, ""):
                     continue
                 params.append(value)

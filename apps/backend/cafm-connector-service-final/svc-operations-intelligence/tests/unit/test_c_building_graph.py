@@ -159,3 +159,72 @@ def test_a_building_with_no_location_falls_back_without_inventing_a_pack():
     from src.engines.energy.buildings import building_to_row_input
     src = building_to_row_input({"building_id": "u-2", "name": "Unlocated"})
     assert src["country_code"] is None and src["benchmark_standard"] is None
+
+
+class TestTheSurveyLivesOnTheSite:
+    """plenum_cafm.buildings on a live deployment has fourteen columns, and floors, area,
+    EUI and hoist score are all empty on every one of them. The figures are on the site.
+
+    Reading them only from the building rendered 605 buildings with no area, no floors and
+    no use type, each capped at 33-44% record completeness, while the numbers sat one join
+    away — the same fault already fixed once for metering_route.
+    """
+
+    def test_the_site_supplies_what_the_building_does_not_have(self):
+        from src.engines.energy.buildings import building_to_row_input
+
+        src = building_to_row_input({
+            "building_id": "u-3", "site_id": "S-01", "name": "Bishopsgate Tower",
+            "site_country_code": "UK", "site_site_type": "Commercial",
+            "site_use_type": "Commercial", "site_floors": "34", "site_gfa_sqm": "38276",
+            "site_hoist_score": "88", "site_eui_kwh_per_m2": "214.00",
+            "site_benchmark_kwh_per_m2": "215.00", "site_benchmark_standard": "CIBSE TM46",
+        })
+        assert src["floors"] == "34"
+        # The site already records m²; converting it as if it were square feet would report
+        # a 38,276 m² tower as 3,556.
+        assert src["gfa_sqm"] == "38276"
+        assert src["hoist_score"] == "88"
+        assert src["eui_kwh_per_m2"] == "214.00"
+        assert src["benchmark_kwh_per_m2"] == "215.00"
+        assert src["use_type"] == "Commercial"
+        assert src["country_code"] == "UK"
+
+    def test_the_building_still_wins_over_its_site(self):
+        from src.engines.energy.buildings import building_to_row_input
+
+        src = building_to_row_input({
+            "building_id": "u-4", "site_id": "S-01", "name": "One of several",
+            "floors": "3", "gross_area_sqft": "10764", "eui_kwh_m2": "99",
+            "hoist_score": "50", "primary_use": "Retail",
+            "site_floors": "34", "site_gfa_sqm": "38276", "site_eui_kwh_per_m2": "214",
+            "site_hoist_score": "88", "site_use_type": "Commercial",
+        })
+        assert src["floors"] == "3"
+        assert src["gfa_sqm"] == 1000.01   # 10,764 ft2, converted, not the site's 38,276
+        assert src["eui_kwh_per_m2"] == "99"
+        assert src["hoist_score"] == "50"
+        assert src["use_type"] == "Retail"
+
+    def test_a_regulation_pack_still_beats_a_recorded_standard(self):
+        from src.engines.energy.buildings import building_to_row_input
+
+        src = building_to_row_input({
+            "building_id": "u-5", "site_id": "S-01", "name": "Packed",
+            "pack_standard": "ASHRAE 100", "pack_standing": "statutory",
+            "site_benchmark_standard": "CIBSE TM46", "site_benchmark_standing": "guidance",
+        })
+        assert src["benchmark_standard"] == "ASHRAE 100"
+        assert src["benchmark_standing"] == "statutory"
+
+    def test_the_site_join_asks_for_every_column_it_falls_back_to(self):
+        """A fallback the query never selects is a fallback that never fires."""
+        import inspect
+
+        from src.engines.energy import building_rollup
+
+        source = inspect.getsource(building_rollup.load_buildings)
+        for column in ("site_type", "use_type", "use_mix", "floors", "gfa_sqm",
+                       "hoist_score", "eui_kwh_per_m2", "benchmark_kwh_per_m2",
+                       "metering_route", "metering_granularity"):
+            assert f'"{column}"' in source, f"load_buildings never reads sites.{column}"

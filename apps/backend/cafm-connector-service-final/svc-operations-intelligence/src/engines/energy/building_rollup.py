@@ -417,8 +417,19 @@ async def load_buildings(session: AsyncSession, *, limit: int = 1000) -> list[di
         # they were silently dropped and every building reported "no meters on record".
         # Not a display nicety: record completeness counts metering, so nine buildings with
         # a half-hourly data collector on file were each capped at 78%.
+        # The survey travels the same road, and for the same reason. `wanted` asks
+        # plenum_cafm.buildings for floors, area, use type, hoist score, EUI and benchmark;
+        # this deployment's buildings table has four of those and they are empty, and has
+        # never had the rest. So a building whose site records 34 floors over 38,276 m² with
+        # an EUI of 214 rendered as a row with no area, no floors and no score, and a record
+        # completeness of 44% — the figures were one join away under a key the query did not
+        # read. Every one of these is a LAST fallback: a figure counted from the graph, or
+        # held on the building itself, still wins (see building_to_row_input).
         for c in ("country_code", "region", "city", "postcode",
-                  "metering_route", "metering_granularity"):
+                  "metering_route", "metering_granularity",
+                  "site_type", "use_type", "use_mix", "floors", "gfa_sqm", "hoist_score",
+                  "eui_kwh_per_m2", "benchmark_kwh_per_m2",
+                  "benchmark_standard", "benchmark_standing", "benchmark_standing_note"):
             if c in shape["sites"]["columns"]:
                 cols += [f"s.{c}::text AS site_{c}"]
         joins += f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"
