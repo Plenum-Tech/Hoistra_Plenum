@@ -47,9 +47,16 @@ def office(
 
 def keys_ok(hit):
     for k in ("anomaly_type", "metric_pct", "excess_kwh", "annualised_excess_kwh",
-              "financial_gbp", "tariff_gbp_per_kwh", "detail"):
+              "financial_gbp", "tariff_gbp_per_kwh", "detail", "priced"):
         assert k in hit, k
-    assert hit["financial_gbp"] >= 0
+    # None is a permitted answer and means "this firing cannot be priced from the inputs
+    # available" — distinct from 0, which claims it costs nothing. A priced rule must still
+    # produce a real, non-negative figure.
+    if hit["priced"]:
+        assert hit["financial_gbp"] is not None and hit["financial_gbp"] >= 0
+    else:
+        assert hit["financial_gbp"] is None
+        assert hit["excess_kwh"] is None and hit["annualised_excess_kwh"] is None
 
 
 # ── nonocc ──────────────────────────────────────────────────────────────────────────
@@ -281,7 +288,10 @@ class TestFight:
         assert hit and hit["anomaly_type"] == "simultaneous_heating_cooling"
         keys_ok(hit)
         assert hit["detail"]["zones_affected"] == ["L3-E"]
-        assert hit["financial_gbp"] == 0 and hit["detail"]["priced"] is False
+        # No figure at all, rather than a zero: the fight is real and its cost is unknown.
+        # It used to report 0.00, which reads on the queue as "costs nothing".
+        assert hit["financial_gbp"] is None and hit["detail"]["priced"] is False
+        assert hit["impact"]["measure"] == "fighting_hours" and hit["impact"]["value"] > 0
 
     def test_priced_when_the_zone_draw_is_known(self):
         hit = D.detect_simultaneous_heating_cooling(trend("L3-E", minutes=240, both_for=60), tariff=TARIFF, zone_kw=8.0)

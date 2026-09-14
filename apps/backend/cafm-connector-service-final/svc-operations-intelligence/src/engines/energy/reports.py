@@ -19,6 +19,7 @@ from ...models.energy import (
     EuiSnapshot,
 )
 from ...shared.approvals import write_audit
+from .anomalies import currency_for_building
 from .eui import compute_site_eui
 
 log = get_logger(__name__)
@@ -146,6 +147,17 @@ def _render_pdf_text(report: dict[str, Any], out_path: Path) -> str:
             return str(txt)
 
 
+def _amount(row: dict[str, Any], currency: str) -> str:
+    """A row's impact as text: money where it was priced, the rule's own measure where it
+    was not. A dash would lose the finding and "0" would misstate it."""
+    if row.get("financial_gbp") is not None:
+        return f"{currency} {row['financial_gbp']}"
+    impact = row.get("impact") or {}
+    if impact.get("value") is not None:
+        return f"{impact['value']} {impact.get('unit') or ''}".strip() + " (not priced)"
+    return "not priced"
+
+
 async def generate_monthly_energy_report(
     session: AsyncSession,
     *,
@@ -154,7 +166,12 @@ async def generate_monthly_energy_report(
     organization_id: UUID | None = None,
     export_pdf: bool = True,
 ) -> dict[str, Any]:
-    """1st-of-month job for preceding month → Energy Saved Space."""
+    """1st-of-month job for preceding month → Energy Saved Space.
+
+    Every money figure in the report is in the site's own currency. A report covers one
+    site, so there is exactly one; printing "£" on a Dubai site's report was wrong on every
+    line of it.
+    """
     if report_month is None:
         today = date.today()
         first = date(today.year, today.month, 1)
@@ -261,7 +278,11 @@ async def generate_monthly_energy_report(
         {
             "id": str(a.id),
             "anomaly_type": a.anomaly_type,
-            "financial_gbp": float(a.financial_gbp) if a.financial_gbp is not None else 0,
+            # None is kept as None: a rule that could not price its firing has no figure,
+            # and folding it to 0 both hides that and understates nothing — it simply says
+            # something false. The table prints the rule's own measure for those instead.
+            "financial_gbp": float(a.financial_gbp) if a.financial_gbp is not None else None,
+            "impact": (a.detail_json or {}).get("impact"),
             "metric_pct": float(a.metric_pct) if a.metric_pct is not None else None,
             "status": "expected" if key in judged_expected else a.status,
             "detections": sum(1 for x in anomalies if _event_key(x) == key),
@@ -275,8 +296,12 @@ async def generate_monthly_energy_report(
     # Excess cost is what the site could recover. Consumption the PM has explained is not
     # recoverable, so it is reported in the list but excluded from the money.
     total_excess = round(
-        sum(r["financial_gbp"] for r in ranked if r["status"] != "expected"), 2
+        sum(r["financial_gbp"] for r in ranked
+            if r["status"] != "expected" and r["financial_gbp"] is not None), 2
     )
+    #: Anomalies the report lists but cannot add up. Said out loud, because a total that
+    #: silently omits them reads as the whole picture.
+    unpriced = [r for r in ranked if r["status"] != "expected" and r["financial_gbp"] is None]
     if eui.get("financial_gbp"):
         total_excess = round(total_excess + float(eui["financial_gbp"]), 2)
 
@@ -294,9 +319,14 @@ async def generate_monthly_energy_report(
     carbon_factor = float(meters[0].carbon_kg_per_kwh) if meters else 0.207
     carbon_kg = round(float(eui.get("total_kwh") or 0) * carbon_factor, 4) if eui.get("ok") else None
 
+    # One site, one currency. Resolved once and used for every figure below.
+    ccy = await currency_for_building(session, site_id)
+
     report_json = {
         "site_id": str(site_id),
         "report_month": report_month.isoformat(),
+        "currency": ccy,
+        "anomalies_unpriced": len(unpriced),
         "eui": eui if eui.get("ok") else {"ok": False, "error": eui.get("error")},
         "eui_trend": trend,
         "anomalies_ranked": ranked,
@@ -309,15 +339,16 @@ async def generate_monthly_energy_report(
         f"Monthly Energy Report — {report_month.isoformat()}",
         f"Site: {site_id}",
         f"EUI annualised: {eui.get('eui_kwh_per_m2_annualised')} kWh/m² (benchmark {eui.get('benchmark_kwh_per_m2')})",
-        f"Deviation: {eui.get('deviation_pct')}% · Excess cost £{eui.get('financial_gbp')}",
-        f"Anomalies: {len(ranked)} · Total excess estimate £{total_excess}",
+        f"Deviation: {eui.get('deviation_pct')}% · Excess cost {ccy} {eui.get('financial_gbp')}",
+        f"Anomalies: {len(ranked)} · Total excess estimate {ccy} {total_excess}",
         f"Carbon exposure: {carbon_kg} kg CO2e",
         "",
         "Anomalies by cost impact:",
     ]
     for r in ranked[:15]:
         lines.append(
-            f"  - {r['anomaly_type']}: {r['metric_pct']}% · £{r['financial_gbp']} ({r['status']})"
+            f"  - {r['anomaly_type']}: {r['metric_pct']}% · "
+                f"{_amount(r, ccy)} ({r['status']})"
         )
 
     sections = [
@@ -326,7 +357,7 @@ async def generate_monthly_energy_report(
             "lines": [
                 f"Report month: {report_month.isoformat()}",
                 f"Site id: {site_id}",
-                f"Total excess cost (estimate): £{total_excess}",
+                f"Total excess cost (estimate): {ccy} {total_excess}",
                 f"Carbon exposure: {carbon_kg} kg CO₂e",
             ],
         },
@@ -336,10 +367,10 @@ async def generate_monthly_energy_report(
                 f"Annualised EUI: {eui.get('eui_kwh_per_m2_annualised')} kWh/m²",
                 f"Benchmark: {eui.get('benchmark_kwh_per_m2')} kWh/m²",
                 f"Deviation: {eui.get('deviation_pct')}%",
-                f"Financial impact: £{eui.get('financial_gbp')}",
+                f"Financial impact: {ccy} {eui.get('financial_gbp')}",
             ],
             "table": (
-                [["Period", "EUI", "Benchmark", "Deviation %", "£"]]
+                [["Period", "EUI", "Benchmark", "Deviation %", ccy]]
                 + [
                     [
                         t.get("period_start") or "—",
@@ -358,12 +389,12 @@ async def generate_monthly_energy_report(
             "heading": "Anomalies ranked by cost",
             "lines": [f"{len(ranked)} anomalies in period."] if ranked else ["No anomalies recorded."],
             "table": (
-                [["Type", "Metric %", "£ impact", "Status"]]
+                [["Type", "Metric %", f"Impact ({ccy})", "Status"]]
                 + [
                     [
                         str(r["anomaly_type"]),
                         str(r["metric_pct"] if r["metric_pct"] is not None else "—"),
-                        str(r["financial_gbp"]),
+                        _amount(r, ccy),
                         str(r["status"]),
                     ]
                     for r in ranked[:20]
@@ -437,6 +468,11 @@ async def generate_monthly_energy_report(
         "report_month": report_month.isoformat(),
         "site_id": str(site_id),
         "total_excess_cost_gbp": total_excess,
+        # The total is in this currency, and it covers only the anomalies that could be
+        # priced — a caller summing report totals across countries needs both facts, and a
+        # caller showing "total excess" needs to know how many findings it leaves out.
+        "currency": ccy,
+        "anomalies_unpriced": len(unpriced),
         "carbon_exposure_kg": carbon_kg,
         "anomalies_count": len(ranked),
         "pdf_path": pdf_url,

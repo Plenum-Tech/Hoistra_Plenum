@@ -10,7 +10,7 @@ from statistics import median
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -79,20 +79,78 @@ def is_weekend(dt: datetime) -> bool:
     return _aware(dt).weekday() >= 5
 
 
+#: The annualised figure at or above which an anomaly is raised as high severity, per
+#: currency. One number cannot serve four: £500 and AED 500 are not the same amount of
+#: money, and comparing a dirham figure against a sterling threshold made every AE anomaly
+#: read three times more urgent than the identical UK one. Roughly equivalent sums, not
+#: exchange rates — the point is that "worth escalating" means the same thing everywhere.
+HIGH_SEVERITY_AT: dict[str, float] = {"GBP": 500.0, "USD": 650.0, "AED": 2400.0, "SGD": 850.0}
+
+
+def severity_for(amount: float | None, currency: str | None) -> str:
+    """high / medium, against the threshold for the currency the figure is in.
+
+    An unpriced anomaly is not automatically minor: the figure is unknown, not small. It
+    takes the default rather than being sorted to the bottom of the queue by a zero it
+    never had.
+    """
+    if amount is None:
+        return "medium"
+    return "high" if amount >= HIGH_SEVERITY_AT.get(
+        str(currency or D.DEFAULT_CURRENCY).upper(), HIGH_SEVERITY_AT["GBP"]) else "medium"
+
+
+def money_phrase(amount: float | None, currency: str | None, impact: dict[str, Any] | None) -> str:
+    """How a figure reads in a queue summary — money where there is money, the rule's own
+    measure where there is not. Never "£0.00" for something nobody has priced."""
+    if amount is not None:
+        return f"est {str(currency or D.DEFAULT_CURRENCY).upper()} {amount}/yr excess"
+    if impact and impact.get("value") is not None:
+        return f"{impact['value']} {impact.get('unit') or ''}".strip() + " (not priceable yet)"
+    return "impact not quantified"
+
+
+async def currency_for_building(session: AsyncSession, building_id: UUID | None) -> str:
+    """The currency this building's tariff is quoted in, from the country it sits in."""
+    if not building_id:
+        return D.DEFAULT_CURRENCY
+    try:
+        async with session.begin_nested():
+            # Off the site, not the building: a building inherits its address from the site
+            # it stands on, and plenum_cafm.buildings has no country column here at all.
+            country = (await session.execute(text("""
+                SELECT s.country_code
+                  FROM plenum_cafm.buildings b
+                  LEFT JOIN plenum_cafm.sites s
+                    ON s.site_id = b.site_id OR s.id = b.site_id
+                 WHERE b.building_id = CAST(:b AS uuid)
+                 LIMIT 1
+            """), {"b": str(building_id)})).scalar()
+    except Exception as exc:  # noqa: BLE001 — a missing column must not stop a scan
+        log.warning("energy.anomaly.currency_lookup_failed", error=str(exc)[:200])
+        return D.DEFAULT_CURRENCY
+    return D.currency_for(country)
+
+
+def _dec(value: Any) -> Decimal | None:
+    """A number for the database, or NULL where the rule had no number to give."""
+    return None if value is None else Decimal(str(value))
+
+
 def financial_translation(
     *,
-    excess_kwh: float,
+    excess_kwh: float | None,
     annualised_frequency: float,
     tariff: float,
-) -> dict[str, float]:
-    """excess kWh × annualised frequency × current tariff."""
-    annualised = excess_kwh * annualised_frequency
-    return {
-        "excess_kwh": round(excess_kwh, 4),
-        "annualised_excess_kwh": round(annualised, 4),
-        "financial_gbp": round(annualised * tariff, 2),
-        "tariff_gbp_per_kwh": tariff,
-    }
+    currency: str | None = None,
+) -> dict[str, Any]:
+    """excess kWh × annualised frequency × current tariff.
+
+    Delegates to the shared implementation so the three rules that live in this file and the
+    ten in detectors.py cannot drift apart on what "no figure" means or what currency a
+    figure is in. ``excess_kwh=None`` yields no money at all rather than zero.
+    """
+    return D._finance(excess_kwh, annualised_frequency, tariff, currency)
 
 
 def detect_weekend_spike(
@@ -450,6 +508,7 @@ async def scan_meter_anomalies(
     if not meter:
         return {"ok": False, "error": "meter_not_found"}
     tariff = float(meter.tariff_gbp_per_kwh or 0.28)
+    currency = await currency_for_building(session, meter.site_id)
     readings = await _load_readings(session, meter_id)
     detectors = [detect_weekend_spike, detect_baseline_drift]
     if meter.is_sub_meter:
@@ -531,6 +590,15 @@ async def scan_meter_anomalies(
         if not hit:
             continue
 
+        # A rule is a pure function over readings and does not know where the building is;
+        # the currency is a property of the building, so it is stamped here rather than
+        # threaded through thirteen signatures. Without it every figure was labelled GBP,
+        # including the ones a Dubai meter priced in dirhams.
+        hit["currency"] = hit.get("currency") or currency
+        # And every row leads with a named measure. Most rules mean annualised cost by that;
+        # one that could not be priced says what it did measure instead of showing a blank.
+        hit.setdefault("impact", D.money_impact(hit))
+
         # A spike stays in the readings, so every later scan detects it again. Without this
         # guard each run wrote another anomaly AND another approval for the same event: one
         # weekend appeared five times, and the August report priced it five times over.
@@ -567,11 +635,15 @@ async def scan_meter_anomalies(
             anomaly_type=hit["anomaly_type"],
             window_end=datetime.now(timezone.utc),
             metric_pct=Decimal(str(hit["metric_pct"])),
-            excess_kwh=Decimal(str(hit["excess_kwh"])),
-            annualised_excess_kwh=Decimal(str(hit["annualised_excess_kwh"])),
-            financial_gbp=Decimal(str(hit["financial_gbp"])),
+            # NULL where the rule could not price the firing. The column is nullable and
+            # NULL is the honest answer; 0 would say "this costs nothing", which is a
+            # different claim and the one the data-quality rule alone gets to make.
+            excess_kwh=_dec(hit.get("excess_kwh")),
+            annualised_excess_kwh=_dec(hit.get("annualised_excess_kwh")),
+            financial_gbp=_dec(hit.get("financial_gbp")),
+            currency=hit.get("currency") or currency,
             tariff_used=Decimal(str(tariff)),
-            detail_json=hit.get("detail") or {},
+            detail_json={**(hit.get("detail") or {}), "impact": hit.get("impact")},
             status="open",
         )
         session.add(row)
@@ -582,14 +654,17 @@ async def scan_meter_anomalies(
             item_type=f"energy_anomaly_{hit['anomaly_type']}",
             summary=(
                 f"Energy anomaly {hit['anomaly_type']} on meter {meter_id}: "
-                f"{hit['metric_pct']}% · est £{hit['financial_gbp']}/yr excess. "
+                f"{hit['metric_pct']}% · "
+                f"{money_phrase(hit.get('financial_gbp'), hit.get('currency'), hit.get('impact'))}. "
                 f"Actions: Acknowledge / Monitor / Mark expected. No WO created."
             ),
-            severity="medium" if hit["financial_gbp"] < 500 else "high",
+            severity=severity_for(hit.get("financial_gbp"), hit.get("currency")),
             payload={
                 "anomaly_id": str(row.id),
                 "anomaly_type": hit["anomaly_type"],
-                "financial_gbp": hit["financial_gbp"],
+                "financial_gbp": hit.get("financial_gbp"),
+                "currency": hit.get("currency"),
+                "impact": hit.get("impact"),
                 "actions": ["acknowledge", "monitor", "mark_expected"],
                 "creates_work_order": False,
                 "status_for_future_wo_engine": "open",
@@ -604,7 +679,9 @@ async def scan_meter_anomalies(
                 "id": str(row.id),
                 "anomaly_type": hit["anomaly_type"],
                 "metric_pct": hit["metric_pct"],
-                "financial_gbp": hit["financial_gbp"],
+                "financial_gbp": hit.get("financial_gbp"),
+                "currency": hit.get("currency"),
+                "impact": hit.get("impact"),
                 "queue_item_id": str(item.id),
             }
         )
@@ -715,7 +792,12 @@ async def list_anomalies(
             "anomaly_type": r.anomaly_type,
             "status": r.status,
             "metric_pct": float(r.metric_pct) if r.metric_pct is not None else None,
+            # financial_gbp keeps its name for callers that already read it; the column has
+            # always held the site's own currency, and `currency` is what says which.
             "financial_gbp": float(r.financial_gbp) if r.financial_gbp is not None else None,
+            "financial_amount": float(r.financial_gbp) if r.financial_gbp is not None else None,
+            "currency": r.currency or D.DEFAULT_CURRENCY,
+            "impact": (r.detail_json or {}).get("impact"),
             "annualised_excess_kwh": float(r.annualised_excess_kwh) if r.annualised_excess_kwh is not None else None,
             "meter_id": str(r.meter_id) if r.meter_id else None,
             "asset_id": str(r.asset_id) if r.asset_id else None,

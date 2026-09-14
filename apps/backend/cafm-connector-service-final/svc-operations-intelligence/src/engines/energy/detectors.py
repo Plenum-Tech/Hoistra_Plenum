@@ -117,14 +117,72 @@ def _mean(vals: Sequence[float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def _finance(excess_kwh: float, annualised_frequency: float, tariff: float) -> dict[str, float]:
+#: The currency a per-kWh tariff is quoted in, by the country the building sits in.
+#:
+#: The tariff column is named ``tariff_gbp_per_kwh`` and the anomaly column
+#: ``financial_gbp``, and both have always held whatever the site's own tariff was — so a
+#: Dubai building's excess was priced in dirhams and labelled sterling. The number was never
+#: wrong; the label was, and a portfolio spanning four countries cannot add up a column whose
+#: unit changes row by row. The currency now travels with the figure.
+CURRENCY_BY_COUNTRY: dict[str, str] = {
+    "UK": "GBP", "GB": "GBP", "AE": "AED", "US": "USD", "SG": "SGD",
+}
+DEFAULT_CURRENCY = "GBP"
+
+
+def currency_for(country_code: str | None) -> str:
+    """The currency a building's tariff is quoted in. Unknown country → the default."""
+    return CURRENCY_BY_COUNTRY.get(str(country_code or "").strip().upper(), DEFAULT_CURRENCY)
+
+
+def _finance(
+    excess_kwh: float | None,
+    annualised_frequency: float,
+    tariff: float,
+    currency: str | None = None,
+) -> dict[str, Any]:
+    """The money a rule's excess translates to — or nothing, said as nothing.
+
+    ``excess_kwh=None`` means this firing cannot be priced: the rule detected something real
+    but the input that would turn it into kWh is absent. That is not zero. Zero is a claim —
+    "this costs nothing" — and the data-quality rule makes it deliberately. Writing zero for
+    an unknown put "£0.00" beside a genuine plant fault on the PM's queue, which reads as
+    "not worth looking at" rather than "we cannot price this yet".
+    """
+    if excess_kwh is None:
+        return {
+            "excess_kwh": None,
+            "annualised_excess_kwh": None,
+            "financial_gbp": None,
+            "tariff_gbp_per_kwh": tariff,
+            "currency": currency,
+            "priced": False,
+        }
     annualised = max(0.0, excess_kwh) * annualised_frequency
     return {
         "excess_kwh": round(max(0.0, excess_kwh), 4),
         "annualised_excess_kwh": round(annualised, 4),
         "financial_gbp": round(annualised * tariff, 2),
         "tariff_gbp_per_kwh": tariff,
+        "currency": currency,
+        "priced": True,
     }
+
+
+def _impact(measure: str, value: float | None, unit: str, *, note: str | None = None) -> dict[str, Any]:
+    """The headline figure for a rule, named so a reader knows what they are looking at.
+
+    Every rule has one. For most it is annualised cost; for a rule that cannot be priced it
+    is whatever that rule does measure — the hours plant spent fighting itself, the share of
+    a feed that is missing — so the row leads with a real quantity instead of an empty one.
+    """
+    return {"measure": measure, "value": value, "unit": unit, "note": note}
+
+
+def money_impact(fin: dict[str, Any]) -> dict[str, Any]:
+    """The default impact: annualised cost, in the currency the tariff was quoted in."""
+    return _impact("annualised_cost", fin.get("financial_gbp"), fin.get("currency") or DEFAULT_CURRENCY,
+                   note=None if fin.get("priced") else "not priceable from the inputs available")
 
 
 def _window(pts: list[tuple[datetime, float]], days: int) -> list[tuple[datetime, float]]:
@@ -444,10 +502,17 @@ def detect_data_quality(
     return {
         "anomaly_type": "data_quality",
         "metric_pct": round(pct, 2),
+        # Zero here is a claim, not a gap: a hole in the feed costs nothing, and pricing it
+        # would put a fictional number on the PM's queue. `priced` is True because the
+        # answer IS zero — which is not the same as the unpriceable case, where it is None.
         "excess_kwh": 0.0,
         "annualised_excess_kwh": 0.0,
         "financial_gbp": 0.0,
         "tariff_gbp_per_kwh": tariff,
+        "currency": None,
+        "priced": True,
+        "impact": _impact("bad_intervals", round(pct, 2), "%",
+                          note="a data fault, never a building fault — it costs nothing"),
         "detail": {
             "missing_intervals": missing,
             "gaps": gaps[:20],
@@ -534,8 +599,12 @@ def detect_tou_misalignment(
         "metric_pct": round(pct, 2),
         "excess_kwh": round(shiftable, 4),
         "annualised_excess_kwh": round(annualised, 4),
+        # Priced on the peak premium, not the flat tariff — the load is not wasted, it is
+        # bought at the wrong hour, and only the difference is recoverable by shifting it.
         "financial_gbp": round(annualised * premium, 2),
         "tariff_gbp_per_kwh": tariff,
+        "currency": None,
+        "priced": True,
         "detail": {
             "peak_band_mean_kwh": round(band_mean, 4),
             "other_occupied_mean_kwh": round(ref_mean, 4),
@@ -702,15 +771,31 @@ def detect_simultaneous_heating_cooling(
         return None
     longest = max(r["minutes"] for r in runs)
     hours = sum(r["minutes"] for r in runs) / 60.0
-    excess = hours * zone_kw if zone_kw else 0.0
+    zones = sorted({r["zone"] for r in runs})
+    # None, not zero, when the zone's plant draw is unknown: the fight is real and its cost
+    # is not known. Reported as 0.00 it sat on the queue looking like a fault that costs
+    # nothing, which is the one thing it is not.
+    excess = hours * zone_kw if zone_kw else None
+    fin = _finance(excess, 52.0, tariff)
     return {
         "anomaly_type": "simultaneous_heating_cooling",
         "metric_pct": round(100.0 * longest / FIGHT_MIN_MINUTES, 2),
-        **_finance(excess, 52.0, tariff),
+        **fin,
+        # What this rule actually measures. Hours of plant fighting itself is the finding —
+        # money is a translation of it, available only when somebody has told us what the
+        # zone draws. Leading with the hours means the row says something either way.
+        "impact": (
+            money_impact(fin) if fin["priced"] else
+            _impact("fighting_hours", round(hours, 2), "h",
+                    note=(f"{len(zones)} zone{'s' if len(zones) != 1 else ''}, longest run "
+                          f"{round(longest)} min — not priceable until the zone's plant kW "
+                          "is on record"))
+        ),
         "detail": {
             "runs": sorted(runs, key=lambda r: -r["minutes"])[:20],
-            "zones_affected": sorted({r["zone"] for r in runs}),
+            "zones_affected": zones,
             "fighting_hours": round(hours, 2),
+            "longest_run_minutes": round(longest, 1),
             "zone_kw": zone_kw,
             "priced": bool(zone_kw),
             "note": None if zone_kw else "unpriced: no zone_kw supplied",

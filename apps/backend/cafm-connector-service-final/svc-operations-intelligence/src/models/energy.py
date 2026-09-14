@@ -161,7 +161,11 @@ class EnergyAnomaly(Base):
     metric_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     excess_kwh: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
     annualised_excess_kwh: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    #: The amount, in `currency`. The column name is historical — it has always held the
+    #: site's own tariff, which is sterling only for the UK buildings. NULL means the rule
+    #: could not price this firing; 0 means it priced it at nothing.
     financial_gbp: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
     tariff_used: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
     detail_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="open")

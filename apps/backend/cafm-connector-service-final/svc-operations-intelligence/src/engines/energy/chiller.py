@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...models.energy import ChillerDesignSpec, ChillerPerformanceReading, EnergyAnomaly
 from ...shared.approvals import enqueue_approval, write_audit
-from . import detectors
+from . import anomalies, detectors
 from .anomalies import _SETTLED_STATUSES
 
 log = get_logger(__name__)
@@ -238,25 +238,34 @@ async def scan(
         existing.detail_json = hit.get("detail") or {}
         await session.commit()
         return {**out, "raised": {"id": str(existing.id), "already_open": True}}
+    # The same currency rule as every other anomaly: the figure is in the building's own
+    # money, and the row says which. A chiller in Dubai priced in dirhams was being written
+    # into a column named for sterling and compared against a sterling escalation threshold.
+    currency = await anomalies.currency_for_building(session, spec.building_id if spec else None)
+    hit["currency"] = currency
+    hit.setdefault("impact", detectors.money_impact(hit))
     row = EnergyAnomaly(
         id=uuid4(), organization_id=org, site_id=spec.building_id if spec else None,
         meter_id=None, asset_id=asset_id, anomaly_type=hit["anomaly_type"],
         window_end=datetime.now(timezone.utc), metric_pct=Decimal(str(hit["metric_pct"])),
-        excess_kwh=Decimal(str(hit["excess_kwh"])),
-        annualised_excess_kwh=Decimal(str(hit["annualised_excess_kwh"])),
-        financial_gbp=Decimal(str(hit["financial_gbp"])), tariff_used=Decimal(str(out["tariff_used"])),
-        detail_json=hit.get("detail") or {}, status="open",
+        excess_kwh=anomalies._dec(hit.get("excess_kwh")),
+        annualised_excess_kwh=anomalies._dec(hit.get("annualised_excess_kwh")),
+        financial_gbp=anomalies._dec(hit.get("financial_gbp")), currency=currency,
+        tariff_used=Decimal(str(out["tariff_used"])),
+        detail_json={**(hit.get("detail") or {}), "impact": hit.get("impact")}, status="open",
     )
     session.add(row)
     await session.flush()
     item = await enqueue_approval(
         session, source_feature="C", item_type="energy_anomaly_chiller_efficiency",
         summary=(f"Chiller {asset_id} running at {hit['detail']['actual_kw_per_rt']} kW/RT against "
-                 f"{out['design_kw_per_rt']} design ({hit['metric_pct']}%) · est £{hit['financial_gbp']}/yr "
-                 f"excess. Actions: Acknowledge / Monitor / Mark expected. No WO created."),
-        severity="high" if hit["financial_gbp"] >= 500 else "medium",
+                 f"{out['design_kw_per_rt']} design ({hit['metric_pct']}%) · "
+                 f"{anomalies.money_phrase(hit.get('financial_gbp'), currency, hit.get('impact'))}"
+                 f". Actions: Acknowledge / Monitor / Mark expected. No WO created."),
+        severity=anomalies.severity_for(hit.get("financial_gbp"), currency),
         payload={"anomaly_id": str(row.id), "anomaly_type": hit["anomaly_type"], "asset_id": str(asset_id),
-                 "financial_gbp": hit["financial_gbp"], "actions": ["acknowledge", "monitor", "mark_expected"],
+                 "financial_gbp": hit.get("financial_gbp"), "currency": currency,
+                 "impact": hit.get("impact"), "actions": ["acknowledge", "monitor", "mark_expected"],
                  "creates_work_order": False},
         organization_id=org, related_entity_type="energy_anomaly", related_entity_id=row.id,
     )
