@@ -218,13 +218,46 @@ separately.
 
 ---
 
-## Found while fixing point 1: svc-udr has the same gap
+## svc-udr now requires a token too
 
-`svc-udr` is routed at `/backend/udr/` from the public internet and has no authentication on
-any of its 18 routes. Verified live on 2026-09-14: `GET /backend/udr/api/tables/` returns the
-full `plenum_cafm` table list with no token. The surface includes `GET /{table}/records` (read
-any row of any table), `GET /{table}/records/{id}`, `POST /{table}/records/search` and
-`POST /{table}/records` (create a row). No write was attempted against production.
+Found while fixing point 1, and fixed in the same way. `svc-udr` is routed at `/backend/udr/`
+from the public internet and had no authentication on any of its 18 routes. Verified live
+before the change: `GET /backend/udr/api/tables/` returned the full `plenum_cafm` table list
+to anyone. The surface includes reading any row of any table, searching it, creating and
+updating rows, deleting them, running a caller-supplied SELECT, and an agent that does all of
+that from a sentence.
 
-It is not one of the four points and is not fixed in this change. It needs the same treatment
-the connector service just got and should be done next.
+Identity comes from operations-intelligence `GET /api/auth/me`, as everywhere else, and the
+error body is the same `{code, message}` shape this service already used.
+
+### Two different boundaries, because the routes are not alike
+
+| Routes | Gate | Why |
+|---|---|---|
+| `/api/tables/**`, `/api/agent/**` | token **and** admin | The table is named by the request. A company filter has to know which column holds the company, and that is only knowable once the table is — so no per-row predicate can be written. Same reasoning as the Table Editor. |
+| `/api/spaces/**`, `/api/udr/**` | token, scoped to your company | Fixed shape, real `organization_id`. An ordinary user has saved spaces and run history of their own. |
+
+For the scoped routes the company now comes from your token, not the query string:
+
+- `?organization_id=<another company>` is **403 `wrong_organization`**, not that company's rows.
+- Omitting it means your company. It used to mean "all of them" on `/api/udr/scripts`, and
+  "the ones belonging to nobody" on `/api/spaces`.
+- `created_by` on a new saved space is the signed-in caller, not a string the request picks.
+- A run or space in another company is **404** on rename and delete — whether that id exists
+  elsewhere is not the caller's to learn.
+- Rows with no `organization_id` stay visible to everyone. They predate this scoping and
+  hiding them would empty the panel for existing users rather than protect anything. New rows
+  are stamped with your company, so that set does not grow.
+
+### What this changes for callers
+
+**Deep-agents keeps working unchanged.** It already sets `caller_authorization` at the top of
+each workflow route and its HTTP client attaches that bearer to every downstream call, so its
+UDR tools now answer as the person who asked rather than as nobody.
+
+**The shell keeps working, with one degradation.** `src/api/client.js` sends the bearer on
+every base. The saved-spaces panel is unaffected. The one caller of the generic SELECT is
+`energyLive.js`'s `enResolveEquipment`, a name lookup for anomaly rows — for a non-admin it
+now returns 403, which that function already catches and turns into `{}`, so anomalies still
+render without the equipment name. If that name matters for ordinary users, the right fix is
+a scoped endpoint on ops-intelligence rather than opening a raw SELECT to everyone.
