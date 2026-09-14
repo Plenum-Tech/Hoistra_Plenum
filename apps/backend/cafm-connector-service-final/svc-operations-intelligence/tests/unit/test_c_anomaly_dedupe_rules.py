@@ -124,3 +124,31 @@ class TestNewestDecisionWins:
         rows = sorted([row("second", "open", detected_min=9), row("first", "open", detected_min=1)],
                       key=lambda r: (r["acted_at"] is None, r["detected_at"]))
         assert rows[0]["id"] == "first"
+
+
+class TestASimulatedReadingKeepsItsHour:
+    """reading_at is timestamptz, so a naive datetime is read as the CLIENT's local time.
+
+    Stripping the zone put a 00:00 UTC slot into the database at 20:00 the previous day on a
+    machine four hours ahead — the row then carried the load shape of a completely different
+    hour, and the first "September" reading was dated 31 August. It also broke the
+    no-overwrite check, which compared one instant while the insert wrote another.
+    """
+
+    def test_the_simulator_never_strips_a_timezone(self):
+        import inspect
+
+        from src.engines.energy import simulator
+
+        source = inspect.getsource(simulator)
+        assert "tzinfo=None" not in source, (
+            "a naive timestamp into a timestamptz column is read as local time")
+
+    def test_both_paths_write_the_slot_they_shaped(self):
+        import inspect
+
+        from src.engines.energy import simulator
+
+        for fn in (simulator.simulate_half_hour, simulator.backfill_range):
+            body = inspect.getsource(fn)
+            assert "reading_at=slot" in body, f"{fn.__name__} does not write the slot it shaped"

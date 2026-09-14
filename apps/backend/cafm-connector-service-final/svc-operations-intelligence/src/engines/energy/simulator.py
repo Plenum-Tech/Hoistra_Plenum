@@ -116,7 +116,7 @@ async def simulate_half_hour(
             await session.execute(
                 select(MeterReading).where(
                     MeterReading.meter_id == m.id,
-                    MeterReading.reading_at == slot.replace(tzinfo=None),
+                    MeterReading.reading_at == slot,
                 )
             )
         ).scalar_one_or_none()
@@ -128,7 +128,7 @@ async def simulate_half_hour(
                     meter_id=m.id,
                     asset_id=m.asset_id,
                     organization_id=m.organization_id,
-                    reading_at=slot.replace(tzinfo=None),
+                    reading_at=slot,
                     consumption_kwh=Decimal(f"{kwh:.4f}"),
                     source="simulator",
                     quality_flag="ok",
@@ -151,5 +151,98 @@ async def simulate_half_hour(
         "slot": slot.isoformat(),
         "meters": len(meters),
         "inserted": inserted,
+        "faults_injected": faults,
+    }
+
+
+async def backfill_range(
+    session: AsyncSession,
+    *,
+    start: datetime,
+    end: datetime,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Fill every half-hour between ``start`` and ``end`` that a flagged meter is missing.
+
+    ``simulate_half_hour`` appends the current half-hour and, if that slot already exists,
+    replaces its value. That is right for a live demo feed catching up after a restart and
+    wrong for filling a month: hoistra_test holds real DCC reads for the first eleven days
+    of September, and a range-fill that updated existing slots would quietly replace eleven
+    days of real data with invented numbers. So this skips any slot a meter already has,
+    unless a caller explicitly asks otherwise.
+
+    Every row it writes carries ``source='simulator'``, the same as the live feed — a
+    simulated reading and a metered one must never be confusable, whichever path wrote it.
+    """
+    start = start.replace(second=0, microsecond=0)
+    start = start.replace(minute=0 if start.minute < 30 else 30)
+    meters = (
+        await session.execute(
+            select(EnergyMeter).where(
+                text("coalesce(raw_metadata->>'simulate','false') = 'true'")
+            )
+        )
+    ).scalars().all()
+    if not meters:
+        return {"ok": True, "meters": 0, "inserted": 0, "note": "no meters flagged simulate"}
+
+    # One query per meter for what it already has, rather than one per slot: a month at
+    # half-hourly is ~1,440 slots, and asking the database that many times per meter turns a
+    # few seconds into several minutes.
+    have: dict[Any, set[datetime]] = {}
+    for m in meters:
+        rows = (await session.execute(
+            select(MeterReading.reading_at).where(
+                MeterReading.meter_id == m.id,
+                MeterReading.reading_at >= start,
+                MeterReading.reading_at <= end,
+            )
+        )).all()
+        # Compared as instants, not as wall-clock strings: reading_at is timestamptz, and a
+        # naive value is read as the CLIENT's local time. Stripping the zone put a UTC slot
+        # into the database four hours early — so the existence check looked at one instant
+        # and the insert wrote another, and the rows that came back carried the load shape
+        # of a completely different hour of the day.
+        have[m.id] = {r[0].astimezone(timezone.utc) if r[0].tzinfo else r[0].replace(tzinfo=timezone.utc)
+                      for r in rows}
+
+    inserted, skipped, faults = 0, 0, {}
+    for m in meters:
+        base = float((m.raw_metadata or {}).get("sim_base_kwh") or 40.0)
+        slot = start
+        while slot <= end:
+            if slot in have[m.id] and not overwrite:
+                skipped += 1
+                slot += HH
+                continue
+            mult, fault = _fault_multiplier(slot, is_sub_meter=bool(m.is_sub_meter))
+            rng = random.Random(f"{m.id}|{slot.isoformat()}")
+            kwh = base * _shape(slot) * mult * rng.uniform(0.97, 1.03)
+            session.add(
+                MeterReading(
+                    meter_id=m.id,
+                    asset_id=m.asset_id,
+                    organization_id=m.organization_id,
+                    reading_at=slot,
+                    consumption_kwh=Decimal(f"{kwh:.4f}"),
+                    source="simulator",
+                    quality_flag="ok",
+                )
+            )
+            inserted += 1
+            if fault:
+                faults[fault] = faults.get(fault, 0) + 1
+            slot += HH
+        await session.flush()
+    await session.commit()
+    log.info("energy.simulator.backfill", start=start.isoformat(), end=end.isoformat(),
+             meters=len(meters), inserted=inserted, skipped=skipped, faults=faults)
+    return {
+        "ok": True,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "meters": len(meters),
+        "inserted": inserted,
+        "skipped_existing": skipped,
         "faults_injected": faults,
     }
