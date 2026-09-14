@@ -302,8 +302,9 @@ class Seeder:
             if self.apply:
                 await self.c.execute("""
                     INSERT INTO plenum_cafm.regulatory_filings
-                        (id, organization_id, building_id, scheme, period_year, status, filed_at, due_date, reference, certification_level)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING""",
+                        (id, organization_id, building_id, scheme, period_year, status, filed_at, due_date, reference,
+                         certification_level, detail_json)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '{"synthetic": true}'::jsonb) ON CONFLICT DO NOTHING""",
                     uuid.uuid5(NS, f"filing:{b['building_id']}:{scheme}:{year}"), b["organization_id"], b["building_id"],
                     scheme, year, status, filed_at, due, f"SYN-{scheme}-{year}-{str(b['building_id'])[:6]}", level)
 
