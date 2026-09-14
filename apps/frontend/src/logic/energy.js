@@ -154,7 +154,14 @@ export const energyMethods = {
       enAvailTitle: sc.single ? "Available at this scope" : "Available across every market in scope",
 
       enMatrixCols: "168px repeat(" + sc.sel.length + ", minmax(200px,1fr))",
-      enMatrixHead: sc.sel.map((cc) => { const n = allBuildings.filter((b) => b.cc === cc).length; return { label: PACKS[cc].flag + " " + PACKS[cc].name, n: n + (n === 1 ? " building" : " buildings") }; }),
+      // Header counts and cells come from the API when it has answered: the table then says
+      // what THIS deployment measures, not what a constant assumed. The constant stays as
+      // the seed fallback so the demo portfolio still renders a table.
+      enMatrixHead: sc.sel.map((cc) => {
+        const live = isLive && s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
+        const n = live ? live.buildings : allBuildings.filter((b) => b.cc === cc).length;
+        return { label: PACKS[cc].flag + " " + PACKS[cc].name, n: n + (n === 1 ? " building" : " buildings") };
+      }),
       enSideTitle: sc.single ? (cc0 === "AE" ? "EUI vs rolling portfolio benchmark" : "EUI vs " + P.std) : "EUI vs each building's own pack",
       enSideFoot: sc.single
         ? "Bar length is EUI against " + (cc0 === "AE" ? "the 228 kWh/m²/yr rolling portfolio benchmark" : "the " + P.std + " reference") + ". Over-benchmark buildings carry the " + money(excess) + " gap at " + E.tariffLabel + "."
@@ -165,11 +172,20 @@ export const energyMethods = {
         AE: ["Which chillers drift against cooling degree days?", "What does the DEWA bill show that the BMS cannot see?", "Rank UAE buildings by RT per m²"],
         SG: ["Is the BCA submission consistent with the retailer feed?", "Which building drifted furthest from its own baseline?", "What does the retail contract say about data at renewal?"]
       })[cc0] : ["Which markets drive the excess cost?", "Which buildings are worst against their own pack?", "Where does the data route limit what I can see?"]),
-      enMatrixRows: EN_ATTRS.map((a, i) => ({
-        section: i === 0 || EN_ATTRS[i - 1][0] !== a[0] ? a[0] : "",
-        sectionShow: i === 0 || EN_ATTRS[i - 1][0] !== a[0] ? "flex" : "none",
+      enMatrixRows: ((isLive && s.enProfilesLive && s.enProfilesLive.attributes) || EN_ATTRS).map((a, i, attrs) => ({
+        section: i === 0 || attrs[i - 1][0] !== a[0] ? a[0] : "",
+        sectionShow: i === 0 || attrs[i - 1][0] !== a[0] ? "flex" : "none",
         label: a[1],
-        cells: sc.sel.map((cc) => ({ v: (EN_PROFILE[cc] || {})[a[2]] || "—" }))
+        cells: sc.sel.map((cc) => {
+          const live = isLive && s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
+          const c = live && live.cells ? live.cells[a[2]] : null;
+          if (!c) return { v: (EN_PROFILE[cc] || {})[a[2]] || "—", basis: "", basisShow: "none", note: "" };
+          // A measured or derived cell earns a small label saying so, with how many
+          // buildings or meters stand behind it; a reference one says it is reference.
+          const tag = c.basis === "reference" ? "reference"
+            : c.basis + (typeof c.n === "number" ? " · " + c.n : "");
+          return { v: c.v || "—", basis: tag, basisShow: c.basis ? "inline-block" : "none", note: c.note || "" };
+        })
       })),
       enMatrixTitle: sc.single ? "Market profile · " + PACKS[cc0].name : "Market profiles side by side · " + sc.sel.length + " markets",
       enMatrixShow: s.enMatrixOpen ? "block" : "none",

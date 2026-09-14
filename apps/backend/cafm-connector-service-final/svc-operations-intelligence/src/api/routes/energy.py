@@ -29,6 +29,7 @@ from ...models.energy import EnergyMonthlyReport
 from ...shared import approvals as approvals_svc
 from ...engines.auth import access
 from ...engines.energy import chiller as chiller_svc
+from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
@@ -920,6 +921,25 @@ async def ratings_position(
 
 
 # ── B9 · chillers ───────────────────────────────────────────────────────────────────────
+
+@router.get("/market-profiles")
+async def market_profiles(
+    markets: str | None = Query(None, description="Comma-separated subset of UK,US,AE,SG; all four by default"),
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The market-profile table the Energy page lays side by side: benchmark, data source
+    and commercial terms per market. Every cell says what kind of fact it is — a published
+    reference, a measurement off this deployment's own records, or a figure derived from
+    them — and how many buildings or meters stand behind it. The reference EUI is each
+    market's own benchmark rule applied to the buildings actually in scope: TM46 weighted by
+    use mix (UK), the LL97 cap by occupancy group with the Energy Star target (US), the
+    rolling portfolio median (UAE), the BCA reference with per-building overrides (SG)."""
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    wanted = tuple(m.strip().upper() for m in markets.split(",") if m.strip()) if markets else None
+    return await profile_svc.market_profiles(session, building_ids=ids, markets=wanted)
+
 
 @router.post("/chillers/{asset_id}/design")
 async def chiller_design(

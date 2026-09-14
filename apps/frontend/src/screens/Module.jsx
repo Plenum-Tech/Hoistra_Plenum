@@ -268,8 +268,11 @@ export default function Module({ vals }) {
                           </span>
                           {(r.cells || []).map((c, $index) => (
                             <React.Fragment key={$index}>
-                              <span style={{ fontSize: "11.5px", lineHeight: "1.45", textWrap: "pretty", minWidth: "0" }}>
+                              <span style={{ fontSize: "11.5px", lineHeight: "1.45", textWrap: "pretty", minWidth: "0" }} title={c.note || undefined}>
                                 {c.v}
+                                <span style={{ display: c.basisShow || "none", marginLeft: "6px", fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", padding: "1px 5px", borderRadius: "4px", verticalAlign: "middle", whiteSpace: "nowrap", color: c.basis === "reference" ? "var(--color-neutral-500)" : "var(--color-accent)", background: c.basis === "reference" ? "var(--color-surface-2, rgba(0,0,0,0.04))" : "var(--color-accent-soft, rgba(255,105,0,0.08))" }}>
+                                  {c.basis}
+                                </span>
                               </span>
                             </React.Fragment>
                           ))}

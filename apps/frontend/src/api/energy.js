@@ -66,6 +66,11 @@ export const energyApi = {
   // Every ENERGY STAR / LL97 snapshot on record for a building (or every building the
   // caller may see), newest first per scheme.
   ratings: (query) => apiFetch(B, '/api/energy/ratings', { query: withOrg(query || {}) }),
+  // The market-profile table: benchmark, data source and commercial terms per market, each
+  // cell labelled reference / measured / derived. The reference EUI is each market's own
+  // benchmark rule applied to the buildings in scope, not a typed constant.
+  marketProfiles: (markets) =>
+    apiFetch(B, '/api/energy/market-profiles', { query: withOrg(markets ? { markets: markets.join(',') } : {}), timeoutMs: 20000 }),
   // kW/RT over a window against a chiller's design figure — the position, breach or not.
   chillerEfficiency: (assetId, windowDays) =>
     apiFetch(B, '/api/energy/chillers/' + enc(assetId) + '/efficiency', { query: { window_days: windowDays || 14 } })

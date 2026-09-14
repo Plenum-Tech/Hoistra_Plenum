@@ -138,9 +138,16 @@ export const energyLiveMethods = {
     clearTimeout(this._enRetry);
     this.setState({ enLoading: true });
     try {
-      const [anomRes, meterRes] = await Promise.all([energyApi.anomalies(), energyApi.meters()]);
+      // The market-profile table rides along: it is small, it is scoped the same way, and
+      // a page that shows live anomalies against a hardcoded benchmark table is telling two
+      // different stories. It is optional — a failure here must not take the anomalies down.
+      const [anomRes, meterRes, profRes] = await Promise.all([
+        energyApi.anomalies(), energyApi.meters(),
+        energyApi.marketProfiles().catch(() => null)
+      ]);
       const anomalies = (anomRes && anomRes.anomalies) || [];
       const meters = (meterRes && meterRes.meters) || [];
+      const profiles = profRes && profRes.ok && profRes.markets ? profRes : null;
       // Equipment resolution only runs when an anomaly actually carries an asset_id — in
       // this database that is rare (site- and meter-scoped anomalies are the common case),
       // so most loads skip the extra round trip entirely.
@@ -149,6 +156,7 @@ export const energyLiveMethods = {
       this._enAttempts = 0;
       this.setState({
         enAnomLive: anomalies, enMetersLive: meters, enEquip: equipmentByUuid,
+        enProfilesLive: profiles,
         enLoading: false, enError: "", enLoadedAt: new Date().toISOString()
       });
       if (opts && opts.announce) this.flash("Energy anomalies loaded — " + anomalies.length + " open, " + meters.length + " meters");
