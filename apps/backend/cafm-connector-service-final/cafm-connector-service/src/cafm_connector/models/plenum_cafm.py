@@ -359,6 +359,10 @@ class Location(PlenumBase):
         ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # The building this row sits on. The column is already in the database and already
+    # populated; it was never mapped here, so the connector could not narrow anything to a
+    # user's building allocation. Mapping it is what lets api.security scope these tables.
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(String(100), nullable=False)          # site, building, floor, room, zone
     parent_location_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -426,6 +430,10 @@ class Asset(PlenumBase):
         ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # The building this row sits on. The column is already in the database and already
+    # populated; it was never mapped here, so the connector could not narrow anything to a
+    # user's building allocation. Mapping it is what lets api.security scope these tables.
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     location_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.locations.id", ondelete="SET NULL"),
     )
@@ -842,6 +850,10 @@ class WorkOrder(PlenumBase):
         ForeignKey(f"{SCHEMA}.organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # The building this row sits on. The column is already in the database and already
+    # populated; it was never mapped here, so the connector could not narrow anything to a
+    # user's building allocation. Mapping it is what lets api.security scope these tables.
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # ── Primary asset/location (kept from original) ──
     asset_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.assets.id", ondelete="SET NULL"),

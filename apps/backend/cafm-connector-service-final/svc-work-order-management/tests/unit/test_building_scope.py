@@ -112,6 +112,8 @@ class Recording:
         def scalars(self): return self
         def all(self): return self._rows
         def scalar_one_or_none(self): return self._rows[0] if self._rows else None
+        # The list routes count before paging, over the same scoped query as the rows.
+        def scalar_one(self): return len(self._rows)
 
     async def execute(self, stmt, *a, **k):
         self.statements.append(stmt)
@@ -161,7 +163,11 @@ def test_a_users_list_is_narrowed_in_sql(client, path, table):
     r = client.get(path)
     assert r.status_code == 200, (path, r.text[:200])
     assert r.json() == []
-    assert f"{table}.building_id IN (" in compiled(s.statements[-1]), path
+    # Every statement the route issued, not only the last: the pre-paging count must carry
+    # the same predicate as the rows, or a restricted caller is told "0 of 54".
+    scoped = [st for st in s.statements if table in compiled(st)]
+    assert scoped, path
+    assert all(f"{table}.building_id IN (" in compiled(st) for st in scoped), path
 
 
 def test_the_dashboard_counts_only_the_callers_buildings(client):

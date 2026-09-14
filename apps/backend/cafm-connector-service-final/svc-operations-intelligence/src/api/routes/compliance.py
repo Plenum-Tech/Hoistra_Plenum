@@ -1137,6 +1137,34 @@ async def backfill_site_links(
     )
 
 
+@router.post("/coverage/backfill-building-links")
+async def backfill_building_links(
+    organization_id: UUID | None = None,
+    dry_run: bool = Query(
+        True,
+        description="true (default) reports what would be linked and writes nothing.",
+    ),
+    limit: int = Query(1000, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Link certificates already in the register to the building they belong to.
+
+    A certificate's building is resolved once, at ingest. If the answer was no — the
+    building did not exist yet, the name did not match, the document named no building —
+    nothing asked again, and that certificate stayed invisible to every building-scoped
+    view and every coverage figure. This asks again, from the certificate's own fields
+    first and from its source document second, and reports the certificates that no rule
+    can place rather than guessing a building for them.
+    """
+    organization_id = access.organization_for(s, organization_id)
+    from ...engines.compliance.building_links import backfill_building_links as _backfill
+
+    return await _backfill(
+        session, organization_id=organization_id, dry_run=dry_run, limit=limit
+    )
+
+
 @router.get("/coverage/vendors")
 async def coverage_vendors(
     organization_id: UUID | None = None,

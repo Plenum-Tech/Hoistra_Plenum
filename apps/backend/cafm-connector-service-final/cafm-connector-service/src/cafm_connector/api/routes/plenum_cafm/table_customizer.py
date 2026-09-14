@@ -35,6 +35,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.security import require_admin
 
 # ── Sub-application (inner — mounted at /table-editor in the main connector app) ─
 
@@ -47,10 +48,21 @@ table_editor_inner = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# Authorization travels as a bearer header, not a cookie, so credentialed cross-site
+# requests are not needed — and "*" with allow_credentials=True is the combination browsers
+# refuse and servers should never offer. Set TABLE_EDITOR_CORS_ORIGINS to a comma-separated
+# list to name the UI's origins explicitly.
+_CORS_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "TABLE_EDITOR_CORS_ORIGINS",
+        "http://localhost:3001,http://127.0.0.1:3001",
+    ).split(",") if o.strip()
+]
+
 table_editor_inner.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -64,7 +76,13 @@ async def dbapi_error_handler(_request: Request, exc: DBAPIError) -> JSONRespons
     return JSONResponse(status_code=422, content={"detail": detail})
 
 
-router = APIRouter(prefix="/tables", tags=["Table Customizer"])
+# Every route here reads and writes arbitrary rows in a table named at runtime, and two of
+# them add or drop columns. A per-row company filter cannot be expressed over a query whose
+# table is chosen by the caller, so the boundary is the role: an administrator of the
+# company, or nobody. ``get_plenum_db`` already refuses a request with no token; this refuses
+# a signed-in user who is not an administrator.
+router = APIRouter(prefix="/tables", tags=["Table Customizer"],
+                   dependencies=[Depends(require_admin)])
 
 _SCHEMA = "plenum_cafm"
 _SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
