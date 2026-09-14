@@ -16,9 +16,6 @@ log = structlog.get_logger(__name__)
 
 @tool
 async def check_requirements(asset_code: str, regulation: str | None = None) -> dict:
-    # The caller's buildings, or nothing for an admin. Every query below joins the
-    # asset, and the building lives on the asset.
-    bsql, bparams = building_clause("a.building_id")
     """Check compliance status for an asset against maintenance and inspection requirements.
 
     Evaluates: PM schedule adherence, open corrective-action inspections,
@@ -32,6 +29,9 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
         asset_code: Asset to check compliance for.
         regulation: Optional regulation to filter checks against (checks all if omitted).
     """
+    # The caller's buildings, or nothing for an admin. Every query below joins the
+    # asset, and the building lives on the asset.
+    bsql, bparams = building_clause("a.building_id")
     async with database.AsyncSessionLocal() as session:
         try:
             # Fetch PM compliance — maintenance_plans joined to assets via asset_id UUID FK
@@ -132,9 +132,6 @@ async def generate_compliance_report(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict:
-    # The caller's buildings, or nothing for an admin. Every query below joins the
-    # asset, and the building lives on the asset.
-    bsql, bparams = building_clause("a.building_id")
     """Generate a portfolio-wide compliance summary report.
 
     Aggregates PM adherence, inspection outcomes, and high-priority WO backlog
@@ -147,6 +144,9 @@ async def generate_compliance_report(
         date_from: Report period start (ISO 8601, optional).
         date_to: Report period end (ISO 8601, optional).
     """
+    # The caller's buildings, or nothing for an admin. Every query below joins the
+    # asset, and the building lives on the asset.
+    bsql, bparams = building_clause("a.building_id")
     params: dict[str, Any] = {**bparams}
 
     # Build asset query — join asset_categories since assets has category_id FK (no direct category col)
