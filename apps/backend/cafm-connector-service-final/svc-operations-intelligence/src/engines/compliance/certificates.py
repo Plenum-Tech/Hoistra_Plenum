@@ -2127,6 +2127,11 @@ async def list_certificates(
     expiry_month: str | None = None,
     include_archived: bool = False,
     limit: int = 200,
+    # The caller's buildings. None = every building in the company. A restricted caller
+    # sees certificates filed for their buildings plus vendor accreditations — which name
+    # no property — and never another building's certificate. Applied in SQL, before the
+    # limit, so a one-building user's page is not the first 200 rows of somebody else's.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     # Fetch a wider window when filtering client-side so deep-links stay accurate.
     # Status is filtered AFTER enrichment (recomputed from expiry) so "expired"/"lapsed"
@@ -2161,6 +2166,11 @@ async def list_certificates(
         q = q.where(ComplianceCertificate.site_id == site_id)
     if site_ref:
         q = q.where(ComplianceCertificate.site_ref == site_ref)
+    if building_ids is not None:
+        vendor_only = ComplianceCertificate.building_id.is_(None) & (
+            func.lower(ComplianceCertificate.cert_scope) == "vendor"
+        )
+        q = q.where(ComplianceCertificate.building_id.in_(list(building_ids)) | vendor_only)
     rows = list((await session.execute(q)).scalars().all())
     # Hide test fixtures / superseded duplicates from Saved Space lists — the same rows the
     # nightly scan already skips — so the PM sees real certificates, not seeded fixtures.
@@ -2400,6 +2410,7 @@ async def count_certificates(
     organization_id: UUID | None = None,
     risk_filter: str | None = None,
     limit: int = 500,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Deterministic filter+count for attribute questions the LLM must not guess.
 
@@ -2414,6 +2425,7 @@ async def count_certificates(
         risk_filter=risk_filter,
         draft=draft,
         limit=limit,
+        building_ids=building_ids,
     )
     matches = [
         r

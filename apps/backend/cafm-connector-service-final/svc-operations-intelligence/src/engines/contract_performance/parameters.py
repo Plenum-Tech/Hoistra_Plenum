@@ -610,8 +610,24 @@ async def list_contract_parameters(
     vendor_id: UUID | None = None,
     status: str | None = None,
     limit: int = 100,
+    # The caller's buildings. A contract belongs to a building through the document it was
+    # extracted from, or through a vendor working on it (a certificate, work order or
+    # invoice there). None = every contract in the company.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(ContractSlaParameters).order_by(ContractSlaParameters.created_at.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        dsql, dparams = _access.document_predicate(building_ids, "document_id", prefix="doc")
+        vsql, vparams = _access.vendor_predicate(building_ids, "vendor_id", prefix="ven")
+        if dsql.strip() == "AND FALSE":
+            q = _access.orm_where(q, " AND FALSE", {})
+        else:
+            q = _access.orm_where(
+                q, " AND (" + dsql[len(" AND "):] + " OR " + vsql[len(" AND "):] + ")",
+                {**dparams, **vparams},
+            )
     if organization_id:
         q = q.where(ContractSlaParameters.organization_id == organization_id)
     if vendor_id:
@@ -933,8 +949,13 @@ async def list_asset_criticalities(
     organization_id: UUID | None = None,
     approved: bool | None = None,
     limit: int = 200,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(AssetCriticality).order_by(AssetCriticality.updated_at.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        q = _access.orm_where(q, *_access.asset_predicate(building_ids, "asset_id"))
     if organization_id:
         q = q.where(AssetCriticality.organization_id == organization_id)
     if approved is not None:

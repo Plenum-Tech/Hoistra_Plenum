@@ -89,11 +89,19 @@ def scope_for(
                 your_organization_id=str(org) if org else None,
             )
         org = requested_org
+    # A selected building narrows what the caller sees to that one building — for a plain
+    # user only if it is among the ones they are allocated, for an admin only if it is in
+    # their company (checked where it is set). It can never widen: a selection that is not
+    # allowed is ignored, not honoured.
+    building_ids = principal.building_ids
+    sel = getattr(principal, "selected_building_id", None)
+    if sel is not None and (building_ids is None or sel in building_ids):
+        building_ids = (sel,)
     return Scope(
         user_id=principal.user_id,
         role=principal.role,
         organization_id=org,
-        building_ids=principal.building_ids,
+        building_ids=building_ids,
         can_ingest=principal.can_ingest,
     )
 
@@ -116,6 +124,101 @@ def organization_for(scope: Scope, requested: UUID | None) -> UUID | None:
             your_organization_id=str(scope.organization_id) if scope.organization_id else None,
         )
     return requested
+
+
+#: The vendors with any footprint on a set of buildings — a certificate filed for one, a
+#: work order raised on one, an invoice verified against one. Vendor tables carry no
+#: building of their own, so this is what "the vendors for my buildings" means wherever a
+#: restricted caller asks about vendors. vendor_id is uuid on all three tables.
+VENDORS_ON_BUILDINGS_SQL = (
+    "(SELECT c.vendor_id FROM plenum_cafm.compliance_certificates c"
+    " WHERE c.vendor_id IS NOT NULL AND c.building_id = ANY(CAST(:{key} AS uuid[]))"
+    " UNION SELECT w.vendor_id FROM plenum_cafm.work_orders w"
+    " WHERE w.vendor_id IS NOT NULL AND w.building_id = ANY(CAST(:{key} AS uuid[]))"
+    " UNION SELECT i.vendor_id FROM plenum_cafm.invoices i"
+    " WHERE i.vendor_id IS NOT NULL AND i.building_id = ANY(CAST(:{key} AS uuid[])))"
+)
+#: assets.id is varchar on one deployment and uuid on another; compared as text it is both.
+ASSETS_ON_BUILDINGS_SQL = (
+    "(SELECT a.id::text FROM plenum_cafm.assets a WHERE a.building_id = ANY(CAST(:{key} AS uuid[])))"
+)
+#: A document placed on a building — the link contracts and invoices reach a building by.
+DOCUMENTS_ON_BUILDINGS_SQL = (
+    "(SELECT d.document_id FROM plenum_cafm.documents d WHERE d.building_id = ANY(CAST(:{key} AS uuid[])))"
+)
+
+
+def _ids_or_none(building_ids: tuple[UUID, ...] | None) -> tuple[list[str] | None, bool]:
+    """(ids, refuse_all): None = unrestricted; [] with refuse_all = allocated to nothing."""
+    if building_ids is None:
+        return None, False
+    ids = [str(b) for b in building_ids]
+    return ids, not ids
+
+
+def building_predicate(
+    building_ids: tuple[UUID, ...] | None, column: str = "building_id", *, prefix: str = "scope"
+) -> tuple[str, dict[str, Any]]:
+    """``building_filter`` for an engine handed the ids rather than the Scope."""
+    ids, refuse = _ids_or_none(building_ids)
+    if ids is None:
+        return "", {}
+    if not _SAFE_COLUMN.match(column):
+        raise ValueError(f"unsafe column reference: {column!r}")
+    if refuse:
+        return " AND FALSE", {}
+    key = f"{prefix}_building_ids"
+    return f" AND {column} = ANY(CAST(:{key} AS uuid[]))", {key: ids}
+
+
+def _derived_predicate(building_ids, column, template, cast, prefix):
+    ids, refuse = _ids_or_none(building_ids)
+    if ids is None:
+        return "", {}
+    if not _SAFE_COLUMN.match(column):
+        raise ValueError(f"unsafe column reference: {column!r}")
+    if refuse:
+        return " AND FALSE", {}
+    key = f"{prefix}_building_ids"
+    return f" AND {column}{cast} IN {template.format(key=key)}", {key: ids}
+
+
+def vendor_predicate(
+    building_ids: tuple[UUID, ...] | None, column: str = "vendor_id", *, prefix: str = "scope"
+) -> tuple[str, dict[str, Any]]:
+    """Narrow a vendor-keyed query to the vendors with a footprint on these buildings."""
+    sql, params = _derived_predicate(
+        building_ids, column, "(SELECT v.vendor_id::text FROM " + VENDORS_ON_BUILDINGS_SQL + " v)",
+        "::text", prefix,
+    )
+    return sql, params
+
+
+def asset_predicate(
+    building_ids: tuple[UUID, ...] | None, column: str = "asset_id", *, prefix: str = "scope"
+) -> tuple[str, dict[str, Any]]:
+    """Narrow an asset-keyed query to the assets on these buildings."""
+    return _derived_predicate(building_ids, column, ASSETS_ON_BUILDINGS_SQL, "::text", prefix)
+
+
+def document_predicate(
+    building_ids: tuple[UUID, ...] | None, column: str = "document_id", *, prefix: str = "scope"
+) -> tuple[str, dict[str, Any]]:
+    """Narrow a document-keyed query to documents placed on these buildings."""
+    return _derived_predicate(building_ids, column, DOCUMENTS_ON_BUILDINGS_SQL, "", prefix)
+
+
+def orm_where(q, sql: str, params: dict[str, Any]):
+    """Apply one of the predicates above to a SQLAlchemy select — the ``" AND …"`` fragment
+    becomes a bound text clause, so ORM engines take the same boundary as raw-SQL ones."""
+    if not sql:
+        return q
+    from sqlalchemy import text as _text
+
+    clause = _text(sql[len(" AND "):])
+    if params:
+        clause = clause.bindparams(**params)
+    return q.where(clause)
 
 
 def building_filter(

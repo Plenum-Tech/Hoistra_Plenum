@@ -22,6 +22,7 @@ from ...api.schemas.work_order import (
     StatusUpdate,
 )
 from ...services.approval_chain_service import approval_suggestion_after_create
+from ...services.principal import Principal, assert_building, current_principal, scope_select
 from ...api.schemas.journey import StatusHistoryEntry, BulkStatusUpdate
 from ...core.exceptions import (
     WorkOrderNotFound, InvalidStatusTransition,
@@ -55,7 +56,9 @@ def _wo_id() -> str:
     return f"WO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')[:18]}"
 
 
-async def _get_wo_or_404(work_order_id: str, session: AsyncSession) -> WorkOrder:
+async def _get_wo_or_404(
+    work_order_id: str, session: AsyncSession, principal: Principal | None = None
+) -> WorkOrder:
     try:
         result = await session.execute(
             select(WorkOrder).where(WorkOrder.work_order_id == work_order_id)
@@ -65,6 +68,10 @@ async def _get_wo_or_404(work_order_id: str, session: AsyncSession) -> WorkOrder
     wo = result.scalar_one_or_none()
     if not wo:
         raise WorkOrderNotFound(work_order_id)
+    if principal is not None:
+        # A work order on somebody else's building is refused, not hidden: the caller
+        # named it, so "not found" would be a lie and 403 says what is actually wrong.
+        assert_building(principal, wo.building_id)
     return wo
 
 
@@ -80,6 +87,7 @@ async def _get_wo_or_404(work_order_id: str, session: AsyncSession) -> WorkOrder
 async def create_work_order(
     payload: WorkOrderCreate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info(
         "work_order.create.start",
@@ -88,6 +96,15 @@ async def create_work_order(
         priority=payload.priority,
         requester_email=payload.requester_email,
     )
+    # The building the work order is on. A named one must be among the caller's; with none
+    # named, a caller who can only see one building (allocated to one, or with one
+    # selected) gets that one stamped, so their own work order does not vanish from their
+    # own list the moment it is created.
+    building_id = payload.building_id
+    if building_id is not None:
+        assert_building(principal, building_id, action="raise work on")
+    elif principal.building_ids is not None and len(principal.building_ids) == 1:
+        building_id = principal.building_ids[0]
     org_id = None
     if settings.default_organization_id:
         try:
@@ -98,6 +115,7 @@ async def create_work_order(
     wo = WorkOrder(
         work_order_id=_wo_id(),
         organization_id=org_id,
+        building_id=building_id,
         title=payload.issue_description,
         source=payload.source,
         asset=payload.asset,
@@ -183,6 +201,7 @@ async def list_work_orders(
     page:          int                = Query(1, ge=1),
     limit:         int                = Query(20, ge=1, le=200),
     session:       AsyncSession       = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.debug(
         "work_order.list",
@@ -190,6 +209,7 @@ async def list_work_orders(
         asset=asset, page=page, limit=limit,
     )
     q = select(WorkOrder).where(WorkOrder.work_order_id.isnot(None))
+    q = scope_select(q, principal, WorkOrder.building_id)
     if status_filter:
         q = q.where(WorkOrder.status == status_filter)
     if priority:
@@ -212,21 +232,25 @@ async def list_work_orders(
 
 
 @router.get("/filter/active",           response_model=List[WorkOrderResponse])
-async def get_active(session: AsyncSession = Depends(get_session)):
+async def get_active(session: AsyncSession = Depends(get_session),
+               principal: Principal = Depends(current_principal)):
     result = await session.execute(
-        select(WorkOrder)
-        .where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "active")
-        .order_by(WorkOrder.created_at.desc())
+        scope_select(
+            select(WorkOrder).where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "active"),
+            principal, WorkOrder.building_id,
+        ).order_by(WorkOrder.created_at.desc())
     )
     return result.scalars().all()
 
 
 @router.get("/filter/pending-approval", response_model=List[WorkOrderResponse])
-async def get_pending(session: AsyncSession = Depends(get_session)):
+async def get_pending(session: AsyncSession = Depends(get_session),
+               principal: Principal = Depends(current_principal)):
     result = await session.execute(
-        select(WorkOrder)
-        .where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "pending_approval")
-        .order_by(WorkOrder.created_at.desc())
+        scope_select(
+            select(WorkOrder).where(WorkOrder.work_order_id.isnot(None), WorkOrder.status == "pending_approval"),
+            principal, WorkOrder.building_id,
+        ).order_by(WorkOrder.created_at.desc())
     )
     return result.scalars().all()
 
@@ -243,8 +267,9 @@ async def get_pending(session: AsyncSession = Depends(get_session)):
 async def get_work_order_history(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    await _get_wo_or_404(work_order_id, session)   # 404 if not found
+    await _get_wo_or_404(work_order_id, session, principal)   # 404 if not found
     try:
         result = await session.execute(
             select(StatusHistory)
@@ -271,6 +296,7 @@ async def get_work_order_history(
 async def bulk_status_update(
     payload: BulkStatusUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     if not payload.work_order_ids:
         raise HTTPException(
@@ -289,7 +315,8 @@ async def bulk_status_update(
     for wo_id in payload.work_order_ids:
         try:
             result = await session.execute(
-                select(WorkOrder).where(WorkOrder.work_order_id == wo_id)
+                scope_select(select(WorkOrder).where(WorkOrder.work_order_id == wo_id),
+                             principal, WorkOrder.building_id)
             )
             wo = result.scalar_one_or_none()
             if not wo:
@@ -398,6 +425,7 @@ async def suggest_approval(body: SuggestApprovalBody):
 async def get_work_order_status_track(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """
     Full work order tracking: status, multi-step approval progress, technician,
@@ -426,6 +454,7 @@ async def customize_work_order_approval_chain(
     work_order_id: str,
     body: CustomizeChainBody,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     from sqlalchemy import text
     for override in body.chain:
@@ -449,9 +478,10 @@ async def request_dynamic_approval(
     work_order_id: str,
     body: RequestApprovalBody = RequestApprovalBody(),
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """Create multi-step approval requests from DynamicApprovalEngine suggestion."""
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     svc = ApprovalWorkflowService(aimms_api_url=settings.aimms_api_url)
     wo_payload = {
         "work_order_id": wo.work_order_id,
@@ -474,6 +504,7 @@ async def send_approval_email(
     work_order_id: str,
     step_order: int = 1,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     """Send Outlook approval-request email to the approver for a chain step."""
     from ...services.approval_chain_service import send_approval_step_email
@@ -486,8 +517,9 @@ async def send_approval_email(
 # ── Get / Update ──────────────────────────────────────────────────────────────
 
 @router.get("/{work_order_id}", response_model=WorkOrderResponse, responses=_404)
-async def get_work_order(work_order_id: str, session: AsyncSession = Depends(get_session)):
-    return await _get_wo_or_404(work_order_id, session)
+async def get_work_order(work_order_id: str, session: AsyncSession = Depends(get_session),
+                         principal: Principal = Depends(current_principal)):
+    return await _get_wo_or_404(work_order_id, session, principal)
 
 
 @router.patch("/{work_order_id}", response_model=WorkOrderResponse, responses=_404_422)
@@ -495,8 +527,9 @@ async def update_work_order(
     work_order_id: str,
     payload: WorkOrderUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     updates = payload.model_dump(exclude_none=True)
     log.info("work_order.update.start", work_order_id=work_order_id, fields=list(updates.keys()))
     if wo.status == "pending_approval":
@@ -537,8 +570,9 @@ async def update_status(
     work_order_id: str,
     payload: StatusUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if payload.new_status not in allowed:
         log.warning(
@@ -590,9 +624,10 @@ async def update_status(
 async def approve_work_order(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.approve.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     if wo.status != "pending_approval":
         log.warning(
             "work_order.approve.not_pending",
@@ -626,9 +661,10 @@ async def approve_work_order(
 async def close_work_order(
     work_order_id: str,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.close.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     if wo.status == "closed":
         log.warning("work_order.close.already_closed", work_order_id=work_order_id)
         raise WorkOrderAlreadyClosed(work_order_id)
@@ -655,9 +691,10 @@ async def prepare_work_order(
     work_order_id: str,
     payload: WorkOrderUpdate,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     log.info("work_order.prepare.start", work_order_id=work_order_id)
-    wo = await _get_wo_or_404(work_order_id, session)
+    wo = await _get_wo_or_404(work_order_id, session, principal)
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if "prepared" not in allowed:
         log.warning(

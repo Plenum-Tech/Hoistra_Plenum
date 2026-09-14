@@ -629,6 +629,7 @@ async def list_invoices(
     invoice_ref: str | None = None,
     status: str | None = None,
     limit: int = 100,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Verified invoices, with the building and vendor they belong to.
 
@@ -640,7 +641,10 @@ async def list_invoices(
     Every filter is a bound parameter and the statement is fixed text; nothing a caller
     sends is ever interpolated into SQL.
     """
-    sql = """
+    from ..auth import access as _access
+
+    bsql, bparams = _access.building_predicate(building_ids, "i.building_id")
+    sql = f"""
         SELECT i.invoice_id::text      AS invoice_id,
                i.invoice_ref,
                i.document_id::text     AS document_id,
@@ -668,7 +672,7 @@ async def list_invoices(
            AND (CAST(:bld AS uuid) IS NULL OR i.building_id     = CAST(:bld AS uuid))
            AND (CAST(:ven AS uuid) IS NULL OR i.vendor_id       = CAST(:ven AS uuid))
            AND (CAST(:ref AS text) IS NULL OR i.invoice_ref ILIKE '%' || CAST(:ref AS text) || '%')
-           AND (CAST(:sts AS text) IS NULL OR i.status = CAST(:sts AS text))
+           AND (CAST(:sts AS text) IS NULL OR i.status = CAST(:sts AS text)){bsql}
          ORDER BY i.created_at DESC
          LIMIT :lim
     """
@@ -682,6 +686,7 @@ async def list_invoices(
                 "ref": invoice_ref or None,
                 "sts": status or None,
                 "lim": max(1, min(int(limit or 100), 500)),
+                **bparams,
             },
         )
     ).mappings().all()

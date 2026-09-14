@@ -1817,8 +1817,16 @@ class DeepAgentOrchestrator:
                 direction = "DESC" if str(sort.get("dir")).lower() == "desc" else "ASC"
                 sort_sql = f"c.{sfield} {direction} NULLS LAST"
 
+        # The caller's buildings, appended after whatever the model asked for: building
+        # certificates on their buildings plus vendor accreditations, the rule the compliance
+        # list applies upstream. The model cannot widen this — it is not part of the spec.
+        from ..services.principal import certificate_clause
+
+        bsql, bparams = certificate_clause("c")
+        if bsql:
+            where_sql = (where_sql + bsql) if where_sql else "WHERE " + bsql[len(" AND "):]
         sql = _sql(sql_template.format(where=where_sql, sort=sort_sql))
-        params: dict[str, Any] = {"limit": limit, **where_params}
+        params: dict[str, Any] = {"limit": limit, **where_params, **bparams}
         async with database.AsyncSessionLocal() as session:
             result = await session.execute(sql, params)
             raw_rows = [dict(r) for r in result.mappings().all()]
@@ -3241,20 +3249,23 @@ class DeepAgentOrchestrator:
 
         if database.AsyncSessionLocal is None:
             database.init_session_factory()
+        from ..services.principal import building_clause
+
+        bsql, bparams = building_clause("building_id")
         sql = _sql(
-            """
+            f"""
             SELECT id::text, work_order_id, title, status, priority, scheduled_date,
                    vendor_id::text AS vendor_id,
                    COALESCE(assigned_vendor, vendor) AS vendor_name,
                    asset, location, site_id::text AS site_id
             FROM plenum_cafm.work_orders
-            WHERE status IN ('Open','InProgress','In Progress','pending_approval')
+            WHERE status IN ('Open','InProgress','In Progress','pending_approval'){bsql}
             ORDER BY scheduled_date ASC NULLS LAST
             LIMIT :limit
             """
         )
         async with database.AsyncSessionLocal() as session:
-            result = await session.execute(sql, {"limit": limit})
+            result = await session.execute(sql, {"limit": limit, **bparams})
             return [dict(r) for r in result.mappings().all()]
 
     @staticmethod

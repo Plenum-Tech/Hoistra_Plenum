@@ -36,7 +36,7 @@ from ..deps import get_orchestrator
 from ...agents import activity_log
 from ...services import building_binding, usage_events
 from ...services import ingestion_validation as validation_gate
-from ...services.principal import Principal, current_principal
+from ...services.principal import Principal, caller_principal, current_principal
 from ...http_client import caller_authorization
 
 log = structlog.get_logger(__name__)
@@ -262,6 +262,8 @@ async def run_workflow(
     # so what comes back is scoped to their company and buildings — not to whatever
     # organization_id a client chose to send, and not to a service credential that sees all.
     caller_authorization.set(request.headers.get("authorization"))
+    # And the caller themselves, for the reads that run SQL here rather than over HTTP.
+    caller_principal.set(principal)
     activity_log.set_current_session(body.session_id, body.session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
@@ -300,6 +302,8 @@ async def run_stateful_workflow(
     """
     sid = body.session_id
     caller_authorization.set(request.headers.get("authorization"))
+    # And the caller themselves, for the reads that run SQL here rather than over HTTP.
+    caller_principal.set(principal)
     await usage_events.record_usage(
         kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
         detail={"session_id": sid, "chars": len(body.message), "stateful": True},
@@ -350,6 +354,8 @@ async def run_stateful_workflow_with_files(
     """
     source = (ingest_source or "files").strip().lower()
     caller_authorization.set(request.headers.get("authorization"))
+    # And the caller themselves, for the reads that run SQL here rather than over HTTP.
+    caller_principal.set(principal)
 
     # The company is the caller's. It used to be whatever organization_id the form carried,
     # with a hard-coded default when it carried none — so any client could file documents

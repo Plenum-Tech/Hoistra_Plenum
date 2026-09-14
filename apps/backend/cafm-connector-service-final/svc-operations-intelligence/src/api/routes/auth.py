@@ -296,6 +296,10 @@ async def me(
         None if principal.building_ids is None else [str(b) for b in principal.building_ids]
     )
     user["all_buildings"] = principal.building_ids is None
+    # The building they are working in now, if they have chosen one. A client shows this as
+    # the current selection and narrows its own views to it; the server already has.
+    user["selected_building_id"] = (
+        str(principal.selected_building_id) if principal.selected_building_id else None)
     if principal.building_ids:
         named = (await session.execute(
             text("""SELECT building_id::text AS id, name, building_code
@@ -308,6 +312,43 @@ async def me(
         user["buildings"] = []
     return {"ok": True, "user": user,
             "session_id": str(principal.session_id) if principal.session_id else None}
+
+
+class SelectBuilding(BaseModel):
+    """null clears the selection — back to every building the person holds."""
+    building_id: UUID | None = None
+
+
+@router.patch("/me/selected-building")
+async def select_building(
+    body: SelectBuilding,
+    session: AsyncSession = Depends(get_session),
+    principal: token_engine.Principal = Depends(current_principal),
+):
+    """Choose the building to work in. Every scoped read then answers for that building
+    alone, until it is cleared. A plain user may only choose a building they are allocated;
+    an admin any building in their company — the check is the same one every route makes,
+    so a selection can narrow what you see but never widen it."""
+    if body.building_id is not None:
+        if principal.building_ids is not None:
+            if body.building_id not in principal.building_ids:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+                    "ok": False, "error": "You are not allocated to that building.",
+                    "reason": "building_not_allocated", "building_id": str(body.building_id)})
+        else:
+            owned = (await session.execute(text("""
+                SELECT 1 FROM plenum_cafm.buildings
+                 WHERE building_id = :b AND (organization_id = :o OR :o IS NULL)"""),
+                {"b": body.building_id, "o": principal.organization_id})).scalar()
+            if not owned:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+                    "ok": False, "error": "That building is not in your company.",
+                    "reason": "building_not_in_company", "building_id": str(body.building_id)})
+    await session.execute(text("""
+        UPDATE plenum_cafm.users SET selected_building_id = :b, updated_at = now() WHERE id = :i"""),
+        {"b": body.building_id, "i": principal.user_id})
+    await session.commit()
+    return {"ok": True, "selected_building_id": str(body.building_id) if body.building_id else None}
 
 
 # ── forgotten and changed passwords ──────────────────────────────────────────────────

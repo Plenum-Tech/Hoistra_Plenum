@@ -2,8 +2,10 @@
 
     GET    /api/admin/users                      users with buildings, ingestion right, usage, status
     POST   /api/admin/users/invite               invite a user, allocate buildings, set can_ingest
-    PATCH  /api/admin/users/{id}                 change allocation, ingestion right, title, status
-    DELETE /api/admin/users/{id}                 deactivate (never delete — the audit trail names them)
+    PATCH  /api/admin/users/{id}                 change allocation, ingestion right, title, status (active|inactive)
+    POST   /api/admin/users/{id}/deactivate      stop them signing in; sessions end now; reversible
+    POST   /api/admin/users/{id}/reactivate      undo a deactivation (never a deletion)
+    DELETE /api/admin/users/{id}                 soft delete: scrub the person, keep the row the audit trail names
     GET    /api/admin/buildings                  the company's buildings, for the allocation chips
     GET    /api/admin/usage                      per-building and per-user usage
     GET    /api/admin/ingestion-audit            the audit trail, filterable by outcome
@@ -62,7 +64,52 @@ class PatchUser(BaseModel):
     can_ingest: bool | None = None
     job_title: str | None = None
     full_name: str | None = None
-    status: str | None = Field(None, description="active | suspended")
+    #: active | inactive | deleted. "suspended" is accepted and stored as inactive — it was
+    #: the old word for the same state, and a client still sending it must not be refused.
+    #: deleted through PATCH is refused: deleting scrubs a person's details, and that goes
+    #: through DELETE so it cannot happen as a side effect of an edit.
+    status: str | None = Field(None, description="active | inactive (suspended = inactive)")
+
+
+
+#: The account states an administrator may set. Everything else is refused by name.
+ACTIVE, INACTIVE, DELETED = "active", "inactive", "deleted"
+_SETTABLE = {ACTIVE, INACTIVE}
+_ALIASES = {"suspended": INACTIVE, "disabled": INACTIVE, "deactivated": INACTIVE}
+
+
+def _normalise_status(value: str) -> str:
+    v = str(value or "").strip().lower()
+    v = _ALIASES.get(v, v)
+    if v == DELETED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "ok": False, "error": "Delete a user with DELETE /api/admin/users/{id}, not by setting status.",
+            "reason": "use_delete"})
+    if v not in _SETTABLE:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={
+            "ok": False, "error": f"status must be one of {sorted(_SETTABLE)}", "reason": "bad_status"})
+    return v
+
+
+async def _set_status(session: AsyncSession, scope: access.Scope, user_id: UUID, new_status: str) -> dict:
+    """Move an account between active and inactive. Inactive revokes every live session so
+    the change bites now, not at the next token refresh; the account is kept whole so it can
+    be reactivated with everything it had."""
+    if user_id == scope.user_id:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "You cannot change your own status."})
+    n = (await session.execute(
+        text("""UPDATE plenum_cafm.users SET status = :s, updated_at = now()
+                 WHERE id = :i AND organization_id = :o AND status <> 'deleted' RETURNING 1"""),
+        {"s": new_status, "i": user_id, "o": scope.organization_id},
+    )).scalar()
+    if not n:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "user_not_found_or_deleted"})
+    if new_status != ACTIVE:
+        await session.execute(
+            text("""UPDATE plenum_cafm.auth_sessions SET revoked_at = now(), revoked_reason = :r
+                     WHERE user_id = :u AND revoked_at IS NULL"""), {"u": user_id, "r": new_status})
+    await session.commit()
+    return {"ok": True, "user_id": str(user_id), "status": new_status}
 
 
 async def _company_buildings(session: AsyncSession, org: UUID) -> dict[str, dict]:
@@ -237,21 +284,25 @@ async def patch_user(
     if body.full_name is not None:
         sets.append("full_name = :fn"); params["fn"] = body.full_name; changed["full_name"] = body.full_name
     if body.status is not None:
-        if body.status not in ("active", "suspended"):
-            raise HTTPException(status_code=400, detail={"ok": False, "error": "status must be active or suspended"})
-        if user_id == scope.user_id and body.status != "active":
-            raise HTTPException(status_code=400, detail={"ok": False, "error": "You cannot suspend yourself."})
+        # _normalise_status already refused anything but active / inactive (and folded the
+        # old word "suspended" into inactive). The check that used to sit here compared
+        # against the OLD vocabulary and would have refused the normalised value it was
+        # just handed.
+        body.status = _normalise_status(body.status)
+        if user_id == scope.user_id and body.status != ACTIVE:
+            raise HTTPException(status_code=400, detail={"ok": False, "error": "You cannot deactivate yourself."})
         sets.append("status = :st"); params["st"] = body.status; changed["status"] = body.status
+        # Deactivation must bite now, not at the next token refresh — the same rule the
+        # dedicated /deactivate route applies.
+        if body.status == INACTIVE:
+            await session.execute(
+                text("""UPDATE plenum_cafm.auth_sessions SET revoked_at = now(), revoked_reason = 'inactive'
+                         WHERE user_id = :u AND revoked_at IS NULL"""), {"u": user_id})
     if sets:
         await session.execute(
             text(f"UPDATE plenum_cafm.users SET {', '.join(sets)}, updated_at = now() WHERE id = :i"),
             params,
         )
-    if body.status == "suspended":
-        # Their sessions end now, not when the token expires.
-        await session.execute(
-            text("""UPDATE plenum_cafm.auth_sessions SET revoked_at = now(), revoked_reason = 'suspended'
-                     WHERE user_id = :u AND revoked_at IS NULL"""), {"u": user_id})
     await write_audit(
         session, actor=str(scope.user_id), action_type="admin.user.updated",
         source_feature=PLATFORM_FEATURE, organization_id=scope.organization_id,
@@ -261,27 +312,68 @@ async def patch_user(
     return {"ok": True, "user_id": str(user_id), "changed": changed}
 
 
-@router.delete("/users/{user_id}")
+@router.post("/users/{user_id}/deactivate")
 async def deactivate_user(
     user_id: UUID,
     session: AsyncSession = Depends(get_session),
     scope: access.Scope = Depends(admin_scope),
 ):
-    """Suspend, never delete. The audit trail names this person and must keep doing so."""
+    """Deactivate: the person can no longer sign in, and their live sessions end now. Their
+    allocation, history and details are kept, so reactivating restores exactly what they had."""
+    return await _set_status(session, scope, user_id, INACTIVE)
+
+
+@router.post("/users/{user_id}/reactivate")
+async def reactivate_user(
+    user_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """Reactivate a deactivated account. A deleted one cannot come back — its details are gone."""
+    return await _set_status(session, scope, user_id, ACTIVE)
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """Delete a user — softly, and for a reason that is not caution.
+
+    Five tables name a user by id with no cascade (work orders' created_by and requested_by,
+    technicians, approver routing, maintenance history), and the append-only audit log names
+    them thousands of times. A hard DELETE would be refused by the database for anyone who
+    has ever done anything, and succeed only for someone who never signed in — the one case
+    where it does not matter.
+
+    So the row stays and the PERSON goes: email, name and phone are scrubbed to values that
+    identify nobody, the status becomes deleted, every session is revoked, and the building
+    allocation is dropped. History keeps resolving to an id; nothing about who it was remains
+    on the row. This is not reversible, and reactivate will refuse it.
+    """
     if user_id == scope.user_id:
-        raise HTTPException(status_code=400, detail={"ok": False, "error": "You cannot deactivate yourself."})
-    n = (await session.execute(
-        text("""UPDATE plenum_cafm.users SET status = 'suspended', updated_at = now()
-                 WHERE id = :i AND organization_id = :o RETURNING 1"""),
-        {"i": user_id, "o": scope.organization_id},
-    )).scalar()
-    if not n:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "You cannot delete yourself."})
+    row = (await session.execute(
+        text("""SELECT email, status FROM plenum_cafm.users WHERE id = :i AND organization_id = :o"""),
+        {"i": user_id, "o": scope.organization_id})).mappings().first()
+    if row is None:
         raise HTTPException(status_code=404, detail={"ok": False, "error": "user_not_found"})
+    if row["status"] == DELETED:
+        return {"ok": True, "user_id": str(user_id), "status": DELETED, "already": True}
+    scrubbed = f"deleted+{str(user_id)[:8]}@invalid.local"
     await session.execute(
-        text("""UPDATE plenum_cafm.auth_sessions SET revoked_at = now(), revoked_reason = 'suspended'
+        text("""UPDATE plenum_cafm.users
+                   SET status = 'deleted', email = :e, full_name = 'Deleted user',
+                       phone = NULL, phone2 = NULL, job_title = NULL,
+                       password_hash = NULL, selected_building_id = NULL, updated_at = now()
+                 WHERE id = :i"""), {"e": scrubbed, "i": user_id})
+    await session.execute(
+        text("""UPDATE plenum_cafm.auth_sessions SET revoked_at = now(), revoked_reason = 'deleted'
                  WHERE user_id = :u AND revoked_at IS NULL"""), {"u": user_id})
+    await session.execute(text("DELETE FROM plenum_cafm.user_buildings WHERE user_id = :u"), {"u": user_id})
     await session.commit()
-    return {"ok": True, "user_id": str(user_id), "status": "suspended"}
+    return {"ok": True, "user_id": str(user_id), "status": DELETED, "previous_email": row["email"]}
 
 
 @router.get("/usage")

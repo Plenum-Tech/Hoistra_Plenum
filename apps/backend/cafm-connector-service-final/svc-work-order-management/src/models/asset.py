@@ -16,6 +16,7 @@ class Asset(Base):
     model         = Column(String(150))
     serial_number = Column(String(150))
     status        = Column(String(50),      server_default="active")
+    building_id   = Column(UUID(as_uuid=True))
     created_at    = Column(DateTime(timezone=True), server_default=func.now())
 
     # Synthetic properties so response schema serialises cleanly

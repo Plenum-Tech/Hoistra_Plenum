@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from typing import Any, Dict, Literal, Optional
 from datetime import datetime
+from uuid import UUID
 
 # ── Enum constants ────────────────────────────────────────────────────────────
 Priority     = Literal["low", "medium", "high", "urgent", "critical"]
@@ -24,6 +25,9 @@ class WorkOrderCreate(BaseModel):
     requester_name:    str
     requester_email:   EmailStr
     requester_phone:   Optional[str] = None
+    # The building the work is on. Optional: a caller allocated to exactly one building
+    # (or with one selected) has it stamped for them; anyone else names it.
+    building_id:       Optional[UUID] = None
 
     @field_validator("asset", "location", "issue_description", "requester_name")
     @classmethod
@@ -61,6 +65,7 @@ class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     work_order_id:      str
+    building_id:        Optional[UUID]     = None
     # Legacy plenum_cafm.work_orders rows may have NULL source/priority when not
     # created through this service — keep optional so list/detail responses validate.
     source:             Optional[str]      = None

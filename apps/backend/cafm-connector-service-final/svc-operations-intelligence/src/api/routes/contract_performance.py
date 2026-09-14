@@ -124,11 +124,10 @@ async def list_contracts(
         vendor_id=vendor_id,
         status=status,
         limit=limit,
+        # Narrowed in SQL: contracts placed on the caller's buildings through their
+        # document, and contracts of vendors working on those buildings.
+        building_ids=s.building_ids,
     )
-    if s.restricted:
-        # Each row carries the building it covers (resolved through its document). A user
-        # sees only contracts on their buildings; an unplaced contract is not theirs to see.
-        rows = [r for r in rows if s.allows_building(r.get("building_id"))]
     return {"ok": True, "count": len(rows), "parameters": rows}
 
 
@@ -221,7 +220,8 @@ async def list_criticalities(
 ):
     organization_id = access.organization_for(s, organization_id)
     rows = await params_svc.list_asset_criticalities(
-        session, organization_id=organization_id, approved=approved, limit=limit
+        session, organization_id=organization_id, approved=approved, limit=limit,
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "items": rows}
 
@@ -341,7 +341,8 @@ async def list_scorecards(
 ):
     organization_id = access.organization_for(s, organization_id)
     rows = await score_svc.list_scorecards(
-        session, vendor_id=vendor_id, organization_id=organization_id, limit=limit
+        session, vendor_id=vendor_id, organization_id=organization_id, limit=limit,
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "scorecards": rows}
 
@@ -358,14 +359,15 @@ async def vendors_saved_space_summary(
     # portfolio-wide (e.g. a vendor scored from 2023 reports vanished behind
     # three vendors' 2026 months). 200 covers years of monthly cards.
     cards = await score_svc.list_scorecards(
-        session, organization_id=organization_id, limit=200
+        session, organization_id=organization_id, limit=200, building_ids=s.building_ids
     )
     weights = await score_svc.get_or_create_weights(session, organization_id)
     approvals = await approvals_svc.list_queue(
         session, source_feature="B", status="pending", organization_id=organization_id
     )
     crit = await params_svc.list_asset_criticalities(
-        session, organization_id=organization_id, approved=False, limit=50
+        session, organization_id=organization_id, approved=False, limit=50,
+        building_ids=s.building_ids,
     )
     return {
         "ok": True,
@@ -466,6 +468,7 @@ async def list_invoices(
         invoice_ref=invoice_ref,
         status=status,
         limit=limit,
+        building_ids=s.building_ids,
     )
     if s.restricted:
         rows = [r for r in rows if s.allows_building(r.get("building_id"))]
@@ -594,5 +597,6 @@ async def get_insights(
         organization_id=organization_id,
         from_date=fd,
         to_date=td,
+        building_ids=s.building_ids,
     )
     return result

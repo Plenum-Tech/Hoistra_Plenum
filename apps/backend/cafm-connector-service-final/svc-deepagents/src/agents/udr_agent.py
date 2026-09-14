@@ -15,6 +15,7 @@ from sqlalchemy import text
 from .. import database
 from ..config import settings
 from ..http_client import request as _request
+from ..services.principal import restrict_records, table_building_clause
 
 log = structlog.get_logger(__name__)
 
@@ -208,10 +209,17 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-    sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
-
     async with database.AsyncSessionLocal() as session:
         try:
+            # The caller's buildings bound this read like every other. Decided from the
+            # table's real columns (building_id, vendor, asset, site, meter), never from the
+            # question; an admin gets no clause and a caller allocated to nothing gets none of
+            # the rows.
+            bsql, bparams = await table_building_clause(session, table_name)
+            if bsql:
+                where_clause = (where_clause + bsql) if where_clause else "WHERE " + bsql[len(" AND "):]
+                params.update(bparams)
+            sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
             result = await session.execute(text(sql), params)
             rows = result.mappings().all()
             return [dict(r) for r in rows]
@@ -483,6 +491,22 @@ async def udr_describe_table(table: str) -> dict:
         return _err(exc, "describe_table")
 
 
+
+async def _scoped(table: str, payload: dict, *, key: str = "rows") -> dict:
+    """Narrow a svc-udr read to the caller's buildings before the model sees it."""
+    rows = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return payload
+    async with database.AsyncSessionLocal() as session:
+        kept, refused = await restrict_records(session, table, [r for r in rows if isinstance(r, dict)])
+    out = {**payload, key: kept, "count": len(kept)}
+    if refused:
+        out["note"] = refused
+    elif len(kept) != len(rows):
+        out["note"] = f"{len(rows) - len(kept)} row(s) outside your buildings were withheld."
+    return out
+
+
 _MAX_READ_LIMIT = 500
 
 
@@ -514,7 +538,7 @@ async def udr_read_records(
             timeout=_TIMEOUT,
             params=params,
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "read_records")
 
@@ -531,7 +555,12 @@ async def udr_get_record(table: str, record_id: str, id_column: str = "id") -> d
             timeout=_TIMEOUT,
             params={"id_column": id_column},
         )
-        return resp.json()
+        record = resp.json()
+        scoped = await _scoped(table, {"rows": [record] if isinstance(record, dict) else []})
+        if not scoped["rows"]:
+            return {"error": scoped.get("note")
+                    or f"Record {record_id!r} in {table} is not in your buildings."}
+        return scoped["rows"][0]
     except Exception as exc:
         return _err(exc, "get_record")
 
@@ -559,7 +588,7 @@ async def udr_search_records(
                 "offset": offset,
             },
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "search_records")
 

@@ -21,6 +21,7 @@ async def compute_insights(
     organization_id: UUID | None,
     from_date: date | None,
     to_date: date | None,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Compute cost variance, labour variance, and matched/flagged trend.
 
@@ -41,6 +42,11 @@ async def compute_insights(
         q = q.where(VendorWoScore.score_month >= from_date)
     if to_date is not None:
         q = q.where(VendorWoScore.score_month <= to_date)
+    # A restricted caller's insights are drawn from the vendors on their buildings only.
+    from ..auth import access as _access
+
+    vsql, vparams = _access.vendor_predicate(building_ids, "vendor_id")
+    q = _access.orm_where(q, vsql, vparams)
 
     rows: list[VendorWoScore] = (await session.execute(q)).scalars().all()
 
@@ -112,6 +118,7 @@ async def compute_insights(
         iv_q = iv_q.where(InvoiceVerification.created_at >= from_date)
     if to_date is not None:
         iv_q = iv_q.where(InvoiceVerification.created_at <= to_date)
+    iv_q = _access.orm_where(iv_q, vsql, vparams)
 
     iv_ratios = (await session.execute(iv_q)).scalars().all()
     matched_flagged_trend = [float(r) if r is not None else None for r in iv_ratios]

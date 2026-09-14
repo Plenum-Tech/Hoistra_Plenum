@@ -7,7 +7,7 @@ Generated from the running FastAPI schema (`app.openapi()`), so it cannot drift 
 - **Every** `/api/energy`, `/api/compliance`, `/api/contract-performance` and `/api/approvals` route now requires `Authorization: Bearer <access token>`. No token → `401 {reason: "missing_token"}`.
 - The **company is the caller's**. Do not send `organization_id` from the client on those routes — not in the query string, not in a JSON body, not in a form field. Omitted, it is the caller's company; naming another company is refused with `403 {reason: "wrong_organization"}` for a user or admin. A superadmin may name a company (`?organization_id=` or in the body) to act as it.
 - **Only an admin creates buildings.** `POST /api/energy/buildings` from a plain user → `403 {reason: "admin_required"}`. The new building belongs to the caller's company.
-- The **building is the access boundary**. A plain user sees only buildings allocated to them; a building named in a path they are not allocated to → `403 {reason: "building_not_allocated"}`. List endpoints (`/api/energy/buildings`, `/api/compliance/certificates`, `/api/contract-performance/contracts`, `/invoices`) are narrowed to their buildings server-side. Admins see their whole company.
+- The **building is the access boundary**. A plain user sees only buildings allocated to them; a building named in a path they are not allocated to → `403 {reason: "building_not_allocated"}`. Every list endpoint — energy, compliance certificates/count/coverage, contracts, scorecards, insights, invoices, asset criticality, the work-order service and the chat agents' own SQL — is narrowed to their buildings in SQL. Admins see their whole company, unless they select one building (`PATCH /api/auth/me/selected-building`). Full table in `building-scope-api.md`.
 - **Ingestion is per user.** `GET /api/auth/me` returns `can_ingest`; the deep-agents upload endpoint and the direct ingest routes (`/api/energy/readings/ingest`, `/readings/ingest/csv`, `/api/compliance/documents/ingest`, `/ingest-batch`, `/verification-dumps/ingest`, `/api/contract-performance/contracts/ingest`) refuse a user without it → `403 {reason: "cannot_ingest"}`, and a restricted user must send `building_id` (one of theirs) → else `400 {reason: "building_required"}` / `403 {reason: "building_not_allocated"}`.
 - Roles are ranked: `user` < `admin` < `superadmin`. `GET /api/auth/roles` lists them.
 
@@ -16,10 +16,11 @@ Generated from the running FastAPI schema (`app.openapi()`), so it cannot drift 
 ```json
 { "ok": true, "user": {
     "id": "…", "email": "…", "full_name": "…", "organization_id": "…",
-    "role": "user|admin|superadmin", "status": "active|invited|suspended",
+    "role": "user|admin|superadmin", "status": "active|invited|pending_verification|inactive|deleted",
     "can_ingest": true,
     "building_ids": ["…"],        // null = unrestricted (admin/superadmin); [] = allocated to nothing
     "all_buildings": false,
+    "selected_building_id": null, // the one building they chose to work in, or null (see building-scope-api.md)
     "buildings": [{"id": "…", "name": "Riverside Court", "building_code": "B-006"}]
 }, "session_id": "…" }
 ```
@@ -29,7 +30,7 @@ Generated from the running FastAPI schema (`app.openapi()`), so it cannot drift 
 | Screen | Endpoints |
 |---|---|
 | Super Admin · Companies on the platform | `GET /api/superadmin/companies` (list + credits this month), `POST /api/superadmin/companies` (create; optional `admin_email` invites in one step), `GET /api/superadmin/companies/{id}` (usage card), `POST /api/superadmin/companies/{id}/invite-admin`, `GET /api/superadmin/credits` (bars) |
-| Admin · Users & access | `GET /api/admin/users` (table + `summary` tiles), `POST /api/admin/users/invite`, `PATCH /api/admin/users/{id}` (buildings / can_ingest / status), `DELETE /api/admin/users/{id}` (suspend), `GET /api/admin/buildings` (allocation chips), `GET /api/admin/usage` |
+| Admin · Users & access | `GET /api/admin/users` (table + `summary` tiles), `POST /api/admin/users/invite`, `PATCH /api/admin/users/{id}` (buildings / can_ingest / status `active|inactive`), `POST /api/admin/users/{id}/deactivate` · `/reactivate`, `DELETE /api/admin/users/{id}` (soft delete), `GET /api/admin/buildings` (allocation chips), `GET /api/admin/usage` |
 | Admin · Ingestion audit trail | `GET /api/admin/ingestion-audit?outcome=accepted|reassigned|overridden|rejected|approved_on_confirmation` |
 | Accept invitation (public page) | `POST /api/auth/invitations/accept {token, password, full_name?}` then normal `POST /api/auth/login` |
 
@@ -82,7 +83,11 @@ Body `PatchUser`: `building_ids`, `can_ingest`, `job_title`, `full_name`, `statu
 
 ### `DELETE /api/admin/users/{user_id}`
 
-Suspend, never delete. The audit trail names this person and must keep doing so.
+Soft delete: the row and its history stay (the audit trail names this person by id and must
+keep resolving), the PERSON goes — email, name, phone, title and password scrubbed, status
+`deleted`, sessions revoked, building allocation dropped. Irreversible. To merely stop
+someone signing in, use `POST /api/admin/users/{user_id}/deactivate` (reversible with
+`/reactivate`). See `building-scope-api.md`.
 
 Parameters: `user_id`* (path), `organization_id` (query)
 

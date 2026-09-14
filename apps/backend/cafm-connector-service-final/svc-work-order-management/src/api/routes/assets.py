@@ -13,6 +13,7 @@ from ...models.asset import Asset
 from ...models.location import Location
 from ...api.schemas.asset import AssetResponse, LocationResponse
 from ...core.exceptions import DatabaseError
+from ...services.principal import Principal, assert_building, current_principal, scope_select
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -35,8 +36,9 @@ async def list_assets(
     page:       int            = Query(1, ge=1),
     limit:      int            = Query(50, ge=1, le=200),
     session:    AsyncSession   = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
-    query = select(Asset)
+    query = scope_select(select(Asset), principal, Asset.building_id)
     # No active/status filter — the real table uses a status string whose exact
     # values depend on the import source. Return all assets for dropdown use.
     if q:
@@ -60,7 +62,8 @@ async def list_assets(
     responses={404: {"description": "Asset not found"}},
     tags=["Assets"],
 )
-async def get_asset(asset_id: str, session: AsyncSession = Depends(get_session)):
+async def get_asset(asset_id: str, session: AsyncSession = Depends(get_session),
+                    principal: Principal = Depends(current_principal)):
     try:
         asset_uuid = uuid_module.UUID(asset_id)
     except ValueError:
@@ -81,6 +84,7 @@ async def get_asset(asset_id: str, session: AsyncSession = Depends(get_session))
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "asset_not_found", "message": f"Asset {asset_id!r} not found"},
         )
+    assert_building(principal, asset.building_id)
     log.debug("assets.get.found", asset_id=asset_id, asset_name=asset.asset_name)
     return asset
 
@@ -99,9 +103,10 @@ async def list_locations(
     page:    int            = Query(1, ge=1),
     limit:   int            = Query(100, ge=1, le=500),
     session: AsyncSession   = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ):
     # Real plenum_cafm.locations has no 'active' column — return all
-    query = select(Location)
+    query = scope_select(select(Location), principal, Location.building_id)
     if q:
         query = query.where(Location.name.ilike(f"%{q}%"))
     query = query.order_by(Location.name).offset((page - 1) * limit).limit(limit)

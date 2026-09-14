@@ -68,6 +68,9 @@ class Principal:
     # — an admin or superadmin sees their whole company and this list is never consulted.
     # An EMPTY tuple is a real answer: a user allocated to nothing sees nothing.
     building_ids: tuple[UUID, ...] | None = None
+    #: The building this person has chosen to work in right now, or None for all of
+    #: theirs. Never widens access: Scope narrows to it only when it is one they hold.
+    selected_building_id: UUID | None = None
 
 
 class InvalidToken(Exception):
@@ -199,6 +202,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
                 """SELECT u.id, u.email, u.organization_id, u.status,
                           u.password_changed_at, u.platform_role AS role,
                           COALESCE(u.can_ingest, FALSE) AS can_ingest,
+                          u.selected_building_id,
                           s.revoked_at, s.expires_at, s.revoked_reason
                    FROM plenum_cafm.users u
                    LEFT JOIN plenum_cafm.auth_sessions s
@@ -254,6 +258,13 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         ).scalars().all()
         building_ids = tuple(UUID(str(b)) for b in allocated)
 
+    selected: UUID | None = None
+    try:
+        raw_sel = row["selected_building_id"]
+        selected = UUID(str(raw_sel)) if raw_sel else None
+    except (KeyError, ValueError, TypeError):
+        selected = None
+
     return Principal(
         user_id=row["id"],
         email=row["email"],
@@ -263,6 +274,7 @@ async def principal_from_token(session: AsyncSession, token: str) -> Principal:
         password_changed_at=int(claims.get("pwd") or 0),
         role=role,
         can_ingest=bool(row["can_ingest"]) or role in ("admin", "superadmin"),
+        selected_building_id=selected,
         building_ids=building_ids,
     )
 
@@ -340,6 +352,7 @@ async def rotate_session(
                 """SELECT s.id, s.user_id, s.expires_at, s.revoked_at, s.rotated_at,
                           (s.refresh_token_hash = :h) AS is_current,
                           u.email, u.organization_id, u.status, u.password_changed_at,
+                          u.selected_building_id,
                           u.platform_role AS role
                    FROM plenum_cafm.auth_sessions s
                    JOIN plenum_cafm.users u ON u.id = s.user_id

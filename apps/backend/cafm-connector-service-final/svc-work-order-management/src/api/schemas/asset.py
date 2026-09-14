@@ -22,6 +22,7 @@ class AssetCreate(BaseModel):
 
 class AssetResponse(BaseModel):
     asset_id:      str
+    building_id:   Optional[str] = None
     asset_name:    str
     asset_type:    Optional[str] = None
     location:      Optional[str] = None
@@ -33,7 +34,7 @@ class AssetResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_validator("asset_id", mode="before")
+    @field_validator("asset_id", "building_id", mode="before")
     @classmethod
     def coerce_to_str(cls, v) -> str:
         return str(v) if v is not None else v
@@ -41,6 +42,7 @@ class AssetResponse(BaseModel):
 
 class LocationResponse(BaseModel):
     location_id: str
+    building_id: Optional[str] = None
     name:        str
     building:    Optional[str] = None
     floor:       Optional[str] = None
@@ -49,7 +51,7 @@ class LocationResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_validator("location_id", mode="before")
+    @field_validator("location_id", "building_id", mode="before")
     @classmethod
     def coerce_to_str(cls, v) -> str:
         return str(v) if v is not None else v

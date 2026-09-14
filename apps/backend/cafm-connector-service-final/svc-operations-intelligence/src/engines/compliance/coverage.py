@@ -193,6 +193,7 @@ async def building_coverage(
     *,
     organization_id: UUID | None = None,
     country_code: str = "UK",
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Coverage % per building against the Building CountryPack.
 
@@ -250,6 +251,7 @@ async def building_coverage(
             cert_scope="Building",
             organization_id=organization_id,
             limit=1000,
+            building_ids=building_ids,
         ),
         country,
     )
@@ -389,8 +391,11 @@ async def vendor_coverage(
     organization_id: UUID | None = None,
     country_code: str = "UK",
     trade_category: str | None = None,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
-    """Coverage % per vendor against Vendor CountryPack types (optionally by trade)."""
+    """Coverage % per vendor against Vendor CountryPack types (optionally by trade).
+
+    For a restricted caller the vendors are those with a footprint on their buildings."""
     country = normalize_country(country_code)
     pack = await list_pack_types(session, country_code=country, scope="Vendor")
     if trade_category:
@@ -410,6 +415,21 @@ async def vendor_coverage(
     required_set = set(required_codes)
 
     vendors = await _vendor_rows(session, organization_id)
+    if building_ids is not None:
+        from ..auth.access import VENDORS_ON_BUILDINGS_SQL
+
+        if not building_ids:
+            vendors = []
+        else:
+            allowed = (
+                await session.execute(
+                    text("SELECT v.vendor_id::text FROM "
+                         + VENDORS_ON_BUILDINGS_SQL.format(key="scope_building_ids") + " v"),
+                    {"scope_building_ids": [str(b) for b in building_ids]},
+                )
+            ).scalars().all()
+            keep = {str(a) for a in allowed}
+            vendors = [v for v in vendors if str(v["id"]) in keep]
     # Same rule as buildings: an accreditation is scored against the pack of the country
     # it was issued under. A firm's Dubai DCD approval is not a gap in the UK pack, and
     # scoring it as one blocks a vendor for failing a test it was never sitting.

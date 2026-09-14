@@ -1,5 +1,6 @@
 import uuid as _uuid_mod
 from sqlalchemy import Column, String, DateTime, Text, Boolean, Float, JSON, Integer, Numeric, func, Index
+from sqlalchemy.dialects.postgresql import UUID
 from .base import Base
 
 
@@ -17,6 +18,8 @@ class WorkOrder(Base):
 
     # Real plenum_cafm.work_orders columns (NOT NULL — must be supplied on insert)
     organization_id     = Column(Integer)                     # set from DEFAULT_ORGANIZATION_ID
+    # The building this work order is on — what a user's access is allocated by.
+    building_id         = Column(UUID(as_uuid=True))
     title               = Column(String(255))                 # mapped from issue_description
 
     source              = Column(String(50))

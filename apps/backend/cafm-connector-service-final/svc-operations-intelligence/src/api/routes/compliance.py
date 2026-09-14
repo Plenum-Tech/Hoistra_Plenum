@@ -282,6 +282,7 @@ async def list_certificates(
         expiry_month=expiry_month,
         include_archived=include_archived,
         limit=limit,
+        building_ids=s.building_ids,
     )
     if s.restricted:
         # A plain user sees certificates on their buildings, plus vendor accreditations
@@ -356,6 +357,7 @@ async def count_certificates(
         organization_id=organization_id,
         risk_filter=risk_filter,
         limit=limit,
+        building_ids=s.building_ids,
     )
 
 
@@ -1103,7 +1105,8 @@ async def coverage_buildings(
     """Per-building CountryPack coverage %."""
     organization_id = access.organization_for(s, organization_id)
     return await coverage_svc.building_coverage(
-        session, organization_id=organization_id, country_code=country_code
+        session, organization_id=organization_id, country_code=country_code,
+        building_ids=s.building_ids,
     )
 
 
@@ -1149,6 +1152,7 @@ async def coverage_vendors(
         organization_id=organization_id,
         country_code=country_code,
         trade_category=trade_category,
+        building_ids=s.building_ids,
     )
 
 

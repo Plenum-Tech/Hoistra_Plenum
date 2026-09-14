@@ -9,12 +9,16 @@ from langchain_core.tools import tool
 from sqlalchemy import text
 
 from .. import database
+from ..services.principal import building_clause
 
 log = structlog.get_logger(__name__)
 
 
 @tool
 async def check_requirements(asset_code: str, regulation: str | None = None) -> dict:
+    # The caller's buildings, or nothing for an admin. Every query below joins the
+    # asset, and the building lives on the asset.
+    bsql, bparams = building_clause("a.building_id")
     """Check compliance status for an asset against maintenance and inspection requirements.
 
     Evaluates: PM schedule adherence, open corrective-action inspections,
@@ -32,20 +36,21 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
         try:
             # Fetch PM compliance — maintenance_plans joined to assets via asset_id UUID FK
             pm_rows = (await session.execute(
-                text("""
+                text(f"""
                     SELECT mp.sm_code, mp.frequency_type, mp.frequency_value, mp.next_due_date,
                            mp.next_due_date < CURRENT_DATE AS is_overdue
                     FROM plenum_cafm.maintenance_plans mp
                     JOIN plenum_cafm.assets a ON a.id = mp.asset_id::text
                     WHERE a.asset_code = :asset_code
                       AND mp.status = 'active'
+                      {bsql}
                 """),
-                {"asset_code": asset_code},
+                {"asset_code": asset_code, **bparams},
             )).mappings().all()
 
             # Fetch open high/critical priority WOs — work_orders joined to assets via asset_id
             wo_rows = (await session.execute(
-                text("""
+                text(f"""
                     SELECT wo.wo_code, wo.priority, wo.status, wo.created_at,
                            now() - wo.created_at AS age
                     FROM plenum_cafm.work_orders wo
@@ -53,21 +58,24 @@ async def check_requirements(asset_code: str, regulation: str | None = None) -> 
                     WHERE a.asset_code = :asset_code
                       AND wo.status NOT IN ('completed', 'closed', 'cancelled')
                       AND wo.priority IN ('high', 'critical')
+                      {bsql}
                 """),
-                {"asset_code": asset_code},
+                {"asset_code": asset_code, **bparams},
             )).mappings().all()
 
             # Fetch open corrective-action inspections (inspections table uses asset_code directly)
             inspection_rows = (await session.execute(
-                text("""
+                text(f"""
                     SELECT id, inspection_date, risk_level, finding_type, observations
-                    FROM plenum_cafm.inspections
-                    WHERE asset_code = :asset_code
-                      AND corrective_action = true
+                    FROM plenum_cafm.inspections i
+                    JOIN plenum_cafm.assets a ON a.asset_code = i.asset_code
+                    WHERE i.asset_code = :asset_code
+                      AND i.corrective_action = true
+                      {bsql}
                     ORDER BY inspection_date DESC
                     LIMIT 20
                 """),
-                {"asset_code": asset_code},
+                {"asset_code": asset_code, **bparams},
             )).mappings().all()
 
         except Exception as exc:
@@ -124,6 +132,9 @@ async def generate_compliance_report(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict:
+    # The caller's buildings, or nothing for an admin. Every query below joins the
+    # asset, and the building lives on the asset.
+    bsql, bparams = building_clause("a.building_id")
     """Generate a portfolio-wide compliance summary report.
 
     Aggregates PM adherence, inspection outcomes, and high-priority WO backlog
@@ -136,22 +147,24 @@ async def generate_compliance_report(
         date_from: Report period start (ISO 8601, optional).
         date_to: Report period end (ISO 8601, optional).
     """
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {**bparams}
 
     # Build asset query — join asset_categories since assets has category_id FK (no direct category col)
     if scope != "all_assets":
-        asset_sql = """
+        asset_sql = f"""
             SELECT a.asset_code, a.asset_name, ac.category_name AS category
             FROM plenum_cafm.assets a
             LEFT JOIN plenum_cafm.asset_categories ac ON ac.id = a.category_id
             WHERE ac.category_name = :category
+            {bsql}
         """
         params["category"] = scope
     else:
-        asset_sql = """
+        asset_sql = f"""
             SELECT a.asset_code, a.asset_name, ac.category_name AS category
             FROM plenum_cafm.assets a
             LEFT JOIN plenum_cafm.asset_categories ac ON ac.id = a.category_id
+            WHERE TRUE {bsql}
         """
 
     async with database.AsyncSessionLocal() as session:
@@ -160,27 +173,29 @@ async def generate_compliance_report(
 
             # Overdue PMs — maintenance_plans joined to assets via asset_id UUID FK
             overdue_pms = (await session.execute(
-                text("""
+                text(f"""
                     SELECT a.asset_code, count(*) AS overdue_count
                     FROM plenum_cafm.maintenance_plans mp
                     JOIN plenum_cafm.assets a ON a.id = mp.asset_id::text
                     WHERE mp.next_due_date < CURRENT_DATE
                       AND mp.status = 'active'
+                      {bsql}
                     GROUP BY a.asset_code
-                """),
+                """), bparams,
             )).mappings().all()
             overdue_map: dict[str, int] = {r["asset_code"]: int(r["overdue_count"]) for r in overdue_pms}
 
             # Open high/critical priority WOs — work_orders joined to assets via asset_id
             open_critical_wos = (await session.execute(
-                text("""
+                text(f"""
                     SELECT a.asset_code, count(*) AS wo_count
                     FROM plenum_cafm.work_orders wo
                     JOIN plenum_cafm.assets a ON a.id = wo.asset_id::text
                     WHERE wo.status NOT IN ('completed', 'closed', 'cancelled')
                       AND wo.priority IN ('high', 'critical')
+                      {bsql}
                     GROUP BY a.asset_code
-                """),
+                """), bparams,
             )).mappings().all()
             wo_map: dict[str, int] = {r["asset_code"]: int(r["wo_count"]) for r in open_critical_wos}
 
