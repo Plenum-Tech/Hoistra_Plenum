@@ -281,6 +281,20 @@ SYNTHETIC_STEPS = [
           FROM plenum_cafm.ops_audit_log a
          WHERE a.organization_id IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)"""),
+
+    # The same insert for a deployment whose organizations.code is NOT NULL with no default
+    # (production). Step 13 fails there inside its savepoint and this one runs; on a
+    # deployment without a code column this one is the step that skips.
+    ("13b [synthetic] organizations ← the same retired row, with the code column production requires",
+     """SELECT count(DISTINCT a.organization_id) FROM plenum_cafm.ops_audit_log a
+         WHERE a.organization_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)""",
+     """INSERT INTO plenum_cafm.organizations (id, name, code, status)
+        SELECT DISTINCT a.organization_id, 'Retired scratch tenant ' || right(a.organization_id::text, 4),
+               'RETIRED-' || upper(right(a.organization_id::text, 4)), 'inactive'
+          FROM plenum_cafm.ops_audit_log a
+         WHERE a.organization_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM plenum_cafm.organizations o WHERE o.id::text = a.organization_id::text)"""),
 ]
 
 REPORT_ONLY = [
