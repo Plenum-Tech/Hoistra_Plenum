@@ -145,18 +145,26 @@ the whole table have any `user_buildings` rows at all.
 
 I have not changed any account, because the report does not say which one is yours and
 granting an access role to the wrong person is not a guess worth making. Tell me the email
-and which you want, or run it directly:
+and which you want, or use the admin endpoints — both already exist, both are audited, and
+neither needs SQL:
 
-```sql
--- see the whole company (the usual fix for a developer or staff account)
-UPDATE plenum_cafm.users SET platform_role = 'admin' WHERE email = '<your email>';
-
--- or allocate specific buildings and stay a plain user
-INSERT INTO plenum_cafm.user_buildings (user_id, building_id)
-SELECT u.id, b.building_id FROM plenum_cafm.users u, plenum_cafm.buildings b
- WHERE u.email = '<your email>' AND b.name IN ('<building>', '<building>')
-ON CONFLICT DO NOTHING;
 ```
+GET   /api/admin/users                     # who exists, their role and their allocation
+PATCH /api/admin/users/{user_id}           # {"building_ids": ["<uuid>", "<uuid>"]}
+POST  /api/auth/users/{user_id}/role       # {"role": "admin"}
+GET   /api/admin/buildings                 # the buildings you may allocate
+```
+
+`PATCH /api/admin/users/{user_id}` replaces the allocation with exactly the list you send, and
+refuses a building outside your company. `POST /api/auth/users/{user_id}/role` lets an admin
+move accounts between `admin` and `user` within their own company; nobody may change their
+own, and only a superadmin may appoint or demote a superadmin. Both take effect on the next
+request — the principal is read from the database on every call, not from the token, so
+there is no need to sign out and back in.
+
+For a developer account that needs to see the whole portfolio, `admin` is the usual answer.
+If you would rather exercise the building-scoped paths the way a real user hits them, take
+the allocation instead and leave the role at `user`.
 
 `GET /api/auth/me` already reports `platform_role` and `building_ids`, so the page can tell
 "you are allocated to nothing" apart from "there is nothing here" without guessing.
@@ -207,3 +215,16 @@ Your change adding `category_id`, `criticality`, `health_score` and `installatio
 this service's Asset model was not on `Hoistra_Frontend`, so the same columns are mapped here
 along with `location_id`, `asset_code` and `status`. Expect a small conflict if you push yours
 separately.
+
+---
+
+## Found while fixing point 1: svc-udr has the same gap
+
+`svc-udr` is routed at `/backend/udr/` from the public internet and has no authentication on
+any of its 18 routes. Verified live on 2026-09-14: `GET /backend/udr/api/tables/` returns the
+full `plenum_cafm` table list with no token. The surface includes `GET /{table}/records` (read
+any row of any table), `GET /{table}/records/{id}`, `POST /{table}/records/search` and
+`POST /{table}/records` (create a row). No write was attempted against production.
+
+It is not one of the four points and is not fixed in this change. It needs the same treatment
+the connector service just got and should be done next.
