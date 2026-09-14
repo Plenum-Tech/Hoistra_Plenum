@@ -62,9 +62,16 @@ class Principal:
             return False
 
 
+def _detail(error: str, reason: str, **extra) -> dict:
+    """Both vocabularies at once: operations-intelligence's {error, reason} so one client
+    handles both services, and this service's {code, message} so its own error envelope
+    (app.http_exception_handler reads detail["code"] / detail["message"]) renders it
+    rather than str()-ing the dict."""
+    return {"ok": False, "error": error, "reason": reason, "code": reason, "message": error, **extra}
+
+
 def _unauthorized(error: str, reason: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                         detail={"ok": False, "error": error, "reason": reason})
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_detail(error, reason))
 
 
 def _from_me(payload: dict[str, Any]) -> Principal:
@@ -102,9 +109,8 @@ async def resolve(authorization: str | None) -> Principal:
         async with httpx.AsyncClient(base_url=OPS_BASE_URL, timeout=8.0) as client:
             resp = await client.get("/api/auth/me", headers={"Authorization": authorization})
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={
-            "ok": False, "error": "The identity service is unreachable.", "reason": "identity_unavailable",
-            "detail": str(exc)[:120]}) from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_detail(
+            "The identity service is unreachable.", "identity_unavailable", detail=str(exc)[:120])) from exc
     if resp.status_code == 401:
         detail = {}
         try:
@@ -113,8 +119,8 @@ async def resolve(authorization: str | None) -> Principal:
             pass
         raise _unauthorized(detail.get("error") or "Sign in again.", detail.get("reason") or "invalid_token")
     if resp.status_code >= 400:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={
-            "ok": False, "error": "The identity service refused the check.", "reason": "identity_error"})
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_detail(
+            "The identity service refused the check.", "identity_error"))
     principal = _from_me(resp.json())
     _cache[key] = (time.monotonic() + CACHE_TTL_S, principal)
     return principal
@@ -163,10 +169,8 @@ def assert_building(principal: Principal, building_id, *, action: str = "read") 
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": "building_not_allocated",
-            "reason": "building_not_allocated",
-            "message": f"You are not allocated to that building, so you cannot {action} its data.",
-            "building_id": str(building_id) if building_id else None,
-        },
+        detail=_detail(
+            f"You are not allocated to that building, so you cannot {action} its data.",
+            "building_not_allocated", building_id=str(building_id) if building_id else None,
+        ),
     )
