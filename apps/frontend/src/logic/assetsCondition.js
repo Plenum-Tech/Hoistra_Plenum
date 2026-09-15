@@ -137,6 +137,17 @@ export function bandFromServer(row, healthScore) {
   };
 }
 
+// Is this row in the chip's set? The engine answered the band chip over every asset it
+// holds, so its list decides membership. The one exception is an asset this page raised on
+// health_score, a signal the engine's rule does not carry: it cannot be in the engine's
+// Threat list because the engine never called it a Threat, and dropping it would hide the
+// row the raise exists to surface. So a raised row falls back to the page's own test.
+export function inChipSet(row, filterLabel, serverIds, localTest) {
+  if (!serverIds) return localTest(row);
+  if (row && row.source === 'server' && row.kind === 'health') return localTest(row);
+  return serverIds.has(String(row && row.a && row.a.asset_id));
+}
+
 // Which assets earn a per-asset intelligence call. Flagged first; then the ones a person
 // would look at anyway — most critical, then worst scored — because a portfolio entirely
 // under reference flags nothing, and that is exactly when someone still wants to see what
@@ -180,12 +191,13 @@ export const assetsConditionMethods = {
       return { __err: (e && e.message) || String(e) };
     });
     try {
-      const [locs, anoms, sections, var_, cond] = await Promise.all([
+      const [locs, anoms, sections, var_, cond, csum] = await Promise.all([
         soft(workOrderApi.locations({ limit: 500 })),
         soft(energyApi.anomalies({ limit: 500 })),
         soft(energyApi.sections()),
         soft(energyApi.assetValueAtRisk()),
-        soft(energyApi.conditionAssets())
+        soft(energyApi.conditionAssets()),
+        soft(energyApi.conditionSummary())
       ]);
       if (stale) throw stale;
       const list = (v, ...keys) => Array.isArray(v) ? v
@@ -203,6 +215,14 @@ export const assetsConditionMethods = {
         // say that is what it is showing.
         asCondBands: list(cond, 'assets'), asCondRules: (cond && cond.rules) || null,
         asCondBandsError: cond && cond.__err ? cond.__err : '',
+        // count is what came back after any filter, total is every asset the engine banded.
+        // They differ when the limit bit, and a page that filters its own copy in that state
+        // is filtering a truncated list — so the difference is kept rather than discarded.
+        asCondTotal: cond && typeof cond.total === 'number' ? cond.total : null,
+        asCondSummary: csum && !csum.__err ? (csum.summary || null) : null,
+        asCondBuildings: csum && !csum.__err && Array.isArray(csum.buildings) ? csum.buildings : [],
+        asCondLastRun: csum && !csum.__err ? (csum.last_run || null) : null,
+        asCondSummaryError: csum && csum.__err ? csum.__err : '',
         asCondLoading: false, asCondLoadedAt: new Date().toISOString()
       });
     } catch (e) {
@@ -210,6 +230,43 @@ export const assetsConditionMethods = {
       this.setState({ asCondLoading: false, asCondError: (e && e.message) || String(e) });
     } finally {
       this._asCondLoading = false;
+    }
+  },
+
+  // A band chip re-asks the engine rather than sifting the copy already in the page.
+  //
+  // At today's portfolio size the two give the same rows, because the unfiltered read holds
+  // every asset. They stop being the same the moment the read is capped: filtering a
+  // truncated list silently answers "of the ones I happened to load" while looking like it
+  // answered "of all of them". ?band= is counted by the engine over everything it holds, so
+  // the chip's count is the portfolio's count at any size.
+  //
+  // Not scored and Open work order stay local on purpose — health_score and open work orders
+  // are not signals this endpoint carries, so there is nothing on it to ask.
+  async asCondSetFilter(f) {
+    const BAND = { Threat: 'threat', Watch: 'watch', 'In control': 'in_control' };
+    const band = BAND[f];
+    if (!band) { this.setState({ asCondFilter: null }); return; }
+    const token = (this._asCondFilterToken = (this._asCondFilterToken || 0) + 1);
+    this.setState({ asCondFilter: { band, loading: true, ids: null, count: null, error: '' } });
+    try {
+      const res = await energyApi.conditionAssets({ band });
+      // A chip clicked twice while the first answer was in flight would otherwise let the
+      // slower response overwrite the faster one, leaving the list showing the wrong band.
+      if (token !== this._asCondFilterToken) return;
+      const rows = (res && Array.isArray(res.assets)) ? res.assets : [];
+      this.setState({ asCondFilter: {
+        band, loading: false, error: '',
+        ids: rows.map((r) => r && r.asset_id).filter(Boolean).map(String),
+        count: typeof res.count === 'number' ? res.count : rows.length,
+        total: typeof res.total === 'number' ? res.total : null } });
+    } catch (e) {
+      if (token !== this._asCondFilterToken) return;
+      if (isStaleScope(e)) { this.setState({ asCondFilter: null }); return; }
+      // Falling back to the local sift is right; pretending it was the engine's answer is
+      // not, so the error rides along and the summary line says which one is on screen.
+      this.setState({ asCondFilter: { band, loading: false, ids: null, count: null,
+                                      error: (e && e.message) || String(e) } });
     }
   },
 
@@ -379,12 +436,23 @@ export const assetsConditionMethods = {
     const unscored = all.filter((x) => x.unscored);
 
     const f = s.filter;
-    const shown = all.filter((x) => f === 'Threat' ? x.cond === 'threat'
+    // The engine's answer to the band chip when it gave one, this page's own sift otherwise.
+    // `serverFiltered` is what the summary line reports, because "filtered by the engine over
+    // every asset" and "filtered here over the ones loaded" are different claims.
+    const cf = s.asCondFilter || null;
+    const BAND_OF = { Threat: 'threat', Watch: 'watch', 'In control': 'in_control' };
+    const fromServer = cf && !cf.loading && !cf.error && Array.isArray(cf.ids)
+      && cf.band === BAND_OF[f] ? new Set(cf.ids) : null;
+    const serverFiltered = !!fromServer;
+
+    const localShown = (x) => f === 'Threat' ? x.cond === 'threat'
       : f === 'Watch' ? x.cond === 'watch'
       : f === 'In control' ? x.cond === 'ok'
       : f === 'Not scored' ? x.unscored
       : f === 'Open work order' ? woCount(x.a) > 0
-      : true);
+      : true;
+
+    const shown = all.filter((x) => inChipSet(x, f, fromServer, localShown));
 
     // Per-asset value at risk, keyed off the portfolio read. An asset absent from that list
     // is one the engine could not compute, not one worth nothing.
@@ -678,12 +746,34 @@ export const assetsConditionMethods = {
     const vaR = s.asVar || null;
     const anomCovered = all.filter((x) => x.anomaly).length;
     const euiCovered = all.filter((x) => x.deviation !== null).length;
+    const cSum = s.asCondSummary || null;
+    // Assets this page put a band on that the engine did not — health_score is the page's
+    // own signal. Stated rather than absorbed, so the cards and the engine can be reconciled.
+    const raisedByHealth = all.filter((x) => x.source === 'server' && x.kind === 'health').length;
     return {
       asThreatN: threats.length,
       asAll: all,
       asCards: [
-        { l: 'Threat', v: String(threats.length), s: 'building over reference + anomaly on asset, or health under 40', color: t('risk').color },
-        { l: 'Watch', v: String(watches.length), s: all.filter((x) => x.kind === 'zone').length + ' shared building · ' + all.filter((x) => x.kind === 'persist').length + ' persistent anomaly', color: t('warn').color },
+        // Counts are over the rows on screen, not the engine's summary, so a card can never
+        // disagree with the list beneath it — health_score can raise a band here and the
+        // engine's rule does not carry that signal. Where the two differ, the card says so
+        // rather than quietly showing whichever number is larger.
+        { l: 'Threat', v: String(threats.length),
+          s: 'section over its own reference + anomaly attributed'
+            + (raisedByHealth ? ' · ' + raisedByHealth + ' raised here on health score' : '')
+            + (cSum && cSum.threat !== threats.length - raisedByHealth
+               ? ' · engine reports ' + cSum.threat : ''),
+          color: t('risk').color },
+        { l: 'Watch', v: String(watches.length),
+          // The engine splits Watch into its two causes, which the page cannot derive: an
+          // asset sharing an over-reference section, and one whose own anomaly has outlasted
+          // the threshold while its section is fine. Different findings, different actions.
+          s: cSum
+            ? (cSum.watch_shares_section || 0) + ' shared section · '
+              + (cSum.watch_persistent_anomaly || 0) + ' persistent anomaly'
+            : all.filter((x) => x.kind === 'zone').length + ' shared section · '
+              + all.filter((x) => x.kind === 'persist').length + ' persistent anomaly',
+          color: t('warn').color },
         // assets_not_computable is shown, never folded in as zero: a total that quietly
         // counts unpriced assets as worthless is a smaller number that looks like a real one.
         { l: 'Est. asset value at risk', v: vaR ? money(vaR.value_at_risk) : '—',
@@ -696,7 +786,23 @@ export const assetsConditionMethods = {
               + ' · from each asset\u2019s worst anomaly, not the building EUI'
             : (s.asVarError ? 'Value engine unreachable — ' + s.asVarError : s.asCondLoading ? 'Reading…' : NOT_COMPUTABLE),
           color: t('risk').color },
-        { l: 'In control', v: (all.length - threats.length - watches.length) + ' of ' + all.length, s: euiCovered + ' with a building EUI · ' + anomCovered + ' with an anomaly attributed', color: t('ok').color }
+        // "In control" is the card most able to mislead. On the deployed database most assets
+        // sit in a section with no sub-meter, so they were banded on the anomaly signal alone
+        // — one of the two things that would have been checked could not be read. That is not
+        // a clean bill of health and the card must not read as one. Same for an asset
+        // carrying an anomaly that has not yet persisted far enough to count: found something
+        // too small to act on is a different answer from found nothing.
+        { l: 'In control', v: (all.length - threats.length - watches.length) + ' of ' + all.length,
+          s: cSum
+            ? [
+                (cSum.section_not_measured || 0) + ' banded on one signal — section not metered',
+                (cSum.in_control_anomaly_under_threshold || 0) + ' with an anomaly under threshold',
+                anomCovered + ' with an anomaly attributed'
+              ].join(' · ')
+            : (s.asCondSummaryError
+               ? 'Band summary unreachable — ' + s.asCondSummaryError + ' · '
+               : '') + euiCovered + ' with a section intensity · ' + anomCovered + ' with an anomaly attributed',
+          color: t('ok').color }
       ],
       asPct: pct + '%', asWeeks: String(wks), asWeeksUnit: wks === 1 ? 'week' : 'weeks',
       asPctDown: bump('asPct', -5, 5, 40), asPctUp: bump('asPct', 5, 5, 40),
@@ -717,10 +823,21 @@ export const assetsConditionMethods = {
         const unkAssets = unk.reduce((n, g) => n + g.sections.reduce((m, sc) => m + sc.rows.length, 0), 0);
         return idn + (idn === 1 ? ' building · ' : ' buildings · ') + shown.length + ' of ' + all.length + ' assets'
           + (unk.length ? ' · ' + unkAssets + ' in ' + unk.length + ' buildings not in your register' : '')
-          + (f === 'All' ? '' : ' · filter: ' + f)
+          + (f === 'All' ? '' : ' · filter: ' + f
+              + (cf && cf.loading ? ' (asking the engine…)'
+                 : serverFiltered ? ' (engine, over all ' + (cf.total === null || cf.total === undefined ? all.length : cf.total) + ')'
+                 : cf && cf.error ? ' (filtered in the page — engine unreachable: ' + cf.error + ')'
+                 : ''))
+          + (typeof s.asCondTotal === 'number' && s.asCondTotal > (s.asCondBands || []).length
+             ? ' · engine holds ' + s.asCondTotal + ' banded assets, ' + (s.asCondBands || []).length + ' read here' : '')
           + ' · ' + (s.asSectionsError ? 'sections unreachable (' + s.asSectionsError + ')'
               : (s.asSections || []).length + ' sections on record, ' + (s.asSections || []).filter((x) => x.measured !== false && typeof x.eui_kwh_per_m2 === 'number').length + ' metered')
-          + ' · buildings ranked by EUI against reference';
+          + ' · buildings ranked by EUI against reference'
+          // A stamp nobody can point at is worse than none. null means no scan has been
+          // recorded, which is not the same as a scan that found nothing.
+          + (s.asCondLastRun && s.asCondLastRun.started_at
+             ? ' · last scan ' + String(s.asCondLastRun.started_at).slice(0, 16).replace('T', ' ')
+             : ' · no condition scan recorded');
       })()
     };
   },

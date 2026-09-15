@@ -70,8 +70,23 @@ one. An asset scored 20 is a Threat whatever the energy says.
 | Band, reasons, section deviation per asset | `GET /api/energy/condition/assets` on load | wired |
 | Which section an asset is in, in bulk | `section_id` on the same row | wired — this closed the gap the page carried, since `AssetResponse` still does not return the column |
 | "Banded on one signal" on an unmetered section | `section_measured` on the same row | wired, per asset, in the row's explanation |
-| Band chips, Above 10% / Above 30% | `?band=` / `?min_deviation_pct=` on the same call | **not wired** — the chips still filter the loaded array, which is correct but re-filters rather than re-asks |
-| KPI cards, building and section rollups | `GET /api/energy/condition/summary` | **not wired** — the client method exists (`energyApi.conditionSummary`), the page still sums rows itself |
+| Threat / Watch / In control chips | `?band=` on the same call, via `asCondSetFilter()` | wired — counted by the engine over every asset it holds, so the chip's count is the portfolio's and not the loaded page's |
+| Watch split, not-metered count, last scan | `GET /api/energy/condition/summary` | wired — the two Watch causes and `section_not_measured` cannot be derived in the page |
+| Not scored, Open work order chips | — | local, deliberately: `health_score` and open work orders are not signals this endpoint carries, so there is nothing on it to ask |
+| Above 10% / Above 30% | `?min_deviation_pct=` | no such chip exists on the Assets page; the parameter is there when one is wanted |
+
+**The cards count the rows on screen, not `summary`.** `health_score` can raise a band in the
+page and the engine's rule does not carry it, so a card taking its number straight from
+`summary` could disagree with the list beneath it. The cards therefore count what is displayed
+and name the difference — "N raised here on health score", and the engine's own figure beside
+it — rather than showing whichever number is larger. The sub-figures that the page genuinely
+cannot derive (`watch_shares_section` vs `watch_persistent_anomaly`,
+`in_control_anomaly_under_threshold`, `section_not_measured`) come from `summary`.
+
+**A chip answered by the engine still shows an asset the page raised.** An asset raised to
+Threat on `health_score` cannot appear in the engine's Threat list, because the engine never
+called it one. Taking that list literally would hide exactly the row the raise exists to
+surface, so a raised row falls back to the page's own test — `inChipSet()`.
 
 `energyApi.assetValueAtRisk()` is **not** replaced by this — replacement value at risk is its
 own figure and stays where it is. Nor is `assetIntelligence()` for the opened-asset drawer.

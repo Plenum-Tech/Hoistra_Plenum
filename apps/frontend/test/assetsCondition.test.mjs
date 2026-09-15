@@ -181,3 +181,38 @@ test('no server row means no server band, so the page falls back instead of inve
   assert.equal(bandFromServer(undefined, 90), null);
   assert.equal(bandFromServer({ asset_id: 'a1', band: 'nonsense' }, 90), null);
 });
+
+// ── Band chips are answered by the engine, not by sifting the loaded copy ───────────────
+// ?band= is counted over every asset the engine holds. Filtering the page's own copy answers
+// "of the ones I loaded" while looking like it answered "of all of them" — identical at
+// today's size, wrong the moment the read is capped.
+import { inChipSet } from '../src/logic/assetsCondition.js';
+
+const mk = (id, over) => ({ a: { asset_id: id }, source: 'server', kind: over || null });
+const local = (want) => (r) => r.kind === want;
+
+test('with an engine answer, its list decides which rows the chip shows', () => {
+  const ids = new Set(['a1', 'a2']);
+  assert.equal(inChipSet(mk('a1'), 'Threat', ids, () => false), true, 'in the engine list');
+  assert.equal(inChipSet(mk('a9'), 'Threat', ids, () => true), false, 'not in it, despite the local test');
+});
+
+test('without an engine answer the page falls back to its own test, not to an empty list', () => {
+  assert.equal(inChipSet(mk('a1'), 'Threat', null, () => true), true);
+  assert.equal(inChipSet(mk('a1'), 'Threat', null, () => false), false);
+});
+
+// The engine never called this asset a Threat — health_score did, and the engine's rule has
+// no such signal. Taking the engine's list literally would hide exactly the row the raise
+// exists to surface.
+test('an asset raised on health score is not dropped by the engine list that cannot contain it', () => {
+  const ids = new Set(['a1']);
+  const raised = mk('a9', 'health');
+  assert.equal(inChipSet(raised, 'Threat', ids, local('health')), true);
+  assert.equal(inChipSet(raised, 'Watch', ids, local('zone')), false, 'and it only shows under the band it was raised to');
+});
+
+test('a row the engine banded is not second-guessed by the local test', () => {
+  const ids = new Set(['a1']);
+  assert.equal(inChipSet(mk('a1', 'zone'), 'Watch', ids, () => false), true);
+});

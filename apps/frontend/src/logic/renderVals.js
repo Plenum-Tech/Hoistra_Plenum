@@ -2546,7 +2546,13 @@ export const renderValsMethods = {
         border: f === s.filter ? "var(--color-accent)" : "var(--color-divider)",
         fg: f === s.filter ? "var(--color-accent)" : "var(--color-neutral-400)",
         bg: f === s.filter ? "var(--color-accent-900)" : "transparent",
-        click: () => this.setState({ filter: f })
+        // Assets asks the condition engine to apply a band chip rather than sifting its own
+        // copy, so the chip's count is the portfolio's and not the loaded page's. Other
+        // modules keep the plain local filter — there is no engine behind their chips.
+        click: () => {
+          this.setState({ filter: f });
+          if (modKey === "assets" && this.asCondSetFilter) this.asCondSetFilter(f);
+        }
       })) : [],
       modAsks: mod ? mod.asks.map((a) => ({ label: a, run: () => this.ask(a) })) : [],
       modBars: this.bars(modKey).map((b) => Object.assign({ groupShow: "none", rowShow: "flex", invShow: "none", group: "", groupMeta: "", investigate: null }, b)),
