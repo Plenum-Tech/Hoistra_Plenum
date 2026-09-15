@@ -15,6 +15,7 @@ from sqlalchemy import text
 from .. import database
 from ..config import settings
 from ..http_client import request as _request
+from ..services.principal import restrict_records, table_building_clause
 
 log = structlog.get_logger(__name__)
 
@@ -43,8 +44,18 @@ async def get_schema() -> dict:
         "tables": {
           "<table_name>": ["col1 (type)", "col2 (type)", ...],
           ...
-        }
+        },
+        "relationships": [
+          {"from": "<table>.<column>", "to": "<table>.<column>"},   # declared foreign keys
+          ...
+        ]
       }
+
+    JOIN ON `relationships`, NEVER ON TABLE-NAME SIMILARITY. A table named like a parent is
+    not necessarily the parent: `meter_readings.meter_id` references `energy_meters.id`, not
+    `meters.meter_id` — `meters` is a separate register and joining through it returns zero
+    rows for a meter that has thousands of readings. If the column you want to join on is not
+    in `relationships`, say so rather than guessing a key.
 
     Result is cached for 5 minutes so repeated calls within a session are free.
     """
@@ -82,7 +93,40 @@ async def get_schema() -> dict:
         col = f"{row['column_name']} ({row['data_type']})"
         tables.setdefault(tbl, []).append(col)
 
-    result = {"tables": tables}
+    # The declared foreign keys — how the tables actually relate, as opposed to how their
+    # names suggest they relate. Without this the model joined meter_readings to `meters`
+    # because the name fit, and reported zero readings for a building holding fifty; the
+    # real parent is energy_meters and the database has said so all along.
+    relationships: list[dict[str, str]] = []
+    async with database.AsyncSessionLocal() as session:
+        try:
+            fks = (await session.execute(
+                text("""
+                    SELECT kcu.table_name  AS from_table,
+                           kcu.column_name AS from_column,
+                           ccu.table_name  AS to_table,
+                           ccu.column_name AS to_column
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                      ON kcu.constraint_name = tc.constraint_name
+                     AND kcu.table_schema    = tc.table_schema
+                    JOIN information_schema.constraint_column_usage ccu
+                      ON ccu.constraint_name = tc.constraint_name
+                     AND ccu.table_schema    = tc.table_schema
+                    WHERE tc.constraint_type = 'FOREIGN KEY'
+                      AND tc.table_schema    = 'plenum_cafm'
+                    ORDER BY kcu.table_name, kcu.column_name
+                """),
+            )).mappings().all()
+            relationships = [
+                {"from": f"{r['from_table']}.{r['from_column']}",
+                 "to": f"{r['to_table']}.{r['to_column']}"}
+                for r in fks
+            ]
+        except Exception as exc:  # noqa: BLE001 — the column list is still worth having
+            log.warning("udr.get_schema.relationships_failed", error=str(exc)[:200])
+
+    result = {"tables": tables, "relationships": relationships}
     _schema_cache = result
     _schema_cache_at = now
     log.info("udr.get_schema.refreshed", table_count=len(tables))
@@ -165,10 +209,17 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-    sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
-
     async with database.AsyncSessionLocal() as session:
         try:
+            # The caller's buildings bound this read like every other. Decided from the
+            # table's real columns (building_id, vendor, asset, site, meter), never from the
+            # question; an admin gets no clause and a caller allocated to nothing gets none of
+            # the rows.
+            bsql, bparams = await table_building_clause(session, table_name)
+            if bsql:
+                where_clause = (where_clause + bsql) if where_clause else "WHERE " + bsql[len(" AND "):]
+                params.update(bparams)
+            sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
             result = await session.execute(text(sql), params)
             rows = result.mappings().all()
             return [dict(r) for r in rows]
@@ -440,6 +491,22 @@ async def udr_describe_table(table: str) -> dict:
         return _err(exc, "describe_table")
 
 
+
+async def _scoped(table: str, payload: dict, *, key: str = "rows") -> dict:
+    """Narrow a svc-udr read to the caller's buildings before the model sees it."""
+    rows = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return payload
+    async with database.AsyncSessionLocal() as session:
+        kept, refused = await restrict_records(session, table, [r for r in rows if isinstance(r, dict)])
+    out = {**payload, key: kept, "count": len(kept)}
+    if refused:
+        out["note"] = refused
+    elif len(kept) != len(rows):
+        out["note"] = f"{len(rows) - len(kept)} row(s) outside your buildings were withheld."
+    return out
+
+
 _MAX_READ_LIMIT = 500
 
 
@@ -471,7 +538,7 @@ async def udr_read_records(
             timeout=_TIMEOUT,
             params=params,
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "read_records")
 
@@ -488,7 +555,12 @@ async def udr_get_record(table: str, record_id: str, id_column: str = "id") -> d
             timeout=_TIMEOUT,
             params={"id_column": id_column},
         )
-        return resp.json()
+        record = resp.json()
+        scoped = await _scoped(table, {"rows": [record] if isinstance(record, dict) else []})
+        if not scoped["rows"]:
+            return {"error": scoped.get("note")
+                    or f"Record {record_id!r} in {table} is not in your buildings."}
+        return scoped["rows"][0]
     except Exception as exc:
         return _err(exc, "get_record")
 
@@ -516,7 +588,7 @@ async def udr_search_records(
                 "offset": offset,
             },
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "search_records")
 

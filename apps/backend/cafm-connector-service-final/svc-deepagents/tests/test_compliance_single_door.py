@@ -10,13 +10,19 @@ def test_classify_eicr_filename():
 
 
 def test_classify_gas_safe_landlord_building():
+    """A landlord/commercial gas safety record is the pack's Building type CP17.
+
+    GAS_SAFE is a different thing: the VENDOR Gas Safe company registration. This test
+    asserted GAS_SAFE + Building, which is neither the right code nor a scope that code
+    can have.
+    """
     hit = classify_compliance_certificate_doc(
         "/tmp/scan.pdf",
         user_query="Please index this gas safe landlord certificate",
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "GAS_SAFE"
+    assert hit["certificate_type_code"] == "CP17"
     assert hit["cert_scope"] == "Building"
 
 

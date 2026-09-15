@@ -9,6 +9,8 @@ Each table has:
 
 from __future__ import annotations
 
+from typing import Literal
+
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -71,22 +73,60 @@ class OrganizationResponse(_Base):
 # ══════════════════════════════════════════════════════════════════════
 
 class UserCreate(BaseModel):
+    """Invite someone. No credential is accepted here, by design.
+
+    This used to take `password_hash: str` straight from the request body and store it.
+    Two things were wrong with that, and the second is the bad one:
+
+      1. The caller chose the digest, so the caller knew the password for an account they
+         were creating for somebody else — and nothing distinguishes that from the
+         person's own later.
+      2. There is no way to check a hash. `password_hash="x"` stores "x"; every policy
+         this platform has about length, reuse and obvious choices is bypassed by a
+         client that simply does not run it. The strength of a stored credential became
+         a property of whoever called the API.
+
+    So the capability is removed rather than validated. The account is created with an
+    unusable password and status "invited"; the person sets their own through
+    POST /api/auth/password/forgot then /password/reset on svc-operations-intelligence,
+    which proves they hold the mailbox at the same moment. An operator never learns, sets
+    or transports another person's password.
+
+    `role` is accepted but only ever `admin` or `user` — a platform superadmin is
+    appointed through the auth service, which is where the rules about who may do that
+    live. Left out, it is `user`.
+    """
+    # Unknown fields are refused rather than ignored. Pydantic's default is to drop
+    # them, which would give a caller still sending `password_hash` a cheerful 201 for an
+    # account whose password is not what they think it is — and they would find out at
+    # the point where somebody cannot sign in. A 422 naming the field says what changed.
+    model_config = {"extra": "forbid"}
+
     organization_id: UUID
     full_name: str = Field(..., max_length=255)
     email: str = Field(..., max_length=255)
-    password_hash: str = Field(..., max_length=500)
     phone: str | None = Field(None, max_length=50)
-    status: str = Field("active", max_length=50)
-    email_verified: bool = False
+    role: Literal["admin", "user"] = "user"
 
 
 class UserUpdate(BaseModel):
+    """Edit an account's details.
+
+    `password_hash` is absent for the same reason it is absent above, plus one more: a
+    generic PUT that can set a credential is an account takeover reachable by anyone who
+    can edit a phone number. Password changes go through the auth service, which requires
+    either the current password or a code emailed to the address.
+
+    `role` is absent too — role changes go through POST /api/auth/users/{id}/role, which
+    enforces who may grant what and writes an append-only audit row. A field on a general
+    edit form does neither.
+    """
+    model_config = {"extra": "forbid"}
+
     full_name: str | None = Field(None, max_length=255)
     email: str | None = Field(None, max_length=255)
-    password_hash: str | None = Field(None, max_length=500)
     phone: str | None = Field(None, max_length=50)
     status: str | None = Field(None, max_length=50)
-    email_verified: bool | None = None
     last_login_at: datetime | None = None
 
 
@@ -96,6 +136,7 @@ class UserResponse(_Base):
     full_name: str
     email: str
     phone: str | None
+    role: str = "user"
     status: str
     last_login_at: datetime | None
     email_verified: bool

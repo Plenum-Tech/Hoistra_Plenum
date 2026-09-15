@@ -37,5 +37,5 @@ BEGIN
     END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_cvs_country
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cvs_country
     ON plenum_cafm.compliance_verification_sources (country_code);

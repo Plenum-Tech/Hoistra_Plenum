@@ -21,6 +21,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.app import app
 from src.db import get_session
+from src.services.principal import Principal, current_principal
 from src.models.base import Base
 
 _SQLITE_URL = "sqlite+aiosqlite://"
@@ -56,6 +57,16 @@ async def http_client(db_engine):
             yield session
 
     app.dependency_overrides[get_session] = _override_session
+
+    # Every route now needs a caller. The integration tests exercise the routes, not the
+    # identity service, so they run as a company admin (unrestricted) unless a test
+    # overrides current_principal itself.
+    async def _admin_principal():
+        import uuid as _uuid
+        return Principal(user_id=_uuid.uuid4(), email="admin@test.local", organization_id=None,
+                         role="admin", building_ids=None)
+
+    app.dependency_overrides[current_principal] = _admin_principal
 
     with patch("src.app.init_db", new_callable=AsyncMock):
         async with AsyncClient(

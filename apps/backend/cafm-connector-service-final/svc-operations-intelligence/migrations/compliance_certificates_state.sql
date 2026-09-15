@@ -24,5 +24,5 @@ COMMENT ON COLUMN plenum_cafm.compliance_certificates.state
        'document did not state a location.';
 
 -- Reporting reads country_code + state together, so index the pair.
-CREATE INDEX IF NOT EXISTS ix_compliance_certificates_country_state
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_compliance_certificates_country_state
     ON plenum_cafm.compliance_certificates (country_code, state);

@@ -12,7 +12,10 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       '/backend': {
         target: process.env.VITE_DEV_PROXY_TARGET || 'http://localhost:3000',
-        changeOrigin: true
+        changeOrigin: true,
+        // The orchestrator streams its chain-of-thought over a WebSocket
+        // (/backend/deep-agents/api/workflow/ws/:session), so upgrades must pass through.
+        ws: true
       }
     }
   },

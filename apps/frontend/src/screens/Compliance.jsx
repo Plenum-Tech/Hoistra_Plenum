@@ -569,8 +569,15 @@ export default function Compliance({ vals }) {
                                     <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" }}>
                                       {c.ver}
                                     </span>
-                                    <span className="hv23" onClick={c.act} style={{ fontSize: "10.5px", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${c.actBorder}`, color: c.actFg, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      {c.actLabel}
+                                    <span style={{ display: "flex", alignItems: "center", gap: "8px", justifySelf: "end" }}>
+                                      {c.downloadUrl ? (
+                                        <a href={c.downloadUrl} target="_blank" rel="noopener noreferrer" title={"Open the certificate on file"} style={{ display: "flex", color: "var(--color-neutral-500)" }}>
+                                          <i className="ph ph-download-simple" style={{ fontSize: "14px" }}></i>
+                                        </a>
+                                      ) : null}
+                                      <span className="hv23" onClick={c.act} style={{ fontSize: "10.5px", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${c.actBorder}`, color: c.actFg, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                        {c.actLabel}
+                                      </span>
                                     </span>
                                   </div>
                                 </React.Fragment>

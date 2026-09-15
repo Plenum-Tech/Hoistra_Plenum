@@ -14,8 +14,11 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from fastapi import Depends
+
 from .core.logging import configure_logging, get_logger
 from .api.routes import agent, tables, runs, spaces
+from .services.principal import current_principal, require_admin
 from .api.schemas.database import ErrorDetail, ErrorResponse
 from .db import ensure_udr_tables
 
@@ -160,10 +163,23 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-app.include_router(agent.router,  prefix="/api/agent",  tags=["Agent"])
-app.include_router(tables.router, prefix="/api/tables", tags=["Tables", "CRUD"])
-app.include_router(runs.router,   prefix="/api/udr",    tags=["UDR Runs"])
-app.include_router(spaces.router, prefix="/api/spaces", tags=["Saved Spaces"])
+# Every router requires a caller. Attached here rather than route by route, so a route
+# added later cannot be the one that forgets — this service went live with eighteen of them
+# and no caller at all, reachable from the public internet.
+#
+# The agent and table routers require an administrator on top. Their table is named by the
+# request, so a per-row company filter cannot be written for them: a predicate has to know
+# which column holds the company, and that is only knowable once the table is. The saved
+# spaces and run history have a fixed shape and a real organization_id, so they are scoped
+# to the caller's company instead (see services.principal.organization_for).
+app.include_router(agent.router,  prefix="/api/agent",  tags=["Agent"],
+                   dependencies=[Depends(require_admin)])
+app.include_router(tables.router, prefix="/api/tables", tags=["Tables", "CRUD"],
+                   dependencies=[Depends(require_admin)])
+app.include_router(runs.router,   prefix="/api/udr",    tags=["UDR Runs"],
+                   dependencies=[Depends(current_principal)])
+app.include_router(spaces.router, prefix="/api/spaces", tags=["Saved Spaces"],
+                   dependencies=[Depends(current_principal)])
 
 
 @app.get("/health", tags=["Health"], summary="Service health check")

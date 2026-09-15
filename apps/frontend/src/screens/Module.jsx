@@ -1,6 +1,8 @@
-// Module — Energy, Assets (Pending), Work orders (Pending)
+// Module — Energy, Assets, Maintenance
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import Assets from './Assets.jsx';
+import Maintenance from './Maintenance.jsx';
 
 export default function Module({ vals }) {
   return (
@@ -266,8 +268,11 @@ export default function Module({ vals }) {
                           </span>
                           {(r.cells || []).map((c, $index) => (
                             <React.Fragment key={$index}>
-                              <span style={{ fontSize: "11.5px", lineHeight: "1.45", textWrap: "pretty", minWidth: "0" }}>
+                              <span style={{ fontSize: "11.5px", lineHeight: "1.45", textWrap: "pretty", minWidth: "0" }} title={c.note || undefined}>
                                 {c.v}
+                                <span style={{ display: c.basisShow || "none", marginLeft: "6px", fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", padding: "1px 5px", borderRadius: "4px", verticalAlign: "middle", whiteSpace: "nowrap", color: c.basis === "reference" ? "var(--color-neutral-500)" : "var(--color-accent)", background: c.basis === "reference" ? "var(--color-surface-2, rgba(0,0,0,0.04))" : "var(--color-accent-soft, rgba(255,105,0,0.08))" }}>
+                                  {c.basis}
+                                </span>
                               </span>
                             </React.Fragment>
                           ))}
@@ -296,70 +301,68 @@ export default function Module({ vals }) {
                     ))}
                   </div>
                   <div style={{ overflowX: "auto" }}>
-                    {(vals.mod.head || []).map((h, $index) => (
-                      <React.Fragment key={$index}>
-                      </React.Fragment>
-                    ))}
-                    {(vals.modRows || []).map((r, $index) => (
-                      <React.Fragment key={$index}>
-                      </React.Fragment>
-                    ))}
                     <table className="table" style={{ width: "100%", minWidth: "640px", fontSize: "12.5px" }}>
                       <thead>
                         <tr>
-                          <th style={{ textAlign: "left", fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--color-neutral-500)", fontWeight: "400", padding: "8px 10px" }}>
-                            {vals.h}
-                          </th>
+                          {(vals.mod.head || []).map((h, $index) => (
+                            <th key={$index} style={{ textAlign: "left", fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--color-neutral-500)", fontWeight: "400", padding: "8px 10px" }}>
+                              {h}
+                            </th>
+                          ))}
                           <th style={{ display: vals.modInvHead, padding: "8px 10px" }}></th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr style={{ display: vals.r.groupShow }}>
-                          <td colSpan="7" style={{ padding: "12px 10px 6px", borderBottom: "1px solid var(--color-divider)" }}>
-                            <div style={{ display: "flex", alignItems: "baseline", gap: "9px" }}>
-                              <span style={{ fontSize: "12px" }}>
-                                {vals.r.group}
-                              </span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
-                                {vals.r.groupMeta}
-                              </span>
-                              <span style={{ flex: "1" }}></span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-300)" }}>
-                                {vals.r.groupSum}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                        <tr className="hv19" onClick={vals.r.click} style={{ cursor: "pointer", display: vals.r.rowShow }}>
-                          <td style={{ padding: "11px 10px" }}>
-                            {vals.r.c0}
-                          </td>
-                          <td style={{ padding: "11px 10px", color: "var(--color-neutral-300)" }}>
-                            {vals.r.c1}
-                          </td>
-                          <td style={{ padding: "11px 10px", color: "var(--color-neutral-400)" }}>
-                            {vals.r.c2}
-                          </td>
-                          <td style={{ padding: "11px 10px", fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-300)" }}>
-                            {vals.r.c3}
-                          </td>
-                          <td style={{ padding: "11px 10px" }}>
-                            <span style={{ display: "inline-block", whiteSpace: "nowrap", fontSize: "11px", padding: "3px 8px", borderRadius: "5px", color: vals.r.color, background: vals.r.bg }}>
-                              {vals.r.c4}
-                            </span>
-                          </td>
-                          <td style={{ padding: "11px 10px", color: "var(--color-neutral-500)", fontSize: "11.5px" }}>
-                            {vals.r.c5}
-                          </td>
-                          <td style={{ padding: "11px 10px", display: vals.r.invShow }}>
-                            <div className="hv15" onClick={vals.r.investigate} style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                              <i className="ph ph-magnifying-glass" style={{ fontSize: "11px" }}></i>
-                              <span>
-                                {"Investigate"}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
+                        {(vals.modRows || []).map((r, $index) => (
+                          <React.Fragment key={$index}>
+                            <tr style={{ display: r.groupShow }}>
+                              <td colSpan="7" style={{ padding: "12px 10px 6px", borderBottom: "1px solid var(--color-divider)" }}>
+                                <div style={{ display: "flex", alignItems: "baseline", gap: "9px" }}>
+                                  <span style={{ fontSize: "12px" }}>
+                                    {r.group}
+                                  </span>
+                                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                                    {r.groupMeta}
+                                  </span>
+                                  <span style={{ flex: "1" }}></span>
+                                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-300)" }}>
+                                    {r.groupSum}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                            <tr className="hv19" onClick={r.click} style={{ cursor: "pointer", display: r.rowShow }}>
+                              <td style={{ padding: "11px 10px" }}>
+                                {r.c0}
+                              </td>
+                              <td style={{ padding: "11px 10px", color: "var(--color-neutral-300)" }}>
+                                {r.c1}
+                              </td>
+                              <td style={{ padding: "11px 10px", color: "var(--color-neutral-400)" }}>
+                                {r.c2}
+                              </td>
+                              <td style={{ padding: "11px 10px", fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-300)" }}>
+                                {r.c3}
+                              </td>
+                              <td style={{ padding: "11px 10px" }}>
+                                <span style={{ display: "inline-block", whiteSpace: "nowrap", fontSize: "11px", padding: "3px 8px", borderRadius: "5px", color: r.color, background: r.bg }}>
+                                  {r.c4}
+                                </span>
+                              </td>
+                              <td style={{ padding: "11px 10px", color: "var(--color-neutral-500)", fontSize: "11.5px" }}>
+                                {r.c5}
+                              </td>
+                              <td style={{ padding: "11px 10px", display: r.invShow }}>
+                                <div className="hv15" onClick={r.investigate} style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  <i className="ph ph-magnifying-glass" style={{ fontSize: "11px" }}></i>
+                                  <span>
+                                    {"Investigate"}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                          </React.Fragment>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -422,6 +425,8 @@ export default function Module({ vals }) {
               </div>
             </>
           ) : null}
+          {vals.isAssets ? <Assets vals={vals} /> : null}
+          {vals.isMaint ? <Maintenance vals={vals} /> : null}
           {vals.isEnergy ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: "9px", marginTop: "32px", flexWrap: "wrap" }}>
@@ -438,6 +443,19 @@ export default function Module({ vals }) {
                 <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
                   {vals.enListSummary}
                 </span>
+              </div>
+              <div style={{ display: vals.enSimulatedShow, alignItems: "center", gap: "9px", padding: "9px 13px", borderRadius: "10px", marginTop: "12px", border: "1px solid var(--color-warn-border, #e0b877)", background: "var(--color-warn-bg, #fdf6e7)", color: "var(--color-warn-fg, #8a6116)", fontSize: "11.5px" }}>
+                <i className="ph ph-flask" style={{ fontSize: "14px", flexShrink: "0" }}></i>
+                <span>
+                  {"Simulated data in view — "}{vals.enSimulatedText}{". Anomalies and costs from this period are about generated readings, not metered ones."}
+                </span>
+              </div>
+              <div style={{ display: vals.enBldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "12px", maxWidth: "420px" }}>
+                <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                <input className="input" value={vals.enBldQuery} onChange={vals.setEnBldQuery} placeholder="Search buildings by name…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+                {vals.enBldQuery ? (
+                  <i className="ph ph-x hv11" onClick={() => vals.setEnBldQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+                ) : null}
               </div>
               {(vals.enGroups || []).map((g, $index) => (
                 <React.Fragment key={$index}>
@@ -529,6 +547,9 @@ export default function Module({ vals }) {
                                         {a.days}
                                       </div>
                                     </div>
+                                    <span style={{ display: a.simulatedShow, whiteSpace: "nowrap", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", border: "1px solid var(--color-warn-border, #e0b877)", color: "var(--color-warn-fg, #8a6116)", background: "var(--color-warn-bg, #fdf6e7)", flex: "0 0 auto" }} title="Detected on a simulated feed — the figure beside it is generated, not metered">
+                                      {"simulated"}
+                                    </span>
                                     <span style={{ display: "inline-block", whiteSpace: "nowrap", fontSize: "11px", padding: "3px 8px", borderRadius: "5px", color: a.color, background: a.bg, flex: "0 0 auto" }}>
                                       {a.status}
                                     </span>
@@ -555,6 +576,14 @@ export default function Module({ vals }) {
               <div style={{ display: vals.enListEmpty, marginTop: "18px", padding: "22px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", fontSize: "12.5px", color: "var(--color-neutral-400)", lineHeight: "1.6" }}>
                 {"No building in scope matches this filter."}
               </div>
+              <div style={{ display: vals.enBldPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", marginTop: "14px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
+                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.enListSummary}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div className="hv13" onClick={vals.enBldPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.enBldPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.enBldPagePrevShow ? "pointer" : "default", opacity: vals.enBldPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.enBldPage + 1) + " of " + vals.enBldPageCount}</span>
+                  <div className="hv13" onClick={vals.enBldPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.enBldPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.enBldPageNextShow ? "pointer" : "default", opacity: vals.enBldPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                </div>
+              </div>
               <div style={{ fontSize: "11px", color: "var(--color-neutral-600)", marginTop: "12px", lineHeight: "1.55" }}>
                 {vals.mod.sideFoot}{" The marker on each bar is the building's reference; open a building to see the anomalies beneath its number, and investigate either the building or a single anomaly."}
               </div>
@@ -565,7 +594,7 @@ export default function Module({ vals }) {
                     {"Detection rules"}
                   </span>
                   <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
-                    {vals.enRulesN}{" rules · coverage shown per building in scope"}
+                    {vals.enRulesLiveN}{" of "}{vals.enRulesN}{" implemented · coverage shown per building in scope for those"}
                   </span>
                 </div>
                 <div style={{ display: vals.enRulesShow }}>

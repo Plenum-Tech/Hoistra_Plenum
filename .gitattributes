@@ -1,0 +1,9 @@
+
+# Batch files must reach Windows with CRLF. cmd.exe silently misparses a
+# .cmd file with LF endings — no output, no error, nothing runs.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# And shell scripts must reach Linux with LF, or bash reports
+# "bad interpreter: /usr/bin/env bash^M".
+*.sh text eol=lf

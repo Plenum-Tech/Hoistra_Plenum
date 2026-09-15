@@ -23,6 +23,8 @@ import time
 
 import structlog
 
+from . import activity_log
+
 from ..config import settings
 from .phase2_intents import Phase2AgentId, resolve_phase2_engine
 from .skills import routable_skills
@@ -93,6 +95,12 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
         return {"agent": eng, "also": [], "reason": "router unavailable", "source": "keyword"}
 
     model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+    _user = (
+        f"AGENTS:\n{catalogue}\n\n"
+        + (f"CONTEXT:\n{context_note.strip()[:600]}\n\n" if context_note else "")
+        + f"QUESTION:\n{(question or '').strip()[:1000]}"
+    )
+    _t0 = time.perf_counter()
     try:
         import anthropic
 
@@ -129,8 +137,19 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
         )
     except Exception as exc:  # noqa: BLE001 — routing must never break the turn
         log.warning("agent_router.failed", error=str(exc)[:200])
+        activity_log.fire_exchange(
+            agent="agent_router", stage="router", system=_PROMPT, user=_user, error=str(exc),
+            model=model, latency_ms=(time.perf_counter() - _t0) * 1000,
+        )
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return {"agent": eng, "also": [], "reason": f"router failed: {type(exc).__name__}", "source": "keyword"}
+
+    activity_log.fire_exchange(
+        agent="agent_router", stage="router", system=_PROMPT, user=_user, output=chosen,
+        model=model, latency_ms=(time.perf_counter() - _t0) * 1000, usage=message.usage,
+        params={"effort": "low", "max_tokens": 400, "schema": "agent"},
+        summary_out=f"agent: {chosen.get('agent')} — {str(chosen.get('reason') or '')[:200]}",
+    )
 
     agent = str(chosen.get("agent") or "").strip()
     also = [str(a).strip() for a in (chosen.get("also") or []) if str(a).strip() in known]

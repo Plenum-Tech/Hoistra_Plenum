@@ -84,6 +84,43 @@ def normalize_vendor_name(raw: str | None) -> str:
     return out if len(out) >= 2 else ""
 
 
+async def vendor_named_in(session: AsyncSession, text_body: str | None) -> str | None:
+    """The vendor this document names, chosen from the ones we already have.
+
+    The opposite question to find_vendor_id, and a much safer one. Reading a supplier's name
+    out of free text means guessing where the name starts and stops, and a wrong guess
+    attributes an invoice to a company that does not exist. Asking instead which of the
+    register's own names appears in the text can only ever return a vendor we already know,
+    or nothing.
+
+    Longest name first, so "Halden Building Services" wins over a "Halden" that would also
+    match — the more specific name is the more likely one to be meant.
+    """
+    body = re.sub(r"\s+", " ", (text_body or "")).lower()
+    if len(body) < 3:
+        return None
+    async with session.begin_nested():
+        rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT id::text AS id, vendor_name
+                      FROM plenum_cafm.vendors
+                     WHERE NULLIF(TRIM(vendor_name), '') IS NOT NULL
+                     ORDER BY length(vendor_name) DESC, created_at NULLS LAST, id
+                    """
+                )
+            )
+        ).mappings().all()
+    for r in rows:
+        name = re.sub(r"\s+", " ", str(r["vendor_name"]).strip()).lower()
+        # Two characters is not a name; matching one would attribute a document to whichever
+        # vendor happened to be initialised.
+        if len(name) >= 3 and name in body:
+            return r["id"]
+    return None
+
+
 async def find_vendor_id(session: AsyncSession, name: str | None) -> str | None:
     """The id of the vendor this name refers to, or None if the register has no such vendor.
 

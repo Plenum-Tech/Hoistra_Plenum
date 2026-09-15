@@ -27,6 +27,7 @@ from ..config import settings
 from ..database import init_session_factory
 from ..limiter import limiter
 from .routes.documents import router as documents_router
+from .routes.ingestion_cases import router as ingestion_cases_router
 from .routes.health import router as health_router
 from .routes.ingest_batch import router as ingest_batch_router
 from .routes.migration import router as migration_router
@@ -91,6 +92,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await init_ingest_batch_tables()
     except Exception as exc:
         log.warning("svc-deepagents.ingest_batch_tables.failed", error=str(exc)[:300])
+
+    # Activity log table (append-only trail of agent inputs/outputs) — best effort.
+    try:
+        from ..agents import activity_log
+
+        await activity_log.ensure_table()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("svc-deepagents.activity_log.failed", error=str(exc)[:300])
 
     # Initialise HITL Postgres checkpointer (optional)
     checkpointer = None
@@ -189,6 +198,7 @@ app.include_router(workflow_router)
 app.include_router(ingest_batch_router)
 app.include_router(migration_router)
 app.include_router(documents_router)
+app.include_router(ingestion_cases_router)
 
 
 if __name__ == "__main__":

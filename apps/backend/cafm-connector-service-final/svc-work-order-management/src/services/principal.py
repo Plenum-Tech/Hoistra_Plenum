@@ -1,0 +1,333 @@
+"""Who is asking — resolved from operations-intelligence, never decided here.
+
+This service had no notion of a caller. Every route took a session and answered for the
+whole database: any bearer of the URL could list every work order, asset and location in
+every company, and a user allocated to one building saw them all. The UDR agent calls these
+routes fifteen times per conversation, carrying the caller's token — which this service then
+ignored.
+
+The token is verified the same way svc-deepagents verifies it: by asking
+operations-intelligence ``GET /api/auth/me`` with it. That service owns accounts, roles and
+building allocations, and answers with the caller's ``building_ids`` — None for an admin
+(the whole company), a list for a user, an empty list for a user allocated to nothing. This
+module does not decode the token, does not hold the signing secret, and cannot disagree with
+the source of truth about who may see what.
+
+Resolved principals are cached for a short while per token so a burst of tool calls in one
+conversation costs one round trip, not fifteen.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from sqlalchemy import column as sa_col
+from sqlalchemy import false as sa_false
+from sqlalchemy import select as sa_select
+from sqlalchemy import table as sa_table
+from uuid import UUID
+
+import httpx
+from fastapi import Header, HTTPException, status
+
+#: The service that owns identity. Same container on the deployed app, so loopback.
+OPS_BASE_URL = os.environ.get("OPERATIONS_INTELLIGENCE_BASE_URL", "http://127.0.0.1:8009").rstrip("/")
+#: How long a resolved principal is trusted before /me is asked again.
+CACHE_TTL_S = float(os.environ.get("PRINCIPAL_CACHE_TTL_SECONDS", "60"))
+
+_cache: dict[str, tuple[float, "Principal"]] = {}
+
+
+@dataclass(frozen=True)
+class Principal:
+    user_id: UUID
+    email: str
+    organization_id: UUID | None
+    role: str
+    #: None = every building in the company. () = allocated to nothing.
+    building_ids: tuple[UUID, ...] | None
+    buildings: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    selected_building_id: UUID | None = None
+
+    @property
+    def restricted(self) -> bool:
+        return self.building_ids is not None
+
+    def allows_building(self, building_id: UUID | str | None) -> bool:
+        if building_id is None:
+            return False
+        if self.building_ids is None:
+            return True
+        try:
+            return UUID(str(building_id)) in self.building_ids
+        except (ValueError, TypeError):
+            return False
+
+
+def _detail(error: str, reason: str, **extra) -> dict:
+    """Both vocabularies at once: operations-intelligence's {error, reason} so one client
+    handles both services, and this service's {code, message} so its own error envelope
+    (app.http_exception_handler reads detail["code"] / detail["message"]) renders it
+    rather than str()-ing the dict."""
+    return {"ok": False, "error": error, "reason": reason, "code": reason, "message": error, **extra}
+
+
+def _unauthorized(error: str, reason: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_detail(error, reason))
+
+
+def _forbidden(error: str, reason: str, **extra) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_detail(error, reason, **extra))
+
+
+def _from_me(payload: dict[str, Any]) -> Principal:
+    user = payload.get("user") or {}
+    ids = user.get("building_ids")
+    building_ids = None if ids is None else tuple(UUID(str(b)) for b in ids)
+    # A selected building narrows what this caller sees, exactly as Scope does upstream —
+    # only if it is one they may see. /me only ever returns a selection that passed that
+    # check, but the rule is cheap to restate and expensive to get wrong.
+    sel = user.get("selected_building_id")
+    selected = UUID(str(sel)) if sel else None
+    if selected is not None and (building_ids is None or selected in building_ids):
+        building_ids = (selected,)
+    return Principal(
+        user_id=UUID(str(user["id"])),
+        email=str(user.get("email") or ""),
+        organization_id=UUID(str(user["organization_id"])) if user.get("organization_id") else None,
+        role=str(user.get("platform_role") or user.get("role") or "user"),
+        building_ids=building_ids,
+        buildings=tuple(user.get("buildings") or ()),
+        selected_building_id=selected,
+    )
+
+
+async def resolve(authorization: str | None) -> Principal:
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not token:
+        raise _unauthorized("Send an Authorization: Bearer <token> header.", "missing_token")
+    key = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    hit = _cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    try:
+        async with httpx.AsyncClient(base_url=OPS_BASE_URL, timeout=8.0) as client:
+            resp = await client.get("/api/auth/me", headers={"Authorization": authorization})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_detail(
+            "The identity service is unreachable.", "identity_unavailable", detail=str(exc)[:120])) from exc
+    if resp.status_code == 401:
+        detail = {}
+        try:
+            detail = (resp.json() or {}).get("detail") or {}
+        except ValueError:
+            pass
+        raise _unauthorized(detail.get("error") or "Sign in again.", detail.get("reason") or "invalid_token")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_detail(
+            "The identity service refused the check.", "identity_error"))
+    principal = _from_me(resp.json())
+    _cache[key] = (time.monotonic() + CACHE_TTL_S, principal)
+    return principal
+
+
+async def current_principal(authorization: str | None = Header(default=None)) -> Principal:
+    """FastAPI dependency: the signed-in caller, or 401."""
+    return await resolve(authorization)
+
+
+def building_clause(principal: Principal, column: str, *, param: str = "scope_buildings") -> tuple[str, dict]:
+    """The predicate that narrows a building-keyed query to this caller.
+
+    ("", {}) for an admin. " AND FALSE" for a user allocated to nothing — a predicate that
+    matches no row, never the absence of one. The column is chosen by the route, never by
+    the request.
+    """
+    if principal.building_ids is None:
+        return "", {}
+    if not principal.building_ids:
+        return " AND FALSE", {}
+    return f" AND {column} = ANY(CAST(:{param} AS uuid[]))", {param: [str(b) for b in principal.building_ids]}
+
+
+#: plenum_cafm.buildings, named rather than modelled — this service owns no buildings table
+#: and needs exactly two of its columns. Both are uuid, so the comparison below is a straight
+#: uuid = uuid with no cast.
+_BUILDINGS = sa_table(
+    "buildings",
+    sa_col("building_id"),
+    sa_col("organization_id"),
+    schema="plenum_cafm",
+)
+
+
+def acting_organization(principal: Principal, requested):
+    """The company a read should answer for.
+
+    A superadmin reads across companies, which is the point of the role — but the Assets
+    screen showed what happens when one endpoint exercises that and another does not. The
+    buildings register was asked for company 0001 and returned its 622 buildings; the asset
+    read was asked for nothing and returned company 0005's assets too, so fifteen assets
+    arrived belonging to a building the register had correctly left out. The page could only
+    describe them as "not in your buildings register", which was true and completely
+    misleading: the building exists, in another company.
+
+    So a superadmin naming a company gets that company on every read, not just some of them.
+    A caller who is not a superadmin gets their own company whatever they ask for — this can
+    only narrow a read, never widen one.
+    """
+    if requested is None:
+        return principal.organization_id
+    if (principal.role or "").strip().lower() == "superadmin":
+        return requested
+    return principal.organization_id
+
+
+def scope_select(q, principal: Principal, column, organization_id=None):
+    """Narrow a SQLAlchemy select on a building column to this caller.
+
+    ``building_ids`` None means "every building in the company" — the company, as this
+    module's own docstring says, not every company. It used to return the query untouched,
+    which is not the whole company but the whole DATABASE: any admin listing assets, work
+    orders or locations got every other tenant's rows too, and the Assets screen presented
+    them as "scoped to your building allocation". The rows carry no organization of their
+    own, so the boundary is drawn through the buildings that do.
+
+    A superadmin is the one caller meant to read across companies, and keeps doing so. A
+    principal with no company at all matches nothing rather than everything: failing closed
+    is the only safe default for a tenancy boundary, and no active account is in that state.
+    """
+    def _in_org(org):
+        return q.where(
+            column.in_(
+                sa_select(_BUILDINGS.c.building_id).where(
+                    _BUILDINGS.c.organization_id == org
+                )
+            )
+        )
+
+    if principal.building_ids is not None:
+        if not principal.building_ids:
+            return q.where(sa_false())
+        return q.where(column.in_(list(principal.building_ids)))
+    if (principal.role or "").strip().lower() == "superadmin":
+        # Across companies by default, and pinned to one the moment a company is named —
+        # so the caller's other reads, which already honour organization_id, agree with
+        # this one instead of describing a different portfolio.
+        return q if organization_id is None else _in_org(organization_id)
+    if principal.organization_id is None:
+        return q.where(sa_false())
+    # A non-superadmin is their own company, whatever was asked for. acting_organization()
+    # has already resolved that; this is the second line of the same defence.
+    return _in_org(principal.organization_id)
+
+
+def assert_building(principal: Principal, building_id, *, action: str = "read") -> None:
+    """403 unless this caller may act on this building — same detail shape and reason as
+    operations-intelligence, so one client handles both."""
+    if principal.building_ids is None:
+        return
+    if principal.allows_building(building_id):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_detail(
+            f"You are not allocated to that building, so you cannot {action} its data.",
+            "building_not_allocated", building_id=str(building_id) if building_id else None,
+        ),
+    )
+
+
+def is_superadmin(principal: Principal) -> bool:
+    return (principal.role or "").strip().lower() == "superadmin"
+
+
+def effective_organization_id(principal: Principal, requested_org=None):
+    """The company this request acts for, with the same rule scope_building_ids applies.
+
+    Only a superadmin may name a company other than their own; anyone else asking gets 403
+    rather than silently their own, so a client sending the wrong id learns about it. Split
+    out because three things need the acting company and not the caller's: narrowing a read,
+    stamping a row that records the read, and refusing a cross-company request outright.
+    Stamping the CALLER's organization_id on a row about another company's data mislabels
+    it, and the row is what the next read is filtered by.
+    """
+    org = principal.organization_id
+    if requested_org is None:
+        return org
+    try:
+        requested = UUID(str(requested_org))
+    except (ValueError, TypeError):
+        raise _forbidden("That is not a company id.", "wrong_organization") from None
+    if requested != org and not is_superadmin(principal):
+        raise _forbidden(
+            "You can only work within your own company.", "wrong_organization",
+            your_organization_id=str(org) if org else None,
+        )
+    return requested
+
+
+async def scope_building_ids(
+    session, principal: Principal, requested_org: UUID | str | None = None,
+) -> list[UUID] | None:
+    """The buildings a request covers, honouring an acting company only from a superadmin.
+
+    The raw-SQL routes on this service narrow by a list of building ids (``_scope_sql`` in
+    services/maintenance.py), and ``None`` there means "no predicate at all". That is the
+    whole database, not the whole company — the same bug ``scope_select`` above was written
+    to close on the ORM side, and it was still open on this one: an admin listing decisions
+    got every other tenant's rows, and a superadmin "viewing as" a company got them too,
+    because nothing carried the company being viewed.
+
+    So this resolves the buildings the caller may see into a list:
+
+    * A caller with an allocation gets their allocation. An organisation cannot widen it —
+      asking to act as a company you hold no buildings in still shows you only your own.
+    * An unrestricted caller gets every building in the effective company.
+    * A superadmin naming no company keeps reading across all of them, which is the one
+      caller meant to and what every existing call already does.
+    * No company at all resolves to nothing rather than everything: a tenancy boundary
+      fails closed.
+
+    Anyone but a superadmin naming a company other than their own gets 403 rather than
+    silently their own — a client sending the wrong id has a bug worth surfacing, and
+    substituting quietly hides it until it matters. Same rule, reason and status as
+    operations-intelligence's ``scope_for``, so one client handles both services.
+    """
+    org = principal.organization_id
+    requested = None
+    if requested_org is not None:
+        try:
+            requested = UUID(str(requested_org))
+        except (ValueError, TypeError):
+            raise _forbidden("That is not a company id.", "wrong_organization") from None
+    if requested is not None and requested != org:
+        if not is_superadmin(principal):
+            raise _forbidden(
+                "You can only work within your own company.", "wrong_organization",
+                your_organization_id=str(org) if org else None,
+            )
+        org = requested
+
+    # An allocation is the narrower boundary and always wins; an acting company never widens it.
+    if principal.building_ids is not None:
+        return list(principal.building_ids)
+
+    # A superadmin who has NOT named a company keeps reading across all of them. Keyed on
+    # whether one was asked for, not on whether they have one of their own — a superadmin
+    # belongs to a company like anyone else, and reading that company's rows by default
+    # would be a silent behaviour change for every existing caller.
+    if requested is None and is_superadmin(principal):
+        return None
+
+    if org is None:
+        return []
+
+    rows = await session.execute(
+        sa_select(_BUILDINGS.c.building_id).where(_BUILDINGS.c.organization_id == org)
+    )
+    return [UUID(str(r[0])) for r in rows.all()]

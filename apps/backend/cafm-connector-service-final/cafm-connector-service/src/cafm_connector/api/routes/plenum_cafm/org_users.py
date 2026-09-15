@@ -111,9 +111,49 @@ async def get_user(user_id: str, db: AsyncSession = Depends(get_plenum_db)):
     return UserResponse.model_validate(row)
 
 
+#: Stored in password_hash for an invited account. It is not a hash of anything: bcrypt
+#: cannot parse it, so every verification against it fails, and it can never be reached by
+#: guessing. The "!" prefix is the long-standing convention for "no usable password" and
+#: is what a person reading the column should see instead of something hash-shaped.
+UNUSABLE_PASSWORD = "!invited-no-password-set"
+
+
 @router.post("/users", response_model=UserResponse, status_code=201, tags=["Users"])
 async def create_user(body: UserCreate, db: AsyncSession = Depends(get_plenum_db)):
-    obj = User(id=uuid4(), **body.model_dump())
+    """Invite someone to the platform. No password is set here.
+
+    This endpoint used to accept `password_hash` from the request body and store it
+    verbatim — the caller chose the credential for an account belonging to someone else,
+    and no policy could be applied to a value that arrived pre-hashed.
+
+    Now the account is created with an unusable password and status "invited". The
+    person sets their own through the auth service's reset flow
+    (POST /api/auth/password/forgot, then /password/reset), which confirms the mailbox
+    at the same time. Nobody but the account holder ever knows the password.
+    """
+    address = (body.email or "").strip().lower()
+    if not address or "@" not in address:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    # Matched case-insensitively: Bala@x.com and bala@x.com are one mailbox, and the
+    # unique constraint on `email` alone would happily hold both as separate accounts.
+    existing = await db.execute(
+        select(User).where(func.lower(User.email) == address)
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail="That email already has an account.")
+
+    obj = User(
+        id=uuid4(),
+        organization_id=body.organization_id,
+        full_name=body.full_name,
+        email=address,
+        phone=body.phone,
+        role=body.role,
+        password_hash=UNUSABLE_PASSWORD,
+        status="invited",
+        email_verified=False,
+    )
     db.add(obj)
     await db.commit()
     await db.refresh(obj)

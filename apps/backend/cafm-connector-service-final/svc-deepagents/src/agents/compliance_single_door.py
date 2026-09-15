@@ -19,32 +19,55 @@ from .compliance_offers import offers_for_row, row_from_ingest
 from .contract_performance_single_door import extract_text_from_upload
 from .document_forensics import analyze_certificate_document, forensics_summary_line
 from .pdf_vision_extract import extract_document_text
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
 
 # CCC §1 canonical aliases for Type code: lines and residual legacy tokens
+# Spellings that are NOT codes in the UK CountryPack, mapped to the code that IS.
+#
+# This map used to run the other way: it took a valid pack code (NAPIT, BPCA, REFCOM,
+# GAS_SAFE …) and rewrote it to a variant (NAPIT_REG, BPCA_MEMBER, REFCOM_COMPANY,
+# GASSAFE_COMPANY …) that appears nowhere in uk_compliance_pack_v1_1.json — the file that
+# seeds plenum_cafm.country_certificate_pack. Every UK certificate ingested through the
+# single door therefore carried a type code that could not join its pack row, so coverage
+# counted the certificate as missing, and the type name, trade category, issuing body,
+# verification URL and alert thresholds all fell back to defaults.
+#
+# The pack is the authority: scripts/rebuild_uk_pack_from_docx.py derives it from the
+# customer's UK_Compliance_Certification_Pack_v1.1.docx and emits these codes. Anything
+# else is a spelling. The old variants are kept as SOURCES here so a document that states
+# "Type code: NAPIT_REG", or a row already stored with one, still resolves to the pack code.
 _CODE_ALIASES_INLINE = {
-    "FIRE_ALARM_SERVICE": "FIRE_ALARM_SVC",
-    "SPRINKLER": "SPRINKLER_TEST",
-    "GAS_SAFE": "GAS_CP17",
-    "L8_RISK": "LEGIONELLA_RA",
-    "BPCA": "BPCA_MEMBER",
-    "NICEIC": "NICEIC_CONTRACTOR",
-    "NAPIT": "NAPIT_REG",
-    "ACS_CARD": "ACS_GAS_CARD",
-    "SIA_INDIVIDUAL": "SIA_LICENCE",
-    "NSI_GOLD_SECURITY": "NSI_GOLD_SEC",
-    "BAFE_SP203_1": "BAFE_SP203",
-    "HSE_ASBESTOS_LICENCE": "ASBESTOS_LICENCE",
-    "LCA": "LCA_REG",
-    "REFCOM": "REFCOM_COMPANY",
-    "LEIA": "LEIA_MEMBER",
-    "CONTRACTOR_PL_INSURANCE": "CONTRACTOR_PL",
-    "CONTRACTOR_EL_INSURANCE": "CONTRACTOR_EL",
-    "PA1_PA2_PA6": "PESTICIDE_PAx",
-    "ASBESTOS_P402_P403_P404": "BOHS_P40x",
-    "BTEC_LEGIONELLA": "LEGIONELLA_COMP",
+    # gas — one legacy token meant two different things; the pack separates them
+    "GAS_CP17": "CP17",                       # building: commercial gas safety record
+    "GASSAFE_COMPANY": "GAS_SAFE",            # vendor: Gas Safe company registration
+    "ACS_GAS_CARD": "ACS_CARD",
+    # fire / security
+    "BAFE_SP203": "BAFE_SP203_1",
+    "FIRE_ALARM_SVC": "FIRE_ALARM_SERVICE",
+    "SPRINKLER_TEST": "SPRINKLER",
+    "NSI_GOLD_SEC": "NSI_GOLD_SECURITY",
+    "SIA_LICENCE": "SIA_INDIVIDUAL",
+    # electrical / mechanical
+    "NICEIC_CONTRACTOR": "NICEIC",
+    "NAPIT_REG": "NAPIT",
+    "REFCOM_COMPANY": "REFCOM",
+    "LEIA_MEMBER": "LEIA",
+    # water hygiene
+    "LEGIONELLA_RA": "L8_RISK",
+    "LEGIONELLA_COMP": "BTEC_LEGIONELLA",
+    "LEGIONELLA_LOG": "LEGIONELLA_MONITORING",
+    "LCA_REG": "LCA",
+    # asbestos
+    "ASBESTOS_LICENCE": "HSE_ASBESTOS_LICENCE",
+    "BOHS_P40x": "ASBESTOS_P402_P403_P404",
+    # insurance / pest
+    "CONTRACTOR_EL": "CONTRACTOR_EL_INSURANCE",
+    "CONTRACTOR_PL": "CONTRACTOR_PL_INSURANCE",
+    "BPCA_MEMBER": "BPCA",
+    "PESTICIDE_PAx": "PA1_PA2_PA6",
 }
 
 # Filename / message / body hints → (certificate_type_code, cert_scope)
@@ -450,6 +473,8 @@ async def classify_compliance_certificate_llm(
         f"User message: {msg or '(none)'}\n"
         f"Document text (may be partial/OCR):\n{body or '(no text layer extracted)'}"
     )
+    _model = "claude-haiku-4-5-20251001"
+    _t0 = __import__("time").perf_counter()
     try:
         import json as _json
 
@@ -457,13 +482,21 @@ async def classify_compliance_certificate_llm(
 
         client = anthropic.AsyncAnthropic(api_key=key)
         resp = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_model,
             max_tokens=350,
             messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         raw = resp.content[0].text if resp.content else "{}"
         raw = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.I | re.M)
         data = _json.loads(raw)
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg, "text_chars": len(body)},
+            output=data, model=_model, usage=resp.usage,
+            latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+            summary_out=f"compliance={data.get('compliance')} candidates={[c.get('certificate_type_code') for c in (data.get('candidates') or [])]}",
+        )
         if not data.get("compliance"):
             return []
         out: list[dict[str, Any]] = []
@@ -487,6 +520,12 @@ async def classify_compliance_certificate_llm(
         return out
     except Exception as exc:  # noqa: BLE001 — classification is best-effort
         log.warning("single_door.compliance.llm_classify_failed", error=str(exc)[:200])
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg}, error=str(exc),
+            model=_model, latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+        )
         return []
 
 

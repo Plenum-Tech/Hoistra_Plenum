@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from cafm_connector.api.security import Principal, current_principal
 from cafm_connector.core.config import Settings, get_settings
 from cafm_connector.secrets.backend import get_secrets_backend
 from cafm_connector.services.connector_service import ConnectorService
@@ -58,43 +57,33 @@ async def get_db_session(
 
 # ── Auth ──────────────────────────────────────────────────────────────
 
-
-class TokenPayload:
-    def __init__(self, sub: str, roles: list[str]) -> None:
-        self.sub   = sub
-        self.roles = roles
-
-
-async def get_current_user() -> TokenPayload:
-    return TokenPayload(sub="anonymous", roles=[])
-'''
-bearer_scheme = HTTPBearer()
+# Identity lives in cafm_connector.api.security, which asks operations-intelligence who the
+# caller is. What used to be here was a stub returning ``TokenPayload(sub="anonymous")`` with
+# the real check commented out inside a string literal, so every connector route — the ones
+# that hold the credentials for a customer's source systems — was open to anyone who could
+# reach the port.
 
 
 class TokenPayload:
-    def __init__(self, sub: str, roles: list[str]) -> None:
-        self.sub   = sub
+    """The caller, in the shape connectors.py already expects."""
+
+    def __init__(self, sub: str, roles: list[str], principal: "Principal | None" = None) -> None:
+        self.sub = sub
         self.roles = roles
+        self.principal = principal
+
+    @property
+    def organization_id(self):
+        return self.principal.organization_id if self.principal else None
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    settings: Settings = Depends(get_settings),
+    principal: Principal = Depends(current_principal),
 ) -> TokenPayload:
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-        sub: str = payload.get("sub", "")
-        roles: list[str] = payload.get("roles", [])
-        return TokenPayload(sub=sub, roles=roles)
-    except JWTError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+    """The signed-in caller, or 401. Never anonymous."""
+    return TokenPayload(sub=str(principal.user_id), roles=[principal.role], principal=principal)
 
-'''
+
 # ── Service factory ───────────────────────────────────────────────────
 
 async def get_service(

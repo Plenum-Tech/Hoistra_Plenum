@@ -5,7 +5,10 @@ import React from 'react';
 export default function Buildings({ vals }) {
   return (
       <div style={{ flex: "1", display: "flex", justifyContent: "flex-start", padding: "0 32px 80px" }}>
-        <div style={{ width: "100%", maxWidth: "1180px", animation: "fadeUp 0.28s ease both" }}>
+        {/* No max-width: the table below is wide (1620px min) and wants the room a
+            collapsed navigator or a closed dock frees up, rather than sitting capped
+            with columns truncated either way. */}
+        <div style={{ width: "100%", animation: "fadeUp 0.28s ease both" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "24px 0 0" }}>
             <div className="hv6" onClick={vals.goHome} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
               <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
@@ -64,15 +67,25 @@ export default function Buildings({ vals }) {
                 <span className="hv11" onClick={vals.bldRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.bldRetryShow }}>{"Retry"}</span>
               </div>
             </div>
-            {vals.isAdmin ? (
+            {vals.bcCanHoist ? (
               <>
+                <div className="btn" onClick={vals.ingestDocuments} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
+                  {"Ingest documents"}
+                </div>
                 <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
                   {"Hoist a building"}
                 </div>
               </>
             ) : null}
           </div>
-          <div style={{ marginTop: "26px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
+          <div style={{ display: vals.bldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "18px", maxWidth: "420px" }}>
+            <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+            <input className="input" value={vals.bldQuery} onChange={vals.setBldQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+            {vals.bldQuery ? (
+              <i className="ph ph-x hv11" onClick={() => vals.setBldQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+            ) : null}
+          </div>
+          <div style={{ marginTop: "16px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
             <div style={{ minWidth: "1620px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "12px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "10.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                 <span>
@@ -114,9 +127,9 @@ export default function Buildings({ vals }) {
               </div>
               {(vals.buildingRows || []).map((b, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={b.click} style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
-                    <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)" }}>
-                      {b.id}
+                  <div className="hv2" onClick={() => vals.bgToggle(b.id)} title="Open the graph for this building" style={{ display: "grid", gridTemplateColumns: "76px minmax(148px,1.2fr) 122px minmax(108px,1fr) minmax(148px,1.4fr) 54px 92px minmax(200px,1.2fr) 96px 104px minmax(240px,1.6fr) 72px", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px", alignItems: "center", cursor: "pointer" }}>
+                    <span title={b.idTip} style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.idText}
                     </span>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {b.name}
@@ -142,15 +155,28 @@ export default function Buildings({ vals }) {
                         {b.mixText}
                       </span>
                     </div>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <span title={b.floorsTip} style={{ fontVariantNumeric: "tabular-nums" }}>
                       {b.floors}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: b.floorsSrcFg }}>{b.floorsSrc}</span>
+                      </span>
                     </span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-300)" }}>
+                    <span title={b.areaTip} style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-300)" }}>
                       {b.area}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: b.areaSrcFg }}>{b.areaSrc}</span>
+                        {" "}
+                        <span title={b.partialTip} style={{ display: b.partialShow, padding: "0 4px", borderRadius: "3px", background: "var(--st-warn)", color: "var(--accent-ink,#0d1412)", fontSize: "9px", cursor: "help" }}>
+                          {b.partialLabel}
+                        </span>
+                      </span>
                     </span>
                     <span title={b.routeTip} style={{ minWidth: "0", fontVariantNumeric: "tabular-nums" }}>
                       <span title={b.euiTip} style={{ whiteSpace: "nowrap" }}>
                         {b.eui}
+                        <span style={{ display: "inline-block", marginLeft: "6px", fontSize: "9.5px", letterSpacing: "0.04em", fontVariantNumeric: "normal", color: b.euiSrcFg }}>
+                          {b.euiSrc}
+                        </span>
                       </span>
                       <span style={{ display: "block", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.3", textWrap: "pretty", fontVariantNumeric: "normal", marginTop: "2px" }}>
                         {b.route}
@@ -161,6 +187,9 @@ export default function Buildings({ vals }) {
                     </span>
                     <span title={b.benchTip} style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
                       {b.bench}
+                      <span style={{ display: "block", fontSize: "9.5px", letterSpacing: "0.04em", lineHeight: "1.3", marginTop: "2px", fontVariantNumeric: "normal" }}>
+                        <span style={{ color: "var(--color-neutral-500)" }}>{b.benchSrc}</span>
+                      </span>
                     </span>
                     <span style={{ fontVariantNumeric: "tabular-nums", color: b.euiColor, whiteSpace: "nowrap" }}>
                       {b.delta}
@@ -174,10 +203,145 @@ export default function Buildings({ vals }) {
                         {b.stdNote}
                       </span>
                     </span>
-                    <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
-                      {b.score}
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                      <span title={b.scoreTip} style={{ fontVariantNumeric: "tabular-nums", color: b.scoreColor }}>
+                        {b.score}
+                      </span>
+                      {vals.bcCanHoist && b.buildingId ? (
+                        <span className="hv6" title={"Edit " + b.name + " — only the fields you change are sent"} onClick={(e) => { e.stopPropagation(); vals.bcOpenEdit(b.row); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
+                          <i className="ph ph-pencil-simple"></i>
+                        </span>
+                      ) : null}
+                      {vals.bcCanRemove && b.buildingId ? (
+                        <span className="hv11" title={"Remove " + b.name} onClick={(e) => { e.stopPropagation(); vals.bcAskDelete(b); }} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}>
+                          <i className="ph ph-trash"></i>
+                        </span>
+                      ) : null}
                     </span>
                   </div>
+                  {vals.bgIsOpen(b.id) ? (() => {
+                    const g = vals.bgFor(b);
+                    return (
+                      <div style={{ gridColumn: "1 / -1", padding: "18px 22px 22px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
+                        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 18px", marginBottom: "14px" }}>
+                          <span style={{ fontSize: "13px", fontWeight: "600" }}>
+                            {b.name}{" — "}{g.totalText}
+                          </span>
+                          <span style={{ fontSize: "10.5px", color: g.error ? "var(--st-warn)" : "var(--color-neutral-500)", fontFamily: "ui-monospace,monospace" }}>
+                            {g.error ? ("Could not read the graph — " + g.error + ". The counts below are from the table.") : g.scopeNote}
+                          </span>
+                        </div>
+
+                        {/* the branches, as the graph is written */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "14px" }}>
+                          {(g.branches || []).map((br) => (
+                            <div key={br.key} style={{ borderLeft: "2px solid var(--color-divider)", paddingLeft: "13px" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" }}>
+                                <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                                  {br.label}
+                                </span>
+                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "16px", fontVariantNumeric: "tabular-nums", color: br.tone }}>
+                                  {br.countText}
+                                </span>
+                              </div>
+                              <div style={{ display: br.noteShow, fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "3px", textWrap: "pretty" }}>
+                                {br.note}
+                              </div>
+                              {(br.rows || []).map((r) => (
+                                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "11px", marginTop: "3px" }}>
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-neutral-300)" }}>{r.label}</span>
+                                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap", flexShrink: "0" }}>{r.detail}</span>
+                                </div>
+                              ))}
+                              <div style={{ display: br.moreShow, fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "3px", fontFamily: "ui-monospace,monospace" }}>
+                                {br.more}
+                              </div>
+                              {(br.children || []).map((c) => (
+                                <div key={c.key} style={{ marginTop: "9px", paddingLeft: "11px", borderLeft: "1px solid var(--color-divider)" }}>
+                                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" }}>
+                                    <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                                      {c.label}
+                                    </span>
+                                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "12.5px", fontVariantNumeric: "tabular-nums", color: c.tone }}>
+                                      {c.countText}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: c.noteShow, fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "2px", textWrap: "pretty" }}>
+                                    {c.note}
+                                  </div>
+                                  {(c.rows || []).map((r) => (
+                                    <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "10.5px", marginTop: "2px" }}>
+                                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-neutral-400)" }}>{r.label}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap", flexShrink: "0" }}>{r.detail}</span>
+                                    </div>
+                                  ))}
+                                  <div style={{ display: c.moreShow, fontSize: "9.5px", color: "var(--color-neutral-500)", marginTop: "2px", fontFamily: "ui-monospace,monospace" }}>
+                                    {c.more}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* what the building is costing — ranked on the gap over contract */}
+                        <div style={{ display: g.cost.show, marginTop: "18px", borderTop: "1px solid var(--color-divider)", paddingTop: "14px" }}>
+                          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "11px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                              {"What it is costing"}
+                            </span>
+                            <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                              {"Ranked on the gap over contract, not on billed — the biggest spender is usually the biggest asset."}
+                            </span>
+                          </div>
+                          {g.cost.loading ? (
+                            <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "8px" }}>{"Reading invoice lines…"}</div>
+                          ) : null}
+                          {g.cost.error ? (
+                            <div style={{ fontSize: "11px", color: "var(--st-warn)", marginTop: "8px", lineHeight: "1.45" }}>{g.cost.error}</div>
+                          ) : null}
+                          {(g.cost.rows || []).length || g.cost.unattributed ? (
+                            <div style={{ marginTop: "8px", borderRadius: "8px", background: "var(--color-surface)", overflow: "hidden" }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 44px 48px 92px 104px 60px", gap: "10px", padding: "7px 12px", borderBottom: "1px solid var(--color-divider)", fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                                <span>{"asset"}</span><span style={{ textAlign: "right" }}>{"WOs"}</span><span style={{ textAlign: "right" }}>{"lines"}</span><span style={{ textAlign: "right" }}>{"billed"}</span><span style={{ textAlign: "right" }}>{"over contract"}</span><span style={{ textAlign: "right" }}>{"flagged"}</span>
+                              </div>
+                              {(g.cost.rows || []).concat(g.cost.unattributed ? [g.cost.unattributed] : []).map((r) => (
+                                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 44px 48px 92px 104px 60px", gap: "10px", padding: "7px 12px", borderBottom: "1px solid var(--color-divider)", fontSize: "11px", fontVariantNumeric: "tabular-nums", alignItems: "baseline" }}>
+                                  <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <span style={{ fontFamily: "ui-monospace,monospace", color: r.key === "unattributed" ? "var(--color-neutral-500)" : "var(--color-text)" }}>{r.asset}</span>
+                                    {r.name ? <span style={{ color: "var(--color-neutral-500)", marginLeft: "6px", fontSize: "10.5px" }}>{r.name}</span> : null}
+                                  </span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.wos}</span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.lines}</span>
+                                  <span style={{ textAlign: "right" }}>{r.billed}</span>
+                                  <span style={{ textAlign: "right", color: r.overTone }}>{r.over}</span>
+                                  <span style={{ textAlign: "right", color: "var(--color-neutral-400)" }}>{r.flagged}</span>
+                                </div>
+                              ))}
+                              <div style={{ display: g.cost.totalsShow, justifyContent: "space-between", gap: "12px", flexWrap: "wrap", padding: "8px 12px", fontSize: "10.5px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
+                                <span>{g.cost.totalWos}{" work orders · "}{g.cost.totalLines}{" invoice lines"}</span>
+                                <span>{"billed "}{g.cost.totalBilled}{" · over contract "}<span style={{ color: "var(--st-risk)" }}>{g.cost.totalOver}</span></span>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div style={{ display: g.cost.noteShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px", lineHeight: "1.45", textWrap: "pretty" }}>
+                            {g.cost.note}
+                          </div>
+                        </div>
+
+                        {/* what the counts above explain about the row */}
+                        {(g.notes || []).length ? (
+                          <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                            {g.notes.map((n, $i) => (
+                              <div key={$i} style={{ fontSize: "11.5px", color: n.tone, lineHeight: "1.5", textWrap: "pretty" }}>
+                                {n.text}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })() : null}
                 </React.Fragment>
               ))}
               <div style={{ padding: "22px 16px", fontSize: "12.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", display: vals.bldEmptyShow }}>
@@ -195,9 +359,17 @@ export default function Buildings({ vals }) {
                   </React.Fragment>
                 ))}
               </div>
+              <div style={{ display: vals.bldPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "11px 18px", borderBottom: "1px solid var(--color-divider)" }}>
+                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.bldPageLabel}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <div className="hv13" onClick={vals.bldPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.bldPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.bldPagePrevShow ? "pointer" : "default", opacity: vals.bldPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                  <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.bldPage + 1) + " of " + vals.bldPageCount}</span>
+                  <div className="hv13" onClick={vals.bldPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: vals.bldPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.bldPageNextShow ? "pointer" : "default", opacity: vals.bldPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                </div>
+              </div>
             </div>
             <div style={{ padding: "13px 18px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.55" }}>
-              {"Use drives the benchmark: each building is scored against the regulation pack for its country — CIBSE TM46, Energy Star Portfolio Manager and ASHRAE 100, the BCA Benchmarking Report, or a rolling live benchmark against comparable buildings in the portfolio. Two provenance lines sit under the numbers. Under EUI: how the reading arrives and at what granularity — a half-hourly data collector under Letter of Authority, a SMETS2 feed through a Smart Energy Code intermediary, a Green Button consent via an aggregator, a contracted retailer feed, or the building's own sub-meters and BMS. Building-level metering is marked in amber because attribution to a plant item there is inferred, not measured. Under the benchmark standard: the legal standing of that standard — enacted, guidance, or no operational standard at all — so a proposal is never read as a duty."}
+              {"Use drives the benchmark: each building is scored against the regulation pack for its country — CIBSE TM46, Energy Star Portfolio Manager and ASHRAE 100, the BCA Benchmarking Report, or a rolling live benchmark against comparable buildings in the portfolio. Two provenance lines sit under the numbers. Under EUI: how the reading arrives and at what granularity — a half-hourly data collector under Letter of Authority, a SMETS2 feed through a Smart Energy Code intermediary, a Green Button consent via an aggregator, a contracted retailer feed, or the building's own sub-meters and BMS. Amber marks an inference, never a threshold: building-level metering is amber because attribution to a plant item there is inferred rather than measured, and a figure that was recorded by hand rather than counted or metered carries the same colour. It says how a number was arrived at, not whether it is bad. A word under each figure names its source, and \u201cpartly counted\u201d against a floor area means the graph holds only some of that building \u2014 the surveyed figure is the one shown. Under the benchmark standard: the legal standing of that standard — enacted, guidance, or no operational standard at all — so a proposal is never read as a duty."}
             </div>
           </div>
           <div style={{ marginTop: "34px" }}>
@@ -210,8 +382,11 @@ export default function Buildings({ vals }) {
                   {"What a Hoisted Building resolves to"}
                 </div>
                 <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "76ch", lineHeight: "1.5" }}>
-                  {"Two passes. Structured data becomes tables and columns, keyed and joined. Scans and PDFs are then vectorised and bound to the column they resemble — squares on the graph, grouped as file classes rather than listed one by one."}
+                  {"Every node is a table in plenum_cafm and every figure beside one is counted in it. A building's own key and floor count sit under its name; each satellite carries the relation and how many rows this building has on that branch. A branch nobody counted reads “?” rather than nought — the two are different facts, and only one of them is about the building."}
                 </p>
+                <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>
+                  {vals.graphNote}
+                </div>
               </div>
               {vals.isAdmin ? (
                 <>
@@ -328,14 +503,14 @@ export default function Buildings({ vals }) {
                     </span>
                     <div style={{ minWidth: "0" }}>
                       <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "12.5px", color: vals.hier.parentFg }}>
-                        {"buildings"}
+                        {vals.hier.parentTbl}
                       </div>
                       <div style={{ fontSize: "10.5px", color: vals.hier.parentSub, marginTop: "2px" }}>
                         {vals.hier.building}{" · parent table"}
                       </div>
                     </div>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", background: vals.hier.pkBg, color: vals.hier.pkFg, whiteSpace: "nowrap" }}>
-                      {"PK building_id"}
+                      {vals.hier.pk}
                     </span>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: vals.hier.parentSub, whiteSpace: "nowrap" }}>
                       {vals.hier.rowKey}
@@ -377,7 +552,7 @@ export default function Buildings({ vals }) {
                               {c.tbl}
                             </div>
                             <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: c.sub, marginTop: "2px" }}>
-                              {c.rel}{" · FK building_id"}
+                              {c.rel}{" · "}{c.on}
                             </div>
                           </div>
                           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", padding: "2px 7px", borderRadius: "5px", background: c.pkBg, color: c.pkFg, whiteSpace: "nowrap" }}>
@@ -566,6 +741,9 @@ export default function Buildings({ vals }) {
                     </span>
                     <span style={{ width: "16px" }}></span>
                   </div>
+                  <div style={{ display: vals.exportT.noteShow, fontSize: "11px", color: "var(--color-neutral-500)", padding: "10px 14px", borderBottom: "1px solid var(--color-divider)" }}>
+                    {vals.exportT.note}
+                  </div>
                   {(vals.exportT.versions || []).map((v, $index) => (
                     <React.Fragment key={$index}>
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: "12px", alignItems: "center", padding: "9px 14px", borderBottom: "1px solid var(--color-divider)", background: v.bg }}>
@@ -589,10 +767,10 @@ export default function Buildings({ vals }) {
                   ))}
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", padding: "11px 14px" }}>
                     <div className="hv15" onClick={vals.exportT.downloadHistory} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                      {"Download the last three snapshots together"}
+                      {"Download every cutoff together"}
                     </div>
                     <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", flex: "1", minWidth: "200px" }}>
-                      {"One CSV per snapshot in a single zip, plus a change log naming which rows moved and what caused it."}
+                      {vals.exportT.basis}
                     </span>
                   </div>
                 </div>
@@ -620,7 +798,11 @@ export default function Buildings({ vals }) {
                         {vals.docBlurb}
                       </p>
                     </div>
-                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", flexShrink: "0" }}>
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", flexShrink: "0", alignItems: "center" }}>
+                      <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
+                        <i className="ph ph-upload-simple" style={{ fontSize: "13px" }}></i>
+                        <span>{"Ingest data"}</span>
+                      </div>
                       {(vals.docStats || []).map((d, $index) => (
                         <React.Fragment key={$index}>
                           <div>
@@ -635,11 +817,28 @@ export default function Buildings({ vals }) {
                       ))}
                     </div>
                   </div>
+                  <div style={{ display: vals.docQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "16px", maxWidth: "420px" }}>
+                    <i className="ph ph-magnifying-glass" style={{ fontSize: "14px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                    <input className="input" value={vals.docQuery} onChange={vals.setDocQuery} placeholder="Search by name, building ID, country or state…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13px", color: "var(--color-text)" }} />
+                    {vals.docQuery ? (
+                      <i className="ph ph-x hv11" onClick={() => vals.setDocQuery({ target: { value: "" } })} style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer", flexShrink: "0" }}></i>
+                    ) : null}
+                  </div>
+                  <div style={{ display: vals.docEmptyShow, fontSize: "12.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", padding: "16px 2px" }}>
+                    {vals.docEmptyText}
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "16px" }}>
                     {(vals.docBuildings || []).map((b, $index) => (
                       <React.Fragment key={$index}>
                         <div style={{ borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
-                          <div className="hv2" onClick={b.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(0,1fr) auto auto auto", gap: "12px", alignItems: "center", padding: "12px 16px", cursor: "pointer", background: b.headBg }}>
+                          {/* Three columns, not five. The chips carry what the rollup
+                              counted now ("9 documents · 2 held"), and against five rigid
+                              `auto` tracks that extra text came straight out of the only
+                              flexible one — the building's name, which truncated to "Town…"
+                              while the counts beside it had room to spare. Grouping the
+                              chips lets them wrap under each other on a narrow card, and
+                              the name keeps a floor it cannot be squeezed below. */}
+                          <div className="hv2" onClick={b.toggle} style={{ display: "grid", gridTemplateColumns: "22px minmax(150px,1fr) auto", gap: "12px", alignItems: "center", padding: "12px 16px", cursor: "pointer", background: b.headBg }}>
                             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-500)" }}>
                               {b.arrow}
                             </span>
@@ -647,19 +846,21 @@ export default function Buildings({ vals }) {
                               <div style={{ fontSize: "13.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {b.name}
                               </div>
-                              <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
+                              <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {b.id}{" · "}{b.state}
                               </div>
                             </div>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
-                              {b.nStruct}{" structured"}
-                            </span>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
-                              {b.nUnstruct}{" unstructured"}
-                            </span>
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                              {b.size}
-                            </span>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center", justifyContent: "flex-end", minWidth: "0" }}>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--color-accent-900)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
+                                {b.nStruct}{" "}{b.structLabel}
+                              </span>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", background: "var(--marker-tint)", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
+                                {b.nUnstruct}{" "}{b.unstructLabel}
+                              </span>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                                {b.size}
+                              </span>
+                            </div>
                           </div>
                           <div style={{ display: b.openShow, flexDirection: "column", borderTop: "1px solid var(--color-divider)" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))" }}>
@@ -667,7 +868,7 @@ export default function Buildings({ vals }) {
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "50%", background: "var(--color-accent)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                    {"Structured — became tables and rows"}
+                                    {"Documents — filed against this building"}
                                   </span>
                                 </div>
                                 {(b.structured || []).map((d, $index) => (
@@ -685,8 +886,8 @@ export default function Buildings({ vals }) {
                                         {d.meta}
                                       </span>
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
-                                        <i className="ph ph-eye hv6" onClick={d.view} title="View" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
-                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
+                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>
@@ -696,8 +897,11 @@ export default function Buildings({ vals }) {
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
                                   <span style={{ width: "11px", height: "11px", borderRadius: "3px", background: "var(--marker)", flexShrink: "0" }}></span>
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                    {"Unstructured — vectorised and bound"}
+                                    {b.certHead}
                                   </span>
+                                </div>
+                                <div style={{ display: b.certEmptyShow, fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "12px 16px" }}>
+                                  {b.certEmpty}
                                 </div>
                                 {(b.unstructured || []).map((d, $index) => (
                                   <React.Fragment key={$index}>
@@ -707,27 +911,35 @@ export default function Buildings({ vals }) {
                                           {d.file}
                                         </div>
                                         <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                          {"~ "}{d.became}{" · "}{d.sim}
+                                          {d.became}
                                         </div>
                                       </div>
                                       <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
                                         {d.meta}
                                       </span>
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
-                                        <i className="ph ph-eye hv6" onClick={d.view} title="View" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
-                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
+                                        <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>
                                 ))}
                               </div>
                             </div>
+                            <div style={{ display: b.emptyShow, fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "12px 16px", borderTop: "1px solid var(--color-divider)" }}>
+                              {b.emptyText}
+                            </div>
                             <div style={{ display: "flex", gap: "9px", flexWrap: "wrap", padding: "12px 16px", background: "var(--color-bg)" }}>
                               <div className="hv15" onClick={b.downloadAll} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
-                                {"Download all · "}{b.size}
+                                {"Download all"}
                               </div>
-                              <div className="hv4" onClick={b.ingestMore} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                                {"Ingest more"}
+                              {/* "Ingest more" said nothing about what it ingests or where
+                                  it lands. It attaches a document to THIS building, so it
+                                  says so — and carries an icon, because it is the one
+                                  control on this card that adds something. */}
+                              <div className="hv4" onClick={b.ingestMore} title={"Attach a document to " + b.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+                                <i className="ph ph-file-arrow-up" style={{ fontSize: "13px" }}></i>
+                                {"Ingest a document"}
                               </div>
                             </div>
                           </div>
@@ -735,11 +947,42 @@ export default function Buildings({ vals }) {
                       </React.Fragment>
                     ))}
                   </div>
+                  <div style={{ display: vals.docPagerShow, alignItems: "center", justifyContent: "space-between", gap: "12px", marginTop: "14px", padding: "5px 2px" }}>
+                    <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.docPageLabel}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <div className="hv13" onClick={vals.docPagePrev} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: vals.docPagePrevShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.docPagePrevShow ? "pointer" : "default", opacity: vals.docPagePrevShow ? "1" : "0.45" }}>{"Prev"}</div>
+                      <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "0 4px" }}>{"Page " + (vals.docPage + 1) + " of " + vals.docPageCount}</span>
+                      <div className="hv13" onClick={vals.docPageNext} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: vals.docPageNextShow ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.docPageNextShow ? "pointer" : "default", opacity: vals.docPageNextShow ? "1" : "0.45" }}>{"Next"}</div>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : null}
           </div>
         </div>
+
+      {/* ── Remove a building ─────────────────────────────────────────────────
+          The dialog opens on a DELETE with no confirm, which changes nothing and
+          reports what the building holds. That report is the whole dialog: the
+          decision is what happens to those records, not "are you sure". */}
+      <div style={{ display: vals.bcDelShow, position: "fixed", inset: "0", zIndex: "61", background: "rgba(8,14,13,0.44)", alignItems: "center", justifyContent: "center", padding: "24px" }} onClick={vals.bcDelCancel}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "460px", background: "var(--color-surface)", borderRadius: "14px", boxShadow: "var(--shadow-lg,0 24px 60px rgba(0,0,0,.28))", overflow: "hidden" }}>
+          <div style={{ padding: "20px 22px 6px" }}>
+            <h2 style={{ margin: "0", fontSize: "18px", lineHeight: "1.25" }}>{"Remove " + vals.bcDelName + "?"}</h2>
+            <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "4px", fontFamily: "ui-monospace,monospace" }}>{vals.bcDelCode}</div>
+          </div>
+          <div style={{ padding: "10px 22px 18px", fontSize: "13px", lineHeight: "1.55", color: "var(--color-neutral-400)" }}>
+            <div style={{ display: vals.bcDelLoading ? "block" : "none" }}>{"Checking what this building holds…"}</div>
+            <div style={{ display: vals.bcDelAttachedShow }}>{vals.bcDelAttachedText}</div>
+            <div style={{ display: vals.bcDelEmptyShow }}>{"This building holds no records. Nothing else is affected."}</div>
+          </div>
+          <div style={{ padding: "14px 22px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="btn" onClick={vals.bcDelCancel} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Keep it"}</div>
+            <div className="btn" onClick={vals.bcDelConfirm} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.bcDelWorking ? "default" : "pointer", color: "var(--st-warn)", border: "1px solid var(--st-warn)", borderRadius: "8px", opacity: vals.bcDelWorking ? "0.6" : "1" }}>{vals.bcDelBusyLabel}</div>
+          </div>
+        </div>
+      </div>
+
       </div>
   );
 }

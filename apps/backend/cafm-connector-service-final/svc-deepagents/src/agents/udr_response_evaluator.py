@@ -48,6 +48,11 @@ class UdrEvaluation(BaseModel):
     score: float = Field(ge=0.0, le=1.0)
     issues: list[str] = Field(default_factory=list)
     corrected_answer: str | None = None
+    #: False when the evaluator never produced a readable verdict — its own output failed to
+    #: parse, or the call failed. The other fields are then placeholders and assert nothing:
+    #: "the judge did not answer" is a different fact from "the judge said no", and only the
+    #: second is a finding about the candidate.
+    evaluated: bool = True
 
     @property
     def passed(self) -> bool:
@@ -86,15 +91,22 @@ def _parse_evaluation(content: Any) -> UdrEvaluation:
 
 
 def _evidence(tool_calls: list[dict[str, Any]]) -> str:
+    """Everything the answer could have been built from — not only the UDR half.
+
+    This used to keep UDR tools and task(agent="udr") and drop every other sub-agent. The
+    orchestrator fires several agents in parallel and synthesises one reply from all of them,
+    so the evaluator was judging a combined answer against one of its sources. When that
+    source was the wrong one — UDR reporting zero readings from a join on the wrong key while
+    energy_intelligence correctly reported fifty — the evaluator called the correct figure
+    ungrounded and degraded the answer. A judge of a combination has to see the combination.
+
+    The gate deciding WHEN the evaluator runs (has_udr_tool_calls) is unchanged.
+    """
     relevant = [
         call
         for call in tool_calls
         if str(call.get("tool") or "") in UDR_TOOL_NAMES
-        or (
-            call.get("tool") == "task"
-            and isinstance(call.get("input"), dict)
-            and call["input"].get("agent") == "udr"
-        )
+        or call.get("tool") == "task"
     ]
     return json.dumps(relevant, ensure_ascii=False, default=str)[:_MAX_EVIDENCE_CHARS]
 
@@ -136,6 +148,7 @@ async def evaluate_udr_response(
             count_consistent=False,
             score=0.0,
             issues=["Evaluator output failed schema validation"],
+            evaluated=False,
         )
     except Exception as exc:  # noqa: BLE001
         log.error("udr.eval.failed", error=str(exc)[:300], exc_info=True)
@@ -145,6 +158,7 @@ async def evaluate_udr_response(
             count_consistent=False,
             score=0.0,
             issues=["Evaluator service unavailable"],
+            evaluated=False,
         )
 
     if evaluation.passed:
@@ -192,12 +206,25 @@ async def evaluate_udr_response(
         best, best_eval = corrected, corrected_evaluation
     elif evaluation.grounded and answer.strip():
         best, best_eval = answer, evaluation
+    elif not evaluation.evaluated and answer.strip():
+        # The judge never returned a verdict, so there is no finding to withhold the answer
+        # on — only a broken judge. Discarding a correct answer because the check around it
+        # failed is the more damaging of the two errors available here, and it is the one
+        # that was happening: three runs in four of a question whose answer was right.
+        best, best_eval = answer, evaluation
     else:
         best, best_eval = "", evaluation
 
     if best.strip():
         note = ""
-        if not best_eval.count_consistent or best_eval.score < EVAL_THRESHOLD:
+        if not best_eval.evaluated:
+            # Say which check did not happen. "Could not be verified" reads as doubt about
+            # the data; this is doubt about the verifier, and the reader should know which.
+            note = (
+                "\n\n_The automated accuracy check could not run on this answer, so it has "
+                "not been independently verified against the retrieved records._"
+            )
+        elif not best_eval.count_consistent or best_eval.score < EVAL_THRESHOLD:
             note = (
                 "\n\n_Automated accuracy check: this is grounded in the retrieved records but "
                 "flagged for a quick human verification — please double-check any counts against "

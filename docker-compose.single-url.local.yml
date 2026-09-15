@@ -38,6 +38,13 @@ services:
       ENVIRONMENT: development
       DEBUG: "true"
       SEED_DEFAULT_PLENUM_ORG: "true"
+      # Where this container validates a caller's token. security.py resolves the principal
+      # against OPS /api/auth/me and defaults to 127.0.0.1:8009 — correct only for the
+      # all-in-one image, where both run under one supervisord. Here ops-intelligence is a
+      # separate container, so the default points at this container's own port 8009, where
+      # nothing listens (it serves 8000), and every principal lookup fails. Same trap as
+      # backend-app's OPERATIONS_INTELLIGENCE_BASE_URL and svc-deepagents' DEEP_AGENTS_BASE_URL.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       # No Tempo/OTLP collector in this local stack — skip trace export so the
       # logs aren't flooded with "Failed to export traces to localhost:4317".
       OTEL_SDK_DISABLED: "true"
@@ -69,6 +76,15 @@ services:
       APPROVAL_EMAIL_POLL_ENABLED: "false"
       APPROVAL_EMAIL_POLL_INTERVAL_SECONDS: "3600"
       SEED_APPROVAL_DEMO: "true"
+      # Where this container validates a caller's token. services/principal.py calls
+      # OPS /api/auth/me on every authenticated request, and defaults to 127.0.0.1:8009 —
+      # right only for the all-in-one image, where both run under one supervisord. Here
+      # ops-intelligence is a separate container, so the default resolves to this container's
+      # own port 8009 (nothing listens there; it serves 8007) and every token check fails
+      # with "Connection refused". The route then answers 503, so a perfectly valid session
+      # reads on the page as the asset register being unreachable. Same trap as
+      # svc-deepagents' OPERATIONS_INTELLIGENCE_BASE_URL below.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
     command:
       - bash
       - -c
@@ -212,6 +228,14 @@ services:
       AUTO_SEED_UK_PACK: "true"
       AUTO_MIGRATE_ON_STARTUP: "true"
       DOC_RAG_BASE_URL: http://schema-mapper-app:8003
+      # The orchestrator, as THIS container reaches it. config.py defaults this to
+      # 127.0.0.1:8008, which is right only for the all-in-one image (deploy/allinone runs
+      # deep-agents under the same supervisord); here it is a separate container and the
+      # default resolves to nothing, so every server-side call fails with "All connection
+      # attempts failed". Nothing needed it until report cards landed — the browser used to
+      # be the only caller of deep-agents, through the gateway — and now the report
+      # scheduler refreshes a card by asking the orchestrator itself.
+      DEEP_AGENTS_BASE_URL: http://svc-deepagents:8008
       PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
       FRONTEND_PUBLIC_URL: http://localhost:3000
       OTEL_SDK_DISABLED: "true"
