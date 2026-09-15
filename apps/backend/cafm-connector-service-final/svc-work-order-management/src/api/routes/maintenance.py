@@ -130,3 +130,35 @@ async def summary(
         },
         "ppm": ppm.get("summary", {}),
     }
+
+
+@router.get(
+    "/next-ppm",
+    summary="When each asset is next due a planned visit",
+    description=(
+        "Per asset, the next PPM date and where it came from. `confidence` is **booked** for "
+        "a date on record (a maintenance plan, a schedule trigger, an uncompleted visit or an "
+        "open planned work order), **projected** for an asset whose own cadence applied to its "
+        "last completed visit gives a date nobody has booked yet, and **unknown** when neither "
+        "exists — reported as a null date with a reason, never as a guess. `summary."
+        "scheduled_anywhere` is false when nothing in scope has a booked date at all, which is "
+        "the signal to render 'no PPM schedule loaded' rather than an empty list."
+    ),
+    tags=["Maintenance"],
+)
+async def next_ppm(
+    building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    asset_id: Optional[str] = Query(None, description="Narrow to one asset"),
+    only: Optional[str] = Query(
+        None, pattern="^(booked|projected|unknown)$",
+        description="Return only assets at this confidence"),
+    limit: int = Query(500, ge=1, le=2000),
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    ids = _scope(principal, building_id)
+    out = await mx.next_ppm(session, building_ids=ids, asset_id=asset_id,
+                            only=only, limit=limit)
+    log.debug("maintenance.next_ppm", building_id=building_id,
+              **{k: v for k, v in out.get("summary", {}).items() if isinstance(v, int)})
+    return out

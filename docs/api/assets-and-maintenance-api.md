@@ -52,15 +52,15 @@ is left out rather than shown to everybody.
 2. **Vendor and vendor email on an asset.** ~~`assets` has no vendor column.~~ **Closed.**
    `assets.vendor_id` now exists and resolves to a vendor name on the asset itself, rather
    than only through work orders.
-3. **Next PPM date per asset.** Still derived from planned work orders, not stored, and no
-   endpoint returns it per asset. This is the one gap left.
+3. **Next PPM date per asset.** **Closed.** `GET /api/maintenance/next-ppm` returns the next
+   date per asset and says where it came from — see below.
 4. **Linked anomaly per asset.** **Closed.** `GET /api/energy/assets/{asset_id}/intelligence`
    returns the open findings attributed to the asset, what they are costing, and how long the
    worst has run.
 
 ---
 
-## Maintenance — four new endpoints
+## Maintenance — five endpoints
 
 None of this existed. All four are on **svc-work-order-management**, which owns work orders
 and was already building-scoped.
@@ -126,6 +126,53 @@ after its due date is **late**.
                 "missed": 0, "late": 0, "buildings": 1, "completion_pct": 100.0,
                 "next_due": null}]}
 ```
+
+### `GET /api/maintenance/next-ppm`
+
+When each asset is next due a planned visit, and on whose authority. Five places a date can
+come from, and they are not equally good — so every asset says which it got.
+
+```json
+{"ok": true,
+ "assets": [
+   {"asset_id": "…", "asset_name": "LIFT-B — Lifts", "asset_code": "…",
+    "building_id": "…", "building": "Meridian Quay",
+    "next_ppm_date": "2026-02-08", "confidence": "booked", "source": "booked visit",
+    "frequency": "monthly", "interval_months": 1, "last_ppm_date": "2026-06-24",
+    "days_until": -219, "overdue": true, "superseded_by_completion": true,
+    "basis": "a date on record, from the booked visit, but a later visit was completed on 2026-06-24 — the booking was probably never closed out"}],
+ "summary": {"assets": 68, "booked": 5, "projected": 16, "unknown": 47,
+             "overdue": 21, "due_next_30_days": 0, "overdue_superseded": 5,
+             "scheduled_anywhere": true}}
+```
+
+| `confidence` | Means | Render as |
+|---|---|---|
+| `booked` | A date on record — a maintenance plan, a schedule trigger, an uncompleted visit, or an open planned work order. `source` says which. | A commitment |
+| `projected` | Nobody has booked anything. This is the asset's own cadence applied to its last completed visit. | A forecast, visibly distinct from booked |
+| `unknown` | Neither exists. `next_ppm_date` is **null** and `basis` says why. | "No schedule on record" — never a date |
+
+**Three things to hold the line on.**
+
+`summary.scheduled_anywhere` is false when nothing in scope has a booked date at all. That is
+the signal to render "no PPM schedule loaded" rather than an empty list — a portfolio that has
+never had a schedule imported is a different thing from one whose visits are all done.
+
+`superseded_by_completion` marks a booked date that falls **before** the asset's last completed
+visit. That is almost always a visit nobody closed out, not work that is months late. It still
+counts as overdue because that is what the record says, but `summary.overdue_superseded` counts
+them separately so an overdue figure is not inflated by stale bookings. On `plenum_agent` today
+all five booked dates are in this state.
+
+A frequency this service does not recognise is reported as unrecognised, not guessed at — a
+wrong interval produces a confident wrong date, which is worse than no date. Recognised
+spellings cover weekly through five-yearly in both databases' spellings.
+
+Query: `?building_id=`, `?asset_id=`, `?only=booked|projected|unknown`, `?limit=`.
+
+**What the data says today:** on the deployed database every asset is `unknown` — there is no
+maintenance plan, no visit and no planned work order anywhere, so `scheduled_anywhere` is
+false for all 54. On `plenum_agent`, 5 booked and 16 projected out of 68.
 
 ### `GET /api/maintenance/summary`
 

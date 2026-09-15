@@ -28,7 +28,8 @@ there, the same way the asset catalogue decides its own column names.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from calendar import monthrange
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -73,7 +74,8 @@ async def shape(session: AsyncSession) -> dict[str, set[str]]:
                     WHERE table_schema = 'plenum_cafm'
                       AND table_name IN ('work_orders','inspections','ppm_schedules',
                                          'approvals_queue_items','assets','vendors',
-                                         'vendor_contracts','buildings')"""
+                                         'vendor_contracts','buildings','maintenance_plans',
+                                         'schedule_triggers','ppm_visits')"""
             )
         )
     ).all()
@@ -467,4 +469,312 @@ async def ppm_health(
             "completion_pct": round(total_done / total_planned * 100, 1) if total_planned else None,
         },
         "contracts": contracts,
+    }
+
+
+# ── next PPM date, per asset ─────────────────────────────────────────────────────────
+
+#: How long each spelling of a frequency actually is, in months. The two databases spell the
+#: same cadence four ways between them ("monthly", "Monthly", "Six-monthly", "Quarterly"), so
+#: matching is lower-cased and punctuation-insensitive. A frequency not in here is reported as
+#: unrecognised rather than guessed at — a wrong interval produces a confident wrong date,
+#: which is worse than no date.
+FREQUENCY_MONTHS: dict[str, float] = {
+    "weekly": 0.25, "fortnightly": 0.5, "biweekly": 0.5, "twoweekly": 0.5,
+    "monthly": 1, "fourweekly": 1,
+    "bimonthly": 2, "twomonthly": 2,
+    "quarterly": 3, "threemonthly": 3,
+    "fourmonthly": 4,
+    "sixmonthly": 6, "halfyearly": 6, "biannual": 6, "semiannual": 6,
+    "annual": 12, "annually": 12, "yearly": 12, "onceayear": 12,
+    "biennial": 24, "twoyearly": 24,
+    "fiveyearly": 60, "quinquennial": 60,
+}
+
+#: The words a work order uses for planned work, in either database.
+PLANNED_KINDS = ("ppm", "planned", "preventive", "preventative", "pm", "scheduled")
+
+
+def _freq_months(raw: Any) -> float | None:
+    """Months between visits, from however this database spells the frequency."""
+    if raw is None:
+        return None
+    key = "".join(ch for ch in str(raw).lower() if ch.isalnum())
+    return FREQUENCY_MONTHS.get(key)
+
+
+#: Sub-month cadences in exact days. A weekly visit is seven days later, not the 7.6 that
+#: falls out of treating a quarter of an average month as a duration.
+SUB_MONTH_DAYS: dict[float, int] = {0.25: 7, 0.5: 14}
+
+
+def _add_months(d: date, months: float) -> date:
+    """Calendar-correct month arithmetic, clamped to the end of a short month.
+
+    A quarterly visit last done on 31 January falls due on 30 April, not 1 May. Cadences
+    shorter than a month are added as an exact number of days.
+    """
+    if months < 1:
+        return d + timedelta(days=SUB_MONTH_DAYS.get(months, round(months * 30.44)))
+    whole = int(months)
+    year = d.year + (d.month - 1 + whole) // 12
+    month = (d.month - 1 + whole) % 12 + 1
+    last = monthrange(year, month)[1]
+    out = date(year, month, min(d.day, last))
+    rest = months - whole
+    return out + timedelta(days=round(rest * 30.44)) if rest else out
+
+
+async def _rows(session: AsyncSession, sql: str, params: dict[str, Any], what: str) -> list:
+    """One source, in its own savepoint: a table this database shapes differently must not
+    abort the transaction and take the other four sources down with it."""
+    try:
+        async with session.begin_nested():
+            return (await session.execute(text(sql), params)).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("maintenance.next_ppm.source_failed", source=what, error=str(exc)[:200])
+        return []
+
+
+async def next_ppm(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+    asset_id: str | None = None, only: str | None = None, limit: int = 500,
+) -> dict[str, Any]:
+    """When each asset is next due a planned visit, and on whose authority.
+
+    There are five places a next date can come from and they are not equally good. A date
+    somebody booked is a commitment; a date computed from how often the last few visits
+    happened is arithmetic. Both are useful and they are not the same claim, so every asset
+    says which it got:
+
+    * ``booked`` — a real date on record: a maintenance plan's next due date, a schedule
+      trigger, an uncompleted visit, or an open planned work order.
+    * ``projected`` — no date on record, but the asset has a completed visit and a frequency,
+      so the next one is that frequency after the last one. Clearly labelled, because it is
+      a forecast and the visit may never be booked.
+    * ``unknown`` — neither. Reported as null with a reason, never as a date.
+
+    An asset with no PPM history at all is the normal case on a portfolio that has never had
+    a schedule loaded, and the summary says so rather than leaving the page to infer it from
+    an empty list.
+    """
+    sh = await shape(session)
+    today = datetime.now(timezone.utc).date()
+    clause, params = _scope_sql(building_ids, "a.building_id")
+    if asset_id:
+        clause += " AND a.id::text = :one_asset"
+        params["one_asset"] = str(asset_id)
+
+    assets = await _rows(session, f"""
+        SELECT a.id::text AS id, a.asset_name, a.asset_code,
+               a.building_id::text AS building_id, b.name AS building
+          FROM plenum_cafm.assets a
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
+         WHERE a.building_id IS NOT NULL{clause}
+         ORDER BY a.asset_name""", params, "assets")
+    if not assets:
+        return {"ok": True, "assets": [], "summary": _ppm_summary([], 0),
+                "note": "no assets in scope"}
+
+    ids = [a["id"] for a in assets]
+    idp = {"aids": ids}
+
+    # ── the booked sources, best authority first ─────────────────────────────────────
+    booked: dict[str, tuple[date, str, Any]] = {}
+
+    def offer(asset: str, when: Any, source: str, freq: Any = None) -> None:
+        """Keep the earliest booked date per asset; ties keep the higher-authority source."""
+        if when is None:
+            return
+        when = when.date() if isinstance(when, datetime) else when
+        if not isinstance(when, date):
+            return
+        seen = booked.get(asset)
+        if seen is None or when < seen[0]:
+            booked[asset] = (when, source, freq)
+
+    mp = sh.get("maintenance_plans", set())
+    if {"asset_id", "next_due_date"} <= mp:
+        status = " AND lower(coalesce(p.status,'active')) NOT IN ('cancelled','inactive')" \
+            if "status" in mp else ""
+        freq_sel = "p.frequency_type" if "frequency_type" in mp else "NULL"
+        for r in await _rows(session, f"""
+            SELECT p.asset_id::text AS id, min(p.next_due_date) AS due, min({freq_sel}) AS freq
+              FROM plenum_cafm.maintenance_plans p
+             WHERE p.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND p.next_due_date IS NOT NULL{status}
+             GROUP BY 1""", idp, "maintenance_plans"):
+            offer(r["id"], r["due"], "maintenance plan", r["freq"])
+
+    st = sh.get("schedule_triggers", set())
+    if {"maintenance_plan_id", "next_due_date"} <= st and "asset_id" in mp:
+        for r in await _rows(session, """
+            SELECT p.asset_id::text AS id, min(t.next_due_date) AS due,
+                   min(t.interval_unit) AS unit, min(t.interval_value) AS val
+              FROM plenum_cafm.schedule_triggers t
+              JOIN plenum_cafm.maintenance_plans p ON p.id = t.maintenance_plan_id
+             WHERE p.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND t.next_due_date IS NOT NULL
+             GROUP BY 1""", idp, "schedule_triggers"):
+            offer(r["id"], r["due"], "schedule trigger",
+                  f"{r['val']} {r['unit']}" if r["val"] and r["unit"] else None)
+
+    pv = sh.get("ppm_visits", set())
+    has_visits = {"asset_id", "scheduled_date"} <= pv
+    if has_visits:
+        for r in await _rows(session, """
+            SELECT v.asset_id::text AS id, min(v.scheduled_date) AS due, min(v.frequency) AS freq
+              FROM plenum_cafm.ppm_visits v
+             WHERE v.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND v.completed_date IS NULL AND v.scheduled_date IS NOT NULL
+             GROUP BY 1""", idp, "ppm_visits_open"):
+            offer(r["id"], r["due"], "booked visit", r["freq"])
+
+    wo = sh.get("work_orders", set())
+    kind = _pick(wo, "wo_type", "maintenance_type", "request_type")
+    due_col = _pick(wo, "scheduled_date", "sla_due_at")
+    if kind and due_col and "asset_id" in wo:
+        for r in await _rows(session, f"""
+            SELECT w.asset_id::text AS id, min(w.{due_col}::text) AS due
+              FROM plenum_cafm.work_orders w
+             WHERE w.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND w.{due_col} IS NOT NULL AND w.{due_col}::text <> ''
+               AND lower(coalesce(w.{kind}, '')) = ANY(CAST(:kinds AS text[]))
+               AND NOT (lower(w.status) = ANY(CAST(:done AS text[])))
+             GROUP BY 1""",
+            {**idp, "kinds": list(PLANNED_KINDS), "done": list(DONE)}, "work_orders_open"):
+            offer(r["id"], _as_date(r["due"]), "booked work order")
+
+    # ── history, for the assets nothing has booked ───────────────────────────────────
+    history: dict[str, tuple[date, Any, str]] = {}
+
+    def remember(asset: str, when: Any, freq: Any, source: str) -> None:
+        when = when.date() if isinstance(when, datetime) else when
+        if not isinstance(when, date):
+            return
+        seen = history.get(asset)
+        if seen is None or when > seen[0]:
+            history[asset] = (when, freq, source)
+
+    if has_visits and "completed_date" in pv:
+        for r in await _rows(session, """
+            SELECT v.asset_id::text AS id, max(v.completed_date) AS last,
+                   count(*) AS visits,
+                   (array_agg(v.frequency ORDER BY v.completed_date DESC))[1] AS freq
+              FROM plenum_cafm.ppm_visits v
+             WHERE v.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND v.completed_date IS NOT NULL
+             GROUP BY 1""", idp, "ppm_visits_history"):
+            remember(r["id"], r["last"], r["freq"], "completed visits")
+
+    finished = _pick(wo, "closed_at", "completed_at")
+    if kind and finished and "asset_id" in wo:
+        for r in await _rows(session, f"""
+            SELECT w.asset_id::text AS id, max(w.{finished}) AS last
+              FROM plenum_cafm.work_orders w
+             WHERE w.asset_id::text = ANY(CAST(:aids AS text[]))
+               AND w.{finished} IS NOT NULL
+               AND lower(coalesce(w.{kind}, '')) = ANY(CAST(:kinds AS text[]))
+             GROUP BY 1""",
+            {**idp, "kinds": list(PLANNED_KINDS)}, "work_orders_history"):
+            remember(r["id"], r["last"], None, "completed planned orders")
+
+    # ── merge: booked beats projected beats nothing ──────────────────────────────────
+    out: list[dict[str, Any]] = []
+    for a in assets:
+        row = {
+            "asset_id": a["id"], "asset_name": a["asset_name"], "asset_code": a["asset_code"],
+            "building_id": a["building_id"], "building": a["building"],
+            "next_ppm_date": None, "confidence": "unknown", "source": None,
+            "frequency": None, "interval_months": None, "last_ppm_date": None,
+            "days_until": None, "overdue": False, "superseded_by_completion": False,
+            "basis": None,
+        }
+        last = history.get(a["id"])
+        if last:
+            row["last_ppm_date"] = last[0].isoformat()
+
+        hit = booked.get(a["id"])
+        if hit:
+            when, source, freq = hit
+            # A booked date earlier than the asset's last completed visit is almost always
+            # a row nobody closed out, not work that is months late. It stays booked and
+            # overdue because that is what the record says, but it is flagged, so a page can
+            # stop short of alarming somebody about a visit that has in fact been overtaken.
+            stale = bool(last and when < last[0])
+            row.update({
+                "next_ppm_date": when.isoformat(), "confidence": "booked", "source": source,
+                "frequency": str(freq) if freq else None,
+                "interval_months": _freq_months(freq),
+                "days_until": (when - today).days, "overdue": when < today,
+                "superseded_by_completion": stale,
+                "basis": (
+                    f"a date on record, from the {source}, but a later visit was completed "
+                    f"on {last[0].isoformat()} — the booking was probably never closed out"
+                    if stale else f"a date on record, from the {source}"),
+            })
+        elif last:
+            when_last, freq, source = last
+            months = _freq_months(freq)
+            if months:
+                nxt = _add_months(when_last, months)
+                row.update({
+                    "next_ppm_date": nxt.isoformat(), "confidence": "projected",
+                    "source": "projected from cadence", "frequency": str(freq),
+                    "interval_months": months, "days_until": (nxt - today).days,
+                    "overdue": nxt < today,
+                    "basis": (f"no visit is booked; projected as {freq} after the last "
+                              f"{source[:-1]} on {when_last.isoformat()}"),
+                })
+            else:
+                row["basis"] = (
+                    f"last {source[:-1]} was {when_last.isoformat()}, but its frequency "
+                    + (f"({freq!r}) is not one this service recognises"
+                       if freq else "is not recorded")
+                    + ", so the next date cannot be projected")
+        else:
+            row["basis"] = "no maintenance plan, no booked visit and no completed planned work"
+        out.append(row)
+
+    out.sort(key=lambda r: (r["next_ppm_date"] is None, r["next_ppm_date"] or "",
+                            r["asset_name"] or ""))
+    return {
+        "ok": True,
+        "assets": out[:limit] if only is None else [
+            r for r in out if r["confidence"] == only][:limit],
+        "summary": _ppm_summary(out, len(assets)),
+        "note": (
+            "booked is a date somebody committed to; projected is that asset's own cadence "
+            "applied to its last completed visit, which may never be booked; unknown is "
+            "reported as null rather than as a guess"
+        ),
+    }
+
+
+def _as_date(v: Any) -> date | None:
+    """A date from a column that holds one as text on one database and a date on the other."""
+    if v is None or isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        return None
+
+
+def _ppm_summary(rows: list[dict[str, Any]], total: int) -> dict[str, Any]:
+    booked = sum(1 for r in rows if r["confidence"] == "booked")
+    projected = sum(1 for r in rows if r["confidence"] == "projected")
+    return {
+        "assets": total,
+        "booked": booked,
+        "projected": projected,
+        "unknown": sum(1 for r in rows if r["confidence"] == "unknown"),
+        "overdue": sum(1 for r in rows if r["overdue"]),
+        "due_next_30_days": sum(
+            1 for r in rows if r["days_until"] is not None and 0 <= r["days_until"] <= 30),
+        # Counted separately so an overdue figure is not inflated by stale bookings.
+        "overdue_superseded": sum(1 for r in rows if r["superseded_by_completion"]),
+        "scheduled_anywhere": booked > 0,
     }
