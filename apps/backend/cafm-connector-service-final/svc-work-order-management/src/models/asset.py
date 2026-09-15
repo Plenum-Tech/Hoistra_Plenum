@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, Date, Numeric, String, DateTime, func
+from sqlalchemy import Column, Date, Integer, String, DateTime, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
 from .base import Base
 
@@ -25,8 +26,15 @@ class Asset(Base):
     category_id       = Column(String)
     location_id       = Column(String)
     criticality       = Column(String(50))
-    health_score      = Column(Numeric)
+    # integer 0-100 with a check constraint on the table, not a float.
+    health_score      = Column(Integer)
     installation_date = Column(Date)
+    warranty_expiry   = Column(Date)
+    # A score with no date is worse than no score: it reads as current when it may be an
+    # import from two years ago. The three travel together for that reason.
+    condition_score      = Column(Integer)
+    condition_provenance = Column(JSONB)
+    condition_updated_at = Column(DateTime(timezone=True))
     created_at    = Column(DateTime(timezone=True), server_default=func.now())
 
     # Synthetic properties so response schema serialises cleanly

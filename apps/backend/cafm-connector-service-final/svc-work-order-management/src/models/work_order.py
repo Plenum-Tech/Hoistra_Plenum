@@ -27,6 +27,10 @@ class WorkOrder(Base):
 
     # Asset & location (string names, added as service-specific columns)
     asset               = Column(String(255))
+    # The real foreign key. Counting a building's open orders per asset by lower-casing the
+    # name is wrong the moment two assets share one or the text drifts from the register.
+    # Deliberately untyped: uuid on one database, varchar on the other.
+    asset_id            = Column(String)
     location            = Column(String(255))
 
     # Description

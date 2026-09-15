@@ -40,8 +40,15 @@ class AssetResponse(BaseModel):
     category_name:     Optional[str] = None
     location_id:       Optional[str] = None
     criticality:       Optional[str] = None
-    health_score:      Optional[float] = None
+    #: integer 0-100 on the table, with a check constraint. Not a float.
+    health_score:      Optional[int] = None
     installation_date: Optional[date] = None
+    warranty_expiry:   Optional[date] = None
+    #: The condition trio travels together. An undated score reads as current when it may
+    #: be years old, so the date is part of the answer rather than an extra.
+    condition_score:      Optional[int] = None
+    condition_provenance: Optional[dict] = None
+    condition_updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -50,10 +57,10 @@ class AssetResponse(BaseModel):
     def coerce_to_str(cls, v) -> str:
         return str(v) if v is not None else v
 
-    @field_validator("health_score", mode="before")
+    @field_validator("health_score", "condition_score", mode="before")
     @classmethod
     def coerce_number(cls, v):
-        return float(v) if v is not None else v
+        return int(v) if v is not None else v
 
 
 class AssetCategoryResponse(BaseModel):

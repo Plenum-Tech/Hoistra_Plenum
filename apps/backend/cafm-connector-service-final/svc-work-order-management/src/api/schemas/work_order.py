@@ -72,6 +72,8 @@ class WorkOrderResponse(BaseModel):
     status:             Optional[str]      = None
     priority:           Optional[str]      = None
     asset:              Optional[str]      = None
+    #: The register's own key for that asset — join on this, not on the name.
+    asset_id:           Optional[str]      = None
     location:           Optional[str]      = None
     issue_description:  Optional[str]      = None
     request_type:       Optional[str]      = None
@@ -85,6 +87,12 @@ class WorkOrderResponse(BaseModel):
     created_at:         Optional[datetime] = None
     approved_at:        Optional[datetime] = None
     prepared_at:        Optional[datetime] = None
+
+
+    @field_validator("asset_id", mode="before")
+    @classmethod
+    def _asset_id_to_str(cls, v):
+        return str(v) if v is not None else v
 
 
 class WorkOrderCreateResponse(WorkOrderResponse):
