@@ -234,13 +234,20 @@ app.include_router(work_orders.router,     prefix="/api/work-orders",          t
 app.include_router(approvals.router,       prefix="/api/work-orders/approvals", tags=["Approvals"])
 # Backward-compatible alias used by older clients/tests.
 app.include_router(approvals.router,       prefix="/api/approvals",             tags=["Approvals"])
-app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"])
-app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"])
+# Who may approve what is an administrative setting, and it answered anybody who asked.
+app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"],
+                   dependencies=[Depends(current_principal)])
+# This one was serving a real mailbox — its contents, and the address it is connected to —
+# to anybody on the internet with no token at all.
+app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"],
+                   dependencies=[Depends(current_principal)])
 # The PPM scheduler creates work orders from an external system and had no caller at all.
 app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"],
                    dependencies=[Depends(current_principal)])
 app.include_router(maintenance.router,     prefix="/api/maintenance",           tags=["Maintenance"])
-app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"])
+# A journey is the history of a work order, so it carries whatever that order carries.
+app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"],
+                   dependencies=[Depends(current_principal)])
 app.include_router(assets.router,          prefix="/api",                       tags=["Assets", "Locations"])
 app.include_router(dashboard.router,       prefix="/api/dashboard",             tags=["Dashboard"])
 app.include_router(chat.router,            prefix="/api/chat",                  tags=["Chat Interface"])

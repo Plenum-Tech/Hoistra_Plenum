@@ -452,7 +452,25 @@ async def get_work_order_status_track(
 
 
 @router.get("/{work_order_id}/approval-chain")
-async def get_work_order_approval_chain(work_order_id: str):
+async def get_work_order_approval_chain(
+    work_order_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    """Who has to approve this order, in order.
+
+    This was the one handler in the router without a caller on it — every sibling has had one
+    all along — so the approval chain of any work order was readable by anybody who knew an id.
+    The order's own building is checked too: knowing an id is not the same as being allowed to
+    see what it is about.
+    """
+    from sqlalchemy import text as _text
+
+    building_id = (await session.execute(_text(
+        "SELECT building_id::text FROM plenum_cafm.work_orders WHERE id::text = :wid"),
+        {"wid": str(work_order_id)})).scalar()
+    if building_id:
+        assert_building(principal, building_id, action="read")
     svc = ApprovalWorkflowService(aimms_api_url=settings.aimms_api_url)
     chain = await svc.get_approval_chain(work_order_id)
     return {"work_order_id": work_order_id, "chain": chain}
