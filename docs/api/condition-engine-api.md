@@ -15,9 +15,10 @@ nothing gets a predicate matching no row.
 `apps/frontend/src/logic/assetsCondition.js` currently derives Threat / Watch / In control in
 the browser, from three calls on load — `energyApi.anomalies()`, `energyApi.sections()`,
 `energyApi.assetValueAtRisk()` — plus a lazy `assetIntelligence()` and `assetWorkHistory()` per
-opened asset. That works, and nothing below is a bug report. But the banding half of it is the
-same computation as `GET /api/energy/condition/assets`, and two implementations of one rule
-drift. Three specific ways:
+opened asset. The mechanics work. But the banding half of it is the
+same computation as `GET /api/energy/condition/assets` — and on `hoistra_test` today the two
+already disagree about **ten of fifty-four assets**, measured below. Three things are behind
+it:
 
 - **The thresholds are per organisation and editable.** `section_over_reference_pct` and
   `anomaly_persistent_weeks` live in `asset_condition_rules`, and `PUT
@@ -27,11 +28,41 @@ drift. Three specific ways:
 - **The chips are already query parameters.** `?band=threat|watch|in_control` and
   `?min_deviation_pct=10` / `=30` back the four chips directly, filtered against the full set
   rather than against whatever the page happened to load.
-- **The section deviation agrees by construction.** `_signals()` in `condition_engine.py`
-  reads `asset_intelligence.sections()` — the same function that fills the section headers —
-  rather than recomputing it. An asset row and its section header cannot disagree. Two
-  separate derivations of the same percentage can, and when they do neither figure is
-  trustworthy.
+- **The page bands on the building's deviation, the server on the section's.** This is the
+  one that is actually costing you rows today — all ten disagreements come from it. `_signals()`
+  in `condition_engine.py` reads `asset_intelligence.sections()`, the same function that fills
+  the section headers, so an asset row and its header cannot disagree. `evalA` reads
+  `bldByEui[asset.building_id]` instead, which is a different number about a different thing.
+
+### They disagree today: 44 of 54 assets, 81.5%
+
+Not a hypothetical. Both rules were run over `hoistra_test` on 15 September 2026 — the backend
+through `condition_engine.assess()`, the page through its own exported `conditionOf()` fed the
+rows `GET /api/energy/buildings` and the anomalies table return — at the shipped thresholds
+(10%, 3 weeks).
+
+| Page says | Server says | Assets | |
+|---|---|---|---|
+| In control | In control | 40 | agree |
+| Watch | Watch | 4 | agree |
+| In control | **Watch** | 8 | disagree |
+| Watch | **Threat** | 2 | disagree |
+
+**All ten disagreements run the same way: the page bands the asset lower than the server, and
+never higher.** The page is currently showing two Threats as Watch and eight Watches as In
+control.
+
+One cause accounts for all ten. `assetsCondition.evalA` reads `bldByEui[asset.building_id]`
+and passes the **building's** deviation to `conditionOf`; the server reads the **section's**.
+On `hoistra_test` not one building is over its reference — every asset row carries a negative
+building deviation, as low as −51.3% — while ten of them sit in a section that is over by 18%
+to 46%. Averaged across a whole building, an over-consuming plant room disappears into the
+floors around it. That is the difference the section split exists to catch, and banding on the
+building figure discards it.
+
+The `health_score` branch of `conditionOf` contributed nothing to this count, because
+`assets.health_score` is null on all 54 rows. It is a real difference between the two rules —
+the server has no such signal — but a dormant one on this data, not part of the 10.
 
 ### What swaps for what
 
