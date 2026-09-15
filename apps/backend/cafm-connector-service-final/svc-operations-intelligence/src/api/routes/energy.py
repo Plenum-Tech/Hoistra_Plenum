@@ -32,6 +32,7 @@ from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import detection_coverage as coverage_svc
+from ...engines.energy import ask as ask_svc
 from ...engines.energy import asset_intelligence as ai_svc
 from ...engines.energy import condition_engine as cond_svc
 from ...engines.energy import ratings_position as position_svc
@@ -1270,3 +1271,35 @@ async def condition_last_run(
     run = await cond_svc.last_run(session, organization_id=access.organization_for(s, None))
     return {"ok": True, "last_run": run,
             "note": "null means no scan has been recorded yet, not that there is nothing to scan"}
+
+
+# ── the Ask bar ──────────────────────────────────────────────────────────────────────
+
+class AssetAskBody(BaseModel):
+    """A question in words about the asset portfolio."""
+    question: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/ask")
+async def ask_assets(
+    body: AssetAskBody,
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Ask a question about the assets, answered from the caller's buildings only.
+
+    Every answer is composed from rows the condition engine or the asset register returned,
+    and `source` names the endpoint it came from. Nothing writes SQL from the question and no
+    figure is generated — a question this cannot place comes back saying so, with the list of
+    what it can be asked.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await ask_svc.ask(session, question=body.question, building_ids=ids,
+                             organization_id=access.organization_for(s, None))
+
+
+@router.get("/ask/suggestions")
+async def ask_asset_suggestions(s: access.Scope = Depends(scope)):
+    """The chips the Assets page shows, served rather than hard-coded in the frontend."""
+    return {"ok": True, "suggestions": ask_svc.suggestions()}

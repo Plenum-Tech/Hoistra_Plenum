@@ -452,3 +452,66 @@ async def panel(
         "note": ("a card that cannot be answered on this database says so rather than "
                  "returning zero — zero would read as 'we checked and there are none'"),
     }
+
+
+# ── who files reports, and who does not ──────────────────────────────────────────────
+
+async def reports_by_vendor(
+    session: AsyncSession, *, building_ids: list[UUID] | None, limit: int = 100,
+) -> dict[str, Any]:
+    """How many reports each vendor has filed, against the completed work they did.
+
+    The question behind this is "which vendor files the fewest reports", and a bare count
+    answers it badly: a vendor with two orders and two reports is not worse than one with
+    forty orders and thirty reports. So the ratio is what is ranked, and the vendors with no
+    completed work at all are left out of the ranking rather than sitting at the bottom of it
+    on a denominator of zero.
+    """
+    sh = await shape(session)
+    wo = sh.get("work_orders", set())
+    if "inspections" not in sh or not {"asset_id", "status"} <= wo:
+        return _unanswerable("this database records no reports against completed work")
+
+    vendor_col = next((c for c in ("assigned_vendor", "vendor") if c in wo), None)
+    if not vendor_col:
+        return _unanswerable("work orders here record no vendor")
+    name_col = "vendor_name" if "vendor_name" in sh.get("vendors", set()) else "name"
+
+    clause, params = _scope(building_ids, "w.building_id")
+    params["done"] = ["completed", "closed", "complete", "done"]
+    rows = await _rows(session, f"""
+        SELECT coalesce(ven.{name_col}, w.{vendor_col}::text, 'Unassigned') AS vendor,
+               count(*) FILTER (WHERE lower(w.status) = ANY(CAST(:done AS text[])))
+                   AS completed_orders,
+               count(DISTINCT i.id) AS reports
+          FROM plenum_cafm.work_orders w
+          LEFT JOIN plenum_cafm.vendors ven ON ven.id::text = w.{vendor_col}::text
+          LEFT JOIN plenum_cafm.inspections i
+                 ON i.asset_id::text = w.asset_id::text
+          WHERE w.building_id IS NOT NULL{clause}
+         GROUP BY 1
+         ORDER BY 1""", params, "reports_by_vendor")
+
+    out = []
+    for r in rows:
+        done = int(r["completed_orders"] or 0)
+        filed = int(r["reports"] or 0)
+        out.append({
+            "vendor": r["vendor"], "completed_orders": done, "reports": filed,
+            # None, not 0.0, when there is no completed work to file against: a vendor who
+            # has done nothing has not failed to report on it.
+            "reports_per_completed_order": round(filed / done, 2) if done else None,
+            "rankable": done > 0,
+        })
+    rankable = [v for v in out if v["rankable"]]
+    rankable.sort(key=lambda v: v["reports_per_completed_order"])
+    return {
+        "answerable": True,
+        "count": len(out),
+        "rankable": len(rankable),
+        "fewest": rankable[0] if rankable else None,
+        "most": rankable[-1] if rankable else None,
+        "method": ("ranked on reports per completed order, not on the raw count; vendors with "
+                   "no completed work are counted but not ranked"),
+        "vendors": (rankable + [v for v in out if not v["rankable"]])[:limit],
+    }

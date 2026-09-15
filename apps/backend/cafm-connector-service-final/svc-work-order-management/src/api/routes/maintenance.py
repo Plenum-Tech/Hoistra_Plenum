@@ -14,10 +14,12 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...db import get_session
+from ...services import ask as ask_svc
 from ...services import inspection_intelligence as ii
 from ...services import maintenance as mx
 from ...services.principal import Principal, assert_building, current_principal
@@ -284,6 +286,57 @@ async def last_inspection_read(
     principal: Principal = Depends(current_principal),
 ):
     return {"ok": True, "last_read": await mx.last_inspection_read(session)}
+
+
+# ── the Ask bar ──────────────────────────────────────────────────────────────────────
+
+class AskBody(BaseModel):
+    """A question in words."""
+    question: str = Field(..., min_length=1, max_length=500)
+    page: Optional[str] = Field(
+        None, description="maintenance or inspection — narrows the chips offered back")
+
+
+@router.post(
+    "/ask",
+    summary="Ask a question about maintenance",
+    description=(
+        "Answers from the same records the panels show. Every answer is composed from rows a "
+        "named engine function returned and `source` says which, so any figure can be checked "
+        "against the screen it came from — nothing here writes SQL from the question or "
+        "generates a number. Scope is inherited: the functions underneath cannot read a "
+        "building you are not allocated to, so neither can this. A question it cannot place "
+        "comes back with `understood: false` and the list it can answer, rather than a guess."
+    ),
+    tags=["Maintenance"],
+)
+async def ask_maintenance(
+    body: AskBody,
+    building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+):
+    ids = _scope(principal, building_id)
+    out = await ask_svc.ask(session, question=body.question, building_ids=ids, page=body.page)
+    log.debug("maintenance.ask", intent=out.get("intent"),
+              understood=out.get("understood"), confidence=out.get("confidence"))
+    return out
+
+
+@router.get(
+    "/ask/suggestions",
+    summary="The questions the Ask bar can answer",
+    description=(
+        "The chips a page shows, served rather than hard-coded in the frontend, so adding a "
+        "skill does not need a frontend release. Pass `page=maintenance` or `page=inspection`."
+    ),
+    tags=["Maintenance"],
+)
+async def ask_suggestions(
+    page: Optional[str] = Query(None, pattern="^(maintenance|inspection)$"),
+    principal: Principal = Depends(current_principal),
+):
+    return {"ok": True, "suggestions": ask_svc.suggestions(page)}
 
 
 @router.get(
