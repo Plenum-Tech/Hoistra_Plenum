@@ -733,13 +733,12 @@ async def restrict_by_site(
     """Narrows site-keyed rows (meters, anomalies, …) to a building-restricted caller's
     allocated buildings. A no-op for an unrestricted caller or an empty scope.
 
-    ``site_id`` is not always a site. On this schema ``energy_meters.site_id`` and
-    ``energy_anomalies.site_id`` carry the BUILDING — stated at meters.py:839, relied on by
-    ``market_profiles.py``'s ``JOIN buildings b ON b.building_id = m.site_id`` and by
-    ``detection_coverage.py``'s ``site_id::text AS building_id``. Mapping those through
-    site_to_buildings() looks a building id up in a site-keyed map, misses every time, and
-    drops every row: a building-allocated person saw an empty meter and anomaly list
-    instead of their own. So the id is tried as a building first.
+    The key is not always a site. The energy tables carried a column called ``site_id``
+    holding a BUILDING id until Sep 2026, when it was renamed to ``building_id`` to say so.
+    Mapping such an id through site_to_buildings() looks a building up in a site-keyed map,
+    misses every time, and drops every row: a building-allocated person saw an empty meter
+    and anomaly list instead of their own. So the id is tried as a building first, which is
+    now also the common case rather than the exception.
 
     The site reading is kept as the fallback for a genuinely site-keyed caller, and there it
     still refuses to guess: a site holding zero or more than one building cannot be

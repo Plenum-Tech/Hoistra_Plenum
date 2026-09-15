@@ -233,15 +233,14 @@ async def _restrict_queue_by_building(
     ``related_entity_type`` names what a queue item is about, and only two of the values
     it takes are ever building- or site-specific: ``compliance_certificate`` (resolved via
     the certificate's own building_id, same rule list_certificates() applies) and
-    ``energy_anomaly`` (site-keyed — resolved the same way /meters and /anomalies are, via
-    engines.energy.buildings.site_to_buildings(), so a site shared by more than one
-    building is hidden rather than guessed). Every other type this queue carries today —
+    ``energy_anomaly`` (which names its building directly — the column was called site_id
+    until Sep 2026 and never held a site id, and reading it as one dropped every energy
+    anomaly from a restricted queue). Every other type this queue carries today —
     vendor, contract_sla_parameters, asset_criticality, invoice, document, site,
     meter_reading_gap, energy_recommendation — is not building-scoped data in this schema
     (the same reason vendor accreditation coverage is not narrowed either), so those items
     are left as they are rather than hidden on a guess.
     """
-    from ..engines.energy.buildings import site_to_buildings
     from ..models import ComplianceCertificate, EnergyAnomaly
 
     cert_ids = [i.related_entity_id for i in items if i.related_entity_type == "compliance_certificate" and i.related_entity_id]
@@ -258,16 +257,18 @@ async def _restrict_queue_by_building(
         ).all()
         cert_building = {str(cid): (str(bid) if bid else None) for cid, bid in rows}
 
-    anomaly_site: dict[str, str | None] = {}
+    # An energy anomaly names its building directly. The column was called site_id until
+    # Sep 2026 and never held a site id, and this code took the name at its word: it looked
+    # the value up in a site-to-buildings map, matched nothing, and so dropped every energy
+    # anomaly from a restricted caller's queue. The building is the answer already.
+    anomaly_building: dict[str, str | None] = {}
     if anomaly_ids:
         rows = (
             await session.execute(
-                select(EnergyAnomaly.id, EnergyAnomaly.site_id).where(EnergyAnomaly.id.in_(anomaly_ids))
+                select(EnergyAnomaly.id, EnergyAnomaly.building_id).where(EnergyAnomaly.id.in_(anomaly_ids))
             )
         ).all()
-        anomaly_site = {str(aid): (str(sid) if sid else None) for aid, sid in rows}
-
-    site_map = await site_to_buildings(session) if anomaly_site else {}
+        anomaly_building = {str(aid): (str(bid) if bid else None) for aid, bid in rows}
 
     out: list[ApprovalsQueueItem] = []
     for item in items:
@@ -277,9 +278,8 @@ async def _restrict_queue_by_building(
                 out.append(item)
             continue
         if item.related_entity_type == "energy_anomaly":
-            sid = anomaly_site.get(str(item.related_entity_id))
-            bids = site_map.get(sid or "") or []
-            if len(bids) == 1 and scope.allows_building(bids[0]):
+            bid = anomaly_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
                 out.append(item)
             continue
         out.append(item)
