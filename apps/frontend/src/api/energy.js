@@ -90,6 +90,17 @@ export const energyApi = {
   // added as zero, so the page must show that count beside the total.
   assetValueAtRisk: (buildingId) =>
     apiFetch(B, '/api/energy/assets/value-at-risk', { query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
+  // Findings grouped by building and meter, with a headline that is NOT their sum.
+  // Several detectors read one meter over one period and each prices the whole excess it
+  // can see — a weekend IS an unoccupied hour, so the weekend rule's kWh are already inside
+  // the non-occupancy rule's. Adding them is how a building 3% UNDER its benchmark came to
+  // display two gigawatt-hours of waste. `headline` is the largest single finding, `if_added`
+  // is what summing would have given, and every rule keeps its own figure and the sentence
+  // that defines it.
+  anomalyRollup: (query) =>
+    apiFetch(B, '/api/energy/anomalies/rollup', {
+      query: withOrg(Object.assign({ status: 'open' }, query || {})), timeoutMs: 20000 }),
+
   // ── Condition engine (docs/api/condition-engine-api.md) ─────────────────
   // Threat / Watch / In control, decided on the server from the section's deviation and the
   // anomalies attributed to the asset, at thresholds held per organisation in

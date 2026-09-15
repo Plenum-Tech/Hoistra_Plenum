@@ -462,6 +462,31 @@ export const energyMethods = {
     const f = s.filter || "All";
     const query = String(s.enBldQuery || "").trim().toLowerCase();
     const money = moneyGBP;
+
+    // What a building's findings come to. The engine answers this: findings on one meter are
+    // different readings of the same consumption, so the headline is the largest single one
+    // and NOT their sum. This line used to add them, which is how a building at or under its
+    // reference could show hundreds of thousands of pounds of waste on the same row that said
+    // "at or under reference".
+    //
+    // Without the rollup the old arithmetic is still the only thing available, so it is used
+    // and labelled — an overstated figure that says it is overstated can at least be checked.
+    const roll = s.enRollup || null;
+    const anomLine = (b, x) => {
+      if (!x.all.length) return "no open anomalies";
+      const n = x.all.length + (x.all.length === 1 ? " anomaly" : " anomalies");
+      const r = roll && (roll[String(b.buildingId)] || roll[String(b.uuid)] || roll[String(b.id)]);
+      if (!r || !r.headline) {
+        return n + " · " + money(x.all.reduce((q, a) => q + impactNum(a), 0)) + " · added, may double count";
+      }
+      const head = money(r.headline.amount) + " " + r.headline.label.toLowerCase();
+      // Only worth saying when adding would actually have given something different.
+      const gap = typeof r.if_added === "number" && r.if_added > r.headline.amount
+        ? " · " + money(r.if_added) + " if every rule were added, which would count the same energy twice"
+        : "";
+      return n + " on " + r.meters_affected + (r.meters_affected === 1 ? " meter" : " meters")
+        + " · largest " + head + gap;
+    };
     const anomHit = (a) => f === "New" ? a.status === "New" : f === "Above £20k" ? impactNum(a) > 20000 : true;
     const allBuildings = this.bldData();
     const allAnoms = this.enAnomalies();
@@ -515,7 +540,7 @@ export const energyMethods = {
             granFg: b.gran === "sub-metered" ? "var(--color-neutral-500)" : "var(--st-warn)",
             excess: !hasEui ? "no EUI reading on record" : over ? money(x.excess) : "at or under reference",
             excessFg: !hasEui ? "var(--color-neutral-500)" : over ? "var(--color-text)" : "var(--st-ok)",
-            anomN: x.all.length ? x.all.length + (x.all.length === 1 ? " anomaly" : " anomalies") + " · " + money(x.all.reduce((q, a) => q + impactNum(a), 0)) : "no open anomalies",
+            anomN: anomLine(b, x),
             anomFg: x.all.length ? "var(--st-warn)" : "var(--color-neutral-500)",
             caret: open ? "ph-caret-down" : "ph-caret-right",
             openShow: open ? "block" : "none",

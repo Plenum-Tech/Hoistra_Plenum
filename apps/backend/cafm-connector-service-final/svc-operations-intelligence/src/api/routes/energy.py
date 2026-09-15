@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...engines.energy import anomalies as anom_svc
+from ...engines.energy import anomaly_rollup as rollup_svc
 from ...engines.energy import buildings as bld_svc
 from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import sites_uuid_migration as sites_uuid
@@ -869,6 +870,30 @@ async def list_anomalies(
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}
+
+
+@router.get("/anomalies/rollup")
+async def anomalies_rollup(
+    building_id: UUID | None = None,
+    status: str | None = "open",
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Findings grouped by building and meter, with a headline that is not their sum.
+
+    Several detectors read one meter over one period and each prices the whole excess it can
+    see. They are different lenses on the same consumption, not separate faults, so adding
+    them counts the same kilowatt-hour more than once — which is how a building three per cent
+    UNDER its own benchmark came to display two gigawatt-hours of waste.
+
+    The headline is the largest single finding. Every rule is still listed with the sentence
+    that defines it and its own figure, and ``if_added`` reports what the sum would have been
+    so nothing looks quietly dropped. See engines/energy/anomaly_rollup.py.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await rollup_svc.rollup(
+        session, building_ids=ids, organization_id=access.organization_for(s, None),
+        status=status)
 
 
 @router.post("/anomalies/{anomaly_id}/act")
