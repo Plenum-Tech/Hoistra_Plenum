@@ -1276,8 +1276,10 @@ async def condition_last_run(
 # ── the Ask bar ──────────────────────────────────────────────────────────────────────
 
 class AssetAskBody(BaseModel):
-    """A question in words about the asset portfolio."""
+    """A question in words about the assets or the energy records."""
     question: str = Field(..., min_length=1, max_length=500)
+    page: str | None = Field(
+        None, description="assets or energy — narrows the chips offered back")
 
 
 @router.post("/ask")
@@ -1296,10 +1298,14 @@ async def ask_assets(
     """
     ids = await position_svc.building_ids_for(session, s, building_id)
     return await ask_svc.ask(session, question=body.question, building_ids=ids,
-                             organization_id=access.organization_for(s, None))
+                             organization_id=access.organization_for(s, None),
+                             page=body.page)
 
 
 @router.get("/ask/suggestions")
-async def ask_asset_suggestions(s: access.Scope = Depends(scope)):
-    """The chips the Assets page shows, served rather than hard-coded in the frontend."""
-    return {"ok": True, "suggestions": ask_svc.suggestions()}
+async def ask_asset_suggestions(
+    page: str | None = Query(None, pattern="^(assets|energy)$"),
+    s: access.Scope = Depends(scope),
+):
+    """The chips a page shows, served rather than hard-coded in the frontend."""
+    return {"ok": True, "suggestions": ask_svc.suggestions(page)}

@@ -22,7 +22,7 @@ from src.engines.energy import anomalies, detection_coverage as DC
 
 def test_the_catalogue_is_the_shells_thirteen_rules_with_its_ids():
     assert len(DC.RULES) == 13
-    assert {short for _, short, _ in DC.RULES} == {
+    assert {r[1] for r in DC.RULES} == {
         "nonocc", "spike", "drift", "schedule", "baseload", "calendar", "weather", "peak",
         "fight", "cop", "regress", "dataq", "tou"}
     assert set(DC.RULE_IDS) == {
@@ -82,9 +82,18 @@ def test_a_user_cannot_read_coverage_for_a_building_they_are_not_allocated(clien
 
 
 @pytest.mark.asyncio
-async def test_an_empty_scope_is_an_empty_report_without_a_query():
+async def test_an_empty_scope_still_answers_without_touching_the_database():
+    # Exploding() fails on any query, so this pins that an empty allocation is answered from
+    # the catalogue alone. What changed is the answer: the thirteen rules come back listed and
+    # unarmed rather than as an empty list, because an empty panel reads as "there are no
+    # rules" when the truth is "no building here has the data route any of them needs".
     rep = await DC.coverage(Exploding(), building_ids=[])
-    assert rep == {"ok": True, "buildings": [], "rules": [], "summary": {"buildings": 0}}
+    assert rep["ok"] is True
+    assert rep["buildings"] == []
+    assert rep["summary"] == {"buildings": 0}
+    assert len(rep["rules"]) == 13
+    assert all(r["armed"] == 0 for r in rep["rules"])
+    assert all(r["description"] and r["needs"] for r in rep["rules"])
 
 
 def test_the_scan_has_a_dry_run_that_returns_hits_without_writing():

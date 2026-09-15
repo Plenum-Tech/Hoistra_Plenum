@@ -1,10 +1,11 @@
-# The Ask bar, on all three pages
+# The Ask bar, on all four pages
 
-Assets, Maintenance and the inspection-reports panel each have an Ask bar. All three are now
-served, and all three work the same way.
+Energy, Assets, Maintenance and the inspection-reports panel each have an Ask bar. All four
+are served, and all four work the same way.
 
 | Page | Endpoint | Service |
 |---|---|---|
+| Energy | `POST /api/energy/ask` with `page: "energy"` | svc-operations-intelligence |
 | Assets | `POST /api/energy/ask` | svc-operations-intelligence |
 | Maintenance | `POST /api/maintenance/ask` | svc-work-order-management |
 | Inspection reports panel | `POST /api/maintenance/ask` with `page: "inspection"` | svc-work-order-management |
@@ -82,6 +83,19 @@ error.
 ---
 
 ## What each page can be asked
+
+**Energy** — `intent` in brackets:
+
+| Question | Reads |
+|---|---|
+| Which markets drive the excess cost? `markets_excess_cost` | buildings grouped by market, ranked on kWh above each building's own reference |
+| Which buildings are worst against their own pack? `worst_against_pack` | each building against its own country's standard |
+| Where does the data route limit what I can see? `data_route_limits` | the detection rules that cannot arm, and the route each needs |
+
+Excess is ranked in **kWh, not money**. Every market prices differently and the profiles hold
+those terms as contract wording — "28.4p/kWh contracted", "$1.40/therm billed in therms" — not
+as a number to multiply. Parsing a rate out of that prose would produce a confident figure
+nobody could check, so the answer gives the exact energy and names the stated terms beside it.
 
 **Assets** — `intent` in brackets:
 

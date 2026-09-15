@@ -22,7 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from . import asset_intelligence as ai
+from . import buildings as bld_svc
 from . import condition_engine as ce
+from . import detection_coverage as dc_svc
+from . import market_profiles as mp_svc
 
 log = get_logger(__name__)
 
@@ -47,6 +50,7 @@ class Skill:
     never: list[str] = field(default_factory=list)
     handler: Callable[..., Awaitable[dict[str, Any]]] | None = None
     endpoint: str = ""
+    page: str = "assets"
 
 
 def _n(t: str) -> str:
@@ -199,9 +203,157 @@ SKILLS: list[Skill] = [
 ]
 
 
-def suggestions() -> list[dict[str, str]]:
-    """The chips the Assets page shows, served rather than hard-coded in the frontend."""
-    return [{"id": s.id, "question": s.question, "page": "assets"} for s in SKILLS]
+# ── the Energy page ──────────────────────────────────────────────────────────────────
+
+async def _markets_excess(session, building_ids, org):
+    """Which markets carry the excess, ranked on kWh above each building's own reference.
+
+    Ranked in energy, not money. Every market prices differently and the profiles hold those
+    terms as contract wording — "28.4p/kWh contracted", "$1.40/therm billed in therms" — not
+    as a number this can multiply. Parsing a rate out of that prose to produce a confident
+    figure is exactly the kind of number nobody could check, so the excess is given in kWh,
+    which is exact, with each market's stated terms beside it.
+    """
+    rows = (await bld_svc.list_buildings(session, organization_id=org, limit=500)
+            ).get("buildings") or []
+    rows = _only_scoped(rows, building_ids)
+    if not rows:
+        return {"answer": "There are no buildings in your scope.", "count": 0, "data": []}
+    try:
+        profiles = mp_svc.load_profiles().get("markets") or {}
+    except Exception:  # noqa: BLE001
+        profiles = {}
+
+    by_market: dict[str, dict[str, Any]] = {}
+    for b in rows:
+        cc = b.get("country_code") or "unknown"
+        eui, ref, area = (_f(b.get("eui_kwh_per_m2")), _f(b.get("benchmark_kwh_per_m2")),
+                          _f(b.get("gfa_counted_sqm")) or _f(b.get("gfa_sqm")))
+        m = by_market.setdefault(cc, {
+            "market": cc, "name": (profiles.get(cc) or {}).get("name", cc),
+            "buildings": 0, "over_reference": 0, "excess_kwh": 0.0,
+            "measurable": 0, "standard": b.get("benchmark_standard"),
+            "electricity": (profiles.get(cc) or {}).get("elec"),
+            "currency": (profiles.get(cc) or {}).get("cur")})
+        m["buildings"] += 1
+        if eui is None or ref is None or not area:
+            continue
+        m["measurable"] += 1
+        if eui > ref:
+            m["over_reference"] += 1
+            m["excess_kwh"] += (eui - ref) * area
+
+    markets = sorted(by_market.values(), key=lambda x: -x["excess_kwh"])
+    for m in markets:
+        m["excess_kwh"] = round(m["excess_kwh"])
+    carrying = [m for m in markets if m["excess_kwh"] > 0]
+    if not carrying:
+        return {"answer": (
+            f"No market is over reference. {sum(m['measurable'] for m in markets)} of "
+            f"{len(rows)} buildings could be measured against their own pack."),
+            "count": 0, "data": markets}
+    lead = "; ".join(
+        f"{m['name']} {m['excess_kwh']:,.0f} kWh across {m['over_reference']} of "
+        f"{m['buildings']} buildings" for m in carrying[:3])
+    return {"answer": (
+        f"{lead}. Ranked on kWh above each building's own reference rather than on money: "
+        f"every market prices differently and the profiles hold those terms as contract "
+        f"wording, not as a rate this can multiply."),
+        "count": len(carrying), "data": markets}
+
+
+async def _worst_against_pack(session, building_ids, org):
+    """Buildings furthest above their own country's reference, not a single league table."""
+    rows = (await bld_svc.list_buildings(session, organization_id=org, limit=500)
+            ).get("buildings") or []
+    rows = _only_scoped(rows, building_ids)
+    # No buildings at all and no buildings that can be measured are different answers: one is
+    # "you are allocated to nothing", the other is "the readings are not there yet".
+    if not rows:
+        return {"answer": "There are no buildings in your scope.", "count": 0, "data": []}
+    rated = [b for b in rows if _f(b.get("deviation_pct")) is not None]
+    over = sorted((b for b in rated if _f(b["deviation_pct"]) > 0),
+                  key=lambda b: -_f(b["deviation_pct"]))
+    if not rated:
+        return {"answer": ("No building can be placed against a reference yet — none has both "
+                           "a measured intensity and a pack to be read against."),
+                "count": 0, "data": []}
+    if not over:
+        return {"answer": (
+            f"No building is above its own reference. All {len(rated)} that can be measured "
+            f"are at or under the pack they are read against."), "count": 0, "data": rated}
+    lead = "; ".join(
+        f"{b.get('name')} at {b.get('eui_kwh_per_m2')} against {b.get('benchmark_kwh_per_m2')} "
+        f"({_f(b['deviation_pct']):+.0f}%, {b.get('benchmark_standard')})" for b in over[:3])
+    return {"answer": (
+        f"{len(over)} of {len(rated)} measurable buildings are above their own reference: "
+        f"{lead}. Each is read against its own country's pack, so these are not comparable "
+        f"with one another — only with the standard each is held to."),
+        "count": len(over), "data": over}
+
+
+async def _route_limits(session, building_ids, org):
+    """What the data route stops the detectors seeing — the rules that cannot arm, and why."""
+    cov = await dc_svc.coverage(session, building_ids=building_ids, organization_id=org)
+    rules = cov.get("rules") or []
+    total = (cov.get("summary") or {}).get("buildings", 0)
+    if not total:
+        return {"answer": "There are no buildings in scope, so no rule could arm on one.",
+                "count": 0, "data": rules}
+    limited = [r for r in rules if r["armed"] < total]
+    if not limited:
+        return {"answer": (
+            f"Nothing is limited: all {len(rules)} rules arm on every one of the {total} "
+            f"buildings in scope."), "count": 0, "data": rules}
+    limited.sort(key=lambda r: r["armed"])
+    lead = "; ".join(
+        f"{r['label']} on {r['armed']} of {total} ({r['needs']})" for r in limited[:3])
+    return {"answer": (
+        f"{len(limited)} of {len(rules)} rules cannot arm everywhere: {lead}. A rule that "
+        f"cannot arm is shown as such rather than skipped quietly — the fix is a data route, "
+        f"not a threshold."),
+        "count": len(limited), "data": limited}
+
+
+def _f(v: Any) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _only_scoped(rows: list[dict], building_ids: list[UUID] | None) -> list[dict]:
+    """list_buildings is organisation-scoped, not building-scoped, so narrow it here.
+
+    None is unrestricted; an empty list is a caller allocated to nothing and must match no
+    building rather than every one.
+    """
+    if building_ids is None:
+        return rows
+    allowed = {str(b) for b in building_ids}
+    return [r for r in rows
+            if str(r.get("building_id") or r.get("id") or r.get("key") or "") in allowed]
+
+
+ENERGY_SKILLS = [
+    Skill("markets_excess_cost", "Which markets drive the excess cost?",
+          must=["market"], any_of=["excess", "cost", "drive", "worst", "spend", "most"],
+          handler=_markets_excess, endpoint="/api/energy/buildings", page="energy"),
+    Skill("worst_against_pack", "Which buildings are worst against their own pack?",
+          must=["building"], any_of=["worst", "pack", "reference", "benchmark", "over",
+                                     "above"],
+          handler=_worst_against_pack, endpoint="/api/energy/buildings", page="energy"),
+    Skill("data_route_limits", "Where does the data route limit what I can see?",
+          any_of=["data route", "route", "limit", "coverage", "arm", "cannot see", "blind"],
+          must=[], handler=_route_limits, endpoint="/api/energy/detection/coverage", page="energy"),
+]
+SKILLS.extend(ENERGY_SKILLS)
+
+
+def suggestions(page: str | None = None) -> list[dict[str, str]]:
+    """The chips a page shows, served rather than hard-coded in the frontend."""
+    return [{"id": s.id, "question": s.question, "page": s.page}
+            for s in SKILLS if page is None or s.page == page]
 
 
 def match(question: str) -> tuple[Skill | None, float, list[tuple[Skill, float]]]:
@@ -214,14 +366,14 @@ def match(question: str) -> tuple[Skill | None, float, list[tuple[Skill, float]]
 
 async def ask(
     session: AsyncSession, *, question: str, building_ids: list[UUID] | None,
-    organization_id: UUID | None,
+    organization_id: UUID | None, page: str | None = None,
 ) -> dict[str, Any]:
     """Answer a question about assets, from the caller's buildings only."""
     q = (question or "").strip()
     if not q:
         return {"ok": True, "understood": False, "question": q,
-                "answer": "Ask me something about the assets.",
-                "can_answer": suggestions()}
+                "answer": "Ask me something about the assets or the energy records.",
+                "can_answer": suggestions(page)}
 
     skill, confidence, near = match(q)
     if skill is None:
@@ -233,7 +385,7 @@ async def ask(
                        "be asked."),
             "closest": [{"id": s.id, "question": s.question, "confidence": round(c, 2)}
                         for s, c in near],
-            "can_answer": suggestions(),
+            "can_answer": suggestions(page),
         }
     try:
         out = await skill.handler(session, building_ids, organization_id)
@@ -249,7 +401,7 @@ async def ask(
         "answer": out["answer"], "count": out.get("count"), "data": out.get("data", []),
         "source": {"endpoint": skill.endpoint, "scope": "your buildings only"},
         "followups": [{"id": s.id, "question": s.question}
-                      for s in SKILLS if s.id != skill.id][:3],
+                      for s in SKILLS if s.id != skill.id and s.page == skill.page][:3],
         "note": ("answered from the same records the page shows; every figure comes from the "
                  "endpoint named in source, narrowed to your buildings"),
     }

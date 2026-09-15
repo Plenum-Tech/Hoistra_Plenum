@@ -23,21 +23,53 @@ from . import chiller as chiller_svc
 
 log = get_logger(__name__)
 
-#: The thirteen rules, in the order the shell lists them, with the shell's short id.
-RULES: list[tuple[str, str, str]] = [
-    ("nonocc_spike", "nonocc", "Non-occupancy spike"),
-    ("asset_spike", "spike", "Single-asset spike"),
-    ("baseline_drift", "drift", "Baseline drift"),
-    ("schedule_mismatch", "schedule", "Schedule mismatch"),
-    ("baseload_creep", "baseload", "Baseload creep"),
-    ("weekend_spike", "calendar", "Calendar rule"),
-    ("weather_residual", "weather", "Weather-normalised residual"),
-    ("peak_excursion", "peak", "Peak demand excursion"),
-    ("simultaneous_heating_cooling", "fight", "Simultaneous heating and cooling"),
-    ("chiller_efficiency", "cop", "Chiller efficiency"),
-    ("post_works_regression", "regress", "Post-works regression"),
-    ("data_quality", "dataq", "Data-quality anomaly"),
-    ("tou_misalignment", "tou", "Time-of-use misalignment"),
+#: The thirteen rules, in the order the shell lists them: id, short id, label, whether it is
+#: one of the three core rules or an added one, what it tests, and the data route it needs.
+#:
+#: The last two used to be copy on the page. They belong here, next to the detector that
+#: implements them, because a rule whose description lives somewhere else drifts from what it
+#: actually does and nobody notices.
+RULES: list[tuple[str, str, str, str, str, str]] = [
+    ("nonocc_spike", "nonocc", "Non-occupancy spike", "core",
+     "consumption in unoccupied hours > 30% of the occupied-hours average",
+     "needs half-hourly or interval meter"),
+    ("asset_spike", "spike", "Single-asset spike", "core",
+     "one sub-metered asset > 2\u03c3 above its own 4-week profile",
+     "needs sub-meter or BMS trend"),
+    ("baseline_drift", "drift", "Baseline drift", "core",
+     "week-on-week baseline rising 3 weeks running with no occupancy change",
+     "needs weekly totals"),
+    ("schedule_mismatch", "schedule", "Schedule mismatch", "added",
+     "plant start or stop more than 45 min outside the occupancy calendar",
+     "needs interval meter + occupancy calendar"),
+    ("baseload_creep", "baseload", "Baseload creep", "added",
+     "overnight minimum rising week on week while daytime is flat",
+     "needs half-hourly or interval meter"),
+    ("weekend_spike", "calendar", "Calendar rule", "added",
+     "weekend or public-holiday profile within 15% of a weekday",
+     "needs daily totals"),
+    ("weather_residual", "weather", "Weather-normalised residual", "added",
+     "CUSUM on degree-day regression residuals breaches the control limit",
+     "needs monthly totals + local degree days"),
+    ("peak_excursion", "peak", "Peak demand excursion", "added",
+     "kVA or kW peak above agreed capacity or prior-year max",
+     "needs half-hourly or interval meter"),
+    ("simultaneous_heating_cooling", "fight", "Simultaneous heating and cooling", "added",
+     "heating and cooling both calling in the same zone for > 30 min",
+     "needs BMS trend"),
+    ("chiller_efficiency", "cop", "Chiller efficiency", "added",
+     "kW per RT more than 15% above design at matched ambient",
+     "needs BMS trend or cooling sub-meter"),
+    ("post_works_regression", "regress", "Post-works regression", "added",
+     "consumption back to pre-fix level within 30 days of a closed work order",
+     "needs meter + work order record"),
+    ("data_quality", "dataq", "Data-quality anomaly", "added",
+     "gaps, flatlines or estimated reads in the feed \u2014 scored as a data fault, never a "
+     "building fault",
+     "needs any feed"),
+    ("tou_misalignment", "tou", "Time-of-use misalignment", "added",
+     "shiftable load sitting in the peak price band",
+     "needs interval meter + tariff bands"),
 ]
 RULE_IDS = [r[0] for r in RULES]
 SETTLED = ("resolved", "closed", "dismissed")
@@ -53,11 +85,43 @@ def _merge(cell: dict[str, Any] | None, outcome: str, **extra: Any) -> dict[str,
     return cell
 
 
+def _rule_catalogue(armed_by: dict[str, int] | None = None,
+                    buildings: int = 0) -> list[dict[str, Any]]:
+    """The thirteen rules as the panel lists them, armed or not.
+
+    Returned whether or not anything could be scanned, because the list of rules is a constant
+    and an empty panel says "there are no rules" when the truth is "no building here has the
+    data route any of them needs" — which is the more useful sentence, and the one the panel's
+    own footnote promises.
+    """
+    return [{
+        "rule": rid, "id": short, "label": label, "tag": tag,
+        "description": desc, "needs": needs,
+        "armed": (armed_by or {}).get(rid, 0), "buildings_in_scope": buildings,
+        "fired": 0, "clear": 0, "skipped": buildings - (armed_by or {}).get(rid, 0),
+        "skipped_reasons": {}, "buildings_fired": [],
+    } for rid, short, label, tag, desc, needs in RULES]
+
+
 async def coverage(
-    session: AsyncSession, *, building_ids: list[UUID], organization_id: UUID | None = None,
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+    organization_id: UUID | None = None,
 ) -> dict[str, Any]:
+    """Which rules can run, did run and fired, per building in scope.
+
+    ``building_ids`` follows the same convention as every other read here: ``None`` is
+    unrestricted and resolves to every building on record, an empty list is a caller allocated
+    to nothing. Conflating the two meant an administrator — who is unrestricted, and therefore
+    passes None — got an empty panel.
+    """
+    if building_ids is None:
+        building_ids = (await session.execute(text(
+            "SELECT building_id FROM plenum_cafm.buildings WHERE building_id IS NOT NULL"
+        ))).scalars().all()
     if not building_ids:
-        return {"ok": True, "buildings": [], "rules": [], "summary": {"buildings": 0}}
+        return {"ok": True, "buildings": [], "rules": _rule_catalogue(),
+                "summary": {"buildings": 0},
+                "note": "no buildings in scope, so no rule could arm on one"}
     ids = [str(b) for b in building_ids]
     blds = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name,
@@ -168,7 +232,7 @@ async def coverage(
         })
 
     rules_out = []
-    for rid, short, label in RULES:
+    for rid, short, label, tag, desc, needs in RULES:
         statuses = [b["rules"][rid]["status"] for b in buildings_out]
         reasons: dict[str, int] = {}
         for b in buildings_out:
@@ -176,7 +240,9 @@ async def coverage(
             if c["status"] == "skipped":
                 reasons[c.get("reason") or "?"] = reasons.get(c.get("reason") or "?", 0) + 1
         rules_out.append({
-            "rule": rid, "id": short, "label": label,
+            "rule": rid, "id": short, "label": label, "tag": tag,
+            "description": desc, "needs": needs,
+            "buildings_in_scope": len(buildings_out),
             "armed": sum(1 for s in statuses if s in ("fired", "clear")),
             "fired": sum(1 for s in statuses if s == "fired"),
             "clear": sum(1 for s in statuses if s == "clear"),
