@@ -33,6 +33,7 @@ from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ask as ask_svc
+from ...engines.energy import investigate as inv_svc
 from ...engines.energy import market_profiles as mp_svc
 from ...engines.energy import pricing as price_svc
 from ...engines.energy import asset_intelligence as ai_svc
@@ -1406,6 +1407,40 @@ async def asset_work_and_notes(
     """
     ids = await position_svc.building_ids_for(session, s, None)
     out = await ai_svc.asset_notes(session, asset_id=asset_id, building_ids=ids, limit=limit)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such asset in your buildings.",
+            "reason": out.get("reason", "not_found")})
+    return out
+
+
+@router.get("/assets/{asset_id}/investigate")
+async def investigate_asset(
+    asset_id: str,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Why is this asset costing what it is, and what should be done — from the sources.
+
+    What the Investigate button opens. Six sources are walked and each says what it gave
+    back, **including the ones that gave back nothing**: a report the contract requires and
+    nobody filed is not a gap in the search, it is a finding in it, and it carries full
+    confidence because nothing is inferred from it.
+
+    Confidence is fixed per rule by how directly its evidence supports its statement — a
+    measured gap with the confounder ruled out is not a trend consistent with three causes —
+    so two investigations that found the same thing say the same thing about it. Nothing here
+    asks a model.
+
+    **Nothing is written.** Every action comes back as a proposal naming the endpoint and the
+    body it would be raised with; a person approves and the caller raises it. `written` is
+    false on every response because this route holds no write at all.
+
+    404 if the asset is not in your buildings — the same answer as an asset that does not
+    exist.
+    """
+    ids = await position_svc.building_ids_for(session, s, None)
+    out = await inv_svc.investigate(session, asset_id=asset_id, building_ids=ids)
     if not out.get("ok"):
         raise HTTPException(status_code=404, detail={
             "ok": False, "error": "No such asset in your buildings.",
