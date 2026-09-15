@@ -49,6 +49,9 @@ AWAITING = ("pending_approval", "pending approval", "awaiting approval", "submit
 LIVE = ("open", "inprogress", "in progress", "in_progress", "assigned", "scheduled")
 DONE = ("completed", "closed", "complete", "done", "cancelled", "canceled")
 
+#: The order the screen lists states in, and the one decisions are sorted by.
+STATE_ORDER = {"Blocked": 0, "Deviation": 1, "Awaiting approval": 2, "To raise": 3}
+
 #: Which module raised an approvals item, in the words the Maintenance screen uses.
 SOURCE_OF = {
     "energy_anomaly": "Energy",
@@ -113,6 +116,7 @@ def _scope_sql(building_ids: list[UUID] | None, column: str) -> tuple[str, dict[
 
 async def decisions(
     session: AsyncSession, *, building_ids: list[UUID] | None, limit: int = 200,
+    state: str | None = None, source: str | None = None, group_by: str | None = None,
 ) -> dict[str, Any]:
     """Every decision the property manager owes, across both places one can arrive from.
 
@@ -120,6 +124,12 @@ async def decisions(
     a work order yet — the module that raised it says one should exist — so its ``work_order``
     is null and its ``state`` is "To raise". Both are reported in one list because to the
     person owing the decision they are the same queue.
+
+    The screen filters on state (Blocked, To raise, Awaiting approval, Deviation) and on the
+    module a decision came from (Compliance, Vendors, Assets, Energy), and groups by state,
+    source, building or vendor. All of that happens here rather than in the page, because the
+    per-group counts and the cost rollup have to be computed over **every** decision in scope,
+    not over whichever ones survived a limit.
     """
     sh = await shape(session)
     wo = sh.get("work_orders", set())
@@ -199,14 +209,22 @@ async def decisions(
             log.warning("maintenance.decisions.work_orders_failed", error=str(exc)[:300])
             rows = []
         for r in rows:
-            state = r["state"]
+            # Named row_state, not state: `state` is this function's filter parameter, and
+            # rebinding it here silently turned every filtered request into an unfiltered one.
+            row_state = r["state"]
             trigger = {
                 "Blocked": "Work order held at status " + repr(r["status"]),
                 "Awaiting approval": "Approval outstanding",
                 "Deviation": "Past its due date",
-            }.get(state, state)
+            }.get(row_state, row_state)
+            # A blocked or deviating order with a vendor on it is a vendor problem — the
+            # thing standing in the way is the vendor, and that is the queue it belongs in.
+            # Anything else is plain maintenance. Approvals items bring their own real
+            # source, so this only decides the work-order rows.
+            attributed = ("Vendors" if row_state in ("Blocked", "Deviation") and r["vendor"]
+                          else "Maintenance")
             out.append({
-                "work_order": r["code"], "state": state, "source": "Maintenance",
+                "work_order": r["code"], "state": row_state, "source": attributed,
                 "trigger": trigger, "detail": r["title"],
                 "asset": r["asset"], "building": r["building"], "building_id": r["building_id"],
                 "vendor": r["vendor"], "estimated_cost": _num(r["est"]),
@@ -214,14 +232,82 @@ async def decisions(
             })
 
     out.extend(await _decisions_from_approvals(session, building_ids=building_ids, limit=limit))
-    order = {"Blocked": 0, "Deviation": 1, "Awaiting approval": 2, "To raise": 3}
-    out.sort(key=lambda d: (order.get(d["state"], 9), str(d.get("building") or "")))
+    out.sort(key=lambda d: (STATE_ORDER.get(d["state"], 9), str(d.get("building") or "")))
+
+    # Counted over everything in scope, so the tallies do not change when a filter narrows
+    # the list. The screen shows "10 of 10 decisions": the first number is what came back,
+    # the second is what exists.
+    by_state = {k: sum(1 for d in out if d["state"] == k) for k in STATE_ORDER}
+    by_source = _tally(out, "source")
+    total = len(out)
+
+    kept = [d for d in out
+            if (state is None or d["state"] == state)
+            and (source is None or d["source"] == source)]
+
     return {
         "ok": True,
-        "count": len(out),
-        "by_state": {s: sum(1 for d in out if d["state"] == s) for s in order},
-        "decisions": out[:limit],
+        "count": len(kept),
+        "total": total,
+        "filtered": state is not None or source is not None,
+        "by_state": by_state,
+        "by_source": by_source,
+        "available": {
+            "state": [k for k in STATE_ORDER if by_state.get(k)],
+            "source": sorted(by_source),
+            "group_by": list(GROUP_KEYS),
+        },
+        "group_by": group_by,
+        "groups": _group(kept, group_by) if group_by else None,
+        "decisions": kept[:limit],
     }
+
+
+#: What a group can be cut by, and the field each one reads.
+GROUP_KEYS = {"state": "state", "source": "source",
+              "building": "building", "vendor": "vendor"}
+
+
+def _group(rows: list[dict[str, Any]], by: str) -> list[dict[str, Any]]:
+    """The decisions cut into the groups the screen offers, each with its own rollup.
+
+    Every group carries the two counts the header shows — how many are blocked and how many
+    are still to raise — and the money in it. A row with no value for the grouping field is
+    gathered under a stated label rather than dropped, because a decision with no vendor is
+    still a decision somebody owes.
+    """
+    field = GROUP_KEYS.get(by)
+    if not field:
+        return []
+    unlabelled = {"building": "No building", "vendor": "Unassigned",
+                  "source": "Unattributed", "state": "No state"}[by]
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        buckets.setdefault(str(r.get(field) or unlabelled), []).append(r)
+
+    out = []
+    for key, items in buckets.items():
+        costs = [d["estimated_cost"] for d in items if d["estimated_cost"] is not None]
+        out.append({
+            "key": key,
+            "count": len(items),
+            "blocked": sum(1 for d in items if d["state"] == "Blocked"),
+            "to_raise": sum(1 for d in items if d["state"] == "To raise"),
+            "deviating": sum(1 for d in items if d["state"] == "Deviation"),
+            "awaiting_approval": sum(1 for d in items if d["state"] == "Awaiting approval"),
+            # None, not 0, when nothing in the group carries an estimate — a group whose
+            # cost is unknown must not read as a group that costs nothing.
+            "estimated_cost": round(sum(costs), 2) if costs else None,
+            "priced": len(costs),
+            "decisions": items,
+        })
+    # State groups keep the order the screen lists them in; everything else leads with the
+    # biggest group, which is what a person scanning the page is looking for.
+    if by == "state":
+        out.sort(key=lambda g: STATE_ORDER.get(g["key"], 9))
+    else:
+        out.sort(key=lambda g: (-g["count"], g["key"]))
+    return out
 
 
 def _overdue(due: Any, now: datetime) -> int | None:

@@ -51,12 +51,22 @@ def _scope(principal: Principal, building_id: Optional[str]) -> list[UUID] | Non
 )
 async def list_decisions(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    state: Optional[str] = Query(
+        None, pattern="^(Blocked|Deviation|Awaiting approval|To raise)$",
+        description="Only decisions in this state"),
+    source: Optional[str] = Query(
+        None, description="Only decisions from this module: Compliance, Vendors, Assets, "
+                          "Energy or Maintenance"),
+    group_by: Optional[str] = Query(
+        None, pattern="^(state|source|building|vendor)$", alias="group_by",
+        description="Cut the decisions into groups, each with its own counts and cost"),
     limit: int = Query(200, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
     ids = _scope(principal, building_id)
-    out = await mx.decisions(session, building_ids=ids, limit=limit)
+    out = await mx.decisions(session, building_ids=ids, limit=limit,
+                             state=state, source=source, group_by=group_by)
     log.debug("maintenance.decisions", count=out.get("count"), building_id=building_id)
     return out
 

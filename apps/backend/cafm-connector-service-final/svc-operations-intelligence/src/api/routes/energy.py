@@ -33,6 +33,7 @@ from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import asset_intelligence as ai_svc
+from ...engines.energy import condition_engine as cond_svc
 from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
@@ -1150,3 +1151,122 @@ async def ingest_bms_trends(
     access.assert_building(s, body.building_id, action="add BMS trends to")
     return await position_svc.ingest_bms_trends(session, building_id=body.building_id, organization_id=org_id,
                                                 samples=body.samples, source=body.source)
+
+
+# ── the condition engine ─────────────────────────────────────────────────────────────
+
+class ConditionRulesIn(BaseModel):
+    """The two steppers on the Assets page."""
+    section_over_reference_pct: float = Field(
+        ..., ge=0, le=500, description="A section counts as over reference above this")
+    anomaly_persistent_weeks: float = Field(
+        ..., ge=0, le=520, description="An anomaly counts as persistent at or past this")
+
+
+@router.get("/condition/summary")
+async def condition_summary(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Every asset banded Threat, Watch or In control, with the rollups the page prints.
+
+    Bands are computed from current signals on every read, so nothing here is stale. The
+    counts underneath each card are returned too: how many of the Watch assets are watched
+    because they share an over-reference section rather than because of an anomaly of their
+    own, and how many In control assets do carry an anomaly that has not persisted far enough
+    to count — that second figure is the one a person actually wants.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await cond_svc.summary(session, building_ids=ids,
+                                  organization_id=access.organization_for(s, None))
+
+
+@router.get("/condition/assets")
+async def condition_assets(
+    building_id: UUID | None = None,
+    band: str | None = Query(None, pattern="^(threat|watch|in_control)$"),
+    min_deviation_pct: float | None = Query(
+        None, description="Only assets whose section is over reference by at least this"),
+    limit: int = Query(500, ge=1, le=2000),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The banded assets themselves, each with the sentence that explains its band.
+
+    ``band`` backs the Threat / Watch / In control chips; ``min_deviation_pct`` backs the
+    Above 10% and Above 30% chips.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    out = await cond_svc.assess(session, building_ids=ids,
+                                organization_id=access.organization_for(s, None))
+    rows = out["assets"]
+    if band:
+        rows = [a for a in rows if a["band"] == band]
+    if min_deviation_pct is not None:
+        rows = [a for a in rows
+                if a["section_deviation_pct"] is not None
+                and a["section_deviation_pct"] >= min_deviation_pct]
+    return {"ok": True, "rules": out["rules"], "method": out["method"],
+            "count": len(rows), "total": len(out["assets"]), "assets": rows[:limit]}
+
+
+@router.get("/condition/rules")
+async def condition_rules(
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The thresholds this organisation bands against. ``is_default`` is true until set."""
+    return await cond_svc.rules(session, organization_id=access.organization_for(s, None))
+
+
+@router.put("/condition/rules")
+async def set_condition_rules(
+    body: ConditionRulesIn,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Move the steppers. Applies to every read from the next one onward."""
+    org = access.organization_for(s, None)
+    if org is None:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "error": "Thresholds are set per organisation and you have none."})
+    out = await cond_svc.set_rules(
+        session, organization_id=org,
+        section_over_reference_pct=body.section_over_reference_pct,
+        anomaly_persistent_weeks=body.anomaly_persistent_weeks,
+        updated_by=getattr(s, "user_id", None))
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=out)
+    return out
+
+
+@router.post("/condition/scan")
+async def condition_scan(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Run the scan and record it: what the Run condition scan button calls.
+
+    The reads do not depend on this having run — they assess live. What a scan adds is a
+    timestamp somebody can point at and a verdict per asset that next week's can be compared
+    against.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    out = await cond_svc.scan(session, building_ids=ids,
+                              organization_id=access.organization_for(s, None))
+    if not out.get("ok"):
+        raise HTTPException(status_code=500, detail=out)
+    return out
+
+
+@router.get("/condition/last-run")
+async def condition_last_run(
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """What "LAST RUN 02:14 today" reads. Null before the first scan."""
+    run = await cond_svc.last_run(session, organization_id=access.organization_for(s, None))
+    return {"ok": True, "last_run": run,
+            "note": "null means no scan has been recorded yet, not that there is nothing to scan"}
