@@ -566,15 +566,15 @@ const MODULES = {
     asks: ["Which vendor is costing me money?", "Show every invoice line flagged this quarter", "What service credits can I recover?"]
   },
   assets: {
-    name: "Assets", kicker: "Feature E · asset-condition-engine", icon: "ph-cube", answer: "energy",
-    blurb: "Condition inferred from energy before a fault shows. Each section's EUI is read against its reference to find where the load is; anomalies attributed to an asset say which one. Both signals together are a threat, one alone is a watch. Actions go to the vendor who holds the asset, as an inspection request or a work order.",
-    scanLabel: "Run condition scan", exportLabel: "Export asset register",
-    tableTitle: "Buildings · EUI against reference, sections and assets beneath",
+    name: "Assets", kicker: "Feature E · plenum_cafm.assets", icon: "ph-cube", answer: "energy",
+    blurb: "Condition inferred from energy before a fault shows, for the buildings you are allocated to. A building's EUI is read against its reference to find where the load is; anomalies attributed to an asset say which one. Both signals together are a threat, one alone is a watch, and the asset's own health score can raise a band but never lower it. Where a panel has no backend behind it — the energy split below building level, asset replacement value, the vendor who holds the asset, reading bands and the failure model — it says so rather than showing a figure.",
+    scanLabel: "Reload register", exportLabel: "Export asset register",
+    tableTitle: "Buildings · EUI against reference, locations and assets beneath",
     head: [],
     tableFoot: "",
     sideTitle: "", sideFoot: "",
-    filters: ["All", "Threat", "Watch", "In control", "Above 10%", "Above 30%"],
-    asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which sections have gone over reference since last month?"]
+    filters: ["All", "Threat", "Watch", "In control", "Not scored", "Open work order"],
+    asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which assets have never been scored?"]
   },
   ops: {
     name: "Maintenance", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",

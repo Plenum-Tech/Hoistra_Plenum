@@ -503,7 +503,7 @@ class AssetDocument(PlenumBase):
 
 
 class AssetReading(PlenumBase):
-    """Fiix: MeterReading — enriched with unit_id FK and submitted_by."""
+    """Fiix: MeterReading — enriched with submitted_by."""
     __tablename__ = "asset_readings"
     __table_args__ = {"schema": SCHEMA}
 
@@ -519,9 +519,13 @@ class AssetReading(PlenumBase):
     reading_type: Mapped[str] = mapped_column(String(100), nullable=False)
     value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     unit: Mapped[str | None] = mapped_column(String(50))
-    unit_id: Mapped[uuid.UUID | None] = mapped_column(                    # Fiix: MeterReadingUnit FK
-        UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.meter_reading_units.id", ondelete="SET NULL"),
-    )
+    # unit_id is NOT mapped. The column is in db/01_schema.sql but does not exist on the
+    # hosted database, and because this is a model attribute rather than a query, SQLAlchemy
+    # put it in the SELECT list of every read — so `column asset_readings.unit_id does not
+    # exist` took down every route through AssetReading, not just the one that wanted it.
+    # No schema in this service exposes it and nothing reads or writes it, so the mapping was
+    # pure liability. Restore it only alongside a migration that adds the column, and check
+    # the hosted database rather than 01_schema.sql, which is ahead of it here.
     submitted_by: Mapped[uuid.UUID | None] = mapped_column(               # Fiix: intSubmittedByUserID
         UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.users.id", ondelete="SET NULL"),
     )

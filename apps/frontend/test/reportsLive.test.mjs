@@ -44,6 +44,8 @@ const SERVER_PRESETS = [
   { key: 'days', label: 'Refresh on chosen days', badge: 'Days', refresh: { days: [], time: '14:00' }, pick_days: true }
 ];
 
+const OWNER = 'ada@example.com';
+
 let c;
 beforeEach(() => {
   Object.keys(mem).forEach((k) => { delete mem[k]; });
@@ -52,7 +54,11 @@ beforeEach(() => {
   c = new HoistraLogic();
   c.setState({
     signedIn: true, refreshToken: 'ref-test', view: 'home',
-    sessions: [{ id: 'sess-1', kind: 'chat', title: 'Which buildings put me at risk?', page: 'Home', turns: [] }]
+    // Reports are personal, so a signed-in account is part of the harness now: rpLoad
+    // stamps reportsOwner on the read and renderVals draws a report only for the account
+    // it was read for. Seeding reports[] by hand means seeding that stamp too.
+    account: { id: 'u-1', email: OWNER, full_name: 'Ada Admin', role: 'user' },
+    sessions: [{ id: 'sess-1', kind: 'chat', title: 'Which buildings put me at risk?', page: 'Home', turns: [], owner: OWNER }]
   });
 });
 const cleanup = () => { c.rpStop(); clearTimeout(c._tt); };
@@ -179,7 +185,7 @@ test('a 422 that is not about the timezone is reported, not retried', async () =
 test('deleting a card from the sidebar takes two clicks — the first only arms it', async () => {
   let deleted = 0;
   handlers['DELETE /backend/ops-intelligence/api/reports/cards/card-1'] = () => { deleted += 1; return [200, { ok: true, card_id: 'card-1', removed: true }]; };
-  c.setState({ reports: [REPORT] });
+  c.setState({ reports: [REPORT], reportsOwner: OWNER });
   const row = () => c.renderVals().navReports.find((r) => r.name === 'Risky buildings');
   assert.equal(row().armed, false);
   row().remove();
@@ -195,7 +201,7 @@ test('deleting a card from the sidebar takes two clicks — the first only arms 
 
 test('the arm window belongs to one control — arming a second disarms the first', () => {
   const CARD2 = Object.assign({}, CARD, { id: 'card-2', name: 'Second' });
-  c.setState({ reports: [Object.assign({}, REPORT, { cards: [CARD, CARD2] })] });
+  c.setState({ reports: [Object.assign({}, REPORT, { cards: [CARD, CARD2] })], reportsOwner: OWNER });
   c.renderVals().navReports[0].remove();
   assert.equal(c.state.rpArmed, 'nav:card-1');
   c.renderVals().navReports[1].remove();
@@ -211,7 +217,7 @@ test('arming one control does not confirm a delete on a different one', () => {
   let deleted = 0;
   handlers['DELETE /backend/ops-intelligence/api/reports/cards/card-1'] = () => { deleted += 1; return [200, { ok: true }]; };
   handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { ok: true, count: 1, reports: [REPORT] }];
-  c.setState({ reports: [REPORT], view: 'report', reportKey: 'card-1' });
+  c.setState({ reports: [REPORT], reportsOwner: OWNER, view: 'report', reportKey: 'card-1' });
   c.renderVals().deleteReport();                 // arms the detail button only
   assert.equal(c.state.rpArmed, 'detail:card-1');
   c.renderVals().navReports[0].remove();         // a different control: must arm, not fire
@@ -223,7 +229,7 @@ test('arming one control does not confirm a delete on a different one', () => {
 test('deleting the whole report takes its cards with it, and says how many first', async () => {
   let deleted = null;
   handlers['DELETE /backend/ops-intelligence/api/reports/rep-1'] = () => { deleted = 'rep-1'; return [200, { ok: true, report_id: 'rep-1', cards_removed: 1 }]; };
-  c.setState({ reports: [REPORT], view: 'report', reportKey: 'card-1' });
+  c.setState({ reports: [REPORT], reportsOwner: OWNER, view: 'report', reportKey: 'card-1' });
   const group = () => c.renderVals().reportGroups[0];
   assert.equal(group().deleteLabel, 'Delete report');
   assert.equal(group().count, '1 card');
@@ -240,7 +246,7 @@ test('deleting the whole report takes its cards with it, and says how many first
 });
 
 test('a report emptied of cards still renders, so it can still be deleted', () => {
-  c.setState({ reports: [Object.assign({}, REPORT, { cards: [] })] });
+  c.setState({ reports: [Object.assign({}, REPORT, { cards: [] })], reportsOwner: OWNER });
   const v = c.renderVals();
   assert.equal(v.reportGridEmpty, false, 'an empty report is not an empty grid');
   assert.equal(v.reportGroups.length, 1);
@@ -251,7 +257,7 @@ test('a report emptied of cards still renders, so it can still be deleted', () =
 
 test('a failed report delete leaves the report exactly where it was', async () => {
   handlers['DELETE /backend/ops-intelligence/api/reports/rep-1'] = () => [500, { detail: 'boom' }];
-  c.setState({ reports: [REPORT] });
+  c.setState({ reports: [REPORT], reportsOwner: OWNER });
   c.renderVals().reportGroups[0].remove();
   await c.renderVals().reportGroups[0].remove();
   assert.equal(c.state.reports.length, 1, 'nothing removed on a server failure');
@@ -267,5 +273,69 @@ test('a manual refresh that collides with the server scheduler is not shown as a
   c.setState({ toast: '' });
   await c.rpRunCard('card-1');
   assert.equal(c.state.toast, '', 'the server having claimed it first is not an error the user needs');
+  cleanup();
+});
+
+// ── whose reports these are ──────────────────────────────────────────────────
+// A report card is personal: /api/reports filters on the caller's user_id, so the array in
+// state holds the rows of whoever was signed in when it was READ. One tab routinely sees
+// more than one account — sign out, sign in as someone else — and the previous person's
+// pinned cards stayed in the navigator, on the home page's pinned runs and open on the
+// Reports page until rpStart's 30-second poll happened to come round and correct it.
+
+test('a report is drawn only for the account it was read for', () => {
+  c.setState({ reports: [REPORT], reportsOwner: OWNER });
+  assert.equal(c.renderVals().navReports.length, 1);
+  // The same rows in state, somebody else looking at them: not theirs, not shown.
+  c.setState({ account: { id: 'u-2', email: 'bo@example.com', full_name: 'Bo', role: 'user' } });
+  const v = c.renderVals();
+  assert.deepEqual(v.navReports, []);
+  // Home's pinned runs are the saved cards followed by the standing suggestions; only the
+  // cards are somebody's, and only they go.
+  assert.equal(v.pinned.filter((x) => x.label === 'Risky buildings').length, 0);
+  assert.equal(v.reportGridEmpty, true);
+  assert.deepEqual(v.reportGroups, []);
+  cleanup();
+});
+
+test('the account switch clears the cards, and the card left open with them', () => {
+  c.setState({ reports: [REPORT], reportsOwner: OWNER, view: 'report', reportKey: 'card-1', reportSelected: ['card-1'] });
+  c.resetLiveData();
+  assert.deepEqual(c.state.reports, []);
+  assert.equal(c.state.reportsOwner, null);
+  assert.equal(c.state.reportKey, null);
+  assert.deepEqual(c.state.reportSelected, []);
+  cleanup();
+});
+
+test('the switch re-reads the reports itself rather than waiting for the poll', () => {
+  const fired = [];
+  ['ccLoad', 'homeLoad', 'vpLoad', 'bldLoad', 'energyLoad', 'enPositionLoad',
+   'asLiveLoad', 'asCondLoad', 'mxLiveLoad', 'spLoad', 'rpLoad'].forEach((m) => {
+    c[m] = () => { fired.push(m); };
+  });
+  c.loadLiveData();
+  assert.ok(fired.indexOf('rpLoad') > -1, 'loadLiveData reads the reports with every other register');
+  cleanup();
+});
+
+test('signing out takes the cards with it', () => {
+  handlers['GET /backend/ops-intelligence/api/auth/config'] = () => [200, { ok: true }];
+  c.setState({ reports: [REPORT], reportsOwner: OWNER, view: 'report', reportKey: 'card-1' });
+  c.authSignedOut('');
+  assert.deepEqual(c.state.reports, []);
+  assert.equal(c.state.reportsOwner, null);
+  assert.equal(c.state.reportKey, null);
+  cleanup();
+});
+
+test('a read issued for the previous account never lands on the next one', async () => {
+  handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { ok: true, count: 1, reports: [REPORT] }];
+  const pending = c.rpLoad();
+  // The account changes while that read is in flight.
+  c.setState({ account: { id: 'u-2', email: 'bo@example.com', full_name: 'Bo', role: 'user' } });
+  await pending;
+  assert.deepEqual(c.state.reports, [], 'the answer to the previous account\'s question is dropped');
+  assert.equal(c.state.reportsOwner, null);
   cleanup();
 });

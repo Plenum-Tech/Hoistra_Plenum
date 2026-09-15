@@ -1265,14 +1265,24 @@ async def read_inspection_reports(
 
 async def last_inspection_read(
     session: AsyncSession, *, building_ids: list[UUID] | None = None,
+    organization_id: UUID | str | None = None,
 ) -> dict[str, Any] | None:
-    """When the reports were last re-read. Null before the first time — not zero."""
+    """When the reports were last re-read, for ONE company. Null before the first time —
+    which means no read has been recorded, not zero.
+
+    The company predicate is the point: without it this answered from the whole table, so a
+    page showed whichever tenant happened to have run last. A caller with no company resolves
+    to no row rather than to everyone's — a tenancy boundary fails closed.
+    """
+    if organization_id is None:
+        return None
     rows = await _rows(session, """
         SELECT run_id::text, started_at, finished_at, reports_read, assets_covered,
                unconverted, corroborated_anomalies, warranted_findings, poorly_graded,
                unanswerable, scope
           FROM plenum_cafm.inspection_read_runs
-         ORDER BY started_at DESC LIMIT 1""", {}, "last_inspection_read")
+         WHERE organization_id = CAST(:org AS uuid)
+         ORDER BY started_at DESC LIMIT 1""", {"org": str(organization_id)}, "last_inspection_read")
     if not rows:
         return None
     r = rows[0]

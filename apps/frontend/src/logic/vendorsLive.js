@@ -1,9 +1,10 @@
 // vendorsLive — the Vendors page read from svc-operations-intelligence.
 //
-// The same treatment the compliance console (complianceLive.js) and the Home page
-// (homeLive.js) got: the backend reads are shaped into exactly the shape the seed dataset
-// (src/data/hoistra-vendors.js + HOISTWAY.vendors) has, so renderVals renders either without
-// knowing which it holds. The seed stays as the fallback until something answers.
+// This model is the whole page. Unlike the compliance console (complianceLive.js), nothing
+// sits behind it: there is no seed fallback, so a vendor, a score, a term or a coverage
+// figure reaches the screen only because one of the reads below returned it. When none of
+// them answer, `empty` below is what renderVals gets — an empty directory and a null against
+// every count — and the page says which service did not answer instead of filling itself in.
 //
 //   Directory + scorecard   GET /api/contract-performance/saved-space/summary  (scorecards, weights,
 //                           pending Feature B approvals) — /scorecards is the fallback read
@@ -14,10 +15,11 @@
 //                           GET /api/compliance/coverage/vendors?country_code=…  (block state, gaps)
 //                           GET /api/compliance/country-pack?country_code=…      (names for gap codes)
 //
-// Not sourced — no read endpoint exists — and therefore shown as "—" or left empty rather
-// than filled from the seed: the per-work-order breach list behind a score (Evidence tab),
-// the vendor's L1/L2/L3 job split, annual spend, contract expiry and page counts, invoice
-// lines that matched (only flagged lines reach the approvals queue), and open work orders.
+// Not sourced — no read endpoint exists — and therefore null here and "—" on the screen:
+// the per-work-order breach list behind a score (Evidence tab), the vendor's L1/L2/L3 job
+// split, annual spend, contract expiry and page counts, invoice lines that matched (only
+// flagged lines reach the approvals queue), open work orders, and when the scorecards were
+// last cut (`lastRebuild` reads `created_at` if the list response ever carries it).
 //
 // Scores are never recomputed here. `overall_score` is the published figure; the rows
 // beneath it are the engine's own component points against the weights it snapshotted.
@@ -53,7 +55,7 @@ export function monthLabel(iso) {
   const m = /^(\d{4})-(\d{2})/.exec(String(iso || ""));
   return m ? MONTHS[Number(m[2]) - 1] + " " + m[1] : null;
 }
-// The seed's trend vocabulary, from the card's month-on-month delta.
+// The trend word under each score, from the card's month-on-month delta.
 export function trendOf(delta) {
   const d = num(delta);
   if (d === null) return "first month";
@@ -114,7 +116,7 @@ const TERM_FIELDS = [
 ];
 const isEmptyValue = (v) => v === null || v === undefined || v === "" || (typeof v === "object" && !keysOf(v).length);
 
-// The register's status vocabulary → the seed's four tags.
+// The register's status vocabulary → the four tags the Coverage tab shows.
 function certStatus(raw) {
   const s = lower(raw);
   if (/lapsed|overdue|expired|revoked|suspended/.test(s)) return "Lapsed";
@@ -200,7 +202,7 @@ export function shapeLiveVendors(input, now) {
 
   const live = !!(cards || params || weights || approvals || certificates);
   const empty = {
-    live: false, month: null, vendors: [], V: {}, weights: null, weightsText: null,
+    live: false, month: null, lastRebuild: null, vendors: [], V: {}, weights: null, weightsText: null,
     tiles: { blocked: null, pending: null, critical: null, L1: null, held: null, defaults: null },
     counts: { contracts: null, termsRead: null, termsDefault: null, expiring: null, invoiceLines: null, heldLines: null, approvedLines: null, workordersOpen: null },
     pkgOf: () => "Unclassified"
@@ -272,6 +274,13 @@ export function shapeLiveVendors(input, now) {
 
   const newestMonth = Object.keys(latest).reduce((m, id) => (String(latest[id].score_month) > m ? String(latest[id].score_month) : m), "");
   const month = newestMonth ? monthLabel(newestMonth) : null;
+  // When the scorecards were last cut. The row carries created_at but the list response does
+  // not return it yet, so this is usually null and the header reads "—". It lights up on its
+  // own the day the read includes the column; nothing here invents a time in the meantime.
+  const lastRebuild = (cards || []).reduce((t, c) => {
+    const v = c && (c.created_at || c.generated_at);
+    return v && (!t || String(v) > t) ? String(v) : t;
+  }, null);
 
   const weightOf = (snapshot, wk, def) => {
     const w = num(snapshot && snapshot[wk]);
@@ -335,14 +344,19 @@ export function shapeLiveVendors(input, now) {
       return {
         k: c.k, label: c.label, w: w, basis: c.basis, unit: "%", ceiling: false, target: 100,
         measured: pts === null || !w ? null : Math.round((100 * pts) / w),
-        pts: pts === null ? 0 : round1(pts),
+        // A component the card did not score is null, not zero: "— of 25 pts" says the
+        // engine did not report it, "0 of 25 pts" says the vendor earned nothing.
+        pts: pts === null ? null : round1(pts),
         fromContract: fromContract, clause: null, page: 0, citeLabel: c.label,
         requires: requires,
         sample: c.basis + " · " + plural(woCount, "work order", "work orders"),
         srcTag: srcTag
       };
     });
-    const rawTotal = card ? (num(bd.wo_avg_before_invoice_blend) !== null ? num(bd.wo_avg_before_invoice_blend) : round1(rowsRaw.reduce((q, r) => q + r.pts, 0))) : 0;
+    // No card, no total. The sum counts the components the card did report.
+    const rawTotal = card
+      ? (num(bd.wo_avg_before_invoice_blend) !== null ? num(bd.wo_avg_before_invoice_blend) : round1(rowsRaw.reduce((q, r) => q + (r.pts || 0), 0)))
+      : null;
     const invoiceSignal = card ? num(bd.invoice_match_signal) : null;
 
     // ── contract terms ──
@@ -438,7 +452,10 @@ export function shapeLiveVendors(input, now) {
       blockedType: blockedType
     });
     V[id] = {
-      contract: contract, terms: terms, rows: rowsRaw, raw: rawTotal, score: score === null ? 0 : score,
+      // An unscored vendor stays unscored. Zero is a score, and a vendor with a contract
+      // but no card has not earned one — it would sit in "below 70" and drag the average
+      // down with a number no engine ever published.
+      contract: contract, terms: terms, rows: rowsRaw, raw: rawTotal, score: score,
       capApplied: capApplied, cap: cap, samples: samples, crit: null, breaches: [], certs: certRows, invoices: invoices,
       critNote: critNote, sourceNote: sourceNote, woCount: woCount,
       month: card ? monthLabel(card.score_month) : null, ppm: card ? num(card.ppm_compliance_pct) : null,
@@ -484,7 +501,7 @@ export function shapeLiveVendors(input, now) {
     : null;
 
   return {
-    live: true, month: month, vendors: vendors, V: V, weights: weights, weightsText: weightsText,
+    live: true, month: month, lastRebuild: lastRebuild, vendors: vendors, V: V, weights: weights, weightsText: weightsText,
     tiles: tiles, counts: counts, pkgOf: (id) => pkgById[id] || "Unclassified",
     pendingCount: tiles.pending, kpis: (summary && summary.kpis) || null
   };
@@ -504,7 +521,7 @@ export const vendorsLiveMethods = {
   vpIsLive() { return !!this.state.vpRaw; },
 
   // Every read is independent: the page goes live when any contract-performance read
-  // answers, and only falls back to the seed wholesale when nothing answered at all.
+  // answers, and stays empty — saying so — when none of them did.
   async vpLoad(opts) {
     if (this._vpLoading) return;
     this._vpLoading = true;

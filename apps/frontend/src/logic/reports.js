@@ -176,16 +176,31 @@ function patchCardInReports(reports, cardId, patch) {
 
 // ── controller ───────────────────────────────────────────────────────────────
 export const reportsMethods = {
+  // Who these rows belong to. A report is personal — /api/reports filters on the caller's
+  // user_id — so the array in state is only ever the rows of whoever was signed in when it
+  // was read. One tab routinely sees more than one account (sign out, sign in as someone
+  // else), so the rows are stamped with that account and renderVals shows them only to it.
+  rpOwner() {
+    const a = this.state.account;
+    return a && a.email ? String(a.email).trim().toLowerCase() : null;
+  },
+
   async rpLoad(opts) {
     if (this._rpLoading) return;
     this._rpLoading = true;
+    // Captured before the read, compared after: a response issued for the previous account
+    // must not land on this one's navigator, and must not overwrite rows already read
+    // correctly for it either.
+    const asked = this.rpOwner();
     this.setState({ reportsLoading: true });
     try {
       const r = await reportsApi.list();
       const reports = (r && Array.isArray(r.reports)) ? r.reports : [];
-      this.setState({ reports: reports, reportsLoading: false, reportsError: '', reportsLoadedAt: Date.now() });
+      if (this.rpOwner() !== asked) return;
+      this.setState({ reports: reports, reportsOwner: asked, reportsLoading: false, reportsError: '', reportsLoadedAt: Date.now() });
       if (opts && opts.announce) this.flash('Reports refreshed.');
     } catch (e) {
+      if (this.rpOwner() !== asked) return;
       this.setState({ reportsLoading: false, reportsError: (e && e.message) || String(e) });
       if (opts && opts.announce) this.flash('Could not refresh reports — ' + ((e && e.message) || String(e)));
     } finally {

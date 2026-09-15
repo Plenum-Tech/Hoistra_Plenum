@@ -125,13 +125,22 @@ recomputed: the card's `overall_score` is shown, and the rows beneath it are the
 its weights snapshot (the published score blends 85% of that total with 15% of the invoice match signal,
 which the scorecard note discloses).
 
-Not sourced — no read endpoint exists — and therefore shown as "—" or left empty instead of seed figures:
+**There is no seed fallback behind this page.** A vendor, a score, a term or a coverage figure is on the
+screen only because one of the reads above returned it. When none of them answer, the directory is empty,
+every tile and stat reads "—", and the page says which service did not answer and offers the read again
+(the source pill beside the buttons, the same one the compliance console carries). A count is never
+inferred from an empty directory — "0 vendors blocked" and "nothing has loaded" are different statements.
+
+Not sourced — no read endpoint exists — and therefore shown as "—" or left empty:
 the per-work-order breach list behind a score (Evidence tab; `vendor_wo_scores` is written but never
 listed), the vendor's L1/L2/L3 job split, annual spend, contract expiry dates and page counts, matched
 invoice lines (only flagged lines reach the queue), open work orders, and the "Last rebuild" time
-(`created_at` is on the scorecard row but not in the list response). "Rebuild scorecards", "Claim
-credits", "Raise credit note" and "Approve as charged" keep the scripted flow: the endpoints exist
-(`POST /score/from-udr`, `POST /scorecards/monthly`, `POST /invoices/{id}/lines/decide`,
+(`created_at` is on the scorecard row but not in the list response — `shapeLiveVendors` reads it when it
+is there, so adding the column to the list response is all that tile needs). A component the card did not
+report, and a vendor with a contract parameter set but no scorecard, are unscored rather than zero: a
+0 would sit in "below 70" and drag the average score down with a number no engine published. "Rebuild
+scorecards", "Claim credits", "Raise credit note" and "Approve as charged" keep the scripted flow: the
+endpoints exist (`POST /score/from-udr`, `POST /scorecards/monthly`, `POST /invoices/{id}/lines/decide`,
 `POST /approvals/{id}/decide`) but they write to the production database and are not wired.
 
 ## Buildings — live data
@@ -181,6 +190,70 @@ the building's location, which is what actually carries its regulation pack.
 Not sourced, and shown as such: vector-similarity badges and document file sizes (no service this panel
 reaches holds either), and which vendor serves which building on the diagram.
 
+## Maintenance — live data
+
+The Maintenance page reads `svc-work-order-management` through
+`apps/frontend/src/logic/maintenanceLive.js` (wrappers in `src/api/workOrder.js`). Reads only;
+nothing on the page writes to the backend.
+
+- `GET /api/maintenance/overview` — the four cards across the top, each with the sub-counts
+  printed beneath it. A decision is statutory two ways and the response names the certificate
+  forcing each, so the badge on a row is the record's claim rather than the page's.
+- `GET /api/maintenance/decisions?group_by=state|source|building|vendor` — the decisions grid.
+  Grouping, the state filter and the source filter are all **server** parameters: changing
+  "Group by" or a filter chip re-reads rather than re-cutting rows the server grouped another
+  way, so the counts above the grid never describe a different set from the rows beneath it.
+  Each group carries its own blocked / to-raise / deviating counts and its total.
+- `GET /api/maintenance/inspection-intelligence` — the corpus header and the four cards.
+- `GET /api/maintenance/inspections` — the reports themselves, behind "Open all reports".
+- `GET /api/maintenance/ppm/contracts` — PPM health, one row per contract; the state
+  (behind plan / watch / to plan) is the backend's rule and is never re-derived here.
+- `GET /api/maintenance/inspection-intelligence/last-read` — the "Last run" stamp.
+- `POST /api/maintenance/ask` and `GET /api/maintenance/ask/suggestions?page=…` — the Ask bar
+  and its chips, so adding a question needs no frontend release.
+
+**Scope is the caller's, and the server decides it.** None of these reads sends a
+`building_id`: each returns every building the account may see — the whole company for an
+admin or superadmin, the allocation for a user, nothing for a user allocated to none. The page
+says which of those applies beside the source pill, and an empty queue for someone allocated
+to nothing reads "you are allocated to no buildings", never "no decision is owed". Those are
+different facts and only one of them is good news.
+
+**There is no seed fallback behind this page** (`src/data/hoistra-maintenance.js` is deleted).
+A card, a decision, a contract row or a report figure is on screen because a read returned it.
+`answerable: false` is rendered as a dash and its reason, never as a zero — the warranty card
+on a database with no warranty terms says so rather than claiming nothing is claimable. A group
+where nothing carries an estimate totals "—", not £0.
+
+**Two boundaries this page cannot draw itself, and says so instead:**
+
+1. ~~A superadmin reads across companies here.~~ **Fixed.** Every `/api/maintenance` route now
+   takes `organization_id`, the same parameter svc-operations-intelligence has ("Superadmin
+   only: act as this company"), resolved by `services/principal.scope_building_ids`. Before
+   it, the raw-SQL routes turned an unrestricted caller into `building_ids = None`, which
+   `_scope_sql` reads as *no predicate at all* — the whole database rather than the whole
+   company. Two companies therefore showed identical maintenance figures because they were
+   identical, and an **admin** got every other tenant's decisions too. Now: an allocation is
+   still the boundary and an acting company can never widen it; an unrestricted caller is
+   narrowed to their own company's buildings; a superadmin naming a company gets that one; a
+   superadmin naming none still reads across all of them, and the page says so rather than
+   letting a platform total pass for one company's. Anyone else naming another company gets
+   403, not silently their own.
+2. **`decisions.total` is limit-dependent.** The work-orders query and
+   `_decisions_from_approvals` are both capped by `limit`, and `total = len(out)` is taken
+   after that — so it is "how many the limit let through", not "what exists", despite the
+   comment above it. `/overview` calls the same function with `limit=1000` while the route
+   caps a client at 500, which is why the card read 374 and the grid read 275 of the same
+   queue. The page now asks for 500 so the two agree below that; past 500 they will diverge
+   again until `total` is a `COUNT(*)` over the scope rather than a `len()` of a truncated list.
+
+Not wired, deliberately: `POST /api/maintenance/inspection-intelligence/read`. The panel
+computes live on every read, so "Re-read inspection reports" re-reads it; the POST only stamps
+the run into `plenum_cafm.inspection_read_runs`, which is a write. The per-decision actions
+(approve, hold, swap vendor) have routes — `POST /api/work-orders/{id}/approve`,
+`PATCH /api/work-orders/{id}/status`, `PATCH /api/work-orders/{id}` with a `vendor` — and are
+unwired for the same reason, so a row offers no button rather than one that does nothing.
+
 ## Ask bars — orchestrator
 
 The ask bar on the compliance console, the Vendors page and the Buildings page goes to the orchestrator
@@ -207,9 +280,11 @@ The navigator follows the Plenum AI shell's model (`apps/frontend/src/logic/sess
   `/api/energy/anomalies`, `/api/contract-performance/saved-space/summary` and `/api/approvals`, plus the
   saved spaces in `plenum_cafm.saved_spaces` through svc-udr's `GET/POST/PATCH/DELETE /api/spaces` — the one
   navigator action that writes, on the user's click.
-- **Custom reports** pin a session's question and re-run it on a cadence through
-  `POST /api/workflow/run-stateful` (fresh `report-…` thread per refresh), keeping the last three answers.
-  `plenum_cafm.pinned_run` has no route, so reports live in the browser and re-run while the app is open.
+- **Custom reports** pin a session's question and re-run it on a cadence. They are server-owned
+  (svc-operations-intelligence's `/api/reports`), refreshed by the server's own scheduler whether or not a
+  tab is open. A report is personal — every route filters on the caller's `user_id` — so the client stamps
+  the account each read was made for and shows a card only to that account, clears the slice on sign-out
+  and on a sign-in that swaps accounts in one tab, and re-reads it there rather than waiting for its poll.
 
 ## Notes
 

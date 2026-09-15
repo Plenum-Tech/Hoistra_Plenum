@@ -5,9 +5,15 @@
 // Reads only, for now. assetsLive.js draws the Assets page's live asset register from
 // assets()+workOrders(); maintenanceLive.js draws the Maintenance page's live decisions grid
 // and KPI tiles from workOrders()+dashboardStats().
-import { BASES, apiFetch } from './client.js';
+import { BASES, apiFetch, currentOrgId } from './client.js';
 
 const B = BASES.workOrder;
+
+// The company a superadmin is acting as. Same contract svc-operations-intelligence has
+// ("Superadmin only: act as this company"); svc-work-order-management takes it too now, and
+// without it a superadmin read every company's rows whatever the header said they were
+// viewing — two companies showed identical figures because they were identical.
+const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
 
 export const workOrderApi = {
   // plenum_cafm.assets, portfolio-wide: every asset the caller may see across all their
@@ -38,5 +44,51 @@ export const workOrderApi = {
   dashboardStats: () => apiFetch(B, '/api/dashboard/stats'),
   // PPM schedules (plenum_cafm.maintenance_plans) currently due — no vendor/contract/visit
   // history on this table; see MEMORY / the Maintenance page's PPM health note.
-  ppmDue: () => apiFetch(B, '/api/ppm/due')
+  ppmDue: () => apiFetch(B, '/api/ppm/due'),
+
+  // ── Maintenance (/api/maintenance) ──────────────────────────────────────
+  // The purpose-built reads behind the Maintenance screen (routes/maintenance.py, docs in
+  // docs/api/assets-and-maintenance-api.md and inspection-intelligence-and-ppm-api.md).
+  // Every one is building-scoped by the caller's own allocation: no building_id means every
+  // building this account may see — the whole company for an admin, the allocation for a
+  // user, nothing for a user allocated to nothing. Passing a building_id you are not
+  // allocated to is a 403, refused rather than answered empty.
+
+  // The four cards across the top, with the sub-counts printed beneath each.
+  maintenanceOverview: (query) => apiFetch(B, '/api/maintenance/overview', { query: withOrg(query) }),
+  // The decisions grid. `group_by` (state | source | building | vendor) is done server-side
+  // and comes back as `groups`, each with its own counts and total — the page's "Group by"
+  // control is that parameter, not a client-side regroup.
+  maintenanceDecisions: (query) =>
+    apiFetch(B, '/api/maintenance/decisions', { query: withOrg(Object.assign({ limit: 200 }, query || {})), timeoutMs: 30000 }),
+  // The inspection-intelligence panel: the corpus header and the four cards. A card this
+  // database cannot answer carries `answerable: false` and a reason, never a zero.
+  inspectionIntelligence: (query) =>
+    apiFetch(B, '/api/maintenance/inspection-intelligence', { query: withOrg(query) }),
+  // One card with every row behind it: unconverted-recommendations | corroborated-anomalies
+  // | warranted-findings | poorly-graded.
+  inspectionIntelligenceCard: (card, query) =>
+    apiFetch(B, '/api/maintenance/inspection-intelligence/' + encodeURIComponent(card), { query: withOrg(query) }),
+  // When the reports were last re-read. `last_read` is null before the first run — that is
+  // "no read has been recorded", not zero.
+  lastInspectionRead: () => apiFetch(B, '/api/maintenance/inspection-intelligence/last-read'),
+  // PPM health, one row per contract rather than per vendor.
+  ppmContracts: (query) =>
+    apiFetch(B, '/api/maintenance/ppm/contracts', { query: withOrg(Object.assign({ limit: 200 }, query || {})) }),
+  // The individual inspection reports behind the panel.
+  maintenanceInspections: (query) =>
+    apiFetch(B, '/api/maintenance/inspections', { query: withOrg(Object.assign({ limit: 200 }, query || {})) }),
+  // The Ask bar. Answers are composed from rows the engine functions returned — `source`
+  // names the endpoint each figure came from — and `understood: false` is a normal 200
+  // carrying the list of questions it can answer.
+  maintenanceAsk: (question, page, query) =>
+    apiFetch(B, '/api/maintenance/ask', { method: 'POST', body: { question: question, page: page || null }, query: withOrg(query), timeoutMs: 30000 }),
+  // The chips, served rather than hard-coded: page = maintenance | inspection.
+  maintenanceAskSuggestions: (page) =>
+    apiFetch(B, '/api/maintenance/ask/suggestions', { query: page ? { page: page } : {} })
+
+  // NOT wired, deliberately: POST /api/maintenance/inspection-intelligence/read. The panel
+  // computes live on every read, so the button is not what makes the numbers appear — the
+  // POST only INSERTs a row into plenum_cafm.inspection_read_runs to stamp the run. That is
+  // a write against the production database, and nothing on this page writes.
 };

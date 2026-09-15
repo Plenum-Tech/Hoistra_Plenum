@@ -5,6 +5,19 @@ import React from 'react';
 export default function Maintenance({ vals }) {
   return (
     <>
+      {/* Nothing answered at all: one panel saying which service, not four empty ones. */}
+      <div style={{ display: vals.mxEmptyShow, marginTop: "32px", padding: "26px 22px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
+        <div style={{ fontSize: "14px" }}>
+          {vals.mxEmptyTitle}
+        </div>
+        <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "7px 0 0", maxWidth: "76ch", lineHeight: "1.55" }}>
+          {vals.mxEmptyNote}
+        </p>
+        <div className="hv4" onClick={vals.mxLiveRetry} style={{ display: vals.mxLiveRetryShow === "none" ? "none" : "inline-block", marginTop: "13px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
+          {"Try the read again"}
+        </div>
+      </div>
+      <div style={{ display: vals.mxBodyShow }}>
       <div style={{ marginTop: "32px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "9px", marginBottom: "12px", flexWrap: "wrap" }}>
           <div style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", flex: "1", minWidth: "180px" }}>
@@ -12,8 +25,9 @@ export default function Maintenance({ vals }) {
           </div>
           {(vals.modFilters || []).map((f, $index) => (
             <React.Fragment key={$index}>
-              <div onClick={f.click} style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "20px", cursor: "pointer", border: `1px solid ${f.border}`, color: f.fg, background: f.bg }}>
-                {f.label}
+              <div onClick={f.click} style={{ display: "inline-flex", alignItems: "baseline", gap: "6px", fontSize: "11px", padding: "4px 10px", borderRadius: "20px", cursor: "pointer", border: `1px solid ${f.border}`, color: f.fg, background: f.bg }}>
+                <span>{f.label}</span>
+                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", opacity: "0.75" }}>{f.n}</span>
               </div>
             </React.Fragment>
           ))}
@@ -24,6 +38,20 @@ export default function Maintenance({ vals }) {
             <span>{vals.mxLiveSourceLabel}</span>
             <span className="hv11" onClick={vals.mxLiveRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.mxLiveRetryShow }}>{"Retry"}</span>
           </span>
+          <span title={vals.mxLiveSourceDetail} style={{ marginLeft: "8px", fontSize: "10.5px", color: "var(--color-neutral-500)", display: vals.mxScopeShow }}>
+            {vals.mxScope}
+          </span>
+        </div>
+        {/* A superadmin reads across companies on this service, so the company named in the
+            header is not the scope of these numbers. Said plainly rather than left to be
+            noticed by two screenshots looking the same. */}
+        <div style={{ display: vals.mxCrossShow, padding: "11px 14px", marginBottom: "12px", borderRadius: "9px", background: "var(--st-warn-bg)", borderLeft: "3px solid var(--st-warn)", fontSize: "11.5px", color: "var(--color-text)", lineHeight: "1.55", maxWidth: "92ch" }}>
+          {vals.mxCrossNote}
+        </div>
+        {/* Routes this page reads that the running service does not serve. Said in full,
+            because "reads failed" sends a reader hunting for a bug in the data. */}
+        <div style={{ display: vals.mxSkewShow, padding: "11px 14px", marginBottom: "12px", borderRadius: "9px", background: "var(--st-warn-bg)", borderLeft: "3px solid var(--st-warn)", fontSize: "11.5px", color: "var(--color-text)", lineHeight: "1.55", maxWidth: "92ch" }}>
+          {vals.mxSkewNote}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
           <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", flex: "1", minWidth: "160px" }}>
@@ -57,7 +85,7 @@ export default function Maintenance({ vals }) {
                   <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", flex: "1 1 200px", minWidth: "0" }}>
                     {grp.desc}
                   </span>
-                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+                  <span title={grp.totalNote} style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: grp.totalColor, whiteSpace: "nowrap" }}>
                     {grp.total}
                   </span>
                   <div className="hv15" onClick={grp.bulkRun} style={{ display: grp.bulkShow, alignItems: "center", gap: "6px", fontSize: "11px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -86,6 +114,9 @@ export default function Maintenance({ vals }) {
                               <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: d.color, background: d.bg }}>
                                 {d.state}
                               </span>
+                              <span title={d.statNote} style={{ display: d.statShow, fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", whiteSpace: "nowrap", color: "var(--st-risk)", background: "var(--st-risk-bg)" }}>
+                                {"statutory"}
+                              </span>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "5px", fontSize: "11.5px" }}>
                               <i className={`ph ${d.srcIcon}`} style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
@@ -113,7 +144,7 @@ export default function Maintenance({ vals }) {
                             <div style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "8px" }}>
                               {"Estimate"}
                             </div>
-                            <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", marginTop: "3px" }}>
+                            <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", marginTop: "3px", color: d.estColor }}>
                               {d.est}
                             </div>
                           </div>
@@ -135,8 +166,8 @@ export default function Maintenance({ vals }) {
             </React.Fragment>
           ))}
         </div>
-        <div style={{ padding: "16px", fontSize: "12px", color: "var(--color-neutral-500)", display: vals.mxDecEmpty }}>
-          {"No decisions match this filter."}
+        <div style={{ padding: "18px 16px", fontSize: "12px", color: "var(--color-neutral-400)", lineHeight: "1.55", maxWidth: "76ch", display: vals.mxDecEmpty }}>
+          {vals.mxDecEmptyNote}
         </div>
       </div>
       <div style={{ marginTop: "36px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderTop: "3px solid var(--color-accent)", overflow: "hidden" }}>
@@ -187,10 +218,13 @@ export default function Maintenance({ vals }) {
           <div style={{ fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
             {"What the reports say together · click to open the reading"}
           </div>
+          <div style={{ fontSize: "11px", color: "var(--color-neutral-400)", marginTop: "6px", lineHeight: "1.5", display: vals.mxInsightNoteShow }}>
+            {vals.mxInsightNote}
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "10px", marginTop: "9px" }}>
             {(vals.mxInsights || []).map((i, $index) => (
               <React.Fragment key={$index}>
-                <div className="hv14" onClick={i.ask} style={{ padding: "13px 14px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-divider)", position: "relative", overflow: "hidden", cursor: "pointer" }}>
+                <div className="hv14" onClick={i.ask} title={i.method} style={{ padding: "13px 14px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-divider)", position: "relative", overflow: "hidden", cursor: i.askShow }}>
                   <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "2px", background: i.color }}></div>
                   <div style={{ fontSize: "24px", lineHeight: "1", color: i.color }}>
                     {i.n}
@@ -254,9 +288,9 @@ export default function Maintenance({ vals }) {
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: "0" }}>
                     <div style={{ flex: "1", height: "5px", borderRadius: "3px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: p.pct, background: p.color }}></div>
+                      <div style={{ height: "100%", width: p.bar, background: p.color }}></div>
                     </div>
-                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap" }}>
+                    <span title={p.planNote} style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap" }}>
                       {p.done}
                     </span>
                   </div>
@@ -284,10 +318,14 @@ export default function Maintenance({ vals }) {
               </div>
             </React.Fragment>
           ))}
+          <div style={{ padding: "18px 14px", fontSize: "12px", color: "var(--color-neutral-400)", lineHeight: "1.55", maxWidth: "76ch", display: vals.mxPpmEmpty }}>
+            {vals.mxPpmEmptyNote}
+          </div>
         </div>
       </div>
       <div style={{ fontSize: "11px", color: "var(--color-neutral-600)", marginTop: "12px", lineHeight: "1.55" }}>
-        {"Visits from the contract PPM schedule; reports are inspection reports ingested against a completed visit. A visit without a report counts as done but unverified."}
+        {vals.mxPpmRule || "Visits from the contract PPM schedule; reports are inspection reports ingested against a completed visit. A visit without a report counts as done but unverified."}
+      </div>
       </div>
     </>
   );

@@ -79,6 +79,10 @@ def _unauthorized(error: str, reason: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_detail(error, reason))
 
 
+def _forbidden(error: str, reason: str, **extra) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_detail(error, reason, **extra))
+
+
 def _from_me(payload: dict[str, Any]) -> Principal:
     user = payload.get("user") or {}
     ids = user.get("building_ids")
@@ -206,3 +210,94 @@ def assert_building(principal: Principal, building_id, *, action: str = "read") 
             "building_not_allocated", building_id=str(building_id) if building_id else None,
         ),
     )
+
+
+def is_superadmin(principal: Principal) -> bool:
+    return (principal.role or "").strip().lower() == "superadmin"
+
+
+def effective_organization_id(principal: Principal, requested_org=None):
+    """The company this request acts for, with the same rule scope_building_ids applies.
+
+    Only a superadmin may name a company other than their own; anyone else asking gets 403
+    rather than silently their own, so a client sending the wrong id learns about it. Split
+    out because three things need the acting company and not the caller's: narrowing a read,
+    stamping a row that records the read, and refusing a cross-company request outright.
+    Stamping the CALLER's organization_id on a row about another company's data mislabels
+    it, and the row is what the next read is filtered by.
+    """
+    org = principal.organization_id
+    if requested_org is None:
+        return org
+    try:
+        requested = UUID(str(requested_org))
+    except (ValueError, TypeError):
+        raise _forbidden("That is not a company id.", "wrong_organization") from None
+    if requested != org and not is_superadmin(principal):
+        raise _forbidden(
+            "You can only work within your own company.", "wrong_organization",
+            your_organization_id=str(org) if org else None,
+        )
+    return requested
+
+
+async def scope_building_ids(
+    session, principal: Principal, requested_org: UUID | str | None = None,
+) -> list[UUID] | None:
+    """The buildings a request covers, honouring an acting company only from a superadmin.
+
+    The raw-SQL routes on this service narrow by a list of building ids (``_scope_sql`` in
+    services/maintenance.py), and ``None`` there means "no predicate at all". That is the
+    whole database, not the whole company — the same bug ``scope_select`` above was written
+    to close on the ORM side, and it was still open on this one: an admin listing decisions
+    got every other tenant's rows, and a superadmin "viewing as" a company got them too,
+    because nothing carried the company being viewed.
+
+    So this resolves the buildings the caller may see into a list:
+
+    * A caller with an allocation gets their allocation. An organisation cannot widen it —
+      asking to act as a company you hold no buildings in still shows you only your own.
+    * An unrestricted caller gets every building in the effective company.
+    * A superadmin naming no company keeps reading across all of them, which is the one
+      caller meant to and what every existing call already does.
+    * No company at all resolves to nothing rather than everything: a tenancy boundary
+      fails closed.
+
+    Anyone but a superadmin naming a company other than their own gets 403 rather than
+    silently their own — a client sending the wrong id has a bug worth surfacing, and
+    substituting quietly hides it until it matters. Same rule, reason and status as
+    operations-intelligence's ``scope_for``, so one client handles both services.
+    """
+    org = principal.organization_id
+    requested = None
+    if requested_org is not None:
+        try:
+            requested = UUID(str(requested_org))
+        except (ValueError, TypeError):
+            raise _forbidden("That is not a company id.", "wrong_organization") from None
+    if requested is not None and requested != org:
+        if not is_superadmin(principal):
+            raise _forbidden(
+                "You can only work within your own company.", "wrong_organization",
+                your_organization_id=str(org) if org else None,
+            )
+        org = requested
+
+    # An allocation is the narrower boundary and always wins; an acting company never widens it.
+    if principal.building_ids is not None:
+        return list(principal.building_ids)
+
+    # A superadmin who has NOT named a company keeps reading across all of them. Keyed on
+    # whether one was asked for, not on whether they have one of their own — a superadmin
+    # belongs to a company like anyone else, and reading that company's rows by default
+    # would be a silent behaviour change for every existing caller.
+    if requested is None and is_superadmin(principal):
+        return None
+
+    if org is None:
+        return []
+
+    rows = await session.execute(
+        sa_select(_BUILDINGS.c.building_id).where(_BUILDINGS.c.organization_id == org)
+    )
+    return [UUID(str(r[0])) for r in rows.all()]

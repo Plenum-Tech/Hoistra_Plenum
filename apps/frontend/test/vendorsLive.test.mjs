@@ -127,7 +127,7 @@ test('with nothing loaded, nothing is asserted', () => {
   assert.equal(m.month, null);
 });
 
-test('trend vocabulary follows the seed: improving / declining / stable', () => {
+test('the trend word is improving / declining / stable, from the card delta', () => {
   assert.equal(trendOf(8.79), 'improving');
   assert.equal(trendOf(-38.73), 'declining');
   assert.equal(trendOf(0.4), 'stable');
@@ -258,7 +258,7 @@ test('coverage lists what is on file and what the pack still expects', () => {
   assert.equal(gap.req, 'Mandatory');
   assert.equal(gap.exp, '—');
   const pl = R.certs.find((c) => c.name === 'Public Liability Insurance');
-  assert.equal(pl.status, 'Expiring');                                   // Due for Renewal → the seed's vocabulary
+  assert.equal(pl.status, 'Expiring');                                   // Due for Renewal → the tab's vocabulary
   assert.equal(pl.exp, '31 Oct 2026');
   assert.equal(pl.req, 'Preferred');                                     // not a UK vendor-pack type
   const gs = R.certs.find((c) => c.name === 'Gas Safe Registration Certificate (Company)');

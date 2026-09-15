@@ -23,6 +23,29 @@ from src.services import principal as P
 MINE, THEIRS = uuid4(), uuid4()
 
 
+class _FakeSession:
+    """Just enough of AsyncSession for scope_building_ids: one execute returning rows, and
+    a record of the organisation it was asked about."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.asked_for = None
+
+    async def execute(self, stmt):
+        for clause in getattr(stmt, "_where_criteria", ()):
+            right = getattr(clause, "right", None)
+            if right is not None and getattr(right, "value", None) is not None:
+                self.asked_for = right.value
+        rows = self._rows
+
+        class _R:
+            @staticmethod
+            def all():
+                return rows
+
+        return _R()
+
+
 def make(building_ids, role="user"):
     return P.Principal(user_id=uuid4(), email="x@example.com", organization_id=None,
                        role=role, building_ids=building_ids)
@@ -67,7 +90,8 @@ def test_the_ppm_scheduler_is_no_longer_open():
     assert client.get("/api/ppm/due").status_code == 401
 
 
-def test_asking_for_a_building_you_are_not_allocated_to_is_refused(monkeypatch):
+@pytest.mark.asyncio
+async def test_asking_for_a_building_you_are_not_allocated_to_is_refused(monkeypatch):
     """403, not an empty list: "you may not see this" and "there is nothing here" are
     different answers and the screen should not confuse them."""
     from fastapi import HTTPException
@@ -75,16 +99,159 @@ def test_asking_for_a_building_you_are_not_allocated_to_is_refused(monkeypatch):
     from src.api.routes.maintenance import _scope
 
     with pytest.raises(HTTPException) as exc:
-        _scope(make((MINE,)), str(THEIRS))
+        await _scope(None, make((MINE,)), str(THEIRS))
     assert exc.value.status_code == 403
 
 
-def test_naming_one_of_your_own_buildings_narrows_to_it():
+@pytest.mark.asyncio
+async def test_an_admin_cannot_read_another_company_by_naming_its_building():
+    """assert_building returns early for ANY caller whose building_ids is None — which is
+    every admin, not only a superadmin — so on its own it let an admin of one company read
+    another company's rows by naming one of their buildings. The named building has to be one
+    the caller's own company holds."""
+    from fastapi import HTTPException
+
     from src.api.routes.maintenance import _scope
 
-    assert _scope(make((MINE, THEIRS)), str(MINE)) == [MINE]
-    assert _scope(make(None), None) is None
-    assert _scope(make(()), None) == []
+    org = uuid4()
+    admin = P.Principal(user_id=uuid4(), email="a@example.com", organization_id=org,
+                        role="admin", building_ids=None)
+    # The company holds MINE and nothing else.
+    session = _FakeSession([(MINE,)])
+    with pytest.raises(HTTPException) as exc:
+        await _scope(session, admin, str(THEIRS))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["reason"] == "building_not_allocated"
+
+    # Their own building still resolves.
+    assert await _scope(_FakeSession([(MINE,)]), admin, str(MINE)) == [MINE]
+
+
+@pytest.mark.asyncio
+async def test_last_read_is_scoped_to_one_company():
+    """It answered from the whole table, so a page showed whichever tenant ran last. No
+    company resolves to no row rather than to everyone's."""
+    from src.services import maintenance as mx_svc
+
+    assert await mx_svc.last_inspection_read(None, organization_id=None) is None
+
+
+def test_the_acting_company_is_the_one_a_row_is_stamped_with():
+    """A run recording another company's data must not be labelled with the caller's own —
+    last_inspection_read filters on that column."""
+    from fastapi import HTTPException
+
+    org, other = uuid4(), uuid4()
+    user = P.Principal(user_id=uuid4(), email="u@example.com", organization_id=org,
+                       role="admin", building_ids=None)
+    su = P.Principal(user_id=uuid4(), email="s@example.com", organization_id=org,
+                     role="superadmin", building_ids=None)
+
+    assert P.effective_organization_id(user, None) == org
+    assert P.effective_organization_id(user, str(org)) == org
+    assert P.effective_organization_id(su, str(other)) == other, "a superadmin may act as another"
+    with pytest.raises(HTTPException) as exc:
+        P.effective_organization_id(user, str(other))
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_naming_one_of_your_own_buildings_narrows_to_it():
+    """A named building short-circuits before any company lookup, so no session is touched."""
+    from src.api.routes.maintenance import _scope
+
+    assert await _scope(None, make((MINE, THEIRS)), str(MINE)) == [MINE]
+    # An allocation is the boundary whether or not a company was named.
+    assert await _scope(None, make((MINE,)), None) == [MINE]
+    assert await _scope(None, make(()), None) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unrestricted_caller_is_narrowed_to_their_own_company():
+    """This is the hole the acting-company parameter closed. `building_ids is None` means
+    "the whole company" — it used to reach the engines as None, which is no predicate at
+    all, and that is the whole database. Two companies read the same rows."""
+    from src.api.routes.maintenance import _scope
+
+    org, b1, b2 = uuid4(), uuid4(), uuid4()
+    session = _FakeSession([(b1,), (b2,)])
+    admin = P.Principal(user_id=uuid4(), email="a@example.com", organization_id=org,
+                        role="admin", building_ids=None)
+    assert await _scope(session, admin, None) == [b1, b2]
+    assert session.asked_for == org
+
+
+@pytest.mark.asyncio
+async def test_a_superadmin_naming_a_company_is_narrowed_to_it():
+    """The whole point of the parameter. Without it a superadmin read every company's rows
+    whatever the client's header said it was viewing, so two companies looked identical."""
+    from src.api.routes.maintenance import _scope
+
+    theirs, b = uuid4(), uuid4()
+    session = _FakeSession([(b,)])
+    su = P.Principal(user_id=uuid4(), email="s@example.com", organization_id=uuid4(),
+                     role="superadmin", building_ids=None)
+    assert await _scope(session, su, None, str(theirs)) == [b]
+    assert session.asked_for == theirs, "the company asked for, not the one they belong to"
+
+
+@pytest.mark.asyncio
+async def test_a_superadmin_naming_no_company_still_reads_across_all_of_them():
+    """The existing behaviour, kept: it is the one caller meant to, and every call that does
+    not name a company is unchanged by this."""
+    from src.api.routes.maintenance import _scope
+
+    su = P.Principal(user_id=uuid4(), email="s@example.com", organization_id=uuid4(),
+                     role="superadmin", building_ids=None)
+    assert await _scope(_FakeSession([]), su, None) is None
+
+
+@pytest.mark.asyncio
+async def test_anyone_but_a_superadmin_naming_another_company_is_refused():
+    """403 rather than silently their own: a client sending the wrong id has a bug, and
+    substituting quietly hides it until it matters."""
+    from fastapi import HTTPException
+
+    from src.api.routes.maintenance import _scope
+
+    admin = P.Principal(user_id=uuid4(), email="a@example.com", organization_id=uuid4(),
+                        role="admin", building_ids=None)
+    with pytest.raises(HTTPException) as exc:
+        await _scope(_FakeSession([]), admin, None, str(uuid4()))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["reason"] == "wrong_organization"
+
+
+@pytest.mark.asyncio
+async def test_naming_your_own_company_is_allowed_and_narrows_the_same_way():
+    from src.api.routes.maintenance import _scope
+
+    org, b = uuid4(), uuid4()
+    session = _FakeSession([(b,)])
+    admin = P.Principal(user_id=uuid4(), email="a@example.com", organization_id=org,
+                        role="admin", building_ids=None)
+    assert await _scope(session, admin, None, str(org)) == [b]
+
+
+@pytest.mark.asyncio
+async def test_an_acting_company_never_widens_an_allocation():
+    """A user allocated to two buildings stays on those two whichever company is named —
+    an override that could widen a boundary would not be a boundary."""
+    from src.api.routes.maintenance import _scope
+
+    su = P.Principal(user_id=uuid4(), email="s@example.com", organization_id=uuid4(),
+                     role="superadmin", building_ids=(MINE,))
+    assert await _scope(_FakeSession([(THEIRS,)]), su, None, str(uuid4())) == [MINE]
+
+
+@pytest.mark.asyncio
+async def test_a_caller_with_no_company_at_all_matches_nothing():
+    """Failing closed is the only safe default for a tenancy boundary."""
+    from src.api.routes.maintenance import _scope
+
+    nobody = P.Principal(user_id=uuid4(), email="n@example.com", organization_id=None,
+                         role="admin", building_ids=None)
+    assert await _scope(_FakeSession([]), nobody, None) == []
 
 
 # ── the state machine ─────────────────────────────────────────────────────────

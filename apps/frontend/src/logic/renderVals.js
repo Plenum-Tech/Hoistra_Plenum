@@ -1,6 +1,6 @@
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, VP, PKG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER } from './constants.js';
+import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER } from './constants.js';
 import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
@@ -129,9 +129,15 @@ export const renderValsMethods = {
     // nobody sees another account's questions, tasks or pinned reports.
     const myEmail = (s.account && s.account.email) ? String(s.account.email).trim().toLowerCase() : null;
     const mySessions = myEmail ? s.sessions.filter((r) => r.owner === myEmail) : [];
-    // Reports are server-owned and already scoped to the caller (every route in
-    // api/routes/reports.py filters on s.user_id) — no client-side owner filter needed.
-    const myCards = flattenCards(s.reports);
+    // Reports are personal: every route in api/routes/reports.py filters on s.user_id, so
+    // the array in state holds the rows of whoever was signed in when it was READ — which
+    // is not necessarily who is looking now. rpLoad stamps that account on the read, and a
+    // stamp that is not the current one is somebody else's list: it is not rendered, and
+    // the sign-in that swapped accounts has already fired the read that replaces it. No
+    // stamp (nothing read yet, or the slice cleared on the switch) shows nothing, the same
+    // safe default mySessions takes.
+    const myReports = myEmail && s.reportsOwner === myEmail ? (s.reports || []) : [];
+    const myCards = flattenCards(myReports);
     // The pages that render the live orchestrator transcript: the dock pages (in their dock)
     // and the chat page (as the page). Home is a dock page too, but it has no dock until a
     // question or a carried-over task opens one, so it only counts once that has happened.
@@ -149,9 +155,11 @@ export const renderValsMethods = {
         if (low.includes("compliance console")) { window.scrollTo(0, 0); return this.setState({ view: "cc", navOpen: true, detail: null, queueOpen: false }); }
         if (low.includes("open compliance")) return this.openModule("compliance");
         if (low.includes("open energy")) return this.openModule("energy");
-        if (low.includes("open vendor performance")) return this.openModule("vendors");
+        // Both vendor buttons go to the Vendors page, which is read from
+        // svc-operations-intelligence — the module table for vendors is the seed one.
+        if (low.includes("open vendor performance")) { window.scrollTo(0, 0); return this.setState({ view: "vp", navOpen: true, detail: null, queueOpen: false }); }
         if (low.includes("work the queue")) return this.setState({ queueOpen: true, view: "home" });
-        if (low.includes("open vendor record")) return this.openModule("vendors");
+        if (low.includes("open vendor record")) { window.scrollTo(0, 0); return this.setState({ view: "vp", navOpen: true, detail: null, queueOpen: false }); }
         const subject = (detail && detail.title) || (ctx && ctx.title) || this.ctxLabel();
         const vendorName = (detail && detail.fields || []).reduce((a, f) => /vendor|contractor/i.test(f.l) ? f.v : a, "the responsible vendor");
         const spec = ACTION_SPECS.find((sp) => sp.m && sp.m.some((rx) => rx.test(low)));
@@ -184,41 +192,29 @@ export const renderValsMethods = {
     const mod = modKey ? MODULES[modKey] : null;
     const answer = s.answerKey ? D.answers[s.answerKey] : null;
     const rep = myCards.find((c) => c.id === s.reportKey) || null;
-    // Vendors: the live model from svc-operations-intelligence once it has loaded, the seed
-    // otherwise (vendorsLive.js). Both expose the same shape — a directory, a record per
-    // vendor and the scorecard rows behind each published score — so the vp* section renders
-    // either without knowing which it holds.
+    // Vendors: the live model from svc-operations-intelligence (vendorsLive.js), and nothing
+    // else. There is no seed fallback — a vendor, a score, a term, a coverage figure is on
+    // this page only because a backend read answered with it. When nothing answered the
+    // directory is empty and every figure reads "—", which is the truth about the register
+    // rather than a dataset that was never in it.
     const vm = this.vpModel();
-    const VD = vm.live
-      ? {
-          vendors: vm.vendors, V: vm.V, pkgOf: vm.pkgOf,
-          // The published score is the engine's; the rows are its own components.
-          score: (id) => { const R = vm.V[id]; return R ? { raw: R.raw, score: R.score, rows: R.rows } : { raw: 0, score: null, rows: [] }; }
-        }
-      : {
-          vendors: D.vendors, V: VP.V, pkgOf: (id) => PKG[id] || "Other",
-          // The rows ARE the score: sum them, then apply the accreditation cap.
-          score: (id) => {
-            const rec = VP.V[id];
-            if (!rec) return { raw: 0, score: 0, rows: [] };
-            const sc = VP.scorecard(rec);
-            const vend = D.vendors.find((x) => x.id === id) || {};
-            return { raw: sc.raw, score: vend.accred === "Lapsed" ? Math.min(60, sc.raw) : sc.raw, rows: sc.rows };
-          }
-        };
+    const VD = {
+      vendors: vm.vendors, V: vm.V, pkgOf: vm.pkgOf,
+      // The published score is the engine's; the rows are its own components.
+      score: (id) => { const R = vm.V[id]; return R ? { raw: R.raw, score: R.score, rows: R.rows } : { raw: null, score: null, rows: [] }; }
+    };
     const firstId = VD.vendors.length ? VD.vendors[0].id : null;
-    // Seed click targets name vendors by id; when the live directory holds no such id the
+    // Tile and stat clicks name a vendor by id; when the directory holds no such id the
     // computed alternative is used instead.
     const idOr = (id, alt) => (VD.V[id] ? id : (alt !== undefined && alt !== null ? alt : firstId));
-    // Live vendors carry the compliance engine's block state; the seed infers it from the
-    // accreditation label.
+    // Vendors carry the compliance engine's block state.
     const capOf = (v) => (v.blocked !== undefined ? !!v.blocked : v.accred === "Lapsed");
     const N = (x) => (x === null || x === undefined ? "—" : String(x));
     const vpV = VD.vendors.find((x) => x.id === s.vpVendor) || VD.vendors[0] || null;
     const vpR = vpV ? (VD.V[vpV.id] || null) : null;
     const vpScore = VD.score;
-    const SC = vpR ? vpScore(vpV.id) : { rows: [], raw: 0, score: null };
-    const score = vpR ? SC.score : 0;
+    const SC = vpR ? vpScore(vpV.id) : { rows: [], raw: null, score: null };
+    const score = vpR ? SC.score : null;
     // The refresh of the card in view (newest unless an older one was picked).
     const repRun = rep ? ((rep.runs || [])[s.reportRunIdx || 0] || (rep.runs || [])[0] || rep.latest_run || null) : null;
     // Spaces: the four engines with their live figures plus the saved spaces (spacesLive.js).
@@ -789,34 +785,62 @@ export const renderValsMethods = {
 
       isVP: s.signedIn && s.view === "vp",
       vpRebuild: () => this.runAction("Rebuild scorecards", "Vendors"),
-      vpWeights: () => this.flash(vm.live && vm.weightsText
-        ? vm.weightsText
-        : "Weights: SLA response 25, SLA completion 25, first-time fix 20, recall rate 15, invoice accuracy 15. Each metric has its own percentage target; shortfall is penalised at three times its relative size. L1 misses weigh 3×, L3 misses 0.5×. A mandatory accreditation lapse puts a ceiling of 60 on the published score."),
+      // Where the page's figures came from, said on the page itself. The same pill the
+      // compliance console carries: nothing here is seed data, so when the service has not
+      // answered the page says so rather than filling itself in.
+      vpSourceLabel: vm.live
+        ? "Live · svc-operations-intelligence" + (s.vpError ? " · refresh failed" : "")
+        : s.vpLoading ? "Reading svc-operations-intelligence…" : "No data · backend unreachable",
+      vpSourceDot: vm.live ? (s.vpError ? "var(--st-warn)" : "var(--st-ok)")
+        : s.vpLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
+      vpSourceDetail: s.vpError || (s.vpLoadedAt ? "Read at " + fmtTime(s.vpLoadedAt) : ""),
+      vpRetryShow: !s.vpLoading && (!vm.live || !!s.vpError) ? "inline" : "none",
+      vpRetry: () => this.vpRetryNow(),
+      // When the scorecards were last cut, from the newest card. No read returns that column
+      // today, so this reads "—" rather than a time nothing on the record supports.
+      vpLastRebuild: vm.lastRebuild ? fmtTime(vm.lastRebuild) : "—",
+      // Nothing answered, or it answered with no vendors: two different sentences, neither
+      // of them a directory of invented contractors.
+      vpEmptyShow: VD.vendors.length ? "none" : "block",
+      vpBodyShow: VD.vendors.length ? "grid" : "none",
+      vpEmptyTitle: vm.live ? "No vendors on the register" : s.vpLoading ? "Reading the register…" : "Contract performance backend unreachable",
+      vpEmptyNote: vm.live
+        ? "svc-operations-intelligence answered and holds no vendor with a scorecard or a contract parameter set for this company. Ingest a signed contract or run the monthly scoring job, and the directory fills from what it writes."
+        : s.vpLoading ? "Nothing is shown until it answers."
+        : "Every figure on this page is read from svc-operations-intelligence, and it did not answer" + (s.vpError ? ": " + s.vpError : "") + ". Nothing is shown in its place.",
+      // The weights the engine scored against, or nothing. Quoting a set of numbers the
+      // backend never sent would be the one place on this page a person cannot check.
+      vpWeights: () => this.flash(vm.weightsText
+        || "Scoring weights are read from svc-operations-intelligence, and it has not answered — there are no weights to report."),
       vpTiles: (() => {
         const vendors = VD.vendors, V = VD.V;
         const rec = (id) => V[id] || {};
         const scored = vendors.filter((v) => V[v.id]);
         const heldOf = (v) => (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length;
-        const blocked = vendors.filter(capOf).length;
-        const held = vm.live ? vm.tiles.held : vendors.reduce((q, v) => q + heldOf(v), 0);
-        const defaults = vm.live ? vm.tiles.defaults : vendors.reduce((q, v) => q + ((rec(v.id).contract || { fields: 0, read: 0 }).fields - (rec(v.id).contract || { read: 0 }).read), 0);
-        const L1 = vm.live ? vm.tiles.L1 : vendors.reduce((q, v) => q + (rec(v.id).breaches || []).filter((b) => b.crit === "L1").length, 0);
-        const pending = vm.live ? vm.tiles.pending
-          : held + vendors.reduce((q, v) => q + (rec(v.id).certs || []).filter((c) => c.req === "Mandatory" && (c.status === "Lapsed" || c.status === "Not on record")).length, 0);
-        const critical = vm.live ? vm.tiles.critical
-          : vendors.reduce((q, v) => q + (rec(v.id).breaches || []).filter((b) => b.crit === "L1" && /blocked|missed/.test(b.actual)).length, 0);
+        // Every figure is the model's, and the model leaves null whatever no read sourced.
+        // A count is never inferred from an empty directory: "0 blocked" and "nothing has
+        // loaded" are different statements and only the first is a fact about the register.
+        const blocked = vm.tiles.blocked;
+        const held = vm.tiles.held;
+        const defaults = vm.tiles.defaults;
+        const L1 = vm.tiles.L1;
+        const pending = vm.tiles.pending;
+        const critical = vm.tiles.critical;
         const worst = scored.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || vendors[0] || null;
         const thinnest = scored.slice().sort((a, b) => V[a.id].contract.read - V[b.id].contract.read)[0] || vendors[0] || null;
         const firstBlocked = vendors.find(capOf) || worst;
         const mostHeld = vendors.slice().sort((a, b) => heldOf(b) - heldOf(a))[0] || vendors[0] || null;
         const idOf = (v) => (v ? v.id : firstId);
+        // The rail keeps the tile's identity; the figure goes grey when there is no figure.
+        // A red "—" reads as a red number at a glance, which is the opposite of what it says.
+        const fg = (n, colour) => (n === null || n === undefined ? "var(--color-neutral-400)" : colour);
         return [
-          { value: N(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 3 }) },
-          { value: N(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", click: () => this.setState({ queueOpen: true }) },
-          { value: N(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 2 }) },
-          { value: N(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", click: () => this.setState({ vpVendor: idOf(worst), vpTab: 2 }) },
-          { value: N(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
-          { value: N(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) }
+          { value: N(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", fg: fg(blocked, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 3 }) },
+          { value: N(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", fg: fg(pending, "var(--st-warn)"), click: () => this.setState({ queueOpen: true }) },
+          { value: N(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", fg: fg(critical, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 2 }) },
+          { value: N(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", fg: fg(L1, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOf(worst), vpTab: 2 }) },
+          { value: N(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", fg: fg(held, "var(--st-warn)"), click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
+          { value: N(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", fg: fg(defaults, "var(--st-warn)"), click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) }
         ];
       })(),
 
@@ -828,18 +852,25 @@ export const renderValsMethods = {
         const bar = (n, max) => (n === null || n === undefined ? "0%" : Math.round((n / Math.max(1, max)) * 100) + "%");
         const pkgMax = Math.max.apply(null, [1].concat(Object.keys(byPkg).map((k) => byPkg[k].length)));
 
-        const expiringV = vm.live ? [] : vendors.filter((v) => { const R = V[v.id]; return R && /2026/.test(R.contract.expires); });
-        const expiring = vm.live ? vm.counts.expiring : expiringV.length;
-        const heldLines = vm.live ? vm.counts.heldLines
-          : vendors.reduce((q, v) => q + (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length, 0);
-        const totalLines = vm.live ? vm.counts.invoiceLines : vendors.reduce((q, v) => q + (rec(v.id).invoices || []).length, 0);
-        const approvedLines = vm.live ? vm.counts.approvedLines : totalLines - heldLines;
-        const woOpen = vm.live ? vm.counts.workordersOpen : (D.workorders || []).length;
-        const termsRead = vm.live ? vm.counts.termsRead : vendors.reduce((q, v) => q + (rec(v.id).contract || { read: 0 }).read, 0);
-        const termsDefault = vm.live ? vm.counts.termsDefault
-          : vendors.reduce((q, v) => q + ((rec(v.id).contract || { fields: 0, read: 0 }).fields - (rec(v.id).contract || { read: 0 }).read), 0);
-        const contractsN = vm.live ? vm.counts.contracts : vendors.filter((v) => V[v.id]).length;
+        // Contract expiry dates, matched invoice lines and open work orders have no read
+        // endpoint on this service, so the model holds null for them and the row shows "—".
+        // The rest are counted from what answered.
+        const expiringV = [];
+        const expiring = vm.counts.expiring;
+        const heldLines = vm.counts.heldLines;
+        const totalLines = vm.counts.invoiceLines;
+        const approvedLines = vm.counts.approvedLines;
+        const woOpen = vm.counts.workordersOpen;
+        const termsRead = vm.counts.termsRead;
+        const termsDefault = vm.counts.termsDefault;
+        const contractsN = vm.counts.contracts;
 
+        // A count of an empty directory is only a fact once the directory has answered.
+        // Until it does, every tally reads "—" rather than a confident zero.
+        const cnt = (n) => (vm.live ? String(n) : "—");
+        // A dash is never green or red. Colour states a position; an unsourced row has none.
+        const tone = (n, colour) => (n === null || n === undefined ? "var(--color-neutral-400)" : colour);
+        const cntTone = (colour) => (vm.live ? colour : "var(--color-neutral-400)");
         const scoredV = vendors.filter((v) => V[v.id] && vpScore(v.id).score !== null);
         const avgS = scoredV.length ? Math.round(scoredV.reduce((q, v) => q + vpScore(v.id).score, 0) / scoredV.length) : null;
         const band = (lo, hi) => scoredV.filter((v) => { const n = vpScore(v.id).score; return n >= lo && n <= hi; });
@@ -857,25 +888,25 @@ export const renderValsMethods = {
             value: N(avgS), label: "Avg score",
             click: () => this.setState({ vpVendor: idOf(lowest), vpTab: 0 }),
             rows: [
-              { label: "85 and above", n: String(band(85, 100).length), color: "var(--st-ok)", bar: bar(band(85, 100).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(85, 100)[0] || vendors[0]), vpTab: 0 }) },
-              { label: "70 to 84", n: String(band(70, 84).length), color: "var(--st-warn)", bar: bar(band(70, 84).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(70, 84)[0] || vendors[0]), vpTab: 0 }) },
-              { label: "Below 70", n: String(band(0, 69).length), color: "var(--st-risk)", bar: bar(band(0, 69).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(lowest), vpTab: 0 }) }
+              { label: "85 and above", n: cnt(band(85, 100).length), color: cntTone("var(--st-ok)"), bar: bar(band(85, 100).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(85, 100)[0] || vendors[0]), vpTab: 0 }) },
+              { label: "70 to 84", n: cnt(band(70, 84).length), color: cntTone("var(--st-warn)"), bar: bar(band(70, 84).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(band(70, 84)[0] || vendors[0]), vpTab: 0 }) },
+              { label: "Below 70", n: cnt(band(0, 69).length), color: cntTone("var(--st-risk)"), bar: bar(band(0, 69).length, scoredV.length), click: () => this.setState({ vpVendor: idOf(lowest), vpTab: 0 }) }
             ]
           },
           {
-            value: String(vendors.length), label: "Vendors",
+            value: cnt(vendors.length), label: "Vendors",
             click: () => this.setState({ vpVendor: idOr("v1", firstId), vpTab: 0 }),
             rows: [
-              { label: "Fully accredited", n: String(byAccred("Current").length), color: "var(--st-ok)", bar: bar(byAccred("Current").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v3", idOf(byAccred("Current")[0] || vendors[0])), vpTab: 3 }) },
-              { label: "Expiring", n: String(byAccred("Expiring").length), color: "var(--st-warn)", bar: bar(byAccred("Expiring").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v6", idOf(byAccred("Expiring")[0] || vendors[0])), vpTab: 3 }) },
-              { label: "Lapsed", n: String(byAccred("Lapsed").length), color: "var(--st-risk)", bar: bar(byAccred("Lapsed").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v2", idOf(byAccred("Lapsed")[0] || vendors[0])), vpTab: 3 }) }
+              { label: "Fully accredited", n: cnt(byAccred("Current").length), color: cntTone("var(--st-ok)"), bar: bar(byAccred("Current").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v3", idOf(byAccred("Current")[0] || vendors[0])), vpTab: 3 }) },
+              { label: "Expiring", n: cnt(byAccred("Expiring").length), color: cntTone("var(--st-warn)"), bar: bar(byAccred("Expiring").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v6", idOf(byAccred("Expiring")[0] || vendors[0])), vpTab: 3 }) },
+              { label: "Lapsed", n: cnt(byAccred("Lapsed").length), color: cntTone("var(--st-risk)"), bar: bar(byAccred("Lapsed").length, vendors.length), click: () => this.setState({ vpVendor: idOr("v2", idOf(byAccred("Lapsed")[0] || vendors[0])), vpTab: 3 }) }
             ]
           },
           {
-            value: String(Object.keys(byPkg).length), label: "Packages",
+            value: cnt(Object.keys(byPkg).length), label: "Packages",
             click: () => this.flash("Vendors are grouped by service package. A package with a single vendor is a single point of failure — worth a second accredited contractor before the next renewal."),
             rows: Object.keys(byPkg).map((k) => ({
-              label: k, n: String(byPkg[k].length),
+              label: k, n: cnt(byPkg[k].length),
               color: byPkg[k].some(capOf) ? "var(--st-risk)" : byPkg[k].length === 1 ? "var(--st-warn)" : "var(--st-ok)",
               bar: bar(byPkg[k].length, pkgMax),
               click: () => this.setState({ vpVendor: byPkg[k][0].id, vpTab: 0 })
@@ -885,17 +916,19 @@ export const renderValsMethods = {
             value: N(contractsN), label: "Contracts",
             click: () => this.setState({ vpVendor: idOr("v1", idOf(mostRead)), vpTab: 1 }),
             rows: [
-              { label: "Terms read from document", n: N(termsRead), color: "var(--st-ok)", bar: vm.live ? bar(termsRead, (termsRead || 0) + (termsDefault || 0)) : "72%", click: () => this.setState({ vpVendor: idOr("v3", idOf(mostRead)), vpTab: 1 }) },
-              { label: "On platform default", n: N(termsDefault), color: "var(--st-warn)", bar: vm.live ? bar(termsDefault, (termsRead || 0) + (termsDefault || 0)) : "28%", click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) },
-              { label: "Expiring this year", n: N(expiring), color: expiring ? "var(--st-warn)" : "var(--st-ok)", bar: bar(expiring, vendors.length), click: () => this.setState({ vpVendor: expiringV.length ? expiringV[0].id : idOr("v1", firstId), vpTab: 1 }) }
+              { label: "Terms read from document", n: N(termsRead), color: tone(termsRead, "var(--st-ok)"), bar: bar(termsRead, (termsRead || 0) + (termsDefault || 0)), click: () => this.setState({ vpVendor: idOr("v3", idOf(mostRead)), vpTab: 1 }) },
+              { label: "On platform default", n: N(termsDefault), color: tone(termsDefault, "var(--st-warn)"), bar: bar(termsDefault, (termsRead || 0) + (termsDefault || 0)), click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) },
+              // Nothing lists a contract's expiry date, so this is never green-because-none:
+              // an unsourced figure is grey, the colour the rest of the page uses for "—".
+              { label: "Expiring this year", n: N(expiring), color: expiring === null || expiring === undefined ? "var(--color-neutral-400)" : expiring ? "var(--st-warn)" : "var(--st-ok)", bar: bar(expiring, vendors.length), click: () => this.setState({ vpVendor: expiringV.length ? expiringV[0].id : idOr("v1", firstId), vpTab: 1 }) }
             ]
           },
           {
             value: N(totalLines), label: "Commercial orders",
             click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }),
             rows: [
-              { label: "Approved as charged", n: N(approvedLines), color: "var(--st-ok)", bar: bar(approvedLines, totalLines || approvedLines), click: () => this.setState({ vpVendor: idOr("v3", idOf(cleanest)), vpTab: 4 }) },
-              { label: "Held or disputed", n: N(heldLines), color: "var(--st-risk)", bar: bar(heldLines, totalLines || heldLines), click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
+              { label: "Approved as charged", n: N(approvedLines), color: tone(approvedLines, "var(--st-ok)"), bar: bar(approvedLines, totalLines || approvedLines), click: () => this.setState({ vpVendor: idOr("v3", idOf(cleanest)), vpTab: 4 }) },
+              { label: "Held or disputed", n: N(heldLines), color: tone(heldLines, "var(--st-risk)"), bar: bar(heldLines, totalLines || heldLines), click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
               { label: "Work orders open", n: N(woOpen), color: "var(--color-neutral-400)", bar: bar(woOpen, woOpen || 1), click: () => this.openModule("ops") }
             ]
           }
@@ -903,28 +936,34 @@ export const renderValsMethods = {
       })(),
       vpList: VD.vendors.map((v) => {
         const R = VD.V[v.id];
-        // Live vendors carry the compliance engine's coverage figure; the seed derives it
-        // from the certificates on the record.
+        // The compliance engine's coverage figure when it has one for this vendor, otherwise
+        // counted from the accreditations on the record. Coverage is a fraction of what the
+        // vendor's work requires: with no requirement on record there is no fraction, and
+        // "0%" would read as a vendor missing all of its cover — a different fact from a
+        // register that was never told what this vendor needs.
         const req = v.covReq !== undefined ? v.covReq : (R ? R.certs.filter((c) => c.req !== "Preferred").length : 0);
         const on = v.covOn !== undefined ? v.covOn : (R ? R.certs.filter((c) => c.req !== "Preferred" && (c.status === "Current" || c.status === "Expiring")).length : 0);
-        const cov = v.cov !== undefined ? v.cov : (req ? Math.round((on / req) * 100) : 0);
+        const cov = v.cov !== undefined ? v.cov : (req ? Math.round((on / req) * 100) : null);
         const capped = capOf(v);
         const active = vpV && vpV.id === v.id;
         const sc = vpScore(v.id);
         const n = sc.score;
         return {
-          name: v.name, meta: v.meta || (v.spend + " annual · " + v.accred.toLowerCase() + " accreditation"),
+          name: v.name, meta: v.meta || "",
           cap: capped ? "ceiling 60 — mandatory lapse" : "", capShow: capped ? "block" : "none", capFg: "var(--st-risk)",
           score: N(n), trend: v.trend,
           scoreFg: n === null ? "var(--color-neutral-500)" : n >= 85 ? "var(--st-ok)" : n >= 70 ? "var(--st-warn)" : "var(--st-risk)",
-          cov: cov + "%", covFrac: on + "/" + req,
-          covFg: cov >= 90 ? "var(--st-ok)" : cov >= 60 ? "var(--st-warn)" : "var(--st-risk)",
+          cov: cov === null ? "—" : cov + "%", covFrac: req ? on + "/" + req : "—",
+          covBar: cov === null ? "0%" : cov + "%",
+          covFg: cov === null ? "var(--color-neutral-500)" : cov >= 90 ? "var(--st-ok)" : cov >= 60 ? "var(--st-warn)" : "var(--st-risk)",
           edge: capped ? "var(--st-risk)" : (v.score !== null && v.score >= 85) ? "var(--st-ok)" : "var(--st-warn)",
           bg: active ? "var(--color-accent-900)" : "transparent",
           pick: () => this.setState({ vpVendor: v.id, vpTab: 0 })
         };
       }),
-      vpTabs: [["Scorecard", SC.rows.length || 5], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpR ? vpR.breaches.length : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? vpR.invoices.length : 0)]].map((t, i) => ({
+      // The count on each tab is the number of rows behind it. An empty tab counts 0 — it
+      // never borrows the five components a scorecard would have had.
+      vpTabs: [["Scorecard", SC.rows.length], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpR ? vpR.breaches.length : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? vpR.invoices.length : 0)]].map((t, i) => ({
         label: t[0], n: String(t[1]),
         edge: s.vpTab === i ? "var(--color-accent)" : "transparent",
         fg: s.vpTab === i ? "var(--color-accent)" : "var(--color-neutral-500)",
@@ -959,7 +998,7 @@ export const renderValsMethods = {
           : (v.blockedType || "a mandatory accreditation");
         return {
           name: v.name,
-          contractLine: R.contract.line || (R.contract.ref + " · signed " + R.contract.signed + " · expires " + R.contract.expires + " · " + R.contract.read + " of " + R.contract.fields + " terms read from " + R.contract.pages + " pages"),
+          contractLine: R.contract.line || "",
           score: N(score), trend: v.trend,
           scoreFg: score === null ? "var(--color-neutral-500)" : score >= 85 ? "var(--st-ok)" : score >= 70 ? "var(--st-warn)" : "var(--st-risk)",
           capShow: capped ? "flex" : "none", capBg: "var(--st-risk-bg)", capFg: "var(--st-risk)",
@@ -967,14 +1006,17 @@ export const renderValsMethods = {
             ? "Score cannot exceed " + (R.cap || 60) + " while " + capNames + " " + (mandatoryMissing.length > 1 ? "are" : "is") + " not current — this vendor cannot hold regulated work whatever the delivery numbers say."
             : "",
           metrics: SC.rows.map((r) => {
-            const ratio = r.w ? r.pts / r.w : 0;
+            // A component the card did not report has no bar and no colour — an empty
+            // track, not a full-width red one saying the vendor scored nothing.
+            const scored = r.pts !== null && r.pts !== undefined;
+            const ratio = scored && r.w ? r.pts / r.w : 0;
             return {
-              label: r.label, max: String(r.w), pts: String(r.pts),
+              label: r.label, max: String(r.w), pts: N(r.pts),
               requires: r.requires || ((r.ceiling ? "no more than " : "at least ") + r.target + "%"),
               measured: r.measured === null || r.measured === undefined ? "—" : r.measured + "%",
               sample: r.sample || (r.basis + " · " + R.samples[r.k] + (r.k === "invoice" ? " invoice lines" : " work orders")),
-              bar: Math.round(Math.max(0, Math.min(1, ratio)) * 100) + "%",
-              color: ratio >= 0.95 ? "var(--st-ok)" : ratio >= 0.75 ? "var(--st-warn)" : "var(--st-risk)",
+              bar: scored ? Math.round(Math.max(0, Math.min(1, ratio)) * 100) + "%" : "0%",
+              color: !scored ? "var(--color-neutral-400)" : ratio >= 0.95 ? "var(--st-ok)" : ratio >= 0.75 ? "var(--st-warn)" : "var(--st-risk)",
               srcTag: r.srcTag || (r.fromContract ? "clause " + r.clause + " · p" + r.page
                 : r.clause ? "default " + r.target + "% · obligation at " + r.clause
                 : "platform default " + r.target + "%"),
@@ -982,7 +1024,7 @@ export const renderValsMethods = {
               srcFg: r.fromContract ? "var(--color-accent)" : "var(--color-neutral-300)"
             };
           }),
-          totalPts: String(SC.raw),
+          totalPts: N(SC.raw),
           capRowShow: capApplied ? "grid" : "none",
           finalScore: N(score),
           critSplit: [
@@ -1010,10 +1052,17 @@ export const renderValsMethods = {
             critBg: CRIT[b.crit][0], critFg: CRIT[b.crit][1],
             click: () => this.flash(b.wo + " — " + b.asset + " at " + b.building + ". " + b.metric + " target " + b.target + ", actual " + b.actual + ". " + b.crit + " asset, so the miss is weighted " + b.mult + " and carries " + b.cost + " in service credits.")
           })),
-          creditTotal: "£" + credit.toLocaleString(),
+          // With no breach rows there is no recoverable total — "£0" would say the clause
+          // was worked and came to nothing, and there is nothing to claim against it.
+          creditTotal: R.breaches.length ? "£" + credit.toLocaleString() : "—",
+          claimShow: R.breaches.length ? "block" : "none",
+          breachEmptyShow: R.breaches.length ? "none" : "block",
+          breachEmpty: "No work-order evidence is on this page: the engine holds the jobs behind each component, and no read endpoint lists them yet. The score above is the card it published, not a total recomputed from rows shown here.",
           claim: () => this.runAction("Claim service credits", v.name),
           evidence: () => this.runAction("Request evidence", v.name),
-          covNote: onFile.length + " of " + req.length + " mandatory accreditations are on file" + (missing.length ? ", and " + missing.length + " " + (missing.length > 1 ? "are" : "is") + " lapsed or never supplied. " : ". ") + "Coverage is checked against the issuing register, not the document the vendor sent.",
+          covNote: req.length
+            ? onFile.length + " of " + req.length + " mandatory accreditations are on file" + (missing.length ? ", and " + missing.length + " " + (missing.length > 1 ? "are" : "is") + " lapsed or never supplied. " : ". ") + "Coverage is checked against the issuing register, not the document the vendor sent."
+            : "No mandatory accreditation is on record for this vendor, so there is no coverage to state — not full coverage, and not none. Coverage is checked against the issuing register, not the document the vendor sent.",
           certs: R.certs.map((c) => ({
             name: c.name, req: c.req, status: c.status, exp: c.exp, ver: c.ver,
             reqFg: c.req === "Preferred" ? "var(--color-neutral-500)" : "var(--color-accent-300)",
@@ -1027,7 +1076,12 @@ export const renderValsMethods = {
             status: i.status, bg: tag(i.status)[0], fg: tag(i.status)[1],
             flag: i.flag, flagShow: i.flag ? "block" : "none"
           })),
-          invTotal: "£" + invTotal.toLocaleString(),
+          // Only flagged lines reach the approvals queue, so an empty tab means nothing was
+          // held — not that every line was checked and matched.
+          invEmptyShow: R.invoices.length ? "none" : "block",
+          invEmpty: "No invoice line for this vendor is held. Only lines the rate check flags reach this queue, so matched lines are not listed here and no total is stated for them.",
+          invTotal: R.invoices.some((i) => i.status === "Held" || i.status === "Disputed") ? "£" + invTotal.toLocaleString() : "—",
+          invActionsShow: R.invoices.length ? "flex" : "none",
           challenge: () => this.runAction("Raise credit note", v.name),
           approveInv: () => this.runAction("Approve as charged", v.name)
         };
@@ -1079,13 +1133,11 @@ export const renderValsMethods = {
               : "nothing on the register yet");
         }
         if (s.view === "vp") {
-          // The live scorecard names its month; until it answers, count what the register
-          // holds rather than quote a scorecard that is not there.
+          // The live scorecard names its month. Until contract performance answers there is
+          // no count to quote — the compliance register's vendor list is a different set,
+          // read from a different service, and standing it in here would misdescribe both.
           if (vm.live) return "Ask anything about vendor performance — " + vm.vendors.length + (vm.vendors.length === 1 ? " vendor" : " vendors") + (vm.month ? ", " + vm.month + " scorecard" : "");
-          const vendors = (this.ccData().vendors || []).length;
-          return "Ask anything about vendor performance — "
-            + (vendors ? vendors + (vendors === 1 ? " vendor" : " vendors") + " on the register"
-              : "no vendors on the register yet");
+          return "Ask anything about vendor performance";
         }
         if (s.view === "report") return "Ask anything about this report, or ask for the next one";
         if (s.view === "buildings") return "Ask anything about your buildings — schema, documents, open risk";
@@ -1516,7 +1568,16 @@ export const renderValsMethods = {
       // Double-click the handle to snap back to the default width.
       orchResizeReset: () => this.setState({ orchW: null }),
       contentCols: s.orchOpen ? "minmax(0,1fr)" : "minmax(0,1fr) 320px",
-      modLastRun: "02:14 today",
+      // Assets and Maintenance read their stamp from the register's own fetch. Energy still
+      // carries a fixed string — it has not been taken off its seed data yet.
+      modLastRun: s.module === "assets"
+        ? (s.asLiveLoading ? "reading…" : s.asLiveLoadedAt ? fmtTime(s.asLiveLoadedAt) + " · register read" : "not yet")
+        : s.module === "ops"
+        // "Last run" on Maintenance is when the inspection reports were last re-read — a
+        // recorded run, not this page's fetch. Null before the first one, and that means no
+        // read has been recorded rather than zero reports, so it reads "—" not "0".
+        ? (s.mxLiveLoading ? "reading…" : this.mxVals(s).mxLastRead || "—")
+        : "02:14 today",
       answerCols: s.orchOpen ? "minmax(0,1fr)" : "minmax(0,1.5fr) minmax(0,1fr)",
       tenantShow: s.orchOpen ? "none" : "flex",
 
@@ -1785,8 +1846,6 @@ export const renderValsMethods = {
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
       fEmail: s.flow === "email", fDone: !!s.flowDone, fDoneText: s.flowDone,
-      fScan: s.flow === "scan",
-      ...this.scanVals(s),
       fCancel: () => this.setState({ flow: null, flowDone: "" }),
       fNewVendor: () => this.setState({ flow: "new" }),
 
@@ -2326,7 +2385,7 @@ export const renderValsMethods = {
       // header click (into a grid view) and the top of the single-card detail page.
       // Empty means no REPORTS, not no cards: a report whose cards have all been deleted
       // still has to render, or the only thing that can delete it is off the screen.
-      reportGridEmpty: !(s.reports || []).length,
+      reportGridEmpty: !myReports.length,
       reportSelectedCount: (s.reportSelected || []).length,
       reportAnySelected: (s.reportSelected || []).length > 0,
       reportAllSelected: myCards.length > 0 && (s.reportSelected || []).length === myCards.length,
@@ -2346,7 +2405,7 @@ export const renderValsMethods = {
       // The reports themselves — the containers the cards sit in. The backend has always had
       // two levels (a report holds cards) but nothing here ever showed the outer one, which
       // left DELETE /api/reports/{id} unreachable and an emptied report impossible to clear.
-      reportGroups: (s.reports || []).map((r) => {
+      reportGroups: myReports.map((r) => {
         const cards = r.cards || [];
         const armed = s.rpArmed === "report:" + r.id;
         return {
@@ -2523,14 +2582,26 @@ export const renderValsMethods = {
         vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
         vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
       }
-      if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s), this.asLiveVals(s), this.asLiveGroups(s));
-      if (modKey === "ops") Object.assign(vals, this.mxVals(s), this.mxLiveVals(s));
+      if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s));
+      if (modKey === "ops") {
+        Object.assign(vals, this.mxVals(s), this.mxLiveVals(s));
+        // The filter row is the backend's: only the states and sources it says it holds are
+        // offered, because a chip for a state with no rows is a chip that can only ever
+        // return an empty list. Picking one re-reads with state=/source= rather than
+        // narrowing rows on the client while the counts above still describe the whole queue.
+        vals.modFilters = vals.mxFilterOpts;
+      }
       vals.mod = {
         ...mod,
         sideTitle: en ? en.enSideTitle : mod.sideTitle,
         sideFoot: en ? en.enSideFoot : mod.sideFoot,
+        // "Re-read inspection reports" re-reads them: the panel computes live on every read,
+        // so this is the read. It does NOT call POST /inspection-intelligence/read — that
+        // endpoint only stamps the run into plenum_cafm.inspection_read_runs, and nothing on
+        // this page writes to the database.
         scan: () => modKey === "assets"
-          ? this.orchWith(mod.scanLabel, mod.name, "scan", { asScanStage: 0, asScanDone: 0, asScanReport: null, asScanB: [], asScanSec: [], asScanAllSec: true })
+          ? (this.asCondLoad(), this.asLiveRetryNow())
+          : modKey === "ops" ? this.mxLiveRetryNow()
           : this.orch(mod.scanLabel, mod.name),
         export: () => this.orch(mod.exportLabel, mod.name)
       };

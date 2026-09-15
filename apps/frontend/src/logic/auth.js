@@ -302,6 +302,12 @@ export const authMethods = {
       // read as sign-out doing nothing.
       saOn: false,
       viewOrgId: null, viewOrgName: null,
+      // Pinned report cards are personal. Held past sign-out they are the previous
+      // person's list waiting in the navigator for whoever signs in next — the register
+      // state resetLiveData() clears on the switch, cleared here for the same reason on
+      // the way out, so the cards never outlive the session that read them.
+      reports: [], reportsOwner: null, reportsLoading: false, reportsError: '', reportsLoadedAt: null,
+      reportKey: null, reportRunIdx: 0, reportSelected: [], rpArmed: null,
       pwOpen: false, pwCurrent: '', pwNext: '', pwBusy: false, pwError: '',
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null,
       authNotice: notice || '', password: '', code: '', newPassword: ''

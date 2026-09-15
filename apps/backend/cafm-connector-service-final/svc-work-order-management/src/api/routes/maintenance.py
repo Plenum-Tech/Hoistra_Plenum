@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,24 +22,45 @@ from ...db import get_session
 from ...services import ask as ask_svc
 from ...services import inspection_intelligence as ii
 from ...services import maintenance as mx
-from ...services.principal import Principal, assert_building, current_principal
+from ...services.principal import (Principal, assert_building, current_principal,
+                                   effective_organization_id, scope_building_ids)
 
 router = APIRouter()
 log = get_logger(__name__)
 
 
-def _scope(principal: Principal, building_id: Optional[str]) -> list[UUID] | None:
+async def _scope(
+    session: AsyncSession,
+    principal: Principal,
+    building_id: Optional[str],
+    organization_id: Optional[str] = None,
+) -> list[UUID] | None:
     """The buildings this request covers: one named building, checked, or the caller's own.
 
-    None means unrestricted — an admin over the whole company. An empty list means allocated
-    to nothing, which the engines turn into a predicate matching no row.
+    An empty list means allocated to nothing, which the engines turn into a predicate
+    matching no row. ``None`` means no predicate at all — which is every building in every
+    company, so only a superadmin who has named no company gets it (see
+    services/principal.scope_building_ids).
     """
     if building_id:
+        # assert_building returns early for any caller whose building_ids is None — which is
+        # every ADMIN, not only a superadmin — so on its own it let an admin of one company
+        # read another company's rows by naming one of their buildings. It also never looked
+        # at organization_id. The named building must therefore also be one the caller's
+        # company actually holds.
         assert_building(principal, building_id, action="read")
-        return [UUID(str(building_id))]
-    if principal.building_ids is None:
-        return None
-    return list(principal.building_ids)
+        wanted = UUID(str(building_id))
+        allowed = await scope_building_ids(session, principal, organization_id)
+        if allowed is not None and wanted not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"ok": False,
+                        "error": "You are not allocated to that building, so you cannot read its data.",
+                        "reason": "building_not_allocated",
+                        "building_id": str(building_id)},
+            )
+        return [wanted]
+    return await scope_building_ids(session, principal, organization_id)
 
 
 @router.get(
@@ -54,6 +75,9 @@ def _scope(principal: Principal, building_id: Optional[str]) -> list[UUID] | Non
 )
 async def list_decisions(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     state: Optional[str] = Query(
         None, pattern="^(Blocked|Deviation|Awaiting approval|To raise)$",
         description="Only decisions in this state"),
@@ -67,7 +91,7 @@ async def list_decisions(
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.decisions(session, building_ids=ids, limit=limit,
                              state=state, source=source, group_by=group_by)
     log.debug("maintenance.decisions", count=out.get("count"), building_id=building_id)
@@ -86,11 +110,14 @@ async def list_decisions(
 )
 async def list_inspections(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     limit: int = Query(200, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.inspections(session, building_ids=ids, limit=limit)
     log.debug("maintenance.inspections", count=out.get("count"), building_id=building_id)
     return out
@@ -108,10 +135,13 @@ async def list_inspections(
 )
 async def ppm_health(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.ppm_health(session, building_ids=ids)
     log.debug("maintenance.ppm", contracts=len(out.get("contracts") or []), building_id=building_id)
     return out
@@ -125,10 +155,13 @@ async def ppm_health(
 )
 async def summary(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     dec = await mx.decisions(session, building_ids=ids, limit=200)
     ins = await mx.inspections(session, building_ids=ids, limit=200)
     ppm = await mx.ppm_health(session, building_ids=ids)
@@ -161,6 +194,9 @@ async def summary(
 )
 async def next_ppm(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     asset_id: Optional[str] = Query(None, description="Narrow to one asset"),
     only: Optional[str] = Query(
         None, pattern="^(booked|projected|unknown)$",
@@ -169,7 +205,7 @@ async def next_ppm(
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.next_ppm(session, building_ids=ids, asset_id=asset_id,
                             only=only, limit=limit)
     log.debug("maintenance.next_ppm", building_id=building_id,
@@ -193,10 +229,13 @@ async def next_ppm(
 )
 async def inspection_intelligence(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await ii.panel(session, building_ids=ids)
     log.debug("maintenance.inspection_intelligence",
               reports=out["corpus"]["reports"], unanswerable=len(out["unanswerable"]))
@@ -220,12 +259,15 @@ async def inspection_intelligence(
 )
 async def ppm_contracts(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     year_to_date: bool = Query(True, description="Window to the calendar year so far"),
     limit: int = Query(200, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.ppm_health_by_contract(
         session, building_ids=ids, year_to_date=year_to_date, limit=limit)
     log.debug("maintenance.ppm_contracts", contracts=out.get("summary", {}).get("contracts"))
@@ -245,10 +287,13 @@ async def ppm_contracts(
 )
 async def maintenance_overview(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await mx.overview(session, building_ids=ids)
     log.debug("maintenance.overview",
               **{k: v["value"] for k, v in out["cards"].items() if isinstance(v.get("value"), int)})
@@ -267,12 +312,17 @@ async def maintenance_overview(
 )
 async def read_inspection_reports(
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
+    # The rows are scoped to the ACTING company, so the run that records reading them must be
+    # stamped with the same one — last_inspection_read filters on it.
     return await mx.read_inspection_reports(
-        session, building_ids=ids, organization_id=getattr(principal, "organization_id", None))
+        session, building_ids=ids, organization_id=effective_organization_id(principal, organization_id))
 
 
 @router.get(
@@ -282,10 +332,16 @@ async def read_inspection_reports(
     tags=["Maintenance"],
 )
 async def last_inspection_read(
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    return {"ok": True, "last_read": await mx.last_inspection_read(session)}
+    # This route had no scope at all and returned the newest run in the whole table, so one
+    # company's page showed another company's run stamp and counts.
+    org = effective_organization_id(principal, organization_id)
+    return {"ok": True, "last_read": await mx.last_inspection_read(session, organization_id=org)}
 
 
 # ── the Ask bar ──────────────────────────────────────────────────────────────────────
@@ -313,10 +369,13 @@ class AskBody(BaseModel):
 async def ask_maintenance(
     body: AskBody,
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     out = await ask_svc.ask(session, question=body.question, building_ids=ids, page=body.page)
     log.debug("maintenance.ask", intent=out.get("intent"),
               understood=out.get("understood"), confidence=out.get("confidence"))
@@ -352,6 +411,9 @@ async def ask_suggestions(
 async def inspection_intelligence_card(
     card: str,
     building_id: Optional[str] = Query(None, description="Narrow to one building"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmin only: act as this company. Everyone else is scoped to "
+                          "their own and gets 403 for any other value."),
     limit: int = Query(100, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
@@ -366,5 +428,5 @@ async def inspection_intelligence_card(
     if fn is None:
         raise HTTPException(status_code=404, detail={
             "ok": False, "error": f"No such card. Try one of: {', '.join(sorted(fns))}."})
-    ids = _scope(principal, building_id)
+    ids = await _scope(session, principal, building_id, organization_id)
     return {"ok": True, "card": card, **await fn(session, building_ids=ids, limit=limit)}

@@ -140,7 +140,8 @@ test('the vendors and buildings pages answer in their side dock too, with the pa
   }
   c.setState({ view: 'vp', ccChat: [], ccBusy: false, orchOpen: false });
   assert.match(c.chatContext(), /vendors page/);
-  assert.match(c.chatContext(), /seed data/);                 // nothing loaded in the test
+  assert.match(c.chatContext(), /has not answered/);          // nothing loaded in the test
+  assert.match(c.chatContext(), /the page is empty/);          // and nothing is standing in for it
   c.setState({ view: 'buildings' });
   assert.match(c.chatContext(), /buildings page/);
   assert.match(c.chatContext(), /building table has not loaded/);

@@ -11,7 +11,7 @@ import { flattenCards } from './reports.js';
 // guard and not listed here is a register that will silently fail to switch.
 const IN_FLIGHT_GUARDS = [
   '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
-  '_enLoading', '_enPosLoading', '_asLiveLoading', '_mxLiveLoading', '_spLoading',
+  '_enLoading', '_enPosLoading', '_asLiveLoading', '_asCondLoading', '_asCondSeeded', '_mxLiveLoading', '_spLoading',
   '_glTablesLoading', '_usLiveLoading', '_rpLoading'
 ];
 
@@ -31,9 +31,6 @@ export const coreMethods = {
     this._frameTimer = setInterval(() => {
       if (!this.state.signedIn) this.setState((p) => ({ frame: (p.frame + 1) % 4 }));
     }, 3200);
-    this._iotTimer = setInterval(() => {
-      if (this.state.signedIn && this.state.view === "module" && this.state.module === "assets") this.setState((p) => ({ iotTick: p.iotTick + 1 }));
-    }, 2000);
     this.authBoot();
     // Every account-scoped register: compliance, home tiles, vendor scorecards, buildings,
     // energy, assets, maintenance, saved spaces. Shared with authEnter, which calls the same
@@ -53,12 +50,12 @@ export const coreMethods = {
   componentWillUnmount() {
     window.removeEventListener("keydown", this._key);
     this.authStop();
-    clearInterval(this._frameTimer); clearInterval(this._cronTimer); clearInterval(this._iotTimer);
+    clearInterval(this._frameTimer); clearInterval(this._cronTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._spRetry); this.rpStop();
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
-    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry);
+    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh);
     clearTimeout(this._usLiveRetry); clearTimeout(this._usLiveRefresh);
     clearTimeout(this._auLiveRetry);
     clearTimeout(this._saLiveRetry); clearTimeout(this._saLiveRefresh);
@@ -79,8 +76,13 @@ export const coreMethods = {
     this.energyLoad();
     this.enPositionLoad();
     this.asLiveLoad();
+    this.asCondLoad();
     this.mxLiveLoad();
     this.spLoad();
+    // Reports are personal rather than per-company, but they are still somebody's: a
+    // sign-in that swaps accounts in this tab has to re-read them here, not wait up to
+    // POLL_MS for rpStart's timer to come round and correct the navigator.
+    this.rpLoad();
   },
 
   // Clears every register loadLiveData() fills, and cancels any retry/refresh timer
@@ -104,7 +106,7 @@ export const coreMethods = {
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
-    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._spRetry);
+    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh); clearTimeout(this._spRetry);
     this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
     this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
     this._mxLiveAttempts = 0; this._spAttempts = 0;
@@ -115,9 +117,20 @@ export const coreMethods = {
       bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
       enAnomLive: null, enMetersLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
+      asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
+      asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,
       asLiveOpenB: [], asLiveCost: {},
-      mxStatsLive: null, mxWosLive: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
-      spaces: null, spLoading: false, spError: ""
+      mxRaw: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
+      mxGroup: "State", mxOpenG: null, mxAnswer: null, mxAsked: "", mxAskBusy: false, mxAskError: "",
+      spaces: null, spLoading: false, spError: "",
+      // A report card belongs to the person who pinned it, not to the company, so it is the
+      // one register a company switch leaves alone — but a sign-in that swaps ACCOUNTS in
+      // this tab must not leave the previous person's cards in the navigator, on the home
+      // page's pinned runs, or open on the Reports page. Cleared here, re-read by
+      // loadLiveData(); reportsOwner going null is what stops renderVals drawing them in
+      // the moment in between.
+      reports: [], reportsOwner: null, reportsLoading: false, reportsError: "", reportsLoadedAt: null,
+      reportKey: null, reportRunIdx: 0, reportSelected: [], rpArmed: null
     });
   },
 
@@ -179,12 +192,11 @@ export const coreMethods = {
     }, 900);
   },
 
-  // _scanTick (assets.js's condition-scan flow) belongs here for the same reason _invTick
-  // does: it is a dock-flow ticker owned by another module, not by componentWillUnmount —
-  // closing the dock mid-scan is the only place that stops it before its own 550ms
-  // completion tick fires a stale report + a flash() toast at whoever is looking at the
-  // app by then.
-  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); clearInterval(this._scanTick); this.setState({ orchOpen: false, flow: null, inv: null }); },
+  // _invTick is a dock-flow ticker owned by another module, not by componentWillUnmount:
+  // closing the dock mid-flow is the only place that stops it before its own completion
+  // tick fires a stale result + a flash() toast at whoever is looking at the app by then.
+  // (_scanTick went with the condition-scan flow, which read a fixture — see screens/Assets.jsx.)
+  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null }); },
 
   // Opens the orchestrator AND arms a flow: booking draft, contractor swap, or an email.
   orchWith(task, ctx, flow, patch) {

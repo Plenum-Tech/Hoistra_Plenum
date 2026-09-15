@@ -1,130 +1,268 @@
-// maintenance — maintenance decisions, inspection intelligence, PPM health, inspection query page.
+// maintenance — the Maintenance page's view model: decisions owed, inspection intelligence,
+// PPM health, and the inspection-reports panel.
+//
+// Everything here reads the live model (maintenanceLive.js → mxModel()) and nothing else.
+// There is no seed dataset behind this page: a decision, a card, a contract row or a report
+// figure is on the screen because a read returned it, and a figure no read carries is a dash.
+//
 // Mixed into HoistraLogic.prototype, so `this` is the controller.
 import { t } from './constants.js';
-import { HOISTRA_MX } from '../data/hoistra-maintenance.js';
-import { STATE_TONE, STATE_ORDER, STATE_DESC } from './maintenanceLive.js';
+import { STATE_TONE, STATE_ORDER, STATE_DESC, SOURCE_ICON, fmtDay } from './maintenanceLive.js';
+import { fmtTime } from './complianceLive.js';
 
 export const maintenanceMethods = {
 
-  /* Maintenance: decisions owed, inspection intelligence, PPM health. */
   mxVals(s) {
-    const MX = HOISTRA_MX;
     const isMx = s.view === "module" && s.module === "ops";
     const isInsp = s.view === "insp";
-    if (!MX || !(isMx || isInsp)) return { isMaint: false, isInsp: false, mxCards: [], mxDecisions: [], mxInsights: [], mxPpm: [], inspRows: [] };
-    // Live decisions and KPI tiles (svc-work-order-management, via maintenanceLive.js)
-    // replace the seed ones once loaded — mxLiveVals shapes them into exactly the row/tile
-    // shape below already, so everything here reads `dec`/`decisions`/`mxCards` without
-    // knowing which source it came from.
-    const live = this.mxLiveVals(s);
-    // null only until the real fetch has never once succeeded — once it has, an honestly
-    // empty live list (nothing open) is shown as such, not papered over with the seed.
-    const decisionsSource = live.mxLiveDecisions !== null ? live.mxLiveDecisions : MX.decisions;
-    const ST = Object.assign({ "Blocked": "risk", "To raise": "warn", "Awaiting approval": "warn", "Deviation": "risk" }, STATE_TONE);
-    const SRC = { Compliance: "ph-shield-check", Vendors: "ph-chart-line-up", Assets: "ph-cube", Energy: "ph-lightning", "Work order": "ph-wrench" };
-    const f = s.filter;
-    const dec = decisionsSource.filter((d) => f === "All" ? true : ST[f] ? d.state === f : d.src === f);
-    const order = Object.assign({ "Blocked": 0, "To raise": 1, "Deviation": 2, "Awaiting approval": 3 }, STATE_ORDER);
-    const decisions = dec.slice().sort((p, q) => order[p.state] - order[q.state]).map((d) => ({
-      id: d.id || "not raised", idColor: d.id ? "var(--color-text)" : "var(--color-neutral-500)",
-      asset: d.asset, b: d.b, vendor: d.vendor, est: d.est,
-      state: d.state, color: t(ST[d.state]).color, bg: t(ST[d.state]).bg, rail: t(ST[d.state]).color,
-      src: d.src, srcIcon: SRC[d.src] || "ph-wrench", trigger: d.trigger, detail: d.detail,
-      actions: d.actions.map((a, i) => ({ label: a, primary: i === 0,
-        bg: i === 0 ? "var(--color-accent)" : "transparent", fg: i === 0 ? "var(--accent-ink)" : "var(--color-neutral-300)", edge: i === 0 ? "var(--color-accent)" : "var(--color-divider)",
-        run: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.runAction(a, d.asset + " · " + d.b, d.vendor); } })),
-      open: () => this.setState({ detail: this.woDetail ? (this.D().workorders.find((w) => w.id === d.id) ? this.woDetail(this.D().workorders.find((w) => w.id === d.id)) : { title: d.asset, sub: d.b + " · " + d.state, tone: ST[d.state], status: d.state, body: d.detail, chain: [{ k: "trigger", v: d.trigger }, { k: "source", v: d.src }], fields: [], actions: [] }) : null })
+    if (!(isMx || isInsp)) {
+      return { isMaint: false, isInsp: false, mxCards: [], mxGroups: [], mxInsights: [], mxPpm: [], inspRows: [] };
+    }
+    const m = this.mxModel();
+    const live = m.live;
+    // A figure the read did not carry. The page never prints a zero nobody counted.
+    const N = (x) => (x === null || x === undefined ? "—" : String(x));
+    // A dash is never green or red — colour states a position, and an unsourced figure has
+    // none. Same rule the Vendors page follows.
+    const tone = (x, colour) => (x === null || x === undefined ? "var(--color-neutral-400)" : colour);
+
+    // ── the four cards across the top ──
+    const mxCards = m.cards.map((c) => ({
+      l: c.l,
+      v: !c.answerable ? "—" : c.v === null ? "—" : String(c.v) + (c.unit || ""),
+      // The sub-line is the backend's own caption; an unanswerable card says why instead.
+      s: !c.answerable ? (c.reason || "this database cannot answer that") : (c.s || "no figure on record"),
+      color: !c.answerable || c.v === null ? "var(--color-neutral-400)" : t(c.tone).color
     }));
-    const I = MX.inspections;
-    const openRec = I.filter((x) => x.rec !== "None" && !x.recDone);
-    const warr = I.filter((x) => x.warranty);
-    const D = this.D();
-    const liveAnoms = D.anomalies.filter((a) => a.status !== "Resolved");
-    const corrob = liveAnoms.filter((a) => I.some((x) => x.anom === a.id));
-    const grade4 = I.filter((x) => x.cond >= 4).map((x) => x.asset).filter((v, i, arr) => arr.indexOf(v) === i);
-    const insights = [
-      { n: String(openRec.length), l: "recommendations never converted to orders", s: openRec.filter((x) => x.anom && liveAnoms.some((a) => a.id === x.anom)).length + " on assets now flagged by energy — the inspector saw it first", tone: "risk", q: "Which recommendations were never converted to orders?" },
-      { n: corrob.length + " of " + liveAnoms.length, l: "open anomalies corroborated by an earlier finding", s: "same cause named in a report dated before detection", tone: "warn", q: "Which reports confirm the energy anomalies?" },
-      { n: String(warr.length), l: "findings on parts still under warranty", s: "£2,100 of invoiced work claimable", tone: "ok", q: "What is under warranty?" },
-      { n: String(grade4.length), l: "assets graded poor (4 of 5) by inspectors", s: "all 2004–2009 boilers and chillers — none graded end of life", tone: "warn", q: "Which assets are in the worst condition?" }
-    ].map((x) => Object.assign({}, x, { color: t(x.tone).color, ask: () => this.openInsp(x.q) }));
-    const ppm = MX.ppm.map((p) => {
-      const pct = Math.round((p.done / p.planned) * 100), rep = p.done ? Math.round((p.reports / p.done) * 100) : 0;
-      const tone = p.missed >= 3 || p.next === "blocked" ? "risk" : p.missed || p.late || rep < 90 ? "warn" : "ok";
-      return {
-        contract: p.contract, vendor: p.vendor, scope: p.scope,
-        done: p.done + " / " + p.planned, pct: pct + "%", missed: String(p.missed), late: String(p.late), reports: p.reports + " / " + p.done, repPct: rep + "%",
-        next: p.next, nextColor: p.next === "blocked" ? t("risk").color : "var(--color-text)",
-        deferrals: p.deferrals ? p.deferrals + " deferred" + (p.note ? " · " : "") : "", note: p.note, noteShow: p.note || p.deferrals ? "block" : "none",
-        color: t(tone).color, bg: t(tone).bg, state: tone === "risk" ? "behind plan" : tone === "warn" ? "watch" : "to plan",
-        missedColor: p.missed ? t("risk").color : "var(--color-neutral-500)", lateColor: p.late ? t("warn").color : "var(--color-neutral-500)", repColor: rep < 90 ? t("warn").color : t("ok").color
-      };
-    }).sort((p, q) => parseInt(p.pct, 10) - parseInt(q.pct, 10));
-    const planned = MX.ppm.reduce((q, p) => q + p.planned, 0), done = MX.ppm.reduce((q, p) => q + p.done, 0), missed = MX.ppm.reduce((q, p) => q + p.missed, 0), reports = MX.ppm.reduce((q, p) => q + p.reports, 0);
-    // Inspection query page
-    const q = s.inspQ || "";
-    const ans = q ? (MX.answers.find((a) => a.m.test(q)) || { title: "No scripted reading for that yet", take: "The reports are indexed; this question would be answered from them. Try one of the suggested questions.", rows: [] }) : MX.defaultAnswer;
-    const inspRows = I.slice().sort((p, q2) => q2.cond - p.cond).map((x) => ({
-      wo: x.wo, asset: x.asset, b: x.b, date: x.date, vendor: x.vendor, type: x.type,
-      grade: String(x.cond), gradeColor: x.cond >= 4 ? t("risk").color : x.cond === 3 ? t("warn").color : t("ok").color,
-      findings: x.findings.join(" · "), rec: x.rec, recState: x.rec === "None" ? "" : x.recDone ? "done" : "open", recColor: x.recDone || x.rec === "None" ? "var(--color-neutral-500)" : t("risk").color,
-      warranty: x.warranty || "", warrShow: x.warranty ? "inline" : "none",
-      anomShow: x.anom && liveAnoms.some((a) => a.id === x.anom) ? "inline" : "none"
-    }));
-    // Grouping for volume. 40 decisions read as 5 groups with a count, a total
-    // and one bulk action where every item in the group wants the same thing.
+
+    // ── the decisions grid ──
+    // Grouping is the server's: mxSetGroup re-reads with group_by, so `groups` below is what
+    // the backend cut and totalled, not a regroup of rows it grouped another way.
     const gk = s.mxGroup || "State";
-    const keyOf = (d) => gk === "State" ? d.state : gk === "Source" ? d.src : gk === "Building" ? d.b : d.vendor;
-    const GDESC = Object.assign({ "Blocked": "cannot proceed until a vendor or certificate is fixed", "To raise": "another module says an order should exist; none does", "Deviation": "live orders drifting off SLA or certificate", "Awaiting approval": "drafted, waiting for you" }, STATE_DESC);
-    const gNames = []; decisions.forEach((d) => { const raw = dec.find((x) => (x.id || "not raised") === d.id && x.asset === d.asset); const k = keyOf(raw); if (gNames.indexOf(k) < 0) gNames.push(k); });
-    const penny = (v) => parseInt(String(v).replace(/[^0-9]/g, ""), 10) || 0;
-    const mxGroups = gNames.map((k, i) => {
-      const raws = dec.filter((d) => keyOf(d) === k);
-      const items = decisions.filter((d) => raws.some((r) => (r.id || "not raised") === d.id && r.asset === d.asset));
-      const firsts = raws.map((r) => r.actions[0]); const same = !!firsts[0] && firsts.every((a) => a === firsts[0]) && raws.length > 1;
-      const open = s.mxOpenG ? s.mxOpenG.indexOf(k) > -1 : i === 0;
-      const tone = gk === "State" ? (ST[k] || "ok") : raws.some((r) => r.state === "Blocked" || r.state === "Deviation") ? "risk" : "warn";
+    const row = (d) => ({
+      id: d.id || "not raised",
+      idColor: d.id ? "var(--color-text)" : "var(--color-neutral-500)",
+      asset: d.asset, b: d.b, vendor: d.vendor, est: d.est,
+      estColor: d.estimated === null ? "var(--color-neutral-500)" : "var(--color-text)",
+      state: d.state,
+      color: t(STATE_TONE[d.state] || "warn").color,
+      bg: t(STATE_TONE[d.state] || "warn").bg,
+      rail: t(STATE_TONE[d.state] || "warn").color,
+      src: d.src, srcIcon: SOURCE_ICON[d.src] || "ph-wrench",
+      trigger: d.trigger, detail: d.detail,
+      due: d.due || "—",
+      statShow: d.statutory ? "inline" : "none",
+      statNote: d.statutoryNote,
+      // Nothing on this page writes, so a row offers no action that would do nothing. The
+      // backend has no decide/approve/reassign route for a decision yet.
+      actions: [],
+      // DetailDrawer reads icon / module / meta / title / body / chain[].a / chain[].t.
+      // Built in any other shape it opens with a broken glyph and a blank chain, so the row
+      // looks clickable and tells you nothing.
+      open: () => this.setState({
+        detail: {
+          icon: "ph-wrench", module: "Maintenance",
+          title: d.asset, meta: d.b + " · " + d.state, tone: STATE_TONE[d.state] || "warn",
+          status: d.state, body: d.detail, refinement: "",
+          chain: [{ a: "trigger", t: d.trigger }, { a: "source", t: d.src },
+                  { a: "building", t: d.b }, { a: "work order", t: d.id || "not raised yet" }],
+          fields: [
+            { l: "Work order", v: d.id || "not raised yet" },
+            { l: "Building", v: d.b }, { l: "Vendor", v: d.vendor },
+            { l: "Estimate", v: d.est }, { l: "Due", v: d.due || "—" },
+            { l: "Statutory", v: d.statutory ? d.statutoryNote : "not forced by a certificate" }
+          ],
+          actions: []
+        }
+      })
+    });
+
+    const groups = (m.groups || []).map((g, i) => {
+      const open = s.mxOpenG ? s.mxOpenG.indexOf(g.name) > -1 : i === 0;
+      const gtone = gk === "State" ? (STATE_TONE[g.name] || "ok")
+        : (g.blocked || g.deviating) ? "risk" : "warn";
       return {
-        name: k, n: String(items.length), desc: gk === "State" ? (GDESC[k] || "") : items.length + (items.length === 1 ? " decision" : " decisions") + " · " + raws.filter((r) => r.state === "Blocked").length + " blocked · " + raws.filter((r) => r.state === "To raise").length + " to raise",
-        total: "~£" + Math.round(raws.reduce((q, r) => q + penny(r.est), 0) / 100) / 10 + "k",
-        color: t(tone).color, open: open, caret: open ? "ph-caret-down" : "ph-caret-right",
-        toggle: () => this.setState((p) => { const cur = p.mxOpenG || [gNames[0]]; return { mxOpenG: cur.indexOf(k) > -1 ? cur.filter((x) => x !== k) : cur.concat([k]) }; }),
-        bulkShow: same ? "inline-flex" : "none", bulk: same ? firsts[0] + " · all " + raws.length : "",
-        bulkRun: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.orch(firsts[0] + " × " + raws.length + " (" + k + ")", raws.map((r) => r.asset).join(", ")); },
-        items: items
+        name: g.name, n: N(g.n),
+        desc: gk === "State"
+          ? (STATE_DESC[g.name] || "")
+          : N(g.n) + (g.n === 1 ? " decision" : " decisions") + " · " + N(g.blocked) + " blocked · " + N(g.toRaise) + " to raise",
+        // "—" when nothing in the group carries an estimate; the backend sends null for that
+        // rather than 0, because a group whose cost is unknown is not a group that is free.
+        total: g.total,
+        totalColor: g.total === "—" ? "var(--color-neutral-500)" : "var(--color-neutral-400)",
+        totalNote: g.priced !== null && g.n !== null && g.priced < g.n
+          ? g.priced + " of " + g.n + " priced" : "",
+        color: t(gtone).color, open: open, caret: open ? "ph-caret-down" : "ph-caret-right",
+        toggle: () => this.setState((p) => {
+          const cur = p.mxOpenG || [(m.groups[0] || {}).name];
+          return { mxOpenG: cur.indexOf(g.name) > -1 ? cur.filter((x) => x !== g.name) : cur.concat([g.name]) };
+        }),
+        // No bulk action: there is no route that decides a decision, so a button here would
+        // be a button that does nothing to the record it names.
+        bulkShow: "none", bulk: "",
+        items: (g.items || []).map(row)
       };
     });
-    const gOpt = (label) => ({ label: label, on: gk === label, edge: gk === label ? "var(--color-accent)" : "var(--color-divider)", fg: gk === label ? "var(--color-accent)" : "var(--color-neutral-400)", bg: gk === label ? "var(--color-accent-900)" : "transparent", pick: () => this.setState({ mxGroup: label, mxOpenG: null }) });
+    // Ungrouped (the group_by read failed but the flat list answered) still renders the rows.
+    const flat = m.decisions.map(row);
+
+    const gOpt = (label) => ({
+      label: label, on: gk === label,
+      edge: gk === label ? "var(--color-accent)" : "var(--color-divider)",
+      fg: gk === label ? "var(--color-accent)" : "var(--color-neutral-400)",
+      bg: gk === label ? "var(--color-accent-900)" : "transparent",
+      pick: () => this.mxSetGroup(label)
+    });
+
+    // The filter row, from what the backend says it actually holds. "All" plus the states
+    // with rows, plus the modules that raised any — never a chip that can only come back
+    // empty. Each carries its count, so the row doubles as the shape of the queue.
+    const cur = s.filter || "All";
+    const fOpt = (label, n) => ({
+      label: label, n: n === null || n === undefined ? "" : String(n),
+      border: cur === label ? "var(--color-accent)" : "var(--color-divider)",
+      fg: cur === label ? "var(--color-accent)" : "var(--color-neutral-400)",
+      bg: cur === label ? "var(--color-accent-900)" : "transparent",
+      click: () => this.mxSetFilter(label)
+    });
+    const avail = m.available || { state: [], source: [] };
+    const mxFilterOpts = [fOpt("All", m.total)]
+      .concat((avail.state || []).map((k) => fOpt(k, m.byState[k])))
+      .concat((avail.source || []).map((k) => fOpt(k, m.bySource[k])));
+
+    // ── inspection intelligence ──
+    const insights = m.intelligence.map((c) => ({
+      n: c.answerable ? (c.n === null ? "—" : c.n) : "—",
+      l: c.l,
+      s: c.s || "",
+      color: c.answerable && c.n !== null ? t(c.tone).color : "var(--color-neutral-400)",
+      // A card the database cannot answer is not asked — the question would return the same
+      // "cannot answer", and offering it as a link reads as if there were something behind it.
+      askShow: c.answerable ? "pointer" : "default",
+      ask: () => (c.answerable ? this.openInsp(c.q) : this.flash(c.l + " — " + (c.s || "this database cannot answer that card."))),
+      method: c.method || ""
+    }));
+    const corpus = m.corpus || null;
+    const inspCount = corpus
+      ? corpus.reports + (corpus.reports === 1 ? " report · " : " reports · ") + corpus.assets
+        + (corpus.assets === 1 ? " asset" : " assets")
+        + (corpus.since ? " · since " + (fmtDay(corpus.since) || corpus.since) : "")
+      : live ? "No inspection reports on record" : "Not loaded";
+
+    // ── PPM health ──
+    const ppm = m.ppm.map((p) => ({
+      contract: p.contract, vendor: p.vendor, scope: p.scope,
+      done: p.done, pct: p.pct, bar: p.bar, planNote: p.planNote,
+      missed: p.missed, late: p.late, reports: p.reports, repPct: p.repPct,
+      next: p.next, nextColor: p.nextIsBlocked ? t("risk").color : p.next === "—" ? "var(--color-neutral-500)" : "var(--color-text)",
+      deferrals: p.deferrals, note: "", noteShow: p.deferrals ? "block" : "none",
+      color: t(p.tone).color, bg: t(p.tone).bg, state: p.state,
+      missedColor: p.missed === "—" ? "var(--color-neutral-500)" : p.missedOn ? t("risk").color : "var(--color-neutral-500)",
+      lateColor: p.late === "—" ? "var(--color-neutral-500)" : p.lateOn ? t("warn").color : "var(--color-neutral-500)",
+      repColor: p.repPct === "—" ? "var(--color-neutral-500)" : p.repLow ? t("warn").color : t("ok").color
+    }));
+    const ps = m.ppmSummary;
+    const mxPpmSummary = ps
+      ? N(ps.done) + " of " + N(ps.plan) + " planned visits done" + (ps.yearToDate ? " year to date" : "")
+        + " · " + N(ps.missed) + " missed · " + N(ps.reports) + " reports on file · " + N(ps.deferred) + " deferrals"
+      : live ? "No PPM visits on record for your buildings" : "Not loaded";
+
+    // ── the Ask bar's answer ──
+    const ans = s.mxAnswer || null;
+    const chips = (m.chips.length ? m.chips.map((c) => c.question) : []).filter(Boolean);
+
     return {
       isMaint: isMx, isInsp: isInsp,
-      mxGroups: mxGroups,
+      mxGroups: groups.length ? groups : (flat.length ? [{
+        name: "All decisions", n: String(flat.length), desc: "", total: "—", totalColor: "var(--color-neutral-500)",
+        totalNote: "", color: t("warn").color, open: true, caret: "ph-caret-down",
+        toggle: () => {}, bulkShow: "none", bulk: "", items: flat
+      }] : []),
       mxGroupOpts: ["State", "Source", "Building", "Vendor"].map(gOpt),
-      mxCards: live.mxLiveTiles ? live.mxLiveTiles.map((x) => ({ l: x.l, v: x.v, s: x.s, color: t(x.tone).color })) : [
-        { l: "Decisions owed", v: String(MX.decisions.length), s: MX.decisions.filter((d) => d.state === "Blocked").length + " blocked · " + MX.decisions.filter((d) => d.state === "To raise").length + " to raise · " + MX.decisions.filter((d) => d.state === "Deviation").length + " deviating", color: t("risk").color },
-        { l: "Statutory among them", v: String(MX.decisions.filter((d) => d.src === "Compliance").length), s: "certificate lapsed or inside 30 days", color: t("warn").color },
-        { l: "Recommendations unconverted", v: String(openRec.length), s: "from " + I.length + " inspection reports since March", color: t("warn").color },
-        { l: "PPM to plan", v: Math.round((done / planned) * 100) + "%", s: done + " of " + planned + " visits · " + missed + " missed · " + reports + " reports", color: missed > 5 ? t("risk").color : t("warn").color }
-      ],
-      mxDecisions: decisions, mxDecEmpty: decisions.length ? "none" : "block",
-      mxDecSummary: decisions.length + " of " + MX.decisions.length + " decisions" + (f === "All" ? "" : " · filter: " + f),
+      mxFilterOpts: mxFilterOpts,
+      mxCards: mxCards,
+      mxDecisions: flat,
+      mxDecEmpty: (groups.length || flat.length) ? "none" : "block",
+      // Three sentences, never two: nothing loaded, nothing you may see, and nothing owed
+      // are different facts and only the last one is good news.
+      mxDecEmptyNote: !live
+        ? "The maintenance service has not answered, so no decision is shown."
+        : m.unallocated
+          ? "You are allocated to no buildings, so no decision is in scope for you. An admin allocates buildings on Users & access."
+          : "No decision is owed on the buildings you can see — nothing is blocked, awaiting approval, past its due date, or waiting to be raised.",
+      mxDecSummary: !live ? "Not loaded"
+        : N(m.count) + " of " + N(m.total) + (m.total === 1 ? " decision" : " decisions"),
+      mxScope: m.scope || "",
+      mxScopeShow: m.scope ? "inline" : "none",
+
       mxInsights: insights,
+      mxInsightNote: m.unanswerable && m.unanswerable.length
+        ? m.unanswerable.length + " of the four cards cannot be answered from this database — each says why in place of a number."
+        : "",
+      mxInsightNoteShow: m.unanswerable && m.unanswerable.length ? "block" : "none",
+
       mxInspQ: s.inspDraft || "",
       mxInspSet: (e) => this.setState({ inspDraft: e.target.value }),
       mxInspKey: (e) => { if (e.key === "Enter") this.openInsp(s.inspDraft || ""); },
       mxInspRun: () => this.openInsp(s.inspDraft || ""),
       mxInspOpen: () => this.openInsp(""),
-      mxInspChips: ["Which recommendations were never converted to orders?", "What is under warranty?", "Which reports confirm the energy anomalies?", "Which assets are in the worst condition?", "Which vendor files the fewest reports?"].map((c) => ({ label: c, run: () => this.openInsp(c) })),
+      mxInspChips: chips.map((c) => ({ label: c, run: () => this.openInsp(c) })),
+
       mxPpm: ppm,
-      mxPpmSummary: done + " of " + planned + " planned visits done year to date · " + missed + " missed · " + reports + " reports on file · " + MX.ppm.reduce((q2, p) => q2 + p.deferrals, 0) + " deferrals",
-      inspQ: q, inspTitle: ans.title, inspTake: ans.take, inspRowsA: ans.rows.map((r) => ({ t: r })), inspAnsEmpty: ans.rows.length ? "none" : "block",
-      inspRows: inspRows, inspCount: I.length + " reports · " + I.map((x) => x.asset).filter((v, i, arr) => arr.indexOf(v) === i).length + " assets · since 10 Mar 2026",
+      mxPpmEmpty: ppm.length ? "none" : "block",
+      mxPpmEmptyNote: !live
+        ? "The maintenance service has not answered."
+        : m.unallocated
+          ? "You are allocated to no buildings, so no contract is in scope for you."
+          : "No planned visit is on record for your buildings in this window. Loading the PPM visit history is what fills this table — the endpoint is there.",
+      mxPpmSummary: mxPpmSummary,
+      mxPpmRule: m.ppmRule || "",
+
+      // ── the inspection-reports page ──
+      inspQ: s.mxAsked || "",
+      inspTitle: !ans ? "" : ans.understood ? (ans.matched || ans.question || "") : "Not a question these records can answer",
+      inspTake: !ans ? "" : (ans.answer || ""),
+      inspSource: ans && ans.source ? "Read from " + ans.source.endpoint + " · " + (ans.source.scope || "") : "",
+      inspSourceShow: ans && ans.source ? "block" : "none",
+      inspRowsA: !ans ? [] : (ans.understood ? (ans.data || []) : (ans.can_answer || [])).map((r) => ({
+        t: typeof r === "string" ? r : (r.question || r.headline || r.contract || r.asset_name || JSON.stringify(r))
+      })),
+      inspAnsEmpty: !ans || (ans.data || ans.can_answer || []).length ? "none" : "block",
+      inspBusy: !!s.mxAskBusy,
+      inspError: s.mxAskError || "",
+      // The reports themselves. A risk level the report carries colours the grade column;
+      // an ungraded report shows a dash rather than being ranked as if it scored well.
+      inspRows: m.reports.map((r) => ({
+        wo: r.wo, asset: r.asset, b: r.b, date: r.date, vendor: r.vendor, type: r.type,
+        grade: r.risk || "—",
+        gradeColor: !r.risk ? "var(--color-neutral-500)"
+          : /high|critical/i.test(r.risk) ? t("risk").color
+          : /medium/i.test(r.risk) ? t("warn").color : t("ok").color,
+        findings: r.findings,
+        rec: r.rec, recState: r.rec === "None" ? "" : r.recOpen ? "open" : "done",
+        recColor: r.recOpen ? t("risk").color : "var(--color-neutral-500)",
+        warranty: r.warranty || "", warrShow: r.warranty ? "inline" : "none",
+        anomShow: "none"
+      })),
+      inspEmpty: m.reports.length ? "none" : "block",
+      inspEmptyNote: !live ? "The maintenance service has not answered."
+        : m.unallocated ? "You are allocated to no buildings, so no report is in scope for you."
+        : "No inspection report is on record for your buildings. A report reaches a building through the asset it is about, so a report whose asset is not placed is not listed here.",
+      inspCount: inspCount,
       inspBack: () => { window.scrollTo(0, 0); this.setState({ view: "module", module: "ops" }); },
-      inspScope: "inspection reports · " + I.length + " on file"
+      inspScope: corpus ? "inspection reports · " + corpus.reports + " on file" : "inspection reports",
+
+      // ── provenance, said on the page ──
+      mxLastRead: m.lastRead && m.lastRead.started_at ? fmtTime(m.lastRead.started_at) : "—",
+      mxLastReadNote: m.lastRead && m.lastRead.reports_read !== undefined && m.lastRead.reports_read !== null
+        ? m.lastRead.reports_read + " reports read"
+        : "no read recorded yet"
     };
   },
 
   openInsp(q) {
     window.scrollTo(0, 0);
     this.setState({ view: "insp", inspQ: q, inspDraft: q, pq: "", detail: null, queueOpen: false });
+    if (q) this.mxAsk(q, "inspection");
   }
 };

@@ -78,6 +78,24 @@ export const energyApi = {
   // benchmark rule applied to the buildings in scope, not a typed constant.
   marketProfiles: (markets) =>
     apiFetch(B, '/api/energy/market-profiles', { query: withOrg(markets ? { markets: markets.join(',') } : {}), timeoutMs: 20000 }),
+  // ── Asset intelligence (docs/api/asset-intelligence-api.md) ──────────────
+  // Sub-metered zones with their OWN reference: a server room read against an office
+  // benchmark looks like a catastrophe and a car park like a triumph. eui_kwh_per_m2 is
+  // null (never 0) when no sub-meter is attached or the area is unknown — `measured: false`
+  // means "not metered", which is a different claim from "consumed nothing".
+  sections: (buildingId) =>
+    apiFetch(B, '/api/energy/sections', { query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
+  // The headline figure and the assets behind it. assets_not_computable counts assets
+  // missing a replacement value, design life or install date; they are excluded, never
+  // added as zero, so the page must show that count beside the total.
+  assetValueAtRisk: (buildingId) =>
+    apiFetch(B, '/api/energy/assets/value-at-risk', { query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
+  // One asset: section, vendor, open anomalies, the value-at-risk arithmetic with its
+  // `basis` in words, banded readings, and the failure assessment. 404 for an asset outside
+  // your buildings — the same answer as one that does not exist.
+  assetIntelligence: (assetId) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/intelligence', { timeoutMs: 20000 }),
+
   // kW/RT over a window against a chiller's design figure — the position, breach or not.
   chillerEfficiency: (assetId, windowDays) =>
     apiFetch(B, '/api/energy/chillers/' + enc(assetId) + '/efficiency', { query: { window_days: windowDays || 14 } })

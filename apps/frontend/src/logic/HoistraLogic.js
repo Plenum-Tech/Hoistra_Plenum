@@ -5,7 +5,7 @@ import { coreMethods } from './core.js';
 import { complianceMethods } from './compliance.js';
 import { vendorsMethods } from './vendors.js';
 import { energyMethods } from './energy.js';
-import { assetsMethods } from './assets.js';
+import { assetsConditionMethods } from './assetsCondition.js';
 import { maintenanceMethods } from './maintenance.js';
 import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
@@ -49,7 +49,9 @@ export class HoistraLogic extends Controller {
     // multi-select set the grid's bulk delete acts on.
     reportMenu: false, reportName: "", reportSrcId: null, reportCad: 1, reportKey: null, reportRunIdx: 0,
     reportDays: [1, 4], reportTime: "14:00",
-    reports: [], reportsLoading: false, reportsError: "", reportsLoadedAt: null,
+    // reportsOwner is the account reports[] was read for — see rpLoad. Reports are personal,
+    // and one tab sees more than one account, so the rows carry who they belong to.
+    reports: [], reportsOwner: null, reportsLoading: false, reportsError: "", reportsLoadedAt: null,
     reportPresets: FALLBACK_PRESETS, reportSelected: [], rpArmed: null,
     // Which cards INSIDE a report the reader has put in the tray, and whether the tray is
     // open (logic/reportCards.js). A view preference, per account, per report card.
@@ -92,7 +94,7 @@ export class HoistraLogic extends Controller {
     // list is searched rather than scrolled; neither field is persisted, since a reload
     // should reopen on the current scope, not on a half-typed search.
     bldOpen: false, bldQuery: "",
-    pq: "", asPct: 10, asWeeks: 3, asOpenB: [], asOpenS: [], iotTick: 0, iotOpen: "AS-1042", inspQ: "", inspDraft: "", asScanB: [], asScanSec: [], asScanAllSec: true, asScanStage: 0, asScanDone: 0, asScanReport: null, asLastRun: "02:14 today", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
+    pq: "", asPct: 10, asWeeks: 3, asOpenB: [], asOpenS: [], iotOpen: null, asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {}, inspQ: "", inspDraft: "", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
     bkDate: "2026-09-16", bkWindow: "08:00–12:00",
     nv: { name: "", email: "", id: "", phone: "" }, nvSpec: "Lifts — LOLER",
     emTo: "", emSubject: "", emBody: "", emKicker: "", emKind: "",
@@ -133,9 +135,14 @@ export class HoistraLogic extends Controller {
     // building groups are expanded, and the per-building cost-drivers cache (fetched lazily
     // the first time a group opens, keyed by building_id).
     asLiveOpenB: [], asLiveCost: {},
-    // Maintenance page's live decisions grid and KPI tiles from svc-work-order-management
-    // (maintenanceLive.js) — null = not loaded, the seed decisions/cards render until it is.
-    mxStatsLive: null, mxWosLive: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
+    // The whole Maintenance page, from svc-work-order-management's /api/maintenance routes
+    // (maintenanceLive.js). mxRaw null = nothing has answered, and the page is empty and
+    // says so — there is no seed behind it. mxGroup is the "Group by" control, which is a
+    // server parameter (group_by) rather than a client-side regroup, so changing it re-reads.
+    // mxAnswer is the Ask bar's last answer, with the endpoint each figure came from.
+    mxRaw: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
+    mxGroup: "State", mxOpenG: null,
+    mxAnswer: null, mxAsked: "", mxAskBusy: false, mxAskError: "",
     // The chat page's connection line: idle | checking | connected | unreachable, and the
     // size of the orchestrator's tool catalogue when it answered.
     chatLink: "idle", chatTools: null, chatLinkError: "",
@@ -230,4 +237,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);

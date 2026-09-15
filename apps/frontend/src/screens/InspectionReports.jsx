@@ -68,6 +68,9 @@ export default function InspectionReports({ vals }) {
             {"Every report · worst condition first"}
           </div>
           <div style={{ borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+            <div style={{ display: vals.inspEmpty, padding: "18px 14px", fontSize: "12px", color: "var(--color-neutral-400)", lineHeight: "1.55", maxWidth: "76ch" }}>
+              {vals.inspEmptyNote}
+            </div>
             {(vals.inspRows || []).map((x, $index) => (
               <React.Fragment key={$index}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "12px 18px", flexWrap: "wrap", padding: "11px 14px", borderBottom: "1px solid var(--color-divider)" }}>

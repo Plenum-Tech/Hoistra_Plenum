@@ -622,7 +622,7 @@ export const complianceLiveMethods = {
         parts.push("Tiles — vendors blocked " + (t.blocked === null ? "—" : t.blocked) + ", pending approvals " + (t.pending === null ? "—" : t.pending) +
           ", invoice lines held " + (t.held === null ? "—" : t.held) + ", contract terms on platform default " + (t.defaults === null ? "—" : t.defaults) + ".");
       } else {
-        parts.push("The contract-performance backend has not answered, so it is showing seed data.");
+        parts.push("The contract-performance backend has not answered, so the page is empty: no vendor, score or figure is shown and every tile reads a dash.");
       }
       return parts.join(" ");
     }
