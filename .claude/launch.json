@@ -4,9 +4,26 @@
     {
       "name": "frontend-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "apps/frontend"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "apps/frontend"
+      ],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "attached-page",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8099",
+        "--directory",
+        "C:\\Users\\balap\\AppData\\Local\\Temp\\claude\\C--CMMS-Hoistra\\61c4c064-3028-458a-abc9-390bd363abec\\scratchpad"
+      ],
+      "port": 8099
     }
   ]
 }

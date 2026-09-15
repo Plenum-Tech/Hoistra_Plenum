@@ -6,7 +6,7 @@ import os
 import time
 import uuid as _uuid_mod
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,7 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .core.logging import configure_logging, get_logger
 from .db import init_db
-from .api.routes import work_orders, approvals, approval_admin, email_processor, ppm_scheduler, journeys, assets, dashboard, chat
+from .services.principal import current_principal
+from .api.routes import maintenance, work_orders, approvals, approval_admin, email_processor, ppm_scheduler, journeys, assets, dashboard, chat
 from .api.schemas.work_order import ErrorDetail, ErrorResponse
 
 log = get_logger(__name__)
@@ -235,7 +236,10 @@ app.include_router(approvals.router,       prefix="/api/work-orders/approvals", 
 app.include_router(approvals.router,       prefix="/api/approvals",             tags=["Approvals"])
 app.include_router(approval_admin.router,  prefix="/api/admin",                 tags=["Approval Admin"])
 app.include_router(email_processor.router, prefix="/api/email",                 tags=["Email Intake"])
-app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"])
+# The PPM scheduler creates work orders from an external system and had no caller at all.
+app.include_router(ppm_scheduler.router,   prefix="/api/ppm",                   tags=["PPM Scheduler"],
+                   dependencies=[Depends(current_principal)])
+app.include_router(maintenance.router,     prefix="/api/maintenance",           tags=["Maintenance"])
 app.include_router(journeys.router,        prefix="/api/journeys",              tags=["Journeys"])
 app.include_router(assets.router,          prefix="/api",                       tags=["Assets", "Locations"])
 app.include_router(dashboard.router,       prefix="/api/dashboard",             tags=["Dashboard"])
