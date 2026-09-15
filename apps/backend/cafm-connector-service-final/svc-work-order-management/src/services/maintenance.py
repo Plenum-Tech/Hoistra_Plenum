@@ -152,7 +152,10 @@ async def decisions(
 
     # Both spellings exist on one database and only one is populated per row, so take the
     # first that is actually there rather than the first that exists as a column.
-    have = [c for c in ("wo_code", "work_order_id", "workorder_ref") if c in wo]
+    # The identifier a decision prints, in the order a person would want it: a code somebody
+    # can read first, then the reference, then the uuid identity. wo_uuid is last because a
+    # uuid is a poor thing to show — but it is always there, so a row is never blank.
+    have = [c for c in ("wo_code", "work_order_id", "workorder_ref", "wo_uuid") if c in wo]
     code = ("coalesce(" + ", ".join("w." + c + "::text" for c in have) + ")") if have else None
     if code:
         vendor_col = _pick(wo, "assigned_vendor", "vendor")
