@@ -142,3 +142,49 @@ def test_a_number_that_will_not_parse_is_null_not_a_crash():
     assert mx._num(None) is None
     assert mx._num("not a number") is None
     assert mx._num("12.5") == 12.5
+
+
+# ── the work order key ────────────────────────────────────────────────────────
+
+def test_the_work_order_is_keyed_on_the_tables_real_primary_key():
+    """plenum_cafm.work_orders.id is the primary key on both databases and is set and
+    distinct on every row. The service used to key on a column called work_order_id, which
+    does not exist on one of them — so every ORM read raised there."""
+    from src.models.work_order import WorkOrder
+
+    col = WorkOrder.__table__.columns["id"]
+    assert col.primary_key, "the primary key must be the id column"
+    assert WorkOrder.work_order_id.property.columns[0].name == "id", (
+        "the attribute keeps its name so 300-odd references and every route path still mean "
+        "the same thing, but it must read the id column"
+    )
+
+
+def test_wo_code_is_carried_but_is_not_the_key():
+    """1,728 of 2,775 rows set and only 948 distinct on one database — it cannot be a key."""
+    from src.models.work_order import WorkOrder
+
+    assert "wo_code" in WorkOrder.__table__.columns
+    assert not WorkOrder.__table__.columns["wo_code"].primary_key
+
+
+def test_neither_key_column_is_typed():
+    """id is a uuid on one database and an integer on the other; wo_code is a varchar on
+    both. Pinning a type breaks one of them."""
+    from sqlalchemy import String
+
+    from src.models.work_order import WorkOrder
+
+    assert isinstance(WorkOrder.__table__.columns["id"].type, String)
+
+
+def test_a_caller_holding_the_human_code_still_finds_the_row():
+    """Links and scripts written before the key moved must keep working, and the comparison
+    is cast to text because a uuid, an integer and a varchar cannot be compared directly."""
+    import inspect
+
+    from src.api.routes import work_orders
+
+    src = inspect.getsource(work_orders._get_wo_or_404)
+    assert "WorkOrder.wo_code" in src
+    assert "cast(" in src and "String" in src

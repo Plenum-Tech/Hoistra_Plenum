@@ -1,7 +1,7 @@
 """BE1-05/08/09/13/14 + BE2-09/12/16 — Work Order CRUD + status machine + history + bulk."""
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import String, cast, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -60,8 +60,17 @@ async def _get_wo_or_404(
     work_order_id: str, session: AsyncSession, principal: Principal | None = None
 ) -> WorkOrder:
     try:
+        # The key is plenum_cafm.work_orders.id. A caller holding the human reference
+        # instead — the code people read and quote — gets the same row rather than a 404,
+        # so links and scripts written before the key moved keep working.
         result = await session.execute(
-            select(WorkOrder).where(WorkOrder.work_order_id == work_order_id)
+            select(WorkOrder).where(
+                # Compared as text on both sides: the key is a uuid on one database and an
+                # integer on the other, and wo_code is a varchar on both, so an untyped
+                # comparison raises "operator does not exist: character varying = integer".
+                or_(cast(WorkOrder.work_order_id, String) == str(work_order_id),
+                    cast(WorkOrder.wo_code, String) == str(work_order_id))
+            )
         )
     except SQLAlchemyError as exc:
         raise DatabaseError(str(exc)) from exc

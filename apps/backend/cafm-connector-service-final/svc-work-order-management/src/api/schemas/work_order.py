@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
 from typing import Any, Dict, Literal, Optional
 from datetime import datetime
 from uuid import UUID
@@ -64,7 +64,13 @@ class StatusUpdate(BaseModel):
 class WorkOrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    #: plenum_cafm.work_orders.id — the key to join on. Carried under its historical name
+    #: so nothing that already reads this field has to change.
     work_order_id:      str
+    #: The same value under the name it actually has on the table.
+    id:                 Optional[str]      = None
+    #: The human reference to display. Not unique, never a key.
+    wo_code:            Optional[str]      = None
     building_id:        Optional[UUID]     = None
     # Legacy plenum_cafm.work_orders rows may have NULL source/priority when not
     # created through this service — keep optional so list/detail responses validate.
@@ -89,10 +95,17 @@ class WorkOrderResponse(BaseModel):
     prepared_at:        Optional[datetime] = None
 
 
-    @field_validator("asset_id", mode="before")
+    @field_validator("asset_id", "id", "work_order_id", mode="before")
     @classmethod
-    def _asset_id_to_str(cls, v):
+    def _key_to_str(cls, v):
         return str(v) if v is not None else v
+
+    @model_validator(mode="after")
+    def _mirror_key(self):
+        # id and work_order_id are the same column; fill whichever the ORM did not set.
+        if self.id is None:
+            self.id = self.work_order_id
+        return self
 
 
 class WorkOrderCreateResponse(WorkOrderResponse):

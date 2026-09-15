@@ -14,7 +14,18 @@ class WorkOrder(Base):
         {"schema": "plenum_cafm"},
     )
 
-    work_order_id       = Column(String(50),  primary_key=True)
+    # plenum_cafm.work_orders.id IS the primary key on both databases and is set and
+    # distinct on every row. The service used to key on a column called work_order_id, which
+    # does not exist on one of them at all — so every ORM read raised there. wo_code is not a
+    # candidate either: 1,728 of 2,775 rows set and only 948 distinct.
+    #
+    # The Python attribute keeps its name so the three hundred-odd references to it, and the
+    # {work_order_id} in every route path, go on meaning the same thing. Deliberately
+    # untyped: the column is uuid on one database and integer on the other.
+    work_order_id       = Column("id", String, primary_key=True)
+    #: The human reference people read and quote. Present on both, not unique on one, and
+    #: never used as a key.
+    wo_code             = Column(String(50))
 
     # Real plenum_cafm.work_orders columns (NOT NULL — must be supplied on insert)
     organization_id     = Column(Integer)                     # set from DEFAULT_ORGANIZATION_ID
