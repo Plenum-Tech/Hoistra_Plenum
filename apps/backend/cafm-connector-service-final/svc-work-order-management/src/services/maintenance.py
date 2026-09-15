@@ -1004,9 +1004,14 @@ async def ppm_health_by_contract(
                count(*) FILTER (WHERE v.completed_date IS NULL
                                   AND v.scheduled_date < current_date
                                   AND NOT {deferred})                        AS missed,
+               -- Late means past the tolerance the contract agrees, not past the date. A
+               -- visit booked for the 1st and done on the 3rd inside a 7-day window was on
+               -- time, and counting it late makes every contract look worse than it is.
                count(*) FILTER (WHERE v.completed_date IS NOT NULL
                                   AND v.scheduled_date IS NOT NULL
-                                  AND v.completed_date > v.scheduled_date)   AS late,
+                                  AND v.completed_date > v.scheduled_date
+                                      + make_interval(days => coalesce(v.tolerance_days, 0)))
+                   AS late,
                count(*) FILTER (WHERE {deferred})                            AS deferred,
                count(*) FILTER (WHERE {report_on})                           AS reports,
                min(v.scheduled_date) FILTER (WHERE v.completed_date IS NULL
