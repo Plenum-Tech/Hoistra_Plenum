@@ -10,6 +10,49 @@ nothing gets a predicate matching no row.
 
 ---
 
+## If you are banding assets in the page, you don't need to
+
+`apps/frontend/src/logic/assetsCondition.js` currently derives Threat / Watch / In control in
+the browser, from three calls on load — `energyApi.anomalies()`, `energyApi.sections()`,
+`energyApi.assetValueAtRisk()` — plus a lazy `assetIntelligence()` and `assetWorkHistory()` per
+opened asset. That works, and nothing below is a bug report. But the banding half of it is the
+same computation as `GET /api/energy/condition/assets`, and two implementations of one rule
+drift. Three specific ways:
+
+- **The thresholds are per organisation and editable.** `section_over_reference_pct` and
+  `anomaly_persistent_weeks` live in `asset_condition_rules`, and `PUT
+  /api/energy/condition/rules` changes them. A browser-side copy cannot see that row, so moving
+  a stepper would change what the server says and leave the page banding on the shipped
+  defaults — silently, and only for the organisations that have set their own.
+- **The chips are already query parameters.** `?band=threat|watch|in_control` and
+  `?min_deviation_pct=10` / `=30` back the four chips directly, filtered against the full set
+  rather than against whatever the page happened to load.
+- **The section deviation agrees by construction.** `_signals()` in `condition_engine.py`
+  reads `asset_intelligence.sections()` — the same function that fills the section headers —
+  rather than recomputing it. An asset row and its section header cannot disagree. Two
+  separate derivations of the same percentage can, and when they do neither figure is
+  trustworthy.
+
+### What swaps for what
+
+| Page needs | Instead of | Call |
+|---|---|---|
+| Band, reasons, explanation per asset | `anomalies()` + `sections()` joined in the page | `GET /api/energy/condition/assets` |
+| Band chips, Above 10% / Above 30% | filtering the loaded array | the same call with `?band=` / `?min_deviation_pct=` |
+| KPI cards, building and section rollups | summing rows client-side | `GET /api/energy/condition/summary` |
+| Asset row's vendor, criticality, install date, last PPM | separate lookups | already on the `condition/assets` row |
+
+`energyApi.assetValueAtRisk()` is **not** replaced by this — replacement value at risk is its
+own figure and stays where it is. Nor is `assetIntelligence()` for the opened-asset drawer.
+This is only about which surface decides the band.
+
+One thing to carry over when you swap: `summary.section_not_measured` — 35 of 54 assets on the
+deployed database sit in a section with no sub-meter and are banded on one signal instead of
+two. Those are not "checked and clean", and the page should say so rather than letting them
+read as In control on equal footing with the rest.
+
+---
+
 ## The rule
 
 | Band | When |
