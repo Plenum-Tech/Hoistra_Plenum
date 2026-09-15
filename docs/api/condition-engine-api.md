@@ -132,6 +132,67 @@ there is nothing to scan — don't render it as "0 assets".
 
 ---
 
+## What a building, a section and an asset row now carry
+
+The page prints far more beside each row than a band, so the rollups carry it — a header is
+one response rather than four joined in the page.
+
+**Building row:** `eui_kwh_per_m2`, `reference_eui_kwh_m2`, `deviation_pct`,
+`benchmark_standard`, `over_reference`, `sections_over_reference` of `sections`,
+`work_orders_open`, `inspections_recommended`, plus the three band counts. Ranked by the
+building's own deviation.
+
+**Section row:** its intensity against its own reference, `over_reference`, the band counts,
+and `route` — **`"sub-meter"`** where a meter measured it, **`"building-level · inferred"`**
+where the figure is apportioned. An asset in no section is gathered into a stated
+`is_whole_building` row rather than dropped, because the page shows those assets and the
+honest label is that the reading is inferred, not that the asset has no home.
+
+**Asset row:** adds `installation_date` and `last_ppm_date` — the most recent visit actually
+completed, from either a PPM visit or a completed planned work order. Null when none is on
+record; never silently the install date.
+
+---
+
+## `GET /api/energy/assets/{asset_id}/notes`
+
+The work orders and inspection notes under an asset.
+
+```jsonc
+{"ok": true, "asset_id": "…", "asset_name": "CHILLER-101",
+ "work_orders": [{"wo_code": "WO-4421", "date": "2026-06-14", "vendor": "Apex Mechanical",
+                  "grade": "4", "status": "Completed",
+                  "notes": ["Compressor 2 contactor replaced · Refrigerant charge 8% low"],
+                  "recommendation": {"text": "Leak test within 3 months; condenser clean",
+                                     "state": "open", "became_work_order": null},
+                  "report_on_file": true}],
+ "reports_without_an_order": [],
+ "recommendations_open": 1,
+ "warranty": {"asset": {"expires": "2027-03-01", "in_warranty": true},
+              "parts": [{"part_name": "Compressor 2 contactor", "expires": "2027-03-01",
+                         "in_warranty": true, "claimable": true}],
+              "claimable": true}}
+```
+
+A recommendation is **open until an order is raised off it** — that is the row worth reading,
+and `recommendations_open` counts them.
+
+**Warranty is two separate claims.** The asset may be in warranty, and a part fitted to it may
+be under its own term long after the asset's has run out — a contactor fitted last month on a
+chiller installed in 2009. Neither is inferred from the other. `claimable` is a prompt to check
+a claim, not an assertion that one exists.
+
+---
+
+## The two buttons
+
+**Raise work order** and **Request inspection** are both `POST /api/work-orders/` on
+svc-work-order-management, differing only in `request_type`. No separate endpoint exists
+because none is needed. Note that `asset` is required as a **name**, not an id — pass
+`building_id` alongside it so the order lands in the right building.
+
+---
+
 ## What the data says today
 
 | | Deployed database | `plenum_agent` |

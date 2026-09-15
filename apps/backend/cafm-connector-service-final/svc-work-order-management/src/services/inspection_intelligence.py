@@ -55,6 +55,11 @@ MIN_SHARED_TERMS = 2
 #: An inspector's grade, 1 as new to 5 end of life. At or above this is "poor".
 POOR_GRADE = 4
 
+#: How long after a report an order may be raised and still count as acting on it. Beyond
+#: this it is simply later work on the same asset, and crediting it would quietly zero the
+#: "never converted" figure on any register with a normal volume of orders.
+FOLLOW_UP_WINDOW_DAYS = 90
+
 
 def _words(*parts: Any) -> set[str]:
     """The subject words in some text: lower-cased, de-punctuated, stopwords removed."""
@@ -172,12 +177,22 @@ async def unconverted_recommendations(
     converted = ("i.converted_work_order_id IS NOT NULL"
                  if "converted_work_order_id" in insp else "FALSE")
     wo = sh.get("work_orders", set())
+    # An order counts as following a recommendation only if it was raised after the report,
+    # inside a window where it could plausibly be that work, and is not the order the report
+    # came off in the first place. "Any order on this asset, ever after" credits a reactive
+    # callout months later with closing out a filter change, and on a register where every
+    # asset carries dozens of orders it means nothing is ever unconverted — which is exactly
+    # what this figure exists to show.
     followed = ("""EXISTS (SELECT 1 FROM plenum_cafm.work_orders w
                             WHERE w.asset_id::text = i.asset_id::text
-                              AND w.created_at::date > i.inspection_date)"""
+                              AND w.created_at::date > i.inspection_date
+                              AND w.created_at::date <= i.inspection_date
+                                  + make_interval(days => :follow_days)
+                              AND w.id::text <> coalesce(i.work_order_id, ''))"""
                 if {"asset_id", "created_at"} <= wo else "FALSE")
 
     clause, params = _scope(building_ids, "a.building_id")
+    params["follow_days"] = FOLLOW_UP_WINDOW_DAYS
     rows = await _rows(session, f"""
         SELECT i.id::text AS id, i.asset_id::text AS asset_id, a.asset_name, i.asset_code,
                a.building_id::text AS building_id, b.name AS building,

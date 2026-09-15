@@ -52,6 +52,14 @@ AWAITING = ("pending_approval", "pending approval", "awaiting approval", "submit
 LIVE = ("open", "inprogress", "in progress", "in_progress", "assigned", "scheduled")
 DONE = ("completed", "closed", "complete", "done", "cancelled", "canceled")
 
+#: How many decisions are read to count them, whatever page size was asked for.
+#:
+#: The page limit used to be pushed into each source's own SQL, so `total` came back as
+#: "min(what exists, the page size), summed per source" — at limit=50 a portfolio with 209
+#: decisions reported 100. A count has to be a count. Reading is bounded by this instead, and
+#: a response that hits it says so rather than presenting a capped number as the total.
+COUNT_CAP = 5000
+
 #: The order the screen lists states in, and the one decisions are sorted by.
 STATE_ORDER = {"Blocked": 0, "Deviation": 1, "Awaiting approval": 2, "To raise": 3}
 
@@ -138,10 +146,16 @@ async def decisions(
     sh = await shape(session)
     wo = sh.get("work_orders", set())
     out: list[dict[str, Any]] = []
+    # Read to the cap rather than to the page size: the counts below are over everything in
+    # scope, and slicing to `limit` happens once, at the end.
+    fetch = COUNT_CAP
 
     # Both spellings exist on one database and only one is populated per row, so take the
     # first that is actually there rather than the first that exists as a column.
-    have = [c for c in ("wo_code", "work_order_id", "workorder_ref") if c in wo]
+    # The identifier a decision prints, in the order a person would want it: a code somebody
+    # can read first, then the reference, then the uuid identity. wo_uuid is last because a
+    # uuid is a poor thing to show — but it is always there, so a row is never blank.
+    have = [c for c in ("wo_code", "work_order_id", "workorder_ref", "wo_uuid") if c in wo]
     code = ("coalesce(" + ", ".join("w." + c + "::text" for c in have) + ")") if have else None
     if code:
         vendor_col = _pick(wo, "assigned_vendor", "vendor")
@@ -166,7 +180,7 @@ async def decisions(
             "END"
         )
         params.update({"blocked": list(BLOCKED), "awaiting": list(AWAITING),
-                       "live": list(LIVE), "lim": int(limit)})
+                       "live": list(LIVE), "lim": fetch})
 
         # A vendor is recorded as a name on one database and as a uuid on the other. Show a
         # name either way, rather than an id the reader cannot act on.
@@ -241,7 +255,7 @@ async def decisions(
                 "priority": r["priority"], "due": r["due"],
             })
 
-    out.extend(await _decisions_from_approvals(session, building_ids=building_ids, limit=limit))
+    out.extend(await _decisions_from_approvals(session, building_ids=building_ids, limit=fetch))
     out.sort(key=lambda d: (STATE_ORDER.get(d["state"], 9), str(d.get("building") or "")))
 
     # Counted over everything in scope, so the tallies do not change when a filter narrows
@@ -250,15 +264,27 @@ async def decisions(
     by_state = {k: sum(1 for d in out if d["state"] == k) for k in STATE_ORDER}
     by_source = _tally(out, "source")
     total = len(out)
+    capped = total >= fetch
 
     kept = [d for d in out
             if (state is None or d["state"] == state)
             and (source is None or d["source"] == source)]
 
+    page = kept[:limit]
     return {
         "ok": True,
-        "count": len(kept),
+        # Three numbers that each mean one thing: how many came back in this response, how
+        # many survived the filter, and how many exist in scope. They were previously one
+        # number wearing three hats, which is why a page could print "134 of 134" while
+        # showing a fraction of them.
+        "count": len(page),
+        "matched": len(kept),
         "total": total,
+        # True when there are more decisions than were read, so `total` is a floor rather than
+        # the figure. A capped count presented as the total is how "134 of 134" ends up on a
+        # screen that is showing 134 of two thousand.
+        "total_is_capped": capped,
+        "read_cap": fetch,
         "filtered": state is not None or source is not None,
         "by_state": by_state,
         "by_source": by_source,
@@ -268,8 +294,8 @@ async def decisions(
             "group_by": list(GROUP_KEYS),
         },
         "group_by": group_by,
-        "groups": _group(kept, group_by) if group_by else None,
-        "decisions": kept[:limit],
+        "groups": _group(kept, group_by, limit=limit) if group_by else None,
+        "decisions": page,
     }
 
 
@@ -278,7 +304,8 @@ GROUP_KEYS = {"state": "state", "source": "source",
               "building": "building", "vendor": "vendor"}
 
 
-def _group(rows: list[dict[str, Any]], by: str) -> list[dict[str, Any]]:
+def _group(rows: list[dict[str, Any]], by: str,
+           *, limit: int | None = None) -> list[dict[str, Any]]:
     """The decisions cut into the groups the screen offers, each with its own rollup.
 
     Every group carries the two counts the header shows — how many are blocked and how many
@@ -309,7 +336,9 @@ def _group(rows: list[dict[str, Any]], by: str) -> list[dict[str, Any]]:
             # cost is unknown must not read as a group that costs nothing.
             "estimated_cost": round(sum(costs), 2) if costs else None,
             "priced": len(costs),
-            "decisions": items,
+            # The counts above are over every decision in the group; the list is a page of
+            # them. A rollup that counted only what it returned would be a rollup of nothing.
+            "decisions": items[:limit] if limit else items,
         })
     # State groups keep the order the screen lists them in; everything else leads with the
     # biggest group, which is what a person scanning the page is looking for.
@@ -978,9 +1007,14 @@ async def ppm_health_by_contract(
                count(*) FILTER (WHERE v.completed_date IS NULL
                                   AND v.scheduled_date < current_date
                                   AND NOT {deferred})                        AS missed,
+               -- Late means past the tolerance the contract agrees, not past the date. A
+               -- visit booked for the 1st and done on the 3rd inside a 7-day window was on
+               -- time, and counting it late makes every contract look worse than it is.
                count(*) FILTER (WHERE v.completed_date IS NOT NULL
                                   AND v.scheduled_date IS NOT NULL
-                                  AND v.completed_date > v.scheduled_date)   AS late,
+                                  AND v.completed_date > v.scheduled_date
+                                      + make_interval(days => coalesce(v.tolerance_days, 0)))
+                   AS late,
                count(*) FILTER (WHERE {deferred})                            AS deferred,
                count(*) FILTER (WHERE {report_on})                           AS reports,
                min(v.scheduled_date) FILTER (WHERE v.completed_date IS NULL

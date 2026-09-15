@@ -239,12 +239,22 @@ async def market_profiles(
         # Reference EUI — derived where the platform computes one, reference otherwise.
         ref_eui = r.get("reference_eui") or {}
         if cc == "UK":
+            # The statutory figure, flat, because that is the number the UK is actually held
+            # to and the one the country rule tests against. The use-mix weighting the
+            # platform can compute is a more precise read of the same standard, so it is
+            # carried in the note rather than dropped — but the headline is the statutory one.
+            statutory = ref_eui.get("statutory_value")
             w = weighted_tm46(blds)
-            ref_cell = (_cell(f"{int(w['value'])} kWh/m²/yr weighted · "
-                              + ", ".join(f"{k} {int(v['benchmark'])}" for k, v in sorted(w["by_type"].items())),
-                              "derived", n=w["buildings"],
-                              note="CIBSE TM46 weighted by the use mix of the buildings in scope")
-                        if w else _cell("TM46 by use class · no typed building in scope to weight", "reference"))
+            weighted_note = (
+                f"; weighted by the use mix of the {w['buildings']} buildings in scope this "
+                f"is {int(w['value'])} ("
+                + ", ".join(f"{k} {int(v['benchmark'])}" for k, v in sorted(w["by_type"].items()))
+                + ")" if w else "")
+            ref_cell = (_cell(f"{int(statutory)} kWh/m²/yr statutory", "reference",
+                              note=(ref_eui.get("statutory_basis") or "CIBSE TM46 statutory")
+                                   + weighted_note)
+                        if statutory is not None else
+                        _cell("TM46 by use class · no statutory figure on file", "reference"))
         elif cc == "AE":
             m = rolling_portfolio_median(blds)
             ref_cell = (_cell(f"{int(m['value'])} kWh/m²/yr rolling portfolio benchmark", "derived",

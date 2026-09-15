@@ -485,3 +485,180 @@ async def portfolio_value_at_risk(
         ),
         "assets": contributing[:100],
     }
+
+
+# ── what has been done to this asset, and what was recommended ───────────────────────
+
+async def asset_notes(
+    session: AsyncSession, *, asset_id: str, building_ids: list[UUID] | None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """The work orders on one asset with the report each produced, and what is still owed.
+
+    This is the block under an asset on the Assets page: an order, its date and vendor, the
+    grade the inspector gave, what they wrote, and — the part that matters — whether the
+    recommendation they left ever became anything. A recommendation with no order after it is
+    the reason the block is worth showing at all.
+
+    Warranty is answered from two places and they are different claims. The asset itself may
+    still be under warranty, and a *part fitted to it* may be under its own term long after
+    the asset's has run out — a contactor fitted last month on a chiller installed in 2009.
+    Both are returned, labelled, and neither is inferred from the other.
+    """
+    clause, params = _scope(building_ids, "a.building_id")
+    params["aid"] = str(asset_id)
+
+    try:
+        async with session.begin_nested():
+            owns = (await session.execute(text(f"""
+                SELECT a.id::text AS id, a.asset_name, a.warranty_expiry,
+                       a.building_id::text AS building_id
+                  FROM plenum_cafm.assets a
+                 WHERE a.id::text = :aid{clause} LIMIT 1"""), params)).mappings().first()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("asset_intel.notes_scope_failed", error=str(exc)[:200])
+        return {"ok": False, "reason": "query_failed"}
+    if owns is None:
+        return {"ok": False, "reason": "not_found_or_not_in_scope", "asset_id": str(asset_id)}
+
+    orders = await _notes_rows(session, """
+        SELECT w.id::text AS work_order_id,
+               coalesce(w.wo_code, w.id::text) AS wo_code,
+               w.status, w.created_at, w.closed_at, w.completed_at,
+               coalesce(v.vendor_name, w.assigned_vendor::text) AS vendor,
+               w.title, w.issue_description
+          FROM plenum_cafm.work_orders w
+          LEFT JOIN plenum_cafm.vendors v ON v.id::text = w.assigned_vendor::text
+         WHERE w.asset_id::text = :aid
+         ORDER BY coalesce(w.completed_at, w.closed_at, w.created_at) DESC NULLS LAST
+         LIMIT :lim""", {"aid": str(asset_id), "lim": int(limit)}, "work_orders")
+
+    reports = await _notes_rows(session, """
+        SELECT i.id::text AS id, i.inspection_date, i.inspector, i.risk_level,
+               i.finding_type, i.observations, i.recommendation,
+               i.corrective_action, i.converted_work_order_id, i.work_order_id
+          FROM plenum_cafm.inspections i
+         WHERE i.asset_id::text = :aid
+         ORDER BY i.inspection_date DESC NULLS LAST
+         LIMIT :lim""", {"aid": str(asset_id), "lim": int(limit)}, "inspections")
+
+    by_wo: dict[str, list[dict[str, Any]]] = {}
+    loose: list[dict[str, Any]] = []
+    for r in reports:
+        key = str(r.get("work_order_id") or "")
+        (by_wo.setdefault(key, []) if key else loose).append(r)
+
+    def recommendation_of(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for r in rows:
+            text_ = (r.get("recommendation") or "").strip()
+            if not text_ and not r.get("corrective_action"):
+                continue
+            done = r.get("converted_work_order_id") is not None
+            return {
+                "text": text_ or "corrective action required",
+                # Open means nobody raised anything off it. That is the whole point of the
+                # line: "recommendation open" is a thing somebody still owes.
+                "state": "done" if done else "open",
+                "became_work_order": r.get("converted_work_order_id"),
+                "risk_level": r.get("risk_level"),
+            }
+        return None
+
+    out_orders = []
+    for w in orders:
+        attached = by_wo.get(w["work_order_id"], []) + by_wo.get(w["wo_code"], [])
+        when = w.get("completed_at") or w.get("closed_at") or w.get("created_at")
+        out_orders.append({
+            "work_order_id": w["work_order_id"], "wo_code": w["wo_code"],
+            "date": _iso(when), "status": w.get("status"), "vendor": w.get("vendor"),
+            "title": w.get("title") or w.get("issue_description"),
+            "grade": next((r.get("risk_level") for r in attached if r.get("risk_level")), None),
+            "notes": [r.get("observations") for r in attached if r.get("observations")],
+            "recommendation": recommendation_of(attached),
+            "report_on_file": bool(attached),
+        })
+
+    # Reports that name no order are still reports, and one carrying an open recommendation is
+    # the most interesting row on the block — it is work nobody has raised.
+    out_reports = [{
+        "id": r["id"], "date": _iso(r.get("inspection_date")), "inspector": r.get("inspector"),
+        "grade": r.get("risk_level"), "finding_type": r.get("finding_type"),
+        "observations": r.get("observations"),
+        "recommendation": recommendation_of([r]),
+        "work_order": None,
+    } for r in loose]
+
+    warranty = await _warranty_for(session, asset_id, owns.get("warranty_expiry"))
+    open_recs = sum(
+        1 for x in out_orders + out_reports
+        if (x.get("recommendation") or {}).get("state") == "open")
+
+    return {
+        "ok": True,
+        "asset_id": owns["id"], "asset_name": owns["asset_name"],
+        "work_orders": out_orders,
+        "reports_without_an_order": out_reports,
+        "recommendations_open": open_recs,
+        "warranty": warranty,
+        "note": ("a recommendation is open until an order is raised off it; asset warranty "
+                 "and part warranty are separate claims and neither is inferred from the other"),
+    }
+
+
+async def _notes_rows(
+    session: AsyncSession, sql: str, params: dict[str, Any], what: str,
+) -> list[dict[str, Any]]:
+    """One source in its own savepoint: a table shaped differently here must cost this block
+    that source, not the whole asset."""
+    try:
+        async with session.begin_nested():
+            return [dict(r) for r in
+                    (await session.execute(text(sql), params)).mappings().all()]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("asset_intel.notes_failed", source=what, error=str(exc)[:220])
+        return []
+
+
+async def _warranty_for(
+    session: AsyncSession, asset_id: str, asset_expiry: Any,
+) -> dict[str, Any]:
+    """What is still under warranty on this asset — the asset itself, and any part fitted.
+
+    A part fitted last month can be under its own term long after the asset's has run out,
+    which is exactly the case worth surfacing: the plant is out of warranty and the component
+    that failed is not.
+    """
+    today = date.today()
+    asset_when = asset_expiry.date() if isinstance(asset_expiry, datetime) else asset_expiry
+    out: dict[str, Any] = {
+        "asset": {
+            "expires": _iso(asset_when),
+            "in_warranty": bool(isinstance(asset_when, date) and asset_when >= today),
+        },
+        "parts": [],
+        "claimable": False,
+    }
+    rows = await _notes_rows(session, """
+        SELECT p.id::text AS id, sp.part_name, sp.part_code, p.fitted_at,
+               coalesce(p.warranty_expiry,
+                        (p.fitted_at + make_interval(months => sp.warranty_months))) AS expires,
+               p.invoiced_value, p.currency
+          FROM plenum_cafm.work_order_parts p
+          LEFT JOIN plenum_cafm.spare_parts sp ON sp.id::text = p.part_id::text
+         WHERE p.asset_id::text = :aid
+         ORDER BY expires DESC NULLS LAST""", {"aid": str(asset_id)}, "warranty_parts")
+    for r in rows:
+        when = r.get("expires")
+        when = when.date() if isinstance(when, datetime) else when
+        live = isinstance(when, date) and when >= today
+        out["parts"].append({
+            "part_name": r.get("part_name"), "part_code": r.get("part_code"),
+            "fitted_at": _iso(r.get("fitted_at")), "expires": _iso(when),
+            "in_warranty": live,
+            "invoiced_value": _num(r.get("invoiced_value")), "currency": r.get("currency"),
+            # Claimable means the part is inside its term, so work on it should not be paid
+            # for twice. It is not a claim, it is a prompt to check one.
+            "claimable": live,
+        })
+    out["claimable"] = out["asset"]["in_warranty"] or any(p["claimable"] for p in out["parts"])
+    return out
