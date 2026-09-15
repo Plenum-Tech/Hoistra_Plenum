@@ -25,7 +25,7 @@ UPDATE plenum_cafm.energy_anomalies a
                     ELSE 'GBP'
                   END
   FROM plenum_cafm.energy_meters m
-  LEFT JOIN plenum_cafm.buildings b ON b.building_id = m.site_id
+  LEFT JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
   LEFT JOIN plenum_cafm.sites s ON s.site_id = b.site_id OR s.id = b.site_id
  WHERE a.currency IS NULL AND m.id = a.meter_id;
 

@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS plenum_cafm.energy_meters (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
-    site_id             UUID,
+    building_id         UUID,
     asset_id            UUID,  -- sub-meter → asset FK
     meter_type          VARCHAR(20) NOT NULL,  -- electricity | gas
     mpan                VARCHAR(40),           -- UK electricity
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_meters (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_site ON plenum_cafm.energy_meters (site_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_site ON plenum_cafm.energy_meters (building_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_asset ON plenum_cafm.energy_meters (asset_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_mpan ON plenum_cafm.energy_meters (mpan);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_em_mprn ON plenum_cafm.energy_meters (mprn);
@@ -62,21 +62,21 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_mrg_status ON plenum_cafm.meter_readi
 CREATE TABLE IF NOT EXISTS plenum_cafm.building_energy_profiles (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
-    site_id             UUID NOT NULL,
+    building_id         UUID NOT NULL,
     building_type       VARCHAR(80) NOT NULL DEFAULT 'office',  -- TM46 category key
     gia_m2              NUMERIC(14,2) NOT NULL,
     tm46_electricity_benchmark NUMERIC(14,4),
     tm46_gas_benchmark  NUMERIC(14,4),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (site_id)
+    UNIQUE (building_id)
 );
 
 -- EUI snapshots
 CREATE TABLE IF NOT EXISTS plenum_cafm.eui_snapshots (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
-    site_id             UUID NOT NULL,
+    building_id         UUID NOT NULL,
     period_start        DATE NOT NULL,
     period_end          DATE NOT NULL,
     meter_type          VARCHAR(20) NOT NULL,  -- electricity | gas | combined
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.eui_snapshots (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_eui_site_period ON plenum_cafm.eui_snapshots (site_id, period_start);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_eui_site_period ON plenum_cafm.eui_snapshots (building_id, period_start);
 
 -- Asset condition scores (1–5) with provenance
 CREATE TABLE IF NOT EXISTS plenum_cafm.asset_condition_scores (
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_recommendations (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
     asset_id            UUID,
-    site_id             UUID,
+    building_id         UUID,
     recommendation_type VARCHAR(40) NOT NULL,  -- preventive | remediation | replacement
     condition_score     INT,
     consumption_vs_benchmark_pct NUMERIC(10,4),
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_recommendations (
 CREATE TABLE IF NOT EXISTS plenum_cafm.energy_anomalies (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
-    site_id             UUID,
+    building_id         UUID,
     meter_id            UUID,
     asset_id            UUID,
     anomaly_type        VARCHAR(60) NOT NULL,
@@ -163,7 +163,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_ea_type ON plenum_cafm.energy_anomali
 CREATE TABLE IF NOT EXISTS plenum_cafm.energy_monthly_reports (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id     UUID,
-    site_id             UUID,
+    building_id         UUID,
     report_month        DATE NOT NULL,
     eui_trend_json      JSONB NOT NULL DEFAULT '[]'::jsonb,
     anomalies_ranked_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.energy_monthly_reports (
     report_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
     pdf_blob_url        TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (site_id, report_month)
+    UNIQUE (building_id, report_month)
 );
 
 -- Optional: condition_score column on assets if missing
