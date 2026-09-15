@@ -73,13 +73,24 @@ def fuel_for(kwh_by_fuel: dict[str, float] | None) -> str:
     return "combined"
 
 
-def _tariff(cc: str | None) -> tuple[float | None, str]:
-    """The market's indicative electricity tariff and currency, from the reference pack."""
+def _tariff(cc: str | None) -> tuple[float | None, float | None, str]:
+    """The market's electricity tariff band and currency, from the reference pack.
+
+    A band, because a commercial tariff is a contract range rather than a number: the market
+    pack gives 21.0p to 26.0p in the UK and a 20-to-33 fils slab plus a fuel surcharge in the
+    UAE. Callers that want one figure take the low end and say so — understating a cost is
+    recoverable, and a midpoint presented as a measurement is not.
+    """
     markets = (market_profiles.load_profiles() or {}).get("markets") or {}
     m = markets.get((cc or "").upper()) or {}
-    elec = m.get("elec") or {}
-    value = elec.get("value") if isinstance(elec, dict) else None
-    return (float(value) if value is not None else None), (m.get("cur") or currency_for(cc))
+    band = ((m.get("tariff") or {}).get("electricity")) or {}
+    lo, hi = band.get("low"), band.get("high")
+    if lo is None:                                    # a pack that still holds a single point
+        elec = m.get("elec") or {}
+        lo = hi = elec.get("value") if isinstance(elec, dict) else None
+    currency = (m.get("cur") or currency_for(cc))
+    return ((float(lo) if lo is not None else None),
+            (float(hi) if hi is not None else None), currency)
 
 
 def annualise(total_kwh: float, months: int) -> float:
@@ -137,13 +148,23 @@ def benchmark_for(*, cc: str | None, use: str | None, recorded: float | None,
 def price_excess(*, eui: float | None, bench: float | None, gfa_m2: float | None,
                  cc: str | None) -> dict[str, Any]:
     if eui is None or bench is None or not gfa_m2:
-        return {"deviation_pct": None, "excess_kwh": None, "cost": None, "currency": currency_for(cc), "priced": False}
-    tariff, currency = _tariff(cc)
+        return {"deviation_pct": None, "excess_kwh": None, "cost": None, "cost_low": None,
+                "cost_high": None, "currency": currency_for(cc), "priced": False}
+    lo, hi, currency = _tariff(cc)
     deviation = round(100.0 * (eui - bench) / bench, 1) if bench else None
     excess = round(max(0.0, eui - bench) * gfa_m2, 0)
-    cost = round(excess * tariff, 0) if tariff is not None else None
-    return {"deviation_pct": deviation, "excess_kwh": excess, "cost": cost, "currency": currency,
-            "tariff": tariff, "priced": cost is not None}
+    cost_low = round(excess * lo, 0) if lo is not None else None
+    cost_high = round(excess * hi, 0) if hi is not None else None
+    return {
+        "deviation_pct": deviation, "excess_kwh": excess,
+        # `cost` is the low end of the band, not a midpoint. A single headline figure has to
+        # be one or the other, and the conservative end is the one that cannot overstate what
+        # a building is costing. cost_high sits beside it for the top of the range.
+        "cost": cost_low, "cost_low": cost_low, "cost_high": cost_high,
+        "cost_basis": ("low end of the market tariff band" if lo != hi else "flat market rate"),
+        "currency": currency, "tariff": lo, "tariff_low": lo, "tariff_high": hi,
+        "priced": cost_low is not None,
+    }
 
 
 # ── inputs ───────────────────────────────────────────────────────────────────

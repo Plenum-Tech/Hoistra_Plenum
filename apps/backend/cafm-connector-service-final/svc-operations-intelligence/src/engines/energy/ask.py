@@ -26,6 +26,7 @@ from . import buildings as bld_svc
 from . import condition_engine as ce
 from . import detection_coverage as dc_svc
 from . import market_profiles as mp_svc
+from . import pricing as price_svc
 
 log = get_logger(__name__)
 
@@ -206,13 +207,12 @@ SKILLS: list[Skill] = [
 # ── the Energy page ──────────────────────────────────────────────────────────────────
 
 async def _markets_excess(session, building_ids, org):
-    """Which markets carry the excess, ranked on kWh above each building's own reference.
+    """Which markets carry the excess, in kWh and in each market's own money.
 
-    Ranked in energy, not money. Every market prices differently and the profiles hold those
-    terms as contract wording — "28.4p/kWh contracted", "$1.40/therm billed in therms" — not
-    as a number this can multiply. Parsing a rate out of that prose to produce a confident
-    figure is exactly the kind of number nobody could check, so the excess is given in kWh,
-    which is exact, with each market's stated terms beside it.
+    Priced from the tariff bands on file rather than a single rate, because a commercial
+    tariff is a contract range and a midpoint invents precision it does not have. Markets are
+    priced separately and not added together: four currencies need an exchange rate on a
+    stated date, and none is held here, so a single portfolio number would be a made-up one.
     """
     rows = (await bld_svc.list_buildings(session, organization_id=org, limit=500)
             ).get("buildings") or []
@@ -246,20 +246,39 @@ async def _markets_excess(session, building_ids, org):
     markets = sorted(by_market.values(), key=lambda x: -x["excess_kwh"])
     for m in markets:
         m["excess_kwh"] = round(m["excess_kwh"])
+
+    # Every market is priced, including the ones with no excess, so `cost` is always an
+    # object. A key that is sometimes a dict and sometimes null is a trap for whoever reads it.
+    priced = price_svc.price_by_market({m["market"]: m["excess_kwh"] for m in markets})
+    by_code = {p["market"]: p for p in priced["markets"]}
+    for m in markets:
+        m["cost"] = by_code.get(m["market"]) or price_svc.price_kwh(m["market"], 0.0)
+
     carrying = [m for m in markets if m["excess_kwh"] > 0]
     if not carrying:
         return {"answer": (
             f"No market is over reference. {sum(m['measurable'] for m in markets)} of "
             f"{len(rows)} buildings could be measured against their own pack."),
             "count": 0, "data": markets}
+    def money(m):
+        c = m.get("cost") or {}
+        if not c.get("priceable"):
+            return ""
+        return (f" ({c['currency']} {c['low']:,.0f}–{c['high']:,.0f})"
+                if c["low"] != c["high"] else f" ({c['currency']} {c['low']:,.0f})")
+
     lead = "; ".join(
-        f"{m['name']} {m['excess_kwh']:,.0f} kWh across {m['over_reference']} of "
+        f"{m['name']} {m['excess_kwh']:,.0f} kWh{money(m)} across {m['over_reference']} of "
         f"{m['buildings']} buildings" for m in carrying[:3])
+    tail = (f" Priced from each market's own tariff band, so the figures are ranges. "
+            f"{priced['note']}." if priced.get("note") else "")
+    unpriced = priced.get("not_priceable") or []
+    if unpriced:
+        tail += (" Not priced: "
+                 + ", ".join(f"{u['market']} ({u['reason']})" for u in unpriced[:2]) + ".")
     return {"answer": (
-        f"{lead}. Ranked on kWh above each building's own reference rather than on money: "
-        f"every market prices differently and the profiles hold those terms as contract "
-        f"wording, not as a rate this can multiply."),
-        "count": len(carrying), "data": markets}
+        f"{lead}. Ranked on kWh above each building's own reference.{tail}"),
+        "count": len(carrying), "data": markets, "pricing": priced}
 
 
 async def _worst_against_pack(session, building_ids, org):

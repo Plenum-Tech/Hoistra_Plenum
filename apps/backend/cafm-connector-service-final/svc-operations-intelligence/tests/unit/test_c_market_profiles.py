@@ -113,10 +113,23 @@ class TestTheReferencePackIsHonest:
                 assert k in m, f"{cc} lacks {k}"
             assert "reference_eui" in m and "elec" in m and "cur" in m
 
-    def test_every_published_tariff_carries_a_date(self):
+    def test_every_published_tariff_carries_a_date_and_a_band(self):
+        # A tariff is a band now, not a point: a commercial rate is a contract range, and the
+        # single figure that used to sit here sat above the published ceiling in three of the
+        # four markets.
         for cc, m in mp.load_profiles()["markets"].items():
             assert m["elec"].get("as_of"), f"{cc} tariff has no as-of date"
-            assert m["elec"].get("value") and m["elec"].get("unit")
+            assert m["elec"].get("label"), f"{cc} tariff has nothing to show a reader"
+            band = (m.get("tariff") or {}).get("electricity") or {}
+            assert band.get("unit"), f"{cc} electricity band has no unit"
+            assert band.get("low") is not None and band.get("high") is not None,                 f"{cc} electricity has no priceable band"
+            assert band["low"] <= band["high"], f"{cc} band is inverted"
+
+    def test_a_fuel_nobody_can_price_says_so_rather_than_costing_nothing(self):
+        # LPG in the UAE is sold by weight, so there is no per-kWh rate for it at all.
+        ae_gas = mp.load_profiles()["markets"]["AE"]["tariff"]["gas"]
+        assert ae_gas.get("unpriceable") is True
+        assert ae_gas.get("low") is None
 
     def test_the_order_is_the_pages_order(self):
         assert mp.MARKET_ORDER == ("UK", "US", "AE", "SG")

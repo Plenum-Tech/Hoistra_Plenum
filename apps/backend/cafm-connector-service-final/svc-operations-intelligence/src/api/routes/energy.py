@@ -33,6 +33,8 @@ from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ask as ask_svc
+from ...engines.energy import market_profiles as mp_svc
+from ...engines.energy import pricing as price_svc
 from ...engines.energy import asset_intelligence as ai_svc
 from ...engines.energy import condition_engine as cond_svc
 from ...engines.energy import ratings_position as position_svc
@@ -1309,3 +1311,74 @@ async def ask_asset_suggestions(
 ):
     """The chips a page shows, served rather than hard-coded in the frontend."""
     return {"ok": True, "suggestions": ask_svc.suggestions(page)}
+
+
+@router.get("/tariffs")
+async def energy_tariffs(
+    market: str | None = Query(None, description="One market code: UK, US, AE or SG"),
+    s: access.Scope = Depends(scope),
+):
+    """The machine-readable tariff band each market bills each fuel at, and the unit factors.
+
+    Bands, not points. A commercial tariff is a contract range — 21.0p to 26.0p in the UK, a
+    20 to 33 fils slab plus a fuel surcharge in the UAE — and a single figure priced from one
+    invents precision it does not have. A fuel with no per-kWh rate at all, like LPG sold by
+    weight in the UAE, is marked unpriceable rather than priced at zero.
+    """
+    profiles = (mp_svc.load_profiles() or {})
+    markets = profiles.get("markets") or {}
+    codes = [market] if market else list(markets)
+    return {
+        "ok": True,
+        "conversions": profiles.get("conversions") or {},
+        "markets": [{
+            "market": c, "name": (markets.get(c) or {}).get("name"),
+            "currency": (markets.get(c) or {}).get("cur"),
+            "tariff": (markets.get(c) or {}).get("tariff"),
+            "statutory": (markets.get(c) or {}).get("statutory"),
+        } for c in codes if c in markets],
+        "note": ("tariffs are bands; prices computed from them are ranges, and markets in "
+                 "different currencies are never added because no exchange rate is held here"),
+    }
+
+
+class PriceBody(BaseModel):
+    """Energy to price, per market."""
+    kwh_by_market: dict[str, float] = Field(
+        ..., description='e.g. {"UK": 50000, "AE": 30000}')
+    fuel: str = Field("electricity", pattern="^(electricity|gas)$")
+
+
+@router.post("/price")
+async def price_energy(
+    body: PriceBody,
+    s: access.Scope = Depends(scope),
+):
+    """Price energy in each market's own currency, as a range.
+
+    Markets are only totalled when every one in scope shares a currency, because then it is
+    arithmetic. Otherwise each stands on its own and `total` is null with the reason — adding
+    them would need an exchange rate on a stated date, and a portfolio number that quietly
+    used a made-up one is worse than no portfolio number.
+    """
+    return {"ok": True, **price_svc.price_by_market(body.kwh_by_market, fuel=body.fuel)}
+
+
+@router.get("/statutory/{market}")
+async def statutory_assessment(
+    market: str,
+    eui_kwh_m2: float | None = Query(None, description="Measured intensity, for a market judged on intensity"),
+    tco2e: float | None = Query(None, description="Computed carbon, for a market judged on carbon"),
+    carbon_cap_tco2e: float | None = Query(None, description="The statutory cap for this occupancy group"),
+    s: access.Scope = Depends(scope),
+):
+    """Is a building over the line its own country draws, and what does that cost?
+
+    The line is a different shape per market. The UK, UAE and Singapore test intensity against
+    their own reference and carry no penalty; New York tests carbon against a cap and fines the
+    excess at $268 a tonne. A market whose rule cannot be answered from what was passed says
+    what it needs rather than returning a verdict.
+    """
+    return {"ok": True, **price_svc.assess_statutory(
+        market.upper(), eui_kwh_m2=eui_kwh_m2, tco2e=tco2e,
+        carbon_cap_tco2e=carbon_cap_tco2e)}
