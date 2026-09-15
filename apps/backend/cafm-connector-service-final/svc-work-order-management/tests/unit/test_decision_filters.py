@@ -110,3 +110,35 @@ class TestTally:
 
     def test_it_counts_sources_the_filter_chips_offer(self):
         assert _tally(FLEET, "source") == {"Vendors": 3, "Energy": 1, "Compliance": 1}
+
+
+class TestTheThreeNumbersEachMeanOneThing:
+    """count, matched and total were one number wearing three hats.
+
+    The page limit used to be pushed into each source's own SQL, so `total` came back as
+    "min(what exists, the page size), summed per source": a portfolio with 209 decisions
+    reported 100 at limit=50 and 209 at limit=200. A screen cannot reconcile that, and the
+    frontend's "134 of —" was the symptom.
+    """
+
+    def test_the_count_cap_is_well_above_any_page_size(self):
+        from src.services.maintenance import COUNT_CAP
+        assert COUNT_CAP >= 1000
+
+    def test_grouping_counts_every_decision_but_pages_the_lists(self):
+        rows = [dec(building=f"B{i // 7}") for i in range(40)]
+        groups = _group(rows, "building", limit=3)
+        # The rollup counts all forty; the lists carry at most three each.
+        assert sum(g["count"] for g in groups) == 40
+        assert all(len(g["decisions"]) <= 3 for g in groups)
+
+    def test_grouping_without_a_limit_returns_every_row(self):
+        rows = [dec(building="B1") for _ in range(10)]
+        g = _group(rows, "building")[0]
+        assert g["count"] == 10 and len(g["decisions"]) == 10
+
+    def test_a_group_cost_is_summed_over_all_of_it_not_the_page(self):
+        rows = [dec(building="B1", cost=100.0) for _ in range(10)]
+        g = _group(rows, "building", limit=2)[0]
+        assert g["estimated_cost"] == 1000.0     # not 200.0
+        assert len(g["decisions"]) == 2
