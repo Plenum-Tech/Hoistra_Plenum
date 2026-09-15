@@ -158,10 +158,10 @@ async def _facts(session: AsyncSession, building_ids: list[UUID]) -> list[dict[s
                s.use_type, s.use_mix, s.gfa_sqm, s.eui_kwh_per_m2 AS recorded_eui,
                s.benchmark_kwh_per_m2 AS recorded_benchmark,
                p.building_type AS profile_type, p.gia_m2 AS profile_gia_m2,
-               (SELECT count(*) FROM plenum_cafm.energy_meters em WHERE em.active AND em.site_id = b.building_id) AS meters_active
+               (SELECT count(*) FROM plenum_cafm.energy_meters em WHERE em.active AND em.building_id = b.building_id) AS meters_active
           FROM plenum_cafm.buildings b
           LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
-          LEFT JOIN plenum_cafm.building_energy_profiles p ON p.site_id = b.building_id
+          LEFT JOIN plenum_cafm.building_energy_profiles p ON p.building_id = b.building_id
          WHERE b.building_id = ANY(CAST(:ids AS uuid[]))
          ORDER BY b.name
     """), {"ids": [str(b) for b in building_ids]})).mappings().all()
@@ -192,7 +192,7 @@ async def _facts(session: AsyncSession, building_ids: list[UUID]) -> list[dict[s
 
 async def _latest_snapshot_end(session: AsyncSession, building_id: UUID, *, fuel: str = "combined") -> date | None:
     return (await session.execute(
-        select(EuiSnapshot.period_end).where(EuiSnapshot.site_id == building_id, EuiSnapshot.meter_type == fuel)
+        select(EuiSnapshot.period_end).where(EuiSnapshot.building_id == building_id, EuiSnapshot.meter_type == fuel)
         .order_by(EuiSnapshot.period_end.desc(), EuiSnapshot.created_at.desc()).limit(1)
     )).scalar_one_or_none()
 
@@ -301,7 +301,7 @@ async def validate(
             session.add(EuiSnapshot(
                 id=uuid4(),
                 organization_id=as_uuid(f.get("organization_id")) or org,
-                site_id=bid, period_start=f["period_start"], period_end=f["period_end"],
+                building_id=bid, period_start=f["period_start"], period_end=f["period_end"],
                 meter_type=f.get("fuel") or "combined",
                 total_kwh=Decimal(str(f["total_kwh"])), gia_m2=Decimal(str(round(f["gfa_m2"], 2))),
                 eui_kwh_per_m2=Decimal(str(f["eui_kwh_per_m2"])),

@@ -19,7 +19,7 @@ class EnergyMeter(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     meter_type: Mapped[str] = mapped_column(String(20), nullable=False)
     mpan: Mapped[str | None] = mapped_column(String(40))
@@ -77,7 +77,7 @@ class BuildingEnergyProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     building_type: Mapped[str] = mapped_column(String(80), nullable=False, default="office")
     gia_m2: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     tm46_electricity_benchmark: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
@@ -92,7 +92,7 @@ class EuiSnapshot(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     meter_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -131,7 +131,7 @@ class EnergyRecommendation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     recommendation_type: Mapped[str] = mapped_column(String(40), nullable=False)
     condition_score: Mapped[int | None] = mapped_column(Integer)
     consumption_vs_benchmark_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
@@ -151,7 +151,7 @@ class EnergyAnomaly(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     meter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     anomaly_type: Mapped[str] = mapped_column(String(60), nullable=False)
@@ -183,7 +183,7 @@ class EnergyMonthlyReport(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     report_month: Mapped[date] = mapped_column(Date, nullable=False)
     eui_trend_json: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     anomalies_ranked_json: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
@@ -202,7 +202,7 @@ class SiteOccupancyLog(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     occupancy_state: Mapped[str] = mapped_column(String(40), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)

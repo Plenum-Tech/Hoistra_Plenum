@@ -161,7 +161,7 @@ def _amount(row: dict[str, Any], currency: str) -> str:
 async def generate_monthly_energy_report(
     session: AsyncSession,
     *,
-    site_id: UUID,
+    building_id: UUID,
     report_month: date | None = None,
     organization_id: UUID | None = None,
     export_pdf: bool = True,
@@ -185,7 +185,7 @@ async def generate_monthly_energy_report(
 
     eui = await compute_site_eui(
         session,
-        site_id=site_id,
+        building_id=building_id,
         period_start=report_month,
         period_end=period_end,
         meter_type="electricity",
@@ -200,7 +200,7 @@ async def generate_monthly_energy_report(
         (
             await session.execute(
                 select(EuiSnapshot)
-                .where(EuiSnapshot.site_id == site_id)
+                .where(EuiSnapshot.building_id == building_id)
                 .order_by(EuiSnapshot.period_start.desc(), EuiSnapshot.id.desc())
                 .limit(60)
             )
@@ -234,7 +234,7 @@ async def generate_monthly_energy_report(
             await session.execute(
                 select(EnergyAnomaly)
                 .where(
-                    EnergyAnomaly.site_id == site_id,
+                    EnergyAnomaly.building_id == building_id,
                     EnergyAnomaly.detected_at >= month_start,
                     EnergyAnomaly.detected_at <= month_end,
                 )
@@ -310,7 +310,7 @@ async def generate_monthly_energy_report(
         (
             await session.execute(
                 select(EnergyMeter).where(
-                    EnergyMeter.site_id == site_id,
+                    EnergyMeter.building_id == building_id,
                     EnergyMeter.active.is_(True),
                 )
             )
@@ -320,10 +320,11 @@ async def generate_monthly_energy_report(
     carbon_kg = round(float(eui.get("total_kwh") or 0) * carbon_factor, 4) if eui.get("ok") else None
 
     # One site, one currency. Resolved once and used for every figure below.
-    ccy = await currency_for_building(session, site_id)
+    ccy = await currency_for_building(session, building_id)
 
     report_json = {
-        "site_id": str(site_id),
+        "building_id": str(building_id),
+        "site_id": str(building_id),  # deprecated alias
         "report_month": report_month.isoformat(),
         "currency": ccy,
         "anomalies_unpriced": len(unpriced),
@@ -337,7 +338,7 @@ async def generate_monthly_energy_report(
 
     lines = [
         f"Monthly Energy Report — {report_month.isoformat()}",
-        f"Site: {site_id}",
+        f"Building: {building_id}",
         f"EUI annualised: {eui.get('eui_kwh_per_m2_annualised')} kWh/m² (benchmark {eui.get('benchmark_kwh_per_m2')})",
         f"Deviation: {eui.get('deviation_pct')}% · Excess cost {ccy} {eui.get('financial_gbp')}",
         f"Anomalies: {len(ranked)} · Total excess estimate {ccy} {total_excess}",
@@ -356,7 +357,7 @@ async def generate_monthly_energy_report(
             "heading": "Executive summary",
             "lines": [
                 f"Report month: {report_month.isoformat()}",
-                f"Site id: {site_id}",
+                f"Building id: {building_id}",
                 f"Total excess cost (estimate): {ccy} {total_excess}",
                 f"Carbon exposure: {carbon_kg} kg CO₂e",
             ],
@@ -409,7 +410,7 @@ async def generate_monthly_energy_report(
     if export_pdf:
         out_dir = Path(__file__).resolve().parents[3] / "data" / "energy_reports"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"energy_{site_id}_{report_month.isoformat()}.pdf"
+        out_path = out_dir / f"energy_{building_id}_{report_month.isoformat()}.pdf"
         local_path = _render_pdf_text(
             {"title": lines[0], "lines": lines, "sections": sections},
             out_path,
@@ -418,14 +419,14 @@ async def generate_monthly_energy_report(
 
         pdf_url = await upload_energy_pdf(
             Path(local_path),
-            site_id=str(site_id),
+            site_id=str(building_id),  # blob path key; unchanged on purpose
             report_month=report_month.isoformat(),
         )
 
     existing = (
         await session.execute(
             select(EnergyMonthlyReport).where(
-                EnergyMonthlyReport.site_id == site_id,
+                EnergyMonthlyReport.building_id == building_id,
                 EnergyMonthlyReport.report_month == report_month,
             )
         )
@@ -442,7 +443,7 @@ async def generate_monthly_energy_report(
         card = EnergyMonthlyReport(
             id=uuid4(),
             organization_id=organization_id,
-            site_id=site_id,
+            building_id=building_id,
             report_month=report_month,
             eui_trend_json=trend,
             anomalies_ranked_json=ranked,
@@ -466,7 +467,8 @@ async def generate_monthly_energy_report(
         "ok": True,
         "report_id": str(card.id),
         "report_month": report_month.isoformat(),
-        "site_id": str(site_id),
+        "building_id": str(building_id),
+        "site_id": str(building_id),  # deprecated alias
         "total_excess_cost_gbp": total_excess,
         # The total is in this currency, and it covers only the anomalies that could be
         # priced — a caller summing report totals across countries needs both facts, and a

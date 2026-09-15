@@ -139,7 +139,7 @@ async def _tariff_for(session: AsyncSession, building_id: UUID | None) -> float:
         return DEFAULT_TARIFF
     v = (await session.execute(text("""
         SELECT tariff_gbp_per_kwh FROM plenum_cafm.energy_meters
-         WHERE active AND site_id = CAST(:b AS uuid) ORDER BY is_sub_meter, created_at LIMIT 1
+         WHERE active AND building_id = CAST(:b AS uuid) ORDER BY is_sub_meter, created_at LIMIT 1
     """), {"b": str(building_id)})).scalar()
     return float(v) if v else DEFAULT_TARIFF
 
@@ -245,7 +245,7 @@ async def scan(
     hit["currency"] = currency
     hit.setdefault("impact", detectors.money_impact(hit))
     row = EnergyAnomaly(
-        id=uuid4(), organization_id=org, site_id=spec.building_id if spec else None,
+        id=uuid4(), organization_id=org, building_id=spec.building_id if spec else None,
         meter_id=None, asset_id=asset_id, anomaly_type=hit["anomaly_type"],
         window_end=datetime.now(timezone.utc), metric_pct=Decimal(str(hit["metric_pct"])),
         excess_kwh=anomalies._dec(hit.get("excess_kwh")),

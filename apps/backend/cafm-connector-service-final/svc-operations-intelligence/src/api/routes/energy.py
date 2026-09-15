@@ -79,14 +79,16 @@ async def upsert_meter(
 @router.get("/meters")
 async def list_meters(
     organization_id: UUID | None = None,
-    site_id: UUID | None = None,
+    building_id: UUID | None = None,
+    site_id: UUID | None = Query(None, deprecated=True,
+                                 description="Former name of building_id. Still accepted."),
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
     organization_id = access.organization_for(s, organization_id)
     rows = await meter_svc.list_meters(
-        session, organization_id=organization_id, site_id=site_id, limit=limit
+        session, organization_id=organization_id, building_id=building_id or site_id, limit=limit
     )
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
@@ -214,7 +216,7 @@ async def building_profile(
     org_id = access.organization_for(s, body.organization_id)
     return await eui_svc.upsert_building_profile(
         session,
-        site_id=body.site_id,
+        building_id=body.building_id,
         gia_m2=body.gia_m2,
         building_type=body.building_type,
         organization_id=org_id,
@@ -637,7 +639,7 @@ async def compute_eui(
     org_id = access.organization_for(s, body.organization_id)
     return await eui_svc.compute_site_eui(
         session,
-        site_id=body.site_id,
+        building_id=body.building_id,
         period_start=body.period_start,
         period_end=body.period_end,
         meter_type=body.meter_type,
@@ -710,7 +712,7 @@ async def log_occupancy(
     org_id = access.organization_for(s, body.organization_id)
     return await occ_svc.log_occupancy_change(
         session,
-        site_id=body.site_id,
+        building_id=body.building_id,
         occupancy_state=body.occupancy_state,
         changed_at=body.changed_at,
         notes=body.notes,

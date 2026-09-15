@@ -25,7 +25,7 @@ RETRY_INTERVAL_MINUTES = 10
 _UPSERT_BATCH = 1000
 
 #: Where a building already records the meters it owns. This engine keys its meters on
-#: ``site_id``; that register keys on ``building_id`` and is what the building tree reads.
+#: ``building_id``; that register keys on ``building_id`` and is what the building tree reads.
 #: An MPAN found there answers the question a bare CSV cannot: whose readings are these.
 _REGISTER_TABLE = "meters"
 #: The identifier column differs by deployment — one column holding either number in the
@@ -159,7 +159,9 @@ def meter_to_dict(m: EnergyMeter) -> dict[str, Any]:
     return {
         "id": str(m.id),
         "organization_id": str(m.organization_id) if m.organization_id else None,
-        "site_id": str(m.site_id) if m.site_id else None,
+        "building_id": str(m.building_id) if m.building_id else None,
+        # Deprecated alias — the column was called site_id until Sep 2026.
+        "site_id": str(m.building_id) if m.building_id else None,
         "asset_id": str(m.asset_id) if m.asset_id else None,
         "meter_type": m.meter_type,
         "mpan": m.mpan,
@@ -196,11 +198,14 @@ async def upsert_meter(
 
     for field in (
         "organization_id",
-        "site_id",
+        "building_id",
         "asset_id",
     ):
         if data.get(field):
             setattr(row, field, UUID(str(data[field])))
+    # A client still sending the old name means the same building.
+    if not data.get("building_id") and data.get("site_id"):
+        row.building_id = UUID(str(data["site_id"]))
     row.meter_type = data.get("meter_type") or row.meter_type or "electricity"
     row.mpan = data.get("mpan", row.mpan)
     row.mprn = data.get("mprn", row.mprn)
@@ -564,14 +569,14 @@ async def list_meters(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
-    site_id: UUID | None = None,
+    building_id: UUID | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     q = select(EnergyMeter).where(EnergyMeter.active.is_(True)).limit(limit)
     if organization_id:
         q = q.where(EnergyMeter.organization_id == organization_id)
-    if site_id:
-        q = q.where(EnergyMeter.site_id == site_id)
+    if building_id:
+        q = q.where(EnergyMeter.building_id == building_id)
     rows = list((await session.execute(q)).scalars().all())
     return [meter_to_dict(r) for r in rows]
 
@@ -685,10 +690,10 @@ async def ingest_readings_csv(
         if existing:
             # A meter an earlier ingest created before this lookup existed carries no
             # building, and every reading written against it is stranded. Ask now.
-            if existing.site_id is None:
+            if existing.building_id is None:
                 owner = await building_for_meter(session, mpan=mpan, mprn=mprn)
                 if owner is not None:
-                    existing.site_id = owner
+                    existing.building_id = owner
                     await session.commit()
                     log.info("energy.meter_building_backfilled",
                              meter_id=str(existing.id), mpan=mpan, mprn=mprn,
@@ -707,7 +712,7 @@ async def ingest_readings_csv(
             session,
             {
                 "organization_id": organization_id,
-                "site_id": owner,
+                "building_id": owner,
                 "meter_type": "gas" if mprn and not mpan else meter_type,
                 "mpan": mpan,
                 "mprn": mprn,
@@ -836,7 +841,7 @@ async def building_meter_summary(
     over a thousand rows per meter, and the question is almost always how many, over what
     window, and how much — not what each one was.
 
-    energy_meters.site_id carries the building. Readings hang off energy_meters, while the
+    energy_meters.building_id carries the building. Readings hang off energy_meters, while the
     building's own register (plenum_cafm.meters, keyed on building_id) is what the building
     graph draws — so a meter can be on the register with no readings, and that is reported
     rather than left to look like an absence of meters.
@@ -859,7 +864,7 @@ async def building_meter_summary(
                )                                 AS estimated_readings
           FROM plenum_cafm.energy_meters em
           LEFT JOIN plenum_cafm.meter_readings r ON r.meter_id = em.id
-         WHERE em.site_id = CAST(:b AS uuid)
+         WHERE em.building_id = CAST(:b AS uuid)
          GROUP BY em.id, em.mpan, em.mprn, em.meter_type, em.is_sub_meter, em.active
          ORDER BY COALESCE(em.mpan, em.mprn)
     """
@@ -873,7 +878,7 @@ async def building_meter_summary(
         SELECT g.status, count(*) AS n, sum(g.missing_periods) AS missing
           FROM plenum_cafm.meter_reading_gaps g
           JOIN plenum_cafm.energy_meters em ON em.id = g.meter_id
-         WHERE em.site_id = CAST(:b AS uuid)
+         WHERE em.building_id = CAST(:b AS uuid)
          GROUP BY g.status
     """
     gaps = [dict(r) for r in (
@@ -889,7 +894,7 @@ async def building_meter_summary(
          WHERE m.building_id = CAST(:b AS uuid)
            AND NOT EXISTS (
                  SELECT 1 FROM plenum_cafm.energy_meters em
-                  WHERE em.site_id = m.building_id
+                  WHERE em.building_id = m.building_id
                     AND (em.mpan = m.mpan_mprn OR em.mprn = m.mpan_mprn))
          ORDER BY m.mpan_mprn
     """

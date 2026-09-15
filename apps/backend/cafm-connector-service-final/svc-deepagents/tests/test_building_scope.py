@@ -108,13 +108,24 @@ async def test_the_vendors_table_itself_is_narrowed_the_same_way():
 
 
 @pytest.mark.asyncio
-async def test_energy_tables_key_the_building_as_site_id():
+async def test_energy_tables_key_the_building_as_building_id():
+    """The energy tables called that column site_id until Sep 2026 and it never held a site
+    id. After the rename they take the same first branch as every other building-keyed table."""
     P.caller_principal.set(make((MINE,)))
-    s = FakeSession({"energy_meters": ["id", "site_id"], "meter_readings": ["id", "meter_id"]})
+    s = FakeSession({"energy_meters": ["id", "building_id"], "meter_readings": ["id", "meter_id"]})
     sql, _ = await P.table_building_clause(s, "energy_meters")
-    assert sql == " AND site_id = ANY(CAST(:scope_buildings AS uuid[]))"
+    assert sql == " AND building_id = ANY(CAST(:scope_buildings AS uuid[]))"
     sql, _ = await P.table_building_clause(s, "meter_readings")
-    assert "meter_id IN (SELECT m.id FROM plenum_cafm.energy_meters m WHERE m.site_id" in sql
+    assert "meter_id IN (SELECT m.id FROM plenum_cafm.energy_meters m WHERE m.building_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_an_unmigrated_database_still_scopes_energy_on_the_old_name():
+    """A database that has not run the rename yet must still be narrowed, not read whole."""
+    P.caller_principal.set(make((MINE,)))
+    s = FakeSession({"energy_anomalies": ["id", "site_id"]})
+    sql, _ = await P.table_building_clause(s, "energy_anomalies")
+    assert sql == " AND site_id = ANY(CAST(:scope_buildings AS uuid[]))"
 
 
 @pytest.mark.asyncio

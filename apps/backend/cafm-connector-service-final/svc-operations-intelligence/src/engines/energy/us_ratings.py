@@ -286,7 +286,7 @@ async def consumption_for_building(
     """Site kWh by fuel over the trailing window, from every active meter on the building.
 
     Meters are found two ways because there are two registries: energy_meters keyed on the
-    building (site_id holds the building id for buildings adopted from sites), and
+    building (energy tables key on building_id), and
     plenum_cafm.meters keyed on building_id whose mpan_mprn matches an energy meter.
     The months counted are months that actually have readings, so a window with a two-month
     hole is scored on ten, not twelve.
@@ -302,7 +302,7 @@ async def consumption_for_building(
         WITH ms AS (
             SELECT em.id, em.meter_type
               FROM plenum_cafm.energy_meters em
-             WHERE em.active AND em.site_id = CAST(:b AS uuid)
+             WHERE em.active AND em.building_id = CAST(:b AS uuid)
             UNION
             SELECT em.id, em.meter_type
               FROM plenum_cafm.meters m

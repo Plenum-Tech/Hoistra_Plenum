@@ -149,14 +149,15 @@ def forget(authorization: str | None) -> None:
 caller_principal: ContextVar["Principal | None"] = ContextVar("caller_principal", default=None)
 
 #: Tables a building question can be narrowed on, and the column that names the building.
-#: energy_meters and energy_anomalies key the building as site_id on this deployment.
+#: energy_meters and energy_anomalies key the building as building_id (called site_id
+#: before Sep 2026; the fallback below still covers a database that has not migrated).
 BUILDING_COLUMN: dict[str, str] = {
     "compliance_certificates": "building_id",
     "work_orders": "building_id",
     "assets": "building_id",
     "buildings": "building_id",
-    "energy_meters": "site_id",
-    "energy_anomalies": "site_id",
+    "energy_meters": "building_id",
+    "energy_anomalies": "building_id",
     "documents": "building_id",
     "meter_readings": None,           # keyed on meter_id — filtered through energy_meters
 }
@@ -211,7 +212,7 @@ ASSETS_ON_BUILDINGS_SQL = (
     "(SELECT a.id::text FROM plenum_cafm.assets a WHERE a.building_id = ANY(CAST(:{p} AS uuid[])))"
 )
 METERS_ON_BUILDINGS_SQL = (
-    "(SELECT m.id FROM plenum_cafm.energy_meters m WHERE m.site_id = ANY(CAST(:{p} AS uuid[])))"
+    "(SELECT m.id FROM plenum_cafm.energy_meters m WHERE m.building_id = ANY(CAST(:{p} AS uuid[])))"
 )
 
 _columns_cache: dict[str, frozenset[str]] = {}

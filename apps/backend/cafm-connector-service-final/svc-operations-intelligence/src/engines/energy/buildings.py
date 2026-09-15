@@ -877,7 +877,7 @@ async def list_buildings(
     seen: set[str] = set()
 
     def _lookup(table: dict[str, Any], site: dict[str, Any]) -> Any:
-        # Energy tables key on a UUID site_id; sites here keys on site_id VARCHAR(50) and may
+        # Energy tables key on a UUID building_id; sites here keys on site_id VARCHAR(50) and may
         # carry the UUID in `id`. Match on the text of either, so both shapes join.
         for cand in (site.get("key"), site.get("alt_id")):
             c = str(cand or "").strip()
@@ -948,7 +948,7 @@ async def simulated_coverage(session: AsyncSession) -> dict[str, dict[str, Any]]
     try:
         async with session.begin_nested():
             rows = (await session.execute(text("""
-                SELECT m.site_id::text AS building_id,
+                SELECT m.building_id::text AS building_id,
                        count(*) AS readings,
                        count(*) FILTER (WHERE r.source = 'simulator') AS simulated,
                        min(r.reading_at) FILTER (WHERE r.source = 'simulator') AS sim_from,
@@ -956,7 +956,7 @@ async def simulated_coverage(session: AsyncSession) -> dict[str, dict[str, Any]]
                        max(r.reading_at) FILTER (WHERE r.source <> 'simulator') AS real_to
                   FROM plenum_cafm.energy_meters m
                   JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
-                 WHERE m.site_id IS NOT NULL
+                 WHERE m.building_id IS NOT NULL
                  GROUP BY 1
             """))).mappings().all()
     except Exception as exc:  # noqa: BLE001 — a marker must never take the page down
@@ -1001,7 +1001,7 @@ async def _energy_by_site(
     try:
         async with session.begin_nested():
             for p in (await session.execute(pq)).scalars().all():
-                profiles[str(p.site_id)] = {
+                profiles[str(p.building_id)] = {
                     "building_type": p.building_type,
                     "gia_m2": float(p.gia_m2) if p.gia_m2 is not None else None,
                     "tm46_electricity_benchmark": (
@@ -1015,7 +1015,7 @@ async def _energy_by_site(
 
     # Latest snapshot per site: ordered newest first, first hit per site wins.
     sq = select(EuiSnapshot).order_by(
-        EuiSnapshot.site_id, EuiSnapshot.period_end.desc(), EuiSnapshot.created_at.desc()
+        EuiSnapshot.building_id, EuiSnapshot.period_end.desc(), EuiSnapshot.created_at.desc()
     )
     if organization_id:
         sq = sq.where(EuiSnapshot.organization_id == organization_id)
@@ -1023,7 +1023,7 @@ async def _energy_by_site(
     try:
         async with session.begin_nested():
             for s in (await session.execute(sq)).scalars().all():
-                sid = str(s.site_id)
+                sid = str(s.building_id)
                 if sid in snapshots:
                     continue
                 snapshots[sid] = {
@@ -1042,9 +1042,9 @@ async def _energy_by_site(
     meters: dict[str, list[dict[str, Any]]] = {}
     try:
         async with session.begin_nested():
-            mq = select(EnergyMeter).where(EnergyMeter.active.is_(True), EnergyMeter.site_id.is_not(None))
+            mq = select(EnergyMeter).where(EnergyMeter.active.is_(True), EnergyMeter.building_id.is_not(None))
             for m in (await session.execute(mq)).scalars().all():
-                meters.setdefault(str(m.site_id), []).append(
+                meters.setdefault(str(m.building_id), []).append(
                     {
                         "meter_type": m.meter_type,
                         "mpan": m.mpan,

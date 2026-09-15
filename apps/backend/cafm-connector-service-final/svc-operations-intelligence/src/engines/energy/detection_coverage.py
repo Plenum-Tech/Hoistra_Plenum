@@ -66,18 +66,18 @@ async def coverage(
           LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
          WHERE b.building_id = ANY(CAST(:ids AS uuid[])) ORDER BY b.name"""), {"ids": ids})).mappings().all()
     meters = (await session.execute(text("""
-        SELECT id::text, site_id::text AS building_id, meter_type, is_sub_meter, asset_id::text AS asset_id,
+        SELECT id::text, building_id::text AS building_id, meter_type, is_sub_meter, asset_id::text AS asset_id,
                coalesce(raw_metadata->>'asset_label', mpan, mprn, id::text) AS label,
                coalesce(raw_metadata->>'simulate','false') = 'true' AS simulated
-          FROM plenum_cafm.energy_meters WHERE active AND site_id = ANY(CAST(:ids AS uuid[]))
+          FROM plenum_cafm.energy_meters WHERE active AND building_id = ANY(CAST(:ids AS uuid[]))
          ORDER BY is_sub_meter, meter_type"""), {"ids": ids})).mappings().all()
     chillers = (await session.execute(text("""
         SELECT asset_id::text, building_id::text FROM plenum_cafm.chiller_design_specs
          WHERE building_id = ANY(CAST(:ids AS uuid[]))"""), {"ids": ids})).mappings().all()
     open_rows = (await session.execute(text("""
-        SELECT site_id::text AS building_id, anomaly_type, count(*) AS n
+        SELECT building_id::text AS building_id, anomaly_type, count(*) AS n
           FROM plenum_cafm.energy_anomalies
-         WHERE site_id = ANY(CAST(:ids AS uuid[])) AND status NOT IN ('resolved','closed','dismissed')
+         WHERE building_id = ANY(CAST(:ids AS uuid[])) AND status NOT IN ('resolved','closed','dismissed')
          GROUP BY 1, 2"""), {"ids": ids})).mappings().all()
     open_by: dict[str, dict[str, int]] = {}
     for r in open_rows:

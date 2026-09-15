@@ -206,9 +206,9 @@ async def _meters_by_market(session: AsyncSession, building_ids: list[UUID]) -> 
                            AS routes,
                        array_remove(array_agg(DISTINCT s.metering_granularity), NULL) AS granularities
                   FROM plenum_cafm.energy_meters m
-                  JOIN plenum_cafm.buildings b ON b.building_id = m.site_id
+                  JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
                   LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
-                 WHERE m.active AND m.site_id = ANY(CAST(:ids AS uuid[]))
+                 WHERE m.active AND m.building_id = ANY(CAST(:ids AS uuid[]))
                  GROUP BY 1
             """), {"ids": [str(b) for b in building_ids]})).mappings().all()
     except Exception as exc:  # noqa: BLE001 — the table stands without the meter column

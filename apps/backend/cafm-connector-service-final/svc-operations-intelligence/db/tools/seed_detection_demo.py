@@ -111,7 +111,7 @@ class DetectionSeeder:
             SELECT id, raw_metadata, (SELECT min(period_minutes) FROM plenum_cafm.meter_readings r WHERE r.meter_id = m.id) AS period,
                    coalesce(raw_metadata->>'synthetic','false') = 'true' AS synthetic
               FROM plenum_cafm.energy_meters m
-             WHERE m.site_id = $1 AND m.active AND m.meter_type = 'electricity' AND NOT m.is_sub_meter
+             WHERE m.building_id = $1 AND m.active AND m.meter_type = 'electricity' AND NOT m.is_sub_meter
              ORDER BY created_at LIMIT 1""", b["building_id"])
         if not row:
             return None
@@ -168,7 +168,7 @@ class DetectionSeeder:
                              m["id"], json.dumps(meta))
         await self.retire_anomalies(m["id"])
         await self.c.execute("DELETE FROM plenum_cafm.meter_readings WHERE meter_id = $1 AND source = 'simulator'", m["id"])
-        await self.c.execute("DELETE FROM plenum_cafm.eui_snapshots WHERE site_id = $1", b["building_id"])
+        await self.c.execute("DELETE FROM plenum_cafm.eui_snapshots WHERE building_id = $1", b["building_id"])
         if closed_wo_at:
             await self.c.execute("""UPDATE plenum_cafm.work_orders SET closed_at = CAST($2 AS timestamptz), completed_at = CAST($2 AS timestamptz)::timestamp, status = 'closed'
                                      WHERE id = (SELECT id FROM plenum_cafm.work_orders WHERE building_id = $1 ORDER BY created_at LIMIT 1)""",
@@ -238,7 +238,7 @@ class DetectionSeeder:
         faults include one — so gas anomalies are findings, not background."""
         m = await self.c.fetchrow("""
             SELECT id, raw_metadata, coalesce(raw_metadata->>'synthetic','false') = 'true' AS synthetic
-              FROM plenum_cafm.energy_meters WHERE site_id = $1 AND active AND meter_type = 'gas' AND NOT is_sub_meter
+              FROM plenum_cafm.energy_meters WHERE building_id = $1 AND active AND meter_type = 'gas' AND NOT is_sub_meter
              ORDER BY created_at LIMIT 1""", b["building_id"])
         if not m or not m["synthetic"]:
             return
@@ -295,7 +295,7 @@ class DetectionSeeder:
                 continue
             await self.c.execute("""
                 INSERT INTO plenum_cafm.energy_meters
-                    (id, organization_id, site_id, asset_id, meter_type, mpan, tariff_gbp_per_kwh, carbon_kg_per_kwh,
+                    (id, organization_id, building_id, asset_id, meter_type, mpan, tariff_gbp_per_kwh, carbon_kg_per_kwh,
                      is_sub_meter, active, raw_metadata, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, 'electricity', $5, $6, 0.207, true, true, $7::jsonb, now(), now())
                 ON CONFLICT (id) DO NOTHING""",
@@ -370,7 +370,7 @@ class DetectionSeeder:
         mains: list[tuple[dict, dict]] = []
         for b in targets:
             b["tariff"] = await self.c.fetchval(
-                "SELECT tariff_gbp_per_kwh FROM plenum_cafm.energy_meters WHERE site_id = $1 AND active ORDER BY is_sub_meter, created_at LIMIT 1",
+                "SELECT tariff_gbp_per_kwh FROM plenum_cafm.energy_meters WHERE building_id = $1 AND active ORDER BY is_sub_meter, created_at LIMIT 1",
                 b["building_id"]) or 0.28
             m = await self.main_meter(b)
             if not m:

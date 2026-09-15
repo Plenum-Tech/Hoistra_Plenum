@@ -169,7 +169,7 @@ class Seeder:
             existing = await self.c.fetchrow(
                 "SELECT id, (SELECT count(*) FROM plenum_cafm.meter_readings r WHERE r.meter_id = m.id) AS readings,"
                 " coalesce(raw_metadata->>'synthetic','false') = 'true' AS synthetic"
-                " FROM plenum_cafm.energy_meters m WHERE m.site_id = $1 AND m.active AND m.meter_type = $2 ORDER BY created_at LIMIT 1",
+                " FROM plenum_cafm.energy_meters m WHERE m.building_id = $1 AND m.active AND m.meter_type = $2 ORDER BY created_at LIMIT 1",
                 b["building_id"], fuel)
             if existing:
                 out.append({"id": existing["id"], "fuel": fuel, "readings": existing["readings"], "synthetic": existing["synthetic"]})
@@ -180,7 +180,7 @@ class Seeder:
                 ident = f"SYN-{str(mid)[:8].upper()}"
                 await self.c.execute("""
                     INSERT INTO plenum_cafm.energy_meters
-                        (id, organization_id, site_id, meter_type, mpan, mprn, tariff_gbp_per_kwh, carbon_kg_per_kwh,
+                        (id, organization_id, building_id, meter_type, mpan, mprn, tariff_gbp_per_kwh, carbon_kg_per_kwh,
                          is_sub_meter, active, raw_metadata, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, 0.207, false, true, $8::jsonb, now(), now())
                     ON CONFLICT (id) DO NOTHING""",
@@ -197,7 +197,7 @@ class Seeder:
             self.note(f"readings.{m['fuel']} regenerated (old rows dropped)")
             if self.apply:
                 await self.c.execute("DELETE FROM plenum_cafm.meter_readings WHERE meter_id = $1 AND source = 'simulator'", m["id"])
-                await self.c.execute("DELETE FROM plenum_cafm.eui_snapshots WHERE site_id = $1", b["building_id"])
+                await self.c.execute("DELETE FROM plenum_cafm.eui_snapshots WHERE building_id = $1", b["building_id"])
             m["readings"] = 0
         if m["readings"]:
             return

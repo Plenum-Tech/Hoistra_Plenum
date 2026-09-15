@@ -446,8 +446,8 @@ async def _closed_work_orders(session: AsyncSession, meter: EnergyMeter, since: 
     params: dict[str, Any] = {"since": since}
     if meter.asset_id:
         where.append("asset_id = CAST(:a AS uuid)"); params["a"] = str(meter.asset_id)
-    if meter.site_id:
-        where.append("building_id = CAST(:b AS uuid)"); params["b"] = str(meter.site_id)
+    if meter.building_id:
+        where.append("building_id = CAST(:b AS uuid)"); params["b"] = str(meter.building_id)
     if not where:
         return []
     try:
@@ -471,7 +471,7 @@ async def _closed_work_orders(session: AsyncSession, meter: EnergyMeter, since: 
 
 async def _monthly_and_degree_days(session: AsyncSession, meter: EnergyMeter):
     """Monthly kWh for the meter and the building's degree days, for the weather rule."""
-    if not meter.site_id:
+    if not meter.building_id:
         return [], []
     from sqlalchemy import text as _text
     months = (await session.execute(_text("""
@@ -481,7 +481,7 @@ async def _monthly_and_degree_days(session: AsyncSession, meter: EnergyMeter):
     try:
         dd = (await session.execute(_text("""
             SELECT month, hdd, cdd FROM plenum_cafm.weather_degree_days
-             WHERE building_id = CAST(:b AS uuid) ORDER BY month"""), {"b": str(meter.site_id)})).all()
+             WHERE building_id = CAST(:b AS uuid) ORDER BY month"""), {"b": str(meter.building_id)})).all()
     except Exception:  # noqa: BLE001 — table absent on an old database
         dd = []
     # a partial current month would read as a drop; only complete months are compared
@@ -491,7 +491,7 @@ async def _monthly_and_degree_days(session: AsyncSession, meter: EnergyMeter):
 
 
 async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime):
-    if not meter.site_id:
+    if not meter.building_id:
         return []
     from sqlalchemy import text as _text
     try:
@@ -499,7 +499,7 @@ async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime
             SELECT recorded_at, zone, coalesce(heating_pct, 0), coalesce(cooling_pct, 0)
               FROM plenum_cafm.bms_trends
              WHERE building_id = CAST(:b AS uuid) AND recorded_at >= :since
-             ORDER BY zone, recorded_at"""), {"b": str(meter.site_id), "since": since})).all()
+             ORDER BY zone, recorded_at"""), {"b": str(meter.building_id), "since": since})).all()
     except Exception:  # noqa: BLE001
         return []
     return [(r[0], r[1], float(r[2]), float(r[3])) for r in rows]
@@ -522,7 +522,7 @@ async def scan_meter_anomalies(
     if not meter:
         return {"ok": False, "error": "meter_not_found"}
     tariff = float(meter.tariff_gbp_per_kwh or 0.28)
-    currency = await currency_for_building(session, meter.site_id)
+    currency = await currency_for_building(session, meter.building_id)
     readings = await _load_readings(session, meter_id)
     detectors = [detect_weekend_spike, detect_baseline_drift]
     if meter.is_sub_meter:
@@ -586,7 +586,7 @@ async def scan_meter_anomalies(
     end_now = datetime.now(timezone.utc)
     occupancy_changed = await has_occupancy_change(
         session,
-        site_id=meter.site_id,
+        building_id=meter.building_id,
         window_start=end_now - timedelta(days=14),
         window_end=end_now,
     )
@@ -597,7 +597,7 @@ async def scan_meter_anomalies(
             log.info(
                 "energy.anomaly.baseline_suppressed_occupancy",
                 meter_id=str(meter_id),
-                site_id=str(meter.site_id) if meter.site_id else None,
+                building_id=str(meter.building_id) if meter.building_id else None,
             )
             continue
         hit = det(readings, tariff=tariff)
@@ -649,7 +649,7 @@ async def scan_meter_anomalies(
         row = EnergyAnomaly(
             id=uuid4(),
             organization_id=organization_id or meter.organization_id,
-            site_id=meter.site_id,
+            building_id=meter.building_id,
             meter_id=meter.id,
             asset_id=meter.asset_id,
             anomaly_type=hit["anomaly_type"],
@@ -853,7 +853,10 @@ async def list_anomalies(
             "annualised_excess_kwh": float(r.annualised_excess_kwh) if r.annualised_excess_kwh is not None else None,
             "meter_id": str(r.meter_id) if r.meter_id else None,
             "asset_id": str(r.asset_id) if r.asset_id else None,
-            "site_id": str(r.site_id) if r.site_id else None,
+            "building_id": str(r.building_id) if r.building_id else None,
+            # Deprecated alias: the column was called site_id until Sep 2026 and the
+            # shell still joins on it. Remove once the frontend reads building_id.
+            "site_id": str(r.building_id) if r.building_id else None,
             "detected_at": r.detected_at.isoformat() if r.detected_at else None,
             "pm_action": r.pm_action,
             "pm_reason": r.pm_reason,

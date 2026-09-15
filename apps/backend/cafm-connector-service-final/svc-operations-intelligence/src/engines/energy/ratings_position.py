@@ -88,7 +88,7 @@ async def _buildings_in_country(session: AsyncSession, building_ids: list[UUID],
           LEFT JOIN LATERAL (
                SELECT e.eui_kwh_per_m2, e.benchmark_kwh_per_m2
                  FROM plenum_cafm.eui_snapshots e
-                WHERE e.site_id = b.building_id
+                WHERE e.building_id = b.building_id
                 ORDER BY e.period_end DESC, e.created_at DESC
                 LIMIT 1) snap ON true
          WHERE b.building_id = ANY(CAST(:ids AS uuid[]))

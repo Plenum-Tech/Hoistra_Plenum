@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 class MeterUpsertRequest(BaseModel):
     id: UUID | None = None
     organization_id: UUID | None = None
+    #: The building this meter serves. Was called site_id until Sep 2026 and never held a
+    #: site id; the old name is still accepted so existing clients keep working.
+    building_id: UUID | None = None
     site_id: UUID | None = None
     asset_id: UUID | None = None
     meter_type: str = "electricity"
@@ -32,14 +35,15 @@ class ReadingsIngestRequest(BaseModel):
 
 
 class BuildingProfileRequest(BaseModel):
-    site_id: UUID
+    building_id: UUID
     gia_m2: float
     building_type: str = "office"
     organization_id: UUID | None = None
 
 
 class EuiComputeRequest(BaseModel):
-    site_id: UUID
+    #: The building to compute for. Was called site_id until Sep 2026.
+    building_id: UUID
     period_start: date
     period_end: date
     meter_type: str = "electricity"
@@ -96,7 +100,8 @@ class MeterPullRequest(BaseModel):
 
 
 class OccupancyLogRequest(BaseModel):
-    site_id: UUID
+    #: The building whose occupancy changed. Was called site_id until Sep 2026.
+    building_id: UUID
     occupancy_state: str
     changed_at: datetime | None = None
     notes: str | None = None
