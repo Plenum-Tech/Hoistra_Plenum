@@ -108,6 +108,43 @@ COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY deploy/allinone/nginx.conf       /etc/nginx/conf.d/hoistra.conf
 COPY deploy/allinone/supervisord.conf /etc/supervisor/conf.d/hoistra.conf
 
+# ── the deployment's own .env, carried into the image ────────────────────────────────
+# The glob, not a bare `COPY .env`, because .env is gitignored: a clone that does not have
+# one must still build. .env.example is committed, so the pattern always matches at least
+# one file and the COPY cannot fail.
+#
+# Each service resolves env_file=".env" against its WORKING DIRECTORY, which supervisord
+# sets per service (/app/svc-operations-intelligence and so on). A single /app/.env would
+# therefore be read by deep-agents alone, which walks up from its own module looking for
+# one — so the file is placed in every service directory that reads it.
+#
+# Two things this does NOT do, and both matter when reading a value back:
+#
+#   * It does not override the platform. pydantic-settings ranks real environment
+#     variables above env_file, and the Container App sets 37 of them — ANTHROPIC_API_KEY,
+#     DB_URL, REDIS_URL, AUTH_JWT_SECRET among them. Those still win. This fills gaps,
+#     it does not replace the portal.
+#   * It does not reach the frontend. VITE_* values are inlined by `npm run build` in the
+#     stage above this one; a file copied here is read at runtime and cannot affect a
+#     bundle that was already compiled. VITE_ORGANIZATION_ID has to be --build-arg.
+#
+# And one cost, stated plainly because it does not go away: whatever is in .env is now in
+# an image layer. Anyone who can pull from the registry can read it, and it stays in every
+# tag built this way. The DSN in this file carries the azure_pg_agentic_ai password, which
+# is on the rotation list.
+COPY .env* /app/
+RUN set -e; \
+    if [ -f /app/.env ]; then \
+      for svc in svc-operations-intelligence svc-work-order-management \
+                 svc-ai-schema-mapper svc-udr svc-deepagents doc-rag \
+                 cafm-connector-service; do \
+        if [ -d "/app/$svc" ]; then cp /app/.env "/app/$svc/.env"; fi; \
+      done; \
+      echo "allinone: .env carried into the image and placed per service"; \
+    else \
+      echo "allinone: no .env in the build context - platform env is the only source"; \
+    fi
+
 # Where the services find each other inside this container. Stated rather than inherited:
 # every one of these is a default in some service's config, and a default that silently
 # stops matching the ports supervisord starts is how a document upload comes to answer

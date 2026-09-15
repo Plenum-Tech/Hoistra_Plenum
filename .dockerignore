@@ -1,0 +1,50 @@
+# What the image build does NOT need from the repo.
+#
+# This file exists because deploy/allinone/Dockerfile copies `.env*` from the context root.
+# A glob at the root makes BuildKit enumerate the whole context, and the enumeration failed
+# on a .pytest_cache directory Windows had locked — so the build broke on a file nothing
+# was ever going to copy. Excluding the noise fixes that and makes the context smaller.
+#
+# NOTE: `.env` is deliberately NOT ignored. It is gitignored, and it is meant to reach the
+# image — see the COPY .env* block in deploy/allinone/Dockerfile for what that does and what
+# it costs. Adding `.env` here would silently undo that, and the build would still succeed,
+# so anyone tempted to add it should change the Dockerfile instead.
+
+# Caches and build output
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/*.egg-info/
+
+# VCS and editor
+.git/
+.gitignore
+**/.DS_Store
+.vscode/
+.idea/
+
+# Local runtime state that must never be baked in
+**/*.log
+**/uploads/
+**/data/uploads/
+**/data/doc_rag_uploads/
+**/.venv/
+**/venv/
+
+# Scratch and coverage output
+**/htmlcov/
+**/.coverage
+
+# Markdown is NOT excluded, and must not be. svc-deepagents/skills/*/SKILL.md is read at
+# runtime: select_skill() routes every chat question by matching it against those files'
+# triggers, so a `*.md` line here would leave the orchestrator with no skills to route to
+# and break the chat interface — while the build still succeeded and every health check
+# still returned 200. The eight files are:
+#   compliance · contract-performance · doc-rag · energy-intelligence
+#   migration · query-builder · udr · wo-engine
