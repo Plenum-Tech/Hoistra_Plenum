@@ -10,15 +10,12 @@ nothing gets a predicate matching no row.
 
 ---
 
-## If you are banding assets in the page, you don't need to
+## Why the page does not band assets itself
 
-`apps/frontend/src/logic/assetsCondition.js` currently derives Threat / Watch / In control in
-the browser, from three calls on load — `energyApi.anomalies()`, `energyApi.sections()`,
-`energyApi.assetValueAtRisk()` — plus a lazy `assetIntelligence()` and `assetWorkHistory()` per
-opened asset. The mechanics work. But the banding half of it is the
-same computation as `GET /api/energy/condition/assets` — and on `hoistra_test` today the two
-already disagree about **ten of fifty-four assets**, measured below. Three things are behind
-it:
+`apps/frontend/src/logic/assetsCondition.js` reads the band from this endpoint. It used to
+decide Threat / Watch / In control in the browser instead, and the two answers were not the
+same: on `hoistra_test` they disagreed about **ten of fifty-four assets**, measured below.
+Three things were behind that, and the first two are reasons it should stay this way:
 
 - **The thresholds are per organisation and editable.** `section_over_reference_pct` and
   `anomaly_persistent_weeks` live in `asset_condition_rules`, and `PUT
@@ -28,18 +25,18 @@ it:
 - **The chips are already query parameters.** `?band=threat|watch|in_control` and
   `?min_deviation_pct=10` / `=30` back the four chips directly, filtered against the full set
   rather than against whatever the page happened to load.
-- **The page bands on the building's deviation, the server on the section's.** This is the
-  one that is actually costing you rows today — all ten disagreements come from it. `_signals()`
-  in `condition_engine.py` reads `asset_intelligence.sections()`, the same function that fills
-  the section headers, so an asset row and its header cannot disagree. `evalA` reads
-  `bldByEui[asset.building_id]` instead, which is a different number about a different thing.
+- **The page banded on the building's deviation, the server bands on the section's.** All ten
+  disagreements came from this one. `_signals()` in `condition_engine.py` reads
+  `asset_intelligence.sections()`, the same function that fills the section headers, so an
+  asset row and its header cannot disagree. `evalA` read `bldByEui[asset.building_id]`
+  instead — a different number about a different thing.
 
-### They disagree today: 44 of 54 assets, 81.5%
+### What the disagreement was: 44 of 54 assets, 81.5%
 
 Not a hypothetical. Both rules were run over `hoistra_test` on 15 September 2026 — the backend
 through `condition_engine.assess()`, the page through its own exported `conditionOf()` fed the
 rows `GET /api/energy/buildings` and the anomalies table return — at the shipped thresholds
-(10%, 3 weeks).
+(10%, 3 weeks). Re-run after the swap, the page reproduces the server on all 54.
 
 | Page says | Server says | Assets | |
 |---|---|---|---|
@@ -48,9 +45,8 @@ rows `GET /api/energy/buildings` and the anomalies table return — at the shipp
 | In control | **Watch** | 8 | disagree |
 | Watch | **Threat** | 2 | disagree |
 
-**All ten disagreements run the same way: the page bands the asset lower than the server, and
-never higher.** The page is currently showing two Threats as Watch and eight Watches as In
-control.
+**All ten disagreements ran the same way: the page banded the asset lower than the server, and
+never higher.** Two Threats were showing as Watch and eight Watches as In control.
 
 One cause accounts for all ten. `assetsCondition.evalA` reads `bldByEui[asset.building_id]`
 and passes the **building's** deviation to `conditionOf`; the server reads the **section's**.
@@ -62,25 +58,32 @@ building figure discards it.
 
 The `health_score` branch of `conditionOf` contributed nothing to this count, because
 `assets.health_score` is null on all 54 rows. It is a real difference between the two rules —
-the server has no such signal — but a dormant one on this data, not part of the 10.
+the server has no such signal — but a dormant one on this data, so it is not part of the 10.
+It was **not** dropped in the swap: `bandFromServer()` lays it on top of the server's band
+under the constraint it has always had in this page, that it may raise a band and never lower
+one. An asset scored 20 is a Threat whatever the energy says.
 
-### What swaps for what
+### What the page now calls
 
-| Page needs | Instead of | Call |
+| Page needs | Now | Status |
 |---|---|---|
-| Band, reasons, explanation per asset | `anomalies()` + `sections()` joined in the page | `GET /api/energy/condition/assets` |
-| Band chips, Above 10% / Above 30% | filtering the loaded array | the same call with `?band=` / `?min_deviation_pct=` |
-| KPI cards, building and section rollups | summing rows client-side | `GET /api/energy/condition/summary` |
-| Asset row's vendor, criticality, install date, last PPM | separate lookups | already on the `condition/assets` row |
+| Band, reasons, section deviation per asset | `GET /api/energy/condition/assets` on load | wired |
+| Which section an asset is in, in bulk | `section_id` on the same row | wired — this closed the gap the page carried, since `AssetResponse` still does not return the column |
+| "Banded on one signal" on an unmetered section | `section_measured` on the same row | wired, per asset, in the row's explanation |
+| Band chips, Above 10% / Above 30% | `?band=` / `?min_deviation_pct=` on the same call | **not wired** — the chips still filter the loaded array, which is correct but re-filters rather than re-asks |
+| KPI cards, building and section rollups | `GET /api/energy/condition/summary` | **not wired** — the client method exists (`energyApi.conditionSummary`), the page still sums rows itself |
 
 `energyApi.assetValueAtRisk()` is **not** replaced by this — replacement value at risk is its
 own figure and stays where it is. Nor is `assetIntelligence()` for the opened-asset drawer.
 This is only about which surface decides the band.
 
-One thing to carry over when you swap: `summary.section_not_measured` — 35 of 54 assets on the
-deployed database sit in a section with no sub-meter and are banded on one signal instead of
-two. Those are not "checked and clean", and the page should say so rather than letting them
-read as In control on equal footing with the rest.
+**The two steppers are the open question.** `section_over_reference_pct` and
+`anomaly_persistent_weeks` are per organisation and only `PUT /api/energy/condition/rules`
+moves them, so a stepper that writes changes the thresholds for everyone in the company, not
+just for the person dragging it. The page therefore reads the server's thresholds back
+(`asCondRules`) and quotes those in each row's explanation, and the steppers were left as they
+were rather than silently turned into a shared write. Wiring them to the PUT is a product
+decision, not a mechanical one.
 
 ---
 

@@ -28,19 +28,28 @@
 //                                      over recorded signals with its drivers, NOT a fitted
 //                                      model — is_fitted_model:false and null accuracy /
 //                                      precision / recall, deliberately
+//     Threat / Watch / In control    — GET /api/energy/condition/assets. The SERVER decides
+//                                      the band, from the section's deviation against the
+//                                      section's own reference and the anomalies attributed
+//                                      to the asset, at thresholds held per organisation in
+//                                      asset_condition_rules. This page used to decide it
+//                                      here off the BUILDING's deviation and was banding
+//                                      assets lower than the server as a result — see
+//                                      bandFromServer().
 //     anomaly attributed to an asset — energy_anomalies.asset_id (GET /api/energy/anomalies)
 //     open work orders               — work_orders.asset_id, a real join since 47b949e
 //     asset condition and its date   — health_score (integer), condition_score,
 //                                      condition_updated_at, warranty_expiry
 //     live readings                  — plenum_cafm.asset_readings
 //
-//   THE ONE GAP LEFT
-//     which section an asset is in   — assets.section_id exists on the table but is not on
-//                                      AssetResponse, so the link cannot be made in bulk;
-//                                      only GET /api/energy/assets/{id}/intelligence knows
-//                                      it, one asset at a time. Sections therefore render
-//                                      with their real bars, and assets sit under "not yet
-//                                      linked to a section" until that field is exposed.
+//   THE GAP THAT WAS LEFT, NOW CLOSED
+//     which section an asset is in   — AssetResponse still does not return section_id, but
+//                                      GET /api/energy/condition/assets carries it for every
+//                                      asset in scope, so the link is made in bulk from that
+//                                      read. The per-asset intelligence call remains the
+//                                      fallback for anything that read did not cover, and
+//                                      "not yet linked to a section" now means the condition
+//                                      read did not place it — not that nothing could.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { healthBand } from './assetsLive.js';
@@ -100,6 +109,34 @@ export function conditionOf({ deviation, pct, anomaly, anomalyDays, weeks, healt
   return { cond, kind, over, persistent, unscored };
 }
 
+// The band as the server decided it, with the one signal the server's rule does not carry
+// laid on top. GET /api/energy/condition/assets is the authority on Threat / Watch / In
+// control: it reads the SECTION's deviation against the section's own reference, at
+// thresholds held per organisation in asset_condition_rules that a browser copy cannot see.
+//
+// health_score is not in that rule, and it is a real signal, so it is applied here — under
+// the same constraint it has always had in this page: it may RAISE a band, never lower one.
+// An asset scored 20 is a threat whatever the energy says; a perfect score does not rescue an
+// asset the server flagged.
+export function bandFromServer(row, healthScore) {
+  const SERVER_COND = { threat: 'threat', watch: 'watch', in_control: 'ok' };
+  if (!row || !SERVER_COND[row.band]) return null;
+  const reasons = row.reasons || [];
+  const hb = healthBand(typeof healthScore === 'number' ? healthScore : null).cond;
+  let cond = SERVER_COND[row.band];
+  let kind = row.band === 'threat' ? 'threat'
+    : reasons.indexOf('anomaly_persistent') >= 0 ? 'persist'
+    : row.band === 'watch' ? 'zone' : null;
+  if (hb === 'threat') { cond = 'threat'; kind = kind || 'health'; }
+  else if (hb === 'watch' && cond === 'ok') { cond = 'watch'; kind = 'health'; }
+  return {
+    cond, kind, reasons,
+    over: reasons.indexOf('section_over_reference') >= 0,
+    persistent: reasons.indexOf('anomaly_persistent') >= 0,
+    unscored: hb === 'unscored'
+  };
+}
+
 // Which assets earn a per-asset intelligence call. Flagged first; then the ones a person
 // would look at anyway — most critical, then worst scored — because a portfolio entirely
 // under reference flags nothing, and that is exactly when someone still wants to see what
@@ -143,11 +180,12 @@ export const assetsConditionMethods = {
       return { __err: (e && e.message) || String(e) };
     });
     try {
-      const [locs, anoms, sections, var_] = await Promise.all([
+      const [locs, anoms, sections, var_, cond] = await Promise.all([
         soft(workOrderApi.locations({ limit: 500 })),
         soft(energyApi.anomalies({ limit: 500 })),
         soft(energyApi.sections()),
-        soft(energyApi.assetValueAtRisk())
+        soft(energyApi.assetValueAtRisk()),
+        soft(energyApi.conditionAssets())
       ]);
       if (stale) throw stale;
       const list = (v, ...keys) => Array.isArray(v) ? v
@@ -159,6 +197,12 @@ export const assetsConditionMethods = {
         asSections: list(sections, 'sections'), asSectionsSummary: (sections && sections.summary) || null,
         asSectionsError: sections && sections.__err ? sections.__err : '',
         asVar: var_ && !var_.__err ? var_ : null, asVarError: var_ && var_.__err ? var_.__err : '',
+        // The server's bands, keyed by asset. asCondBandsError is not cosmetic: when this
+        // read fails the page falls back to deciding bands itself off the BUILDING's
+        // deviation, which is a different and coarser answer, so the page has to be able to
+        // say that is what it is showing.
+        asCondBands: list(cond, 'assets'), asCondRules: (cond && cond.rules) || null,
+        asCondBandsError: cond && cond.__err ? cond.__err : '',
         asCondLoading: false, asCondLoadedAt: new Date().toISOString()
       });
     } catch (e) {
@@ -200,6 +244,10 @@ export const assetsConditionMethods = {
      its reference a building must be, and how long an anomaly must have been open. */
   asVals(s) {
     const pct = s.asPct, wks = s.asWeeks;
+    // The thresholds the server actually banded on, which are held per organisation in
+    // asset_condition_rules and are not necessarily the ones these steppers show. Where they
+    // differ the server's are the ones that decided the bands, so they are what gets quoted.
+    const serverRules = s.asCondRules || null;
     const assets = s.asLive || [];
     const now = Date.now();
     const bldByEui = {};
@@ -266,17 +314,51 @@ export const assetsConditionMethods = {
     });
     const woCount = (a) => (openWo[String(a.asset_id)] || 0) + (openWoByName[String(a.asset_name || '').trim().toLowerCase()] || 0);
 
+    // GET /api/energy/condition/assets decides the band. The page used to decide it here,
+    // and the two answers were not the same: measured over hoistra_test on 15 Sep 2026 they
+    // agreed on 44 of 54 assets, and every one of the ten disagreements ran the same way —
+    // this page banding LOWER than the server, two Threats shown as Watch and eight Watches
+    // as In control. One cause explained all ten: the line below used to read the BUILDING's
+    // deviation, where the server reads the SECTION's. On that data no building was over its
+    // reference at all (as low as -51.3%) while ten assets sat in sections over by 18-46% —
+    // averaged across a building, an over-consuming plant room disappears into the floors
+    // around it, which is the whole reason sections carry their own reference.
+    const bandRow = {};
+    (s.asCondBands || []).forEach((r) => { if (r && r.asset_id) bandRow[String(r.asset_id)] = r; });
+
     const evalA = (a) => {
       const b = a.building_id ? bldByEui[String(a.building_id)] : null;
-      const deviation = b && typeof b.deviation === 'number' ? b.deviation
+      const buildingDeviation = b && typeof b.deviation === 'number' ? b.deviation
         : (b && typeof b.euiN === 'number' && typeof b.benchN === 'number' && b.benchN)
           ? Math.round(((b.euiN - b.benchN) / b.benchN) * 100) : null;
       const anoms = anomBy[String(a.asset_id)] || [];
       const anomaly = anoms[0] || null;
       const anomalyDays = anomaly ? anomalyAgeDays(anomaly, now) : null;
       const score = typeof a.health_score === 'number' ? a.health_score : null;
-      const c = conditionOf({ deviation, pct, anomaly, anomalyDays, weeks: wks, healthScore: score });
-      return { a, b, deviation, anomaly, anomalyDays, score, ...c };
+      const sv = bandRow[String(a.asset_id)];
+      const svc = bandFromServer(sv, score);
+
+      if (svc) {
+        return {
+          a, b, source: 'server',
+          // `deviation` is the section's here — the figure the band was actually decided on,
+          // and the same number the section header shows, because both come from one
+          // function on the server rather than from two derivations that can drift.
+          deviation: typeof sv.section_deviation_pct === 'number' ? sv.section_deviation_pct : null,
+          buildingDeviation, sectionMeasured: sv.section_measured !== false,
+          sectionId: sv.section_id ? String(sv.section_id) : null, sectionName: sv.section || null,
+          explanation: sv.explanation || '',
+          anomaly, anomalyDays, score, ...svc
+        };
+      }
+
+      // Fallback: the condition read failed, or this asset is outside what it returned. The
+      // band is then decided here off the BUILDING's deviation, which is the coarser answer
+      // — so it is marked as such and the page says so rather than presenting it as equal.
+      const c = conditionOf({ deviation: buildingDeviation, pct, anomaly, anomalyDays, weeks: wks, healthScore: score });
+      return { a, b, source: 'page', deviation: buildingDeviation, buildingDeviation,
+               sectionMeasured: null, sectionId: null, sectionName: null,
+               reasons: [], explanation: '', anomaly, anomalyDays, score, ...c };
     };
 
     // The caller's own allocation from GET /me decides what this page shows. It is the only
@@ -314,11 +396,31 @@ export const assetsConditionMethods = {
       ? '£' + (Math.abs(n) >= 1000 ? (n / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1) + 'k' : Math.round(n))
       : '—';
 
+    // Says which figure the band was actually decided on, because "over reference" means a
+    // different thing for a section than for the building around it.
     const why = (x) => {
       const bits = [];
-      if (x.deviation === null) bits.push('No EUI on record for this building, so the energy rule cannot run on it.');
-      else if (x.over) bits.push('Building ' + (x.deviation > 0 ? '+' : '') + x.deviation + '% against its reference, over the ' + pct + '% threshold.');
-      else bits.push('Building ' + (x.deviation > 0 ? '+' : '') + x.deviation + '% against its reference, inside the ' + pct + '% threshold.');
+      const thr = (serverRules && typeof serverRules.section_over_reference_pct === 'number')
+        ? serverRules.section_over_reference_pct : pct;
+      if (x.source === 'server') {
+        if (x.sectionMeasured === false) {
+          bits.push('The section this asset sits in has no sub-meter, so it was banded on the anomaly signal alone — one of the two things that would have been checked could not be read. That is not the same as checked and clean.');
+        } else if (x.deviation === null) {
+          bits.push('No intensity on record for the section this asset sits in, so the energy rule could not run on it.');
+        } else {
+          bits.push('Section ' + (x.deviation > 0 ? '+' : '') + x.deviation + '% against its own reference, '
+            + (x.over ? 'over' : 'inside') + ' the ' + thr + '% threshold.'
+            + (typeof x.buildingDeviation === 'number' && x.buildingDeviation !== x.deviation
+               ? ' The building around it is ' + (x.buildingDeviation > 0 ? '+' : '') + x.buildingDeviation
+                 + '%, which is why the building figure alone would not have shown this.' : ''));
+        }
+      } else if (x.deviation === null) {
+        bits.push('No EUI on record for this building, so the energy rule cannot run on it.');
+      } else {
+        bits.push('Building ' + (x.deviation > 0 ? '+' : '') + x.deviation + '% against its reference, '
+          + (x.over ? 'over' : 'inside') + ' the ' + pct + '% threshold. Banded in the page on the building figure, '
+          + 'not on the section, because the condition read did not come back.');
+      }
       if (x.anomaly) bits.push('An anomaly is attributed to this asset (' + (x.anomaly.anomaly_type || 'anomaly') + ', open ' + (x.anomalyDays === null ? 'unknown' : x.anomalyDays + ' days') + ').');
       else bits.push('No anomaly is attributed to this asset; energy_anomalies.asset_id is set only where a meter names the asset.');
       bits.push(x.score === null ? 'No health score on record — not the same as healthy.' : 'Health score ' + Math.round(x.score) + '/100.');
@@ -397,10 +499,14 @@ export const assetsConditionMethods = {
     // measured:false, which means not metered, not zero consumption.
     const secsByB = {};
     (s.asSections || []).forEach((x) => { if (x && x.building_id) { const k = canonKey(x.building_id); (secsByB[k] = secsByB[k] || []).push(x); } });
-    // AssetResponse does not return section_id, but the per-asset intelligence read does, so
-    // an asset placed in a real section is one whose intelligence has come back. The rest
-    // stay on the location row: an unread section is unknown, not absent.
+    // GET /api/energy/condition/assets carries section_id for every asset in scope, which is
+    // what closes the gap this page used to carry: AssetResponse does not return the column,
+    // so the link could only be made one asset at a time through the intelligence read, and
+    // most assets sat under "not yet linked to a section" as a result. The intelligence read
+    // stays as the fallback for anything the condition read did not cover.
     const sectionOfAsset = (a) => {
+      const sv = bandRow[String(a.asset_id)];
+      if (sv && sv.section_id) return String(sv.section_id);
       const i = intel[a.asset_id];
       return i && i.asset && i.asset.section_id ? String(i.asset.section_id) : null;
     };

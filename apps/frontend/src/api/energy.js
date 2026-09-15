@@ -90,6 +90,25 @@ export const energyApi = {
   // added as zero, so the page must show that count beside the total.
   assetValueAtRisk: (buildingId) =>
     apiFetch(B, '/api/energy/assets/value-at-risk', { query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
+  // ── Condition engine (docs/api/condition-engine-api.md) ─────────────────
+  // Threat / Watch / In control, decided on the server from the section's deviation and the
+  // anomalies attributed to the asset, at thresholds held per organisation in
+  // asset_condition_rules. Do not recompute this in the page: the thresholds are editable
+  // through PUT /api/energy/condition/rules and a browser copy cannot see them, and the
+  // section deviation here is the same number the section headers are drawn from.
+  //
+  // Each row also carries section_id — which AssetResponse does not — so this is the only
+  // bulk read that says which section an asset is in.
+  conditionAssets: (query) =>
+    apiFetch(B, '/api/energy/condition/assets', {
+      query: withOrg(Object.assign({ limit: 2000 }, query || {})), timeoutMs: 20000 }),
+  // The band counts, the building and section rollups, and the last scan's stamp.
+  // summary.section_not_measured counts assets banded on ONE signal because their section
+  // has no sub-meter; they are not "checked and clean" and should not read as such.
+  conditionSummary: (buildingId) =>
+    apiFetch(B, '/api/energy/condition/summary', {
+      query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
+
   // One asset: section, vendor, open anomalies, the value-at-risk arithmetic with its
   // `basis` in words, banded readings, and the failure assessment. 404 for an asset outside
   // your buildings — the same answer as one that does not exist.

@@ -123,3 +123,61 @@ test('seedOrder treats an unscored asset as unknown, not as worst', () => {
   ];
   assert.deepEqual(seedOrder(rows, 2), ['bad', 'unscored']);
 });
+
+// ── The band now comes from GET /api/energy/condition/assets ────────────────────────────
+// This page used to decide Threat / Watch / In control itself, from the BUILDING's deviation.
+// Measured against condition_engine.assess() over hoistra_test on 15 Sep 2026, the two agreed
+// on 44 of 54 assets and every one of the ten disagreements ran the same way: this page banded
+// LOWER than the server — two Threats shown as Watch, eight Watches shown as In control. The
+// cause was the figure, not the rule: no building on that data was over its reference (as low
+// as -51.3%) while ten assets sat in sections over by 18-46%. A building average hides an
+// over-consuming plant room among the floors around it.
+import { bandFromServer } from '../src/logic/assetsCondition.js';
+
+const svRow = (band, reasons) => ({ asset_id: 'a1', band, reasons: reasons || [] });
+
+test('the server decides the band, and its reasons come through as given', () => {
+  const r = bandFromServer(svRow('threat', ['section_over_reference', 'anomaly_attributed']), 90);
+  assert.equal(r.cond, 'threat');
+  assert.equal(r.over, true);
+  assert.deepEqual(r.reasons, ['section_over_reference', 'anomaly_attributed']);
+});
+
+test('in_control maps to the page vocabulary rather than being passed through raw', () => {
+  assert.equal(bandFromServer(svRow('in_control', []), 90).cond, 'ok');
+});
+
+test('a Watch the server reached on a persistent anomaly is marked as that, not as a zone', () => {
+  assert.equal(bandFromServer(svRow('watch', ['anomaly_persistent']), 90).kind, 'persist');
+  assert.equal(bandFromServer(svRow('watch', ['section_over_reference']), 90).kind, 'zone');
+});
+
+// The exact case the old rule got wrong: section over, building under. The server sees the
+// section; the page no longer gets a say in it.
+test('an asset whose section is over reference is banded on that, whatever the building reads', () => {
+  const r = bandFromServer(svRow('watch', ['section_over_reference']), 90);
+  assert.equal(r.cond, 'watch', 'the building being 51% UNDER its reference cannot clear this');
+});
+
+test('health score still raises a band the server set, and still never lowers one', () => {
+  assert.equal(bandFromServer(svRow('in_control', []), 20).cond, 'threat');
+  assert.equal(bandFromServer(svRow('in_control', []), 55).cond, 'watch');
+  assert.equal(bandFromServer(svRow('threat', ['section_over_reference', 'anomaly_attributed']), 100).cond,
+    'threat', 'a perfect score does not rescue an asset the server flagged');
+  assert.equal(bandFromServer(svRow('watch', ['section_over_reference']), 100).cond, 'watch');
+});
+
+test('an unscored asset is still marked unscored, and is not treated as healthy', () => {
+  const r = bandFromServer(svRow('in_control', []), null);
+  assert.equal(r.unscored, true);
+  assert.equal(r.cond, 'ok');
+});
+
+// When the condition read fails, soft() hands back {__err}, the list is empty and no asset has
+// a row. The page must fall back to its own rule rather than banding everything In control —
+// which is what returning a default here would have done.
+test('no server row means no server band, so the page falls back instead of inventing one', () => {
+  assert.equal(bandFromServer(null, 90), null);
+  assert.equal(bandFromServer(undefined, 90), null);
+  assert.equal(bandFromServer({ asset_id: 'a1', band: 'nonsense' }, 90), null);
+});
