@@ -28,6 +28,8 @@ there, the same way the asset catalogue decides its own column names.
 """
 from __future__ import annotations
 
+import json
+
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -37,6 +39,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import get_logger
+from . import inspection_intelligence as ii
 
 log = get_logger(__name__)
 
@@ -78,6 +81,7 @@ async def shape(session: AsyncSession) -> dict[str, set[str]]:
                       AND table_name IN ('work_orders','inspections','ppm_schedules',
                                          'approvals_queue_items','assets','vendors',
                                          'vendor_contracts','buildings','maintenance_plans',
+                                         'ppm_visits','spare_parts','compliance_certificates',
                                          'schedule_triggers','ppm_visits')"""
             )
         )
@@ -182,7 +186,9 @@ async def decisions(
                    w.building_id::text AS building_id,
                    b.name              AS building,
                    {vendor}            AS vendor,
+                   {vendor_id}         AS vendor_id,
                    {asset}             AS asset,
+                   {asset_id}          AS asset_id,
                    {cost}              AS est,
                    {due}               AS due,
                    {title}             AS title,
@@ -196,6 +202,8 @@ async def decisions(
              LIMIT :lim""".format(
             code=code, state=state_case, vendor=vendor_expr, vjoin=vendor_join, clause=clause,
             asset=("w." + asset + "::text") if asset else "NULL",
+            asset_id=("w.asset_id::text" if "asset_id" in wo else "NULL"),
+            vendor_id=(("w." + vendor_col + "::text") if vendor_col else "NULL"),
             cost=("w." + cost) if cost else "NULL",
             due=("w." + due + "::text") if due else "NULL",
             title=("w." + title) if title else "NULL",
@@ -226,8 +234,10 @@ async def decisions(
             out.append({
                 "work_order": r["code"], "state": row_state, "source": attributed,
                 "trigger": trigger, "detail": r["title"],
-                "asset": r["asset"], "building": r["building"], "building_id": r["building_id"],
-                "vendor": r["vendor"], "estimated_cost": _num(r["est"]),
+                "asset": r["asset"], "asset_id": r["asset_id"],
+                "building": r["building"], "building_id": r["building_id"],
+                "vendor": r["vendor"], "vendor_id": r["vendor_id"],
+                "estimated_cost": _num(r["est"]),
                 "priority": r["priority"], "due": r["due"],
             })
 
@@ -359,18 +369,28 @@ async def _decisions_from_approvals(
         LEFT JOIN plenum_cafm.compliance_certificates c
                ON q.related_entity_type = 'compliance_certificate' AND c.id::text = q.related_entity_id::text
     """
+    cc = sh.get("compliance_certificates", set())
+    cert_expiry = "c." + (_pick(cc, "expiry_date", "next_due_date") or "created_at")         if cc else "NULL"
+    cert_ref = "c." + (_pick(cc, "certificate_number", "certificate_ref") or "id") if cc else "NULL"
+    cert_kind = "c." + (_pick(cc, "certificate_type_code", "cert_type") or "id") if cc else "NULL"
     resolved = " COALESCE(" + ", ".join([x for x in (anomaly_b, cert_b) if x] or ["NULL"]) + ")::text"
     where_scope = f" AND {resolved} = ANY(CAST(:scope_b AS text[]))" if restricted else ""
     sql = f"""
         SELECT q.id::text AS id, q.related_entity_type AS kind, q.summary AS summary,
                q.severity AS severity, q.source_feature AS feature,
-               {resolved} AS building_id, b.name AS building
+               {resolved} AS building_id, b.name AS building,
+               coalesce(a.asset_id::text, c.asset_id::text) AS asset_id,
+               c.vendor_id::text                            AS vendor_id,
+               {cert_expiry}                                AS cert_expires,
+               {cert_ref}                                   AS cert_ref,
+               {cert_kind}                                  AS cert_kind
           FROM plenum_cafm.approvals_queue_items q
           {joins}
           LEFT JOIN plenum_cafm.buildings b ON b.building_id::text = {resolved}
          WHERE q.status = 'pending' AND {resolved} IS NOT NULL{where_scope}
          ORDER BY q.created_at DESC NULLS LAST
          LIMIT :lim"""
+    sql = sql.format(cert_expiry=cert_expiry, cert_ref=cert_ref, cert_kind=cert_kind)
     try:
         async with session.begin_nested():
             rows = (await session.execute(text(sql), params)).mappings().all()
@@ -381,10 +401,17 @@ async def _decisions_from_approvals(
         "work_order": None, "state": "To raise",
         "source": SOURCE_OF.get(r["kind"] or "", "Maintenance"),
         "trigger": r["summary"], "detail": None, "asset": None,
+        "asset_id": r["asset_id"],
         "building": r["building"], "building_id": r["building_id"],
-        "vendor": None, "estimated_cost": None,
+        "vendor": None, "vendor_id": r["vendor_id"], "estimated_cost": None,
         "priority": r["severity"], "due": None, "queue_item": r["id"],
+        "certificate_expires": _iso_date(r["cert_expires"]),
+        "certificate": r["cert_ref"], "certificate_type": r["cert_kind"],
     } for r in rows]
+
+
+def _iso_date(v: Any) -> Any:
+    return v.isoformat() if hasattr(v, "isoformat") else v
 
 
 # ── inspections ──────────────────────────────────────────────────────────────────────
@@ -616,9 +643,11 @@ async def _rows(session: AsyncSession, sql: str, params: dict[str, Any], what: s
     abort the transaction and take the other four sources down with it."""
     try:
         async with session.begin_nested():
-            return (await session.execute(text(sql), params)).mappings().all()
+            # dict, not RowMapping: callers annotate these rows, and a RowMapping is read-only.
+            return [dict(r) for r in
+                    (await session.execute(text(sql), params)).mappings().all()]
     except Exception as exc:  # noqa: BLE001
-        log.warning("maintenance.next_ppm.source_failed", source=what, error=str(exc)[:200])
+        log.warning("maintenance.query_failed", source=what, error=str(exc)[:200])
         return []
 
 
@@ -864,3 +893,389 @@ def _ppm_summary(rows: list[dict[str, Any]], total: int) -> dict[str, Any]:
         "overdue_superseded": sum(1 for r in rows if r["superseded_by_completion"]),
         "scheduled_anywhere": booked > 0,
     }
+
+
+# ── PPM health, by contract, year to date ────────────────────────────────────────────
+
+#: When a contract is behind plan, watched, or running to plan. Thresholds rather than a
+#: gut call, so two people reading the table reach the same conclusion — and so moving them
+#: is a decision somebody makes once rather than an argument every month.
+BEHIND_MISSED = 3          # this many missed visits is behind plan whatever the percentage
+BEHIND_COMPLETION_PCT = 80.0
+WATCH_COMPLETION_PCT = 100.0
+
+#: A visit that was agreed to move is not one nobody turned up for.
+PPM_STATE_BEHIND = "behind plan"
+PPM_STATE_WATCH = "watch"
+PPM_STATE_TO_PLAN = "to plan"
+
+
+def ppm_state(*, missed: int, late: int, completion_pct: float | None) -> str:
+    """Behind plan, watch, or to plan — from the counts, by a stated rule.
+
+    Missed visits carry more weight than late ones: a visit that happened late still happened,
+    and a visit that never happened is the one the contract is judged on.
+    """
+    pct = 100.0 if completion_pct is None else completion_pct
+    if missed >= BEHIND_MISSED or pct < BEHIND_COMPLETION_PCT:
+        return PPM_STATE_BEHIND
+    if missed or late or pct < WATCH_COMPLETION_PCT:
+        return PPM_STATE_WATCH
+    return PPM_STATE_TO_PLAN
+
+
+async def ppm_health_by_contract(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+    year_to_date: bool = True, limit: int = 200,
+) -> dict[str, Any]:
+    """The PPM health table: one row per contract, year to date, with its state.
+
+    Keyed on the **contract** rather than the vendor, because that is the thing with a scope
+    and a plan — one vendor can hold several contracts covering different services, and rolling
+    them together hides the one that is behind.
+
+    Visits come from ``ppm_visits`` where that table has rows, and fall back to planned work
+    orders where it does not. Which source answered is stated on every row: a table built from
+    two different sources without saying which is a table nobody can check.
+    """
+    sh = await shape(session)
+    today = datetime.now(timezone.utc).date()
+    start = date(today.year, 1, 1) if year_to_date else date(1900, 1, 1)
+
+    pv = sh.get("ppm_visits", set())
+    vc = sh.get("vendor_contracts", set())
+    have_visits = {"asset_id", "scheduled_date"} <= pv
+    if not have_visits:
+        return {"ok": True, "contracts": [], "summary": _ppm_zero(),
+                "source": None,
+                "note": "no ppm_visits table on this database; nothing to report against"}
+
+    # Which optional columns this database actually has.
+    deferred = "v.deferred" if "deferred" in pv else "FALSE"
+    # ::text on both sides: vendor_contracts.id is integer on one database and uuid on
+    # the other, and ppm_visits.contract_id does not always agree with either.
+    contract_join = ("LEFT JOIN plenum_cafm.vendor_contracts c ON c.id::text = v.contract_id::text"
+                     if "contract_id" in pv and vc else "")
+    c_name = "c.contract_name" if "contract_name" in vc else "NULL"
+    c_country = "c.country_code" if "country_code" in vc else "NULL"
+    c_scope = "c.service_scope" if "service_scope" in vc else "NULL"
+    c_plan = "c.visits_per_year" if "visits_per_year" in vc else "NULL"
+    ven_name = "ven.vendor_name" if "vendor_name" in sh.get("vendors", set()) else "ven.name"
+    report_on = ("v.inspection_id IS NOT NULL" if "inspection_id" in pv
+                 else "FALSE")
+
+    clause, params = _scope_sql(building_ids, "a.building_id")
+    params["start"] = start
+    sql = f"""
+        SELECT coalesce({c_name}, {ven_name}, 'Unassigned')      AS contract,
+               v.contract_id::text                               AS contract_id,
+               {ven_name}                                        AS vendor,
+               {c_country}                                       AS country_code,
+               {c_scope}                                         AS service_scope,
+               {c_plan}                                          AS visits_per_year,
+               count(*)                                          AS planned,
+               count(*) FILTER (WHERE v.completed_date IS NOT NULL)          AS done,
+               count(*) FILTER (WHERE v.completed_date IS NULL
+                                  AND v.scheduled_date < current_date
+                                  AND NOT {deferred})                        AS missed,
+               count(*) FILTER (WHERE v.completed_date IS NOT NULL
+                                  AND v.scheduled_date IS NOT NULL
+                                  AND v.completed_date > v.scheduled_date)   AS late,
+               count(*) FILTER (WHERE {deferred})                            AS deferred,
+               count(*) FILTER (WHERE {report_on})                           AS reports,
+               min(v.scheduled_date) FILTER (WHERE v.completed_date IS NULL
+                                               AND v.scheduled_date >= current_date) AS next_due,
+               count(DISTINCT a.building_id)                     AS buildings
+          FROM plenum_cafm.ppm_visits v
+          JOIN plenum_cafm.assets a ON a.id::text = v.asset_id::text
+          LEFT JOIN plenum_cafm.vendors ven ON ven.id::text = v.vendor_id::text
+          {contract_join}
+         WHERE a.building_id IS NOT NULL
+           AND v.scheduled_date >= :start{clause}
+         GROUP BY 1, 2, 3, 4, 5, 6
+         ORDER BY 1"""
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(sql), params)).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("maintenance.ppm_by_contract_failed", error=str(exc)[:300])
+        return {"ok": False, "error": str(exc)[:200], "contracts": [],
+                "summary": _ppm_zero()}
+
+    out = []
+    for r in rows:
+        planned = int(r["planned"] or 0)
+        done = int(r["done"] or 0)
+        missed = int(r["missed"] or 0)
+        late = int(r["late"] or 0)
+        # The plan is what the contract commits to where that is agreed, and what was actually
+        # booked where it is not. Which one was used is stated, because 12 of 18 against an
+        # agreed plan and 12 of 18 against whatever got booked are different claims.
+        committed = int(r["visits_per_year"]) if r["visits_per_year"] else None
+        plan = committed or planned
+        pct = round(done / plan * 100, 1) if plan else None
+        out.append({
+            "contract": r["contract"], "contract_id": r["contract_id"],
+            "vendor": r["vendor"], "country_code": r["country_code"],
+            "service_scope": r["service_scope"],
+            "visits_to_plan": {"done": done, "plan": plan,
+                               "plan_is_committed": committed is not None},
+            "planned": planned, "done": done, "missed": missed, "late": late,
+            "deferred": int(r["deferred"] or 0),
+            "reports": int(r["reports"] or 0),
+            "reports_to_done": {"filed": int(r["reports"] or 0), "done": done},
+            "completion_pct": pct,
+            "next_due": r["next_due"].isoformat() if r["next_due"] else None,
+            "buildings": int(r["buildings"] or 0),
+            "state": ppm_state(missed=missed, late=late, completion_pct=pct),
+        })
+    out.sort(key=lambda c: ({PPM_STATE_BEHIND: 0, PPM_STATE_WATCH: 1,
+                             PPM_STATE_TO_PLAN: 2}[c["state"]], -c["missed"], c["contract"]))
+
+    done = sum(c["done"] for c in out)
+    plan = sum(c["visits_to_plan"]["plan"] for c in out)
+    return {
+        "ok": True,
+        "source": "ppm_visits",
+        "window": {"year_to_date": year_to_date, "from": start.isoformat(),
+                   "to": today.isoformat()},
+        "summary": {
+            "contracts": len(out),
+            "done": done, "plan": plan,
+            "completion_pct": round(done / plan * 100, 1) if plan else None,
+            "missed": sum(c["missed"] for c in out),
+            "late": sum(c["late"] for c in out),
+            "deferred": sum(c["deferred"] for c in out),
+            "reports": sum(c["reports"] for c in out),
+            "behind_plan": sum(1 for c in out if c["state"] == PPM_STATE_BEHIND),
+            "watch": sum(1 for c in out if c["state"] == PPM_STATE_WATCH),
+            "to_plan": sum(1 for c in out if c["state"] == PPM_STATE_TO_PLAN),
+        },
+        "contracts": out[:limit],
+        "rule": (
+            f"behind plan at {BEHIND_MISSED}+ missed visits or under "
+            f"{BEHIND_COMPLETION_PCT:g}% complete; watch at any missed, any late or under "
+            f"{WATCH_COMPLETION_PCT:g}%; to plan otherwise. A deferred visit is not a missed one."
+        ),
+    }
+
+
+def _ppm_zero() -> dict[str, Any]:
+    return {"contracts": 0, "done": 0, "plan": 0, "completion_pct": None, "missed": 0,
+            "late": 0, "deferred": 0, "reports": 0, "behind_plan": 0, "watch": 0, "to_plan": 0}
+
+
+# ── the four cards across the top of the Maintenance screen ──────────────────────────
+
+#: A certificate this close to running out is treated the same as one that already has: the
+#: work has to be booked now either way, which is what makes the decision statutory.
+STATUTORY_WINDOW_DAYS = 30
+
+
+async def statutory_assets(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+) -> dict[str, dict[str, Any]]:
+    """Assets and vendors whose certificate has lapsed or runs out inside the window.
+
+    Returned as a lookup rather than a count, so a decision can be marked statutory *and* say
+    which certificate makes it so. A count on its own is a number nobody can check.
+    """
+    sh = await shape(session)
+    if "compliance_certificates" not in sh:
+        return {}
+    cc = sh["compliance_certificates"]
+    expiry = _pick(cc, "expiry_date", "next_due_date")
+    if not expiry:
+        return {}
+    ref = _pick(cc, "certificate_number", "certificate_ref") or "NULL"
+    kind = _pick(cc, "certificate_type_code", "cert_type") or "NULL"
+
+    rows = await _rows(session, f"""
+        SELECT c.asset_id::text  AS asset_id,
+               c.vendor_id::text AS vendor_id,
+               c.{expiry}        AS expires,
+               c.{ref}           AS certificate,
+               c.{kind}          AS certificate_type,
+               (c.{expiry} < current_date) AS lapsed
+          FROM plenum_cafm.compliance_certificates c
+         WHERE c.{expiry} IS NOT NULL
+           AND c.{expiry} <= current_date + make_interval(days => :win)
+           AND (c.asset_id IS NOT NULL OR c.vendor_id IS NOT NULL)""",
+        {"win": STATUTORY_WINDOW_DAYS}, "statutory_certificates")
+
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        entry = {
+            "certificate": r["certificate"], "certificate_type": r["certificate_type"],
+            "expires": r["expires"].isoformat() if r["expires"] else None,
+            "lapsed": bool(r["lapsed"]),
+        }
+        # The soonest expiry wins where an asset carries several: that is the one forcing it.
+        for key in (f"asset:{r['asset_id']}" if r["asset_id"] else None,
+                    f"vendor:{r['vendor_id']}" if r["vendor_id"] else None):
+            if key and (key not in out or (entry["expires"] or "") < (out[key]["expires"] or "~")):
+                out[key] = entry
+    return out
+
+
+async def overview(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+) -> dict[str, Any]:
+    """The four cards across the top of the Maintenance screen, in one call.
+
+    Each card returns the sub-counts printed underneath it, not just the headline number —
+    "2 blocked · 4 to raise · 2 deviating" is the part that tells somebody what to do next.
+    """
+    dec = await decisions(session, building_ids=building_ids, limit=1000)
+    statutory = await statutory_assets(session, building_ids=building_ids)
+
+    # Which decisions are statutory, and why. Marked on the decision itself so the chip and
+    # the card agree by construction rather than by two counts happening to match.
+    #
+    # Two ways a decision qualifies. A decision raised *about* a certificate is tested against
+    # that certificate's own expiry — exact, and the only test that catches building-scope
+    # certificates like an EICR, which carry neither an asset nor a vendor and are most of
+    # them. Anything else is matched on the asset or the vendor it names.
+    horizon = (datetime.now(timezone.utc).date() + timedelta(days=STATUTORY_WINDOW_DAYS))
+    today = datetime.now(timezone.utc).date()
+    marked = 0
+    for d in dec.get("decisions", []):
+        hit = None
+        expires = d.get("certificate_expires")
+        if expires:
+            try:
+                when = date.fromisoformat(str(expires)[:10])
+            except ValueError:
+                when = None
+            if when and when <= horizon:
+                hit = {"certificate": d.get("certificate"),
+                       "certificate_type": d.get("certificate_type"),
+                       "expires": when.isoformat(), "lapsed": when < today,
+                       "matched_on": "the certificate this decision is about"}
+        if hit is None:
+            keyed = (statutory.get(f"asset:{d.get('asset_id')}")
+                     or statutory.get(f"vendor:{d.get('vendor_id')}"))
+            if keyed:
+                hit = {**keyed, "matched_on": "a certificate on its asset or vendor"}
+        d["statutory"] = bool(hit)
+        d["statutory_certificate"] = hit
+        if hit:
+            marked += 1
+
+    ins = await ii.panel(session, building_ids=building_ids)
+    unconv = ins["cards"]["unconverted_recommendations"]
+    ppm = await ppm_health_by_contract(session, building_ids=building_ids, year_to_date=True)
+    ps = ppm.get("summary", {})
+
+    by_state = dec.get("by_state", {})
+    return {
+        "ok": True,
+        "cards": {
+            "decisions_owed": {
+                "value": dec.get("total", dec.get("count", 0)),
+                "blocked": by_state.get("Blocked", 0),
+                "to_raise": by_state.get("To raise", 0),
+                "deviating": by_state.get("Deviation", 0),
+                "awaiting_approval": by_state.get("Awaiting approval", 0),
+                "caption": (f"{by_state.get('Blocked', 0)} blocked · "
+                            f"{by_state.get('To raise', 0)} to raise · "
+                            f"{by_state.get('Deviation', 0)} deviating"),
+            },
+            "statutory": {
+                "value": marked,
+                "of_decisions": dec.get("total", 0),
+                "window_days": STATUTORY_WINDOW_DAYS,
+                "caption": f"certificate lapsed or inside {STATUTORY_WINDOW_DAYS} days",
+                "answerable": bool(statutory) or marked == 0,
+                # The decisions themselves, so "which ones?" is one click rather than a
+                # second request the page has to work out how to make.
+                "decisions": [d for d in dec.get("decisions", [])
+                              if d.get("statutory")][:50],
+            },
+            "recommendations_unconverted": {
+                "value": unconv.get("count"),
+                "answerable": unconv.get("answerable", False),
+                "reason": unconv.get("reason"),
+                "now_flagged_by_energy": unconv.get("now_flagged_by_energy"),
+                "reports": ins["corpus"]["reports"],
+                "since": ins["corpus"]["since"],
+                "caption": (f"from {ins['corpus']['reports']} inspection reports"
+                            + (f" since {ins['corpus']['since']}"
+                               if ins["corpus"]["since"] else "")),
+            },
+            "ppm_to_plan": {
+                "value": ps.get("completion_pct"),
+                "done": ps.get("done", 0), "plan": ps.get("plan", 0),
+                "missed": ps.get("missed", 0), "reports": ps.get("reports", 0),
+                "deferred": ps.get("deferred", 0),
+                "behind_plan": ps.get("behind_plan", 0),
+                "caption": (f"{ps.get('done', 0)} of {ps.get('plan', 0)} visits · "
+                            f"{ps.get('missed', 0)} missed · "
+                            f"{ps.get('reports', 0)} reports"),
+                "year_to_date": True,
+            },
+        },
+        "last_read": await last_inspection_read(session, building_ids=building_ids),
+        "note": ("every card carries the sub-counts printed beneath it; a card that cannot be "
+                 "answered on this database says so rather than returning zero"),
+    }
+
+
+async def read_inspection_reports(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """What the Re-read inspection reports button calls: read them all together, and record it.
+
+    The panel computes live on every read, so this is not what makes the numbers appear. What
+    it adds is a timestamp somebody can point at and a row saying what this reading found, so
+    next week's can be compared with it.
+    """
+    started = datetime.now(timezone.utc)
+    p = await ii.panel(session, building_ids=building_ids)
+    c = p["cards"]
+
+    def val(name: str) -> int:
+        v = c[name].get("count")
+        return int(v) if isinstance(v, int) else 0
+
+    scope = "portfolio" if building_ids is None else f"{len(building_ids)} building(s)"
+    try:
+        async with session.begin_nested():
+            await session.execute(text("""
+                INSERT INTO plenum_cafm.inspection_read_runs
+                    (organization_id, started_at, finished_at, reports_read, assets_covered,
+                     unconverted, corroborated_anomalies, warranted_findings, poorly_graded,
+                     unanswerable, scope)
+                VALUES (CAST(:org AS uuid), :started, now(), :reports, :assets, :unconv,
+                        :corr, :warr, :poor, CAST(:unans AS jsonb), :scope)"""),
+                {"org": str(organization_id) if organization_id else None,
+                 "started": started, "reports": p["corpus"]["reports"],
+                 "assets": p["corpus"]["assets"], "unconv": val("unconverted_recommendations"),
+                 "corr": val("corroborated_anomalies"), "warr": val("warranted_findings"),
+                 "poor": val("poorly_graded"),
+                 "unans": json.dumps(p["unanswerable"]), "scope": scope})
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("maintenance.inspection_read_failed", error=str(exc)[:300])
+        return {**p, "recorded": False, "error": str(exc)[:200],
+                "note": "the reports were read but the run could not be recorded"}
+    return {**p, "recorded": True, "scope": scope, "started_at": started.isoformat()}
+
+
+async def last_inspection_read(
+    session: AsyncSession, *, building_ids: list[UUID] | None = None,
+) -> dict[str, Any] | None:
+    """When the reports were last re-read. Null before the first time — not zero."""
+    rows = await _rows(session, """
+        SELECT run_id::text, started_at, finished_at, reports_read, assets_covered,
+               unconverted, corroborated_anomalies, warranted_findings, poorly_graded,
+               unanswerable, scope
+          FROM plenum_cafm.inspection_read_runs
+         ORDER BY started_at DESC LIMIT 1""", {}, "last_inspection_read")
+    if not rows:
+        return None
+    r = rows[0]
+    for k in ("started_at", "finished_at"):
+        r[k] = r[k].isoformat() if r[k] else None
+    return r
