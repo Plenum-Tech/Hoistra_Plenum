@@ -102,8 +102,10 @@ returning a verdict — asking the UK rule without an intensity returns `assessa
 
 ## One note on the UK reference
 
-The specification gives **190 kWh/m²/yr statutory unweighted**. The platform also computes a
-TM46 figure **weighted by the use mix of the buildings actually in scope**, which is the more
-precise read of the same standard. Both are on file: the weighted figure is what the page
-shows, and the statutory 190 is what the country rule tests against. Neither silently replaced
-the other, because they answer different questions.
+The page shows **190 kWh/m²/yr statutory**, flat — the figure the UK is actually held to, and
+the one the country rule tests against.
+
+The platform can also compute a TM46 figure weighted by the use mix of the buildings actually
+in scope. That is a more precise read of the same standard, so it is carried in the cell's
+`note` rather than dropped — but it is not the headline, because a reader comparing a building
+against "the standard" means the statutory one.

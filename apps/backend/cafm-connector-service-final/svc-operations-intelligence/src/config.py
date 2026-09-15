@@ -11,8 +11,13 @@ class Settings(BaseSettings):
     service_name: str = "svc-operations-intelligence"
     service_port: int = 8009
 
+    #: How an approved email leaves the platform. "handoff" builds a mailto: the person sends
+    #: from their own client, which is the answer PRD Q1 locked; "platform_send" has the
+    #: platform send it. The default had drifted to "platform", which matches neither branch —
+    #: it fell through to handoff anyway, so this change is behaviour the service already had,
+    #: now said out loud.
     email_delivery_mode: str = Field(
-        "platform",
+        "handoff",
         validation_alias=AliasChoices("EMAIL_DELIVERY_MODE", "email_delivery_mode"),
     )
     smtp_host: str = Field("", validation_alias=AliasChoices("SMTP_HOST", "smtp_host"))
