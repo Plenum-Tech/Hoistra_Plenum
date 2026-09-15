@@ -44,20 +44,19 @@ is left out rather than shown to everybody.
 | Work history for an asset | `GET /api/energy/assets/{asset_id}/work-history` | **Yes** |
 | Sub-metered zones and their intensity against a reference | `GET /api/energy/detection/coverage` gives per-meter rows; `GET /api/energy/ratings/position` gives intensity against the country benchmark | **Partly** |
 
-### The four gaps
+### The four gaps — three now closed
 
-1. **`section` on an asset.** The page groups assets by sub-metered zone ("L4 East · tenant
-   floor"). Nothing carries that: `floors` and `spaces` exist as tables but no asset points
-   at one — 0 of 54 on one database, and the column does not exist on the other. Until an
-   asset records its floor or space, the grouping cannot be served.
-2. **Vendor and vendor email on an asset.** The register shows who maintains each asset.
-   `assets` has no vendor column; the link exists only through work orders.
-3. **Next PPM date per asset.** Derivable from planned work orders, not stored.
-4. **Linked anomaly per asset.** `energy_anomalies.asset_id` exists, so this is a join away,
-   but no endpoint returns it alongside the asset.
-
-None of the four is blocked by design. Each needs either a column populated or a small
-addition; say which matter and I will add them.
+1. **`section` on an asset.** ~~Nothing carries that.~~ **Closed.** `building_sections` now
+   exists and `assets.section_id` points at it. See
+   [asset-intelligence-api.md](asset-intelligence-api.md).
+2. **Vendor and vendor email on an asset.** ~~`assets` has no vendor column.~~ **Closed.**
+   `assets.vendor_id` now exists and resolves to a vendor name on the asset itself, rather
+   than only through work orders.
+3. **Next PPM date per asset.** Still derived from planned work orders, not stored, and no
+   endpoint returns it per asset. This is the one gap left.
+4. **Linked anomaly per asset.** **Closed.** `GET /api/energy/assets/{asset_id}/intelligence`
+   returns the open findings attributed to the asset, what they are costing, and how long the
+   worst has run.
 
 ---
 

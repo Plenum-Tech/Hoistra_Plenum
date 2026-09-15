@@ -32,6 +32,7 @@ from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
 from ...engines.energy import detection_coverage as coverage_svc
+from ...engines.energy import asset_intelligence as ai_svc
 from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
@@ -781,6 +782,58 @@ async def scan_all_anomalies(
 ):
     organization_id = access.organization_for(s, organization_id)
     return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+
+
+@router.get("/sections")
+async def list_sections(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Sections with their measured intensity against their OWN reference.
+
+    A server room read against an office benchmark looks like a catastrophe and a car park
+    looks like a triumph, so each section carries its own reference and is judged on that.
+    A section with no sub-meter or no area returns a null intensity, not a zero.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await ai_svc.sections(session, building_ids=ids)
+
+
+@router.get("/assets/value-at-risk")
+async def assets_value_at_risk(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The headline figure, with the assets that make it up and the ones that cannot.
+
+    Only assets carrying a replacement value, a design life and an install date are counted.
+    The rest are reported as not computable rather than counted as worth nothing.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await ai_svc.portfolio_value_at_risk(session, building_ids=ids)
+
+
+@router.get("/assets/{asset_id}/intelligence")
+async def asset_intelligence(
+    asset_id: str,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """One asset: its section, its vendor, what its deviation is costing, its latest
+    readings against their bands, and a failure assessment.
+
+    The assessment is a named rule over recorded signals, not a fitted model. It carries no
+    accuracy, precision or recall, and says why.
+    """
+    ids = await position_svc.building_ids_for(session, s, None)
+    out = await ai_svc.asset_detail(session, asset_id=asset_id, building_ids=ids)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such asset in your buildings.",
+            "reason": out.get("reason", "not_found")})
+    return out
 
 
 @router.get("/detection/coverage")
