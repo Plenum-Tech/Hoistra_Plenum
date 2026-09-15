@@ -276,15 +276,24 @@ async def _seed_reports(c, apply: bool) -> None:
     if have >= 12:
         print(f"  inspections: {have} already on record, left alone"); return
 
+    # Reports go on the assets that actually had a visit, so the two can be joined. Seeding
+    # them against whichever completed order came first put reports and visits on disjoint
+    # sets of assets, and the "reports filed" column then measured the seeder rather than the
+    # contract. Assets with a completed visit come first; anything else fills the remainder.
     orders = await c.fetch("""
         SELECT w.id::text AS id, coalesce(w.wo_code, w.id::text) AS code,
-               w.asset_id::text AS asset_id, w.organization_id
+               w.asset_id::text AS asset_id, w.organization_id,
+               EXISTS (SELECT 1 FROM plenum_cafm.ppm_visits v
+                        WHERE v.asset_id::text = w.asset_id::text
+                          AND v.completed_date IS NOT NULL) AS has_visit
           FROM plenum_cafm.work_orders w
          WHERE w.asset_id IS NOT NULL
            AND lower(coalesce(w.status,'')) IN ('completed','closed','complete','done')
-         ORDER BY w.id LIMIT 14""")
+         ORDER BY has_visit DESC, w.id LIMIT 18""")
     if not orders:
         print("  inspections: no completed order to attach a report to"); return
+    with_visit = sum(1 for o in orders if o["has_visit"])
+    print(f"  inspections: {with_visit} of {len(orders)} target assets that had a visit")
 
     id_type = await c.fetchval(
         """SELECT data_type FROM information_schema.columns
@@ -370,16 +379,11 @@ async def _link_reports_to_visits(c, apply: bool) -> None:
         """SELECT data_type FROM information_schema.columns
             WHERE table_schema='plenum_cafm' AND table_name='ppm_visits'
               AND column_name='inspection_id'""")
-    insp_id_type = await c.fetchval(
-        """SELECT data_type FROM information_schema.columns
-            WHERE table_schema='plenum_cafm' AND table_name='inspections' AND column_name='id'""")
-    if link_type != insp_id_type:
-        # Not a bug to work around: ppm_visits.inspection_id is uuid and inspections.id is an
-        # integer sequence here, so the two cannot reference each other at all. Saying so is
-        # more use than a cast that would store a number no lookup could follow.
-        print(f"  visit→report link: ppm_visits.inspection_id is {link_type} and "
-              f"inspections.id is {insp_id_type} — these cannot reference each other, "
-              f"so no link is written")
+    if link_type != "text":
+        # ppm_visit_inspection_key.sql widens this to text precisely so a uuid key and an
+        # integer sequence can both be held. Until that has run the link cannot be written.
+        print(f"  visit→report link: inspection_id is {link_type}, not text — run "
+              f"ppm_visit_inspection_key.sql first")
         return
     linked = await c.fetchval(
         "SELECT count(*) FROM plenum_cafm.ppm_visits WHERE inspection_id IS NOT NULL")
@@ -399,7 +403,7 @@ async def _link_reports_to_visits(c, apply: bool) -> None:
         for r in pairs:
             await c.execute(
                 "UPDATE plenum_cafm.ppm_visits SET inspection_id = $2 WHERE id = $1",
-                r["visit_id"], r["inspection_id"])
+                r["visit_id"], str(r["inspection_id"]))
     print(f"  visit→report link: {len(pairs)} of {len(rows)} completed visits filed a report "
           f"({'written' if apply else 'would write'})")
 
