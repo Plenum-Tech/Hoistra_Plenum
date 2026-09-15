@@ -143,3 +143,42 @@ class TestTheRouteIsScoped:
         assert "Depends(scope)" in src
         assert "building_ids_for(session, s, building_id)" in src, (
             "a caller must only ever see the markets of buildings they may see")
+
+
+class TestEveryCellIsText:
+    """A matrix cell is rendered straight into the page, so it has to be a string.
+
+    The published tariffs in energy_market_profiles.json started as plain strings and became
+    objects carrying the numbers the pricing engine needs — low, high, unit. The electricity
+    cell was updated to read the words off that object; the gas cell was not, so the whole
+    dict went out as the cell's value and the Assets and Energy pages died on it with React
+    error #31, "objects are not valid as a React child". The numbers belong on
+    GET /api/energy/tariffs, which is what they are for; the matrix gets the words.
+    """
+
+    def test_a_published_tariff_object_renders_as_its_words(self):
+        from src.engines.energy.market_profiles import _published
+        out = _published({"label": "5.5p – 7.0p/kWh", "basis": "commercial",
+                          "as_of": "2026-09", "low": 0.055, "high": 0.07, "unit": "GBP/kWh"})
+        assert isinstance(out, str)
+        assert out == "5.5p – 7.0p/kWh · commercial"
+
+    def test_an_unpriceable_market_says_so_rather_than_rendering_blank(self):
+        from src.engines.energy.market_profiles import _published
+        out = _published({"label": "LPG by cylinder or weight · no piped grid",
+                          "basis": "sold by weight, not energy", "unpriceable": True})
+        assert isinstance(out, str)
+        assert "LPG" in out
+
+    def test_a_plain_string_still_works_so_an_unconverted_market_renders(self):
+        from src.engines.energy.market_profiles import _published
+        assert _published("21.0p/kWh") == "21.0p/kWh"
+        assert _published(None) == "—"
+        assert _published("") == "—"
+
+    def test_no_reference_tariff_in_the_file_would_reach_a_page_as_an_object(self):
+        """The guard that matters: every elec/gas entry on file renders to text."""
+        from src.engines.energy.market_profiles import load_profiles, _published
+        for cc, row in (load_profiles().get("markets") or {}).items():
+            for key in ("elec", "gas"):
+                assert isinstance(_published(row.get(key)), str), f"{cc}.{key} is not text"

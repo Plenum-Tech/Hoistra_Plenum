@@ -74,6 +74,23 @@ def _cell(value: Any, basis: str, *, n: int | None = None, note: str | None = No
     return out
 
 
+def _published(pub: Any) -> str:
+    """The text of a published tariff, whatever shape the reference file holds it in.
+
+    These entries used to be plain strings and are now objects carrying the numbers the
+    pricing engine needs — low, high, unit — alongside the words. A table cell wants the
+    words. Both shapes are accepted because a market that has not been converted yet must
+    still render, and a dict must never reach the page as a cell value.
+    """
+    if isinstance(pub, dict):
+        if pub.get("unpriceable"):
+            # LPG in the UAE is sold by weight, so there is no per-kWh rate to show. Saying
+            # so is the answer; a blank cell reads as "we did not look".
+            return " · ".join(x for x in (pub.get("label"), pub.get("basis")) if x) or "not priced per kWh"
+        return " · ".join(x for x in (pub.get("label"), pub.get("basis")) if x) or "—"
+    return str(pub) if pub not in (None, "") else "—"
+
+
 def per_kwh(value: float, currency: str) -> str:
     fmt = _PER_KWH.get(str(currency or "").upper())
     return fmt(value) if fmt else f"{value:.3f} {currency}/kWh"
@@ -292,8 +309,17 @@ async def market_profiles(
                               "measured", n=int(mt["priced"]),
                               note=f"mean of the tariffs on {int(mt['priced'])} active meters")
         else:
-            elec_cell = _cell(f"{pub.get('label')} · {pub.get('basis')}", "reference",
+            elec_cell = _cell(_published(pub), "reference",
                               note=f"published figure as of {pub.get('as_of')}" if pub.get("as_of") else None)
+
+        # Gas is the same shape as electricity and has to be read the same way. It was left
+        # as _cell(r.get("gas")) when the published tariffs became objects, so the whole
+        # {label, basis, as_of, source, low, high, unit} dict went out as the cell's text and
+        # the page tried to render a dict as a table cell. A cell is a string; the numbers on
+        # that object are for GET /api/energy/tariffs, which is what they are for.
+        gas_cell = _cell(_published(r.get("gas")), "reference",
+                         note=f"published figure as of {(r.get('gas') or {}).get('as_of')}"
+                              if isinstance(r.get("gas"), dict) and (r.get("gas") or {}).get("as_of") else None)
 
         # Route — what the meters on record actually arrive by, else the market's usual.
         routes = [x for x in (mt.get("routes") or []) if x]
@@ -316,7 +342,7 @@ async def market_profiles(
                 "ident": _cell(r.get("ident"), "reference"),
                 "limits": _cell(r.get("limits"), "reference"),
                 "elec": elec_cell,
-                "gas": _cell(r.get("gas"), "reference"),
+                "gas": gas_cell,
                 "other": _cell(r.get("other"), "reference"),
                 # Derived from the market, not typed into it: the same rule every anomaly
                 # figure and every report line now follows.
