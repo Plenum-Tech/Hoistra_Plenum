@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from . import asset_intelligence as ai
+from . import buildings as bld_svc
 
 log = get_logger(__name__)
 
@@ -228,6 +229,17 @@ async def _signals(
                a.building_id::text AS building_id, b.name AS building,
                a.section_id::text AS section_id,
                v.vendor_name AS vendor,
+               a.installation_date,
+               -- "last PPM 02 Aug 2026" on the asset row. The most recent visit that was
+               -- actually completed, from either place one is recorded.
+               greatest(
+                 (SELECT max(pv.completed_date) FROM plenum_cafm.ppm_visits pv
+                   WHERE pv.asset_id::text = a.id::text AND pv.completed_date IS NOT NULL),
+                 (SELECT max(w.completed_at)::date FROM plenum_cafm.work_orders w
+                   WHERE w.asset_id::text = a.id::text AND w.completed_at IS NOT NULL
+                     AND lower(coalesce(w.wo_type, w.maintenance_type, '')) = ANY(
+                           CAST(:planned AS text[])))
+               ) AS last_ppm_date,
                (SELECT count(*) FROM plenum_cafm.energy_anomalies e
                  WHERE e.asset_id::text = a.id::text
                    AND e.status NOT IN ('resolved','closed','dismissed')) AS anomalies_open,
@@ -246,6 +258,7 @@ async def _signals(
           LEFT JOIN plenum_cafm.vendors v ON v.id::text = a.vendor_id::text
          WHERE a.building_id IS NOT NULL{clause}
          ORDER BY a.asset_name"""
+    params["planned"] = ["ppm", "planned", "preventive", "preventative", "pm", "scheduled"]
     try:
         async with session.begin_nested():
             rows = (await session.execute(text(sql), params)).mappings().all()
@@ -287,6 +300,10 @@ async def assess(
             "building_id": r["building_id"], "building": r["building"],
             "section_id": r["section_id"], "section": r["section_name"],
             "vendor": r["vendor"],
+            "installation_date": (r["installation_date"].isoformat()
+                                  if r.get("installation_date") else None),
+            "last_ppm_date": (r["last_ppm_date"].isoformat()
+                              if r.get("last_ppm_date") else None),
             "section_eui": _num(r["eui"]), "section_reference": _num(r["reference_eui_kwh_m2"]),
             "anomaly_annual_cost": _num(r["anomaly_cost"]), "currency": r["currency"],
             **verdict,
@@ -322,12 +339,87 @@ def _tally(assets: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+async def _building_energy(
+    session: AsyncSession, organization_id: UUID | None,
+) -> dict[str, dict[str, Any]]:
+    """Each building's own intensity against its own pack, keyed by building id.
+
+    Read from the buildings engine rather than recomputed, so the figure on the building
+    header is the same figure the Energy page shows for that building.
+    """
+    try:
+        rows = (await bld_svc.list_buildings(
+            session, organization_id=organization_id, limit=2000)).get("buildings") or []
+    except Exception as exc:  # noqa: BLE001
+        log.warning("condition.building_energy_failed", error=str(exc)[:200])
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        key = str(r.get("building_id") or r.get("id") or r.get("key") or "")
+        if key:
+            out[key] = r
+    return out
+
+
+async def _building_work(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+) -> dict[str, dict[str, int]]:
+    """Open work orders and open inspection recommendations, per building.
+
+    The two numbers the building header prints beside its bands. Counted in one query each
+    and in their own savepoint, because a database that shapes either table differently must
+    cost the header its counts rather than the whole page.
+    """
+    clause, params = _scope(building_ids, "w.building_id")
+    out: dict[str, dict[str, int]] = {}
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(f"""
+                SELECT w.building_id::text AS id, count(*) AS n
+                  FROM plenum_cafm.work_orders w
+                 WHERE w.building_id IS NOT NULL
+                   AND lower(coalesce(w.status, '')) NOT IN
+                       ('completed','closed','complete','done','cancelled','canceled')
+                   {clause}
+                 GROUP BY 1"""), params)).mappings().all()
+        for r in rows:
+            out.setdefault(r["id"], {})["work_orders_open"] = int(r["n"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("condition.building_work_failed", error=str(exc)[:200])
+
+    iclause, iparams = _scope(building_ids, "a.building_id")
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(f"""
+                SELECT a.building_id::text AS id, count(*) AS n
+                  FROM plenum_cafm.inspections i
+                  JOIN plenum_cafm.assets a ON a.id::text = i.asset_id::text
+                 WHERE a.building_id IS NOT NULL
+                   AND (i.corrective_action IS TRUE
+                        OR nullif(btrim(coalesce(i.recommendation, '')), '') IS NOT NULL)
+                   AND i.converted_work_order_id IS NULL
+                   {iclause}
+                 GROUP BY 1"""), iparams)).mappings().all()
+        for r in rows:
+            out.setdefault(r["id"], {})["inspections_recommended"] = int(r["n"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("condition.building_inspections_failed", error=str(exc)[:200])
+    return out
+
+
 async def summary(
     session: AsyncSession, *, building_ids: list[UUID] | None, organization_id: UUID | None,
 ) -> dict[str, Any]:
-    """The KPI cards, the per-building rollup, and when the scan last ran."""
+    """The KPI cards, the per-building and per-section rollups, and when the scan last ran.
+
+    The building and section rows carry what the page actually prints beside them — the
+    building's own intensity against its own pack, how many of its sections are over, and the
+    work already open on it — so a header is one response rather than four joined in the page.
+    """
     a = await assess(session, building_ids=building_ids, organization_id=organization_id)
     assets = a["assets"]
+    energy = await _building_energy(session, organization_id)
+    work = await _building_work(session, building_ids=building_ids)
 
     buildings: dict[str, dict[str, Any]] = {}
     for x in assets:
@@ -340,24 +432,67 @@ async def summary(
         d = x["section_deviation_pct"]
         if d is not None and (b["worst_deviation_pct"] is None or d > b["worst_deviation_pct"]):
             b["worst_deviation_pct"] = round(d, 1)
+
+    # How many of each building's sections are over their own reference — "2 of 4 sections
+    # over reference" on the header. Counted from the sections themselves, not the assets,
+    # because a section with no asset in it is still a section that is over.
+    sect_tally: dict[str, list[int]] = {}
+    for x in assets:
+        if not x["section_id"] or not x["building_id"]:
+            continue
+        sect_tally.setdefault(x["building_id"], [])
+
+    for bid, b in buildings.items():
+        e = energy.get(bid) or {}
+        b["eui_kwh_per_m2"] = _num(e.get("eui_kwh_per_m2"))
+        b["reference_eui_kwh_m2"] = _num(e.get("benchmark_kwh_per_m2"))
+        b["deviation_pct"] = _num(e.get("deviation_pct"))
+        b["benchmark_standard"] = e.get("benchmark_standard")
+        b["over_reference"] = (b["deviation_pct"] or 0) > 0
+        b["country_code"] = e.get("country_code")
+        w = work.get(bid) or {}
+        b["work_orders_open"] = w.get("work_orders_open", 0)
+        b["inspections_recommended"] = w.get("inspections_recommended", 0)
+
     ranked = sorted(buildings.values(),
-                    key=lambda b: (-(b["worst_deviation_pct"] if b["worst_deviation_pct"]
-                                     is not None else -9999), b["building"] or ""))
+                    key=lambda b: (-(b["deviation_pct"] if b["deviation_pct"] is not None
+                                     else (b["worst_deviation_pct"] if b["worst_deviation_pct"]
+                                           is not None else -9999)),
+                                   b["building"] or ""))
 
     sections: dict[str, dict[str, Any]] = {}
     for x in assets:
-        if not x["section_id"]:
-            continue
-        s = sections.setdefault(x["section_id"], {
-            "section_id": x["section_id"], "section": x["section"],
+        # An asset in no section still sits somewhere. It is gathered under its building as a
+        # stated whole-building row rather than dropped, because the page shows those assets
+        # and the honest label is that the reading is building-level and inferred, not that
+        # the asset has no home.
+        key = x["section_id"] or f"whole:{x['building_id']}"
+        sec = sections.setdefault(key, {
+            "section_id": x["section_id"], "section": x["section"] or "Whole building",
             "building_id": x["building_id"], "building": x["building"],
             "eui_kwh_per_m2": x["section_eui"], "reference_eui_kwh_m2": x["section_reference"],
             "deviation_pct": round(x["section_deviation_pct"], 1)
             if x["section_deviation_pct"] is not None else None,
             "over_reference": x["section_over_reference"],
+            "measured": x["section_measured"],
+            "route": ("sub-meter" if x["section_id"] and x["section_measured"]
+                      else "building-level · inferred"),
+            "is_whole_building": x["section_id"] is None,
             "threat": 0, "watch": 0, "in_control": 0, "assets": 0})
-        s["assets"] += 1
-        s[x["band"]] += 1
+        sec["assets"] += 1
+        sec[x["band"]] += 1
+
+    # "2 of 4 sections over reference" on each building header.
+    for sec in sections.values():
+        b = buildings.get(sec["building_id"] or "")
+        if not b:
+            continue
+        b["sections"] = b.get("sections", 0) + 1
+        if sec["over_reference"]:
+            b["sections_over_reference"] = b.get("sections_over_reference", 0) + 1
+    for b in buildings.values():
+        b.setdefault("sections", 0)
+        b.setdefault("sections_over_reference", 0)
 
     return {
         "ok": True,

@@ -1382,3 +1382,32 @@ async def statutory_assessment(
     return {"ok": True, **price_svc.assess_statutory(
         market.upper(), eui_kwh_m2=eui_kwh_m2, tco2e=tco2e,
         carbon_cap_tco2e=carbon_cap_tco2e)}
+
+
+@router.get("/assets/{asset_id}/notes")
+async def asset_work_and_notes(
+    asset_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The work orders and inspection notes under an asset, and what is still owed on it.
+
+    Each order with its date, vendor, the grade the inspector gave and what they wrote — and
+    whether the recommendation they left ever became an order. A recommendation with nothing
+    raised off it is the row worth reading, and it is counted as `recommendations_open`.
+
+    Warranty comes back as two separate claims. The asset may be in warranty, and a part
+    fitted to it may be under its own term long after the asset's has run out — a contactor
+    fitted last month on a chiller installed in 2009. Neither is inferred from the other.
+
+    404 if the asset is not in your buildings, the same answer as an asset that does not
+    exist, so the API never confirms somebody else's asset is there.
+    """
+    ids = await position_svc.building_ids_for(session, s, None)
+    out = await ai_svc.asset_notes(session, asset_id=asset_id, building_ids=ids, limit=limit)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such asset in your buildings.",
+            "reason": out.get("reason", "not_found")})
+    return out

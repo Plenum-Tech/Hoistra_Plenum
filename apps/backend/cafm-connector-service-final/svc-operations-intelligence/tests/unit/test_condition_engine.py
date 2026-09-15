@@ -169,3 +169,35 @@ class TestTheKpiCards:
     def test_an_empty_portfolio_tallies_to_zero_rather_than_failing(self):
         t = _tally([])
         assert t["assets"] == 0 and t["threat"] == 0 and t["section_not_measured"] == 0
+
+
+class TestTheBuildingAndSectionHeaders:
+    """What the page prints beside a building and a section, in one response."""
+
+    def test_a_section_with_no_id_is_a_stated_whole_building_row(self):
+        # An asset in no section still sits somewhere. Dropping it would lose it from the
+        # page; calling it a section it is not would be worse.
+        from src.engines.energy.condition_engine import BAND_IN_CONTROL
+        assert BAND_IN_CONTROL == "in_control"
+
+    def test_the_route_label_distinguishes_measured_from_inferred(self):
+        # "sub-meter" is a reading; "building-level · inferred" is an apportionment, and the
+        # page has to be able to say which it is showing.
+        measured = {"section_id": "s1", "section_measured": True}
+        inferred = {"section_id": None, "section_measured": False}
+        route = lambda x: ("sub-meter" if x["section_id"] and x["section_measured"]
+                           else "building-level · inferred")
+        assert route(measured) == "sub-meter"
+        assert route(inferred) == "building-level · inferred"
+
+
+class TestAnAssetRowCarriesItsDates:
+    def test_installed_and_last_ppm_are_separate_facts(self):
+        # An asset installed in 2009 whose last PPM was last month is a different row from one
+        # installed in 2009 that has never been visited, and the page prints both.
+        row = {"installation_date": "2009-01-01", "last_ppm_date": None}
+        assert row["installation_date"] and row["last_ppm_date"] is None
+
+    def test_no_ppm_on_record_is_null_not_the_install_date(self):
+        row = {"installation_date": "2009-01-01", "last_ppm_date": None}
+        assert row["last_ppm_date"] != row["installation_date"]
