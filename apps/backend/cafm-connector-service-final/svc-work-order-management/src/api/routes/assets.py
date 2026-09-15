@@ -14,7 +14,8 @@ from ...models.location import Location
 from ...api.schemas.asset import AssetCategoryResponse, AssetResponse, LocationResponse
 from ...core.exceptions import DatabaseError
 from ...services import asset_catalogue
-from ...services.principal import Principal, assert_building, current_principal, scope_select
+from ...services.principal import (Principal, acting_organization, assert_building,
+                                   current_principal, scope_select)
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -43,12 +44,19 @@ async def list_assets(
     asset_type:  Optional[str]  = Query(None, description="Ignored — category is a UUID FK in plenum_cafm.assets"),
     location:    Optional[str]  = Query(None, description="Ignored — location is a UUID FK; use location_id"),
     active:      Optional[bool] = Query(None, description="Ignored — plenum_cafm.assets uses a status string, not a boolean"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmins only: answer for this company instead of reading across "
+                          "all of them. Ignored for everybody else, who always get their own."),
     page:        int            = Query(1, ge=1),
     limit:       int            = Query(50, ge=1, le=200),
     session:     AsyncSession   = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    query = scope_select(select(Asset), principal, Asset.building_id)
+    # Pinned to the same company the buildings register was asked for, so the two reads
+    # describe one portfolio. Without this a superadmin got every company's assets beside
+    # one company's buildings, and the page had to call the difference "not in your register".
+    query = scope_select(select(Asset), principal, Asset.building_id,
+                         organization_id=acting_organization(principal, organization_id))
     if building_id:
         # Asked for one building: 403 rather than an empty list, so a caller who is not
         # allocated to it learns that, instead of concluding the building has no assets.
@@ -162,13 +170,17 @@ async def get_asset(asset_id: str, session: AsyncSession = Depends(get_session),
 async def list_locations(
     q:       Optional[str]  = Query(None, description="Name substring search"),
     active:  Optional[bool] = Query(True, description="Ignored — real table has no active flag"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmins only: answer for this company instead of reading across "
+                          "all of them. Ignored for everybody else."),
     page:    int            = Query(1, ge=1),
     limit:   int            = Query(100, ge=1, le=500),
     session: AsyncSession   = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
     # Real plenum_cafm.locations has no 'active' column — return all
-    query = scope_select(select(Location), principal, Location.building_id)
+    query = scope_select(select(Location), principal, Location.building_id,
+                         organization_id=acting_organization(principal, organization_id))
     if q:
         query = query.where(Location.name.ilike(f"%{q}%"))
     query = query.order_by(Location.name).offset((page - 1) * limit).limit(limit)

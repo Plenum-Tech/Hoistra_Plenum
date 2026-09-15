@@ -25,14 +25,21 @@ export const workOrderApi = {
   // substring), page. Server caps limit at 200 and returns the pre-paging total in
   // X-Total-Count. Still not on this table: vendor, replacement value, and there is no
   // `section` concept anywhere in the schema (see assetsLive.js).
+  //
+  // organization_id rides along for the same reason every ops-intelligence read carries it:
+  // a superadmin viewing one company must get THAT company here too. Without it this read
+  // answered across every company while the buildings register answered for one, and the
+  // Assets page had to describe the difference as assets "not in your buildings register" —
+  // true, and misleading, because those buildings exist in a company the caller was not
+  // looking at. Ignored by the server for anyone who is not a superadmin.
   assets: (query) =>
-    apiFetch(B, '/api/assets', { query: Object.assign({ limit: 200 }, query || {}) }),
+    apiFetch(B, '/api/assets', { query: withOrg(Object.assign({ limit: 200 }, query || {})) }),
   // The register behind assets.category_id — {category_id, name, description,
   // parent_category_id, asset_count}. Company-wide: the table carries no building column.
   assetCategories: (query) =>
     apiFetch(B, '/api/asset-categories', { query: Object.assign({ limit: 500 }, query || {}) }),
   locations: (query) =>
-    apiFetch(B, '/api/locations', { query: Object.assign({ limit: 200 }, query || {}) }),
+    apiFetch(B, '/api/locations', { query: withOrg(Object.assign({ limit: 200 }, query || {})) }),
   // plenum_cafm.work_orders, newest first. Note: the response has no estimated_cost field
   // even though the underlying column exists — WorkOrderResponse never exposes it.
   workOrders: (query) =>

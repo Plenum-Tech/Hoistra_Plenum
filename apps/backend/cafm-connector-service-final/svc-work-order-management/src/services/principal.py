@@ -165,7 +165,29 @@ _BUILDINGS = sa_table(
 )
 
 
-def scope_select(q, principal: Principal, column):
+def acting_organization(principal: Principal, requested):
+    """The company a read should answer for.
+
+    A superadmin reads across companies, which is the point of the role — but the Assets
+    screen showed what happens when one endpoint exercises that and another does not. The
+    buildings register was asked for company 0001 and returned its 622 buildings; the asset
+    read was asked for nothing and returned company 0005's assets too, so fifteen assets
+    arrived belonging to a building the register had correctly left out. The page could only
+    describe them as "not in your buildings register", which was true and completely
+    misleading: the building exists, in another company.
+
+    So a superadmin naming a company gets that company on every read, not just some of them.
+    A caller who is not a superadmin gets their own company whatever they ask for — this can
+    only narrow a read, never widen one.
+    """
+    if requested is None:
+        return principal.organization_id
+    if (principal.role or "").strip().lower() == "superadmin":
+        return requested
+    return principal.organization_id
+
+
+def scope_select(q, principal: Principal, column, organization_id=None):
     """Narrow a SQLAlchemy select on a building column to this caller.
 
     ``building_ids`` None means "every building in the company" — the company, as this
@@ -179,21 +201,29 @@ def scope_select(q, principal: Principal, column):
     principal with no company at all matches nothing rather than everything: failing closed
     is the only safe default for a tenancy boundary, and no active account is in that state.
     """
+    def _in_org(org):
+        return q.where(
+            column.in_(
+                sa_select(_BUILDINGS.c.building_id).where(
+                    _BUILDINGS.c.organization_id == org
+                )
+            )
+        )
+
     if principal.building_ids is not None:
         if not principal.building_ids:
             return q.where(sa_false())
         return q.where(column.in_(list(principal.building_ids)))
     if (principal.role or "").strip().lower() == "superadmin":
-        return q
+        # Across companies by default, and pinned to one the moment a company is named —
+        # so the caller's other reads, which already honour organization_id, agree with
+        # this one instead of describing a different portfolio.
+        return q if organization_id is None else _in_org(organization_id)
     if principal.organization_id is None:
         return q.where(sa_false())
-    return q.where(
-        column.in_(
-            sa_select(_BUILDINGS.c.building_id).where(
-                _BUILDINGS.c.organization_id == principal.organization_id
-            )
-        )
-    )
+    # A non-superadmin is their own company, whatever was asked for. acting_organization()
+    # has already resolved that; this is the second line of the same defence.
+    return _in_org(principal.organization_id)
 
 
 def assert_building(principal: Principal, building_id, *, action: str = "read") -> None:
