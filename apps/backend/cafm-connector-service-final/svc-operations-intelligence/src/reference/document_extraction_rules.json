@@ -358,7 +358,7 @@
     "energy": {
       "label": "Energy",
       "handler": null,
-      "handler_note": "No extractor existed for this domain. Facts are recorded with their target column and held for a person until one does — inventing a meter row from a bill is how a portfolio gains supply points nobody contracted.",
+      "handler_note": "Writes through engines/ingestion/domain_writers.py. The target is energy_meters, NOT plenum_cafm.meters: meter_readings.meter_id carries a foreign key to energy_meters.id, and `meters` is a vestigial 18-row table nothing references for readings. That was found by a real insert failing, not by reading the schema — the column names on `meters` look right and the rows land nowhere.",
       "signals": {
         "strong": [
           "mpan",
@@ -392,37 +392,36 @@
       },
       "fields": [
         {
-          "name": "mpan_mprn",
-          "question": "The MPAN (electricity) or MPRN (gas) supply number",
-          "lands": "meters.mpan_mprn",
+          "name": "mpan",
+          "question": "The MPAN — the electricity supply number",
+          "lands": "energy_meters.mpan",
           "type": "text",
           "aliases": [
             "mpan",
-            "mprn",
+            "mpan core",
             "supply number",
-            "msn",
-            "supply point",
-            "meter point",
-            "mpan core"
+            "electricity supply number",
+            "msn"
           ]
         },
         {
           "name": "meter_serial",
-          "question": "The meter serial number",
-          "lands": null,
+          "question": "The meter serial or device identifier",
+          "lands": "energy_meters.dcc_device_id",
           "type": "text",
           "aliases": [
             "meter serial",
             "meter number",
             "meter no",
-            "serial"
+            "device id",
+            "msn"
           ],
-          "note": "plenum_cafm.meters has no serial column — only mpan_mprn, which is the supply number and a different identifier. Pointing both here would have written the serial over the MPAN for any sheet carrying both, so this is named as the gap."
+          "note": "The device identifier, which is what a serial is. It no longer shares a column with the supply number."
         },
         {
           "name": "meter_type",
           "question": "Whether this is an electricity, gas, water, heat or cooling meter",
-          "lands": "meters.meter_type",
+          "lands": "energy_meters.meter_type",
           "type": "text",
           "aliases": [
             "utility",
@@ -434,13 +433,14 @@
         {
           "name": "unit",
           "question": "The unit consumption is measured in (kWh, m3, therms, RTh)",
-          "lands": "meters.unit",
+          "lands": null,
           "type": "text",
           "aliases": [
             "uom",
             "unit of measure",
             "units"
-          ]
+          ],
+          "note": "energy_meters has no unit column; consumption is held in kWh by the column name itself (meter_readings.consumption_kwh), so a stated unit is read and shown rather than stored somewhere it would be ignored."
         },
         {
           "name": "period_start",
@@ -489,9 +489,9 @@
         {
           "name": "unit_rate",
           "question": "The unit rate charged per kWh or per unit, with its currency",
-          "lands": "energy_anomalies.tariff_used",
+          "lands": "energy_meters.tariff_gbp_per_kwh",
           "type": "money",
-          "note": "plenum_cafm.meters has no metadata column, so a rate read off a bill has nowhere of its own to live. tariff_used is where a rate is already recorded against a finding; a contracted rate needs a column before it can be stored.",
+          "note": "The contracted rate on the meter. Previously aimed at energy_anomalies.tariff_used, which is the rate a FINDING was priced at — a different fact about a different row.",
           "aliases": [
             "rate",
             "p/kwh",
@@ -521,6 +521,17 @@
             "energy supplier",
             "retailer",
             "utility company"
+          ]
+        },
+        {
+          "name": "mprn",
+          "question": "The MPRN — the gas supply number",
+          "lands": "energy_meters.mprn",
+          "type": "text",
+          "aliases": [
+            "mprn",
+            "gas supply number",
+            "gas meter point"
           ]
         }
       ]

@@ -25,10 +25,14 @@ def lands_of(result, header):
 class TestTheThreeDomainsThatHadNoMapping:
 
     def test_an_energy_export_reaches_the_meter_tables(self):
-        """MPAN had no canonical target at all, so the file imported into nothing."""
+        """MPAN had no canonical target at all, so the file imported into nothing.
+
+        energy_meters, not `meters`: meter_readings.meter_id carries a foreign key to
+        energy_meters.id. `meters` has the plausible column names and 18 rows nothing reads.
+        """
         r = tm.map_headers(ENERGY_EXPORT)
-        assert lands_of(r, "MPAN") == "meters.mpan_mprn"
-        assert lands_of(r, "Fuel") == "meters.meter_type"
+        assert lands_of(r, "MPAN") == "energy_meters.mpan"
+        assert lands_of(r, "Fuel") == "energy_meters.meter_type"
         assert lands_of(r, "Consumption kWh") == "meter_readings.consumption_kwh"
 
     def test_an_asset_register_reaches_the_asset_table(self):
@@ -118,13 +122,20 @@ class TestTwoColumnsCannotShareOneTarget:
         p = tm.import_plan(["Make", "Manufacturer"], row_count=10)
         assert any("overwrite" in b["why"] for b in p["blocked"])
 
+    def test_a_serial_and_a_supply_number_no_longer_share_one_column(self):
+        """Both pointed at mpan_mprn, so a sheet carrying each would have written the serial
+        over the supply number. On energy_meters they are separate columns and both land."""
+        r = tm.map_headers(ENERGY_EXPORT)
+        assert lands_of(r, "MPAN") == "energy_meters.mpan"
+        assert lands_of(r, "Meter Serial") == "energy_meters.dcc_device_id"
+        assert r["collisions"] == []
+
     def test_a_field_with_no_column_on_this_schema_is_named_not_written(self):
-        """Meter serial is not an MPAN, and meters has no serial column. Pointing both at
-        mpan_mprn would have written the serial over the supply number."""
+        """A unit and a standing charge have nowhere to live on this schema. Both are read and
+        shown; neither is written into a column that would ignore it."""
         r = tm.map_headers(ENERGY_EXPORT)
         no_target = {n["header"] for n in r["no_target"]}
-        assert "Meter Serial" in no_target
-        assert lands_of(r, "MPAN") == "meters.mpan_mprn"
+        assert {"UOM", "Standing Charge"} <= no_target
 
 
 class TestTheImportPlanIsHonestBeforeItWrites:

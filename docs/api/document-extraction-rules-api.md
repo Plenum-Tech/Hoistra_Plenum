@@ -186,9 +186,72 @@ one that says so, and neither is worth losing an upload over.
 
 ---
 
+## `POST /api/ingestion/import` — the extractors
+
+Energy, assets and maintenance now write. Dry run unless `apply: true`.
+
+```jsonc
+{"headers": ["MPAN", "Fuel", "Read To", "Consumption kWh"],
+ "rows": [{"MPAN": "12 3456 7890 123", "Fuel": "electricity",
+           "Read To": "2026-08-31", "Consumption kWh": "184220"}],
+ "domains": ["energy"], "building_id": "…", "apply": true}
+```
+
+| Domain | Tables, in write order |
+|---|---|
+| assets | `assets` |
+| energy | `energy_meters` → `meter_readings` |
+| maintenance | `work_orders` → `ppm_visits` → `inspections` |
+
+Order is not cosmetic — a reading resolves its `meter_id` against the meter the same run just
+wrote.
+
+### Five rules, each because the careless version fails silently
+
+**The schema is probed, never assumed.** `hoistra_test` declares `work_orders.title`,
+`priority` and `status` NOT NULL; `plenum_agent` declares almost nothing. `assets.id` has no
+default on one. A row missing something the table actually requires is refused **by name**,
+not attempted and rolled back halfway through a file.
+
+**Writes are idempotent.** `asset_code`, `mpan`, `meter_id`+`reading_at`, `ppm_ref`, `wo_code`
+— a row matching its natural key updates. Running the same file twice does not double a
+portfolio.
+
+**A human's edit survives an import.** Update fills empty columns and leaves populated ones
+alone unless `overwrite` is asked for. Someone corrected a serial by hand; a re-import should
+not quietly undo it.
+
+**An ambiguous date is refused, not guessed.** `03/04/2026` is 3 April on a British export and
+4 March on an American one, and the cell does not say which. Preferring one reading is right
+about half the time, which is how a PPM visit lands a month out and nobody can see why. Pass
+`day_first` to state the convention. `25/12/2026` needs no convention — there is no month 25.
+
+**A reference that resolves to nothing is left empty.** The row then fails on its own missing
+column, by name, which is fixable. A fabricated id is a reading pointing at the wrong meter
+forever.
+
+### What the real write found that a dry run could not
+
+Two bugs surfaced only by executing against the database, inside a transaction that was rolled
+back:
+
+- **`assets.id` has no default on `hoistra_test`.** Excluding `id` from the required check —
+  on the assumption a database generates its own keys — failed with a null violation on a
+  column nothing had been asked for. Uuid keys with no default are now generated.
+- **Energy was pointed at the wrong table entirely.** `meter_readings.meter_id` carries a
+  foreign key to **`energy_meters.id`**, not `plenum_cafm.meters`. `meters` has the plausible
+  column names, 18 rows on one database and 3 on the other, and nothing reads it for
+  readings. The insert failed on the foreign key; the schema alone would not have said so.
+
+Verified end to end on `hoistra_test`: assets 1, `energy_meters` 1, `meter_readings` 1 — the
+reading resolving against the meter written in the same run — re-run inserting 0, rollback
+clean, no probe rows left behind.
+
+---
+
 ## What this does not do yet
 
-**Three domains have no extractor.** Energy, assets and maintenance return fields and land
+**Documents still do not write into these three.** Energy, assets and maintenance return fields and land
 nowhere. Building those means, for each: a Claude extraction pass against the domain's field
 list, and a handler that writes with provenance. The rules and the targets are already
 declared, so the work is the extractor, not the design.

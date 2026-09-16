@@ -33,8 +33,23 @@ from ...engines.auth import ingestion_audit
 from ...engines.ingestion import ontology as onto
 from ...engines.ingestion import document_facts as facts_svc
 from ...engines.ingestion import tabular_mapping as tab_svc
+from ...engines.ingestion import domain_writers as write_svc
 from ...engines.ingestion import validation as val
 from .auth import scope
+
+class ImportRequest(BaseModel):
+    """A sheet, and what to do with it. Dry run unless `apply` says otherwise."""
+    headers: list[str] = Field(default_factory=list, max_length=2000)
+    rows: list[dict[str, Any]] = Field(default_factory=list, max_length=50000)
+    domains: list[str] = Field(default_factory=list,
+                               description="assets, energy, maintenance — the domains to write.")
+    building_id: UUID | None = None
+    apply: bool = Field(False, description="Write. Without it this plans and writes nothing.")
+    overwrite: bool = Field(
+        False, description="Fill columns that already hold a value. Off by default: an import "
+                           "should not quietly undo somebody's correction.")
+    source_reference: str | None = Field(None, description="The file or run this came from.")
+
 
 class ImportPlanRequest(BaseModel):
     """A spreadsheet's headers, and optionally how many rows sit under them."""
@@ -275,6 +290,62 @@ async def import_plan(body: ImportPlanRequest, s: access.Scope = Depends(scope))
     confidence score. See engines/ingestion/tabular_mapping.py.
     """
     return tab_svc.import_plan(body.headers, row_count=body.row_count, domains=body.domains)
+
+
+@router.post("/import")
+async def run_import(
+    body: ImportRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Write a CSV or Excel sheet into the tables its columns belong in.
+
+    This is the extractor for energy, assets and maintenance — the three domains that had a
+    catalogue entry, a verified target column and nothing that wrote them.
+
+    **Dry run unless `apply` is true.** The plan says, per table, what would be inserted,
+    updated and refused, and the refusals name the column that blocked each row. A writer that
+    reports only its successes leaves a caller believing a file imported cleanly when a third
+    of it was dropped.
+
+    Idempotent: a row matching a natural key — asset_code, mpan, meter_id+reading_at, ppm_ref,
+    wo_code — updates rather than inserting again, so running the same file twice does not
+    double a portfolio. Update fills empty columns and leaves populated ones alone unless
+    `overwrite` is asked for.
+
+    See engines/ingestion/domain_writers.py.
+    """
+    if body.building_id is not None:
+        access.assert_building(s, body.building_id, action="write")
+    org = access.organization_for(s, None)
+    if org is None:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_organization",
+            "error": "Rows are written into a company and this account belongs to none."})
+
+    known = sorted(write_svc.DOMAIN_TABLES)
+    want = [d for d in (body.domains or known) if d in write_svc.DOMAIN_TABLES]
+    if not want:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_writable_domain",
+            "error": f"Nothing to write. Writable domains are {known}.",
+            "asked_for": body.domains})
+
+    out = []
+    for domain in want:
+        mapping = tab_svc.map_headers(body.headers, domains=[domain])["mapped"]
+        out.append(await write_svc.write_domain(
+            session, domain, body.rows, mapping,
+            organization_id=org, building_id=body.building_id,
+            source="import", source_reference=body.source_reference,
+            apply=body.apply, overwrite=body.overwrite))
+    return {
+        "ok": all(x.get("ok") for x in out), "applied": body.apply,
+        "domains": out,
+        "totals": {k: sum(x["totals"][k] for x in out)
+                   for k in ("inserted", "updated", "skipped")},
+        "note": "DRY RUN — nothing was written" if not body.apply else "written",
+    }
 
 
 @router.get("/extraction-rules/validate")
