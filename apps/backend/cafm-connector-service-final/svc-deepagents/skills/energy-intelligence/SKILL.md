@@ -89,6 +89,17 @@ is the share that is actionable now. The remainder is structural — plant age, 
 and does not move when the anomalies are fixed. Say which part is which, and say what each
 figure rests on.
 
+**The conclusion must not contradict the evidence rows.** A worked answer shows its reads and
+then states a finding, and the finding has to follow from what the reads returned. An answer
+that lists *occupancy: as assumed* and then concludes *"the building keeps longer hours than its
+pack assumes"* has contradicted itself in the same breath — and if it then proposes
+"re-benchmark with actual hours" on the strength of it, it has recommended work on a premise its
+own evidence denied. Before writing the conclusion, read back what each step actually returned.
+
+**Do not propose an action with nothing in it.** "Work the open anomalies — 0 open, £0
+annualised" is not a recommendation; it is a row that should not be there. Offer the actions the
+evidence supports and drop the rest.
+
 Two rules for this shape of question:
 
 - **Do not stop at the first tool that returns something.** One call answers "what is the EUI";

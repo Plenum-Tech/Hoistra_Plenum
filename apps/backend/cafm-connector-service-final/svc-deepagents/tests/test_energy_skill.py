@@ -141,3 +141,16 @@ class TestCompoundQuestionsAreChained:
     def test_the_decomposition_is_stated(self):
         low = SKILL.lower()
         assert "actionable now" in low and "structural" in low
+
+
+class TestTheConclusionMustFollowTheEvidence:
+    """A worked answer that shows its reads and then contradicts them is worse than a short
+    one: it looks audited. Observed in a proposed transcript — "occupancy: as assumed" in the
+    evidence, "the building keeps longer hours than its pack assumes" in the conclusion, and
+    "re-benchmark with actual hours" offered as an action on the strength of it."""
+
+    def test_it_forbids_contradicting_the_evidence(self):
+        assert "must not contradict the evidence rows" in SKILL
+
+    def test_it_forbids_an_action_with_nothing_in_it(self):
+        assert "Do not propose an action with nothing in it" in SKILL
