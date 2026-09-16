@@ -3657,6 +3657,12 @@ class DeepAgentOrchestrator:
         "certificates", "buildings", "vendors", "types",          # compliance
         "anomalies", "assets", "groups", "meters", "readings",    # energy
         "work_orders", "visits", "contracts",                     # wo / contract performance
+        # An asset investigation returns what it WALKED and what it FOUND, not a row list.
+        # Without these it reported "1 tool, 0 rows" for a call that examined six sources and
+        # produced two pieces of evidence — the same shape of miss as the compliance-only keys.
+        # `actions` is deliberately absent: those are proposals the tool generated, not data it
+        # fetched, and counting them would inflate the figure with its own output.
+        "sources", "evidence",                                    # asset investigation
         "rows", "records", "items",                               # generic
     )
 

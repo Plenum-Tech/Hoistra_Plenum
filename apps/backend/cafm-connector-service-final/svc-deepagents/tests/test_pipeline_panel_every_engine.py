@@ -93,3 +93,39 @@ class TestTheCostSummary:
         assert summary["by_role"]["agent_router"] > 0
         assert summary["by_role"]["sub_agent"] > 0
         assert summary["calls"] == 2
+
+
+class TestAnAssetInvestigationIsCountedToo:
+    """investigate_asset returns what it WALKED (sources) and what it FOUND (evidence), not a
+    row list. Without those keys the panel said "1 tool, 0 rows" about a call that examined six
+    sources and produced two pieces of evidence — the same shape of miss as the compliance-only
+    keys, one tool shape later."""
+
+    @staticmethod
+    def asset_turn():
+        llm_cost.begin_turn("asset-test")
+        llm_cost.record("agent_router", "claude-sonnet-5",
+                        {"input_tokens": 900, "output_tokens": 40}, 2400.0,
+                        agent="energy_intelligence", reason="Asks why one asset costs what it does.")
+        llm_cost.record("sub_agent", "gpt-5.6-terra",
+                        {"input_tokens": 7000, "output_tokens": 600}, 6100.0, cache_hit=True)
+        return [
+            {"tool": "investigate_asset",
+             "output": {"sources": [{}] * 6, "evidence": [{}] * 2, "actions": [{}] * 1}},
+            {"tool": "get_asset_intelligence", "output": {"readings": [{}] * 4}},
+            {"tool": "phase2_engine:energy_intelligence", "output": {}},
+        ]
+
+    def test_sources_and_evidence_are_counted(self):
+        data = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "data")
+        assert "12 rows" in data["label"]        # 6 sources + 2 evidence + 4 readings
+
+    def test_actions_are_not_counted_as_data(self):
+        """Actions are proposals the tool generated, not records it fetched. Counting them
+        would inflate the figure with the tool's own output."""
+        from src.agents.orchestrator import DeepAgentOrchestrator
+        assert "actions" not in DeepAgentOrchestrator._ROW_KEYS
+
+    def test_an_asset_question_still_names_the_engine_that_took_it(self):
+        route = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "route")
+        assert "energy_intelligence" in route["label"]
