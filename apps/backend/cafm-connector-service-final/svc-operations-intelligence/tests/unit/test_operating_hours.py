@@ -64,3 +64,36 @@ class TestTheGuards:
 
     def test_the_in_use_fraction_leaves_the_base_load_out(self):
         assert 0.0 < IN_USE_FRACTION < 0.5
+
+
+class TestSimulatedReadingsAreNotMeasurement:
+    """98% of readings in this deployment carry source='simulator', and every building but one
+    is 99-100% simulated over ninety days — which is why five different buildings derived
+    exactly the same 07:00-19:00. A pattern read off invented consumption is a fact about the
+    simulator, and this figure is used to argue a benchmark fits a building badly."""
+
+    def test_the_threshold_is_strict(self):
+        from src.engines.energy.operating_hours import SIMULATED_LIMIT_PCT
+        assert SIMULATED_LIMIT_PCT <= 25.0
+
+    def test_a_simulated_profile_is_refused_before_anything_else(self):
+        """The warning replaces the note rather than appending to it. A caller who reads "the
+        building opens at 07:00" acts on it long before reading a field further down."""
+        from src.engines.energy.operating_hours import _note
+        note = _note(True, True, list(range(7, 19)), 12, 89, simulated_pct=99.9)
+        assert "simulated" in note.lower()
+        assert "re-benchmark argument" in note or "cannot" in note
+        assert "hours a WEEK longer" not in note
+
+    def test_a_half_simulated_profile_is_still_refused(self):
+        """Harbour View is 47% simulated — the least synthetic building in the estate, and
+        still half invented."""
+        from src.engines.energy.operating_hours import _note
+        assert "simulated" in _note(True, True, list(range(7, 19)), 12, 89,
+                                    simulated_pct=47.4).lower()
+
+    def test_real_data_gets_the_real_note(self):
+        from src.engines.energy.operating_hours import _note
+        note = _note(True, True, list(range(7, 19)), 12, 89, simulated_pct=0.0)
+        assert "simulated" not in note.lower()
+        assert "hours a WEEK longer" in note

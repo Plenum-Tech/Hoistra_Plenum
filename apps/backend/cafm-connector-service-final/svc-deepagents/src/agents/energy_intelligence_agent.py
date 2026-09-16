@@ -1036,6 +1036,11 @@ async def get_operating_hours(building_id: str, days: int = 90) -> dict:
     twelve hours a week more than its pack assumes while a daily comparison reports no difference
     at all. Check `derived.weekend_operation` against `assumed.days_per_week`.
 
+    CHECK `provenance.measured` FIRST. False means the readings behind the pattern are mostly
+    simulated, and the hours describe the simulator rather than the building — in this
+    deployment 98% of all readings carry source='simulator'. Say the pattern cannot support a
+    re-benchmark argument and that real half-hourly data is needed. Do not quote the hours.
+
     `derived.contiguous` False means the in-use hours have a break in them — two shifts, or a
     cleaning window. Printing "07:00-19:00" over that describes a continuity the readings do not
     show.

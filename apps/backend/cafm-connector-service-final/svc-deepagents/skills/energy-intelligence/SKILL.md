@@ -135,6 +135,12 @@ an assumed 09:00–21:00 is the same twelve hours, and a building also running S
 twelve hours a week more than its pack allows while a daily comparison shows nothing. Check
 `derived.weekend_operation` against `assumed.days_per_week`.
 
+**Check `provenance.measured` before quoting any derived hours.** False means the readings
+behind the pattern are mostly simulated — 98% of readings in this deployment carry
+`source='simulator'`, and every building but one is 99–100% simulated, which is why several
+buildings derive identical hours. A pattern read off invented consumption is a fact about the
+simulator. Say so, and that real half-hourly data is needed before benchmark fit can be argued.
+
 Read `known` before quoting either side. `assumed.known` false means the benchmark's assumption
 was never recorded — say the fit cannot be judged and that it needs setting. **Never supply a
 plausible default**: a fabricated assumption behind a re-benchmark argument is worse than no

@@ -43,6 +43,13 @@ IN_USE_FRACTION = 0.25
 #: point on it.
 MIN_DAYS = 14
 
+#: Above this share of simulated readings, a derived pattern is reported as unusable rather than
+#: as a measurement. 20% is deliberately strict: the figure is used to argue that a benchmark
+#: fits the building badly, and an argument built on invented consumption is worse than saying
+#: nothing. Measured on this deployment, 98% of all readings are simulator-generated and every
+#: building but one is 99-100% simulated, which is why five buildings derived identical hours.
+SIMULATED_LIMIT_PCT = 20.0
+
 
 def in_use_hours(hourly_median: dict[int, float]) -> list[int]:
     """Which hours of the day this building is in use, from its median hourly load.
@@ -144,6 +151,47 @@ async def operating_hours(
         or 0
     )
 
+    # What the profile is built on. An operating pattern read off invented readings is a fact
+    # about the simulator, and presenting it as "the building opens at 07:00" is the same class
+    # of error as pricing an anomaly off simulated consumption — which is why list_anomalies
+    # already marks its rows this way. Measured here: 98% of all readings in this deployment
+    # carry source='simulator', and every building except one is 99-100% simulated over ninety
+    # days, which is why five different buildings derived exactly the same hours.
+    simulated = int(
+        await session.scalar(
+            text(
+                f"""
+                SELECT count(*)
+                  FROM plenum_cafm.meter_readings r
+                  JOIN plenum_cafm.energy_meters m ON m.id = r.meter_id
+                 WHERE m.building_id::text = :b
+                   AND r.reading_at > now() - interval '{int(days)} days'
+                   AND r.consumption_kwh IS NOT NULL
+                   AND r.source = 'simulator'
+                """
+            ),
+            {"b": str(building_id)},
+        )
+        or 0
+    )
+    total_readings = int(
+        await session.scalar(
+            text(
+                f"""
+                SELECT count(*)
+                  FROM plenum_cafm.meter_readings r
+                  JOIN plenum_cafm.energy_meters m ON m.id = r.meter_id
+                 WHERE m.building_id::text = :b
+                   AND r.reading_at > now() - interval '{int(days)} days'
+                   AND r.consumption_kwh IS NOT NULL
+                """
+            ),
+            {"b": str(building_id)},
+        )
+        or 0
+    )
+    simulated_pct = round(100.0 * simulated / total_readings, 1) if total_readings else 0.0
+
     weekday = {r["hour"]: float(r["median_kwh"]) for r in rows if r["isodow"] <= 5}
     weekend = {r["hour"]: float(r["median_kwh"]) for r in rows if r["isodow"] >= 6}
 
@@ -197,17 +245,33 @@ async def operating_hours(
             "contiguous": contiguous,
             "weekend_operation": bool(we_hours),
         },
+        "provenance": {
+            "readings": total_readings,
+            "simulated": simulated,
+            "simulated_pct": simulated_pct,
+            # Anything above this is a pattern of the simulator, not of the building.
+            "measured": simulated_pct < SIMULATED_LIMIT_PCT,
+        },
         "gap_hours_per_day": gap_hours,
         "gap_hours_per_week": gap_weekly,
         "note": _note(assumed_known, enough, wd_hours, gap_weekly, days_seen,
-                      weekend=bool(we_hours), assumed_days=assumed_days),
+                      weekend=bool(we_hours), assumed_days=assumed_days,
+                      simulated_pct=simulated_pct),
     }
 
 
 def _note(assumed_known: bool, enough: bool, wd_hours: list[int],
           gap: int | None, days_seen: int, *, weekend: bool = False,
-          assumed_days: int = 5) -> str:
-    """One sentence saying what may and may not be concluded from this."""
+          assumed_days: int = 5, simulated_pct: float = 0.0) -> str:
+    """One sentence saying what may and may not be concluded from this.
+
+    The provenance warning comes FIRST and replaces the rest. A hours figure derived from
+    invented readings is a fact about the simulator, and a caller who reads "the building opens
+    at 07:00" will act on it long before they read a field further down the payload."""
+    if simulated_pct >= SIMULATED_LIMIT_PCT:
+        return (f"{simulated_pct:.0f}% of the readings behind this are simulated, so the "
+                f"pattern below describes the simulator and not the building. It cannot "
+                f"support a re-benchmark argument. Real half-hourly data is needed first.")
     if not enough:
         return (f"Only {days_seen} days of readings; at least {MIN_DAYS} are needed before an "
                 f"operating pattern is a habit rather than one atypical week.")
