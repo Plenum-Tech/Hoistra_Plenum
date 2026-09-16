@@ -762,7 +762,172 @@ async def ingest_bms_trends(building_id: str, samples: list[dict]) -> dict:
         return _err(exc, "ingest_bms_trends")
 
 
+
+# ── The portfolio views the Energy page renders, which the agent could not reach ──────────
+#
+# svc-operations-intelligence serves /market-profiles, /buildings, /buildings/{id}/cost-drivers,
+# /anomalies/rollup, /statutory/{market} and /tariffs, and the Energy page renders all of them.
+# None had a tool, so the orchestrator could not answer the questions printed as chips on that
+# very page — "Which markets drive the excess cost?", "Which buildings are worst against their
+# own pack?" — while a person was looking at the answer on screen.
+
+
+@tool
+async def get_market_profiles(markets: str | None = None,
+                              building_id: str | None = None) -> dict:
+    """C — The four markets side by side: what each benchmarks against, how its data arrives,
+    and what it bills.
+
+    Use for any question that compares COUNTRIES or asks why portfolio numbers are normalised
+    rather than summed — "which markets drive the excess cost?", "what standard applies in
+    Singapore?", "why are these buildings not comparable?".
+
+    Each market returns its benchmark standard and reference EUI (CIBSE TM46 by use class in
+    the UK, Energy Star / ASHRAE 100 with the LL97 emissions limit in the US, a rolling
+    portfolio benchmark for the UAE where Estidama covers new build only, BCA in Singapore),
+    its unit of measure, its data route and refresh, its identifier scheme, its known limits,
+    and its commercial tariffs in the local currency.
+
+    The units differ — kWh/m2/yr, kBtu/ft2/yr, tCO2e/ft2, cooling in RTh — so figures from
+    different markets must NOT be added together. Say which basis each number is on, and when
+    a portfolio figure is shown say that it is normalised rather than totalled.
+    """
+    try:
+        params: dict[str, Any] = {}
+        if markets:
+            params["markets"] = markets      # comma-separated subset of UK,US,AE,SG
+        if building_id:
+            params["building_id"] = building_id
+        resp = await _request("GET", _base(), "/api/energy/market-profiles", service=_SERVICE,
+                              timeout=_TIMEOUT, params=params or None)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_market_profiles")
+
+
+@tool
+async def list_energy_buildings(limit: int = 500) -> dict:
+    """C — Every building with its EUI, the benchmark it is read against and where that
+    benchmark came from, plus record completeness. The table the Energy page lays out.
+
+    Use for "which buildings are worst against their own pack?", "which are over benchmark?",
+    "anything above 20k?".
+
+    **This endpoint takes no filters.** It returns the caller's buildings and you filter the
+    result yourself — over benchmark, with anomalies, above a cost threshold. Do not invent
+    query parameters for it: unknown ones are ignored rather than refused, so a call that looks
+    filtered comes back unfiltered and the answer is confidently wrong about how many buildings
+    qualify.
+
+    Each building is compared to the reference for ITS market and use class, not to the others.
+    Kingsway House at 198 kWh/m2 against a reference of 172 is +15%; Bishopsgate Tower at 214
+    against 215 is AT reference. Reporting those two raw EUIs side by side says the second is
+    worse, which is the opposite of the truth — always carry the reference with the figure.
+    """
+    try:
+        resp = await _request("GET", _base(), "/api/energy/buildings", service=_SERVICE,
+                              timeout=_TIMEOUT, params={"limit": limit})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "list_energy_buildings")
+
+
+@tool
+async def get_building_cost_drivers(building_id: str, limit: int = 25) -> dict:
+    """C — What is actually costing money in one building, ranked. The "Investigate building"
+    view.
+
+    Use when a question names ONE building — "why is Kingsway House so expensive?", "what is
+    driving the cost at Town Hall?". Returns the drivers beneath the headline number, so the
+    answer is a cause rather than a restatement of the total.
+    """
+    try:
+        resp = await _request("GET", _base(), f"/api/energy/buildings/{building_id}/cost-drivers",
+                              service=_SERVICE, timeout=_TIMEOUT, params={"limit": limit})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_building_cost_drivers")
+
+
+@tool
+async def get_anomaly_rollup(building_id: str | None = None,
+                             status: str | None = "open") -> dict:
+    """C — The honest total across overlapping anomaly detectors. Use this, never a sum of
+    list_energy_anomalies.
+
+    Several rules fire on the same kWh — a weekend spike sits inside a non-occupied spike, and
+    a baseline drift can overlap both. Adding their costs counts the same energy two or three
+    times, which is how a building 3% UNDER its reference came to show a six-figure anomaly
+    cost.
+
+    Returns the HEADLINE (the largest single finding, never a sum), what the total would become
+    if the next rule were added, what is double counted at least, which rules are contained
+    inside others, which may overlap, and which are priced at all. Report the headline as the
+    number, and the rest as what it deliberately does not include.
+    """
+    try:
+        params: dict[str, Any] = {}
+        if building_id:
+            params["building_id"] = building_id
+        if status:
+            params["status"] = status
+        resp = await _request("GET", _base(), "/api/energy/anomalies/rollup", service=_SERVICE,
+                              timeout=_TIMEOUT, params=params or None)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_anomaly_rollup")
+
+
+@tool
+async def get_statutory_duties(market: str) -> dict:
+    """C — The statutory position for one market: what is enforceable now, what is proposed,
+    and what is on file.
+
+    UK: MEES below EPC E enforceable now, below B proposed for 2030, EPCs held and when they
+    expire. US: LL97 emissions limits and LL84 filing. SG: BCA submission and Green Mark.
+    AE: Estidama.
+
+    Every tile states its basis — from a certificate, from a filing, or inferred from
+    consumption. Say which. "2 buildings below EPC B" taken from certificates is a fact; the
+    same number inferred from consumption is an estimate, and that difference decides whether
+    somebody can act on it.
+    """
+    try:
+        resp = await _request("GET", _base(), f"/api/energy/statutory/{market}", service=_SERVICE,
+                              timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_statutory_duties")
+
+
+@tool
+async def get_energy_tariffs(market: str | None = None) -> dict:
+    """C — The tariff each market bills each fuel at, and the unit conversions.
+
+    Needed whenever kWh becomes money, because the rate and the currency both differ by market:
+    28.4p/kWh contracted in the UK, $0.22/kWh in the US, 44.5 fils/kWh in the UAE including the
+    fuel surcharge, S$0.30/kWh in Singapore. Gas is billed per therm in the US and by calorific
+    value in the UK, and the UAE bills LPG by cylinder or kg.
+
+    Never convert between currencies. Quote each market in its own, and name the tariff used
+    for any cost figure.
+    """
+    try:
+        params = {"market": market} if market else None
+        resp = await _request("GET", _base(), "/api/energy/tariffs", service=_SERVICE,
+                              timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_energy_tariffs")
+
 ENERGY_INTELLIGENCE_TOOLS = [
+    # Portfolio and market views - what the Energy page renders.
+    get_market_profiles,
+    list_energy_buildings,
+    get_building_cost_drivers,
+    get_anomaly_rollup,
+    get_statutory_duties,
+    get_energy_tariffs,
     compute_building_rating,
     get_ratings_position,
     record_chiller_design,
