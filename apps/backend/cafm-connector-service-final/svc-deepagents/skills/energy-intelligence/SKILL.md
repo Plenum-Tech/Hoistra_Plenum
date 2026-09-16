@@ -197,6 +197,17 @@ A rough decomposition of the gap: anomaly headline (from `get_anomaly_rollup`) o
 reference gives the share that is actionable now. The remainder is structural — plant age, hours,
 fabric — and does not move when the anomalies are fixed. Say which part is which.
 
+### An asset id is not always an asset
+
+19 of the 26 assets carrying anomalies are **not in the asset register** — the `asset_id` points
+at nothing. `summarise_anomalies(group_by="asset")` labels a group with its asset CODE where one
+exists and returns `asset_in_register` on every group.
+
+When that is false, the uuid is a **dangling reference, not an unnamed asset**. Never print it as
+"the asset to investigate": it sends somebody looking for plant that was never recorded. Say the
+finding sits on the building and its asset link is broken — that is both true and actionable,
+because the broken link is itself the thing to fix.
+
 ### Asset criticality has one scale
 
 `assets.criticality` holds three vocabularies — `L1/L2/L3`, `critical/high/medium/Low`, and

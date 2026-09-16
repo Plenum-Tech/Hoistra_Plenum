@@ -1003,6 +1003,12 @@ async def summarise_anomalies(group_by: str = "building", status: str | None = N
                  returned only so you can see the gap; never quote it as a total.
       unpriced   findings with no cost attached. They are real, and are not £0.
 
+    With group_by="asset" the label is the asset CODE where one exists. Check
+    `asset_in_register` on each group: false means the anomaly names an asset_id that is not in
+    the asset register at all — 19 of the 26 assets carrying anomalies are dangling references.
+    That uuid is a pointer to nothing, not an unnamed asset. Do NOT offer it as plant to
+    investigate; say the finding is on the building and its asset link is broken.
+
     Groups are split BY CURRENCY as well as by the dimension asked for, because the estate
     spans four. The dearest buildings here are in AED and the next in GBP — one ranking across
     both is a ranking of exchange rates, not of waste. Rank within a currency, or say which

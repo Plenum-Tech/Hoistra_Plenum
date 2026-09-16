@@ -1051,7 +1051,11 @@ SUMMARY_GROUPS: dict[str, str] = {
     "building": "b.name",
     "type": "a.anomaly_type",
     "status": "a.status",
-    "asset": "a.asset_id::text",
+    # The asset CODE, falling back to the id only where a code was never recorded. Grouping on
+    # the bare uuid put rows like "f66d102f-3c1d-57e1-a213-188f757f715e" in front of a person
+    # deciding which plant to investigate — four of the five assets in that table had codes
+    # (ACS-DL-04, ACS-DL-06, ACS-DL-07, ACS-DL-03) and none of them were shown.
+    "asset": "COALESCE(ast.asset_code, a.asset_id::text)",
 }
 
 
@@ -1105,12 +1109,14 @@ async def summarise_anomalies(
     sql = f"""
         SELECT COALESCE({column}::text, '(unattributed)') AS label,
                COALESCE(a.currency, 'GBP')                AS currency,
+               bool_or(a.asset_id IS NOT NULL AND ast.id IS NULL) AS orphan_asset,
                count(*)                                   AS count,
                max(a.financial_gbp)                       AS worst,
                sum(a.financial_gbp)                       AS naive_sum,
                count(*) FILTER (WHERE a.financial_gbp IS NULL) AS unpriced
           FROM plenum_cafm.energy_anomalies a
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
+          LEFT JOIN plenum_cafm.assets ast ON ast.id::text = a.asset_id::text
          WHERE {' AND '.join(where)}
          GROUP BY 1, 2
          ORDER BY max(a.financial_gbp) DESC NULLS LAST
@@ -1127,13 +1133,21 @@ async def summarise_anomalies(
                 "worst": float(r["worst"]) if r["worst"] is not None else None,
                 "naive_sum": float(r["naive_sum"]) if r["naive_sum"] is not None else None,
                 "unpriced": int(r["unpriced"]),
+                # True when the anomaly names an asset_id that is not in the asset register at
+                # all. Measured: 19 of the 26 assets carrying anomalies are dangling
+                # references, so the uuid shown is not an unnamed asset — it is a pointer to
+                # nothing, and offering it as "the asset to investigate" sends somebody
+                # looking for plant that was never recorded.
+                "asset_in_register": not bool(r["orphan_asset"]),
             }
             for r in rows
         ],
         "note": (
             "worst is the largest single finding and is the figure to quote. naive_sum adds "
             "overlapping detectors and double counts; it is not a total. Currencies are not "
-            "combined."
+            "combined. A group with asset_in_register false names an asset_id that is not in "
+            "the asset register — the uuid is a dangling reference, not an unnamed asset, and "
+            "must not be offered as plant to investigate."
         ),
     }
 
