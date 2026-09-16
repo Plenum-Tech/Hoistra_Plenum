@@ -113,3 +113,31 @@ class TestCrossDomainToolsAreRealToo:
         a figure and get the same rows, or reach for it believing it sees more."""
         low = SKILL.lower()
         assert "scoped to the caller" in low
+
+
+class TestCompoundQuestionsAreChained:
+    """Both observed failures answered after ONE tool call. The recursion limit is 60, so
+    nothing was cutting the agent off — the skill read as a routing table, one question to one
+    tool, and that is what it did. "Why is this building over reference and how much can I act
+    on" is six reads, and answering it from the building list alone is thin, confidently."""
+
+    def test_the_skill_says_a_compound_question_takes_several_calls(self):
+        assert "A compound question takes several calls" in SKILL
+
+    def test_it_forbids_stopping_at_the_first_result(self):
+        assert "Do not stop at the first tool that returns something" in SKILL
+
+    def test_the_worked_chain_names_every_step(self):
+        """Six reads. If one is dropped from the skill the chain silently shortens."""
+        for call in ("list_energy_buildings", "list_energy_anomalies",
+                     "get_operating_hours", "udr_read_records"):
+            assert call in SKILL, call
+
+    def test_an_empty_read_is_evidence_not_a_dead_end(self):
+        """assumed.known false, provenance.measured false, an unmetered asset — each is a fact
+        to report, not a step to omit quietly."""
+        assert "evidence, not a dead end" in SKILL
+
+    def test_the_decomposition_is_stated(self):
+        low = SKILL.lower()
+        assert "actionable now" in low and "structural" in low

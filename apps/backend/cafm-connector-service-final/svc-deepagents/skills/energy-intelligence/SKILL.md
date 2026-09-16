@@ -66,6 +66,41 @@ reaching for anything.
 | a BUILDING | `list_energy_buildings` then `get_building_cost_drivers` | quote an EUI without its reference |
 | an ANOMALY | `get_anomaly_rollup` then `list_energy_anomalies` | sum the detectors |
 
+## 0. A compound question takes several calls, not one
+
+The tables above route a SIMPLE question. A question with *why* or *how much of it can I act
+on* in it is not simple, and answering it from one tool call is the most common way to be
+useless here — not wrong, but thin, and confidently so.
+
+**"Why is Kingsway House at 198 against a reference of 172, and how much can I act on?"** is six
+reads, and every one of them exists:
+
+| # | Read | Call |
+|---|---|---|
+| 1 | the building, its pack and use class | `list_energy_buildings` |
+| 2 | consumption over twelve months | `list_building_meter_readings` / meter summary |
+| 3 | open anomalies **on that building** | `list_energy_anomalies(building_id="Kingsway House")` |
+| 4 | hours kept vs hours assumed | `get_operating_hours(building_id)` |
+| 5 | plant age and criticality | `udr_read_records("assets", …)` — `installation_date`, `design_life_years`, `criticality_level` |
+| 6 | the EPC and its improvement measures | cross to `compliance` |
+
+Then the decomposition, which is the actual answer: **anomaly headline ÷ cost above reference**
+is the share that is actionable now. The remainder is structural — plant age, hours, fabric —
+and does not move when the anomalies are fixed. Say which part is which, and say what each
+figure rests on.
+
+Two rules for this shape of question:
+
+- **Do not stop at the first tool that returns something.** One call answers "what is the EUI";
+  it does not answer "why", and a confident paragraph built on it reads as though the other five
+  reads happened.
+- **A read that comes back empty or unknown is evidence, not a dead end.** `assumed.known` false
+  means benchmark fit cannot be judged — say so and carry on with the rest. `provenance.measured`
+  false means the hours describe the simulator. An unmetered asset is unmetered, not idle. The
+  answer names its own gaps; it does not quietly omit the steps that failed.
+
+---
+
 ---
 
 ## 1. The portfolio is four markets, not one
