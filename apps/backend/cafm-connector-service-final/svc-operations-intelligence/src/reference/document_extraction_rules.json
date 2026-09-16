@@ -1,0 +1,132 @@
+{
+  "version": "1.0",
+  "note": "What every ingested document is read for, per domain. A document is not one kind of thing: an FM contract names a vendor, the assets it covers, the PPM frequency it commits to and the certificates it requires — four domains in one file. The pipeline used to pick ONE winner from the filename and run ONE extractor, so three of those four were never read. Every domain here is tested against every document, and a domain that is absent is recorded as absent WITH THE REASON rather than silently skipped. `lands` names the real column a field is destined for, so a rule that points nowhere is visible as a bug instead of quietly extracting into nothing.",
+  "confidence": {
+    "accept": 0.85,
+    "review": 0.6,
+    "note": "At or above accept, a fact may be written. Between review and accept it becomes a draft for a person. Below review it is reported and discarded — a low-confidence figure written into a domain table is indistinguishable from a measured one once it is a row."
+  },
+  "domains": {
+    "compliance": {
+      "label": "Compliance",
+      "handler": "compliance.upsert_certificate",
+      "handler_note": "Defers to the existing certificate pipeline, which owns type packs, country rules and the expiry ladder. This catalogue only says what to look for.",
+      "signals": {
+        "strong": ["certificate number", "certificate no", "date of issue", "expiry date", "valid until", "next inspection due", "satisfactory", "unsatisfactory", "remedial action", "accreditation number", "eicr", "epc", "gas safe", "niceic", "fire risk assessment", "legionella risk assessment", "lifting equipment", "loler", "puwer", "insurance certificate"],
+        "weak": ["inspection", "compliance", "certificate", "assessor", "engineer", "issued by", "regulation"]
+      },
+      "fields": [
+        {"name": "certificate_number", "question": "The certificate or report reference number", "lands": "compliance_certificates.certificate_number", "type": "text"},
+        {"name": "certificate_type_code", "question": "Which statutory certificate type this is (EICR, EPC, GAS_SAFETY, FRA, LOLER, PAT, LEGIONELLA, INSURANCE, other)", "lands": "compliance_certificates.certificate_type_code", "type": "text"},
+        {"name": "issuer", "question": "The organisation that issued the certificate", "lands": "compliance_certificates.issuer", "type": "text"},
+        {"name": "issue_date", "question": "The date the certificate was issued", "lands": "compliance_certificates.issue_date", "type": "date"},
+        {"name": "expiry_date", "question": "The date the certificate expires", "lands": "compliance_certificates.expiry_date", "type": "date"},
+        {"name": "next_due_date", "question": "The date the next inspection is due, if stated separately from expiry", "lands": "compliance_certificates.next_due_date", "type": "date"},
+        {"name": "inspector_name", "question": "The named inspector or assessor", "lands": "compliance_certificates.inspector_name", "type": "text"},
+        {"name": "inspector_accreditation_number", "question": "The inspector's accreditation or registration number", "lands": "compliance_certificates.inspector_accreditation_number", "type": "text"},
+        {"name": "result", "question": "The overall outcome, e.g. satisfactory or unsatisfactory", "lands": "compliance_certificates.result", "type": "text"},
+        {"name": "defects_found", "question": "Defects or non-conformities recorded", "lands": "compliance_certificates.defects_found", "type": "text"},
+        {"name": "remedial_actions", "question": "Remedial actions required and by when", "lands": "compliance_certificates.remedial_actions", "type": "text"}
+      ]
+    },
+
+    "vendors": {
+      "label": "Vendors and contracts",
+      "handler": "contract_performance.extract_contract_parameters",
+      "handler_note": "The contract extractor resolves or creates the vendor itself. These fields are what a document of ANY kind can say about a supplier — an invoice and a certificate name one too.",
+      "signals": {
+        "strong": ["service agreement", "framework agreement", "master services", "statement of work", "purchase order", "contract value", "contract period", "service level agreement", "invoice number", "vat registration", "company registration", "remittance", "payment terms", "supplier"],
+        "weak": ["contractor", "vendor", "provider", "agreement", "contract", "invoice", "quotation", "company"]
+      },
+      "fields": [
+        {"name": "vendor_name", "question": "The supplier, contractor or service provider named", "lands": "vendors.vendor_name", "type": "text"},
+        {"name": "vendor_code", "question": "The supplier's account or reference code, if any", "lands": "vendors.vendor_code", "type": "text"},
+        {"name": "address", "question": "The supplier's registered address", "lands": "vendors.address", "type": "text"},
+        {"name": "city", "question": "The supplier's city", "lands": "vendors.city", "type": "text"},
+        {"name": "postal_code", "question": "The supplier's postcode", "lands": "vendors.postal_code", "type": "text"},
+        {"name": "country", "question": "The supplier's country", "lands": "vendors.country", "type": "text"},
+        {"name": "phone", "question": "The supplier's telephone number", "lands": "vendors.phone", "type": "text"},
+        {"name": "website", "question": "The supplier's website", "lands": "vendors.website", "type": "text"},
+        {"name": "contract_name", "question": "The title of the agreement", "lands": "vendor_contracts.contract_name", "type": "text"},
+        {"name": "contract_start", "question": "The date the agreement starts", "lands": "vendor_contracts.contract_start", "type": "date"},
+        {"name": "contract_end", "question": "The date the agreement ends", "lands": "vendor_contracts.contract_end", "type": "date"},
+        {"name": "contract_value", "question": "The total contract value with its currency", "lands": "vendor_contracts.contract_value", "type": "money"},
+        {"name": "sla_terms", "question": "Response and rectification times, service credits, KPIs", "lands": "vendor_contracts.sla_terms", "type": "text"},
+        {"name": "service_scope", "question": "What services the agreement covers", "lands": "vendor_contracts.service_scope", "type": "text"},
+        {"name": "visits_per_year", "question": "How many planned visits per year the agreement commits to", "lands": "vendor_contracts.visits_per_year", "type": "number"}
+      ]
+    },
+
+    "energy": {
+      "label": "Energy",
+      "handler": null,
+      "handler_note": "No extractor existed for this domain. Facts are recorded with their target column and held for a person until one does — inventing a meter row from a bill is how a portfolio gains supply points nobody contracted.",
+      "signals": {
+        "strong": ["mpan", "mprn", "msn", "kwh", "kva", "supply number", "meter reading", "half hourly", "standing charge", "day rate", "night rate", "p/kwh", "climate change levy", "therms", "rt.h", "district cooling", "billing period"],
+        "weak": ["meter", "electricity", "gas", "consumption", "tariff", "energy", "supply", "utility"]
+      },
+      "fields": [
+        {"name": "mpan_mprn", "question": "The MPAN (electricity) or MPRN (gas) supply number", "lands": "meters.mpan_mprn", "type": "text"},
+        {"name": "meter_serial", "question": "The meter serial number", "lands": "meters.mpan_mprn", "type": "text"},
+        {"name": "meter_type", "question": "Whether this is an electricity, gas, water, heat or cooling meter", "lands": "meters.meter_type", "type": "text"},
+        {"name": "unit", "question": "The unit consumption is measured in (kWh, m3, therms, RTh)", "lands": "meters.unit", "type": "text"},
+        {"name": "period_start", "question": "The first date of the billing or reading period", "lands": "meter_readings.reading_at", "type": "date"},
+        {"name": "period_end", "question": "The last date of the billing or reading period", "lands": "meter_readings.reading_at", "type": "date"},
+        {"name": "consumption", "question": "Total consumption over the period, in the stated unit", "lands": "meter_readings.consumption_kwh", "type": "number"},
+        {"name": "unit_rate", "question": "The unit rate charged per kWh or per unit, with its currency", "lands": "energy_anomalies.tariff_used", "type": "money", "note": "plenum_cafm.meters has no metadata column, so a rate read off a bill has nowhere of its own to live. tariff_used is where a rate is already recorded against a finding; a contracted rate needs a column before it can be stored."},
+        {"name": "standing_charge", "question": "The standing or fixed charge for the period", "lands": null, "type": "money", "note": "No column anywhere holds a standing charge. Extracted and returned so the figure is visible, never written, and named here as the gap it is rather than dropped from the catalogue."},
+        {"name": "supplier_name", "question": "The energy supplier named on the document", "lands": "vendors.vendor_name", "type": "text"}
+      ]
+    },
+
+    "assets": {
+      "label": "Assets and parts",
+      "handler": null,
+      "handler_note": "No extractor existed. An asset created from a document nobody checked is a register entry with no provenance, so these are held for confirmation rather than inserted.",
+      "signals": {
+        "strong": ["serial number", "model number", "asset tag", "plant number", "manufacturer", "date of manufacture", "commissioning date", "warranty expires", "warranty period", "nameplate", "duty", "rated capacity", "refrigerant charge", "o&m manual", "spare part", "part number"],
+        "weak": ["asset", "equipment", "plant", "unit", "chiller", "boiler", "ahu", "pump", "lift", "generator", "model", "capacity"]
+      },
+      "fields": [
+        {"name": "asset_name", "question": "The name or description of the equipment", "lands": "assets.asset_name", "type": "text"},
+        {"name": "asset_code", "question": "The asset tag, plant number or equipment reference", "lands": "assets.asset_code", "type": "text"},
+        {"name": "serial_number", "question": "The equipment serial number", "lands": "assets.serial_number", "type": "text"},
+        {"name": "manufacturer", "question": "The manufacturer", "lands": "assets.manufacturer", "type": "text"},
+        {"name": "model_number", "question": "The model number", "lands": "assets.model_number", "type": "text"},
+        {"name": "installation_date", "question": "The installation or commissioning date", "lands": "assets.installation_date", "type": "date"},
+        {"name": "warranty_expiry", "question": "The date the equipment warranty expires", "lands": "assets.warranty_expiry", "type": "date"},
+        {"name": "criticality", "question": "The stated criticality or priority level of the asset", "lands": "assets.criticality", "type": "text"},
+        {"name": "replacement_value", "question": "The replacement or capital value with its currency", "lands": "assets.replacement_value", "type": "money"},
+        {"name": "design_life_years", "question": "The expected or design life in years", "lands": "assets.design_life_years", "type": "number"},
+        {"name": "part_name", "question": "A spare part named as fitted or supplied", "lands": "spare_parts.part_name", "type": "text"},
+        {"name": "part_code", "question": "The part number of a spare part", "lands": "spare_parts.part_code", "type": "text"},
+        {"name": "part_warranty_months", "question": "The warranty period in months on a fitted part", "lands": "spare_parts.warranty_months", "type": "number"}
+      ]
+    },
+
+    "maintenance": {
+      "label": "Maintenance",
+      "handler": null,
+      "handler_note": "No extractor existed. A visit or a finding invented from a misread document becomes evidence of work that may not have happened, so these are held.",
+      "signals": {
+        "strong": ["planned preventative", "ppm", "service visit", "visit report", "job sheet", "work order", "job number", "fault reported", "remedial works", "next service due", "service frequency", "quarterly service", "annual service", "engineer attended", "corrective action", "recommendation"],
+        "weak": ["maintenance", "service", "visit", "inspection", "repair", "fault", "attended", "engineer", "technician", "schedule"]
+      },
+      "fields": [
+        {"name": "ppm_ref", "question": "The planned maintenance visit reference", "lands": "ppm_visits.ppm_ref", "type": "text"},
+        {"name": "frequency", "question": "The service frequency committed to, e.g. quarterly or annual", "lands": "ppm_visits.frequency", "type": "text"},
+        {"name": "scheduled_date", "question": "The date the visit was scheduled for", "lands": "ppm_visits.scheduled_date", "type": "date"},
+        {"name": "completed_date", "question": "The date the visit was actually carried out", "lands": "ppm_visits.completed_date", "type": "date"},
+        {"name": "wo_code", "question": "The work order or job number", "lands": "work_orders.wo_code", "type": "text"},
+        {"name": "title", "question": "A short description of the work carried out or requested", "lands": "work_orders.title", "type": "text"},
+        {"name": "maintenance_type", "question": "Whether the work was planned, reactive or corrective", "lands": "work_orders.maintenance_type", "type": "text"},
+        {"name": "inspector", "question": "The engineer or technician who attended", "lands": "inspections.inspector", "type": "text"},
+        {"name": "inspection_date", "question": "The date of the inspection or attendance", "lands": "inspections.inspection_date", "type": "date"},
+        {"name": "observations", "question": "What was observed or found", "lands": "inspections.observations", "type": "text"},
+        {"name": "risk_level", "question": "The risk or severity assigned to a finding", "lands": "inspections.risk_level", "type": "text"},
+        {"name": "recommendation", "question": "What the report recommends be done next", "lands": "inspections.recommendation", "type": "text"},
+        {"name": "corrective_action", "question": "Whether corrective action is required (true or false)", "lands": "inspections.corrective_action", "type": "boolean"}
+      ]
+    }
+  }
+}

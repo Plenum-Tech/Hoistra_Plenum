@@ -31,8 +31,15 @@ from ...db import get_session
 from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.ingestion import ontology as onto
+from ...engines.ingestion import document_facts as facts_svc
 from ...engines.ingestion import validation as val
 from .auth import scope
+
+class ExtractionPlanRequest(BaseModel):
+    """The document text to plan against. Text, not a file: planning is a read over
+    words and must not depend on having somewhere to put an upload."""
+    text: str = Field(default="", max_length=2_000_000)
+
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"],
                    dependencies=[Depends(scope)])
@@ -206,6 +213,51 @@ async def decide_case(
     if not out.get("ok"):
         raise HTTPException(status_code=409, detail={"ok": False, **out})
     return out
+
+
+@router.get("/extraction-rules")
+async def extraction_rules(s: access.Scope = Depends(scope)):
+    """What every ingested document is read for, per domain.
+
+    A document is not one kind of thing. An FM contract names the supplier, the assets it
+    covers, the PPM frequency it commits to and the certificates the contractor must hold —
+    four domains in one file. Ingestion used to pick ONE from the filename and run ONE
+    extractor, so three of those were never read and nothing said so.
+
+    `writes` says whether anything can persist that domain yet: compliance and vendors have
+    extractors behind them, the other three return their facts and hold them. Stated here so
+    the page does not imply a fact will be stored when it will only be shown.
+    See engines/ingestion/document_facts.py.
+    """
+    return facts_svc.domains()
+
+
+@router.post("/extraction-plan")
+async def extraction_plan(
+    body: ExtractionPlanRequest,
+    s: access.Scope = Depends(scope),
+):
+    """Which domains this document actually speaks to, and for the rest, why not.
+
+    Model-free and cheap: it is the honest answer to "will this document give me my vendor
+    data" before anything is extracted, and it is what an ingest receipt should show. A
+    domain that is absent comes back WITH the reason, because "we looked and this says
+    nothing about energy" and "energy was never checked" are different statements.
+    """
+    return facts_svc.extraction_plan(body.text)
+
+
+@router.get("/extraction-rules/validate")
+async def extraction_rules_validate(
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Does every field in the catalogue name a column that exists on THIS database?
+
+    A rule pointing nowhere extracts into nothing and reports success. The two databases
+    disagree on shape, so this is per-deployment rather than a fact about the file.
+    """
+    return await facts_svc.validate_targets(session)
 
 
 @router.get("/buildings/{building_id}/ontology")
