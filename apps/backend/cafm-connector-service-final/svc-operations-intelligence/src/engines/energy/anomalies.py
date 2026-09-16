@@ -837,9 +837,11 @@ async def list_anomalies(
         q = q.where(sa_cast(EnergyAnomaly.building_id, SAText)
                     == await resolve_building(session, building_id))
     if asset_id:
-        q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText) == str(asset_id))
+        q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText)
+                    == await resolve_asset(session, asset_id))
     if meter_id:
-        q = q.where(sa_cast(EnergyAnomaly.meter_id, SAText) == str(meter_id))
+        q = q.where(sa_cast(EnergyAnomaly.meter_id, SAText)
+                    == await resolve_meter(session, meter_id))
     if anomaly_type:
         # Matched case-insensitively and on the underscored form, so "Baseline drift" as the
         # UI prints it finds `baseline_drift` as the column holds it.
@@ -931,13 +933,36 @@ class UnknownBuilding(ValueError):
     """
 
 
-async def resolve_building(session: AsyncSession, value: UUID | str | None) -> str | None:
-    """A building id from a uuid or a NAME, or an error naming what was not found.
+class UnknownAsset(ValueError):
+    """An asset identifier that matched no asset. Same failure, same reason it must raise.
 
-    Filters are written by an agent reading a person's sentence, and people say "Building 5",
-    not "a40ef675-9584-4db5-a3c8-5e71c6812e0c". The building_id filter compares as text, so a
-    name matched no row and the list came back empty — which read as "this building is clean"
-    rather than "that is not an id".
+    People say "ACS-DL-07" and "FCU-301" — the asset CODE — not a uuid. ACS-DL-07 carries five
+    anomalies and `asset_id::text = 'ACS-DL-07'` matches none of them.
+    """
+
+
+class UnknownMeter(ValueError):
+    """A meter identifier that matched no meter. People say an MPAN, not a uuid."""
+
+
+async def _resolve(
+    session: AsyncSession,
+    value: UUID | str | None,
+    *,
+    table: str,
+    id_column: str,
+    name_columns: tuple[str, ...],
+    error: type[ValueError],
+    what: str,
+) -> str | None:
+    """A uuid from a uuid, or from the thing a person would actually say.
+
+    One implementation for buildings, assets and meters, because the failure is one failure:
+    an identifier that does not resolve must never quietly become "no rows". Every filter here
+    compares as text, so an unresolved name matches nothing and the caller reports a clean
+    building, a healthy asset or a silent meter.
+
+    A uuid is returned without touching the database — the common path stays one comparison.
     """
     if value in (None, ""):
         return None
@@ -946,25 +971,38 @@ async def resolve_building(session: AsyncSession, value: UUID | str | None) -> s
         return str(UUID(raw))
     except (ValueError, AttributeError, TypeError):
         pass
+    where = " OR ".join(f"lower(btrim({c}::text)) = lower(btrim(:n))" for c in name_columns)
     found = (
         await session.execute(
-            text(
-                """
-                SELECT building_id::text
-                  FROM plenum_cafm.buildings
-                 WHERE lower(btrim(name)) = lower(btrim(:n))
-                 LIMIT 1
-                """
-            ),
+            text(f"SELECT {id_column}::text FROM plenum_cafm.{table} WHERE {where} LIMIT 1"),
             {"n": raw},
         )
     ).scalar()
     if found:
         return str(found)
-    raise UnknownBuilding(
-        f"No building matches {raw!r}. It is neither a building id nor the name of a building "
-        f"this caller can see, so no anomaly list can be produced for it."
+    raise error(
+        f"No {what} matches {raw!r}. It is neither an id nor a name this caller can see, so "
+        f"no result can be produced for it."
     )
+
+
+async def resolve_building(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """A building id from a uuid or the NAME a person would say ("Building 5")."""
+    return await _resolve(session, value, table="buildings", id_column="building_id",
+                          name_columns=("name",), error=UnknownBuilding, what="building")
+
+
+async def resolve_asset(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """An asset id from a uuid or the CODE a person would say ("ACS-DL-07", "FCU-301")."""
+    return await _resolve(session, value, table="assets", id_column="id",
+                          name_columns=("asset_code",), error=UnknownAsset, what="asset")
+
+
+async def resolve_meter(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """A meter id from a uuid, or from the MPAN or MPRN printed on the meter."""
+    return await _resolve(session, value, table="energy_meters", id_column="id",
+                          name_columns=("mpan", "mprn", "dcc_device_id"),
+                          error=UnknownMeter, what="meter")
 
 
 SUMMARY_GROUPS: dict[str, str] = {
@@ -1054,5 +1092,95 @@ async def summarise_anomalies(
             "worst is the largest single finding and is the figure to quote. naive_sum adds "
             "overlapping detectors and double counts; it is not a total. Currencies are not "
             "combined."
+        ),
+    }
+
+
+async def consumption_by_asset(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    building_ids: list[str] | None = None,
+    category: str | None = None,
+    days: int = 90,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Consumption ranked by asset, for "which chiller uses the most power".
+
+    The question could not be answered at all before: the agent had readings by BUILDING and
+    efficiency by chiller, and nothing that put kWh against an asset. Asked which chiller used
+    most, it read the building list, found no chiller column, and said it could not tell —
+    while CH-01 sat there with a sub-meter and 2,880 readings against it.
+
+    Only sub-metered assets can appear, and that is the honest limit: 34 of 67 meters carry an
+    asset_id, so the rest of the estate's consumption belongs to a building and cannot be
+    attributed to plant. An asset absent from this list is not a quiet asset — it is an
+    unmetered one, and the caller must be told which.
+
+    ``simulated_pct`` rides with every row for the same reason it rides with operating hours.
+    Every sub-metered asset in this deployment returns an identical 867,240 kWh, which is not a
+    remarkable coincidence — it is the simulator, and a ranking of identical numbers is a
+    ranking of nothing.
+    """
+    where = ["m.asset_id IS NOT NULL", f"r.reading_at > now() - interval '{int(days)} days'"]
+    params: dict[str, Any] = {"lim": limit}
+    if organization_id:
+        where.append("m.organization_id = CAST(:org AS uuid)")
+        params["org"] = str(organization_id)
+    if building_ids is not None:
+        if not building_ids:
+            where.append("FALSE")
+        else:
+            where.append("m.building_id::text = ANY(:blds)")
+            params["blds"] = [str(b) for b in building_ids]
+    if category:
+        where.append("lower(btrim(ast.category)) = lower(btrim(:cat))")
+        params["cat"] = category
+
+    rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT COALESCE(ast.asset_code, m.asset_id::text)     AS asset,
+                       ast.category                                   AS category,
+                       b.name                                         AS building,
+                       round(sum(r.consumption_kwh)::numeric, 0)      AS kwh,
+                       count(r.id)                                    AS readings,
+                       count(*) FILTER (WHERE r.source = 'simulator')  AS simulated
+                  FROM plenum_cafm.energy_meters m
+                  JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
+                  LEFT JOIN plenum_cafm.assets ast ON ast.id::text = m.asset_id::text
+                  LEFT JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
+                 WHERE {' AND '.join(where)}
+                 GROUP BY 1, 2, 3
+                 ORDER BY sum(r.consumption_kwh) DESC NULLS LAST
+                 LIMIT :lim
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+
+    out = []
+    for r in rows:
+        readings = int(r["readings"] or 0)
+        sim = int(r["simulated"] or 0)
+        out.append({
+            "asset": r["asset"],
+            "category": r["category"],
+            "building": r["building"],
+            "kwh": float(r["kwh"]) if r["kwh"] is not None else None,
+            "readings": readings,
+            "simulated_pct": round(100.0 * sim / readings, 1) if readings else 0.0,
+        })
+    return {
+        "days": days,
+        "category": category,
+        "assets": out,
+        "note": (
+            "Sub-metered assets only. 34 of 67 meters carry an asset_id; consumption on the "
+            "rest belongs to a building and cannot be attributed to plant, so an asset missing "
+            "from this list is unmetered rather than idle. Check simulated_pct before ranking: "
+            "identical totals across assets mean the simulator, not a tie."
         ),
     }

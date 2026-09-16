@@ -28,8 +28,10 @@ class TestTheSkillOnlyNamesRealTools:
         """Names in backticks that look like calls must be tools the agent actually has."""
         mentioned = set(re.findall(r"`([a-z][a-z0-9_]{4,})\(", SKILL))
         known = tool_names()
-        # find_location / find_asset belong to other agents and are named as cross-domain hops.
-        cross_domain = {"find_location", "find_asset"}
+        # Named as cross-domain hops. Each is asserted to be a REAL tool on its own agent
+        # below, so widening this set cannot be used to wave through a typo.
+        cross_domain = {"find_location", "find_asset",
+                        "udr_read_records", "udr_execute_select"}
         missing = mentioned - known - cross_domain
         assert not missing, f"skill names tools that do not exist: {sorted(missing)}"
 
@@ -94,3 +96,20 @@ class TestFrontMatter:
     def test_the_new_question_shapes_are_triggerable(self):
         for trigger in ("market profile", "which market", "mees", "baseline drift"):
             assert trigger in SKILL.lower(), trigger
+
+
+class TestCrossDomainToolsAreRealToo:
+    """The allow-list above exempts tools belonging to OTHER agents. That exemption is only
+    safe while each one actually exists — otherwise the list becomes a place to hide a typo,
+    and the skill sends the model after a tool nobody has."""
+
+    def test_the_udr_tools_the_skill_points_at_exist(self):
+        from src.agents.udr_agent import udr_execute_select, udr_read_records
+        assert udr_read_records.name == "udr_read_records"
+        assert udr_execute_select.name == "udr_execute_select"
+
+    def test_the_skill_says_they_are_already_scoped(self):
+        """A reader who thinks UDR is a way around the company filter will use it to "check"
+        a figure and get the same rows, or reach for it believing it sees more."""
+        low = SKILL.lower()
+        assert "scoped to the caller" in low

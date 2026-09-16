@@ -901,12 +901,12 @@ async def list_anomalies(
             anomaly_type=anomaly_type, min_cost=min_cost, min_days_active=min_days_active,
             order_by=order_by,
         )
-    except anom_svc.UnknownBuilding as exc:
+    except (anom_svc.UnknownBuilding, anom_svc.UnknownAsset, anom_svc.UnknownMeter) as exc:
         # 404 and say so. Returning an empty list would read as "this building is clean",
         # which is what produced "no energy anomalies were found for Building 5" about a
         # building with nine open findings.
         raise HTTPException(status_code=404, detail={
-            "ok": False, "reason": "unknown_building", "error": str(exc)}) from exc
+            "ok": False, "reason": "unknown_identifier", "error": str(exc)}) from exc
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}
@@ -934,6 +934,31 @@ async def building_operating_hours(
                               action="read", id_column="building_id")
     return {"ok": True, **await hours_svc.operating_hours(
         session, building_id=building_id, days=days)}
+
+
+@router.get("/consumption/by-asset")
+async def consumption_by_asset(
+    category: str | None = Query(None, description='e.g. "Chiller", "Access Control"'),
+    days: int = Query(90, ge=1, le=365),
+    organization_id: UUID | None = None,
+    limit: int = Query(25, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Consumption ranked by asset - "which chiller uses the most power".
+
+    Could not be answered at all before: readings existed by building and efficiency by chiller,
+    and nothing put kWh against an asset. Asked which chiller used most, the agent read the
+    building list, found no chiller column and said it could not tell - while CH-01 sat there
+    sub-metered with 2,880 readings.
+
+    Sub-metered assets only. An asset missing from this list is unmetered, not idle.
+    """
+    org_id = access.organization_for(s, organization_id)
+    ids, _ = access._ids_or_none(s.building_ids)
+    return {"ok": True, **await anom_svc.consumption_by_asset(
+        session, organization_id=org_id, building_ids=ids,
+        category=category, days=days, limit=limit)}
 
 
 @router.get("/anomalies/summary")

@@ -164,6 +164,36 @@ recorded value is not one the mapping knows — unknown, not low.
 For one building, `get_building_cost_drivers` gives what is beneath the headline — a cause, not
 a restatement of the total. Say which tariff priced it.
 
+### Which asset uses the most power
+
+`consumption_by_asset(category="Chiller")` ranks sub-metered assets by kWh. This is the tool for
+"which chiller uses the most power" — the building list does not carry it, and answering from
+there is how that question came to be refused while CH-01 sat sub-metered with 2,880 readings
+against it.
+
+**Sub-metered assets only.** 34 of 67 meters carry an `asset_id`; the rest of the estate's
+consumption belongs to a building and cannot be attributed to plant. An asset missing from the
+list is **unmetered, not idle** — saying "CH-02 uses nothing" about an asset with no sub-meter
+is a fabrication. Say which assets the metering can see.
+
+Consumption and efficiency are different questions: `consumption_by_asset` for kWh,
+`scan_chiller_efficiency` for kW/RT, where **lower is better**.
+
+### When a curated tool does not carry the field
+
+The tools here return the fields the question usually needs, not every column. When a question
+turns on something they do not carry — a serial number, a warranty date, an install date, a free
+text note — do not guess from what you have and do not say the data does not exist. Fall back to
+UDR, which returns whole rows:
+
+- `udr_read_records(table, …)` — every column of a table, paged.
+- `udr_execute_select(sql, params)` — joins and aggregates across `plenum_cafm`.
+
+Both are scoped to the caller's company and buildings before they return anything, so what comes
+back is already theirs. Use them to fill a gap in a curated answer, not to re-derive figures the
+energy tools already compute correctly — the rollup, the references and the tariffs exist
+because those are the calculations that are easy to get wrong.
+
 ---
 
 ## 3. An anomaly total is not a sum

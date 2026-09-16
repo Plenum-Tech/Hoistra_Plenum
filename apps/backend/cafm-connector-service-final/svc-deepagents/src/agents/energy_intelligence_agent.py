@@ -1061,9 +1061,41 @@ async def get_operating_hours(building_id: str, days: int = 90) -> dict:
     except Exception as exc:
         return _err(exc, "get_operating_hours")
 
+
+@tool
+async def consumption_by_asset(category: str | None = None, days: int = 90,
+                               limit: int = 25) -> dict:
+    """C — Consumption ranked by ASSET. The tool for "which chiller uses the most power".
+
+    `category="Chiller"` for chillers, or omit it to rank every sub-metered asset. Ranked on
+    kWh over the window.
+
+    Sub-metered assets ONLY, and this is the honest limit to state with any answer: 34 of 67
+    meters carry an asset_id, so the rest of the estate's consumption belongs to a building and
+    cannot be attributed to plant. An asset missing from this list is UNMETERED, not idle —
+    saying "CH-02 uses nothing" about an asset with no sub-meter is a fabrication.
+
+    Check `simulated_pct` per row before ranking. Every sub-metered asset in this deployment
+    returns an identical 867,240 kWh, which is the simulator rather than a remarkable
+    coincidence; a ranking of identical numbers ranks nothing.
+
+    If the question is about chiller EFFICIENCY rather than consumption, use
+    `scan_chiller_efficiency` — kW/RT, where lower is better.
+    """
+    try:
+        params: dict[str, Any] = {"days": days, "limit": limit}
+        if category:
+            params["category"] = category
+        resp = await _request("GET", _base(), "/api/energy/consumption/by-asset",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "consumption_by_asset")
+
 ENERGY_INTELLIGENCE_TOOLS = [
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,
+    consumption_by_asset,
     get_operating_hours,
     get_market_profiles,
     list_energy_buildings,

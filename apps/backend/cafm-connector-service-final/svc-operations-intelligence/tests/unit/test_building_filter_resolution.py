@@ -48,3 +48,49 @@ class TestResolutionRules:
     async def test_a_uuid_is_normalised(self):
         upper = "A40EF675-9584-4DB5-A3C8-5E71C6812E0C"
         assert await resolve_building(None, upper) == upper.lower()
+
+
+class TestAssetsAndMetersHaveTheSameProblem:
+    """Fixing the building filter alone left two more of the same bug. People say the asset
+    CODE — "ACS-DL-07", "FCU-301" — and the MPAN printed on the meter, not uuids. ACS-DL-07
+    carries five anomalies and `asset_id::text = 'ACS-DL-07'` matched none of them."""
+
+    def test_each_identifier_has_its_own_error(self):
+        from src.engines.energy.anomalies import UnknownAsset, UnknownBuilding, UnknownMeter
+        for cls in (UnknownBuilding, UnknownAsset, UnknownMeter):
+            assert issubclass(cls, ValueError)
+        # Distinct, so a caller can tell which of three filters was the unresolvable one.
+        assert len({UnknownBuilding, UnknownAsset, UnknownMeter}) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_uuid_asset_needs_no_lookup(self):
+        from src.engines.energy.anomalies import resolve_asset
+        uid = "158335d4-1111-2222-3333-444444444444"
+        assert await resolve_asset(None, uid) == uid
+
+    @pytest.mark.asyncio
+    async def test_a_uuid_meter_needs_no_lookup(self):
+        from src.engines.energy.anomalies import resolve_meter
+        uid = "47191ed4-1111-2222-3333-444444444444"
+        assert await resolve_meter(None, uid) == uid
+
+    @pytest.mark.asyncio
+    async def test_none_is_none_for_all_three(self):
+        from src.engines.energy.anomalies import (resolve_asset, resolve_building,
+                                                  resolve_meter)
+        for fn in (resolve_building, resolve_asset, resolve_meter):
+            assert await fn(None, None) is None
+            assert await fn(None, "") is None
+
+
+class TestTheRouteReportsAllThree:
+
+    def test_every_unresolvable_identifier_is_caught(self):
+        """One except clause, three errors. Catching only UnknownBuilding would turn an
+        unresolvable asset code into a 500 instead of a 404 that names it."""
+        from pathlib import Path
+        route = (Path(__file__).resolve().parents[2]
+                 / "src" / "api" / "routes" / "energy.py").read_text(encoding="utf-8")
+        assert "anom_svc.UnknownBuilding" in route
+        assert "anom_svc.UnknownAsset" in route
+        assert "anom_svc.UnknownMeter" in route
