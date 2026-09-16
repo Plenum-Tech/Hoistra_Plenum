@@ -122,6 +122,25 @@ def _is_transient(exc: BaseException) -> bool:
 #: own token is the only thing that carries the right answer to "what may this call see".
 caller_authorization: ContextVar[str | None] = ContextVar("caller_authorization", default=None)
 
+#: A superadmin's viewAsCompany() override (routes/workflow.py sets this on /run,
+#: /run-stateful and /run-stateful-with-files, authorized exactly like the frontend's own
+#: viewAsCompany — a non-superadmin naming a company that is not their own is refused
+#: before this is ever set), default None for every normal caller. operations-intelligence
+#: already accepts organization_id as an override on the routes the frontend calls directly
+#: (Compliance, Vendors, Home, Users & access, Audit trail all switch to it), and the
+#: *_engine_agent tool functions already accept and forward organization_id — nothing in the
+#: chat/orchestrator path ever supplied one, so a superadmin's chat answers stayed scoped to
+#: their own company's data (from the caller's own token) no matter which company the rest
+#: of the app said they were viewing. Injected centrally here, at the one place every Phase 2
+#: engine's HTTP call already passes through, rather than in each tool function individually.
+caller_organization_id: ContextVar[str | None] = ContextVar("caller_organization_id", default=None)
+
+#: Only operations-intelligence has this override at all (wo_management, udr and doc_rag
+#: have no per-company scoping — see superAdmin.js's own comment on the frontend) —
+#: injecting an unrequested organization_id into a call to one of those would be a stray
+#: query param at best, and asserting a scope that service cannot actually enforce at worst.
+_ORG_SCOPED_SERVICE = "operations_intelligence"
+
 
 async def request(
     method: str,
@@ -196,6 +215,17 @@ async def request(
                             note="calling without the caller's bearer; downstream will refuse "
                                  "this and the failure will surface as an unreachable service",
                         )
+                    # A superadmin's viewAsCompany() override, same "don't touch what the
+                    # caller already set" rule as the Authorization header above: a tool
+                    # function that explicitly resolved its own organization_id (the LLM
+                    # supplied one, or a future caller has a reason of its own) is left
+                    # alone. Query-string only (`params`) — operations-intelligence's write
+                    # routes (scan, verify, renewal-email) take their scope from the body and
+                    # this must never reach into one uninvited.
+                    _org = caller_organization_id.get()
+                    if _org and service == _ORG_SCOPED_SERVICE and isinstance(kwargs.get('params'), dict) \
+                            and not kwargs['params'].get('organization_id'):
+                        kwargs['params'] = {**kwargs['params'], 'organization_id': _org}
                     resp = await client.request(method, path, **kwargs)
                     resp.raise_for_status()
                     cb.record_success()

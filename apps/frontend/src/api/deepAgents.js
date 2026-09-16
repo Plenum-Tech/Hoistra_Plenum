@@ -9,7 +9,7 @@
 //
 // Also the activity log (plenum_cafm.agent_activity_log): the UI's own actions are appended
 // as turns so they sit in the same trail as the server-side stages when troubleshooting.
-import { BASES, apiFetch, accessToken } from './client.js';
+import { BASES, apiFetch, accessToken, getActingOrg } from './client.js';
 
 const B = BASES.deepAgents;
 
@@ -43,6 +43,15 @@ export function activitySessionId() {
 // One id per UI action (scan, verify, renewal) so its input and output rows group as a turn.
 export function newTurn() { return 'ui-turn-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+// A superadmin's viewAsCompany() override, and ONLY that — deliberately raw getActingOrg(),
+// never client.js's currentOrgId() (which falls back to the build's own default org for
+// every ordinary caller). The compliance/vendor/energy GETs can send that fallback because
+// operations-intelligence there is lenient about a caller naming their own org;
+// workflow.py's _resolve_acting_org is not — a normal caller naming ANY org, own default
+// included, that is not their real one is a 403. null (nobody viewing as anyone) is the
+// only value every ordinary caller may ever send, so this must stay null for them.
+function orgOverride() { const o = getActingOrg(); return o ? { organization_id: o } : {}; }
+
 export const deepAgentsApi = {
   health: () => apiFetch(B, '/health', { timeoutMs: 6000 }),
 
@@ -54,7 +63,7 @@ export const deepAgentsApi = {
   run: (message, sessionId, context) =>
     apiFetch(B, '/api/workflow/run', {
       method: 'POST',
-      body: { message: message, session_id: sessionId || null, context: context || null },
+      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride()),
       timeoutMs: T_ASK
     }),
 
@@ -64,7 +73,7 @@ export const deepAgentsApi = {
   runStateful: (message, sessionId, context, signal) =>
     apiFetch(B, '/api/workflow/run-stateful', {
       method: 'POST',
-      body: { message: message, session_id: sessionId || null, context: context || null },
+      body: Object.assign({ message: message, session_id: sessionId || null, context: context || null }, orgOverride()),
       timeoutMs: T_ASK,
       signal: signal
     }),
@@ -83,6 +92,8 @@ export const deepAgentsApi = {
     form.append('session_id', sessionId || '');
     if (context) form.append('context', context);
     if (buildingId) form.append('building_id', buildingId);
+    const org = getActingOrg();
+    if (org) form.append('organization_id', org);
     (files || []).forEach((f) => form.append('files', f, f.name));
     return apiFetch(B, '/api/workflow/run-stateful-with-files', {
       method: 'POST',
@@ -204,7 +215,7 @@ export const deepAgentsApi = {
 
     ws.onopen = () => {
       try {
-        ws.send(JSON.stringify({ message: message, context: context || null }));
+        ws.send(JSON.stringify(Object.assign({ message: message, context: context || null }, orgOverride())));
         if (h.onOpen) h.onOpen();
       } catch (e) { finish(e); }
     };

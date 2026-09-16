@@ -174,6 +174,19 @@ export const authMethods = {
     // that is a superadmin-only, explicitly-chosen state, never something the next
     // account to sign in in this tab should find itself silently still scoped to.
     if (!o.keepView) setActingOrg(null);
+    // A fresh sign-in swapping the account in this tab must not leave the previous
+    // account's orchestrator thread active: sessionId is a LangGraph thread_id the server
+    // keeps conversation memory under (logic/sessions.js), so continuing it — asking one
+    // more question without first hitting "+ New query" — carries the earlier account's
+    // findings (vendor names, figures already discussed) into the new account's answers
+    // even though every tool call this turn correctly scopes to the new account's own
+    // organization_id. Same reset newQuery() already does for the manual case, applied
+    // here for the identity-changed case: an in-flight stream is aborted first, same as
+    // that button does, rather than left running against a state that no longer exists.
+    if (!o.keepView) {
+      if (this._ccAbort) this._ccAbort.abort();
+      clearInterval(this._orchTick);
+    }
     this.setState((p) => ({
       account: resp.user, accessToken: resp.tokens.access_token, refreshToken: resp.tokens.refresh_token,
       signedIn: true,
@@ -181,6 +194,12 @@ export const authMethods = {
       saOn: o.keepView ? p.saOn : isSuperadmin,
       view: o.keepView ? p.view : 'home', navOpen: o.keepView ? p.navOpen : true,
       viewOrgId: o.keepView ? p.viewOrgId : null, viewOrgName: o.keepView ? p.viewOrgName : null,
+      sessionId: o.keepView ? p.sessionId : null,
+      ccChat: o.keepView ? p.ccChat : [],
+      ccBusy: o.keepView ? p.ccBusy : false,
+      ccStream: o.keepView ? p.ccStream : null,
+      orchOpen: o.keepView ? p.orchOpen : false,
+      orchTask: o.keepView ? p.orchTask : null,
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null, authRetryAt: 0,
       password: '', code: '', newPassword: '', fullName: '', phone: ''
     }));
@@ -292,6 +311,8 @@ export const authMethods = {
     // A viewAsCompany() override belongs to the session that chose it — never left
     // armed for whoever signs into this tab next.
     setActingOrg(null);
+    if (this._ccAbort) this._ccAbort.abort();
+    clearInterval(this._orchTick);
     this.setState({
       account: null, accessToken: null, refreshToken: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
@@ -302,6 +323,11 @@ export const authMethods = {
       // read as sign-out doing nothing.
       saOn: false,
       viewOrgId: null, viewOrgName: null,
+      // Same reason as the pinned report cards below, and as authEnter()'s own reset on
+      // the way back in: sessionId is the orchestrator's server-side thread, and leaving
+      // it set here is the one gap authEnter()'s reset (armed on the NEXT sign-in) doesn't
+      // itself close — a stale thread sitting between sign-out and whoever signs in next.
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
       // Pinned report cards are personal. Held past sign-out they are the previous
       // person's list waiting in the navigator for whoever signs in next — the register
       // state resetLiveData() clears on the switch, cleared here for the same reason on

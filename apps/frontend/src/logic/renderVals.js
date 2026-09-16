@@ -128,7 +128,17 @@ export const renderValsMethods = {
     // two are the "mine" views everything below reads instead of the raw state arrays, so
     // nobody sees another account's questions, tasks or pinned reports.
     const myEmail = (s.account && s.account.email) ? String(s.account.email).trim().toLowerCase() : null;
-    const mySessions = myEmail ? s.sessions.filter((r) => r.owner === myEmail) : [];
+    // owner alone is not enough: the SAME superadmin account asks questions while viewing
+    // as different companies (viewAsCompany), each a separate server-side thread against
+    // that company's own data. Without also matching viewOrgId, switching from "viewing as
+    // TechCorp" to "viewing as Plenum Tech" left TechCorp's sessions (and their transcripts,
+    // reopenable to continue that same thread) sitting in the navigator under Plenum Tech,
+    // since both were asked by the one owner email. null means "my own account, not viewing
+    // as anyone" and is its own scope, same as any company id.
+    const myOrgScope = s.viewOrgId || null;
+    const mySessions = myEmail
+      ? s.sessions.filter((r) => r.owner === myEmail && (r.viewOrgId || null) === myOrgScope)
+      : [];
     // Reports are personal: every route in api/routes/reports.py filters on s.user_id, so
     // the array in state holds the rows of whoever was signed in when it was READ — which
     // is not necessarily who is looking now. rpLoad stamps that account on the read, and a

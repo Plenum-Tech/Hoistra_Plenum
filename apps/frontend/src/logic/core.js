@@ -176,7 +176,7 @@ export const coreMethods = {
     ];
     // A task is a session record (logic/sessions.js): `task`/`ctx` keep the raw
     // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
-    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now(), owner: this.state.account && this.state.account.email });
+    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now(), owner: this.state.account && this.state.account.email, viewOrgId: this.state.viewOrgId || null });
     const record = !(opts && opts.record === false);
     clearInterval(this._orchTick);
     this.setState((p) => Object.assign({

@@ -47,7 +47,7 @@ from ...services.principal import (
     current_principal,
     resolve as resolve_principal,
 )
-from ...http_client import caller_authorization
+from ...http_client import caller_authorization, caller_organization_id
 from ...provider_errors import provider_refusal, refusal_detail
 
 log = structlog.get_logger(__name__)
@@ -63,6 +63,11 @@ class WorkflowRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000, description="Natural language request")
     session_id: str | None = Field(None, description="Optional session ID for grouping related calls")
     context: str | None = Field(None, description="Optional extra context appended to the system prompt")
+    # Superadmin-only override (viewAsCompany on the frontend) — same rule as
+    # run-stateful-with-files' own organization_id form field: naming your own company is a
+    # no-op, naming a different one as anyone but a superadmin is a 403, and a normal caller
+    # never sends this at all. Default None reproduces today's behaviour exactly.
+    organization_id: str | None = Field(None, description="Superadmin-only: view as this company")
 
 
 class ToolCallRecord(BaseModel):
@@ -306,6 +311,21 @@ def _to_response(result: dict[str, Any]) -> WorkflowResponse:
     )
 
 
+def _resolve_acting_org(named_org: str | None, principal: Principal) -> str | None:
+    """Same authorization rule as run-stateful-with-files' own organization_id form field:
+    naming your own company is a no-op, a normal caller naming any other company is a 403,
+    and a superadmin naming one is honoured. Returns the org to scope this turn's
+    operations-intelligence tool calls to (None = no override, i.e. today's behaviour —
+    every tool call resolves org from the caller's own token, same as always)."""
+    is_super = principal.role == "superadmin"
+    named = (named_org or "").strip() or None
+    if named and not is_super and named != str(principal.organization_id):
+        raise HTTPException(status_code=403, detail={
+            "ok": False, "error": "You can only ask about your own company.",
+            "reason": "wrong_organization"})
+    return named if (named and is_super) else None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -326,11 +346,14 @@ async def run_workflow(
     Rate limited to 20 requests/minute per IP.
     """
     # Every call this turn makes to operations-intelligence carries the caller's own token,
-    # so what comes back is scoped to their company and buildings — not to whatever
-    # organization_id a client chose to send, and not to a service credential that sees all.
+    # so what comes back is scoped to their company and buildings by default — not to a
+    # service credential that sees all, and not to just anything a client sends: a
+    # superadmin's viewAsCompany() override is authorized below (_resolve_acting_org) before
+    # it ever reaches caller_organization_id, same as every other route that honours it.
     caller_authorization.set(request.headers.get("authorization"))
     # And the caller themselves, for the reads that run SQL here rather than over HTTP.
     caller_principal.set(principal)
+    caller_organization_id.set(_resolve_acting_org(body.organization_id, principal))
     activity_log.set_current_session(body.session_id, body.session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
@@ -371,6 +394,7 @@ async def run_stateful_workflow(
     caller_authorization.set(request.headers.get("authorization"))
     # And the caller themselves, for the reads that run SQL here rather than over HTTP.
     caller_principal.set(principal)
+    caller_organization_id.set(_resolve_acting_org(body.organization_id, principal))
     await usage_events.record_usage(
         kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
         detail={"session_id": sid, "chars": len(body.message), "stateful": True},
@@ -439,6 +463,12 @@ async def run_stateful_workflow_with_files(
             "ok": False, "error": "You can only ingest into your own company.",
             "reason": "wrong_organization"})
     org = named_org if (named_org and is_super) else str(principal.organization_id)
+    # Was only ever embedded as prose in the Fiix-sync context below (organization_id={org}),
+    # which a model has no mechanism to turn into an actual query filter — the orchestrator's
+    # own tool calls to operations-intelligence never carried this scope. Set it structurally
+    # too, same as /run and /run-stateful, so a superadmin's named override (or a normal
+    # caller's own org, resolved the same way it always was) actually reaches those calls.
+    caller_organization_id.set(org)
 
     # Whether this person may add data at all. Read-only users see their buildings and stop
     # there; the message says who can change that rather than just refusing.
@@ -905,7 +935,8 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
     Stream workflow events in real time over WebSocket.
 
     After connecting, send a single JSON message:
-        {"message": "your request", "context": "optional extra context"}
+        {"message": "your request", "context": "optional extra context",
+         "organization_id": "optional, superadmin-only viewAsCompany override"}
 
     Events are streamed back as JSON objects with a `type` field:
 
@@ -971,6 +1002,19 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
         if not message:
             await websocket.send_text(json.dumps({
                 "type": "error", "error": "message field is required", "session_id": session_id,
+            }))
+            return
+
+        # Same authorization as /run and /run-stateful: an override is honoured only for a
+        # superadmin naming a company, everyone else naming anything but their own is
+        # refused rather than the socket silently ignoring it and answering from their own
+        # company anyway.
+        try:
+            caller_organization_id.set(_resolve_acting_org(body.get("organization_id"), principal))
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+            await websocket.send_text(json.dumps({
+                "type": "error", "session_id": session_id, **detail,
             }))
             return
 

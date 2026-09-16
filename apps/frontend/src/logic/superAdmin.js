@@ -126,18 +126,37 @@ export const superAdminMethods = {
     // between, must not overwrite this with the null the first entry already cleared it
     // to, or the superadmin's own selection is lost for good rather than restored on the
     // eventual exitViewAsCompany().
+    // Same capture-once-on-first-entry rule as the building selection above, and for the
+    // same reason: role flips to "admin" for the duration of the view (below), and without
+    // remembering what it was before, exitViewAsCompany() had nothing to give back but a
+    // hardcoded "admin" — stranding a superadmin who was in User view on their own account
+    // in Admin view permanently after they left, with no way back except toggling it by
+    // hand. That read as the navigator's own report cards (Buildings, Compliance, Vendors,
+    // Energy, Assets, Maintenance) having silently disappeared, since Admin view shows a
+    // different set (Integrations, Users & access, Audit trail) — see auth.js's renderVals.
     if (!this.state.viewOrgId) {
       const ownSelection = this.state.account && this.state.account.selected_building_id;
       this._ownSelectionBeforeViewAs = ownSelection || null;
+      this._ownRoleBeforeViewAs = this.state.role;
       if (ownSelection) {
         authApi.selectBuilding(null).catch(() => {});
         this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: null }) } : {}));
       }
     }
     setActingOrg(orgId);
+    // Same reason as authEnter()'s own reset for a fresh sign-in: sessionId is the
+    // orchestrator's LangGraph thread_id, and an active one left running across this
+    // switch would keep answering inside the PREVIOUS company's conversation memory —
+    // every tool call this turn correctly scoped to the new company's organization_id
+    // (http_client.py's caller_organization_id), but the model's own recollection of
+    // what it already found (a vendor's name, a contract reference) still there to draw
+    // on regardless. newQuery()'s own reset, applied here for the same reason it exists.
+    if (this._ccAbort) this._ccAbort.abort();
+    clearInterval(this._orchTick);
     this.setState({
       viewOrgId: orgId, viewOrgName: name || null,
-      saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null
+      saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null,
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
     });
     if (typeof this.resetLiveData === "function") this.resetLiveData();
     if (typeof this.loadLiveData === "function") this.loadLiveData();
@@ -149,20 +168,33 @@ export const superAdminMethods = {
   // Back to the superadmin's own account: every subsequent read is the caller's own
   // company again (or unscoped, inside the console itself). Restores whatever building
   // selection viewAsCompany() cleared on the way in — exiting must give back exactly what
-  // was there before, not leave the superadmin's own working selection gone for good.
+  // was there before, not leave the superadmin's own working selection gone for good. Same
+  // for role: viewAsCompany() forces "admin" for the duration of the view (its own landing,
+  // by design), but exiting must give back whatever lens the superadmin was actually using
+  // before — "admin" unconditionally here left every exit stranded in Admin view even for
+  // someone who was in User view a moment before, with the operational report cards gone.
   exitViewAsCompany() {
     if (!this.state.viewOrgId) return;
     const was = this.state.viewOrgName;
     setActingOrg(null);
     const restore = this._ownSelectionBeforeViewAs || null;
     this._ownSelectionBeforeViewAs = null;
+    const restoreRole = this._ownRoleBeforeViewAs || "admin";
+    this._ownRoleBeforeViewAs = null;
     if (restore) {
       authApi.selectBuilding(restore).catch(() => {});
       this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: restore }) } : {}));
     }
+    // Same reset as entering a view-as, and the same reason: leaving one company's
+    // conversation active while reading as another (here, back to the superadmin's own)
+    // means the next question in that thread still carries whatever the model already
+    // found while it was scoped to the company just exited.
+    if (this._ccAbort) this._ccAbort.abort();
+    clearInterval(this._orchTick);
     this.setState({
       viewOrgId: null, viewOrgName: null,
-      role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null
+      role: restoreRole, view: "home", navOpen: true, acctOpen: false, detail: null,
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
     });
     if (typeof this.resetLiveData === "function") this.resetLiveData();
     if (typeof this.loadLiveData === "function") this.loadLiveData();

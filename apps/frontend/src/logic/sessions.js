@@ -48,6 +48,13 @@ export function newSessionId() {
 // session ever created in this browser — by every account that ever tested from it —
 // shows up in everyone's navigator. shapeSessionList() below is what actually hides a
 // session whose owner does not match who is looking; this just stamps it at birth.
+//
+// `viewOrgId` is the SAME owner's acting-company scope at that moment (superAdmin.js's
+// viewAsCompany — null when not viewing as anyone). owner alone does not separate a
+// superadmin's TechCorp questions from their Plenum Tech questions: it is the same email
+// both times, but each is a live thread against that company's own data via a different
+// organization_id, so reopening a TechCorp session while viewing as Plenum Tech would
+// resume the wrong company's thread. Stamped at birth, same as owner.
 export function makeSession(o) {
   const at = o.at === undefined ? Date.now() : o.at;
   const kind = o.kind === 'task' ? 'task' : 'chat';
@@ -67,7 +74,8 @@ export function makeSession(o) {
     calls: [],
     domain: 'Orchestrator',
     spaceId: null,
-    owner: typeof o.owner === 'string' && o.owner ? o.owner.trim().toLowerCase() : null
+    owner: typeof o.owner === 'string' && o.owner ? o.owner.trim().toLowerCase() : null,
+    viewOrgId: typeof o.viewOrgId === 'string' && o.viewOrgId ? o.viewOrgId : null
   };
 }
 
@@ -134,7 +142,7 @@ export function loadSessions(storage) {
   const out = [];
   d.forEach((r) => {
     if (!r || typeof r !== 'object' || typeof r.id !== 'string' || typeof r.title !== 'string' || !r.title) return;
-    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps, owner: r.owner });
+    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps, owner: r.owner, viewOrgId: r.viewOrgId });
     rec.createdAt = Number(r.createdAt) || rec.at;
     rec.turns = Array.isArray(r.turns) ? r.turns.filter((m) => m && typeof m === 'object' && typeof m.role === 'string') : [];
     rec.calls = Array.isArray(r.calls) ? r.calls.filter((x) => typeof x === 'string') : [];
@@ -230,7 +238,7 @@ export const sessionsMethods = {
     const list = s.sessions || [];
     if (s.sessionId && list.some((x) => x.id === s.sessionId)) return s.sessionId;
     const id = s.sessionId || newSessionId();
-    const rec = makeSession({ id: id, title: q, page: this.ctxLabel(), at: Date.now(), owner: s.account && s.account.email });
+    const rec = makeSession({ id: id, title: q, page: this.ctxLabel(), at: Date.now(), owner: s.account && s.account.email, viewOrgId: s.viewOrgId || null });
     // Asked from inside a saved space: the session is filed there from the start.
     if (s.view === 'space' && s.spaceKey && BUILTIN_SPACE_KEYS.indexOf(s.spaceKey) < 0) rec.spaceId = s.spaceKey;
     this.setState((p) => ({ sessionId: id, sessions: trimSessions([rec].concat((p.sessions || []).filter((x) => x.id !== id))) }));

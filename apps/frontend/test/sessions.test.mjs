@@ -93,6 +93,33 @@ test('sessions round-trip through storage and bad rows are dropped', () => {
   assert.deepEqual(loadSessions({ getItem: () => { throw new Error('blocked'); } }), []);
 });
 
+test('viewOrgId is stamped at birth and round-trips through storage', () => {
+  // Regression for the cross-company session leak: a superadmin asking a question while
+  // viewing as TechCorp, then switching to Plenum Tech, used to still see (and could
+  // reopen — resuming the wrong company's server-side thread) the TechCorp session, because
+  // only `owner` (the same superadmin's email either way) was ever checked. viewOrgId is
+  // the second half of that scope and must survive exactly like owner does.
+  const techcorp = makeSession({ id: 't1', title: 'What is the SLA completion for my vendor', page: 'Home', at: NOW, owner: 'admin@plenum-tech.com', viewOrgId: 'org-techcorp' });
+  assert.equal(techcorp.viewOrgId, 'org-techcorp');
+
+  const ownAccount = makeSession({ id: 'o1', title: 'Which buildings put me at risk?', page: 'Home', at: NOW, owner: 'admin@plenum-tech.com' });
+  assert.equal(ownAccount.viewOrgId, null, 'no viewOrgId given means not viewing as anyone, not a missing field');
+
+  const st = memStorage();
+  assert.equal(saveSessions([techcorp, ownAccount], st), true);
+  const back = loadSessions(st);
+  const backTechcorp = back.find((r) => r.id === 't1');
+  const backOwn = back.find((r) => r.id === 'o1');
+  assert.equal(backTechcorp.viewOrgId, 'org-techcorp');
+  assert.equal(backOwn.viewOrgId, null);
+
+  // A hand-edited or pre-fix stored row with no viewOrgId at all restores as null (own
+  // account), same as a fresh session asked while not viewing as anyone — never crashes,
+  // never inherits a stray string.
+  st._m[SESSIONS_KEY] = JSON.stringify([{ id: 'legacy', title: 'old row from before this field existed', at: NOW, owner: 'admin@plenum-tech.com' }]);
+  assert.equal(loadSessions(st)[0].viewOrgId, null);
+});
+
 test('saveSessions shrinks what it stores when the browser refuses the size', () => {
   let failures = 2;
   const st = memStorage();
