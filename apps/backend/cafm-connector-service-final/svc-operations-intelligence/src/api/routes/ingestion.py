@@ -32,8 +32,19 @@ from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.ingestion import ontology as onto
 from ...engines.ingestion import document_facts as facts_svc
+from ...engines.ingestion import tabular_mapping as tab_svc
 from ...engines.ingestion import validation as val
 from .auth import scope
+
+class ImportPlanRequest(BaseModel):
+    """A spreadsheet's headers, and optionally how many rows sit under them."""
+    headers: list[str] = Field(default_factory=list, max_length=2000)
+    row_count: int | None = Field(None, ge=0)
+    domains: list[str] | None = Field(
+        None, description="Narrow the search when the uploader has already said what the file "
+                          "is — an asset register whose 'Date' column should not be weighed "
+                          "against a compliance issue date.")
+
 
 class ExtractionPlanRequest(BaseModel):
     """The document text to plan against. Text, not a file: planning is a read over
@@ -245,6 +256,25 @@ async def extraction_plan(
     nothing about energy" and "energy was never checked" are different statements.
     """
     return facts_svc.extraction_plan(body.text)
+
+
+@router.post("/import-plan")
+async def import_plan(body: ImportPlanRequest, s: access.Scope = Depends(scope)):
+    """Which table each column of a CSV or Excel sheet is destined for, before it writes.
+
+    The migration flow's canonical registry covered assets, work orders, parts, scheduled PM
+    and users. Energy was not in it at all, so an MPAN column had no target and a half-hourly
+    export became rows nobody could query. Headers are matched against the SAME catalogue the
+    document extractor uses, because a field's destination has to be declared once.
+
+    Three things this refuses to do quietly. A header that matches nothing is returned by
+    name, never guessed into a column. Two headers aimed at one column are held back, because
+    the second write lands on top of the first and the import still reports success. And a
+    header that matches two domains equally is left for the sheet's own shape to decide, or
+    reported unresolved — picking the first in dictionary order is a coin toss wearing a
+    confidence score. See engines/ingestion/tabular_mapping.py.
+    """
+    return tab_svc.import_plan(body.headers, row_count=body.row_count, domains=body.domains)
 
 
 @router.get("/extraction-rules/validate")

@@ -129,11 +129,64 @@ one. An empty value is not a fact at any confidence.
 
 ---
 
-## What this does not do yet
+## `POST /api/ingestion/import-plan` — CSV and Excel
 
-**It does not run inside the ingest flow.** The catalogue, the detector and the plan are here
-and tested; wiring them into `run-stateful-with-files` so every upload is read for all five
-domains is the next step. Today that endpoint still classifies on filename and message.
+The same catalogue, applied to spreadsheet headers. The migration flow's canonical registry
+covered assets, work orders, parts, scheduled PM and users; **energy was not in it at all**,
+so an MPAN column had no target and a half-hourly export became rows nobody could query.
+
+A field's destination is declared once. Two registries disagreeing about where
+`serial_number` lands is how a column silently stops arriving while the import still reports
+success.
+
+```jsonc
+{"headers": ["MPAN", "Fuel", "Read To", "Consumption kWh", "Supplier"], "row_count": 1200}
+```
+
+```jsonc
+{"would_write": [
+   {"table": "meters",         "columns": ["mpan_mprn", "meter_type"], "rows": 1200},
+   {"table": "meter_readings", "columns": ["reading_at", "consumption_kwh"], "rows": 1200}],
+ "coverage_pct": 100.0, "blocked": [], "unmapped": []}
+```
+
+Measured on four real export shapes — asset register, half-hourly energy export, PPM schedule,
+service visit log — **100% of columns mapped on each**, into `assets`, `meters`,
+`meter_readings`, `ppm_visits`, `work_orders` and `inspections`. 239 aliases cover what real
+exports call things: `EQUIP#`, `MPAN`, `p/kWh`, `Attended By`.
+
+Note that one sheet is not one table. A PPM export carries visit, work-order and inspection
+fields; writing it into one table would lose two thirds of it.
+
+### Three things it refuses to do quietly
+
+**A header that matches nothing is named, never guessed.** Adding an alias is a five-second
+edit to the catalogue. A column quietly dropped is a field the customer thinks they imported.
+
+**Two headers aimed at one column are held back.** The second write lands on top of the first
+and the import still reports success — data loss that looks like a clean run. `Make` and
+`Manufacturer` in one sheet both mean `assets.manufacturer`; both are blocked and reported.
+
+**A header matching two domains equally is decided by the sheet, or left unresolved.** "Asset
+Code" is the asset's own code in a register and the asset a visit was against in a PPM sheet.
+When only unambiguous columns are counted and one domain leads outright, that settles it;
+a draw stays a draw, because picking the first in dictionary order is a coin toss wearing a
+confidence score. Passing `domains` settles it outright.
+
+---
+
+## The ingest flow reports what it read
+
+`POST /api/workflow/run-stateful-with-files` now returns `extraction_plans` — one entry per
+uploaded file, carrying `domains_present`, `domains_absent` and the reason for each absence.
+
+It is advisory and never fatal: a plan that cannot be produced is recorded against its own
+file rather than raised, because a receipt that cannot say what it looked for is worse than
+one that says so, and neither is worth losing an upload over.
+
+---
+
+## What this does not do yet
 
 **Three domains have no extractor.** Energy, assets and maintenance return fields and land
 nowhere. Building those means, for each: a Claude extraction pass against the domain's field

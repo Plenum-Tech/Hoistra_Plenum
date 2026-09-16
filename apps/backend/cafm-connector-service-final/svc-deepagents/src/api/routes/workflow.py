@@ -14,6 +14,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import httpx
 import structlog
 from uuid import UUID
 from ... import database
@@ -91,6 +92,31 @@ class WorkspaceStatusResponse(BaseModel):
     last_tool: str | None = None
 
 
+async def _extraction_plan_for(text: str, authorization: str | None) -> dict | None:
+    """What operations-intelligence would read this document for, per domain.
+
+    Model-free on the other side, so it is cheap enough to run on every file. Returns None
+    rather than raising when the service is unreachable — a receipt that cannot say what it
+    looked for is worse than one that says so, but neither is worth losing the upload over.
+    """
+    if not (text or "").strip():
+        return {"ok": True, "domains_present": [], "domains_absent": [],
+                "note": "no text could be read from this file, so nothing could be looked for"}
+    base = settings.operations_intelligence_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{base}/api/ingestion/extraction-plan",
+                json={"text": text[:2_000_000]},
+                headers={"Authorization": authorization} if authorization else {},
+            )
+        if resp.status_code >= 400:
+            return {"ok": False, "error": f"extraction-plan returned {resp.status_code}"}
+        return resp.json()
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+
+
 class WorkflowResponse(BaseModel):
     session_id: str
     answer: str
@@ -119,6 +145,14 @@ class WorkflowResponse(BaseModel):
     # building, and will not be until somebody answers.
     validation_cases: list[dict[str, Any]] = Field(default_factory=list)
     validation_held: list[str] = Field(default_factory=list)
+    # What each uploaded file was READ FOR, per domain, and for the domains it does not
+    # mention, why not. A document is not one kind of thing — an FM contract names the
+    # supplier, the assets it covers, the PPM frequency it commits to and the certificates
+    # the contractor must hold. Routing picked one and ran one extractor, so the receipt said
+    # "ingested" while three of those four were never looked at. This is what makes that
+    # visible: one entry per file, with domains_present, domains_absent and the reason for
+    # each absence. Absent-with-a-reason and never-checked look identical without it.
+    extraction_plans: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResumeRequest(BaseModel):
@@ -236,6 +270,7 @@ def _to_response(result: dict[str, Any]) -> WorkflowResponse:
         citations=list(result.get("citations") or []),
         validation_cases=list(result.get("validation_cases") or []),
         validation_held=[str(x) for x in (result.get("validation_held") or []) if x],
+        extraction_plans=list(result.get("extraction_plans") or []),
     )
 
 
@@ -580,6 +615,21 @@ async def run_stateful_workflow_with_files(
                     validation_cases.append(_case)
             held = validation_gate.blocking(validation_cases)
 
+            # Read every file for every domain, not just the one routing picked. Advisory and
+            # never fatal: a plan that cannot be produced must not cost the upload, so each
+            # failure is recorded against its own file rather than raised.
+            extraction_plans: list[dict] = []
+            for _p in saved_paths:
+                _n = Path(_p).name
+                try:
+                    _text = building_binding.document_text(_p) or ""
+                    _plan = await _extraction_plan_for(_text, request.headers.get("authorization"))
+                    extraction_plans.append({"document_name": _n, **(_plan or {})})
+                except Exception as exc:  # noqa: BLE001 — see the comment above
+                    log.warning("single_door.extraction_plan_failed", file=_n, error=str(exc)[:200])
+                    extraction_plans.append({"document_name": _n, "ok": False,
+                                             "error": str(exc)[:300]})
+
             # The link the caller asked for, made by the caller. Failure here is reported
             # and does not fail the ingest: the file is indexed either way, and an unbound
             # document is recoverable while a lost upload is not.
@@ -716,6 +766,7 @@ async def run_stateful_workflow_with_files(
                 result["answer"] = notice + ('\n\n---\n\n' + _prev if _prev else "")
             if validation_cases:
                 result["validation_cases"] = validation_cases
+                result["extraction_plans"] = extraction_plans
                 result["validation_held"] = [c.get("id") for c in held]
             return _to_response(result)
         finally:
