@@ -43,7 +43,7 @@ from langgraph.errors import GraphInterrupt
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
-from ..config import settings
+from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
 from ..llm_factory import create_chat_model, friendly_openai_error
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
@@ -3771,7 +3771,7 @@ class DeepAgentOrchestrator:
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
             return None
-        model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+        model = (getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL).strip()
         # Everything the reader will see, including the panels code attaches after the model
         # has finished. The missing-duty panel was invisible here, so a statutory-list
         # question shipped with 22 "nothing on record" rows and 44 buttons beneath it and the
@@ -3983,7 +3983,7 @@ class DeepAgentOrchestrator:
         if not api_key:
             return None
         model = (
-            getattr(settings, "compliance_summary_model", "") or "claude-opus-5"
+            getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
         try:
             import anthropic
@@ -4112,7 +4112,7 @@ class DeepAgentOrchestrator:
         if not api_key:
             return None
         model = (
-            getattr(settings, "compliance_summary_model", "") or "claude-opus-5"
+            getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
         try:
             import anthropic
@@ -4606,7 +4606,7 @@ class DeepAgentOrchestrator:
                 "label": "Compliance analyst reasoning",
                 "detail": (
                     f"{len(fetched_rows)} row(s) handed to "
-                    f"{(getattr(settings, 'compliance_summary_model', '') or 'claude-opus-5')}"
+                    f"{(getattr(settings, 'compliance_summary_model', '') or DEFAULT_COMPLIANCE_SUMMARY_MODEL)}"
                     " to rank by operational urgency and write the answer"
                     if fetched_rows
                     else "Answering from the compliance engine tools"

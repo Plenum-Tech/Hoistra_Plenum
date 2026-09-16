@@ -28,7 +28,7 @@ import time
 
 import structlog
 
-from ..config import settings
+from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
 from .skills import prompt_doc, skills_dir
 from . import llm_cost
 from . import activity_log
@@ -149,7 +149,7 @@ async def select_docs(question: str) -> dict:
     catalogue = "\n".join(
         f"- {name}: {why}" for name, why in TOPIC_DOCS.items() if name in have
     )
-    model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+    model = (getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL).strip()
     _user = f"AVAILABLE DOCUMENTS:\n{catalogue}\n\nQUESTION:\n{(question or '').strip()[:1000]}"
     activity_log.fire(
         agent="compliance_router", stage="router", direction="input", model=model,

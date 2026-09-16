@@ -25,7 +25,7 @@ import structlog
 
 from . import activity_log
 
-from ..config import settings
+from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
 from .phase2_intents import Phase2AgentId, resolve_phase2_engine
 from .skills import routable_skills
 from . import llm_cost
@@ -94,7 +94,7 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return {"agent": eng, "also": [], "reason": "router unavailable", "source": "keyword"}
 
-    model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+    model = (getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL).strip()
     _user = (
         f"AGENTS:\n{catalogue}\n\n"
         + (f"CONTEXT:\n{context_note.strip()[:600]}\n\n" if context_note else "")

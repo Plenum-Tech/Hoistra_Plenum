@@ -17,6 +17,17 @@ def _find_env_file() -> str | None:
 _ENV_FILE = _find_env_file()
 
 
+#: The model the compliance portfolio summary runs on when the environment does not name one.
+#:
+#: Written here once and imported by every caller. It used to be the string "claude-opus-5"
+#: repeated at seven call sites as `settings.compliance_summary_model or "claude-opus-5"`, which
+#: is how it came to disagree with reality: both the Container App and the local .env set
+#: COMPLIANCE_SUMMARY_MODEL=claude-sonnet-5, so the fallback had not been reached in either
+#: environment and nobody had cause to notice it named a different, dearer model. A default that
+#: is never exercised still decides what happens the day the variable is unset.
+DEFAULT_COMPLIANCE_SUMMARY_MODEL = "claude-sonnet-5"
+
+
 class Settings(BaseSettings):
     # Database
     db_url: str = Field(..., validation_alias=AliasChoices("DB_URL", "DATABASE_URL", "db_url"))
@@ -89,7 +100,7 @@ class Settings(BaseSettings):
     # ("forged AND still compliant") over the whole table, which the cheap routing model gets
     # wrong, so it runs on Claude independently of OPENAI_MODEL.
     compliance_summary_model: str = Field(
-        "claude-opus-5",
+        DEFAULT_COMPLIANCE_SUMMARY_MODEL,
         validation_alias=AliasChoices(
             "COMPLIANCE_SUMMARY_MODEL", "compliance_summary_model"
         ),
