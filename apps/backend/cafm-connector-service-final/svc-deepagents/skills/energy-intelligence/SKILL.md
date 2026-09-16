@@ -120,6 +120,41 @@ Bishopsgate has the **higher** EUI and is **at** its reference; Kingsway is lowe
 Reporting the two raw EUIs side by side reverses the finding. This is the single most common way
 to be confidently wrong here.
 
+### How much of the gap can be acted on
+
+A building over its reference is over it for two different reasons, and they take different
+answers. `get_operating_hours(building_id)` separates them:
+
+- **Waste** — the building uses more than it should for the hours it keeps. That is anomalies
+  and plant, and it is a work order.
+- **Benchmark fit** — the building keeps longer hours than its pack assumes. That is a
+  re-benchmark, not a fault, and no amount of maintenance closes it.
+
+The gap is reported **weekly**, because a daily figure misses the weekend: 07:00–19:00 against
+an assumed 09:00–21:00 is the same twelve hours, and a building also running Saturdays works
+twelve hours a week more than its pack allows while a daily comparison shows nothing. Check
+`derived.weekend_operation` against `assumed.days_per_week`.
+
+Read `known` before quoting either side. `assumed.known` false means the benchmark's assumption
+was never recorded — say the fit cannot be judged and that it needs setting. **Never supply a
+plausible default**: a fabricated assumption behind a re-benchmark argument is worse than no
+argument. `derived.known` false means under 14 days of readings, or a load flat all day with no
+occupancy signal to read.
+
+A rough decomposition of the gap: anomaly headline (from `get_anomaly_rollup`) over cost above
+reference gives the share that is actionable now. The remainder is structural — plant age, hours,
+fabric — and does not move when the anomalies are fixed. Say which part is which.
+
+### Asset criticality has one scale
+
+`assets.criticality` holds three vocabularies — `L1/L2/L3`, `critical/high/medium/Low`, and
+`Med`. Query **`criticality_level`**, the generated canonical column: `criticality = 'L1'`
+returns 10 assets where the true figure is 26, because 16 are recorded as words.
+
+`high` maps **up** to L1, deliberately: four word levels do not fit three L levels, and where a
+scale must lose precision it should lose it in the direction that fails safe. NULL means the
+recorded value is not one the mapping knows — unknown, not low.
+
 For one building, `get_building_cost_drivers` gives what is beneath the headline — a cause, not
 a restatement of the total. Say which tariff priced it.
 

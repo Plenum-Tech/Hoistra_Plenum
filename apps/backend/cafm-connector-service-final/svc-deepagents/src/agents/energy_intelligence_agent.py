@@ -1005,9 +1005,56 @@ async def summarise_anomalies(group_by: str = "building", status: str | None = N
     except Exception as exc:
         return _err(exc, "summarise_anomalies")
 
+
+@tool
+async def get_operating_hours(building_id: str, days: int = 90) -> dict:
+    """C — The hours a building keeps, against the hours its benchmark assumes.
+
+    Use this whenever a building is over its reference and the question is "how much of that can
+    I act on". Part of the gap is waste and part is that the reference assumes a shorter week
+    than the building works, and the two take different answers: a work order, or a re-benchmark.
+    Without this you cannot separate them, and saying "the building keeps longer hours than its
+    pack assumes" without it is an invention.
+
+    Returns `assumed` (stored on the building profile, WITH its source), `derived` (computed
+    from the load profile every call, never stored, so it cannot go stale) and
+    `gap_hours_per_week`.
+
+    Read `known` on each before using a figure:
+
+      assumed.known is False   the benchmark's assumption was never recorded. Say the fit of
+                               the benchmark cannot be judged and that the assumption needs
+                               setting — do NOT supply a plausible default, because a fabricated
+                               assumption behind a re-benchmark argument is worse than no
+                               argument.
+      derived.known is False   either under 14 days of readings, or the load is flat all day
+                               (a continuous process load, or a meter reporting a constant).
+                               `note` says which.
+
+    The gap is WEEKLY on purpose. A building running 07:00-19:00 against an assumed 09:00-21:00
+    keeps the same twelve hours, so the daily gap is zero — and if it also runs weekends it works
+    twelve hours a week more than its pack assumes while a daily comparison reports no difference
+    at all. Check `derived.weekend_operation` against `assumed.days_per_week`.
+
+    `derived.contiguous` False means the in-use hours have a break in them — two shifts, or a
+    cleaning window. Printing "07:00-19:00" over that describes a continuity the readings do not
+    show.
+
+    A wide gap is NOT a finding of waste. It is a benchmark-fit question, and the honest answer
+    names it as one.
+    """
+    try:
+        resp = await _request("GET", _base(),
+                              f"/api/energy/buildings/{building_id}/operating-hours",
+                              service=_SERVICE, timeout=_TIMEOUT, params={"days": days})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_operating_hours")
+
 ENERGY_INTELLIGENCE_TOOLS = [
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,
+    get_operating_hours,
     get_market_profiles,
     list_energy_buildings,
     get_building_cost_drivers,

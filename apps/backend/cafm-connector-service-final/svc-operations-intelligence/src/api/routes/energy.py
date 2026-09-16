@@ -25,6 +25,7 @@ from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
 from ...engines.energy import occupancy as occ_svc
+from ...engines.energy import operating_hours as hours_svc
 from ...engines.energy import reports as report_svc
 from ...models.energy import EnergyMonthlyReport
 from ...shared import approvals as approvals_svc
@@ -902,6 +903,30 @@ async def list_anomalies(
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}
+
+
+@router.get("/buildings/{building_id}/operating-hours")
+async def building_operating_hours(
+    building_id: str,
+    days: int = Query(90, ge=14, le=365),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The hours this building keeps, against the hours its benchmark assumes.
+
+    Part of a building's gap to reference is waste and part is that the reference assumes a
+    shorter week than the building works. They take different answers - a work order, or a
+    re-benchmark - and nothing could tell them apart before, because the assumption was not in
+    the schema and the actual was never derived.
+
+    The assumption is stored on the building profile with its source. The actual is derived from
+    the load profile on every call and never stored, because a stored operating profile goes
+    stale the moment the pattern changes and then reads as measurement.
+    """
+    await access.assert_owned(session, s, "buildings", building_id,
+                              action="read", id_column="building_id")
+    return {"ok": True, **await hours_svc.operating_hours(
+        session, building_id=building_id, days=days)}
 
 
 @router.get("/anomalies/summary")
