@@ -22,6 +22,7 @@ rather than a second ORM model, so there is one declaration of what a user is.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -551,14 +552,33 @@ async def sign_in(
     session: AsyncSession, *, email: str, password: str,
     user_agent: str | None = None, request_ip: str | None = None,
 ) -> dict[str, Any]:
-    """Exchange an email and password for a session."""
+    """Exchange an email and password for a session.
+
+    Two things here are deliberate, and both were the other way round until sign-ins started
+    timing out in production. Observed on 2026-09-16: two logins that SUCCEEDED took 102 and
+    147 seconds, while about twenty other requests in the same window served in 1-10ms. nginx
+    gives up at 60s, so the browser was told the sign-in service could not be reached for a
+    login the server had already accepted - and a person who is told that retries, which is
+    what made it worse.
+
+    1. The row is read WITHOUT ``FOR UPDATE``. The lock used to be taken before the password
+       was checked and held across it, so every sign-in attempt for one account queued behind
+       the last one's bcrypt. The lock was there to make the failed-attempt counter race-free;
+       that is now done by incrementing in SQL instead, which needs no lock and cannot lose a
+       count to a concurrent attempt.
+
+    2. bcrypt runs in a worker thread. It is ~250ms of CPU at 12 rounds, and called directly
+       it blocks the event loop for that whole time - so one sign-in delays every other
+       request the service is handling, on a container that runs eight services on two cores.
+    """
     address = normalise_email(email)
-    row = await find_by_email(session, address, lock=True)
+    row = await find_by_email(session, address)
 
     if row is None:
         # Same cost as a real check. Without it, a missing account answers in ~1ms and a
-        # wrong password in ~250ms, and the generic message above is decoration.
-        burn_time()
+        # wrong password in ~250ms, and the difference is a reliable, remotely measurable
+        # answer to "does this person have an account here".
+        await asyncio.to_thread(burn_time)
         await session.commit()
         raise AuthError(GENERIC_SIGNIN_FAILURE, status=401, reason="invalid_credentials")
 
@@ -573,30 +593,40 @@ async def sign_in(
             status=429, reason="locked", extra={"retry_after_seconds": wait},
         )
 
-    if not verify_password(password, row["password_hash"]):
-        failures = int(row["failed_login_count"] or 0) + 1
+    if not await asyncio.to_thread(verify_password, password, row["password_hash"]):
         cap = int(settings.auth_login_max_failures)
         lock_for = int(settings.auth_lockout_minutes)
-        await session.execute(
-            text(
-                # Every parameter is cast. Without the casts Postgres sees :f used both as
-                # an INT column assignment and as the left side of a comparison and refuses
-                # the statement outright with "inconsistent types deduced for parameter $1"
-                # — which surfaced as a 500 on the wrong-password path, i.e. exactly the
-                # path an attacker exercises and a normal test run never reaches.
-                """UPDATE plenum_cafm.users
-                   SET failed_login_count = CAST(:f AS INT),
-                       locked_until = CASE WHEN CAST(:f AS INT) >= CAST(:cap AS INT)
-                                           THEN CAST(:until AS TIMESTAMPTZ)
-                                           ELSE locked_until END,
-                       updated_at = now()
-                   WHERE id = :i"""
-            ),
-            {"f": failures, "cap": cap,
-             "until": _now() + timedelta(minutes=lock_for),
-             "i": await keys.user_key(session, row["id"])},
-        )
+        failed = (
+            await session.execute(
+                text(
+                    # The count is incremented IN SQL, from the column, not from the value
+                    # read before the password check. That is what replaces the row lock:
+                    # two simultaneous wrong guesses each add one, where computing N+1 in
+                    # Python from a stale read would have both written the same number and
+                    # lost an attempt — the one thing the lockout must not do.
+                    #
+                    # Every parameter is cast. Without the casts Postgres sees :cap used both
+                    # in a comparison and an assignment and refuses the statement outright
+                    # with "inconsistent types deduced for parameter $1" — which surfaced as
+                    # a 500 on the wrong-password path, i.e. exactly the path an attacker
+                    # exercises and a normal test run never reaches.
+                    """UPDATE plenum_cafm.users
+                       SET failed_login_count = COALESCE(failed_login_count, 0) + 1,
+                           locked_until = CASE
+                               WHEN COALESCE(failed_login_count, 0) + 1 >= CAST(:cap AS INT)
+                               THEN CAST(:until AS TIMESTAMPTZ)
+                               ELSE locked_until END,
+                           updated_at = now()
+                       WHERE id = :i
+                   RETURNING failed_login_count"""
+                ),
+                {"cap": cap,
+                 "until": _now() + timedelta(minutes=lock_for),
+                 "i": await keys.user_key(session, row["id"])},
+            )
+        ).scalar()
         await session.commit()
+        failures = int(failed or 0)
         log.info("auth.signin.failed", user_id=str(row["id"]), failures=failures,
                  locked=failures >= cap)
         raise AuthError(GENERIC_SIGNIN_FAILURE, status=401, reason="invalid_credentials")
@@ -738,7 +768,7 @@ async def reset_password(
         await session.commit()
         raise AuthError("That account no longer exists.", status=404, reason="no_account")
 
-    if verify_password(new_password, row["password_hash"]):
+    if await asyncio.to_thread(verify_password, new_password, row["password_hash"]):
         await session.commit()
         raise AuthError(
             "That is the password the account already has. If you are resetting it "
@@ -820,7 +850,7 @@ async def change_password(
     if row is None:
         raise AuthError("That account no longer exists.", status=404, reason="no_account")
 
-    if not verify_password(current_password, row["password_hash"]):
+    if not await asyncio.to_thread(verify_password, current_password, row["password_hash"]):
         # Not the generic sign-in message: the caller is already authenticated, so there
         # is nothing left to hide from them, and "your current password is wrong" is the
         # only message they can act on.
@@ -831,7 +861,7 @@ async def change_password(
                                 full_name=row["full_name"])
     except WeakPassword as exc:
         raise AuthError(str(exc), reason="password") from None
-    if verify_password(new_password, row["password_hash"]):
+    if await asyncio.to_thread(verify_password, new_password, row["password_hash"]):
         raise AuthError("That is the password you already have.",
                         reason="password_unchanged")
 
