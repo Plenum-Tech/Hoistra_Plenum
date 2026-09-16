@@ -39,6 +39,7 @@ from ...services import building_binding, usage_events
 from ...services import ingestion_validation as validation_gate
 from ...services.principal import Principal, caller_principal, current_principal
 from ...http_client import caller_authorization
+from ...provider_errors import provider_refusal, refusal_detail
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/workflow", tags=["Workflow"])
@@ -236,7 +237,29 @@ def _extract_ingested_schema_mapping_ids(tool_calls: list[dict[str, Any]]) -> li
 
 def _to_response(result: dict[str, Any]) -> WorkflowResponse:
     if not result["success"] and result.get("error"):
-        raise HTTPException(status_code=500, detail=result["error"])
+        err = str(result["error"])
+        refusal = provider_refusal(err)
+        if refusal:
+            provider, kind = refusal
+            # 503, not 500: this service is up and the request was fine — the model provider
+            # it depends on will not serve us. A 500 sends somebody to read a traceback that
+            # says nothing they can act on.
+            #
+            # And the provider's own message does NOT go in the body. It shipped doing that,
+            # so a failing report card stored
+            #   orchestrator answered 500: {"detail":"Error code: 401 - {'error': {'message':
+            #   'You do not have access to the organization tied to the API key.'…
+            # on a record a user reads. Upstream error text is for the log, where it is
+            # already written in full with the traceback.
+            log.error("workflow.model_provider_refused", provider=provider, kind=kind,
+                      detail=err[:400])
+            raise HTTPException(status_code=503, detail=refusal_detail(provider, kind))
+        log.error("workflow.run_failed", detail=err[:400])
+        raise HTTPException(status_code=500, detail={
+            "ok": False, "reason": "orchestrator_failed",
+            "error": "The orchestrator could not complete this turn. The reason is in the "
+                     "service log against this session id.",
+        })
     rm = result.get("route_metadata")
     ws = result.get("workspace_status")
     tool_calls_raw = result.get("tool_calls") or []

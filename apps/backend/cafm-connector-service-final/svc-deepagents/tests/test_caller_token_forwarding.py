@@ -140,3 +140,70 @@ class TestAnUnauthenticatedCallIsNamed:
         await asyncio.sleep(0)
         assert seen.get("path") == "/api/compliance/certificates"
         assert seen.get("service") == "operations_intelligence"
+
+
+# ── A rejected model key is not an outage, and its text is not for the user ──────────────
+# Both provider keys were refused on the local stack:
+#
+#   POST https://api.anthropic.com/v1/messages -> 401  "API key is invalid."
+#   POST https://api.openai.com/v1/chat/completions -> 401
+#     "You do not have access to the organization tied to the API key."  invalid_organization
+#
+# The orchestrator had no model, /run-stateful answered 500, and the provider's own sentence
+# was copied into the response body and stored on the report card a user reads.
+
+from src.provider_errors import provider_refusal as _provider_refusal, refusal_detail  # noqa: E402
+
+ANTHROPIC_401 = ("Error code: 401 - {'type': 'error', 'error': {'type': "
+                 "'authentication_error', 'message': 'API key is invalid.'}}")
+OPENAI_401 = ("Error code: 401 - {'error': {'message': 'You do not have access to the "
+              "organization tied to the API key.', 'type': 'invalid_request_error', "
+              "'code': 'invalid_organization'}}")
+
+
+class TestAProviderRefusalIsRecognised:
+
+    def test_an_invalid_anthropic_key_is_named_as_such(self):
+        assert _provider_refusal(ANTHROPIC_401) == ("anthropic", "rejected")
+
+    def test_an_openai_organization_mismatch_is_named_as_such(self):
+        assert _provider_refusal(OPENAI_401) == ("openai", "rejected")
+
+    def test_running_out_of_credit_is_a_different_answer_from_a_bad_key(self):
+        """Both stop the model answering; only one is fixed by changing a key."""
+        out = _provider_refusal("Error code: 400 - {'error': {'type': 'invalid_request_error', "
+                                "'code': 'insufficient_quota', 'message': 'Your credit balance "
+                                "is too low'}}")
+        assert out is not None and out[1] == "out of credit"
+
+    def test_an_ordinary_failure_is_not_blamed_on_the_provider(self):
+        """A timeout, a tool error or a bad question must not be reported as a bad API key —
+        that sends somebody to rotate a credential that was never the problem."""
+        for other in ("ReadTimeout", "tool 'x' failed", "", "connection refused",
+                      "Error code: 500 - internal server error"):
+            assert _provider_refusal(other) is None, other
+
+    def test_matching_is_on_the_providers_codes_not_its_prose(self):
+        """Wording changes; 'invalid_organization' and 'authentication_error' do not."""
+        assert _provider_refusal("code: invalid_organization") == ("openai", "rejected")
+        assert _provider_refusal("type: authentication_error") == ("anthropic", "rejected")
+
+
+class TestTheAnswerCarriesNoUpstreamText:
+
+    def test_it_names_the_provider_and_the_variable_to_check(self):
+        d = refusal_detail("openai", "rejected")
+        assert d["provider"] == "openai"
+        assert "OPENAI_API_KEY" in d["error"]
+        assert d["reason"] == "model_provider_rejected"
+
+    def test_the_providers_own_sentence_is_not_in_it(self):
+        """That sentence is stored on a report card a user reads. It belongs in the log."""
+        d = refusal_detail("openai", "rejected")
+        blob = " ".join(str(v) for v in d.values()).lower()
+        assert "organization tied to the api key" not in blob
+        assert "error code: 401" not in blob
+
+    def test_out_of_credit_reads_differently_from_a_bad_key(self):
+        assert "out of credit" in refusal_detail("anthropic", "out of credit")["error"]
+        assert refusal_detail("anthropic", "out of credit")["reason"] ==             "model_provider_out_of_credit"
