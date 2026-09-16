@@ -31,6 +31,28 @@ approval needs thirty seconds from one named person.
 that exists, never quote its reference (there isn't one), and never add its estimate to committed
 spend. It is a recommendation with a price on it.
 
+## 1a. `count` is the page. `total` is the answer.
+
+The payload carries four numbers and they are not the same:
+
+| field | means |
+|---|---|
+| `count` | how many rows came back — **the page size, not a finding** |
+| `matched` | how many matched the filter |
+| `total` | how many there are |
+| `total_is_capped` | true when `total` is a floor, because more exist than were read |
+
+At the default `limit=200` this estate returns **`count` 200 and `total` 374**. Reading `count`
+and reporting "200 decisions owed" is wrong by 174, and it is wrong in the direction that looks
+plausible — it is a round number that happens to be the limit.
+
+**`by_state` and `by_source` are computed over every decision, not over the page.** So the split
+(Blocked 69 · Deviation 55 · Awaiting approval 175 · To raise 75) is correct even when the list
+is truncated. Answer counting questions from those, never by counting the rows you were handed.
+
+Where `total_is_capped` is true, say "at least" — a capped figure presented as the total is how
+a screen ends up reading "134 of 134" while showing 134 of two thousand.
+
 ## 2. Source is where the trigger came from
 
 Compliance · Vendors · Assets · Energy · Maintenance.
@@ -42,6 +64,11 @@ just the count: "3 statutory" tells nobody which building loses its cover first.
 A decision sourced from Energy came from a priced anomaly; one from Assets came from a condition
 flag. Saying which module raised it is half the answer, because it tells the reader which team
 already has evidence.
+
+**Measured on this estate: Maintenance 175, Vendors 124, Compliance 75 — and Assets 0, Energy 0.**
+The two filters exist and produce nothing today, so "no decisions from the energy engine" is a
+statement about wiring, not about the estate being clean. Say which sources are populated rather
+than reporting an empty filter as an absence of problems.
 
 ## 3. PPM is measured against plan, and a report is the proof
 

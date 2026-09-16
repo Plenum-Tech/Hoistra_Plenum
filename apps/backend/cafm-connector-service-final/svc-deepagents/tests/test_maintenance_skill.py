@@ -97,3 +97,34 @@ class TestPpmAndInspections:
         """resource_skills and work_order_tasks are both empty, so no availability check and
         no task list happened however plausible the narration reads."""
         assert "resource_skills" in prompt and "empty" in prompt
+
+
+class TestCountIsNotTheTotal:
+    """At the default limit=200 this estate returns count=200 and total=374. Reading `count`
+    is wrong by 174 and wrong in the plausible direction — a round number that is the limit.
+    The engine gets this right and says so in its own comments; the risk is the reader, and I
+    made exactly this mistake while verifying it."""
+
+    def test_the_four_numbers_are_distinguished(self, prompt):
+        for field in ("`count`", "`matched`", "`total`", "`total_is_capped`"):
+            assert field in prompt, field
+
+    def test_it_says_count_is_the_page(self, prompt):
+        assert "the page size, not a finding" in prompt
+
+    def test_it_gives_the_measured_example(self, prompt):
+        assert "200 and `total` 374" in prompt or "count` 200" in prompt
+
+    def test_counting_questions_use_the_rollups(self, prompt):
+        """by_state and by_source are computed over every decision, so they stay right when
+        the list is truncated."""
+        assert "not over the page" in prompt
+
+
+class TestEmptySourcesAreNotCleanliness:
+
+    def test_the_unpopulated_sources_are_named(self, prompt):
+        assert "Assets 0, Energy 0" in prompt
+
+    def test_an_empty_filter_is_about_wiring(self, prompt):
+        assert "statement about wiring" in prompt
