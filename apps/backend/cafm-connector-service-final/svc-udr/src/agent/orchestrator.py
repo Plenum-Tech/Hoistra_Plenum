@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..services.database_service import DatabaseService
+from ..services.principal import Principal
 from ..agent.tools.definitions import TOOL_DEFINITIONS
 from ..agent.tools.executor import ToolExecutor
 from ..agent.prompts import SYSTEM_PROMPT
@@ -21,17 +22,21 @@ log = get_logger(__name__)
 
 
 class UDROrchestrator:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, principal: "Principal | None" = None) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self._model = settings.anthropic_model
         self._session = session
+        self._principal = principal
 
     async def query(self, message: str) -> dict[str, Any]:
         """
         Process a natural-language database query.
         Returns {"reply": str, "success": bool, "tool_calls_made": int}.
         """
-        svc = DatabaseService(self._session)
+        # Bound to the caller. The agent chooses which tools to run and with what arguments;
+        # what it may see is not its decision, so the restriction is attached here rather than
+        # asked of the model.
+        svc = DatabaseService(self._session, self._principal)
         executor = ToolExecutor(svc)
 
         messages: list[dict] = [{"role": "user", "content": message}]
