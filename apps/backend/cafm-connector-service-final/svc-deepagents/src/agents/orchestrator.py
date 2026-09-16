@@ -3651,6 +3651,15 @@ class DeepAgentOrchestrator:
             out["cache_hit"] = True
         return out
 
+    #: Where a tool puts its rows. Compliance-only before, so an energy turn that fetched nine
+    #: anomalies reported "0 rows" — the count was looking for keys energy never returns.
+    _ROW_KEYS: tuple[str, ...] = (
+        "certificates", "buildings", "vendors", "types",          # compliance
+        "anomalies", "assets", "groups", "meters", "readings",    # energy
+        "work_orders", "visits", "contracts",                     # wo / contract performance
+        "rows", "records", "items",                               # generic
+    )
+
     @classmethod
     def _early_pipeline_steps(cls, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The three steps before the analyst — routing, document choice, fetch — rebuilt from
@@ -3664,7 +3673,7 @@ class DeepAgentOrchestrator:
             steps.append(
                 {
                     "stage": "route",
-                    "label": f"Routed the question — {e.get('agent') or 'compliance'}",
+                    "label": f"Routed the question — {e.get('agent') or 'the engine'}",
                     "detail": str(e.get("reason") or ""),
                     **cls._step_cost("agent_router"),
                 }
@@ -3692,7 +3701,7 @@ class DeepAgentOrchestrator:
                 out_ = tc.get("output") if isinstance(tc, dict) and isinstance(tc.get("output"), dict) else {}
                 # Row lists sit at the top level or one level down (the coverage tool nests
                 # its per-scope report under "buildings" / "vendors").
-                for key in ("certificates", "buildings", "vendors", "types"):
+                for key in cls._ROW_KEYS:
                     v = out_.get(key)
                     if isinstance(v, list):
                         rows += len(v)
@@ -5975,6 +5984,35 @@ class DeepAgentOrchestrator:
         # the answer, and facts computed by code. All three are available from the tool
         # calls the agent itself made.
         structured: dict[str, Any] | None = None
+        if engine != "compliance":
+            # Every engine shows WHICH agent answered, WHAT it did and WHAT it cost. The whole
+            # panel used to sit behind `engine == "compliance"`, so an energy turn measured
+            # itself exactly as carefully and then displayed none of it — the ledger starts in
+            # this function, above, for every engine alike.
+            #
+            # Deliberately the first three steps only. The analyst, the grounding check and the
+            # reviewer are compliance stages that do not exist here, and inventing labels for
+            # work that did not happen would be worse than showing less: a panel saying
+            # "checked the answer against the rows" where nothing checked anything is a lie
+            # with a cost figure attached.
+            early_steps = self._early_pipeline_steps(inner_tool_calls)
+            if early_steps:
+                if on_zone is not None:
+                    for st in early_steps:
+                        await on_zone(self._STEP_ZONE, st)
+                ledger = llm_cost.current()
+                inner_tool_calls = [
+                    *inner_tool_calls,
+                    {
+                        "tool": f"{engine}_pipeline",
+                        "input": {"question": user_message[:300]},
+                        "output": {
+                            "engine": engine,
+                            "steps": early_steps,
+                            "cost": ledger.log_summary(user_message) if ledger else None,
+                        },
+                    },
+                ]
         if engine == "compliance":
             early_steps = self._early_pipeline_steps(inner_tool_calls)
             if on_zone is not None:
