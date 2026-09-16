@@ -9,9 +9,16 @@
 //
 // Also the activity log (plenum_cafm.agent_activity_log): the UI's own actions are appended
 // as turns so they sit in the same trail as the server-side stages when troubleshooting.
-import { BASES, apiFetch } from './client.js';
+import { BASES, apiFetch, accessToken } from './client.js';
 
 const B = BASES.deepAgents;
+
+// How the caller reaches a socket. A WebSocket handshake has no Authorization header to put
+// a bearer in, so the token is offered as a subprotocol behind this marker — the client
+// sends [marker, token], the server agrees to the marker alone and reads the token off the
+// handshake. Matches WS_AUTH_SUBPROTOCOL in svc-deepagents/src/services/principal.py;
+// changing one without the other signs everybody out of the streaming path.
+export const WS_AUTH_SUBPROTOCOL = 'hoistra.auth.bearer';
 
 // LLM round-trips plus tool calls: the ask bar is not a 20-second request.
 const T_ASK = 180000;
@@ -168,9 +175,20 @@ export const deepAgentsApi = {
     const base = new URL(B + '/api/workflow/ws/' + encodeURIComponent(sessionId), window.location.origin);
     base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
 
+    // The signed-in caller, carried in the handshake. Without one the server closes the
+    // socket, so there is nothing to gain by dialling: report it and let the caller take
+    // the non-streaming path, which refreshes the access token and retries on its own.
+    // That is the normal state for the first moments of a session — the access token is
+    // never persisted, only rebuilt by authBoot()'s refresh.
+    const token = accessToken();
+    if (!token) {
+      if (h.onError) h.onError(new Error('not signed in yet'));
+      return { close: () => {} };
+    }
+
     let ws;
     try {
-      ws = new WebSocket(base.toString());
+      ws = new WebSocket(base.toString(), [WS_AUTH_SUBPROTOCOL, token]);
     } catch (e) {
       if (h.onError) h.onError(e);
       return { close: () => {} };

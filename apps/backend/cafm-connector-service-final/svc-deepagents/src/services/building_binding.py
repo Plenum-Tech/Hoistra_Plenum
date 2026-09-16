@@ -20,6 +20,7 @@ closes the loop.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -59,6 +60,19 @@ def _doc_types_by_file(tool_calls: Any) -> dict[str, str]:
     return out
 
 
+#: A path separator on either kind of machine. `Path` here is a PurePosixPath — the server
+#: runs on Linux — so it does not read a backslash as a separator, and a file picked on
+#: Windows arrived as `C:\\data\\uploads\\report.pdf` whose ".name" was the whole string. That
+#: became the filename on the row, so the one-hour lookup that matches an upload by its name
+#: never found it again. The name of a file is its last segment whichever machine wrote it.
+_PATH_SEPARATORS = re.compile(r"[\\/]")
+
+
+def _file_name(path: Any) -> str:
+    """The file's own name, whatever shape of path it arrived as."""
+    return _PATH_SEPARATORS.split(str(path).strip())[-1]
+
+
 async def register_uploads(
     session_id: str, file_paths: list[str] | None, tool_calls: Any = None
 ) -> int:
@@ -70,7 +84,7 @@ async def register_uploads(
     The one-hour window matches documents_from_session(): a filename is only unique within
     an upload, and a row from hours ago belongs to a different one.
     """
-    names = [Path(p).name for p in (file_paths or []) if str(p).strip()]
+    names = [_file_name(p) for p in (file_paths or []) if str(p).strip()]
     if not names:
         return 0
     types = _doc_types_by_file(tool_calls)

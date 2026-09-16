@@ -55,6 +55,13 @@ export function currentOrgId() { return actingOrgId || ORG_ID || ''; }
 let hooks = { getToken: () => null, refresh: null, onTerminal: null };
 export function configureAuth(h) { hooks = Object.assign({}, hooks, h || {}); }
 
+// The access token itself, for the one caller that cannot go through apiFetch: a browser
+// WebSocket constructor takes a URL and a list of subprotocols and nothing else, so the
+// streaming route reads the token out of the handshake instead of a header. Everything that
+// can send a header should — apiFetch attaches it, refreshes it and retries, and none of
+// that is available here.
+export function accessToken() { return hooks.getToken(); }
+
 // 401 reasons after which the credential is finished. Only `expired` is worth a retry.
 export const TERMINAL_401 = new Set(['invalid', 'wrong_type', 'session_revoked', 'password_changed', 'replayed', 'no_account', 'disabled']);
 

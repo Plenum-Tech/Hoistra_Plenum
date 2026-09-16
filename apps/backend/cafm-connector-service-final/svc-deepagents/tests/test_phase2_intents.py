@@ -10,11 +10,18 @@ from src.agents.phase2_intents import (
 from src.agents.system_prompt import build_system_prompt
 
 # Exact PRD lists — fail if anyone trims/reorders without updating this lock
+#
+# `cert` and `certs` are not in the PRD's own table. They are the short forms people
+# actually type ("which certs are lapsed"), they have been in COMPLIANCE_INTENT_KEYWORDS
+# since the first commit of that file, and the compliance tools' own docstrings are written
+# around them — so the routing they give is deliberate and this lock records it. The lock had
+# never matched the code, which meant it could not do its job: a list that is always red
+# cannot report the day someone trims it by accident.
 _PRD_COMPLIANCE = (
-    "certificate, expiry, cert due, inspection, LOLER, EICR, gas safety, compliance, "
-    "accreditation, Gas Safe, NICEIC, lapsed, renewal, statutory, fire risk, vendor cert, "
-    "building cert, blocked, vendor accreditation, not on record, remedial, insurance risk, "
-    "expired"
+    "certificate, cert, certs, expiry, cert due, inspection, LOLER, EICR, gas safety, "
+    "compliance, accreditation, Gas Safe, NICEIC, lapsed, renewal, statutory, fire risk, "
+    "vendor cert, building cert, blocked, vendor accreditation, not on record, remedial, "
+    "insurance risk, expired"
 )
 _PRD_CONTRACT = (
     "SLA, contractor, performance, KPI, PPM completion rate, vendor score, first fix, "

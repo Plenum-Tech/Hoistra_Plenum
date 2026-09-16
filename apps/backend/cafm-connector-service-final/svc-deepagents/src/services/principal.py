@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from contextvars import ContextVar
 import time
 from dataclasses import dataclass, field
@@ -136,6 +137,38 @@ def forget(authorization: str | None) -> None:
     _, _, token = (authorization or "").partition(" ")
     if token.strip():
         _cache.pop(hashlib.sha256(token.strip().encode("utf-8")).hexdigest(), None)
+
+
+# ── the same caller, arriving on a WebSocket ──────────────────────────────────────────
+#
+# A browser cannot put a header on a socket: the WebSocket constructor takes a URL and a
+# list of subprotocols, and nothing else — a gap in the standard, not in the client. So the
+# token rides in the handshake's subprotocol list behind a marker: the client offers
+# [marker, token] and the server agrees to the marker alone. A query string would also
+# carry it, and is where this usually ends up, but a URL is written to every proxy and
+# access log on the way and the token is a credential.
+#
+# What comes back is shaped exactly like the header the POST routes read, so identity,
+# caching and scope downstream of it are the same code answering the same way.
+
+#: The name a browser dials with. Changing it breaks every deployed client, so it is pinned
+#: by a test that spells it out rather than importing it.
+WS_AUTH_SUBPROTOCOL = "hoistra.auth.bearer"
+
+
+def bearer_from_subprotocols(offered: Iterable[str] | None) -> str | None:
+    """The Authorization header value a browser tucked into a WebSocket handshake.
+
+    None when the marker is absent or nothing follows it — an unauthenticated socket, which
+    the route refuses rather than serving as if nobody needed to be anybody.
+    """
+    values = [v for v in (str(x).strip() for x in (offered or [])) if v]
+    try:
+        marker = values.index(WS_AUTH_SUBPROTOCOL)
+    except ValueError:
+        return None
+    token = values[marker + 1] if marker + 1 < len(values) else ""
+    return f"Bearer {token}" if token else None
 
 
 #: The signed-in caller for the duration of one request, for code that runs SQL directly.

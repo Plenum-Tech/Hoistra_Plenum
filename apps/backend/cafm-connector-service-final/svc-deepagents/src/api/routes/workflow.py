@@ -20,7 +20,9 @@ from uuid import UUID
 from ... import database
 from sqlalchemy import text
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, status,
+)
 from pydantic import BaseModel, Field
 
 from ...config import settings
@@ -37,7 +39,14 @@ from ..deps import get_orchestrator
 from ...agents import activity_log
 from ...services import building_binding, usage_events
 from ...services import ingestion_validation as validation_gate
-from ...services.principal import Principal, caller_principal, current_principal
+from ...services.principal import (
+    WS_AUTH_SUBPROTOCOL,
+    Principal,
+    bearer_from_subprotocols,
+    caller_principal,
+    current_principal,
+    resolve as resolve_principal,
+)
 from ...http_client import caller_authorization
 from ...provider_errors import provider_refusal, refusal_detail
 
@@ -909,8 +918,42 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
 
     The server closes the connection after workflow_completed, gate_interrupt, or error.
     HITL gates surface as gate_interrupt events — to resume them use POST /resume/{session_id}.
+
+    Authentication. A browser cannot put a header on a socket, so the caller's token arrives
+    in the handshake as `Sec-WebSocket-Protocol: hoistra.auth.bearer, <token>`; from there on
+    this is the same identity path the POST routes take. A socket that carries no usable
+    token is closed before the orchestrator is reached — 1008 when the credential is the
+    problem and the client should sign in again, 1011 when identity itself is unreachable
+    and signing in again could not help.
     """
-    await websocket.accept()
+    # Before accept, and before anything is logged against a session: a route that asks for
+    # no credential answers to anyone, and the reads that run SQL in-process read an absent
+    # caller as "nobody is restricting this one" — which is every building of every company.
+    authorization = bearer_from_subprotocols(websocket.scope.get("subprotocols"))
+    try:
+        principal = await resolve_principal(authorization)
+    except HTTPException as exc:
+        # Whose problem it is decides what to say: a bad or absent credential is the
+        # caller's and signing in again fixes it; identity being unreachable is ours, and
+        # telling them to sign in again would send them round a loop that cannot end.
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        theirs = exc.status_code == status.HTTP_401_UNAUTHORIZED
+        log.info("ws_workflow.refused", session_id=session_id,
+                 status=exc.status_code, reason=detail.get("reason"))
+        await websocket.close(
+            code=1008 if theirs else 1011,
+            reason="Sign in and reconnect." if theirs else "Identity service unavailable.",
+        )
+        return
+
+    # Everything this turn fetches on the caller's behalf carries their own token, and the
+    # direct-SQL reads get the same boundary operations-intelligence would have applied.
+    caller_authorization.set(authorization)
+    caller_principal.set(principal)
+
+    # Agreeing to the marker, never to the token: the agreed subprotocol is echoed in the
+    # handshake response and kept on the client's socket object.
+    await websocket.accept(subprotocol=WS_AUTH_SUBPROTOCOL)
     orchestrator = getattr(websocket.app.state, "orchestrator", None)
     if orchestrator is None:
         await websocket.send_text(json.dumps({

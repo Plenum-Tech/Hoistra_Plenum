@@ -5532,6 +5532,22 @@ class DeepAgentOrchestrator:
                 "output": tc.get("output"),
             }
 
+        # The pipeline's steps, which the live path emits as the composer produces them. They
+        # are already sitting in the finished turn's compliance_pipeline call, so a replayed
+        # turn can show the same route instead of a trace with the pipeline missing from it —
+        # the reader could otherwise not tell why one answer records its steps and another,
+        # to the same question, does not.
+        pipeline = next(
+            (
+                tc.get("output")
+                for tc in (shortcut.get("tool_calls") or [])
+                if tc.get("tool") == "compliance_pipeline"
+            ),
+            None,
+        )
+        for step in (pipeline.get("steps") or []) if isinstance(pipeline, dict) else ():
+            yield self._compliance_zone_event(self._STEP_ZONE, step)
+
         analysis = next(
             (
                 tc.get("output")
