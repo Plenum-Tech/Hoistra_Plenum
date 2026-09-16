@@ -120,11 +120,28 @@ class TestAnAssetInvestigationIsCountedToo:
         data = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "data")
         assert "12 rows" in data["label"]        # 6 sources + 2 evidence + 4 readings
 
-    def test_actions_are_not_counted_as_data(self):
-        """Actions are proposals the tool generated, not records it fetched. Counting them
-        would inflate the figure with the tool's own output."""
+    def test_actions_are_reported_but_not_as_rows(self):
+        """Actions are shown — a person wants to know how many decisions are waiting — but in
+        their own clause. An action is something the tool PROPOSES (expedite this order, claim
+        this credit), not a record it fetched, so folding it into the row count would mean
+        "16 rows" included four things nobody retrieved."""
         from src.agents.orchestrator import DeepAgentOrchestrator
         assert "actions" not in DeepAgentOrchestrator._ROW_KEYS
+        data = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "data")
+        assert "12 rows" in data["label"]
+        assert "1 action ready" in data["label"]
+        assert data["actions_ready"] == 1
+
+    def test_a_turn_with_no_actions_says_nothing_about_them(self):
+        """No empty clause. "0 actions ready" on every energy answer is noise."""
+        llm_cost.begin_turn("no-actions")
+        llm_cost.record("sub_agent", "gpt-5.6-terra",
+                        {"input_tokens": 100, "output_tokens": 10}, 1000.0)
+        steps = O._early_pipeline_steps(
+            [{"tool": "list_energy_anomalies", "output": {"anomalies": [{}] * 9}}])
+        data = next(s for s in steps if s["stage"] == "data")
+        assert "action" not in data["label"]
+        assert data["actions_ready"] == 0
 
     def test_an_asset_question_still_names_the_engine_that_took_it(self):
         route = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "route")

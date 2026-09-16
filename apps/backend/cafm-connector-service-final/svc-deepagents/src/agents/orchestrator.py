@@ -3660,8 +3660,6 @@ class DeepAgentOrchestrator:
         # An asset investigation returns what it WALKED and what it FOUND, not a row list.
         # Without these it reported "1 tool, 0 rows" for a call that examined six sources and
         # produced two pieces of evidence — the same shape of miss as the compliance-only keys.
-        # `actions` is deliberately absent: those are proposals the tool generated, not data it
-        # fetched, and counting them would inflate the figure with its own output.
         "sources", "evidence",                                    # asset investigation
         "rows", "records", "items",                               # generic
     )
@@ -3702,11 +3700,20 @@ class DeepAgentOrchestrator:
                 if isinstance(tc, dict)
                 and not str(tc.get("tool", "")).startswith(("phase2_engine:", "compliance_"))
             ]
+            # Counted apart from rows, and shown apart. An action is something the tool
+            # PROPOSES — expedite this order, claim this credit — not a record it fetched, so
+            # folding it into the row count would mean "12 rows" included one thing nobody
+            # retrieved. Reported in its own clause instead: the figure keeps meaning records,
+            # and the actions waiting on a decision are visible rather than buried.
+            actions = 0
             rows = 0
             for tc in tool_calls:
                 out_ = tc.get("output") if isinstance(tc, dict) and isinstance(tc.get("output"), dict) else {}
                 # Row lists sit at the top level or one level down (the coverage tool nests
                 # its per-scope report under "buildings" / "vendors").
+                acts = out_.get("actions")
+                if isinstance(acts, list):
+                    actions += len(acts)
                 for key in cls._ROW_KEYS:
                     v = out_.get(key)
                     if isinstance(v, list):
@@ -3721,7 +3728,10 @@ class DeepAgentOrchestrator:
                     "label": (
                         f"Fetched the data — {len(tools)} tool{'s' if len(tools) != 1 else ''}, "
                         f"{rows} row{'s' if rows != 1 else ''}"
+                        + (f", {actions} action{'s' if actions != 1 else ''} ready"
+                           if actions else "")
                     ),
+                    "actions_ready": actions,
                     "detail": ", ".join(tools),
                     **cls._step_cost("sub_agent"),
                 }
