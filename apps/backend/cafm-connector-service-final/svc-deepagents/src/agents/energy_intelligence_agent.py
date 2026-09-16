@@ -1106,10 +1106,76 @@ async def consumption_by_asset(category: str | None = None, days: int = 90,
     except Exception as exc:
         return _err(exc, "consumption_by_asset")
 
+
+@tool
+async def investigate_asset(asset_id: str) -> dict:
+    """E — Why is THIS asset costing what it is, and what should be done. The Investigate view.
+
+    Takes an asset id or the CODE a person says ("ACS-DL-07", "CHILLER-101").
+
+    This is the tool for a compound question about ONE asset — "why is CHILLER-101 showing a
+    single-asset spike and what do I do about it?". Do not assemble that answer yourself from
+    separate calls: this walks all six sources in one pass and, crucially, reports the ones that
+    returned NOTHING.
+
+    Returns:
+
+      sources          each source walked, what it was asked, and what it gave back
+      sources_found    how many produced evidence
+      sources_missing  which produced none — bms_trend, weather, work_order, document
+      evidence         statements with a confidence each
+      conclusion       cause, cost_to_date, cost_annualised
+      actions          what may be raised, already shaped for the decision queue
+
+    **A missing source is a finding, not a gap in the search.** A condenser-clean report the
+    contract requires and nobody filed is itself the answer, and it carries full confidence
+    because nothing is inferred from it. Report `sources_missing` explicitly — an answer that
+    quietly omits them implies six sources agreed when one spoke.
+
+    Where the evidence is thin, say so and let the actions ask the people who were on site.
+    `conclusion.cause` of "the records this asset should carry are not on file" is a real
+    finding about record-keeping, not a failure to answer — do not dress it up as a plant
+    diagnosis.
+
+    Coverage is uneven and the honest answer depends on it. chiller_performance_readings and
+    bms_trends carry asset links that are not in the asset register, so telemetry-based causes
+    (COP fell, condenser approach temperature rose) are NOT available for any asset today.
+    Assets with real work-order and PPM history — ACS-DL-02, ACS-DL-07, ACS-DL-010 — support a
+    maintenance-history answer. Never narrate a COP trend the readings cannot support.
+    """
+    try:
+        resp = await _request("GET", _base(), f"/api/energy/assets/{asset_id}/investigate",
+                              service=_SERVICE, timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "investigate_asset")
+
+
+@tool
+async def get_asset_intelligence(asset_id: str) -> dict:
+    """E — One asset: its section, its vendor, what its deviation costs, its latest readings
+    against their bands, and a failure assessment.
+
+    The assessment is a NAMED RULE over recorded signals, not a fitted model. It carries no
+    accuracy, precision or recall, and the payload says so. Do not present it as a prediction
+    with implied statistical backing — say which rule fired and on what.
+
+    Use `investigate_asset` for "why is it costing this and what do I do"; use this for "what
+    is the state of this asset".
+    """
+    try:
+        resp = await _request("GET", _base(), f"/api/energy/assets/{asset_id}/intelligence",
+                              service=_SERVICE, timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_asset_intelligence")
+
 ENERGY_INTELLIGENCE_TOOLS = [
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,
     consumption_by_asset,
+    investigate_asset,
+    get_asset_intelligence,
     get_operating_hours,
     get_market_profiles,
     list_energy_buildings,

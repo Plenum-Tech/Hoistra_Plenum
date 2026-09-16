@@ -197,6 +197,34 @@ A rough decomposition of the gap: anomaly headline (from `get_anomaly_rollup`) o
 reference gives the share that is actionable now. The remainder is structural — plant age, hours,
 fabric — and does not move when the anomalies are fixed. Say which part is which.
 
+### One asset, asked why — use `investigate_asset`
+
+"Why is CHILLER-101 showing a single-asset spike worth £28,000 a year, and what should I do?" is
+one call, not six. `investigate_asset(asset_id)` takes the code a person says, walks every
+source, and returns `sources`, `sources_found`, **`sources_missing`**, `evidence` (each with a
+confidence), `conclusion` (cause, cost to date, cost annualised) and `actions` already shaped for
+the decision queue. Nothing is written — every action comes back as a proposal.
+
+**Report `sources_missing` explicitly.** A condenser-clean report the contract requires and
+nobody filed is a finding, not a gap in the search, and it carries full confidence because
+nothing is inferred from it. An answer that quietly drops the empty sources implies six agreed
+when one spoke.
+
+**Do not narrate telemetry this estate cannot support.** `chiller_performance_readings` and
+`bms_trends` carry asset links that are not in the register — 2,160 chiller readings and 16,128
+BMS rows, none attributable to a real asset — so "COP fell from 4.1 to 3.2" and "condenser
+approach temperature rose" are **not available for any asset today**. Saying them would be
+invention with a decimal point on it.
+
+What is available: work-order and PPM history (ACS-DL-02, ACS-DL-07, ACS-DL-010 have real
+records), anomalies, consumption where sub-metered, and vendor performance. A conclusion of
+*"the records this asset should carry are not on file"* is a real finding about record-keeping —
+report it as that, not as a plant diagnosis, and let the actions ask the people who were on site.
+
+`get_asset_intelligence` is the neighbouring tool for "what is the state of this asset". Its
+failure assessment is a **named rule over recorded signals, not a fitted model** — it carries no
+accuracy or recall, so say which rule fired rather than implying a prediction.
+
 ### An asset id is not always an asset
 
 19 of the 26 assets carrying anomalies are **not in the asset register** — the `asset_id` points

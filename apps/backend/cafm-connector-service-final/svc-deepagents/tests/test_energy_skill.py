@@ -154,3 +154,28 @@ class TestTheConclusionMustFollowTheEvidence:
 
     def test_it_forbids_an_action_with_nothing_in_it(self):
         assert "Do not propose an action with nothing in it" in SKILL
+
+
+class TestTheAssetInvestigation:
+    """A compound question about ONE asset is one call. The engine already walked six sources
+    and reported the empty ones; deep-agents simply had no tool for it."""
+
+    def test_the_tools_are_registered(self):
+        assert "investigate_asset" in tool_names()
+        assert "get_asset_intelligence" in tool_names()
+
+    def test_the_skill_requires_reporting_the_missing_sources(self):
+        assert "sources_missing" in SKILL
+        assert "finding, not a gap in the search" in SKILL
+
+    def test_it_forbids_narrating_telemetry_that_does_not_exist(self):
+        """chiller_performance_readings and bms_trends carry asset links that are not in the
+        register, so a COP trend is invention however plausible it reads."""
+        low = SKILL.lower()
+        assert "cop fell" in low and "not available for any asset today" in low
+
+    def test_it_says_a_missing_record_is_a_record_finding(self):
+        assert "not as a plant diagnosis" in SKILL
+
+    def test_the_failure_assessment_is_not_sold_as_a_model(self):
+        assert "not a fitted model" in SKILL

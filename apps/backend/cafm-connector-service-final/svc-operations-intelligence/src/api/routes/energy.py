@@ -845,6 +845,14 @@ async def asset_intelligence(
     The assessment is a named rule over recorded signals, not a fitted model. It carries no
     accuracy, precision or recall, and says why.
     """
+    # An asset CODE is what a person says. Unresolved it reached the engine as a literal
+    # "ACS-DL-07", matched no row, and came back ok=False — the fourth identifier on this
+    # service to fail that way, after building, asset and meter on the anomaly list.
+    try:
+        asset_id = await anom_svc.resolve_asset(session, asset_id) or asset_id
+    except anom_svc.UnknownAsset as exc:
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "reason": "unknown_asset", "error": str(exc)}) from exc
     ids = await position_svc.building_ids_for(session, s, None)
     out = await ai_svc.asset_detail(session, asset_id=asset_id, building_ids=ids)
     if not out.get("ok"):
@@ -1591,6 +1599,14 @@ async def investigate_asset(
     404 if the asset is not in your buildings — the same answer as an asset that does not
     exist.
     """
+    # Resolved first: an asset CODE ("ACS-DL-07", "CHILLER-101") is what a person says, and
+    # unresolved it reached the engine as a literal and came back ok=False — which this route
+    # then reported as "no such asset in your buildings", about an asset that exists.
+    try:
+        asset_id = await anom_svc.resolve_asset(session, asset_id) or asset_id
+    except anom_svc.UnknownAsset as exc:
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "reason": "unknown_asset", "error": str(exc)}) from exc
     ids = await position_svc.building_ids_for(session, s, None)
     out = await inv_svc.investigate(session, asset_id=asset_id, building_ids=ids)
     if not out.get("ok"):
