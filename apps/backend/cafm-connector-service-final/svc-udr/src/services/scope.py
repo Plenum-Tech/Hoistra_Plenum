@@ -82,6 +82,33 @@ UNSCOPED_WITH_FK_ROUTE: dict[str, tuple[str, str, str]] = {
     "work_order_businesses":  ("vendor_id", "vendors", ORG_COLUMN),
 }
 
+#: Never readable or writable through this service, by anyone, superadmin included.
+#:
+#: These are not "unscoped tables we have not got to yet" — scoping them is the wrong frame.
+#: They hold live credentials and bearer-equivalent tokens, and the Universal Database Reader is
+#: reachable at /backend/udr/ from the public internet and driven by an agent that composes its
+#: own queries from a user's sentence. There is no question about a building or a work order
+#: whose answer requires a one-time passcode, so the honest setting is off.
+#:
+#: Counted on the live database when this was written: auth_otp_codes 9 rows, auth_sessions 183,
+#: approval_action_tokens 154 — every one of them readable by an administrator of any company
+#: before this list existed.
+#:
+#: A denied table has no view in plenum_scoped either, so caller-supplied SELECT naming one
+#: fails to resolve rather than falling back to the base table.
+DENIED_TABLES: frozenset[str] = frozenset({
+    "auth_otp_codes",          # one-time passcodes; production sign-in is OTP-only
+    "auth_sessions",           # live session records
+    "auth_role_changes",       # audit of privilege changes
+    "approval_action_tokens",  # single-use tokens that authorise an approval by possession
+})
+
+
+def is_denied(table: str) -> bool:
+    """Whether this table is closed to the Universal Database Reader entirely."""
+    return table.strip().lower() in DENIED_TABLES
+
+
 #: table name -> the scope columns it actually has. Filled on first use per table.
 #: Module level, like the shape caches in the other services: the schema does not change
 #: between requests, and re-reading information_schema per row read is a needless round trip.
@@ -262,6 +289,7 @@ def session_settings(principal: Principal | None) -> list[tuple[str, str]]:
 
 
 __all__ = [
+    "DENIED_TABLES",
     "SCOPED_SCHEMA",
     "SETTING_BUILDINGS",
     "SETTING_ORG",
@@ -274,6 +302,7 @@ __all__ = [
     "UNSCOPED_WITH_FK_ROUTE",
     "combine",
     "describe",
+    "is_denied",
     "predicate",
     "predicate_for",
     "reset_cache",

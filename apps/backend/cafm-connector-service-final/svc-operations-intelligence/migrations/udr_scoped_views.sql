@@ -61,6 +61,12 @@ BEGIN
         SELECT table_name
           FROM information_schema.tables
          WHERE table_schema = 'plenum_cafm'
+           -- Closed to the Universal Database Reader entirely: live credentials and
+           -- bearer-equivalent tokens. Building no view is the enforcement for caller-supplied
+           -- SELECT — naming one fails to resolve rather than reaching the base table. Must
+           -- stay in step with DENIED_TABLES in svc-udr/src/services/scope.py.
+           AND table_name NOT IN ('auth_otp_codes', 'auth_sessions',
+                                  'auth_role_changes', 'approval_action_tokens')
          ORDER BY table_name
     LOOP
         SELECT bool_or(column_name = 'organization_id'),

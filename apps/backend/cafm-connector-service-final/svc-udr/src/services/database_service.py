@@ -38,6 +38,19 @@ _SCOPED_VIEWS_PRESENT = False
 SCHEMA = settings.db_schema
 
 
+def _assert_not_denied(table: str) -> None:
+    """Refuse a table that is closed to this service outright.
+
+    Called from _validate_ident so it covers every route at once — read, search, get, create,
+    update and delete all pass a table name through there, and a guard added per method is a
+    guard the next method forgets."""
+    if scope.is_denied(table):
+        log.warning("db.security.denied_table", table=table)
+        raise UnsafeQueryError(
+            f"The table {table!r} is not available through the Universal Database Reader."
+        )
+
+
 def _validate_ident(name: str) -> str:
     if not _SAFE_IDENT.match(name):
         log.warning(
@@ -142,9 +155,12 @@ class DatabaseService:
             """),
             {"schema": SCHEMA},
         )
+        # Denied tables are not listed either. Leaving them in the catalogue only invites the
+        # agent to name one and be refused, and the refusal itself confirms the table exists.
         tables = [
             {"table": r.table_name, "row_estimate": int(r.row_estimate)}
             for r in result
+            if not scope.is_denied(r.table_name)
         ]
         log.info("db.list_tables.done", schema=SCHEMA, table_count=len(tables))
         return tables
@@ -633,6 +649,9 @@ class DatabaseService:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     async def _assert_table_exists(self, table: str) -> None:
+        # Before the existence check, not after: a denied table must not be distinguishable
+        # from a missing one, and every read and write path already funnels through here.
+        _assert_not_denied(table)
         result = await self._db.execute(
             text("""
                 SELECT 1

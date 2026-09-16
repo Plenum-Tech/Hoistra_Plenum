@@ -223,3 +223,53 @@ class TestTheDescriptionReturnedToTheCaller:
         assert scope.describe(who(role="superadmin"), ORG_ONLY)["reason"] == "superadmin"
         assert scope.describe(who(), NEITHER)["reason"] == "no_scope_column_on_table"
         assert scope.describe(None, ORG_ONLY)["reason"] == "no_principal"
+
+
+class TestTablesThatAreClosedEntirely:
+    """Scoping is the wrong frame for a few tables. They hold live credentials and
+    bearer-equivalent tokens, and UDR is reachable from the public internet and driven by an
+    agent that writes its own SQL from a user's sentence. No question about a building needs a
+    one-time passcode, so the setting is off rather than narrow.
+
+    Counted on the live database: auth_otp_codes 9 rows, auth_sessions 183,
+    approval_action_tokens 154 — all readable by an administrator of any company before this."""
+
+    def test_the_credential_tables_are_denied(self):
+        for t in ("auth_otp_codes", "auth_sessions", "approval_action_tokens",
+                  "auth_role_changes"):
+            assert scope.is_denied(t), t
+
+    def test_ordinary_tables_are_not(self):
+        for t in ("buildings", "assets", "vendors", "work_orders", "countries"):
+            assert not scope.is_denied(t), t
+
+    def test_the_check_is_not_defeated_by_case_or_padding(self):
+        assert scope.is_denied("AUTH_OTP_CODES")
+        assert scope.is_denied("  auth_sessions  ")
+
+    def test_denial_does_not_depend_on_who_is_asking(self):
+        """A superadmin is unrestricted for scoping and still cannot read these. The two are
+        different questions: 'whose rows' versus 'may this be read through here at all'."""
+        assert scope.is_denied("auth_otp_codes")  # no principal is consulted at all
+
+
+class TestTheDeniedListIsTheSameInBothPlaces:
+    """The list lives twice: in Python, which guards the structured routes, and in the
+    migration, which decides whether a view is built for caller-supplied SELECT. If they drift,
+    one route silently reopens — so the drift is what this test fails on."""
+
+    def test_the_migration_excludes_exactly_the_denied_tables(self):
+        import pathlib
+        import re as _re
+        sql = pathlib.Path(__file__).resolve().parents[3] / (
+            "svc-operations-intelligence/migrations/udr_scoped_views.sql")
+        if not sql.exists():
+            import pytest as _pytest
+            _pytest.skip(f"migration not found at {sql}")
+        text_ = sql.read_text(encoding="utf-8")
+        block = _re.search(r"table_name NOT IN \(([^)]*)\)", text_, _re.S)
+        assert block, "the migration no longer excludes any table — the deny list is not applied"
+        in_sql = set(_re.findall(r"'([a-z_]+)'", block.group(1)))
+        assert in_sql == set(scope.DENIED_TABLES), (
+            f"only in SQL: {in_sql - set(scope.DENIED_TABLES)}; "
+            f"only in Python: {set(scope.DENIED_TABLES) - in_sql}")
