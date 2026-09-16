@@ -660,8 +660,33 @@ async def list_invoices(
                i.status,
                i.matched_count,
                i.flagged_count,
+               -- What is actually in dispute, as opposed to what the invoice came to.
+               --
+               -- A flagged LINE is not a flagged AMOUNT: delta_gbp is the gap between what was
+               -- billed and what the contract allows, not the line total. On 16 Sep 2026 an
+               -- invoice of GBP 6,353.70 with all 23 lines flagged was reported to a user as
+               -- "the full amount remains a claim"; the claimed gap was GBP 3,031.59 and the
+               -- Adversary had agreed GBP 1,644.46. Nearly two thirds of that invoice was never
+               -- in dispute, and the figure a PM would have put to the vendor was 3.9x too high.
+               --
+               -- The header carried no way to know that, so the agent reached for the only
+               -- number it had. These two columns are that way: claimed, and confirmed.
+               -- Left NULL rather than COALESCEd to 0: an invoice whose lines were never
+               -- loaded joins to nothing, and "we have no line detail" must not arrive
+               -- looking like "nothing is in dispute".
+               d.flagged_delta,
+               d.agreed_delta,
                i.created_at
           FROM plenum_cafm.invoices i
+          LEFT JOIN (
+              SELECT iv.invoice_ref,
+                     SUM(l.delta_gbp) FILTER (WHERE l.match_status = 'flagged')  AS flagged_delta,
+                     SUM(l.delta_gbp) FILTER (WHERE l.adversary_agreed IS TRUE)  AS agreed_delta
+                FROM plenum_cafm.invoice_verifications iv
+                JOIN plenum_cafm.invoice_lines l
+                  ON l.invoice_verification_id = iv.id
+               GROUP BY iv.invoice_ref
+          ) d ON d.invoice_ref = i.invoice_ref
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = i.building_id
           -- vendors.id is a uuid on one deployment and a VARCHAR on another, while an
           -- invoice always names its vendor as a uuid. Compared as text the join works on
@@ -694,6 +719,8 @@ async def list_invoices(
     for r in rows:
         d = dict(r)
         d["amount"] = float(d["amount"]) if d.get("amount") is not None else None
+        for money in ("flagged_delta", "agreed_delta"):
+            d[money] = float(d[money]) if d.get(money) is not None else None
         # An invoice the graph could not place. Said plainly, because "no building" and
         # "not this building" read identically to a caller filtering by name.
         d["building_link"] = "placed" if d.get("building_id") else "unplaced"

@@ -18,6 +18,16 @@ export function domainOf(calls) {
   const names = (calls || []).map((t) => String(t || "").toLowerCase());
   const has = (re) => names.some((n) => re.test(n));
   if (!names.length) return "Orchestrator";
+  // The engine that ran, when it said so, beats guessing from tool names. The vendor engine
+  // emits `compliance_response` because that is the name the answer renderer matches on — so
+  // every vendor answer was being badged Compliance, and the trace beside it said
+  // contract_performance. The wrapper is the authority; the ladder below is the fallback.
+  const engine = names.find((n) => n.startsWith("phase2_engine:"));
+  if (engine) {
+    if (engine.includes("contract_performance")) return "Vendors";
+    if (engine.includes("energy")) return "Energy";
+    if (engine.includes("compliance")) return "Compliance";
+  }
   if (has(/compliance|certificate|accreditation|country_pack/)) return "Compliance";
   if (has(/energy|meter|anomal|eui|tm46/)) return "Energy";
   if (has(/contract|scorecard|invoice|vendor/)) return "Vendors";

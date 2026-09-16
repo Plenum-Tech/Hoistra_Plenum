@@ -43,7 +43,11 @@ from langgraph.errors import GraphInterrupt
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
-from ..config import DEFAULT_COMPLIANCE_SUMMARY_MODEL, settings
+from ..config import (
+    DEFAULT_COMPLIANCE_SUMMARY_MODEL,
+    DEFAULT_CONTRACT_ANALYST_MODEL,
+    settings,
+)
 from ..llm_factory import create_chat_model, friendly_openai_error
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
@@ -148,6 +152,7 @@ from .agent_router import as_phase2_engine, select_agent
 from .compliance_facts import compute_pack_facts
 from .compliance_router import compliance_skill_path_enabled
 from . import activity_log
+from . import contract_answer
 from . import llm_cost
 from .skills import prompt_doc
 from .system_prompt import build_system_prompt
@@ -5868,6 +5873,20 @@ class DeepAgentOrchestrator:
                 }
         return analysis, steps
 
+    @staticmethod
+    def _contract_analyst_model() -> str:
+        """The model that writes the vendor answer.
+
+        Separate from the compliance analyst on purpose: that one runs opus and a compliance
+        turn costs about a quarter of a dollar, which is the right trade for statutory exposure
+        and the wrong one for a scorecard question asked twenty times a day. Defaults to sonnet;
+        CONTRACT_ANALYST_MODEL overrides, and pointing it at the compliance model buys
+        compliance-grade answers at compliance-grade prices.
+        """
+        import os
+
+        return os.getenv("CONTRACT_ANALYST_MODEL", "").strip() or DEFAULT_CONTRACT_ANALYST_MODEL
+
     async def _invoke_phase2_engine(
         self,
         *,
@@ -6172,6 +6191,27 @@ class DeepAgentOrchestrator:
                         chars=len(revised),
                     )
 
+        # The vendor engine's answer pass. The sub-agent gathered rows and wrote prose; an
+        # analyst now rewrites it from those rows into zones, code strips anything they do not
+        # support, and the result is emitted under the two names the interface draws cards
+        # from. Compliance has had this since it shipped; contract_performance answered in a
+        # paragraph with nothing between the model and the reader.
+        #
+        # Every failure is soft on purpose: no rows, a refused model, unparsable JSON — the
+        # prose answer stands. A worse answer beats no answer, and half a card set beats
+        # neither.
+        if engine == "contract_performance":
+            answer, inner_tool_calls, _meta = await contract_answer.compose(
+                question=user_message,
+                answer=str(answer or ""),
+                tool_calls=inner_tool_calls,
+                api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
+                model=self._contract_analyst_model(),
+                session_id=session_id,
+                cost=(llm_cost.current().log_summary(user_message)
+                      if llm_cost.current() else None),
+            )
+
         # Parse synthetic tool record so FE route_metadata shows the engine
         out = {
             "session_id": session_id,
@@ -6261,6 +6301,21 @@ class DeepAgentOrchestrator:
 
         tool_calls = _extract_tool_calls(messages)
         answer = _extract_answer(messages)
+        # The general path reaches the vendor tools too — the meta agent hands the question to
+        # the contract sub-agent through `task` whenever the keyword table missed. Composing
+        # here as well is what stops the same question answering in cards or in prose depending
+        # on which words it happened to contain. No vendor rows in the turn: nothing happens.
+        if interrupt_payload is None:
+            answer, tool_calls, _ = await contract_answer.compose(
+                question=_latest_user_message(input_),
+                answer=str(answer or ""),
+                tool_calls=tool_calls,
+                api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
+                model=self._contract_analyst_model(),
+                session_id=session_id,
+                cost=(llm_cost.current().log_summary(_latest_user_message(input_))
+                      if llm_cost.current() else None),
+            )
         if has_udr_tool_calls(tool_calls) and interrupt_payload is None:
             answer, _ = await evaluate_udr_response(
                 user_message=_latest_user_message(input_),

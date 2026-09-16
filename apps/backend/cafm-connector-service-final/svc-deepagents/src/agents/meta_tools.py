@@ -49,6 +49,45 @@ COMPLIANCE_SUBAGENT_PROMPT = prompt_doc("compliance", "tool-routing")
 status word means. Loaded between the shared query-builder discipline and the compliance
 skill, where it keeps precedence on tool choice while the skill supplies the data layer."""
 
+
+#: skills/contract-performance/*.md, in the order the model reads them.
+#:
+#: Compliance splits its documents across the pipeline stages that use them — the analyst gets
+#: `answering`, the reviewer gets `review` and `scope-eval`. The vendor agent has neither stage:
+#: it chooses its own tools AND writes the final answer, so the whole discipline has to reach
+#: the sub-agent itself or it reaches nobody.
+#:
+#: Named rather than globbed. A document added to the directory should be a deliberate decision
+#: to put it in front of the model, not something that happens because a file appeared; and
+#: prompt_doc raises on a missing or empty file, so a renamed document breaks startup instead of
+#: quietly dropping the rule it carried. skills.py only globs `*/SKILL.md`, which is why these
+#: siblings sat unread until they were named here.
+#:
+#: NOTE the hyphen: the agent id is `contract_performance`, the directory is
+#: `contract-performance`, and prompt_doc takes the directory. Compliance hides that difference
+#: because both of its names are the same word.
+CONTRACT_SUBAGENT_DOCS = (
+    "vocabulary",
+    "tables",
+    "tool-selection",
+    "scoring",
+    "contract-terms",
+    "domain_contract_knowledge",
+    "answering",
+    "recipes",
+    "cross-domain",
+    "review",
+    "never",
+)
+
+CONTRACT_SUBAGENT_PROMPT = "\n\n---\n\n".join(
+    prompt_doc("contract-performance", _name) for _name in CONTRACT_SUBAGENT_DOCS
+)
+"""The vendor agent's discipline: vocabulary, the data layer and what it cannot read, tool
+choice and the name-to-id problem, how a score is built, how to rank, how to write the answer,
+how to check it, and the hard prohibitions. Loaded between the shared query-builder discipline
+and skills/contract-performance/SKILL.md."""
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Session context — set by orchestrator before each ainvoke call so that temp
 # files and memory entries are automatically namespaced per session.
@@ -312,7 +351,9 @@ class _TaskRunner:
             "contract_performance": create_react_agent(
                 llm,
                 tools=[*CONTRACT_PERFORMANCE_TOOLS],
-                prompt=agent_system_prompt("contract_performance"),
+                prompt=agent_system_prompt(
+                    "contract_performance", extra=CONTRACT_SUBAGENT_PROMPT
+                ),
             ),
             "energy_intelligence": create_react_agent(
                 llm,

@@ -27,6 +27,14 @@ _ENV_FILE = _find_env_file()
 #: is never exercised still decides what happens the day the variable is unset.
 DEFAULT_COMPLIANCE_SUMMARY_MODEL = "claude-sonnet-5"
 
+#: The model the vendor/contract analyst writes its answer zones with when the environment
+#: does not name one. Kept separate from the compliance default above because the two are
+#: different decisions: this one runs on every vendor question a property manager asks, so
+#: pointing it at the dearer model buys compliance-grade answers at compliance-grade prices.
+#: Declared here rather than inline for the reason the note above gives — a fallback nobody
+#: exercises still decides what happens the day the variable is unset.
+DEFAULT_CONTRACT_ANALYST_MODEL = "claude-sonnet-5"
+
 
 class Settings(BaseSettings):
     # Database

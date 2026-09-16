@@ -141,7 +141,13 @@ export const renderValsMethods = {
     // The pages that render the live orchestrator transcript: the dock pages (in their dock)
     // and the chat page (as the page). Home is a dock page too, but it has no dock until a
     // question or a carried-over task opens one, so it only counts once that has happened.
-    const chatView = ["cc", "chat", "vp", "buildings"].indexOf(s.view) > -1 || (s.view === "home" && !!s.orchOpen);
+    //
+    // The dock pages are read from the controller's own dockAnswers() rather than listed
+    // again here. They used to be two lists, and they drifted: dockAnswers() counted the
+    // Energy module page and this one did not, so a question asked on Energy ran, opened the
+    // dock, and then rendered the legacy task panel — orchStepsShow below is the exact
+    // inverse of orchChatShow — leaving an answer that had been produced nowhere on screen.
+    const chatView = this.dockAnswers() || s.view === "chat" || (s.view === "home" && !!s.orchOpen);
     // The chat page carries the run in its trace rail, so an answer's own copy of the steps
     // starts collapsed there. The console's dock has no rail and keeps it open.
     const stepsDefault = s.view !== "chat";
@@ -2554,7 +2560,10 @@ export const renderValsMethods = {
           if (modKey === "assets" && this.asCondSetFilter) this.asCondSetFilter(f);
         }
       })) : [],
-      modAsks: mod ? mod.asks.map((a) => ({ label: a, run: () => this.ask(a) })) : [],
+      // askScoped, never ask() directly: a suggested question is the same question the bar
+      // above it sends, so it must land in the same place. Calling ask() here sent it to the
+      // seed answer page and took the whole screen over, on pages whose own ask bar docked.
+      modAsks: mod ? mod.asks.map((a) => ({ label: a, run: () => this.askScoped(a) })) : [],
       modBars: this.bars(modKey).map((b) => Object.assign({ groupShow: "none", rowShow: "flex", invShow: "none", group: "", groupMeta: "", investigate: null }, b)),
       modRows: this.rows(modKey, s.filter).map((r) => Object.assign({ groupShow: "none", rowShow: "table-row", invShow: "none", group: "", groupMeta: "", groupSum: "", investigate: null }, r)),
       modInvHead: modKey === "energy" ? "table-cell" : "none",
@@ -2585,8 +2594,10 @@ export const renderValsMethods = {
     if (mod) {
       const en = modKey === "energy" ? this.enVals(s) : null;
       if (en) {
-        vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
-        vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.ask(a) }));
+        // Same rule as the general chips above — the energy page swaps in its own scoped
+        // questions, not a different destination for them.
+        vals.modAsks = en.enAsks.map((a) => ({ label: a, run: () => this.askScoped(a) }));
+        vals.abChips = en.enAsks.map((a) => ({ label: a, run: () => this.askScoped(a) }));
       }
       if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s));
       if (modKey === "ops") {

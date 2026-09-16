@@ -7,6 +7,7 @@
 // nothing is asserted without disclosure.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { MODULES } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
 import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
@@ -516,6 +517,13 @@ export function overdueBars(certificates, register) {
 // the compliance console. The chat page is reached from a space's ask bar and by reopening
 // a conversation from the sessions list.
 export const DOCK_VIEWS = ["cc", "vp", "buildings"];
+//: The modules whose page answers beside itself instead of handing the screen over to the
+//: conversation. They share one view name ("module"), so they cannot live in DOCK_VIEWS.
+//: These are MODULES keys, not page titles: Maintenance is keyed "ops". Naming it by its
+//: title silently matched nothing, and the page went on handing the screen to the seed
+//: answer view — a test that invents the key passes while the app stays broken, so
+//: moduleDock.test.mjs checks every entry here against MODULES itself.
+export const DOCK_MODULES = ["energy", "assets", "ops"];
 // Home is deliberately not a dock view: a question from the hero bar (or "+ New query") is the
 // main orchestrator's and answers on the chat page. The dock on Home is only what the top-bar
 // icon opens beside the tiles.
@@ -589,16 +597,24 @@ export const complianceLiveMethods = {
   // buildings page keep their side dock (DOCK_VIEWS) so the data stays in view beside the
   // answer; home and the chat page make the conversation the page.
   // A space's ask bar starts a conversation filed in that space, so it is a chat view too.
-  // The Energy module keeps its own side dock too — same reason as Buildings: the scope
-  // chips, ratings and building list stay in view beside the answer. It is a module page
-  // (view "module", not its own view name), so it is checked alongside DOCK_VIEWS rather
-  // than added to it.
+  // Energy, Assets and Maintenance keep their own side dock too — same reason as Buildings:
+  // the figures the question is about stay in view beside the answer. All three are served by
+  // the Module screen (view "module", not a view name of their own), so they are named by
+  // module here and checked alongside DOCK_VIEWS rather than added to it.
+  isModuleDock() { return this.state.view === "module" && DOCK_MODULES.indexOf(this.state.module) > -1; },
+  //: Energy alone, for the context block that describes EUI and anomaly figures. Firing that
+  //: for Assets would tell the orchestrator about a page the reader is not looking at.
   isEnergyDock() { return this.state.view === "module" && this.state.module === "energy"; },
-  chatView() { return this.isEnergyDock() || ["cc", "home", "chat", "space"].concat(DOCK_VIEWS).indexOf(this.state.view) > -1; },
+  chatView() { return this.isModuleDock() || ["cc", "home", "chat", "space"].concat(DOCK_VIEWS).indexOf(this.state.view) > -1; },
   // Where the answer lands: the dock on the dock pages (Home included), the chat page
   // everywhere else. A task carried onto a dock page (the Hoist a building form, say) stays
   // in view and the question is answered beside it.
-  dockAnswers() { return this.isEnergyDock() || DOCK_VIEWS.indexOf(this.state.view) > -1; },
+  //
+  // renderVals reads THIS rather than keeping a list of its own. The two were separate, and
+  // they drifted: this counted the Energy module page, that one did not, so a question asked
+  // there ran and opened the dock while the dock rendered the legacy task panel — the answer
+  // had been produced and was simply never on screen.
+  dockAnswers() { return this.isModuleDock() || DOCK_VIEWS.indexOf(this.state.view) > -1; },
   askScoped(q) {
     if (this.chatView()) return this.ccAsk(q);
     return this.ask(q);
@@ -661,6 +677,29 @@ export const complianceLiveMethods = {
       }
       const sc = this.enScope(s);
       if (!sc.isAll) parts.push("Scope filter — " + sc.sel.join(", ") + ".");
+      return parts.join(" ");
+    }
+    // The other module pages that answer in their own dock. Without this they fell through to
+    // the generic context and the answer was written as if the reader were nowhere in
+    // particular — a dock that answers beside the figures should know which figures.
+    if (this.isModuleDock()) {
+      const mod = MODULES[s.module];
+      const parts = ["The user is on the Hoistra " + ((mod && mod.name) || s.module) + " module page."];
+      if (s.module === "assets") {
+        const assets = s.asLive || [];
+        const wos = s.asLiveWos || [];
+        parts.push(assets.length || wos.length
+          ? "Live from svc-work-order-management: " + assets.length + " assets and " + wos.length +
+            " work orders on record."
+          : s.asLiveError
+            ? "The asset register did not load (" + String(s.asLiveError).slice(0, 120) + "), so the page is empty."
+            : "The asset register has not loaded from the backend yet.");
+      } else if (s.module === "ops") {
+        parts.push(this.mxIsLive()
+          ? "The maintenance register is live from svc-work-order-management."
+          : "The maintenance register has not loaded from the backend yet.");
+      }
+      if (s.filter && s.filter !== "All") parts.push("Current filter — " + s.filter + ".");
       return parts.join(" ");
     }
     if (s.view === "cc") {

@@ -23,9 +23,18 @@ _PRD_COMPLIANCE = (
     "vendor cert, building cert, blocked, vendor accreditation, not on record, remedial, "
     "insurance risk, expired"
 )
+# Everything from "performing" onwards is beyond the PRD's own table, added deliberately on
+# 16 Sep 2026. Measured then: eight of ten questions a property manager actually types matched
+# NOTHING in the PRD list — "performing" is not "performance", and a bare "scorecard",
+# "overcharge" or "capped" was absent — so whenever the reading model could not be asked, those
+# turns fell through to the general orchestrator with every tool bound and came back answered
+# from the certificate register. Each entry is the longer form on purpose ("capped" not "cap",
+# which fires on "capacity"); test_vendor_routing.py pins both the hits and the near-misses.
 _PRD_CONTRACT = (
     "SLA, contractor, performance, KPI, PPM completion rate, vendor score, first fix, "
-    "recall, invoice, overrun, contract breach"
+    "recall, invoice, overrun, contract breach, performing, scorecard, overcharge, "
+    "overbilling, overpay, capped, day rate, hourly rate, labour rate, cost variance, "
+    "contract terms, commit them to, PPM compliance, ppm, trend_delta, trend"
 )
 _PRD_ENERGY = (
     "energy, meter, consumption, kWh, spike, anomaly, EUI, NABERS, carbon, EPC, "
