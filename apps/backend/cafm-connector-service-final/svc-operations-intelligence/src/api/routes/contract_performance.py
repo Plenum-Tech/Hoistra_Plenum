@@ -135,7 +135,9 @@ async def list_contracts(
 async def get_contract(
     parameters_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "contract_sla_parameters", parameters_id)
     return await params_svc.get_contract_parameters(session, parameters_id)
 
 

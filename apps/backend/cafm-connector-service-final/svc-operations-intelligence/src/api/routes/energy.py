@@ -170,7 +170,11 @@ async def list_meter_readings(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    # The meter is named in the path, so there is no list to narrow — the only question is
+    # whether this meter is the caller's. Unasked, any meter id returned its readings.
+    await access.assert_owned(session, s, "energy_meters", meter_id, action="read")
     rows = await meter_svc.list_readings(
         session,
         meter_id=meter_id,
@@ -203,9 +207,14 @@ async def list_meter_gaps(
     status: str | None = Query("open"),
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    if meter_id is not None:
+        await access.assert_owned(session, s, "energy_meters", meter_id, action="read")
     rows = await meter_svc.list_gaps(
-        session, meter_id=meter_id, status=status, limit=limit
+        session, meter_id=meter_id, status=status, limit=limit,
+        organization_id=s.organization_id if not s.is_superadmin else None,
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "gaps": rows}
 
@@ -613,8 +622,10 @@ async def asset_work_history(
     asset_id: str,
     limit: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Every work order recorded against this asset, with what each one was billed."""
+    await access.assert_owned(session, s, "assets", asset_id, action="read")
     return await cost.asset_work_history(session, asset_id, limit=limit)
 
 
@@ -923,7 +934,14 @@ async def monthly_report(
 
 
 @router.get("/reports/{report_id}/pdf")
-async def download_report_pdf(report_id: UUID, session: AsyncSession = Depends(get_session)):
+async def download_report_pdf(
+    report_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    # A report is a building's consumption and spend written out. Served by id alone, any
+    # report id downloaded any company's month.
+    await access.assert_owned(session, s, "energy_monthly_reports", report_id, action="download")
     row = await session.get(EnergyMonthlyReport, report_id)
     if not row or not row.pdf_blob_url:
         raise HTTPException(status_code=404, detail="pdf_not_found")

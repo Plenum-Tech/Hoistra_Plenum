@@ -411,7 +411,11 @@ async def confirm_certificate(
 async def certificate_link_candidates(
     certificate_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    # Named by id, so there is no list to narrow. Unchecked, a certificate id from any
+    # company returned that certificate's candidate vendors, sites and assets.
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
     """Match a certificate's document against the vendor / site / asset tables and return the
     top candidate rows for each (with the currently-linked row flagged). Read-only."""
     cert = await session.get(cert_svc.ComplianceCertificate, certificate_id)
@@ -1073,9 +1077,13 @@ async def list_resource_skills(
     vendor_id: UUID | None = None,
     limit: int = Query(200, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    if vendor_id is not None:
+        await access.assert_owned(session, s, "vendors", vendor_id)
     rows = await skill_svc.list_vendor_operative_skills(
-        session, vendor_id, limit=limit
+        session, vendor_id, limit=limit,
+        organization_id=None if s.is_superadmin else s.organization_id,
     )
     return {"ok": True, "count": len(rows), "skills": rows}
 

@@ -270,6 +270,91 @@ def assert_building(scope: Scope, building_id: UUID | str | None, *, action: str
     return bid
 
 
+#: table -> the scope columns it has, probed once. The schema does not change between
+#: requests, and re-reading information_schema per request is a needless round trip.
+_row_scope_columns: dict[str, frozenset[str]] = {}
+
+
+async def assert_owned(
+    session: Any,
+    scope: Scope,
+    table: str,
+    row_id: UUID | str | None,
+    *,
+    action: str = "read",
+    id_column: str = "id",
+) -> None:
+    """403 unless the row this caller named belongs to them. 404 if it does not exist.
+
+    ``building_filter`` narrows a LIST. It does nothing for a route that takes an id in the
+    path, because there is no list to narrow — the caller has already named the row, and the
+    only question is whether it is theirs. Twenty-three GET routes ask for a row by id and
+    never asked that question, so an id from one company read a row from another:
+
+        GET /api/energy/meters/<any meter id>/readings   -> 584,042 readings, unfiltered
+        GET /api/energy/assets/<any asset id>/work-history
+        GET /api/contract-performance/contracts/<any id>
+
+    The scope columns are read from information_schema rather than declared per table,
+    because the two databases disagree on which tables carry which, and a hardcoded column
+    that is absent on one of them fails as "no restriction" — the wrong direction to fail.
+
+    A row whose table carries no scope column at all cannot be checked here and is allowed
+    through; that is the same decision taken elsewhere for such tables, and the ones that
+    matter (report_card_runs, ingestion_documents) need a join route rather than a column.
+    """
+    if row_id is None or scope.is_superadmin:
+        return
+    if not _SAFE_COLUMN.match(table) or not _SAFE_COLUMN.match(id_column):
+        raise ValueError(f"unsafe identifier: {table!r}.{id_column!r}")
+
+    from sqlalchemy import text  # local: access.py is imported by modules with no ORM need
+
+    columns = _row_scope_columns.get(table)
+    if columns is None:
+        found = await session.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'plenum_cafm' AND table_name = :t "
+                "AND column_name IN ('organization_id', 'building_id')"
+            ),
+            {"t": table},
+        )
+        columns = frozenset(str(r[0]) for r in found)
+        _row_scope_columns[table] = columns
+    if not columns:
+        return
+
+    selected = ", ".join(f'"{c}"::text AS {c}' for c in sorted(columns))
+    row = (
+        await session.execute(
+            text(f'SELECT {selected} FROM plenum_cafm."{table}" WHERE "{id_column}"::text = :rid'),
+            {"rid": str(row_id)},
+        )
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"ok": False, "error": "No such record.", "reason": "not_found"},
+        )
+
+    if "organization_id" in columns and scope.organization_id is not None:
+        if str(row.get("organization_id") or "") != str(scope.organization_id):
+            # 404, not 403: a 403 confirms the row exists and belongs to somebody else, which
+            # is a fact about another company's data and is not ours to disclose.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"ok": False, "error": "No such record.", "reason": "not_found"},
+            )
+
+    if "building_id" in columns and scope.restricted:
+        if not scope.allows_building(row.get("building_id")):
+            raise _forbidden(
+                f"You are not allocated to that building, so you cannot {action} its data.",
+                "building_not_allocated",
+            )
+
+
 def assert_admin(scope: Scope, *, action: str = "do that") -> None:
     """403 unless the caller administers the company. Creating a building is one such
     action: a user is allocated to buildings, they do not make them."""

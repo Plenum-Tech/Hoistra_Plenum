@@ -7,7 +7,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, text
+from sqlalchemy import false as sa_false, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -811,12 +811,32 @@ async def list_gaps(
     meter_id: UUID | None = None,
     status: str | None = "open",
     limit: int = 100,
+    organization_id: UUID | None = None,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
+    """Missing-reading windows. Narrowed to the caller's company and buildings.
+
+    ``organization_id=None`` means unrestricted, so an internal caller and a superadmin keep
+    the cross-company view. ``building_ids`` follows the convention used everywhere here:
+    None is every building, an empty tuple is none.
+    """
     q = select(MeterReadingGap).order_by(MeterReadingGap.gap_start.desc()).limit(limit)
     if meter_id:
         q = q.where(MeterReadingGap.meter_id == meter_id)
     if status:
         q = q.where(MeterReadingGap.status == status)
+    if organization_id is not None:
+        q = q.where(MeterReadingGap.organization_id == organization_id)
+    if building_ids is not None:
+        # A gap names a meter, not a building, so the building is reached through the meter.
+        # An empty allocation must select nothing rather than everything.
+        q = q.where(
+            MeterReadingGap.meter_id.in_(
+                select(EnergyMeter.id).where(EnergyMeter.building_id.in_(list(building_ids)))
+            )
+            if building_ids
+            else sa_false()
+        )
     rows = list((await session.execute(q)).scalars().all())
     return [
         {
