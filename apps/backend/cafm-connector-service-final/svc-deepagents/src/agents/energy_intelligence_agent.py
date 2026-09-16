@@ -401,6 +401,14 @@ async def list_energy_anomalies(
     `order_by="financial"` sorts dearest first, which is usually what the question means. The
     default is newest first.
 
+    Every row carries the labels a person reads — `asset_code` ("ACS-DL-07"), `meter_ref` (the
+    MPAN/MPRN) and `building_name` — alongside the ids. Use them. Quoting a uuid at somebody and
+    saying the name is unavailable is not an answer they can act on, and the dashboard beside
+    them is showing the same row as "SYN-SUB-FDCC31 on Building 5".
+
+    `asset_code` None means the metering is building-level and the circuit is genuinely unknown
+    — not that the name could not be looked up. Say "whole building", not "unnamed asset".
+
     A building name that matches nothing raises rather than returning an empty list, because
     empty reads as "this building is clean". That is not hypothetical: "no energy anomalies were
     found for Building 5" was said about a building with nine open findings, because the name

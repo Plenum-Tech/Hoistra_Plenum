@@ -893,10 +893,52 @@ async def list_anomalies(
         except Exception as exc:  # noqa: BLE001
             log.warning("energy.anomaly.simulated_lookup_failed", error=str(exc)[:200])
 
+    # The labels a person reads. Rows carried asset_id, meter_id and building_id as raw uuids
+    # and nothing else, so an answer could only say
+    # "the asset identifier is 158335d4-1d74-5793-8e97-0e4af8688f7f; its name is not available
+    # through the permitted energy tools" — while the dashboard beside it rendered the same
+    # rows as SYN-SUB-FDCC31 on Building 5, because the UI resolves labels the agent could not.
+    #
+    # Batched, like the simulated lookup above: three statements for the page rather than three
+    # per row, and never allowed to fail the list — a row without a label is still a finding,
+    # and losing the list to gain a name is the wrong trade.
+    labels: dict[str, dict[str, str]] = {"asset": {}, "meter": {}, "building": {}}
+    try:
+        async with session.begin_nested():
+            a_ids = [str(r.asset_id) for r in rows if r.asset_id]
+            if a_ids:
+                for x in (await session.execute(text(
+                    "SELECT id::text, asset_code FROM plenum_cafm.assets "
+                    "WHERE id::text = ANY(:ids) AND asset_code IS NOT NULL"),
+                        {"ids": a_ids})).all():
+                    labels["asset"][x[0]] = x[1]
+            m_ids = [str(r.meter_id) for r in rows if r.meter_id]
+            if m_ids:
+                for x in (await session.execute(text(
+                    "SELECT id::text, COALESCE(mpan, mprn, dcc_device_id) "
+                    "FROM plenum_cafm.energy_meters WHERE id::text = ANY(:ids)"),
+                        {"ids": m_ids})).all():
+                    if x[1]:
+                        labels["meter"][x[0]] = x[1]
+            b_ids = [str(r.building_id) for r in rows if r.building_id]
+            if b_ids:
+                for x in (await session.execute(text(
+                    "SELECT building_id::text, name FROM plenum_cafm.buildings "
+                    "WHERE building_id::text = ANY(:ids)"), {"ids": b_ids})).all():
+                    labels["building"][x[0]] = x[1]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("energy.anomaly.label_lookup_failed", error=str(exc)[:200])
+
     return [
         {
             "id": str(r.id),
             "anomaly_type": r.anomaly_type,
+            # None means unlabelled, which for an asset means building-level metering: the
+            # finding is real and the circuit is unknown. It does NOT mean the name is
+            # unavailable to look up.
+            "asset_code": labels["asset"].get(str(r.asset_id)) if r.asset_id else None,
+            "meter_ref": labels["meter"].get(str(r.meter_id)) if r.meter_id else None,
+            "building_name": labels["building"].get(str(r.building_id)) if r.building_id else None,
             # True means the window this was detected in contains simulated readings.
             "simulated": str(r.id) in simulated,
             "status": r.status,

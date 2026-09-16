@@ -94,3 +94,37 @@ class TestTheRouteReportsAllThree:
         assert "anom_svc.UnknownBuilding" in route
         assert "anom_svc.UnknownAsset" in route
         assert "anom_svc.UnknownMeter" in route
+
+
+class TestRowsCarryTheLabelsAPersonReads:
+    """An anomaly row carried asset_id, meter_id and building_id as raw uuids and nothing else,
+    so the best an answer could manage was "the asset identifier is
+    158335d4-1d74-5793-8e97-0e4af8688f7f; its name is not available through the permitted energy
+    tools" — while the dashboard beside it rendered the same rows as SYN-SUB-FDCC31 on
+    Building 5, because the UI resolves labels the agent could not.
+
+    With labels the two reconcile: 9 anomalies on 3 meters, five of them on ACS-DL-07.
+    """
+
+    def test_the_row_shape_includes_the_labels(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[2]
+               / "src" / "engines" / "energy" / "anomalies.py").read_text(encoding="utf-8")
+        for field in ('"asset_code"', '"meter_ref"', '"building_name"'):
+            assert field in src, field
+
+    def test_the_lookup_is_batched_not_per_row(self):
+        """Three statements for the page, like the simulated lookup. Per row it would be three
+        round trips times the page size."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[2]
+               / "src" / "engines" / "energy" / "anomalies.py").read_text(encoding="utf-8")
+        assert "id::text = ANY(:ids)" in src
+
+    def test_a_failed_lookup_does_not_lose_the_list(self):
+        """A row without a label is still a finding. Losing the list to gain a name is the
+        wrong trade, so the lookup warns and carries on."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[2]
+               / "src" / "engines" / "energy" / "anomalies.py").read_text(encoding="utf-8")
+        assert "energy.anomaly.label_lookup_failed" in src
