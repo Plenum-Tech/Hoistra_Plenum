@@ -10,7 +10,7 @@ from statistics import median
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Text as SAText, cast as sa_cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -800,12 +800,64 @@ async def list_anomalies(
     status: str | None = "open",
     organization_id: UUID | None = None,
     limit: int = 100,
+    building_id: UUID | str | None = None,
+    asset_id: UUID | str | None = None,
+    meter_id: UUID | str | None = None,
+    anomaly_type: str | None = None,
+    min_cost: float | None = None,
+    min_days_active: int | None = None,
+    order_by: str = "detected_at",
 ) -> list[dict[str, Any]]:
-    q = select(EnergyAnomaly).order_by(EnergyAnomaly.detected_at.desc()).limit(limit)
+    """Anomalies, narrowed by any of the dimensions the activity log shows.
+
+    The list used to filter on status alone, so "baseline drift on Town Hall over £5k, active
+    more than ten days" could only be answered by pulling every row and discarding most of them
+    in the caller — which silently caps at `limit` and reports a subset as if it were the
+    answer. Each of these is a column on the row, and belongs in the WHERE clause.
+
+    ``min_days_active`` counts from `window_start` — how long the deviation has persisted, not
+    how long anyone has known about it. An anomaly acknowledged on day one is still active on
+    day twelve.
+
+    ``order_by`` accepts `detected_at` (newest first) or `financial` (dearest first). Money is
+    usually the right order: a 300% spike on a 2 kW circuit sorts above a 20% drift on a chiller
+    by percentage, and below it by anything that matters.
+    """
+    q = select(EnergyAnomaly)
     if status:
         q = q.where(EnergyAnomaly.status == status)
     if organization_id:
         q = q.where(EnergyAnomaly.organization_id == organization_id)
+    # Compared as text on both sides: these keys are uuid in one deployment's schema and
+    # character varying in the other, and an uncast comparison raises rather than returning
+    # nothing — the same mismatch that took /api/assets down.
+    if building_id:
+        q = q.where(sa_cast(EnergyAnomaly.building_id, SAText) == str(building_id))
+    if asset_id:
+        q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText) == str(asset_id))
+    if meter_id:
+        q = q.where(sa_cast(EnergyAnomaly.meter_id, SAText) == str(meter_id))
+    if anomaly_type:
+        # Matched case-insensitively and on the underscored form, so "Baseline drift" as the
+        # UI prints it finds `baseline_drift` as the column holds it.
+        wanted = anomaly_type.strip().lower().replace(" ", "_")
+        q = q.where(func.lower(EnergyAnomaly.anomaly_type) == wanted)
+    if min_cost is not None:
+        q = q.where(EnergyAnomaly.financial_gbp >= min_cost)
+    if min_days_active is not None:
+        # COALESCE, because window_start is NULL on every row in this deployment — only
+        # window_end and detected_at are written. Filtering on window_start alone matched
+        # nothing at any threshold, including one day, while 154 anomalies sat in the table:
+        # an empty list that reads as "none are that old" rather than as "that column is not
+        # populated here". detected_at is when the scan first saw it, which is the honest
+        # answer to "how long has this been active" when the window's start was never stored.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(min_days_active))
+        q = q.where(func.coalesce(EnergyAnomaly.window_start,
+                                  EnergyAnomaly.detected_at) <= cutoff)
+    order = (EnergyAnomaly.financial_gbp.desc().nullslast()
+             if str(order_by).lower().startswith("financ")
+             else EnergyAnomaly.detected_at.desc())
+    q = q.order_by(order).limit(limit)
     rows = list((await session.execute(q)).scalars().all())
 
     # Which of these were detected on a simulated feed. An anomaly reads as a finding about
@@ -863,3 +915,96 @@ async def list_anomalies(
         }
         for r in rows
     ]
+
+
+#: What an anomaly summary may be grouped by. An allow-list, not an f-string of whatever
+#: arrived: this becomes a column name in SQL.
+SUMMARY_GROUPS: dict[str, str] = {
+    "building": "b.name",
+    "type": "a.anomaly_type",
+    "status": "a.status",
+    "asset": "a.asset_id::text",
+}
+
+
+async def summarise_anomalies(
+    session: AsyncSession,
+    *,
+    group_by: str = "building",
+    organization_id: UUID | None = None,
+    building_ids: list[str] | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Counts and totals per building, type, status or asset — in one query.
+
+    "Which building has the most anomalies", "which type dominates", "what is waiting on an
+    action" are questions about the WHOLE table. Answering them by listing rows and counting
+    them in the caller silently truncates at the page size and reports a subset as the answer.
+
+    Three figures per group, and the difference between them matters:
+
+      count    how many findings
+      worst    the largest single finding — the honest headline, same basis as the rollup
+      naive_sum   every finding added together. Detectors overlap, so this DOUBLE COUNTS.
+                  It is returned because leaving it out invites the caller to compute it,
+                  and named so it cannot be mistaken for a total anyone should quote.
+
+    Grouped by currency as well as by the requested dimension, because the estate spans four
+    of them. The two dearest buildings here are in AED and the next in GBP; adding those
+    produces a number in no currency at all.
+    """
+    column = SUMMARY_GROUPS.get(str(group_by).lower())
+    if column is None:
+        raise ValueError(
+            f"group_by must be one of {sorted(SUMMARY_GROUPS)}; got {group_by!r}")
+
+    where = ["1=1"]
+    params: dict[str, Any] = {"lim": limit}
+    if organization_id:
+        where.append("a.organization_id = CAST(:org AS uuid)")
+        params["org"] = str(organization_id)
+    if status:
+        where.append("a.status = :st")
+        params["st"] = status
+    if building_ids is not None:
+        if not building_ids:
+            where.append("FALSE")
+        else:
+            where.append("a.building_id::text = ANY(:blds)")
+            params["blds"] = [str(b) for b in building_ids]
+
+    sql = f"""
+        SELECT COALESCE({column}::text, '(unattributed)') AS label,
+               COALESCE(a.currency, 'GBP')                AS currency,
+               count(*)                                   AS count,
+               max(a.financial_gbp)                       AS worst,
+               sum(a.financial_gbp)                       AS naive_sum,
+               count(*) FILTER (WHERE a.financial_gbp IS NULL) AS unpriced
+          FROM plenum_cafm.energy_anomalies a
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
+         WHERE {' AND '.join(where)}
+         GROUP BY 1, 2
+         ORDER BY max(a.financial_gbp) DESC NULLS LAST
+         LIMIT :lim
+    """
+    rows = (await session.execute(text(sql), params)).mappings().all()
+    return {
+        "group_by": str(group_by).lower(),
+        "groups": [
+            {
+                "label": r["label"],
+                "currency": r["currency"],
+                "count": int(r["count"]),
+                "worst": float(r["worst"]) if r["worst"] is not None else None,
+                "naive_sum": float(r["naive_sum"]) if r["naive_sum"] is not None else None,
+                "unpriced": int(r["unpriced"]),
+            }
+            for r in rows
+        ],
+        "note": (
+            "worst is the largest single finding and is the figure to quote. naive_sum adds "
+            "overlapping detectors and double counts; it is not a total. Currencies are not "
+            "combined."
+        ),
+    }

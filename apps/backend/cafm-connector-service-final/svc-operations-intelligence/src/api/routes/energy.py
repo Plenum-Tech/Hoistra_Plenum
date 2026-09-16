@@ -871,16 +871,68 @@ async def list_anomalies(
     status: str | None = "open",
     organization_id: UUID | None = None,
     limit: int = Query(100, le=500),
+    building_id: str | None = Query(None, description="One building"),
+    asset_id: str | None = Query(None, description="One asset or sub-metered circuit"),
+    meter_id: str | None = Query(None),
+    anomaly_type: str | None = Query(
+        None, description="baseline_drift, weekend_spike, asset_spike … ; spaces and case are "
+                          "tolerated, so 'Baseline drift' finds baseline_drift"),
+    min_cost: float | None = Query(None, description="Annualised cost at or above this"),
+    min_days_active: int | None = Query(
+        None, description="Deviation has persisted at least this many days, from window_start"),
+    order_by: str = Query("detected_at", pattern="^(detected_at|financial)$"),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
+    """The anomaly list, narrowed by any dimension the activity log shows.
+
+    Every field a person reads on an entry — the building, the circuit, the type, the cost, how
+    long it has been active — is now something they can ask by. It filtered on status alone, so
+    "baseline drift on Town Hall over £5k, active more than ten days" meant pulling the first
+    500 rows and discarding most of them in the caller, which reports a subset as though it were
+    the answer whenever there are more than 500.
+    """
     organization_id = access.organization_for(s, organization_id)
     rows = await anom_svc.list_anomalies(
-        session, status=status, organization_id=organization_id, limit=limit
+        session, status=status, organization_id=organization_id, limit=limit,
+        building_id=building_id, asset_id=asset_id, meter_id=meter_id,
+        anomaly_type=anomaly_type, min_cost=min_cost, min_days_active=min_days_active,
+        order_by=order_by,
     )
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}
+
+
+@router.get("/anomalies/summary")
+async def anomalies_summary(
+    group_by: str = Query("building", pattern="^(building|type|status|asset)$"),
+    status: str | None = None,
+    organization_id: UUID | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Counts and totals across the WHOLE table, grouped one way, in a single query.
+
+    "Which building has the most anomalies", "which type dominates", "what is waiting on an
+    action" are questions about every row, and answering them by listing rows and counting them
+    in the caller truncates at the page size and reports a subset as the answer.
+
+    Each group carries `worst` (the largest single finding - the figure to quote, same basis as
+    the rollup) and `naive_sum` (every finding added, which double counts overlapping detectors
+    and is named so it cannot be mistaken for a total). Grouped by currency as well: the estate
+    spans four, and the dearest buildings here are in AED while the next are in GBP.
+    """
+    org_id = access.organization_for(s, organization_id)
+    ids, _ = access._ids_or_none(s.building_ids)
+    return {
+        "ok": True,
+        **await anom_svc.summarise_anomalies(
+            session, group_by=group_by, organization_id=org_id,
+            building_ids=ids, status=status, limit=limit,
+        ),
+    }
 
 
 @router.get("/anomalies/rollup")

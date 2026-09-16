@@ -371,14 +371,59 @@ async def scan_energy_anomalies(
 
 @tool
 async def list_energy_anomalies(
-    status: str = "open",
+    status: str | None = "open",
     organization_id: str | None = None,
+    building_id: str | None = None,
+    asset_id: str | None = None,
+    meter_id: str | None = None,
+    anomaly_type: str | None = None,
+    min_cost: float | None = None,
+    min_days_active: int | None = None,
+    order_by: str = "detected_at",
+    limit: int = 100,
 ) -> dict:
-    """C — List energy anomalies (status open|acknowledged|monitoring|expected)."""
+    """C — Anomalies, narrowed by any dimension the activity log shows.
+
+    Every field a person reads on an entry is something they can ask by, and each maps to one
+    argument here:
+
+        Building          -> building_id       (resolve the name first, /buildings/resolve)
+        Asset / circuit   -> asset_id
+        Anomaly type      -> anomaly_type      "Baseline drift" or baseline_drift both work
+        Annualised cost   -> min_cost          at or above
+        Days active       -> min_days_active   persisted at least this long
+        Status            -> status            open | acknowledged | monitoring | expected
+                                               pass None for every status
+
+    So "baseline drift on Town Hall over £5k, active more than ten days" is one call:
+    `anomaly_type="baseline drift", building_id=…, min_cost=5000, min_days_active=10`.
+
+    `order_by="financial"` sorts dearest first, which is usually what the question means. The
+    default is newest first.
+
+    Filter HERE, not after. Filtering the result in the answer discards rows that were never
+    fetched once there are more than `limit`, and reports a subset as though it were the whole
+    answer. This is a list of WHICH anomalies exist; for HOW MUCH they cost together, use
+    `get_anomaly_rollup` — summing this list double counts overlapping detectors.
+    """
     try:
-        params: dict[str, Any] = {"status": status}
+        params: dict[str, Any] = {"limit": limit, "order_by": order_by}
+        if status:
+            params["status"] = status
         if organization_id:
             params["organization_id"] = organization_id
+        if building_id:
+            params["building_id"] = building_id
+        if asset_id:
+            params["asset_id"] = asset_id
+        if meter_id:
+            params["meter_id"] = meter_id
+        if anomaly_type:
+            params["anomaly_type"] = anomaly_type
+        if min_cost is not None:
+            params["min_cost"] = min_cost
+        if min_days_active is not None:
+            params["min_days_active"] = min_days_active
         resp = await _request(
             "GET",
             _base(),
@@ -920,8 +965,49 @@ async def get_energy_tariffs(market: str | None = None) -> dict:
     except Exception as exc:
         return _err(exc, "get_energy_tariffs")
 
+
+@tool
+async def summarise_anomalies(group_by: str = "building", status: str | None = None,
+                              limit: int = 50) -> dict:
+    """C — Counts and totals across the WHOLE anomaly table, grouped one way, in one call.
+
+    This is the tool for "which …" questions, where the answer is a ranking rather than a row:
+
+        "which building has the most anomalies?"      group_by="building"
+        "which building costs us the most?"           group_by="building"
+        "which anomaly type dominates?"               group_by="type"
+        "what is still open / needs action?"          group_by="status"
+        "which asset or circuit is worst?"            group_by="asset"
+
+    Do NOT answer these by listing anomalies and counting them yourself: the list stops at its
+    page size, so a count taken from it is a count of the page, reported as a count of the
+    estate.
+
+    Each group returns:
+      count      how many findings
+      worst      the largest SINGLE finding — this is the figure to quote
+      naive_sum  every finding added together. Detectors overlap, so this DOUBLE COUNTS. It is
+                 returned only so you can see the gap; never quote it as a total.
+      unpriced   findings with no cost attached. They are real, and are not £0.
+
+    Groups are split BY CURRENCY as well as by the dimension asked for, because the estate
+    spans four. The dearest buildings here are in AED and the next in GBP — one ranking across
+    both is a ranking of exchange rates, not of waste. Rank within a currency, or say which
+    currency each figure is in.
+    """
+    try:
+        params: dict[str, Any] = {"group_by": group_by, "limit": limit}
+        if status:
+            params["status"] = status
+        resp = await _request("GET", _base(), "/api/energy/anomalies/summary", service=_SERVICE,
+                              timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "summarise_anomalies")
+
 ENERGY_INTELLIGENCE_TOOLS = [
     # Portfolio and market views - what the Energy page renders.
+    summarise_anomalies,
     get_market_profiles,
     list_energy_buildings,
     get_building_cost_drivers,

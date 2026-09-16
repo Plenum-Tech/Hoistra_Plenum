@@ -146,6 +146,40 @@ for *which* anomalies exist; it is never right for *how much*.
 Rank by `financial_gbp`, not `metric_pct` — a 300% spike on a 2 kW circuit matters less than a
 20% drift on the chiller.
 
+### Asking by any field on the entry
+
+Every field a person reads on an activity-log entry is something they can ask by, and each is an
+argument to `list_energy_anomalies` — filtered in the query, not after:
+
+| They ask about | Argument |
+|---|---|
+| a building | `building_id` (resolve the name first) |
+| an asset or circuit | `asset_id` |
+| an anomaly type | `anomaly_type` — "Baseline drift" and `baseline_drift` both work |
+| cost | `min_cost` — at or above |
+| how long it has run | `min_days_active` |
+| status / what needs action | `status`, or `None` for every status |
+| dearest first | `order_by="financial"` |
+
+"Baseline drift on Town Hall over £5k, active more than ten days" is **one call**, not a fetch
+and a filter. Filtering after the fact discards rows that were never fetched once there are more
+than `limit`, and reports a page as though it were the estate.
+
+### "Which …" questions are a summary, not a list
+
+"Which building has the most anomalies?", "which type dominates?", "which building costs most?",
+"what is still open?" — these are rankings over the whole table. Use
+`summarise_anomalies(group_by="building" | "type" | "status" | "asset")`, which answers in one
+query. Counting rows you listed yourself counts the page, not the estate.
+
+Each group carries `count`, `worst` (the largest single finding — **the figure to quote**),
+`naive_sum` (every finding added, which double counts overlapping detectors — never quote it)
+and `unpriced` (findings with no cost attached; they are real, not £0).
+
+**Groups are split by currency.** The dearest buildings are in AED and the next in GBP — one
+ranking across both ranks exchange rates, not waste. Rank within a currency, or name the
+currency on every figure.
+
 ### Answering about one anomaly
 
 A person clicking an anomaly expects the activity-log shape. Give it in prose, in this order:
