@@ -1009,6 +1009,23 @@ Direct SQL access to any table in plenum_cafm. The fallback for data not covered
 **Security:** Table and column names are regex-validated. All filter values are parameterised.
 Never pass user-provided strings directly as table or column names.
 
+**A blocked vendor is `block_state`, never `status`.** `plenum_cafm.vendors` has both, and they
+do not mean the same thing. `status` is the account record and reads `'active'` on every row in
+the database — filtering it for `'blocked'` returns nothing, for every company, which is
+indistinguishable from a truthful "none are blocked". Blocking lives in:
+
+| column | meaning |
+|---|---|
+| `block_state` | `'Clear'` or `'Blocked'` — **this is the one to filter on** |
+| `block_reason` | why, in words (usually "Accreditation lapsed: …") |
+| `block_date` | when it was blocked |
+| `blocked_accreditation_type` | which accreditation lapsed and caused it |
+
+So "which vendors are blocked" is `WHERE block_state = 'Blocked'`. Prefer
+`list_vendor_accreditations` with `risk_filter="blocked"` where it fits the question — it
+carries the reason and the lapsed accreditation with it. Reach for SQL only when the question
+needs a join or an aggregate that tool cannot express.
+
 **Schema-first rule:** Before any database query — whether via query_table, check_requirements,
 or generate_compliance_report — call get_schema() once per session to load the live table and
 column names. If a tool returns an "undefined table" or "undefined column" error, call get_schema()

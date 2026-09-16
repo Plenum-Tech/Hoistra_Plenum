@@ -25,7 +25,17 @@ from fastapi import FastAPI, HTTPException
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from src.api.routes import workflow
+# src.api.routes.workflow pulls in slowapi, which ships in the image but is not necessarily
+# installed in a bare dev environment. Imported unguarded, a missing dependency is a COLLECTION
+# error, and pytest abandons the whole run — so one absent package took all 551 tests in this
+# service with it rather than just these. Skipping is honest; the tests below do not run.
+import pytest as _pytest
+
+workflow = _pytest.importorskip(
+    "src.api.routes.workflow",
+    reason="src.api.routes.workflow needs slowapi, which is not installed here",
+)
+
 from src.http_client import caller_authorization
 from src.services import principal as P
 
