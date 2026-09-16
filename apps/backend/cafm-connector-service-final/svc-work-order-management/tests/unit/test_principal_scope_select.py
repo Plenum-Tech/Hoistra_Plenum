@@ -150,3 +150,45 @@ class TestSuperadminPinnedToOneCompany:
             p = principal(role=role)
             assert sql(scope_select(select(Thing), p, Thing.building_id)) == \
                    sql(scope_select(select(Thing), p, Thing.building_id, organization_id=None)), role
+
+
+# ── The organization must reach Postgres as a uuid ──────────────────────────────────────
+# acting_organization() shipped returning the query-string value verbatim. buildings
+# .organization_id is uuid, so the comparison went out as `organization_id = $1::VARCHAR`
+# and every /api/assets call 500ed:
+#
+#   operator does not exist: uuid = character varying
+#
+# The non-superadmin path never showed it — principal.organization_id was already a UUID.
+# It appeared the moment the frontend started sending the parameter at all.
+
+class TestTheCompanyIsAlwaysAUuid:
+
+    def test_a_superadmin_naming_a_company_as_a_string_gets_a_uuid_back(self):
+        got = acting_organization(principal(role="superadmin"), str(OTHER_ORG))
+        assert isinstance(got, UUID)
+        assert got == OTHER_ORG
+
+    def test_a_uuid_passed_straight_through_stays_one(self):
+        assert acting_organization(principal(role="superadmin"), OTHER_ORG) == OTHER_ORG
+
+    def test_a_value_that_is_not_a_company_falls_back_rather_than_failing(self):
+        """Not a 500, and not a comparison that quietly matches nothing."""
+        for junk in ("", "  ", "not-a-uuid", "12345", None):
+            got = acting_organization(principal(role="superadmin"), junk)
+            assert got == ORG, junk
+
+    def test_the_emitted_sql_compares_against_a_uuid_not_a_varchar(self):
+        """The regression test that would have caught it: read the SQL, not the return value.
+
+        acting_organization() could return the right thing and the predicate still bind the
+        wrong type, because the named buildings table has untyped columns.
+        """
+        out = sql(scope_select(select(Thing), principal(role="superadmin"),
+                               Thing.building_id, organization_id=str(OTHER_ORG)))
+        assert "VARCHAR" not in out.upper(), out
+        assert "UUID" in out.upper(), out
+
+    def test_a_plain_caller_still_emits_a_uuid_comparison(self):
+        out = sql(scope_select(select(Thing), principal(role="user"), Thing.building_id))
+        assert "VARCHAR" not in out.upper(), out

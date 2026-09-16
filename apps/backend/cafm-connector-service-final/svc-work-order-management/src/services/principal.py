@@ -26,7 +26,9 @@ from typing import Any
 
 from sqlalchemy import column as sa_col
 from sqlalchemy import false as sa_false
+from sqlalchemy import cast as sa_cast
 from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy import table as sa_table
 from uuid import UUID
 
@@ -179,12 +181,27 @@ def acting_organization(principal: Principal, requested):
     So a superadmin naming a company gets that company on every read, not just some of them.
     A caller who is not a superadmin gets their own company whatever they ask for — this can
     only narrow a read, never widen one.
+
+    Always returns a UUID or None, never the raw query string. It shipped returning the string
+    verbatim, and plenum_cafm.buildings.organization_id is uuid, so the comparison reached
+    Postgres as ``organization_id = $1::VARCHAR`` and every /api/assets call 500ed with
+    "operator does not exist: uuid = character varying". The non-superadmin path never showed
+    it, because principal.organization_id was already a UUID — it appeared the moment the
+    frontend began sending the parameter at all.
+
+    A value that is not a UUID is not a company; the caller gets their own rather than a 500
+    or, worse, a comparison that quietly matches nothing.
     """
     if requested is None:
         return principal.organization_id
-    if (principal.role or "").strip().lower() == "superadmin":
+    if (principal.role or "").strip().lower() != "superadmin":
+        return principal.organization_id
+    if isinstance(requested, UUID):
         return requested
-    return principal.organization_id
+    try:
+        return UUID(str(requested).strip())
+    except (ValueError, AttributeError, TypeError):
+        return principal.organization_id
 
 
 def scope_select(q, principal: Principal, column, organization_id=None):
@@ -202,10 +219,15 @@ def scope_select(q, principal: Principal, column, organization_id=None):
     is the only safe default for a tenancy boundary, and no active account is in that state.
     """
     def _in_org(org):
+        # cast() and not a bare value: _BUILDINGS is a named table with untyped columns, so
+        # SQLAlchemy binds whatever Python type it is handed. A str would go out as VARCHAR
+        # against a uuid column, which is not a mismatch Postgres will coerce — it is an
+        # error, and the read 500s. Stating the type here means it cannot depend on how
+        # carefully every caller typed its argument.
         return q.where(
             column.in_(
                 sa_select(_BUILDINGS.c.building_id).where(
-                    _BUILDINGS.c.organization_id == org
+                    _BUILDINGS.c.organization_id == sa_cast(org, PG_UUID)
                 )
             )
         )
