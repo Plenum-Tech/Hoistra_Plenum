@@ -894,12 +894,19 @@ async def list_anomalies(
     the answer whenever there are more than 500.
     """
     organization_id = access.organization_for(s, organization_id)
-    rows = await anom_svc.list_anomalies(
-        session, status=status, organization_id=organization_id, limit=limit,
-        building_id=building_id, asset_id=asset_id, meter_id=meter_id,
-        anomaly_type=anomaly_type, min_cost=min_cost, min_days_active=min_days_active,
-        order_by=order_by,
-    )
+    try:
+        rows = await anom_svc.list_anomalies(
+            session, status=status, organization_id=organization_id, limit=limit,
+            building_id=building_id, asset_id=asset_id, meter_id=meter_id,
+            anomaly_type=anomaly_type, min_cost=min_cost, min_days_active=min_days_active,
+            order_by=order_by,
+        )
+    except anom_svc.UnknownBuilding as exc:
+        # 404 and say so. Returning an empty list would read as "this building is clean",
+        # which is what produced "no energy anomalies were found for Building 5" about a
+        # building with nine open findings.
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "reason": "unknown_building", "error": str(exc)}) from exc
     if s.restricted:
         rows = await bld_svc.restrict_by_site(session, rows, s)
     return {"ok": True, "count": len(rows), "anomalies": rows}

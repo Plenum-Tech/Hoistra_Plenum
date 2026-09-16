@@ -194,7 +194,7 @@ argument to `list_energy_anomalies` — filtered in the query, not after:
 
 | They ask about | Argument |
 |---|---|
-| a building | `building_id` (resolve the name first) |
+| a building | `building_id` — a name or an id; "Building 5" resolves |
 | an asset or circuit | `asset_id` |
 | an anomaly type | `anomaly_type` — "Baseline drift" and `baseline_drift` both work |
 | cost | `min_cost` — at or above |

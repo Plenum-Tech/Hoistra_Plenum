@@ -832,7 +832,10 @@ async def list_anomalies(
     # character varying in the other, and an uncast comparison raises rather than returning
     # nothing — the same mismatch that took /api/assets down.
     if building_id:
-        q = q.where(sa_cast(EnergyAnomaly.building_id, SAText) == str(building_id))
+        # Resolved, not trusted. A name here used to match no row and return an empty list,
+        # which reads as "this building is clean" — said of a building with nine open findings.
+        q = q.where(sa_cast(EnergyAnomaly.building_id, SAText)
+                    == await resolve_building(session, building_id))
     if asset_id:
         q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText) == str(asset_id))
     if meter_id:
@@ -919,6 +922,51 @@ async def list_anomalies(
 
 #: What an anomaly summary may be grouped by. An allow-list, not an f-string of whatever
 #: arrived: this becomes a column name in SQL.
+class UnknownBuilding(ValueError):
+    """A building identifier that matched no building. Raised rather than returning nothing.
+
+    The whole point: a filter that silently matches nothing produces a confident "no anomalies
+    were found for Building 5" when Building 5 has ten of them, nine open. An empty result is
+    indistinguishable from a clean building, and the person reading it has no way to tell.
+    """
+
+
+async def resolve_building(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """A building id from a uuid or a NAME, or an error naming what was not found.
+
+    Filters are written by an agent reading a person's sentence, and people say "Building 5",
+    not "a40ef675-9584-4db5-a3c8-5e71c6812e0c". The building_id filter compares as text, so a
+    name matched no row and the list came back empty — which read as "this building is clean"
+    rather than "that is not an id".
+    """
+    if value in (None, ""):
+        return None
+    raw = str(value).strip()
+    try:
+        return str(UUID(raw))
+    except (ValueError, AttributeError, TypeError):
+        pass
+    found = (
+        await session.execute(
+            text(
+                """
+                SELECT building_id::text
+                  FROM plenum_cafm.buildings
+                 WHERE lower(btrim(name)) = lower(btrim(:n))
+                 LIMIT 1
+                """
+            ),
+            {"n": raw},
+        )
+    ).scalar()
+    if found:
+        return str(found)
+    raise UnknownBuilding(
+        f"No building matches {raw!r}. It is neither a building id nor the name of a building "
+        f"this caller can see, so no anomaly list can be produced for it."
+    )
+
+
 SUMMARY_GROUPS: dict[str, str] = {
     "building": "b.name",
     "type": "a.anomaly_type",

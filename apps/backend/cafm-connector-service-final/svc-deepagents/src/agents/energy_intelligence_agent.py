@@ -387,7 +387,7 @@ async def list_energy_anomalies(
     Every field a person reads on an entry is something they can ask by, and each maps to one
     argument here:
 
-        Building          -> building_id       (resolve the name first, /buildings/resolve)
+        Building          -> building_id       a NAME or an id; "Building 5" resolves
         Asset / circuit   -> asset_id
         Anomaly type      -> anomaly_type      "Baseline drift" or baseline_drift both work
         Annualised cost   -> min_cost          at or above
@@ -400,6 +400,11 @@ async def list_energy_anomalies(
 
     `order_by="financial"` sorts dearest first, which is usually what the question means. The
     default is newest first.
+
+    A building name that matches nothing raises rather than returning an empty list, because
+    empty reads as "this building is clean". That is not hypothetical: "no energy anomalies were
+    found for Building 5" was said about a building with nine open findings, because the name
+    was passed where an id was compared.
 
     Filter HERE, not after. Filtering the result in the answer discards rows that were never
     fetched once there are more than `limit`, and reports a subset as though it were the whole
