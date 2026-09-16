@@ -2,6 +2,10 @@
 name: energy-intelligence
 agent: energy_intelligence
 description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift".
+references:
+  - anomalies
+  - assets
+  - costs
 triggers:
   - energy
   - consumption
