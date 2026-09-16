@@ -198,6 +198,11 @@ from .wo_engine_agent import (
     get_asset_details,
     search_locations,
     find_ppm_schedules,
+    # Maintenance page (4)
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
     get_dashboard_stats,
 )
 
@@ -291,6 +296,11 @@ ALL_TOOLS = [
     search_locations,
     find_ppm_schedules,
     get_dashboard_stats,
+    # WO Engine — the Maintenance page (4)
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
     # Migration (8)
     start_migration,
     run_migration,
@@ -405,6 +415,9 @@ _TOOL_DOMAIN: dict[str, str] = {
     "search_assets": "wo_engine", "get_asset_details": "wo_engine",
     "search_locations": "wo_engine", "find_ppm_schedules": "wo_engine",
     "get_dashboard_stats": "wo_engine",
+    # WO Engine — the Maintenance page (4)
+    "get_maintenance_overview": "wo_engine", "list_maintenance_decisions": "wo_engine",
+    "get_inspection_intelligence": "wo_engine", "get_ppm_contracts": "wo_engine",
     # Migration (8)
     "start_migration": "migration", "run_migration": "migration",
     "submit_pre_semantic": "migration", "submit_field_mapping": "migration",

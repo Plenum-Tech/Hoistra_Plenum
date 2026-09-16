@@ -2,6 +2,10 @@
 name: work-order-engine
 agent: wo_engine
 description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog".
+references:
+  - decisions
+  - work-orders
+  - dispatch
 triggers:
   - work order
   - workorder
@@ -38,6 +42,20 @@ triggers:
   - dashboard
   - technician
   - assign
+  - decisions owed
+  - what needs my decision
+  - blocked work order
+  - to raise
+  - awaiting approval
+  - deviation
+  - statutory
+  - ppm to plan
+  - behind plan
+  - missed visits
+  - inspection report
+  - recommendations
+  - under warranty
+  - unconverted
 ---
 
 # WO Engine — work order lifecycle
