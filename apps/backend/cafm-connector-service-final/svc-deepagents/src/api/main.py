@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from ..http_client import caller_authorization
 from ..agents.orchestrator import DeepAgentOrchestrator
 from ..config import settings
 from ..database import init_session_factory
@@ -163,6 +164,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def forward_caller_token(request: Request, call_next) -> Response:
+    """Carry the caller's bearer into everything this service does on their behalf.
+
+    Every call this service makes to operations-intelligence goes out as the USER, not as a
+    service — that is how the answer gets scoped to their company and buildings rather than to
+    everything. The token was picked up in three handlers by hand, and a route that forgot
+    simply called the next service with no Authorization header at all. Downstream answered
+    401 missing_token, the tool returned zero rows, and the agent reported it to the user as
+    "the compliance service could not be reached" — which reads as an outage rather than as a
+    request that was never authenticated.
+
+    /resume/{session_id} was one of those routes: it drives the same tools as /run-stateful,
+    with no token. Doing it here means a handler cannot forget, and a new route inherits it.
+
+    The header is copied verbatim, including when absent — setting None explicitly is what
+    stops one request inheriting the previous one's token from a reused context.
+    """
+    caller_authorization.set(request.headers.get("authorization"))
+    return await call_next(request)
 
 
 @app.middleware("http")

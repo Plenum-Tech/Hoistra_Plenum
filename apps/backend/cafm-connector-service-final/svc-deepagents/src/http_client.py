@@ -180,8 +180,22 @@ async def request(
             try:
                 async with httpx.AsyncClient(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
                     _auth = caller_authorization.get()
-                    if _auth and 'Authorization' not in {k.title(): v for k, v in (kwargs.get('headers') or {}).items()}:
+                    _has_own = 'Authorization' in {k.title(): v for k, v in (kwargs.get('headers') or {}).items()}
+                    if _auth and not _has_own:
                         kwargs['headers'] = {**(kwargs.get('headers') or {}), 'Authorization': _auth}
+                    elif not _auth and not _has_own:
+                        # Worth a line of its own. Downstream will answer 401 missing_token,
+                        # the tool will return zero rows, and the agent will tell the user the
+                        # service could not be reached — which reads as an outage rather than
+                        # as a request that was never authenticated. This names it at the
+                        # moment it happens, with the path, so the route that failed to carry
+                        # the caller's token is identifiable rather than inferred.
+                        log.warning(
+                            "http_client.no_caller_token",
+                            service=service, method=method, path=path,
+                            note="calling without the caller's bearer; downstream will refuse "
+                                 "this and the failure will surface as an unreachable service",
+                        )
                     resp = await client.request(method, path, **kwargs)
                     resp.raise_for_status()
                     cb.record_success()
