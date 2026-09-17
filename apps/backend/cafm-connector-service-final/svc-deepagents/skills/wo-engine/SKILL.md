@@ -1,7 +1,7 @@
 ---
 name: work-order-engine
 agent: wo_engine
-description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog".
+description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together (recommendations never converted to orders, findings under warranty, condition grades). Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
 references:
   - decisions
   - work-orders
@@ -56,6 +56,13 @@ triggers:
   - recommendations
   - under warranty
   - unconverted
+  - decision
+  - decisions
+  - which decisions
+  - statutory decisions
+  - decisions are statutory
+  - never converted
+  - converted to orders
 ---
 
 # WO Engine — work order lifecycle

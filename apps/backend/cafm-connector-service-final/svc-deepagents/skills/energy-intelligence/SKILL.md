@@ -1,7 +1,7 @@
 ---
 name: energy-intelligence
 agent: energy_intelligence
-description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift".
+description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Also owns ASSET INTELLIGENCE — which assets need investigating and why, an asset's own anomalies, readings, operating hours and condition, chiller/AHU/boiler/HVAC performance and COP, and asset health ranked worst-first. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift", "which assets need investigating", "worst condition", "asset health", "chiller performance", "HVAC".
 references:
   - anomalies
   - assets
@@ -50,6 +50,21 @@ triggers:
   - occupancy
   - energy report
   - cost above benchmark
+  - investigate
+  - investigation
+  - needs investigating
+  - which assets need
+  - asset condition
+  - worst condition
+  - asset health
+  - asset intelligence
+  - condition score
+  - chiller performance
+  - chiller condition
+  - chiller cop
+  - hvac performance
+  - ahu performance
+  - boiler performance
 ---
 
 # Energy Intelligence — consumption, benchmarks and anomalies
