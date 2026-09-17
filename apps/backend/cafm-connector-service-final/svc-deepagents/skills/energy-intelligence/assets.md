@@ -17,6 +17,29 @@ building-level.
 
 ---
 
+## 0. The Assets page — bands, scores, and "never scored"
+
+The page bands every asset **Threat / Watch / In control** from two signals: whether its
+section runs over its own reference EUI, and whether it carries a persistent anomaly. Both →
+Threat; one → Watch; neither → In control. A **health score** (0–100, `plenum_cafm.assets
+.health_score`) is a third, independent signal that can raise a band but never lower one.
+
+| question | tool | what to say |
+|---|---|---|
+| how many are threat / watch / in control | `get_asset_condition_summary` | the three counts, then the two that matter: watch-because-shares-a-section vs watch-for-its-own-anomaly, and in-control assets that still carry an anomaly under threshold |
+| which assets are a threat (or on watch, or above 30%) | `list_asset_conditions(band=…, min_deviation_pct=…)` | each asset with its `explanation` — the sentence the server wrote for its band |
+| which assets have never been scored | `list_unscored_assets` | the assets whose `health_score` is NULL, by building; **an asset with no score is not evidence of health** |
+| what are the thresholds | `get_asset_condition_rules` | the two steppers and whether they are still the defaults |
+
+**"Never been scored" is a register question, not a join you invent.** Measured 17 Sep 2026:
+asked this, one turn guessed asset codes (`AST-GEN-501`, `A-001` → 404) and another wrote a
+LEFT JOIN against a table that does not exist and reported "cannot determine" from 0 rows. The
+answer is `list_unscored_assets`, and it is a count and a list, not a shrug.
+
+`section_measured` is false where the asset's section has no sub-meter: that asset was banded
+on one signal, not two. Say so — "in control" on an unmetered section is "no evidence", not
+"good".
+
 ## 1. Chillers and cooling
 
 The efficiency measure is **kW/RT** — electrical kilowatts drawn per ton of refrigeration

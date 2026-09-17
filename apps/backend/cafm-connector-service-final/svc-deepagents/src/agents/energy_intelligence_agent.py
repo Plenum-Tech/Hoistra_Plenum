@@ -1170,9 +1170,147 @@ async def get_asset_intelligence(asset_id: str) -> dict:
     except Exception as exc:
         return _err(exc, "get_asset_intelligence")
 
+
+# ── The Assets page, which the agent could not reach ─────────────────────────────────────
+#
+# The page bands every asset Threat / Watch / In control (GET /api/energy/condition/*) and
+# reads the health score off the register (GET /api/assets on work-order-management). Neither
+# had a tool. Measured 17 Sep 2026, "Which assets have never been scored?": one turn guessed
+# asset codes (AST-GEN-501, A-001 -> 404), another wrote a LEFT JOIN against a table that does
+# not exist and answered "cannot determine" from 0 rows. The question is a register read.
+
+
+@tool
+async def get_asset_condition_summary(building_id: str | None = None) -> dict:
+    """E — The Assets page tiles: how many assets are Threat, Watch and In control, and why.
+
+    Bands are computed from two current signals: the asset's section running over its own
+    reference EUI, and a persistent anomaly on the asset. Both → Threat, one → Watch, neither →
+    In control. Computed on every read; nothing here is stale.
+
+    Read the counts underneath the three before quoting them: `watch_shares_section` is how
+    many Watch assets are watched only because they share an over-reference section (not for
+    anything of their own), and `in_control_anomaly_under_threshold` is how many In-control
+    assets DO carry an anomaly that has not yet persisted long enough to count. The second is
+    the figure a person actually wants. `section_not_measured` says how many were banded on one
+    signal because their section has no sub-meter — "in control" there is no evidence, not good.
+    """
+    try:
+        params = {"building_id": building_id} if building_id else None
+        resp = await _request("GET", _base(), "/api/energy/condition/summary",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_asset_condition_summary")
+
+
+@tool
+async def list_asset_conditions(
+    band: str | None = None,
+    building_id: str | None = None,
+    min_deviation_pct: float | None = None,
+    limit: int = 500,
+) -> dict:
+    """E — The banded assets themselves, each with the sentence that explains its band.
+
+    `band` is one of **threat**, **watch**, **in_control** (the page's chips); omit it for all.
+    `min_deviation_pct` backs the "above 10%" / "above 30%" chips. Each row carries `band`,
+    `explanation`, `reasons`, `section_deviation_pct`, `anomalies_open`, `anomaly_persistent`,
+    `section_measured`, `criticality`, `building` and `vendor`.
+
+    Quote the `explanation` — it is the server's own sentence for why the asset is banded as
+    it is — rather than re-deriving a reason. `count` is the rows returned for this filter and
+    `total` is every asset in scope; report both when the filter narrowed anything.
+    """
+    try:
+        params: dict[str, Any] = {"limit": limit}
+        if band:
+            params["band"] = band
+        if building_id:
+            params["building_id"] = building_id
+        if min_deviation_pct is not None:
+            params["min_deviation_pct"] = min_deviation_pct
+        resp = await _request("GET", _base(), "/api/energy/condition/assets",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "list_asset_conditions")
+
+
+@tool
+async def get_asset_condition_rules() -> dict:
+    """E — The two thresholds the Assets page bands against, and whether they are still the
+    defaults: `section_over_reference_pct` (a section counts as over reference above this) and
+    `anomaly_persistent_weeks` (an anomaly counts as persistent at or past this)."""
+    try:
+        resp = await _request("GET", _base(), "/api/energy/condition/rules",
+                              service=_SERVICE, timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_asset_condition_rules")
+
+
+@tool
+async def list_unscored_assets(building_id: str | None = None, limit: int = 200) -> dict:
+    """E — Which assets have NEVER BEEN SCORED: every asset in scope whose `health_score` is
+    empty on the register, with the count of scored ones beside it.
+
+    The health score is an integer 0–100 on plenum_cafm.assets. An asset with no score is not
+    evidence of health — it is an asset nobody has assessed — and the Assets page bands it
+    "unscored" for exactly that reason. Say how many are unscored out of how many in scope, then
+    list them by building; where the count is zero, say every asset in scope carries a score.
+
+    Reads the register from work-order-management page by page, so it covers the whole scope
+    rather than the first 200 rows.
+    """
+    try:
+        base = settings.wo_management_base_url.rstrip("/")
+        page, page_size = 1, 200
+        rows: list[dict[str, Any]] = []
+        while True:
+            params: dict[str, Any] = {"page": page, "limit": page_size}
+            if building_id:
+                params["building_id"] = building_id
+            resp = await _request("GET", base, "/api/assets", service="wo_management",
+                                  timeout=_TIMEOUT, params=params)
+            batch = resp.json()
+            if not isinstance(batch, list):
+                break
+            rows.extend(r for r in batch if isinstance(r, dict))
+            if len(batch) < page_size or page >= 25:
+                break
+            page += 1
+        unscored = [r for r in rows if r.get("health_score") is None]
+        by_building: dict[str, int] = {}
+        for r in unscored:
+            key = str(r.get("building_id") or "(no building)")
+            by_building[key] = by_building.get(key, 0) + 1
+        return {
+            "ok": True,
+            "in_scope": len(rows),
+            "scored": len(rows) - len(unscored),
+            "unscored": len(unscored),
+            "unscored_by_building": by_building,
+            "assets": [
+                {k: r.get(k) for k in ("id", "asset_code", "asset_name", "building_id",
+                                        "criticality", "status", "condition_score")}
+                for r in unscored[:limit]
+            ],
+            "note": ("health_score is NULL on these rows: nobody has assessed them. Not evidence "
+                     "of health."),
+        }
+    except Exception as exc:
+        return _err(exc, "list_unscored_assets")
+
+
 ENERGY_INTELLIGENCE_TOOLS = [
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,
+    # The Assets page — bands, scores, never scored.
+    get_asset_condition_summary,
+    list_asset_conditions,
+    get_asset_condition_rules,
+    list_unscored_assets,
     consumption_by_asset,
     investigate_asset,
     get_asset_intelligence,

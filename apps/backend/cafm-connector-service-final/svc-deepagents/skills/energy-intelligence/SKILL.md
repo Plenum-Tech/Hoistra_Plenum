@@ -1,7 +1,7 @@
 ---
 name: energy-intelligence
 agent: energy_intelligence
-description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Also owns ASSET INTELLIGENCE — which assets need investigating and why, an asset's own anomalies, readings, operating hours and condition, chiller/AHU/boiler/HVAC performance and COP, and asset health ranked worst-first. Asset criticality (L1/L2/L3) lives here too. A question about an asset's CONDITION or HEALTH cannot be answered from this register alone — the inspector's condition grades are wo_engine's — so name wo_engine under also for those; a cost, consumption, anomaly, tariff, benchmark, criticality or operating-hours question is this agent's alone and has no also. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift", "which assets need investigating", "worst condition", "asset health", "chiller performance", "HVAC".
+description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Also owns ASSET INTELLIGENCE — which assets need investigating and why, an asset's own anomalies, readings, operating hours and condition, chiller/AHU/boiler/HVAC performance and COP, and asset health ranked worst-first. This agent also owns the ASSETS PAGE: every asset banded Threat / Watch / In control from its section's EUI and its anomalies, the health score (0–100) on the register and which assets have NEVER BEEN SCORED, asset value at risk, and the condition rules. "Which assets have never been scored", "which assets are a threat", "what is on watch", "not scored" are this agent's questions, not a table lookup. Asset criticality (L1/L2/L3) lives here too. A question about an asset's CONDITION or HEALTH cannot be answered from this register alone — the inspector's condition grades are wo_engine's — so name wo_engine under also for those; a cost, consumption, anomaly, tariff, benchmark, criticality or operating-hours question is this agent's alone and has no also. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift", "which assets need investigating", "worst condition", "asset health", "chiller performance", "HVAC".
 references:
   - anomalies
   - assets
@@ -65,6 +65,19 @@ triggers:
   - hvac performance
   - ahu performance
   - boiler performance
+  - never been scored
+  - never scored
+  - not scored
+  - unscored
+  - health score
+  - threat
+  - threat assets
+  - a threat
+  - watch assets
+  - on watch
+  - in control
+  - value at risk
+  - condition rules
 ---
 
 # Energy Intelligence — consumption, benchmarks and anomalies

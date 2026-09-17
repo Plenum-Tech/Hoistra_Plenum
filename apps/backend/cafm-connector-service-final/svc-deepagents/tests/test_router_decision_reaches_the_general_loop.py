@@ -61,6 +61,22 @@ class TestTheRouterCanSeeTheAssetAndMaintenanceTools:
                   "which chillers are in the worst condition?"):
             assert route(q)["primary_agent"] == "energy_intelligence", q
 
+    def test_the_assets_page_chips_route_to_energy_by_keyword(self):
+        """Measured 17 Sep 2026: "Which assets have never been scored?" — a chip printed on
+        the Assets page — went to UDR as "a straightforward cross-table lookup", which then
+        guessed a join and answered "cannot determine" from 0 rows. The page's vocabulary
+        (scored, threat, watch, in control, value at risk) is the energy agent's."""
+        from src.agents.skills import route
+        for q in ("which assets have never been scored?",
+                  "which assets are a threat right now?",
+                  "what is the asset value at risk?"):
+            assert route(q)["primary_agent"] == "energy_intelligence", q
+
+    def test_the_energy_description_names_the_assets_page_vocabulary(self):
+        d = skill_for_agent("energy_intelligence").description.lower()
+        for word in ("never been scored", "health score", "threat", "watch", "in control"):
+            assert word in d, word
+
     def test_a_plain_asset_count_still_falls_to_udr(self):
         """Extending energy's triggers must not make it swallow the register. "how many assets"
         is a UDR question; a bare `asset` trigger on energy would have taken it."""
