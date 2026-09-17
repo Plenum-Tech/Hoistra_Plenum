@@ -103,6 +103,25 @@ class TestWhatTheJudgeSees:
     def test_a_small_output_is_passed_through_untouched(self):
         assert ev._clipped(self.ROWS) is self.ROWS
 
+    def test_a_page_engines_tools_called_directly_are_evidence_too(self):
+        """13:39, 17 Sep: the general loop called the Assets page tools itself on a fanned-out
+        turn, the filter kept only UDR tools and task(), and the judge replaced a correct
+        two-part answer with 'schema definitions only'."""
+        energy = {"tool": "list_asset_conditions", "input": {"band": "threat"},
+                  "output": {"assets": [{"asset_code": "ACS-DL-04", "band": "threat", "section_deviation_pct": 31.4}]}}
+        evidence = ev._evidence([energy, self.ROWS])
+        assert "ACS-DL-04" in evidence and "PRT-BNZ-04" in evidence
+
+    def test_the_plan_the_route_and_the_panel_are_still_not_evidence(self):
+        calls = [{"tool": "write_todos", "input": {"todos": ["x"]}, "output": "Plan"},
+                 {"tool": "select_skill", "input": {"q": "x"}, "output": {"agent": "udr"}},
+                 {"tool": "compliance_pipeline", "input": {}, "output": {"steps": []}},
+                 self.ROWS]
+        evidence = ev._evidence(calls)
+        assert "PRT-BNZ-04" in evidence
+        for name in ("write_todos", "select_skill", "compliance_pipeline"):
+            assert name not in evidence
+
     def test_schema_only_turns_still_gate_the_check(self):
         """Excluded from evidence, not from the decision to run."""
         assert ev.has_udr_tool_calls([{"tool": "get_schema", "input": {}, "output": {}}])

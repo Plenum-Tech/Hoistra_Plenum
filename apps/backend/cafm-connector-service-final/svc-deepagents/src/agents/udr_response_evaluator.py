@@ -187,10 +187,21 @@ def _evidence(tool_calls: list[dict[str, Any]]) -> str:
     relevant = [
         _clipped(call)
         for call in tool_calls
-        if (str(call.get("tool") or "") in UDR_TOOL_NAMES or call.get("tool") == "task")
-        and str(call.get("tool") or "") not in _METADATA_TOOLS
+        if str(call.get("tool") or "") not in _NOT_EVIDENCE
     ]
     return json.dumps(relevant, ensure_ascii=False, default=str)[:_MAX_EVIDENCE_CHARS]
+
+
+#: What the judge must not ground an answer in: the agent's own plan and routing, the schema
+#: and catalogue (descriptions of the database, not reads of it), and the run panel. Everything
+#: else a tool returned is evidence — including a page engine's tools called directly by the
+#: general loop on a fanned-out turn. Measured 17 Sep 2026 at 13:39: the orchestrator called
+#: get_asset_condition_summary and list_asset_conditions itself, the filter kept only UDR tools
+#: and task(), the judge saw "schema definitions only" and replaced a correct two-part answer
+#: with a refusal.
+_NOT_EVIDENCE = frozenset({
+    *_METADATA_TOOLS, "select_skill", "write_todos", "read_todos", "compliance_pipeline",
+})
 
 
 def _clipped(call: dict[str, Any]) -> dict[str, Any]:
