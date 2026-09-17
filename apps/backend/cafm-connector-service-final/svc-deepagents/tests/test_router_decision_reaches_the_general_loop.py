@@ -86,7 +86,7 @@ class TestTheRoutingNote:
         would fail on the first call."""
         assert O._routing_note({"agent": "billing", "reason": "invoices"}) is None
 
-    @pytest.mark.parametrize("agent", ["wo_engine", "udr", "doc_rag", "migration"])
+    @pytest.mark.parametrize("agent", ["udr", "doc_rag", "migration"])
     def test_a_non_engine_agent_is_carried_with_the_instruction_to_delegate(self, agent):
         note = O._routing_note({"agent": agent, "reason": "because"})
         assert f"`{agent}`" in note
@@ -94,8 +94,16 @@ class TestTheRoutingNote:
         assert "because" in note
         assert "select_skill" in note  # told not to re-route
 
+    def test_an_engine_is_carried_only_when_the_caller_asks_for_it(self):
+        """wo_engine became an engine on 17 Sep. Its note is None by default — the caller
+        short-circuits to it — and written only when _decide_dispatch sends the turn the long
+        way (an action verb, or a second domain) and says so."""
+        assert O._routing_note({"agent": "wo_engine", "reason": "r"}) is None
+        note = O._routing_note({"agent": "wo_engine", "reason": "r"}, carry_engine=True)
+        assert 'task("wo_engine"' in note
+
     def test_also_agents_are_named_so_a_cross_domain_ask_fans_out(self):
-        note = O._routing_note({"agent": "wo_engine", "also": ["compliance"], "reason": ""})
+        note = O._routing_note({"agent": "udr", "also": ["compliance"], "reason": ""})
         assert "`compliance`" in note
         assert "same turn" in note
 
@@ -119,3 +127,99 @@ class TestThePanelNameIsTheInterfacesContract:
         follow. `energy_pipeline` was emitted for weeks with nothing on the other end."""
         js = FRONTEND.read_text(encoding="utf-8")
         assert f'find("{O.PIPELINE_PANEL_TOOL}")' in js
+
+
+# ── where a turn runs: one engine, or the orchestrator fanning out ─────────────────────
+
+class TestWhereATurnRuns:
+    """Three things the user asked for on 17 Sep, in their words: a Maintenance-page question
+    "should route to maintenance page related question" — directly, like compliance and
+    energy do; an asset-condition question "should go and get the assets details and energy"
+    both; and "the orchestrator provides the whole summary according to the user query"."""
+
+    def test_a_maintenance_question_runs_on_the_maintenance_engine_directly(self):
+        engine, note = O._decide_dispatch(
+            {"agent": "wo_engine", "also": [], "reason": "r"}, "which ppm contracts are behind plan?")
+        assert engine == "wo_engine" and note is None
+
+    @pytest.mark.parametrize("q", [
+        "raise a work order for the chiller at kingsway",
+        "approve WO-4512",
+        "close the boiler job",
+        "assign meridian heating to the gas work",
+    ])
+    def test_a_maintenance_action_goes_the_long_way_so_the_intake_keeps_its_gates(self, q):
+        engine, note = O._decide_dispatch({"agent": "wo_engine", "also": []}, q)
+        assert engine is None
+        assert 'task("wo_engine"' in note
+
+    def test_awaiting_approval_is_a_question_not_an_approval(self):
+        assert O._maintenance_read_question("which work orders are awaiting approval?")
+        assert not O._maintenance_read_question("approve the pending work orders")
+
+    def test_a_two_domain_question_fans_out_through_the_orchestrator(self):
+        engine, note = O._decide_dispatch(
+            {"agent": "energy_intelligence", "also": ["wo_engine"], "reason": "condition"},
+            "which assets are in the worst condition?")
+        assert engine is None
+        assert 'task("energy_intelligence"' in note and "`wo_engine`" in note
+        assert "same turn" in note
+
+    def test_compliance_keeps_its_pipeline_even_when_a_second_domain_is_named(self):
+        engine, note = O._decide_dispatch(
+            {"agent": "compliance", "also": ["wo_engine"]},
+            "which buildings have lapsed certificates and open urgent work orders?")
+        assert engine == "compliance" and note is None
+
+    def test_a_single_domain_engine_question_still_short_circuits(self):
+        engine, note = O._decide_dispatch({"agent": "energy_intelligence", "also": []}, "eui by building")
+        assert engine == "energy_intelligence" and note is None
+
+    def test_no_decision_means_the_general_loop_with_nothing_carried(self):
+        assert O._decide_dispatch({"agent": None}, "hello") == (None, None)
+
+
+class TestTheMaintenanceEngineHoldsNoWriteTool:
+
+    def test_the_engine_tool_list_is_read_only(self):
+        from src.agents.orchestrator import PHASE2_ENGINE_TOOLS
+        names = {t.name for t in PHASE2_ENGINE_TOOLS["wo_engine"]}
+        for forbidden in ("create_work_order", "approve_work_order", "close_work_order",
+                          "transition_work_order", "update_work_order",
+                          "prepare_intelligent_work_order", "confirm_intelligent_work_order_creation",
+                          "respond_to_approval_step", "send_approval_request_email"):
+            assert forbidden not in names, forbidden
+
+    def test_the_engine_holds_the_four_maintenance_page_tools(self):
+        from src.agents.orchestrator import PHASE2_ENGINE_TOOLS
+        names = {t.name for t in PHASE2_ENGINE_TOOLS["wo_engine"]}
+        assert {"list_maintenance_decisions", "get_inspection_intelligence",
+                "get_ppm_contracts", "get_maintenance_overview"} <= names
+
+    def test_the_general_loops_sub_agent_holds_them_too(self):
+        """This is the one that was broken: the runner listed its tools by hand and the four
+        were never added, so routing to wo_engine reached an agent that could not answer."""
+        from src.agents.wo_engine_agent import WO_ENGINE_SUBAGENT_TOOLS
+        names = {t.name for t in WO_ENGINE_SUBAGENT_TOOLS}
+        assert {"list_maintenance_decisions", "get_inspection_intelligence",
+                "get_ppm_contracts", "get_maintenance_overview", "create_work_order"} <= names
+
+    def test_wo_engine_is_an_engine_the_router_can_short_circuit_to(self):
+        from src.agents.agent_router import as_phase2_engine
+        assert as_phase2_engine("wo_engine") == "wo_engine"
+
+
+class TestTheOrchestratorsOwnPanel:
+
+    def test_a_fanned_out_turn_names_the_agents_it_delegated_to(self):
+        calls = [
+            {"tool": "task", "input": {"agent": "energy_intelligence", "prompt": "…"}, "output": "a"},
+            {"tool": "task", "input": {"agent": "wo_engine", "prompt": "…"}, "output": "b"},
+        ]
+        from src.agents import llm_cost
+        llm_cost.begin_turn("t-panel")
+        panel = O._general_loop_panel("which assets are in the worst condition?", calls)
+        assert panel is not None and panel["tool"] == O.PIPELINE_PANEL_TOOL
+        agents = next(s for s in panel["output"]["steps"] if s["stage"] == "agents")
+        assert "energy_intelligence" in agents["label"] and "wo_engine" in agents["label"]
+        assert panel["output"]["engine"] == "orchestrator"

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-Phase2AgentId = Literal["compliance", "contract_performance", "energy_intelligence"]
+Phase2AgentId = Literal["compliance", "contract_performance", "energy_intelligence", "wo_engine"]
 
 # PRD names ↔ code agent ids
 PHASE2_AGENT_REGISTRY: dict[str, Phase2AgentId] = {

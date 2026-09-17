@@ -37,7 +37,7 @@ _FLAG = "ORCHESTRATOR_LLM_ROUTING"
 #: Agents that answer a turn by themselves through _invoke_phase2_engine. Any other agent the
 #: router names is handed to the orchestrator loop, which already knows how to task() it.
 PHASE2_ENGINES: frozenset[str] = frozenset(
-    {"compliance", "contract_performance", "energy_intelligence"}
+    {"compliance", "contract_performance", "energy_intelligence", "wo_engine"}
 )
 
 
