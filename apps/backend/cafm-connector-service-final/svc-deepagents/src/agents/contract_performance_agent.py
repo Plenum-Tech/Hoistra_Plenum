@@ -213,6 +213,27 @@ def _mark_stale_scorecards(rows: list[dict]) -> None:
         )
 
 
+# "What is the SLA completion for my vendor?" names two different measures, and the platform
+# holds both. Asked twice, it was answered twice from two different tables — each answer right
+# on its own terms, neither mentioning the other existed, and the two support opposite
+# conclusions: one says what the vendor promised, the other whether they met it.
+_SLA_SENSE_CONTRACT = (
+    "These sla_completion_* and sla_response_* hours are the TARGETS the contract allows — "
+    "what the vendor promised, not what they achieved. The MEASURED performance is a scored "
+    "component on the monthly scorecard: `list_vendor_scorecards` → "
+    "component_breakdown.sla_completion, out of 25 points. 'SLA completion' means either of "
+    "these, so say which one you are giving; if the question did not make it clear, give both "
+    "or say plainly which reading you took."
+)
+_SLA_SENSE_SCORECARD = (
+    "component_breakdown.sla_completion is the MEASURED score out of 25 — how the vendor "
+    "actually performed that month. It is NOT the contracted target hours, which live on the "
+    "contract: `list_contract_parameters` → sla_completion_p1..p4_hours. 'SLA completion' "
+    "means either of these, so say which one you are giving; if the question did not make it "
+    "clear, give both or say plainly which reading you took."
+)
+
+
 def _base() -> str:
     return settings.operations_intelligence_base_url.rstrip("/")
 
@@ -531,6 +552,11 @@ async def list_contract_parameters(
                     "Never introduce one with 'the contract says' or 'the contract terms are'; "
                     "a default cannot be put to a vendor."
                 )
+        if any(
+            k.startswith("sla_completion") or k.startswith("sla_response")
+            for r in (data.get("parameters") or []) for k in r
+        ):
+            data["SLA_SENSE_NOTE"] = _SLA_SENSE_CONTRACT
         return data
     except Exception as exc:
         return _err(exc, "list_contract_parameters")
@@ -590,6 +616,8 @@ async def list_vendor_scorecards(
             # narrowing it to one vendor is this call's answer, not a change to the register.
             data = dict(data, scorecards=rows, count=len(rows), **matched)
         _mark_stale_scorecards(data.get("scorecards") or [])
+        if any((r.get("component_breakdown") or {}) for r in (data.get("scorecards") or [])):
+            data["SLA_SENSE_NOTE"] = _SLA_SENSE_SCORECARD
         return data
     except Exception as exc:
         return _err(exc, "list_vendor_scorecards")

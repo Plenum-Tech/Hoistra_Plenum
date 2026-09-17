@@ -376,3 +376,22 @@ def test_the_analyst_is_told_to_scan_every_row_before_naming_a_best_or_worst():
     lowered = ca._ANALYST_SYSTEM.lower()
     assert "best" in lowered and "worst" in lowered
     assert "every row" in lowered
+
+
+def test_the_analyst_is_told_a_trend_claim_is_a_claim_about_every_step():
+    """Live answer, 16 Sep 2026, on Gough and Kelly's SLA-completion component:
+
+        "has fallen every month on record, from 23.71 in July 2023 to 16.67 in January 2024"
+        "The trend across all seven months is one of steady decline, not a one-off dip"
+
+    Every figure it quoted was right. The shape it described was not: the series rose in two
+    of six transitions (Sep->Oct +0.94, Nov->Dec +2.96), and the January step alone (-5.70) is
+    larger than the four falls before it combined — which reads far more like a one-off
+    collapse than a steady decline.
+
+    First and last are the endpoints of a trend, not the trend. A claim about "every month" is
+    a claim about every step, and it is checkable against the rows the same way a total is.
+    """
+    lowered = ca._ANALYST_SYSTEM.lower()
+    assert "every step" in lowered
+    assert "first and last" in lowered or "endpoints" in lowered

@@ -330,6 +330,13 @@ RULES THAT DECIDE WHETHER THE ANSWER IS TRUE
 - A capped score is a ceiling, not a measurement. Never average capped and earned scores
   together without saying how many were capped.
 - Say which measure you ranked on when you rank.
+- A TREND CLAIM IS A CLAIM ABOUT EVERY STEP. First and last are the endpoints of a series,
+  not its shape: before writing "every month", "steady", "consistently" or "month on month",
+  walk the consecutive pairs and check. A component that went 23.71, 22.50, 21.79, 22.73,
+  19.41, 22.37, 16.67 was described as having "fallen every month on record" in a "steady
+  decline, not a one-off dip" — it rose twice, and the last step alone was larger than the
+  four falls before it combined. Say what the series did, including the recoveries, and name
+  the biggest single move when one dominates.
 - A SUPERLATIVE IS A CLAIM ABOUT EVERY ROW. Before you write best, worst, highest, lowest,
   most or least, compare every row you were given and name the winner by its value — not the
   most recent row, not the one that caught the eye. "Best month: December 2023, 85.09" was

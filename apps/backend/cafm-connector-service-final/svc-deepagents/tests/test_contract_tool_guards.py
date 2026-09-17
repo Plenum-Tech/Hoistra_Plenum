@@ -509,3 +509,39 @@ async def test_a_claim_names_the_benchmark_it_was_measured_against(monkeypatch):
     rule = (await cp.list_invoices.ainvoke({}))["invoices"][0]["AMOUNT_RULE"]
     assert "list_contract_parameters" in rule
     assert "defaults_used" in rule
+
+
+# ── one phrase, two measures ─────────────────────────────────────────────────────────
+
+async def test_contract_sla_hours_say_they_are_targets_not_performance(monkeypatch):
+    """"What is the SLA completion for my vendor?" was asked twice and answered twice, from
+    two different tables, both correctly:
+
+      - contract_sla_parameters.sla_completion_p1..p4_hours - the hours the contract ALLOWS
+      - component_breakdown.sla_completion on the monthly scorecard - what the vendor SCORED
+
+    Neither answer mentioned the other reading existed. The sub-agent picked a table and the
+    question's own ambiguity vanished into it; on the second run the router's stated reason
+    said "which is a scorecard metric" while the tool call went to the contract. A reader
+    cannot tell which of the two they were given, and the two support opposite conclusions:
+    one says what was promised, the other says whether it was met.
+    """
+    monkeypatch.setattr(cp, "_request", _fake({"ok": True, "parameters": [
+        {"contract_ref": "UKRI-2938", "vendor_name": "Gough and Kelly Ltd.",
+         "sla_completion_p1_hours": 4, "status": "draft"},
+    ]}))
+    out = await cp.list_contract_parameters.ainvoke({})
+    note = out["SLA_SENSE_NOTE"]
+    assert "target" in note.lower()
+    assert "list_vendor_scorecards" in note
+
+
+async def test_scorecard_sla_component_says_it_is_the_measured_one(monkeypatch):
+    monkeypatch.setattr(cp, "_request", _fake({"ok": True, "scorecards": [
+        {"vendor_name": "Gough and Kelly Ltd.", "score_month": "2024-01-01",
+         "component_breakdown": {"sla_completion": 16.67}},
+    ]}))
+    out = await cp.list_vendor_scorecards.ainvoke({})
+    note = out["SLA_SENSE_NOTE"]
+    assert "measured" in note.lower() or "achieved" in note.lower()
+    assert "list_contract_parameters" in note
