@@ -492,6 +492,58 @@ async def udr_describe_table(table: str) -> dict:
 
 
 
+@tool
+async def find_tables(question: str, k: int = 8, domain: str | None = None) -> dict:
+    """UDR — Which tables answer this question. Call this BEFORE naming a table.
+
+    Searches the table catalogue by meaning: every plenum_cafm table has a written purpose,
+    the questions it is the right source for, its grain (what one row is), its keys, its links
+    to other tables — declared foreign keys AND the links that exist only by column naming —
+    and sample values. Pass the user's question as asked; paraphrasing it loses the words the
+    embedding matches on.
+
+    Returns the best `k` tables, best first, each with `purpose`, `answers`, `not_for` (the
+    near-miss table for a question that sounds like this one), `links_out` / `links_in` (the
+    joins available), `primary_key`, `columns` (names) and `score`. Then `table_card` for the
+    one or two you will actually read, and `get_schema` only to confirm exact column names.
+
+    `domain` narrows to one area: org, assets, work, compliance, energy, vendors, supply, docs,
+    reference, platform.
+
+    Measured 17 Sep 2026: without this, "which assets have never been scored" was answered by
+    a LEFT JOIN against a table that does not exist. The catalogue would have said
+    `assets.health_score`, and that `asset_condition_scores` is the near-miss.
+    """
+    try:
+        params: dict[str, Any] = {"q": question, "k": k}
+        if domain:
+            params["domain"] = domain
+        resp = await _request("GET", settings.udr_base_url, "/api/catalog/search",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "find_tables")
+
+
+@tool
+async def table_card(table: str) -> dict:
+    """UDR — One table's card from the catalogue: purpose, the questions it answers, what one
+    row is, primary key, every link in and out (declared vs by-name), every column with type,
+    nullability and sample values, three redacted sample rows, and which service owns it.
+
+    Read this before writing SQL against a table you have not used in this session. The sample
+    values tell you the status spellings and the id formats; the links tell you what you can
+    join to without guessing. A table with `purpose_source: "heuristic"` had no model-written
+    purpose — treat its description as structural, not semantic.
+    """
+    try:
+        resp = await _request("GET", settings.udr_base_url, f"/api/catalog/{table}",
+                              service=_SERVICE, timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "table_card")
+
+
 async def _scoped(table: str, payload: dict, *, key: str = "rows") -> dict:
     """Narrow a svc-udr read to the caller's buildings before the model sees it."""
     rows = payload.get(key) if isinstance(payload, dict) else None

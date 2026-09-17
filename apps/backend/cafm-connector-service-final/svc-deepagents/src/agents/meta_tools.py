@@ -281,6 +281,8 @@ class _TaskRunner:
         from .wo_engine_agent import MAINTENANCE_READ_TOOLS, WO_ENGINE_SUBAGENT_TOOLS
         from .schema_mapper_agent import continue_schema_mapping_gate
         from .udr_agent import (
+            find_tables,
+            table_card,
             find_asset,
             find_location,
             get_asset_documents,
@@ -395,6 +397,7 @@ class _TaskRunner:
             "udr": create_react_agent(
                 llm,
                 tools=[
+                    find_tables, table_card,
                     get_schema, udr_list_tables, udr_describe_table,
                     find_asset, find_location, get_asset_documents,
                     query_table, udr_read_records, udr_get_record, udr_search_records,

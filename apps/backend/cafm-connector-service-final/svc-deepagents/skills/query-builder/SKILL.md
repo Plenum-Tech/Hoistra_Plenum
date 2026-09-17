@@ -50,6 +50,8 @@ Rules:
 
 ## Step 2 — LOCATE: read the live schema, never the model file
 
+**Call `find_tables(question)` first when the table is not certain.** It searches a catalogue of every table's purpose, the questions it answers, its keys and links and sample values — by meaning, not by name — and returns the best candidates with the joins available between them. `table_card(table)` then gives one table's columns with sample values before you write SQL.
+
 **Call `get_schema()` once per session before your first query.** It returns every table and
 every column that exists *right now*. That is the only source of truth.
 

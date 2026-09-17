@@ -5,7 +5,7 @@ Wraps a LangGraph ReAct agent over all 54 CAFM tools with the CAFM system prompt
 Tool breakdown:
   Meta (6)        : write_todos, task, write_file, read_file, memory_set, memory_get
   UDR (13)        : get_schema, lookup_user, query_table, udr_agent_query,
-                    udr_list_tables, udr_describe_table, udr_read_records, udr_get_record,
+                    udr_list_tables, udr_describe_table, find_tables, table_card, udr_read_records, udr_get_record,
                     udr_search_records, udr_create_record, udr_update_record,
                     udr_delete_record, udr_execute_select
   WO Engine (22)  : 5 dynamic approval + 4 intelligent pipeline + 8 CRUD + 5 reference lookups
@@ -166,7 +166,7 @@ from .udr_agent import (
     get_asset_documents,
     udr_agent_query,
     udr_list_tables,
-    udr_describe_table,
+    udr_describe_table, find_tables, table_card,
     udr_read_records,
     udr_get_record,
     udr_search_records,
@@ -266,7 +266,7 @@ ALL_TOOLS = [
     list_building_documents,
     udr_agent_query,
     udr_list_tables,
-    udr_describe_table,
+    udr_describe_table, find_tables, table_card,
     udr_read_records,
     udr_get_record,
     udr_search_records,
@@ -391,6 +391,7 @@ _TOOL_DOMAIN: dict[str, str] = {
     "read_file": "meta", "memory_set": "meta", "memory_get": "meta",
     # UDR (11+)
     "get_schema": "udr", "lookup_user": "udr", "query_table": "udr",
+    "find_tables": "udr", "table_card": "udr",
     "find_asset": "udr", "find_location": "udr",
     "get_asset_documents": "udr",
     "list_building_documents": "udr",

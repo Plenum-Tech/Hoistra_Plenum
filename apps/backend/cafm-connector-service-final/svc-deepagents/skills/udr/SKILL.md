@@ -72,7 +72,9 @@ Confirm both against `get_schema()` before you filter on them.
 
 | Tool | Use it for |
 |------|-----------|
-| `get_schema()` | **First call of every session.** Every table, every column, live. |
+| `find_tables(question)` | **First call for any question whose table you are not certain of.** Searches the table catalogue by meaning: purpose, the questions each table answers, its grain, keys, links (declared and by-name) and sample values. Pass the question as asked. |
+| `table_card(table)` | One table's card before you write SQL against it: every column with sample values (status spellings, id formats), every join available, which service owns it. |
+| `get_schema()` | Every table, every column, live. Confirms exact names after `find_tables` has chosen the table. |
 | `find_asset(identifier)` | Any asset reference — searches id, asset_code, asset_name, barcode, serial at once. |
 | `find_location(identifier)` | Any site/location reference — site_id, code, name, city, and the locations tree. |
 | `get_asset_documents(identifier, query="")` | The asset's linked documents and their chunks. Empty `query` = the whole document. |
@@ -163,7 +165,8 @@ pull your half, name the other half plainly, and let the orchestrator combine th
 
 ## 5. Never
 
-- Never guess a table or column name. `get_schema()` first, always.
+- Never guess a table or column name. `find_tables()` to choose the table, `get_schema()` to confirm the names — always.
+- Never join on a column name alone. `table_card` says whether the link is a declared foreign key or a naming convention; 230 of this schema's 384 links are the second kind, and rows can point at ids that do not exist.
 - Never interpolate user text into an identifier — values are parameters.
 - Never call `udr_create_record` / `udr_update_record` / `udr_delete_record` from a question.
   Reads answer questions; writes need an explicit instruction and a confirmation.

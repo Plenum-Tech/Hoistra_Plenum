@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi import Depends
 
 from .core.logging import configure_logging, get_logger
-from .api.routes import agent, tables, runs, spaces
+from .api.routes import agent, catalog, tables, runs, spaces
 from .services.principal import current_principal, require_admin
 from .api.schemas.database import ErrorDetail, ErrorResponse
 from .db import ensure_udr_tables
@@ -172,6 +172,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 # which column holds the company, and that is only knowable once the table is. The saved
 # spaces and run history have a fixed shape and a real organization_id, so they are scoped
 # to the caller's company instead (see services.principal.organization_for).
+app.include_router(catalog.router, prefix="/api/catalog", tags=["Table catalogue"])
 app.include_router(agent.router,  prefix="/api/agent",  tags=["Agent"],
                    dependencies=[Depends(require_admin)])
 app.include_router(tables.router, prefix="/api/tables", tags=["Tables", "CRUD"],
