@@ -145,6 +145,29 @@ caller_organization_id: ContextVar[str | None] = ContextVar("caller_organization
 #: parameter and scope from the token alone; stamping them would be a stray query param.
 _ORG_SCOPED_SERVICES = frozenset({"operations_intelligence", "wo_management"})
 
+#: The page engines the router assigned this turn to, when it named no place for the
+#: database catalogue. Compliance, vendor, energy, asset and maintenance questions are
+#: answered from the page APIs so the chat agrees with the screen; the general loop still
+#: holds every UDR tool, and a fanned-out or action-verb turn runs there. This is the rule
+#: the routing note states, made a refusal: while the set is non-empty, a call to svc-udr
+#: raises PageEngineOwnsThisTurn instead of reading a table. Empty (the default, and
+#: whenever `udr` is one of the agents named) means the catalogue is open.
+turn_page_engines: ContextVar[frozenset[str]] = ContextVar("turn_page_engines", default=frozenset())
+
+
+class PageEngineOwnsThisTurn(RuntimeError):
+    """Raised in place of a UDR read on a turn the router gave to one or more page engines."""
+
+    def __init__(self, engines: frozenset[str] | set[str]) -> None:
+        self.engines = frozenset(engines)
+        names = ", ".join(sorted(self.engines))
+        super().__init__(
+            f"This question was routed to the {names} page engine(s), which answer from the "
+            "page's own API — the source of record for it. The database catalogue and direct "
+            "table reads are closed for this turn: call task(\"<engine>\") with the user's "
+            "question instead."
+        )
+
 
 async def request(
     method: str,
@@ -177,6 +200,12 @@ async def request(
         httpx.TransportError:  On persistent connection/timeout failures.
     """
     cb = _breaker(service)
+
+    if service == "udr":
+        _owners = turn_page_engines.get()
+        if _owners:
+            log.info("http_client.udr_closed_for_page_turn", engines=sorted(_owners), path=path)
+            raise PageEngineOwnsThisTurn(_owners)
 
     if not cb.allow_request():
         raise RuntimeError(

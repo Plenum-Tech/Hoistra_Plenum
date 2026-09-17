@@ -49,6 +49,7 @@ from ..config import (
     settings,
 )
 from ..llm_factory import create_chat_model, friendly_openai_error
+from ..http_client import turn_page_engines as _turn_page_engines
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
 from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
@@ -3794,6 +3795,28 @@ class DeepAgentOrchestrator:
         }
 
     @staticmethod
+    def _claim_turn_for_page_engines(routing: dict[str, Any] | None) -> frozenset[str]:
+        """Close the database catalogue for this turn when the router gave it to page engines.
+
+        Compliance, vendor, energy, asset and maintenance questions are answered from the
+        page APIs, so the chat agrees with the screen. The engines' own tool lists hold no
+        UDR tool, so a direct dispatch cannot reach the catalogue — but a fanned-out turn or
+        an action verb runs in the general loop, which holds every tool. This records the
+        engines the router named in `turn_page_engines`; svc-udr calls then refuse until the
+        turn ends. Naming `udr` anywhere (a spare-parts-and-assets join, a page question
+        with a genuine database half) leaves the catalogue open: the router said it is needed.
+        Returns what was claimed, for the caller's log.
+        """
+        named = [str((routing or {}).get("agent") or "").strip()]
+        named += [str(a).strip() for a in ((routing or {}).get("also") or [])]
+        named = [n for n in named if n]
+        owners: frozenset[str] = frozenset()
+        if "udr" not in named:
+            owners = frozenset(n for n in named if as_phase2_engine(n) is not None)
+        _turn_page_engines.set(owners)
+        return owners
+
+    @staticmethod
     def _routing_note(routing: dict[str, Any] | None, *, carry_engine: bool = False) -> str | None:
         """What the general loop is told when the router chose a sub-agent it cannot short-circuit to.
 
@@ -3829,6 +3852,14 @@ class DeepAgentOrchestrator:
             lines.append(
                 "The question also touches: " + ", ".join(f"`{a}`" for a in also)
                 + " — spawn one task() each in the same turn and merge the results yourself."
+            )
+        owners = [a for a in (agent, *also) if as_phase2_engine(a) is not None]
+        if owners and "udr" not in (agent, *also):
+            lines.append(
+                "These are page engines: they answer from the page's own API, which is the source "
+                "of record, so the chat agrees with the screen. Do not answer this from the database "
+                "catalogue or direct table reads (find_tables, table_card, get_schema, query_table, "
+                "udr_*) — those tools are closed for this turn and will refuse."
             )
         return "\n".join(lines)
 
@@ -6607,9 +6638,14 @@ class DeepAgentOrchestrator:
         }
         engine = preferred_engine
         routing_note: str | None = None
+        # A new turn opens the catalogue again before anything decides otherwise: a keyword
+        # route or a preferred engine skips select_agent, and a claim from the previous turn
+        # on this task must not outlive the turn that made it.
+        _turn_page_engines.set(frozenset())
         if engine is None and route_intent not in core_routes:
             routing = await select_agent(user_message, extra_context)
             engine, routing_note = self._decide_dispatch(routing, msg_l)
+            self._claim_turn_for_page_engines(routing)
             # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
             # intent classifier so the orchestrator comprehends meaning, not just exact keywords.
             # Not when the router made a decision the engines cannot take — wo_engine or udr is
@@ -6996,6 +7032,10 @@ class DeepAgentOrchestrator:
             ROUTE_WO_CLARIFY,
         }
         routing_note: str | None = None
+        # A new turn opens the catalogue again before anything decides otherwise: a keyword
+        # route or a preferred engine skips select_agent, and a claim from the previous turn
+        # on this task must not outlive the turn that made it.
+        _turn_page_engines.set(frozenset())
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -7005,6 +7045,7 @@ class DeepAgentOrchestrator:
             llm_cost.begin_turn(sid)
             routing = await select_agent(user_message, extra_context)
             phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
+            self._claim_turn_for_page_engines(routing)
             if phase2_engine is not None:
                 yield {
                     "type": "reasoning",

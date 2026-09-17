@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from .. import database
 from ..config import settings
-from ..http_client import request as _request
+from ..http_client import PageEngineOwnsThisTurn, request as _request, turn_page_engines
 from ..services.principal import restrict_records, table_building_clause
 
 log = structlog.get_logger(__name__)
@@ -60,6 +60,10 @@ async def get_schema() -> dict:
     Result is cached for 5 minutes so repeated calls within a session are free.
     """
     global _schema_cache, _schema_cache_at
+
+    _owners = turn_page_engines.get()
+    if _owners:  # the same door the HTTP tools go through; this one reads the database directly
+        return _err(PageEngineOwnsThisTurn(_owners), "get_schema")
 
     now = time.monotonic()
     if _schema_cache is not None and (now - _schema_cache_at) < _SCHEMA_TTL:
