@@ -135,6 +135,54 @@ class TestWhatTheJudgeSees:
         assert "join result" in src and "0.0 to " in src
 
 
+# ── a correction may not shrink a table ────────────────────────────────────────────────
+
+TABLE_ANSWER = (
+    "**9 parts are below reorder level.**\n\n"
+    "| Part | Stock | Reorder |\n|---|---:|---:|\n"
+    "| P-BRG-001 | 0 | 5 |\n| PRT-BNZ-04 | 0 | 5 |\n| PRT-BRG-88 | 0 | 5 |\n"
+    "| P-IMP-001 | 2 | 5 |\n| P-BLT-002 | 3 | 5 |\n"
+)
+TABLE_ROWS = [{"tool": "udr_execute_select", "input": {"sql": "SELECT …"},
+               "output": {"rows": [{"part_code": c} for c in ("P-BRG-001", "PRT-BNZ-04", "PRT-BRG-88", "P-IMP-001", "P-BLT-002")]}}]
+
+
+class TestACorrectionMayNotShrinkATable:
+
+    def test_rows_are_counted_without_the_header_rule(self):
+        assert ev._table_rows(TABLE_ANSWER) == 6  # header + 5 rows
+        assert ev._table_rows("no table here") == 0
+
+    async def test_a_correction_that_keeps_three_examples_is_not_delivered(self):
+        """14:12, 17 Sep: the judge could not verify every row, so its correction kept three
+        rows 'as examples' and turned the rest into prose. The user had asked for the list."""
+        judge = _Judge(
+            _verdict(grounded=False, count_consistent=False, score=0.4,
+                     issues=["output is clipped, so several rows cannot be confirmed"],
+                     corrected_answer="The visible evidence confirms these examples: P-BRG-001 (0/5), PRT-BNZ-04 (0/5), PRT-BRG-88 (0/5). A complete list is not available."),
+            _verdict(score=0.94),
+        )
+        out, e = await ev.evaluate_udr_response(user_message="which parts are below reorder level?",
+                                                answer=TABLE_ANSWER, tool_calls=TABLE_ROWS, llm=judge)
+        assert ev._table_rows(out) == 6, out
+        assert "these examples" not in out
+        assert "human verification" in out
+
+    async def test_a_correction_that_keeps_the_table_and_fixes_a_number_is_delivered(self):
+        fixed = TABLE_ANSWER.replace("**9 parts", "**5 parts")
+        judge = _Judge(
+            _verdict(grounded=False, count_consistent=False, score=0.6, issues=["headline says 9, table has 5"], corrected_answer=fixed),
+            _verdict(score=0.96),
+        )
+        out, e = await ev.evaluate_udr_response(user_message="q", answer=TABLE_ANSWER, tool_calls=TABLE_ROWS, llm=judge)
+        assert out.startswith("**5 parts") and ev._table_rows(out) == 6 and e.passed
+
+    def test_the_judge_is_told_to_keep_tables_and_treat_clipped_as_unverifiable(self):
+        import inspect
+        src = inspect.getsource(ev.evaluate_udr_response)
+        assert "verbatim" in src and "[clipped]" in src and "never replace a table" in src
+
+
 # ── the skill ──────────────────────────────────────────────────────────────────────────
 
 class TestTheSkillRefusesToGuessLinks:

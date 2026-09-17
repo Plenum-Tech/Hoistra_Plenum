@@ -36,13 +36,17 @@ UDR_TOOL_NAMES = frozenset(
     }
 )
 EVAL_THRESHOLD = 0.85
-_MAX_EVIDENCE_CHARS = 24_000
+#: Measured 17 Sep 2026 at 14:12: at 24,000 total and 6,000 per call, the 47-row parts result
+#: and the part→asset join were clipped, the judge wrote "cannot be confirmed from the supplied
+#: visible rows", and its correction replaced two tables with three examples. The judge must
+#: see what the answer was built from; the model reads this much without difficulty.
+_MAX_EVIDENCE_CHARS = 80_000
 #: One call's output may take at most this much of the evidence. Measured 17 Sep 2026: a
 #: get_schema dump (221 tables, 2,580 columns) filled the whole 24,000-character budget on
 #: its own, the rows that followed it were cut off, and the judge wrote "the evidence
 #: contains only schema metadata" — then either failed a correct answer or, when its own
 #: output broke, let an invented one through. Clipping per call keeps every source in view.
-_MAX_CALL_CHARS = 6_000
+_MAX_CALL_CHARS = 20_000
 #: Tools whose output describes the database rather than reads it. They gate the check
 #: (a turn that only looked at the schema is still a UDR turn) but are not evidence: no
 #: factual claim about a part, an asset or a count can be grounded in a column list.
@@ -204,6 +208,16 @@ _NOT_EVIDENCE = frozenset({
 })
 
 
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_RULE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+
+
+def _table_rows(text: str) -> int:
+    """Markdown table rows in an answer, header rules excluded — the rows a reader counts."""
+    return sum(1 for line in (text or "").splitlines()
+               if _TABLE_ROW.match(line) and not _TABLE_RULE.match(line))
+
+
 def _clipped(call: dict[str, Any]) -> dict[str, Any]:
     """One call's record with its output held to _MAX_CALL_CHARS, so it cannot crowd out the rest."""
     out = call.get("output")
@@ -233,8 +247,12 @@ async def evaluate_udr_response(
             "ungrounded. A headline count must equal the number of matching rows in the evidence "
             "and in the answer's own table. Return JSON only with keys grounded, answers_question, "
             "count_consistent, score, issues, corrected_answer. score is a decimal from 0.0 to "
-            "1.0. If the candidate is wrong, corrected_answer must be a concise answer built only "
-            "from the evidence. Never add external knowledge."
+            "1.0. If the candidate is wrong, corrected_answer is the candidate with only its "
+            "unsupported values fixed or removed and any rows the evidence shows were omitted "
+            "added: keep every supported markdown table and row verbatim, never replace a table "
+            "with examples or prose, and keep the candidate's headings. Where the evidence is "
+            "marked [clipped], values beyond the clip are unverifiable, not wrong: keep them and "
+            "set count_consistent to false. Never add external knowledge."
         )
     )
     human = HumanMessage(
@@ -278,6 +296,7 @@ async def evaluate_udr_response(
         return answer, evaluation
 
     corrected = (evaluation.corrected_answer or "").strip()
+    shrank = False  # set when the judge's correction has fewer table rows than the answer
     if corrected:
         # A correction is another agent output, so it must pass the same gate before delivery.
         corrected_human = HumanMessage(
@@ -303,6 +322,19 @@ async def evaluate_udr_response(
             )
         corrected_evaluation = _with_invented(
             corrected_evaluation, ungrounded_identifiers(corrected, tool_calls, user_message))
+        if corrected_evaluation.passed and _table_rows(corrected) < _table_rows(answer):
+            # A correction may not shrink a table. Measured 17 Sep 2026 at 14:12: the judge
+            # could not verify every row of two tables, so its "correction" kept three rows as
+            # examples and turned the rest into prose. The user had asked for the list. A
+            # correction that drops rows is a different, smaller answer, not a corrected one —
+            # the original goes out with the human-verification note instead.
+            log.warning("udr.eval.correction_shrank_table",
+                        original_rows=_table_rows(answer), corrected_rows=_table_rows(corrected))
+            shrank = True
+            corrected_evaluation = corrected_evaluation.model_copy(update={
+                "score": min(corrected_evaluation.score, EVAL_THRESHOLD - 0.01),
+                "issues": [*corrected_evaluation.issues, "correction dropped table rows"],
+            })
         if corrected_evaluation.passed:
             log.warning(
                 "udr.eval.corrected",
@@ -316,9 +348,12 @@ async def evaluate_udr_response(
     # answer as long as it is grounded (i.e. every value traces to the evidence). Only a truly
     # ungrounded answer is withheld, and even then we explain what was missing instead of a bare
     # retry, so the assistant reads as intelligent rather than a brittle gate.
-    if corrected and corrected_evaluation.grounded:
+    if corrected and corrected_evaluation.grounded and not shrank:
         best, best_eval = corrected, corrected_evaluation
-    elif evaluation.grounded and answer.strip():
+    elif answer.strip() and not missing and (evaluation.grounded or shrank):
+        # Grounded but imperfect — or the judge's only remedy was a smaller table. Every code
+        # in the answer was returned by a tool (no `missing`), so the answer goes out as written
+        # and the note below asks for a human check of the counts.
         best, best_eval = answer, evaluation
     elif not evaluation.evaluated and answer.strip() and not missing:
         # The judge never returned a verdict, so there is no finding to withhold the answer
