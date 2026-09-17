@@ -135,11 +135,15 @@ caller_authorization: ContextVar[str | None] = ContextVar("caller_authorization"
 #: engine's HTTP call already passes through, rather than in each tool function individually.
 caller_organization_id: ContextVar[str | None] = ContextVar("caller_organization_id", default=None)
 
-#: Only operations-intelligence has this override at all (wo_management, udr and doc_rag
-#: have no per-company scoping — see superAdmin.js's own comment on the frontend) —
-#: injecting an unrequested organization_id into a call to one of those would be a stray
-#: query param at best, and asserting a scope that service cannot actually enforce at worst.
-_ORG_SCOPED_SERVICE = "operations_intelligence"
+#: The services that read `organization_id` as "superadmin: act as this company" and narrow
+#: to it. operations-intelligence does on every register route. work-order-management does
+#: too — every /api/maintenance route declares it "Superadmin only: act as this company" and
+#: scopes to that company's buildings (routes/maintenance.py) — and it was left out of this
+#: set on the belief that it had no per-company scoping. Measured 17 Sep 2026: a superadmin
+#: viewing TechCorp saw 368 decisions on the Maintenance page and 374 in the chat, the six
+#: extra at Town Hall, another company's building. UDR and doc-rag genuinely have no act-as
+#: parameter and scope from the token alone; stamping them would be a stray query param.
+_ORG_SCOPED_SERVICES = frozenset({"operations_intelligence", "wo_management"})
 
 
 async def request(
@@ -222,10 +226,14 @@ async def request(
                     # alone. Query-string only (`params`) — operations-intelligence's write
                     # routes (scan, verify, renewal-email) take their scope from the body and
                     # this must never reach into one uninvited.
+                    # `params=None` counts as "no params", not as "leave alone": most of the
+                    # maintenance tools pass None when the question named no building, and
+                    # those are exactly the whole-estate reads where the company matters most.
                     _org = caller_organization_id.get()
-                    if _org and service == _ORG_SCOPED_SERVICE and isinstance(kwargs.get('params'), dict) \
-                            and not kwargs['params'].get('organization_id'):
-                        kwargs['params'] = {**kwargs['params'], 'organization_id': _org}
+                    _params = kwargs.get('params')
+                    if _org and service in _ORG_SCOPED_SERVICES and (_params is None or isinstance(_params, dict)) \
+                            and not (_params or {}).get('organization_id'):
+                        kwargs['params'] = {**(_params or {}), 'organization_id': _org}
                     resp = await client.request(method, path, **kwargs)
                     resp.raise_for_status()
                     cb.record_success()

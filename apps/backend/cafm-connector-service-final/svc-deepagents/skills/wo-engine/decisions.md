@@ -53,6 +53,28 @@ is truncated. Answer counting questions from those, never by counting the rows y
 Where `total_is_capped` is true, say "at least" — a capped figure presented as the total is how
 a screen ends up reading "134 of 134" while showing 134 of two thousand.
 
+## 1b. "Backlog on critical assets" is a join, not a filter
+
+`list_maintenance_decisions` filters on **state, source, building and vendor — nothing else.**
+There is no criticality filter and no condition filter. So "what is the backlog on critical
+assets in poor condition?" cannot be answered by this tool alone, and a call that returns 0
+rows because a filter did not exist is **not** "no backlog".
+
+Measured 17 Sep 2026: that exact question was answered "the available maintenance-decision
+data shows no backlog" from a call that matched nothing, on an estate carrying 368 decisions.
+
+The answer is a join:
+
+1. `list_maintenance_decisions()` — every decision in scope, with `asset_id` on each row.
+2. The asset side from the energy agent (`get_asset_intelligence` / `investigate_asset`):
+   `criticality_level` (L1/L2/L3) and condition. Ask for it under `also`; do not guess.
+3. Keep the decisions whose `asset_id` is an L1 (or poor-condition) asset. Report that
+   count, the states they sit in, and the cost, **and** how many decisions had no `asset_id`
+   at all — those are unclassifiable, not clean.
+
+Where the asset side is unavailable, say the join could not be made and give the total
+backlog by state instead. Never present a filter that does not exist as a result.
+
 ## 2. Source is where the trigger came from
 
 Compliance · Vendors · Assets · Energy · Maintenance.
