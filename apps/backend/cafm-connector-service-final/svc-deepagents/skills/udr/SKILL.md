@@ -99,16 +99,26 @@ GROUP BY s.site_name ORDER BY assets DESC
 ```
 Answer: total first, then the table.
 
-### "Which parts are below reorder level, and what asset needs them?" — three tables
+### "Which parts are below reorder level, and what asset needs them?" — four tables
+An asset is always shown **with its building**: every row of `assets` carries `building_id`, and
+`buildings.building_id` (the key — there is no `id` column) gives `name`. "BOILER-01 (Town Hall)"
+tells the reader where to go; "BOILER-01" alone does not. `work_order_parts.asset_id` is text and
+holds an asset id in most rows and an asset code in a few, so match on either.
 ```sql
 SELECT p.part_code, p.part_name, p.stock_quantity, p.reorder_level,
-       COUNT(DISTINCT wp.asset_id) AS assets_using
+       COUNT(DISTINCT a.id) AS assets_using,
+       STRING_AGG(DISTINCT a.asset_code || ' (' || COALESCE(b.name, 'building not recorded') || ')', ', ')
+           AS assets_with_building
 FROM plenum_cafm.spare_parts p
 LEFT JOIN plenum_cafm.work_order_parts wp ON wp.part_id = p.id
+LEFT JOIN plenum_cafm.assets a ON a.id::text = wp.asset_id OR a.asset_code = wp.asset_id
+LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
 WHERE p.stock_quantity < p.reorder_level
 GROUP BY p.part_code, p.part_name, p.stock_quantity, p.reorder_level
 ORDER BY (p.reorder_level - p.stock_quantity) DESC
 ```
+A `work_order_parts.asset_id` that matches no asset (an `AST-…` code that is not in the register)
+is reported as the raw reference with "not in the asset register", never as an asset.
 Call out `stock_quantity = 0` rows separately — those are stock-outs, not low stock.
 The headline figures come from a second, counting statement — never from counting the rows above by eye:
 ```sql

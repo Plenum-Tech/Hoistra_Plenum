@@ -224,3 +224,12 @@ class TestTheSkillRefusesToGuessLinks:
         prompt = agent_system_prompt("udr") or ""
         assert "Never fill a relationship column" in prompt
         assert "Never write a headline count from memory" in prompt
+
+    def test_a_linked_asset_is_shown_with_its_building(self):
+        """Asked 17 Sep 2026: 'building name is not showing — assets are linked to buildings'.
+        Every asset row carries building_id; buildings is keyed by building_id, not id."""
+        prompt = agent_system_prompt("udr") or ""
+        assert "b.building_id = a.building_id" in prompt
+        assert "assets_with_building" in prompt
+        assert "there is no `id` column" in prompt
+        assert "a.asset_code = wp.asset_id" in prompt  # asset_id holds a code in a few rows
