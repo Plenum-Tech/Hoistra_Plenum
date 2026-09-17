@@ -146,3 +146,29 @@ class TestAnAssetInvestigationIsCountedToo:
     def test_an_asset_question_still_names_the_engine_that_took_it(self):
         route = next(s for s in O._early_pipeline_steps(self.asset_turn()) if s["stage"] == "route")
         assert "energy_intelligence" in route["label"]
+
+
+class TestAToolThatReadEverythingAndMatchedNothing:
+
+    def test_an_empty_list_with_an_in_scope_count_is_not_zero_rows(self):
+        """"Which assets have never been scored?" returned `assets: []` and `in_scope: 53`, and
+        the panel said "1 tool, 0 rows" — as if nothing had been fetched, on a turn that read
+        the whole register. Where a tool says how many rows it examined, show that."""
+        llm_cost.begin_turn("test-unscored")
+        llm_cost.record("agent_router", "claude-sonnet-5", {"input_tokens": 900, "output_tokens": 40},
+                        2200.0, agent="energy_intelligence", reason="never-scored is the Assets page")
+        llm_cost.record("sub_agent", "gpt-5.6-terra", {"input_tokens": 3000, "output_tokens": 200}, 5500.0)
+        calls = [{"tool": "list_unscored_assets",
+                  "output": {"ok": True, "in_scope": 53, "scored": 53, "unscored": 0, "assets": []}}]
+        data = next(s for s in O._early_pipeline_steps(calls) if s["stage"] == "data")
+        assert "53 rows" in data["label"], data["label"]
+
+    def test_a_populated_list_is_still_counted_by_its_rows_not_in_scope(self):
+        llm_cost.begin_turn("test-unscored-2")
+        llm_cost.record("agent_router", "claude-sonnet-5", {"input_tokens": 900, "output_tokens": 40},
+                        2200.0, agent="energy_intelligence", reason="r")
+        llm_cost.record("sub_agent", "gpt-5.6-terra", {"input_tokens": 3000, "output_tokens": 200}, 5500.0)
+        calls = [{"tool": "list_unscored_assets",
+                  "output": {"in_scope": 53, "unscored": 4, "assets": [{}] * 4}}]
+        data = next(s for s in O._early_pipeline_steps(calls) if s["stage"] == "data")
+        assert "4 rows" in data["label"], data["label"]

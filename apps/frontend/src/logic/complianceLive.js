@@ -692,7 +692,12 @@ export const complianceLiveMethods = {
           ? "Live from svc-work-order-management: " + assets.length + " assets and " + wos.length +
             " work orders on record."
           : s.asLiveError
-            ? "The asset register did not load (" + String(s.asLiveError).slice(0, 120) + "), so the page is empty."
+            // A page-load failure is about the PAGE, not the data. Said as a bare fact, the
+            // orchestrator relayed it back: "the asset-register page's 401 error does not
+            // affect this result" — true, and noise, in an answer about unscored assets. The
+            // tools make their own authenticated reads; the page's fetch is not their evidence.
+            ? "The asset register on this page did not load (" + String(s.asLiveError).slice(0, 120) +
+              "). That is the page's own fetch, not evidence about the data — the tools read the register themselves. Do not mention it unless asked."
             : "The asset register has not loaded from the backend yet.");
       } else if (s.module === "ops") {
         parts.push(this.mxIsLive()

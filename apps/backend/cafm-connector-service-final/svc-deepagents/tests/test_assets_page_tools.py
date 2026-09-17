@@ -26,6 +26,15 @@ class TestTheToolsExist:
         assert "health_score" in doc and "never been scored" in doc
         assert "not evidence of health" in doc
 
+    def test_none_unscored_still_says_what_is_there(self):
+        """The chat answered "0 of 53 are unscored" and stopped. A person asked the same thing
+        would add how the scores spread and which assets sit nearest the bottom — which is what
+        the reader asks next. The tool now returns both, and the docstring says to use them."""
+        doc = " ".join(TOOLS["list_unscored_assets"].description.lower().split())
+        for key in ("score_bands", "score_range", "lowest_scored"):
+            assert key in doc, key
+        assert "seeded" in doc  # a register scored 78-100 throughout is that shape
+
     def test_the_band_tool_names_the_pages_chips(self):
         doc = TOOLS["list_asset_conditions"].description.lower()
         for band in ("threat", "watch", "in_control"):

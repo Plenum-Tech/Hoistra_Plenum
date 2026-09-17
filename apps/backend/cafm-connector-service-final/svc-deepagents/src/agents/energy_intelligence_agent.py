@@ -1260,6 +1260,11 @@ async def list_unscored_assets(building_id: str | None = None, limit: int = 200)
     "unscored" for exactly that reason. Say how many are unscored out of how many in scope, then
     list them by building; where the count is zero, say every asset in scope carries a score.
 
+    When the answer is "none", say what IS there: `score_bands` (how many sit in the page's
+    threat / watch / in-control health bands), `score_range`, and `lowest_scored` — the five
+    assets nearest the bottom, which is what the reader asks next. A whole register scored
+    78–100 is the shape of seeded data, not an assessed estate; say so if you see it.
+
     Reads the register from work-order-management page by page, so it covers the whole scope
     rather than the first 200 rows.
     """
@@ -1285,12 +1290,28 @@ async def list_unscored_assets(building_id: str | None = None, limit: int = 200)
         for r in unscored:
             key = str(r.get("building_id") or "(no building)")
             by_building[key] = by_building.get(key, 0) + 1
+        # What IS there, for the answer "none" would otherwise leave thin: how the scores
+        # spread across the page's health bands, and the assets nearest the bottom. Measured
+        # 17 Sep 2026: every one of 53 assets scored 78-100, which is a seeded register, not
+        # an assessed one - a reader should be told that shape, not just the zero.
+        scored_rows = [r for r in rows if isinstance(r.get("health_score"), (int, float))]
+        bands = {"threat_below_40": 0, "watch_40_to_69": 0, "in_control_70_plus": 0}
+        for r in scored_rows:
+            sc = float(r["health_score"])
+            bands["threat_below_40" if sc < 40 else "watch_40_to_69" if sc < 70 else "in_control_70_plus"] += 1
+        lowest = sorted(scored_rows, key=lambda r: float(r["health_score"]))[:5]
+        pick = ("asset_code", "asset_name", "building_id", "health_score", "criticality")
         return {
             "ok": True,
             "in_scope": len(rows),
             "scored": len(rows) - len(unscored),
             "unscored": len(unscored),
             "unscored_by_building": by_building,
+            "score_bands": bands,
+            "score_range": ({"min": min(float(r["health_score"]) for r in scored_rows),
+                             "max": max(float(r["health_score"]) for r in scored_rows)}
+                            if scored_rows else None),
+            "lowest_scored": [{k: r.get(k) for k in pick} for r in lowest],
             "assets": [
                 {k: r.get(k) for k in ("id", "asset_code", "asset_name", "building_id",
                                         "criticality", "status", "condition_score")}

@@ -3889,6 +3889,7 @@ class DeepAgentOrchestrator:
                 acts = out_.get("actions")
                 if isinstance(acts, list):
                     actions += len(acts)
+                before = rows
                 for key in cls._ROW_KEYS:
                     v = out_.get(key)
                     if isinstance(v, list):
@@ -3897,6 +3898,12 @@ class DeepAgentOrchestrator:
                         inner = v.get(key)
                         if isinstance(inner, list):
                             rows += len(inner)
+                # A tool whose list is legitimately empty still READ something. "Which assets
+                # have never been scored" returns an empty `assets` list and `in_scope: 53`;
+                # the panel said "1 tool, 0 rows" as if nothing had been fetched. Where a
+                # tool reports how many rows it examined, that is the figure to show.
+                if rows == before and isinstance(out_.get("in_scope"), int):
+                    rows += int(out_["in_scope"])
             steps.append(
                 {
                     "stage": "data",
