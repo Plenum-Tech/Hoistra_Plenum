@@ -3705,6 +3705,10 @@ class DeepAgentOrchestrator:
         r"trigger|mark|escalate|schedule a)\b"
     )
 
+    #: What makes a question about an asset's condition rather than its cost. "worst
+    #: performing chiller" is a cost question; "worst condition" and "graded poor" are not.
+    _ASSET_CONDITION = re.compile(r"\b(condition|health|healthy|unhealthy|graded?|grades)\b")
+
     @classmethod
     def _maintenance_read_question(cls, msg_l: str) -> bool:
         return not cls._WO_WRITE_VERBS.search(msg_l or "")
@@ -3729,7 +3733,19 @@ class DeepAgentOrchestrator:
         """
         agent = str((routing or {}).get("agent") or "").strip() or None
         engine = as_phase2_engine(agent)
-        also = [a for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        also = [str(a).strip() for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        # An asset's CONDITION is two registers by definition — the inspector's grade lives with
+        # the work orders, the consumption evidence with energy — and the user asked, in so many
+        # words, that "worst condition" fetch both and the orchestrator write the summary. The
+        # router was asked for a strict `also` (a half-relevant second agent buries the answer)
+        # and, asked that, it stopped naming the second register here. So this one pairing is
+        # a rule rather than a judgement: whichever of the two the router picked, the other is
+        # added. Cost and consumption questions are not condition questions and stay single.
+        if engine in ("energy_intelligence", "wo_engine") and cls._ASSET_CONDITION.search(msg_l or ""):
+            partner = "wo_engine" if engine == "energy_intelligence" else "energy_intelligence"
+            if partner not in also:
+                also = [*also, partner]
+                routing = {**(routing or {}), "also": also}
         if engine == "wo_engine" and not cls._maintenance_read_question(msg_l):
             return None, cls._routing_note(routing, carry_engine=True)
         if engine is not None and also and engine != "compliance":

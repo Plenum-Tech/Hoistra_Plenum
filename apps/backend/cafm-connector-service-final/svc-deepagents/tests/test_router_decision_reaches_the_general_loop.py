@@ -165,6 +165,28 @@ class TestWhereATurnRuns:
         assert 'task("energy_intelligence"' in note and "`wo_engine`" in note
         assert "same turn" in note
 
+    @pytest.mark.parametrize("primary,partner", [
+        ("energy_intelligence", "wo_engine"), ("wo_engine", "energy_intelligence"),
+    ])
+    def test_a_condition_question_fans_out_even_when_the_router_named_one_agent(self, primary, partner):
+        """Asked for a strict `also`, the router stopped naming the second register on "worst
+        condition". The user's requirement is explicit, so this pairing is a rule, not a
+        judgement — whichever side the router picked, the other is fetched too."""
+        engine, note = O._decide_dispatch(
+            {"agent": primary, "also": []}, "which assets are in the worst condition?")
+        assert engine is None
+        assert f'task("{primary}"' in note and f"`{partner}`" in note
+
+    @pytest.mark.parametrize("q", [
+        "why does ch-01 at kingsway house cost so much to run?",
+        "what is the operating hours gap at kingsway house?",
+        "which assets have anomalies attached to them?",
+        "which is the worst performing chiller?",
+    ])
+    def test_a_cost_or_consumption_question_stays_on_the_energy_engine(self, q):
+        engine, note = O._decide_dispatch({"agent": "energy_intelligence", "also": []}, q)
+        assert engine == "energy_intelligence" and note is None
+
     def test_compliance_keeps_its_pipeline_even_when_a_second_domain_is_named(self):
         engine, note = O._decide_dispatch(
             {"agent": "compliance", "also": ["wo_engine"]},
