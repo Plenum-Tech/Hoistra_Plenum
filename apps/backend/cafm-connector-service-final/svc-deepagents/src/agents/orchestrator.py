@@ -73,6 +73,7 @@ from .doc_rag_agent import (
     semantic_search,
 )
 from .meta_tools import (
+    answer_delta_event,
     init_meta_tools,
     memory_get,
     memory_set,
@@ -6093,8 +6094,15 @@ class DeepAgentOrchestrator:
         inner_tool_calls: list[dict[str, Any]] = []
 
         async def _live(event: dict[str, Any]) -> None:
-            if on_zone is not None:
-                await on_zone(self._EVENT_ZONE, event)
+            if on_zone is None:
+                return
+            # Compliance streams its ANALYST's zones, not the sub-agent's prose — the prose is
+            # evidence-gathering the analyst rewrites, and showing it as a draft would put two
+            # different answers on screen in one turn. Every other engine's sub-agent text IS
+            # the answer (or the draft the vendor composer works from), so it streams.
+            if engine == "compliance" and event.get("type") == "answer_delta":
+                return
+            await on_zone(self._EVENT_ZONE, event)
 
         if on_zone is not None:
             await _live(
@@ -7146,6 +7154,18 @@ class DeepAgentOrchestrator:
                     # (e.g. run_migration), so Activity Log Section 2 streams node-by-node.
                     if event.get("name") == "processing_step":
                         yield {"type": "processing_step", **(event.get("data") or {})}
+
+                elif kind == "on_chat_model_stream":
+                    # The orchestrator's own words as it writes them. Only the top-level model
+                    # run: a sub-agent a `task` call spawned inherits this run as its parent
+                    # and its model runs surface here too, nested deeper — its drafts are not
+                    # this answer. The interface shows deltas as a draft the final replaces.
+                    if len(event.get("parent_ids") or []) <= 2:
+                        delta = answer_delta_event(
+                            event.get("data", {}).get("chunk"), last_domain or "orchestrator"
+                        )
+                        if delta is not None:
+                            yield delta
 
                 elif kind == "on_chat_model_end":
                     output_msg = event.get("data", {}).get("output")

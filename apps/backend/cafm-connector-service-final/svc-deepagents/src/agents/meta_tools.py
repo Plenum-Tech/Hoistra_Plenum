@@ -184,6 +184,33 @@ def _tool_calls_from_messages(messages: list) -> list[dict]:
     return calls
 
 
+def answer_delta_event(payload: Any, agent: str) -> dict[str, Any] | None:
+    """One `answer_delta` event from a LangGraph `messages`-mode item, or None.
+
+    The item is ``(message_chunk, metadata)``. Only an AI chunk with text counts: a chunk
+    that is part of a tool call is the model deciding what to fetch, not what to say, and a
+    tool's own message is data the panel already shows. Content arrives as a string from
+    OpenAI and as a list of parts from Anthropic; both are read.
+    """
+    try:
+        chunk = payload[0] if isinstance(payload, (tuple, list)) else payload
+    except Exception:  # noqa: BLE001
+        return None
+    if chunk is None or getattr(chunk, "type", "") not in ("AIMessageChunk", "ai"):
+        return None
+    if getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None):
+        return None
+    content = getattr(chunk, "content", None)
+    if isinstance(content, list):
+        content = "".join(
+            str(p.get("text", "")) if isinstance(p, dict) else str(getattr(p, "text", "") or "")
+            for p in content
+        )
+    if not isinstance(content, str) or not content:
+        return None
+    return {"type": "answer_delta", "text": content, "domain": agent}
+
+
 async def run_phase2_engine_verbose(
     agent: str, prompt: str, on_event: Any = None
 ) -> tuple[str, list[dict]]:
@@ -444,11 +471,24 @@ class _TaskRunner:
                 result = {}
                 seen = 0
                 names: dict[str, str] = {}
-                async for state in runner.astream(
+                # Two stream modes at once: `values` for the tool starts and finishes the panel
+                # draws, `messages` for the model's text as it is written. Compliance streamed
+                # its analyst's zones token by token from the start; every other engine's
+                # answer arrived whole at the end of a silent minute. The deltas ride the same
+                # event channel the tool events do, typed `answer_delta`, and the interface
+                # shows them as a draft that the final answer replaces — a draft, because the
+                # vendor composer and the compliance analyst rewrite what the sub-agent wrote.
+                async for mode, payload in runner.astream(
                     {"messages": [HumanMessage(content=prompt)]},
                     config={"recursion_limit": 45},
-                    stream_mode="values",
+                    stream_mode=["values", "messages"],
                 ):
+                    if mode == "messages":
+                        delta = answer_delta_event(payload, agent)
+                        if delta is not None:
+                            await on_event(delta)
+                        continue
+                    state = payload
                     result = state
                     msgs = state.get("messages", [])
                     for msg in msgs[seen:]:

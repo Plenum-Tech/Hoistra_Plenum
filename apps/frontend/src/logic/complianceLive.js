@@ -1142,7 +1142,10 @@ export const complianceLiveMethods = {
       const sid = this.state.sessionId;
       let opened = false;
       let done = false;
-      const partial = { steps: [], zones: {}, reasoning: "", trace: [] };
+      // `answer` is the draft: the engine's words as it writes them (answer_delta events),
+      // shown where the narrative goes until a zone or the completion replaces it. Compliance
+      // never sends deltas — its analyst's zones stream instead — so for it this stays empty.
+      const partial = { steps: [], zones: {}, reasoning: "", trace: [], answer: "" };
       const t0 = Date.now();
 
       // The trace is the run's sequence of thoughts, kept in arrival order so the rail can
@@ -1160,7 +1163,7 @@ export const complianceLiveMethods = {
             reasoning: partial.reasoning,
             trace: partial.trace.slice(),
             rich: {
-              narrative: z.narrative || "",
+              narrative: z.narrative || partial.answer || "",
               sections: z.sections || [], groups: z.groups || [], kpis: z.kpis || [],
               actions: z.actions || [], insights: z.insights || [],
               certificates: z.certificates || [], pending: z.pending || [],
@@ -1174,6 +1177,13 @@ export const complianceLiveMethods = {
       const handle = deepAgentsApi.stream(sid, q, context, {
         onOpen: () => { opened = true; },
         onEvent: (d) => {
+          // The answer arriving as it is written — energy, maintenance, vendors and the
+          // general loop send these; compliance streams zones instead. Appended, painted,
+          // not traced: a trace entry per token would bury the run rail under the prose.
+          if (d.type === "answer_delta") {
+            if (typeof d.text === "string" && d.text) { partial.answer += d.text; paint(); }
+            return;
+          }
           if (d.type === "compliance_step" && d.step) {
             partial.steps.push(d.step);
             push({ kind: "step", step: d.step });
