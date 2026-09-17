@@ -87,6 +87,50 @@ def has_udr_tool_calls(tool_calls: list[dict[str, Any]] | None) -> bool:
     return False
 
 
+#: A code the way this estate writes them: AHU-01, PRT-CONT-2P, AST-GEN-501, B-SITE-AUH-001.
+#: Upper-case first segment, at least one hyphenated segment. Dates start with a digit and
+#: UUIDs are lower-case hex, so neither matches.
+_IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
+_IDENTIFIER_ALLOW = frozenset({"EL-UDR"})
+
+
+def ungrounded_identifiers(answer: str, tool_calls: list[dict[str, Any]] | None,
+                           user_message: str = "") -> list[str]:
+    """The codes an answer names that appear in no retrieved record — a check that needs no model.
+
+    The model judge decides whether a relationship or a count is supported; this decides the
+    narrower, mechanical question of whether a code the answer prints was ever *seen*. An
+    answer that names an asset, part or building code that no tool returned has invented it,
+    and no judge output (or judge failure) should let that through. Codes the user typed are
+    exempt: "AST-AHU-601 was not found" names one legitimately.
+    """
+    if not answer:
+        return []
+    haystack = json.dumps(tool_calls or [], ensure_ascii=False, default=str)
+    asked = set(_IDENTIFIER.findall(user_message or ""))
+    seen: set[str] = set()
+    missing: list[str] = []
+    for tok in _IDENTIFIER.findall(answer):
+        if tok in seen or tok in asked or tok in _IDENTIFIER_ALLOW:
+            continue
+        seen.add(tok)
+        if tok not in haystack:
+            missing.append(tok)
+    return missing
+
+
+def _with_invented(evaluation: "UdrEvaluation", missing: list[str]) -> "UdrEvaluation":
+    """The judge's verdict, overruled on grounding by the codes it could not have known were invented."""
+    if not missing:
+        return evaluation
+    shown = ", ".join(missing[:8]) + (" …" if len(missing) > 8 else "")
+    return evaluation.model_copy(update={
+        "grounded": False,
+        "issues": [*evaluation.issues,
+                   f"names {len(missing)} identifier(s) that appear in no retrieved record: {shown}"],
+    })
+
+
 def _json_content(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -213,6 +257,11 @@ async def evaluate_udr_response(
             evaluated=False,
         )
 
+    missing = ungrounded_identifiers(answer, tool_calls, user_message)
+    if missing:
+        log.warning("udr.eval.ungrounded_identifiers", missing=missing[:8], count=len(missing))
+        evaluation = _with_invented(evaluation, missing)
+
     if evaluation.passed:
         log.info("udr.eval.passed", score=evaluation.score)
         return answer, evaluation
@@ -241,6 +290,8 @@ async def evaluate_udr_response(
                 score=0.0,
                 issues=["Corrected answer could not be validated"],
             )
+        corrected_evaluation = _with_invented(
+            corrected_evaluation, ungrounded_identifiers(corrected, tool_calls, user_message))
         if corrected_evaluation.passed:
             log.warning(
                 "udr.eval.corrected",
@@ -258,11 +309,12 @@ async def evaluate_udr_response(
         best, best_eval = corrected, corrected_evaluation
     elif evaluation.grounded and answer.strip():
         best, best_eval = answer, evaluation
-    elif not evaluation.evaluated and answer.strip():
+    elif not evaluation.evaluated and answer.strip() and not missing:
         # The judge never returned a verdict, so there is no finding to withhold the answer
         # on — only a broken judge. Discarding a correct answer because the check around it
         # failed is the more damaging of the two errors available here, and it is the one
         # that was happening: three runs in four of a question whose answer was right.
+        # Unless the answer names codes no tool returned: that finding needs no judge.
         best, best_eval = answer, evaluation
     else:
         best, best_eval = "", evaluation

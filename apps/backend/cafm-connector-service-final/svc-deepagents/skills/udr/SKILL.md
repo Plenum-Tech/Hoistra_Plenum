@@ -110,6 +110,14 @@ GROUP BY p.part_code, p.part_name, p.stock_quantity, p.reorder_level
 ORDER BY (p.reorder_level - p.stock_quantity) DESC
 ```
 Call out `stock_quantity = 0` rows separately — those are stock-outs, not low stock.
+The headline figures come from a second, counting statement — never from counting the rows above by eye:
+```sql
+SELECT COUNT(*)                                            AS below_reorder,
+       COUNT(*) FILTER (WHERE stock_quantity = 0)            AS stock_outs,
+       COUNT(*) FILTER (WHERE COALESCE(part_code, '') = '') AS without_a_part_code
+FROM plenum_cafm.spare_parts
+WHERE stock_quantity < reorder_level
+```
 `assets_using` comes from the join and from nothing else. When `work_order_parts` (and, if you
 check them, `scheduled_maintenance_parts`, `bom_group_parts`) return no rows for a part, the
 answer says **no asset link recorded** for that part — it does not name assets whose type
@@ -180,6 +188,8 @@ pull your half, name the other half plainly, and let the orchestrator combine th
 - Never fill a relationship column ("linked assets", "vendor on", "used by") from anything but
   a join that returned rows. No rows means the cell says *no link recorded* — a name, type or
   description match is a guess, and a table makes a guess look like a record.
-- Never write a headline count from memory. Count the rows you are about to print, and make the
-  sentence agree with the table: seven zero-stock rows in the table is "7 stock-outs" in the
-  sentence, and the placeholder count is the number the query returned, not an estimate.
+- Never write a headline count from memory, and never count a result's rows by eye. Every
+  figure in the opening sentence is a number SQL returned — `COUNT(*)`, `COUNT(*) FILTER (WHERE …)`,
+  `GROUP BY` — quoted as returned. Measured 17 Sep 2026: the same 47-row result was reported as
+  "44", "44" and "39" unidentified rows on three runs; the true count, 38, was one COUNT away.
+  The sentence and the table must agree: seven zero-stock rows in the table is "7 stock-outs".
