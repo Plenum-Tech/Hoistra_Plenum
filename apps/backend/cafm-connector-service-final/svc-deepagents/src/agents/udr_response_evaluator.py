@@ -37,6 +37,17 @@ UDR_TOOL_NAMES = frozenset(
 )
 EVAL_THRESHOLD = 0.85
 _MAX_EVIDENCE_CHARS = 24_000
+#: One call's output may take at most this much of the evidence. Measured 17 Sep 2026: a
+#: get_schema dump (221 tables, 2,580 columns) filled the whole 24,000-character budget on
+#: its own, the rows that followed it were cut off, and the judge wrote "the evidence
+#: contains only schema metadata" — then either failed a correct answer or, when its own
+#: output broke, let an invented one through. Clipping per call keeps every source in view.
+_MAX_CALL_CHARS = 6_000
+#: Tools whose output describes the database rather than reads it. They gate the check
+#: (a turn that only looked at the schema is still a UDR turn) but are not evidence: no
+#: factual claim about a part, an asset or a count can be grounded in a column list.
+_METADATA_TOOLS = frozenset({"get_schema", "udr_list_tables", "udr_describe_table",
+                             "find_tables", "table_card"})
 
 
 class UdrEvaluation(BaseModel):
@@ -79,7 +90,31 @@ def has_udr_tool_calls(tool_calls: list[dict[str, Any]] | None) -> bool:
 def _json_content(value: Any) -> str:
     if isinstance(value, str):
         return value
+    if isinstance(value, list) and value and all(isinstance(b, dict) for b in value):
+        # Content blocks from a chat model that returns them: the judge's text is the text
+        # parts joined, not a JSON array of blocks (which can never validate as a verdict).
+        texts = [str(b.get("text") or "") for b in value if b.get("type") in (None, "text")]
+        if any(texts):
+            return "\n".join(t for t in texts if t)
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _normalise_score(payload: dict[str, Any]) -> dict[str, Any]:
+    """Read a score the judge wrote on a 0-10 or 0-100 scale as the 0-1 it was asked for.
+
+    Measured 17 Sep 2026 at 13:19: the judge returned `"score": 2`, pydantic refused it, the
+    verdict was thrown away and an answer with an invented column reached the user with a
+    footnote saying the check "could not run". A judge that answered on the wrong scale did
+    answer; the scale is recoverable, the verdict is not once it is discarded.
+    """
+    score = payload.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return payload
+    if 1 < score <= 10:
+        return {**payload, "score": score / 10}
+    if 10 < score <= 100:
+        return {**payload, "score": score / 100}
+    return payload
 
 
 def _parse_evaluation(content: Any) -> UdrEvaluation:
@@ -87,7 +122,10 @@ def _parse_evaluation(content: Any) -> UdrEvaluation:
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL)
     if fenced:
         text = fenced.group(1)
-    return UdrEvaluation.model_validate_json(text)
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("evaluator verdict is not a JSON object")
+    return UdrEvaluation.model_validate(_normalise_score(payload))
 
 
 def _evidence(tool_calls: list[dict[str, Any]]) -> str:
@@ -103,12 +141,21 @@ def _evidence(tool_calls: list[dict[str, Any]]) -> str:
     The gate deciding WHEN the evaluator runs (has_udr_tool_calls) is unchanged.
     """
     relevant = [
-        call
+        _clipped(call)
         for call in tool_calls
-        if str(call.get("tool") or "") in UDR_TOOL_NAMES
-        or call.get("tool") == "task"
+        if (str(call.get("tool") or "") in UDR_TOOL_NAMES or call.get("tool") == "task")
+        and str(call.get("tool") or "") not in _METADATA_TOOLS
     ]
     return json.dumps(relevant, ensure_ascii=False, default=str)[:_MAX_EVIDENCE_CHARS]
+
+
+def _clipped(call: dict[str, Any]) -> dict[str, Any]:
+    """One call's record with its output held to _MAX_CALL_CHARS, so it cannot crowd out the rest."""
+    out = call.get("output")
+    text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False, default=str)
+    if len(text) <= _MAX_CALL_CHARS:
+        return call
+    return {**call, "output": text[:_MAX_CALL_CHARS] + f"… [clipped {len(text) - _MAX_CALL_CHARS} chars]"}
 
 
 async def evaluate_udr_response(
@@ -124,10 +171,15 @@ async def evaluate_udr_response(
             "You are EL-UDR, a strict CAFM answer evaluator. Compare the candidate answer only "
             "against the user request and UDR tool evidence. Check that it answers the requested "
             "operation (including GROUP BY, counts, > versus >=, filters, and entity scope), that "
-            "every factual value is grounded, and that counts equal the evidence. Return JSON only "
-            "with keys grounded, answers_question, count_consistent, score, issues, "
-            "corrected_answer. If the candidate is wrong, corrected_answer must be a concise answer "
-            "built only from the evidence. Never add external knowledge."
+            "every factual value is grounded, and that counts equal the evidence. A relationship "
+            "the answer states between two records — a part linked to an asset, a vendor on a "
+            "contract, a user granted a building — is grounded only if a join result in the "
+            "evidence shows that pair; a link inferred from names, types or descriptions is "
+            "ungrounded. A headline count must equal the number of matching rows in the evidence "
+            "and in the answer's own table. Return JSON only with keys grounded, answers_question, "
+            "count_consistent, score, issues, corrected_answer. score is a decimal from 0.0 to "
+            "1.0. If the candidate is wrong, corrected_answer must be a concise answer built only "
+            "from the evidence. Never add external knowledge."
         )
     )
     human = HumanMessage(

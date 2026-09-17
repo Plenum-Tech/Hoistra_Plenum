@@ -110,6 +110,11 @@ GROUP BY p.part_code, p.part_name, p.stock_quantity, p.reorder_level
 ORDER BY (p.reorder_level - p.stock_quantity) DESC
 ```
 Call out `stock_quantity = 0` rows separately — those are stock-outs, not low stock.
+`assets_using` comes from the join and from nothing else. When `work_order_parts` (and, if you
+check them, `scheduled_maintenance_parts`, `bom_group_parts`) return no rows for a part, the
+answer says **no asset link recorded** for that part — it does not name assets whose type
+sounds like the part. Measured 17 Sep 2026: ten parts, zero linked rows in any table, and an
+answer that listed up to seven "linked assets" each, one of which was not an asset code at all.
 
 ### "Give me complete information on AST-AHU-601" — structured + documents + graph
 1. `find_asset("AST-AHU-601")` → the row and its `document_ids`.
@@ -172,3 +177,9 @@ pull your half, name the other half plainly, and let the orchestrator combine th
   Reads answer questions; writes need an explicit instruction and a confirmation.
 - Never report "not found" until `find_asset` / `find_location` has returned zero.
 - Never show a raw UUID unless the user asked for the ID.
+- Never fill a relationship column ("linked assets", "vendor on", "used by") from anything but
+  a join that returned rows. No rows means the cell says *no link recorded* — a name, type or
+  description match is a guess, and a table makes a guess look like a record.
+- Never write a headline count from memory. Count the rows you are about to print, and make the
+  sentence agree with the table: seven zero-stock rows in the table is "7 stock-outs" in the
+  sentence, and the placeholder count is the number the query returned, not an estimate.
