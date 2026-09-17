@@ -183,6 +183,34 @@ class TestACorrectionMayNotShrinkATable:
         assert "verbatim" in src and "[clipped]" in src and "never replace a table" in src
 
 
+# ── a conflict between sources flags the answer; it does not withhold it ───────────────
+
+class TestAConflictFlagsInsteadOfBlocking:
+
+    async def test_the_engine_says_17_a_stray_count_says_6_and_the_answer_still_goes_out(self):
+        """15:40, 17 Sep: the Assets page engine banded 17 assets, the general loop's own SQL
+        counted 6 in a scores table, the judge called the evidence inconsistent and withheld a
+        correct answer. Every code in it was returned by a tool; it answers the question."""
+        judge = _Judge(_verdict(grounded=False, answers_question=True, count_consistent=False, score=0.5,
+                                issues=['"17 of 53 assets" is supported by get_asset_condition_summary but conflicts with the SQL COUNT query, which reports 6']))
+        out, e = await ev.evaluate_udr_response(
+            user_message="which assets need investigation?",
+            answer="17 of 53 assets need investigation.\n\n| Asset | Band |\n|---|---|\n| ACS-DL-04 | threat |",
+            tool_calls=[{"tool": "list_asset_conditions", "input": {}, "output": {"total": 53, "assets": [{"asset_code": "ACS-DL-04", "band": "threat"}]}},
+                        {"tool": "udr_execute_select", "input": {"sql": "SELECT count(*) …"}, "output": {"rows": [{"count": 6}]}}],
+            llm=judge)
+        assert out.startswith("17 of 53 assets"), out
+        assert "human verification" in out and "reports 6" in out  # the note names the conflict
+
+    async def test_an_answer_that_does_not_answer_and_is_ungrounded_is_still_withheld(self):
+        judge = _Judge(_verdict(grounded=False, answers_question=False, count_consistent=False, score=0.1,
+                                issues=["the answer describes the schema, not the assets"]))
+        out, e = await ev.evaluate_udr_response(
+            user_message="which assets need investigation?", answer="The assets table has 40 columns.",
+            tool_calls=[{"tool": "udr_execute_select", "input": {}, "output": {"rows": []}}], llm=judge)
+        assert "couldn't fully verify" in out
+
+
 # ── the skill ──────────────────────────────────────────────────────────────────────────
 
 class TestTheSkillRefusesToGuessLinks:

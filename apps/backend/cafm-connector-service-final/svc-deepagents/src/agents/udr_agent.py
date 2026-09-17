@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from .. import database
 from ..config import settings
-from ..http_client import PageEngineOwnsThisTurn, request as _request, turn_page_engines
+from ..http_client import PageEngineOwnsThisTurn, catalogue_closed, request as _request
 from ..services.principal import restrict_records, table_building_clause
 
 log = structlog.get_logger(__name__)
@@ -61,7 +61,7 @@ async def get_schema() -> dict:
     """
     global _schema_cache, _schema_cache_at
 
-    _owners = turn_page_engines.get()
+    _owners = catalogue_closed()
     if _owners:  # the same door the HTTP tools go through; this one reads the database directly
         return _err(PageEngineOwnsThisTurn(_owners), "get_schema")
 

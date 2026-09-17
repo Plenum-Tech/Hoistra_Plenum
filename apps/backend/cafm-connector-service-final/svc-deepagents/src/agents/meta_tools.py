@@ -416,6 +416,21 @@ class _TaskRunner:
     async def run_verbose(
         self, agent: str, prompt: str, on_event: Any = None
     ) -> tuple[str, list[dict]]:
+        """Run the sub-agent with `active_subagent` naming it for the life of the run.
+
+        The catalogue gate reads that name: on a turn the router gave to page engines plus
+        udr, svc-udr answers inside task("udr") and refuses the general loop.
+        """
+        from ..http_client import active_subagent
+        token = active_subagent.set(agent)
+        try:
+            return await self._run_verbose(agent, prompt, on_event=on_event)
+        finally:
+            active_subagent.reset(token)
+
+    async def _run_verbose(
+        self, agent: str, prompt: str, on_event: Any = None
+    ) -> tuple[str, list[dict]]:
         """Run the sub-agent and return (final answer, inner tool calls with outputs).
 
         The inner tool calls let the Orchestrator surface real domain-tool results (e.g. the

@@ -49,6 +49,7 @@ from ..config import (
     settings,
 )
 from ..llm_factory import create_chat_model, friendly_openai_error
+from ..http_client import turn_catalogue_via_task as _turn_catalogue_via_task
 from ..http_client import turn_page_engines as _turn_page_engines
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
@@ -3810,10 +3811,11 @@ class DeepAgentOrchestrator:
         named = [str((routing or {}).get("agent") or "").strip()]
         named += [str(a).strip() for a in ((routing or {}).get("also") or [])]
         named = [n for n in named if n]
-        owners: frozenset[str] = frozenset()
-        if "udr" not in named:
-            owners = frozenset(n for n in named if as_phase2_engine(n) is not None)
+        owners = frozenset(n for n in named if as_phase2_engine(n) is not None)
         _turn_page_engines.set(owners)
+        # udr named beside page engines: the database half is real and runs inside task("udr");
+        # the general loop itself still may not read tables on this turn (catalogue_closed()).
+        _turn_catalogue_via_task.set("udr" in named)
         return owners
 
     @staticmethod
@@ -3860,6 +3862,14 @@ class DeepAgentOrchestrator:
                 "of record, so the chat agrees with the screen. Do not answer this from the database "
                 "catalogue or direct table reads (find_tables, table_card, get_schema, query_table, "
                 "udr_*) — those tools are closed for this turn and will refuse."
+            )
+        elif owners:
+            lines.append(
+                "The page engines answer their half from the page's own API — the source of record. "
+                "The database half runs inside task(\"udr\") ONLY: do not call find_tables, table_card, "
+                "get_schema, query_table or udr_* yourself on this turn — they are closed here and will "
+                "refuse — and do not re-count a page engine's figures from tables. Merge what the two "
+                "sub-agents return; where they disagree, the page engine's figure stands."
             )
         return "\n".join(lines)
 
@@ -6642,6 +6652,7 @@ class DeepAgentOrchestrator:
         # route or a preferred engine skips select_agent, and a claim from the previous turn
         # on this task must not outlive the turn that made it.
         _turn_page_engines.set(frozenset())
+        _turn_catalogue_via_task.set(False)
         if engine is None and route_intent not in core_routes:
             routing = await select_agent(user_message, extra_context)
             engine, routing_note = self._decide_dispatch(routing, msg_l)
@@ -7036,6 +7047,7 @@ class DeepAgentOrchestrator:
         # route or a preferred engine skips select_agent, and a claim from the previous turn
         # on this task must not outlive the turn that made it.
         _turn_page_engines.set(frozenset())
+        _turn_catalogue_via_task.set(False)
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the

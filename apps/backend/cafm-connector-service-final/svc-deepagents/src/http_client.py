@@ -155,6 +155,34 @@ _ORG_SCOPED_SERVICES = frozenset({"operations_intelligence", "wo_management"})
 turn_page_engines: ContextVar[frozenset[str]] = ContextVar("turn_page_engines", default=frozenset())
 
 
+#: True when the router named `udr` beside the page engines: the database half of the question
+#: is real, but it runs inside task("udr"), whose sub-agent has the catalogue and the query
+#: discipline. The general loop itself still may not read tables on such a turn. Measured
+#: 17 Sep 2026 at 15:40: with the catalogue simply open, the general loop ran four SELECTs of
+#: its own against the asset-condition tables, counted 6 where the Assets page engine says
+#: 17, and the judge blocked a correct answer over the conflict it had created.
+turn_catalogue_via_task: ContextVar[bool] = ContextVar("turn_catalogue_via_task", default=False)
+
+#: The sub-agent whose graph is running on this task, set by the task runner for the life of
+#: the run; None in the general loop.
+active_subagent: ContextVar[str | None] = ContextVar("active_subagent", default=None)
+
+
+def catalogue_closed() -> frozenset[str] | None:
+    """The page engines that own this turn if a svc-udr read must refuse here; None if it may go.
+
+    Open when no page engine owns the turn. Open inside task("udr") when the router named udr.
+    Closed everywhere else on an owned turn — including task("udr") on a turn the router did
+    not give a database half.
+    """
+    owners = turn_page_engines.get()
+    if not owners:
+        return None
+    if turn_catalogue_via_task.get() and active_subagent.get() == "udr":
+        return None
+    return owners
+
+
 class PageEngineOwnsThisTurn(RuntimeError):
     """Raised in place of a UDR read on a turn the router gave to one or more page engines."""
 
@@ -202,7 +230,7 @@ async def request(
     cb = _breaker(service)
 
     if service == "udr":
-        _owners = turn_page_engines.get()
+        _owners = catalogue_closed()
         if _owners:
             log.info("http_client.udr_closed_for_page_turn", engines=sorted(_owners), path=path)
             raise PageEngineOwnsThisTurn(_owners)

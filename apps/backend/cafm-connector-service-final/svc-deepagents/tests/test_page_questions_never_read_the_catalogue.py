@@ -10,9 +10,13 @@ with the screen. Three layers make that so, and each is pinned here:
    action verb) claims the turn: `turn_page_engines` is set, and every svc-udr call refuses;
 3. the routing note tells the general loop the same thing in words.
 
-Naming `udr` anywhere in the decision leaves the catalogue open — "spare parts below reorder
-level and which assets' repairs need them" is one cross-table question, not a page question.
-Measured 17 Sep 2026 over 26 questions: 0 page questions reached `udr`, 6/6 general questions did.
+A decision that names only `udr` leaves the catalogue open — "spare parts below reorder level
+and which assets' repairs need them" is one cross-table question, not a page question. A
+decision that names page engines AND `udr` (assets to investigate, plus parts to reorder) opens
+the catalogue inside task("udr") only: the general loop may not re-count a page engine's figures
+from tables. Measured 17 Sep 2026 at 15:40, with the catalogue simply open on such a turn, it ran
+four SELECTs of its own, counted 6 where the Assets page engine says 17, and the judge withheld a
+correct answer over the conflict. Over 26 questions: 0 page questions reached `udr`, 6/6 general did.
 """
 import pytest
 
@@ -29,7 +33,9 @@ UDR_TOOLS = {"find_tables", "table_card", "get_schema", "query_table", "udr_list
 @pytest.fixture(autouse=True)
 def _open_catalogue():
     token = hc.turn_page_engines.set(frozenset())
+    via = hc.turn_catalogue_via_task.set(False)
     yield
+    hc.turn_catalogue_via_task.reset(via)
     hc.turn_page_engines.reset(token)
 
 
@@ -57,10 +63,32 @@ class TestClaimingTheTurn:
     def test_a_udr_question_leaves_it_open(self):
         assert O._claim_turn_for_page_engines({"agent": "udr"}) == frozenset()
         assert hc.turn_page_engines.get() == frozenset()
+        assert hc.catalogue_closed() is None
 
-    def test_a_page_question_with_a_database_half_leaves_it_open(self):
-        """The router said the catalogue is needed; the rule defers to it."""
-        assert O._claim_turn_for_page_engines({"agent": "wo_engine", "also": ["udr"]}) == frozenset()
+    def test_a_page_question_with_a_database_half_opens_it_inside_task_udr_only(self):
+        """The router said the database half is real — so task("udr") may read; the general
+        loop, which would otherwise re-count the page engine's figures from tables, may not."""
+        assert O._claim_turn_for_page_engines({"agent": "wo_engine", "also": ["udr"]}) == {"wo_engine"}
+        assert hc.turn_catalogue_via_task.get() is True
+        assert hc.catalogue_closed() == {"wo_engine"}, "the general loop is closed"
+        token = hc.active_subagent.set("udr")
+        try:
+            assert hc.catalogue_closed() is None, "task(\"udr\") is open"
+        finally:
+            hc.active_subagent.reset(token)
+        token = hc.active_subagent.set("energy_intelligence")
+        try:
+            assert hc.catalogue_closed() == {"wo_engine"}, "another sub-agent is not"
+        finally:
+            hc.active_subagent.reset(token)
+
+    def test_task_udr_on_a_turn_with_no_database_half_is_still_closed(self):
+        O._claim_turn_for_page_engines({"agent": "wo_engine"})
+        token = hc.active_subagent.set("udr")
+        try:
+            assert hc.catalogue_closed() == {"wo_engine"}
+        finally:
+            hc.active_subagent.reset(token)
 
     def test_agents_that_are_not_page_engines_claim_nothing(self):
         assert O._claim_turn_for_page_engines({"agent": "doc_rag"}) == frozenset()
@@ -129,6 +157,6 @@ class TestTheNoteSaysSo:
         note = O._routing_note({"agent": "udr", "reason": "cross-table"})
         assert note and "source of record" not in note
 
-    def test_a_page_question_with_a_udr_half_is_not_either(self):
+    def test_a_page_question_with_a_udr_half_is_told_the_database_half_runs_in_task_udr(self):
         note = O._routing_note({"agent": "wo_engine", "also": ["udr"]}, carry_engine=True)
-        assert "source of record" not in note and "`udr`" in note
+        assert 'task("udr") ONLY' in note and "page engine's figure stands" in note and "`udr`" in note

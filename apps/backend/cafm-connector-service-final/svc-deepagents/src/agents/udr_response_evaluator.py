@@ -350,10 +350,13 @@ async def evaluate_udr_response(
     # retry, so the assistant reads as intelligent rather than a brittle gate.
     if corrected and corrected_evaluation.grounded and not shrank:
         best, best_eval = corrected, corrected_evaluation
-    elif answer.strip() and not missing and (evaluation.grounded or shrank):
-        # Grounded but imperfect — or the judge's only remedy was a smaller table. Every code
-        # in the answer was returned by a tool (no `missing`), so the answer goes out as written
-        # and the note below asks for a human check of the counts.
+    elif answer.strip() and not missing and (evaluation.grounded or shrank or evaluation.answers_question):
+        # Grounded but imperfect; or the judge's only remedy was a smaller table; or the judge
+        # found the answer answers the question but could not reconcile two sources (measured
+        # 17 Sep 2026 at 15:40: the Assets page engine said 17, a stray COUNT said 6, and a
+        # correct answer was withheld). Every code in it was returned by a tool (no `missing`),
+        # so it goes out as written and the note below names what to double-check. Withholding
+        # is for answers that name invented codes or that do not answer the question at all.
         best, best_eval = answer, evaluation
     elif not evaluation.evaluated and answer.strip() and not missing:
         # The judge never returned a verdict, so there is no finding to withhold the answer
@@ -374,11 +377,13 @@ async def evaluate_udr_response(
                 "\n\n_The automated accuracy check could not run on this answer, so it has "
                 "not been independently verified against the retrieved records._"
             )
-        elif not best_eval.count_consistent or best_eval.score < EVAL_THRESHOLD:
+        elif not best_eval.passed:
+            first = next((i for i in best_eval.issues if i), "").strip()
+            first = (first[:220] + "…") if len(first) > 220 else first
             note = (
-                "\n\n_Automated accuracy check: this is grounded in the retrieved records but "
-                "flagged for a quick human verification — please double-check any counts against "
-                "the register._"
+                "\n\n_Automated accuracy check: flagged for a quick human verification"
+                + (f" — {first}" if first else " — please double-check any counts against the register.")
+                + "_"
             )
         log.warning(
             "udr.eval.degraded",
