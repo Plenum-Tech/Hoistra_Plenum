@@ -514,6 +514,14 @@ async def run_card(session: AsyncSession, card_id: UUID, *, trigger: str = "sche
     answer, tool_calls, rich, error = "", [], None, None
     try:
         token = await _owner_token(session, card.owner_user_id)
+        # End the transaction BEFORE the wait. The two reads above (the card, the owner) opened
+        # one, and it used to stay open — idle, holding a share lock on plenum_cafm.users — for
+        # as long as the orchestrator took, up to 180 s. Caught live on 17 Sep 2026 08:07: a
+        # migration's ALTER TABLE on users queued behind that lock, every token check in the
+        # service queued behind the ALTER, and twenty requests released at once the instant
+        # this call timed out. Nothing here is written until the run is over, so there is
+        # nothing to keep open; commit returns the connection to the pool for the duration.
+        await session.commit()
         body = await _ask_orchestrator(card, token, http=http)
         if body.get("success") is False:
             raise RuntimeError(str(body.get("error") or "the orchestrator returned no answer"))

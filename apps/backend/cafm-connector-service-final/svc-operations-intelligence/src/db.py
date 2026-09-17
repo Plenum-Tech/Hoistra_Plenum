@@ -19,6 +19,17 @@ engine = create_async_engine(
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=1800,
+    # A session left idle inside a transaction holds every lock it took. One did, for 180 s
+    # at a time, once an hour (reports/cards.py) — and a migration's ALTER TABLE queued behind
+    # it took the whole service's auth reads down with it. The code no longer does that; this
+    # is the server-side guarantee that no future await inside a transaction can. The name
+    # is so pg_stat_activity says who a backend belongs to instead of an empty string.
+    connect_args={
+        "server_settings": {
+            "idle_in_transaction_session_timeout": "60000",
+            "application_name": "svc-operations-intelligence",
+        }
+    },
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -182,17 +193,71 @@ async def exec_migration_statements(statements: list[str]) -> tuple[int, list[st
         if not str(stmt).strip():
             continue
         try:
-            if _CONCURRENT_INDEX.search(stmt):
-                async with engine.connect() as conn:
-                    raw = await conn.get_raw_connection()
-                    await raw.driver_connection.execute(stmt)
-            else:
-                async with engine.begin() as conn:
-                    await conn.exec_driver_sql(stmt)
+            await _run_ddl_statement(stmt)
             applied += 1
         except Exception as exc:  # noqa: BLE001 — one bad statement must not lose the file
             errors.append(str(exc)[:300])
     return applied, errors
+
+
+#: How long a migration statement may wait for a table lock before giving up and retrying.
+#:
+#: Caught live on 17 Sep 2026 at 08:07 UTC: `DO $uuid_default$ … ALTER TABLE plenum_cafm.users`
+#: from auth_identity_and_otp.sql waited three minutes for an exclusive lock behind one
+#: session that was idle in a transaction holding a share lock on users — and, because a
+#: waiting exclusive lock blocks every NEW share lock behind it, every token check in the
+#: service queued behind the ALTER. Twenty of them by the time the holder committed.
+#:
+#: These statements are idempotent and re-run on every start, so waiting is never worth it:
+#: an ALTER that cannot get its lock in five seconds backs off and tries again rather than
+#: turning the auth path of the running service into a queue.
+_DDL_LOCK_TIMEOUT = "5s"
+_DDL_LOCK_RETRIES = 4
+_DDL_LOCK_RETRY_SLEEP_S = 3.0
+
+
+def _is_lock_timeout(exc: BaseException) -> bool:
+    text_ = str(exc).lower()
+    return "lock timeout" in text_ or "lock_timeout" in text_ or "locknotavailable" in text_
+
+
+async def _run_ddl_statement(stmt: str) -> None:
+    """One migration statement, with a lock timeout and a short retry loop.
+
+    Concurrent index builds run on the raw asyncpg connection outside any transaction
+    (Postgres refuses them inside one); everything else runs in its own transaction with a
+    ``SET LOCAL lock_timeout`` so a lock it cannot get promptly is an error to retry, not a
+    wait that takes the rest of the service down with it.
+    """
+    import asyncio as _asyncio
+
+    for attempt in range(1, _DDL_LOCK_RETRIES + 1):
+        try:
+            if _CONCURRENT_INDEX.search(stmt):
+                async with engine.connect() as conn:
+                    raw = await conn.get_raw_connection()
+                    await raw.driver_connection.execute(f"SET lock_timeout = '{_DDL_LOCK_TIMEOUT}'")
+                    try:
+                        await raw.driver_connection.execute(stmt)
+                    finally:
+                        await raw.driver_connection.execute("RESET lock_timeout")
+            else:
+                async with engine.begin() as conn:
+                    await conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{_DDL_LOCK_TIMEOUT}'")
+                    await conn.exec_driver_sql(stmt)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if _is_lock_timeout(exc) and attempt < _DDL_LOCK_RETRIES:
+                log.warning(
+                    "db.migration.lock_wait",
+                    attempt=attempt,
+                    retry_in_s=_DDL_LOCK_RETRY_SLEEP_S,
+                    statement=str(stmt).strip()[:120],
+                    note="a reader holds the table; backing off rather than queueing the service behind this",
+                )
+                await _asyncio.sleep(_DDL_LOCK_RETRY_SLEEP_S)
+                continue
+            raise
 
 
 async def _drop_invalid_indexes() -> list[str]:
@@ -252,24 +317,12 @@ async def apply_sql_migrations(
             # exec_driver_sql (raw DBAPI) — NOT text(): several seeds use PostgreSQL
             # ``::jsonb`` casts, which text() misreads as ``:jsonb`` bind params.
             try:
-                if _CONCURRENT_INDEX.search(stmt):
-                    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block,
-                    # and it is concurrent precisely so building an index on a live table
-                    # does not hold a lock that blocks every write to it for the duration —
-                    # on a register being ingested into, that is an outage.
-                    #
-                    # Run on the raw asyncpg connection rather than through SQLAlchemy.
-                    # Neither engine.execution_options(isolation_level="AUTOCOMMIT") nor
-                    # setting it on an open connection took effect on this pooled engine:
-                    # the statement still arrived inside a transaction and every index
-                    # build failed, silently, as a skipped migration. asyncpg's own execute
-                    # opens no transaction, which is the behaviour actually needed.
-                    async with engine.connect() as conn:
-                        raw = await conn.get_raw_connection()
-                        await raw.driver_connection.execute(stmt)
-                else:
-                    async with engine.begin() as conn:
-                        await conn.exec_driver_sql(stmt)
+                # CREATE INDEX CONCURRENTLY runs outside a transaction on the raw asyncpg
+                # connection (Postgres refuses it inside one, and the pooled engine's
+                # AUTOCOMMIT option never took effect); everything else in its own
+                # transaction. Both with a lock timeout — see _run_ddl_statement for the
+                # three-minute outage that a single waiting ALTER TABLE caused.
+                await _run_ddl_statement(stmt)
                 total += 1
             except Exception as exc:  # noqa: BLE001
                 # Tolerated HERE on purpose: within a pass, a statement can fail only
