@@ -1,0 +1,205 @@
+// superAdmin — the Super Admin console: a full-screen overlay for onboarding
+// companies onto the platform, separate from any single company's admin app.
+// Live via superAdminLive.js (svc-operations-intelligence /api/superadmin): the seed
+// rows in s.saCompanies are replaced in place once the companies read answers, and
+// create/invite delegate to the API for live rows — the seed keeps its local-only
+// behaviour so the demo still works offline. saLiveLoad() fires when the overlay
+// opens (the account-menu item), never at app mount.
+//
+// viewAsCompany()/exitViewAsCompany(): a superadmin's own Admin/User view (auth.js) is a
+// lens on their own company only — this is the separate capability to act as a DIFFERENT
+// one instead. Every route that honours it (api/client.js's currentOrgId()/getActingOrg())
+// enforces server-side that only a superadmin gets the company they ask for; this just
+// chooses, for a live row only (a seed/demo row has no real organization_id to act as).
+// Buildings, Compliance, Vendors, Home, Users & access and Audit trail all switch to the
+// chosen company; Assets and Maintenance do not (svc-work-order-management has no
+// per-company scoping yet) and keep showing this deployment's own data regardless.
+// Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { setActingOrg } from '../api/client.js';
+import { authApi } from '../api/auth.js';
+
+// A live list can be genuinely empty (a fresh platform) — the header still needs a
+// subject, so an empty list renders this placeholder instead of throwing.
+const NO_CO = { id: null, name: "No companies yet", cc: "—", status: "—", buildings: null, graphs: null, last: "—", udr: "—", certs: null, certCc: "—", api: "—", credits: 0, users: null, invited: false };
+
+export const superAdminMethods = {
+  saVals(s) {
+    const co = s.saCompanies.find((c) => c.id === s.saSel) || s.saCompanies[0] || NO_CO;
+    const maxCr = Math.max(...s.saCompanies.map((c) => c.credits || 0), 0);
+    // A live row's tile numbers ride on the usage card; null = the card has not landed.
+    const nn = (v) => (v === null || v === undefined ? "…" : String(v));
+
+    return {
+      saOn: s.saOn,
+      saOpen: () => this.setState({ saOn: true, acctOpen: false }),
+      // Live once the companies read has answered; until then the seed is on show, and
+      // the overlay says so next to the retry control.
+      saLiveError: s.saLiveError
+        ? (s.saLiveLoadedAt ? "Companies refresh failed — " + s.saLiveError : "Companies backend unreachable — " + s.saLiveError + ". Showing sample data.")
+        : (s.saLiveCardError ? "Company usage card unavailable — " + s.saLiveCardError : ""),
+      saLiveRetry: () => { if (typeof this.saLiveRetryNow === "function") this.saLiveRetryNow(); },
+      saCompanies: s.saCompanies.map((c) => ({
+        name: c.name, cc: c.cc, status: c.status, credits: (c.credits || 0).toLocaleString("en-GB") + " cr",
+        dot: c.status === "Active" ? "var(--st-ok)" : c.status === "Onboarding" ? "var(--st-warn)" : "var(--color-neutral-500)",
+        bg: s.saSel === c.id ? "var(--color-accent-900)" : "var(--color-surface)",
+        edge: s.saSel === c.id ? "var(--color-accent)" : "transparent",
+        pick: () => {
+          this.setState({ saSel: c.id });
+          // Fresh tile numbers on focus — the card is the only read that carries them.
+          if (c.live && typeof this.saLiveLoadCompany === "function") this.saLiveLoadCompany(c.id);
+        }
+      })),
+      saNewOpen: s.saNew,
+      saToggleNew: () => this.setState((p) => ({ saNew: !p.saNew })),
+      saName: s.saName || "", saSetName: (e) => this.setState({ saName: e.target.value }),
+      saEmail: s.saEmail || "", saSetEmail: (e) => this.setState({ saEmail: e.target.value }),
+      saCcs: ["UK", "US", "UAE", "Singapore"].map((cc) => ({
+        label: cc, pick: () => this.setState({ saCc: cc }),
+        bg: s.saCc === cc ? "var(--color-accent)" : "var(--color-surface)",
+        fg: s.saCc === cc ? "var(--accent-ink)" : "var(--color-neutral-400)"
+      })),
+      saCreate: () => {
+        if (!this.state.saName.trim()) return this.flash("Company name is required.");
+        // Live once the platform has answered: the API creates the record (and invites
+        // the administrator when an email was given). Offline, the demo keeps minting a
+        // local row so the console still works without a backend.
+        if (this.state.saLiveLoadedAt && typeof this.saLiveCreate === "function") return this.saLiveCreate();
+        const email = this.state.saEmail.trim();
+        const c = { id: "c" + this.state.saCompanies.length + "-" + this.state.saName, name: this.state.saName, cc: this.state.saCc, status: "Created", buildings: 0, graphs: 0, last: "—", udr: "0 MB", certs: 0, certCc: "—", api: "0", credits: 0, users: 0, invited: !!email };
+        this.setState((p) => ({ saCompanies: p.saCompanies.concat(c), saSel: c.id, saNew: false, saName: "", saEmail: "" }));
+        this.flash(c.invited ? "Company created — admin invitation sent to " + email : "Company created. Invite its administrator when ready.");
+      },
+      saCo: {
+        name: co.name, cc: co.cc, status: co.status,
+        dot: co.status === "Active" ? "var(--st-ok)" : co.status === "Onboarding" ? "var(--st-warn)" : "var(--color-neutral-500)",
+        inviteLabel: co.invited ? "Re-send admin invitation" : "Invite company admin",
+        invite: () => {
+          if (!co.id) return this.flash("Create a company first.");
+          // A live row re-sends to the admin_email on record; a company without one gets
+          // an instruction rather than an API call (the create form is where it enters).
+          if (co.live && typeof this.saLiveInvite === "function") return this.saLiveInvite(co);
+          this.setState((p) => ({ saCompanies: p.saCompanies.map((x) => x.id === co.id ? { ...x, invited: true, status: x.status === "Created" ? "Onboarding" : x.status } : x) })); this.flash("Admin invitation sent for " + co.name + " — they activate, set a password and land in the company admin application.");
+        },
+        // Only a live row has a real organization_id to act as — the seed/demo rows
+        // (offline console) have nothing a backend override could resolve.
+        viewAsShow: !!(co.live && co.id),
+        viewAsCurrent: s.viewOrgId === co.id,
+        viewAs: () => { if (co.live && co.id && typeof this.viewAsCompany === "function") this.viewAsCompany(co.id, co.name); }
+      },
+      saTiles: [
+        { value: nn(co.buildings), label: "Buildings created", hint: "access boundary per user", color: "var(--color-accent)" },
+        { value: nn(co.graphs), label: "Hoist graphs", hint: "one per hoisted building", color: "var(--color-accent)" },
+        { value: co.last, label: "Last activity", hint: "most recent update", color: "var(--color-neutral-300)" },
+        { value: co.udr, label: "UDR data", hint: "volume added", color: "var(--color-neutral-300)" },
+        { value: nn(co.certs), label: "Compliance certificates", hint: co.certCc === "—" ? "none yet" : "countries: " + co.certCc, color: "var(--st-ok)" },
+        { value: co.api, label: "API requests", hint: "30 days · platform usage", color: "var(--color-neutral-300)" },
+        { value: (co.credits || 0).toLocaleString("en-GB"), label: "Credits consumed", hint: "this month", color: "var(--st-warn)" },
+        { value: nn(co.users), label: "Users", hint: "no seat limit", color: "var(--color-neutral-300)" }
+      ],
+      saCredits: s.saCompanies.map((c) => ({
+        name: c.name, v: (c.credits || 0).toLocaleString("en-GB"),
+        bar: Math.max(2, Math.round(((c.credits || 0) / (maxCr || 1)) * 100)) + "%",
+        fg: c.id === s.saSel ? "var(--color-accent)" : "var(--color-neutral-500)"
+      }))
+    };
+  },
+
+  // Switches every reader that honours currentOrgId()/getActingOrg() (Buildings,
+  // Compliance, Vendors, Home, Users & access, Audit trail, company usage) onto this
+  // company's data, and drops out of the console into that company's Admin view — same
+  // landing a fresh admin sign-in gets. Assets and Maintenance do not switch (see the
+  // file header) and keep reading this deployment's own data regardless.
+  viewAsCompany(orgId, name) {
+    if (!orgId) return;
+    // A selected building (docs/api/building-scope-api.md) is validated ONLY against the
+    // superadmin's own company when it is set — PATCH /api/auth/me/selected-building has
+    // no acting-as override at all — but engines/auth/access.py's scope_for() re-applies
+    // whatever is already stored regardless of which org is being acted as. Left in place,
+    // a selection made earlier on the superadmin's own company would silently narrow every
+    // read of THIS company to a building id that belongs to neither — not an error, just
+    // quietly empty or wrong results. Cleared here, before anything reads as this company,
+    // and best-effort/silent: a failure to clear it server-side is no worse than not
+    // having tried, and must not block getting into the view at all.
+    //
+    // Captured only on the FIRST entry (viewOrgId not already set) — picking a second
+    // company directly from within the console, without exiting back to "my account" in
+    // between, must not overwrite this with the null the first entry already cleared it
+    // to, or the superadmin's own selection is lost for good rather than restored on the
+    // eventual exitViewAsCompany().
+    // Same capture-once-on-first-entry rule as the building selection above, and for the
+    // same reason: role flips to "admin" for the duration of the view (below), and without
+    // remembering what it was before, exitViewAsCompany() had nothing to give back but a
+    // hardcoded "admin" — stranding a superadmin who was in User view on their own account
+    // in Admin view permanently after they left, with no way back except toggling it by
+    // hand. That read as the navigator's own report cards (Buildings, Compliance, Vendors,
+    // Energy, Assets, Maintenance) having silently disappeared, since Admin view shows a
+    // different set (Integrations, Users & access, Audit trail) — see auth.js's renderVals.
+    if (!this.state.viewOrgId) {
+      const ownSelection = this.state.account && this.state.account.selected_building_id;
+      this._ownSelectionBeforeViewAs = ownSelection || null;
+      this._ownRoleBeforeViewAs = this.state.role;
+      if (ownSelection) {
+        authApi.selectBuilding(null).catch(() => {});
+        this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: null }) } : {}));
+      }
+    }
+    setActingOrg(orgId);
+    // Same reason as authEnter()'s own reset for a fresh sign-in: sessionId is the
+    // orchestrator's LangGraph thread_id, and an active one left running across this
+    // switch would keep answering inside the PREVIOUS company's conversation memory —
+    // every tool call this turn correctly scoped to the new company's organization_id
+    // (http_client.py's caller_organization_id), but the model's own recollection of
+    // what it already found (a vendor's name, a contract reference) still there to draw
+    // on regardless. newQuery()'s own reset, applied here for the same reason it exists.
+    if (this._ccAbort) this._ccAbort.abort();
+    clearInterval(this._orchTick);
+    this.setState({
+      viewOrgId: orgId, viewOrgName: name || null,
+      saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null,
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
+    });
+    if (typeof this.resetLiveData === "function") this.resetLiveData();
+    if (typeof this.loadLiveData === "function") this.loadLiveData();
+    if (typeof this.usLiveLoad === "function") this.usLiveLoad();
+    if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    this.flash("Viewing as " + (name || "the selected company") + " — every report now reads its data.");
+  },
+
+  // Back to the superadmin's own account: every subsequent read is the caller's own
+  // company again (or unscoped, inside the console itself). Restores whatever building
+  // selection viewAsCompany() cleared on the way in — exiting must give back exactly what
+  // was there before, not leave the superadmin's own working selection gone for good. Same
+  // for role: viewAsCompany() forces "admin" for the duration of the view (its own landing,
+  // by design), but exiting must give back whatever lens the superadmin was actually using
+  // before — "admin" unconditionally here left every exit stranded in Admin view even for
+  // someone who was in User view a moment before, with the operational report cards gone.
+  exitViewAsCompany() {
+    if (!this.state.viewOrgId) return;
+    const was = this.state.viewOrgName;
+    setActingOrg(null);
+    const restore = this._ownSelectionBeforeViewAs || null;
+    this._ownSelectionBeforeViewAs = null;
+    const restoreRole = this._ownRoleBeforeViewAs || "admin";
+    this._ownRoleBeforeViewAs = null;
+    if (restore) {
+      authApi.selectBuilding(restore).catch(() => {});
+      this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: restore }) } : {}));
+    }
+    // Same reset as entering a view-as, and the same reason: leaving one company's
+    // conversation active while reading as another (here, back to the superadmin's own)
+    // means the next question in that thread still carries whatever the model already
+    // found while it was scoped to the company just exited.
+    if (this._ccAbort) this._ccAbort.abort();
+    clearInterval(this._orchTick);
+    this.setState({
+      viewOrgId: null, viewOrgName: null,
+      role: restoreRole, view: "home", navOpen: true, acctOpen: false, detail: null,
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
+    });
+    if (typeof this.resetLiveData === "function") this.resetLiveData();
+    if (typeof this.loadLiveData === "function") this.loadLiveData();
+    if (typeof this.usLiveLoad === "function") this.usLiveLoad();
+    if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    this.flash("Back to your own account" + (was ? " — no longer viewing " + was : "") + ".");
+  }
+};

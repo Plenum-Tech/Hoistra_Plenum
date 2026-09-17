@@ -13,6 +13,34 @@ from ...core.logging import get_logger
 
 log = get_logger(__name__)
 
+#: None until probed. vendor_contacts.is_primary is present in one deployment and absent in
+#: the other, and the two databases disagree on more than this one column.
+_IS_PRIMARY: bool | None = None
+
+
+async def _has_is_primary(session: AsyncSession) -> bool:
+    """Whether vendor_contacts carries is_primary here. Read once per process."""
+    global _IS_PRIMARY
+    if _IS_PRIMARY is None:
+        try:
+            async with session.begin_nested():
+                found = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_schema = 'plenum_cafm' "
+                            "AND table_name = 'vendor_contacts' "
+                            "AND column_name = 'is_primary' LIMIT 1"
+                        )
+                    )
+                ).scalar()
+            _IS_PRIMARY = bool(found)
+        except Exception as exc:  # noqa: BLE001 — an unreadable catalogue costs the
+            # preference, never the recommendation.
+            log.warning("contractors.is_primary_probe_failed", error=str(exc)[:160])
+            _IS_PRIMARY = False
+    return _IS_PRIMARY
+
 
 async def recommend_contractors(
     session: AsyncSession,
@@ -28,20 +56,43 @@ async def recommend_contractors(
     if not required_accreditation:
         return []
 
-    sql = """
+    # Casts on both sides of every vendor join. plenum_cafm.vendors.id is character varying
+    # and compliance_certificates.vendor_id / vendor_contacts.vendor_id are uuid, so the
+    # uncast comparison raised "operator does not exist: uuid = character varying" — and both
+    # the primary query and its fallback caught it and returned [], so this function answered
+    # "no approved contractor found" for every accreditation, for every company, silently.
+    #
+    # The company filter is applied here rather than left to the caller. All three call sites
+    # already passed organization_id; the parameter was accepted and never referenced, so a
+    # recommendation could name another company's vendor.
+    # vendor_contacts.is_primary exists in one deployment's schema and not the other, and
+    # naming a column that is not there fails the whole statement at parse time — which is how
+    # this query came to fall back on every call. Probed once, like the meter register.
+    contact_order = "vc.is_primary DESC NULLS LAST, " if await _has_is_primary(session) else ""
+
+    org_filter = " AND v.organization_id::text = :org" if organization_id is not None else ""
+    params: dict[str, Any] = {
+        "acc": required_accreditation,
+        "acc_like": f"%{required_accreditation}%",
+        "lim": limit,
+    }
+    if organization_id is not None:
+        params["org"] = str(organization_id)
+
+    sql = f"""
         SELECT v.id, v.vendor_name, v.vendor_code, v.block_state,
                v.blocked_accreditation_type,
                cc.certificate_type_code, cc.expiry_date, cc.status, cc.days_to_expiry,
                (
                  SELECT vc.email FROM plenum_cafm.vendor_contacts vc
-                 WHERE vc.vendor_id = v.id
+                 WHERE vc.vendor_id::text = v.id::text
                    AND vc.email IS NOT NULL AND TRIM(vc.email) <> ''
-                 ORDER BY vc.is_primary DESC NULLS LAST
+                 ORDER BY {contact_order}vc.id
                  LIMIT 1
                ) AS contact_email
         FROM plenum_cafm.vendors v
         JOIN plenum_cafm.compliance_certificates cc
-          ON cc.vendor_id = v.id
+          ON cc.vendor_id::text = v.id::text
          AND cc.cert_scope = 'Vendor'
          AND (
                cc.certificate_type_code ILIKE :acc
@@ -51,20 +102,14 @@ async def recommend_contractors(
         WHERE COALESCE(v.block_state, 'Clear') <> 'Blocked'
           AND (cc.days_to_expiry IS NULL OR cc.days_to_expiry > 0)
           AND (cc.status IS NULL OR cc.status <> 'Lapsed')
+          {org_filter}
         ORDER BY cc.days_to_expiry DESC NULLS LAST
         LIMIT :lim
     """
     try:
         async with session.begin_nested():
             rows = (
-                await session.execute(
-                    text(sql),
-                    {
-                        "acc": required_accreditation,
-                        "acc_like": f"%{required_accreditation}%",
-                        "lim": limit,
-                    },
-                )
+                await session.execute(text(sql), params)
             ).mappings().all()
     except Exception as exc:  # noqa: BLE001
         # Fallback without vendor_contacts join if table/column missing
@@ -74,7 +119,7 @@ async def recommend_contractors(
                 rows = (
                     await session.execute(
                         text(
-                            """
+                            f"""
                             SELECT v.id, v.vendor_name, v.vendor_code, v.block_state,
                                    v.blocked_accreditation_type,
                                    cc.certificate_type_code, cc.expiry_date,
@@ -82,21 +127,20 @@ async def recommend_contractors(
                                    NULL::text AS contact_email
                             FROM plenum_cafm.vendors v
                             JOIN plenum_cafm.compliance_certificates cc
-                              ON cc.vendor_id = v.id AND cc.cert_scope = 'Vendor'
+                              ON cc.vendor_id::text = v.id::text AND cc.cert_scope = 'Vendor'
                              AND (
                                    cc.certificate_type_code ILIKE :acc
                                 OR cc.cert_type ILIKE :acc
                              )
                             WHERE COALESCE(v.block_state, 'Clear') <> 'Blocked'
                               AND (cc.days_to_expiry IS NULL OR cc.days_to_expiry > 0)
+                              {org_filter}
                             ORDER BY cc.days_to_expiry DESC NULLS LAST
                             LIMIT :lim
                             """
                         ),
-                        {
-                            "acc": required_accreditation,
-                            "lim": limit,
-                        },
+                        # The fallback drops the vendor_contacts join, not the company filter.
+                        {k: v for k, v in params.items() if k != "acc_like"},
                     )
                 ).mappings().all()
         except Exception as exc2:  # noqa: BLE001

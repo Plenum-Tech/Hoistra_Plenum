@@ -840,6 +840,28 @@ def score_udr_intent(msg_l: str) -> float:
     return min(score, 1.0)
 
 
+#: Openers that make a message a QUESTION about work orders rather than a request to raise one.
+#: The bare noun used to be enough for intake, and an intake route short-circuits phase-2 engine
+#: selection — so on 16 Sep 2026 "how many work orders were scored for SafeLift, and what's the
+#: average?" was classified as "create/triage a maintenance work order", never reached the
+#: scoring engine, and was answered from vendor scorecard rows: "7 work orders" that were seven
+#: monthly scorecards belonging to a different vendor.
+#:
+#: A read cue wins outright. Nobody reporting a fault opens with "how many" or "compare", and a
+#: misrouted question is silent — it returns a confident answer built from the wrong table —
+#: while a misrouted fault report is visible the moment the reply comes back.
+_WO_READ_CUES = (
+    "how many", "how much", "how long", "what is the", "what's the", "what are the",
+    "which ", "show me", "list ", "compare", "average", "total ", "breakdown", "count of",
+    "report on", "summarise", "summarize",
+)
+
+
+def _asks_about_work_orders(msg_l: str) -> bool:
+    """True when the message is asking about work orders, not asking for one."""
+    return any(cue in msg_l for cue in _WO_READ_CUES)
+
+
 def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
     if any(
         t in msg_l
@@ -894,7 +916,7 @@ def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
         return ROUTE_FIIX_SYNC
     if sum(1 for k in ("subdomain", "app key", "access key", "secret key") if k in msg_l) >= 2:
         return ROUTE_FIIX_SYNC
-    if "work order" in msg_l or "create wo" in msg_l:
+    if ("work order" in msg_l or "create wo" in msg_l) and not _asks_about_work_orders(msg_l):
         return ROUTE_WO_INTAKE
     if session_state.get("pending_wo_clarification"):
         return ROUTE_WO_CLARIFY

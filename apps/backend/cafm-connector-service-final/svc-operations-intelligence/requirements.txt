@@ -12,5 +12,20 @@ arq>=0.26
 reportlab>=4.0
 anthropic>=0.40
 azure-storage-blob>=12.20
+# Auth. Declared in pyproject.toml too, but the Dockerfile installs from THIS file, so
+# without them here the image has no bcrypt and the service dies on import — the whole
+# auth engine is unreachable in Docker while passing every test on a dev box.
+# bcrypt direct rather than through passlib: passlib 1.7.4 reads bcrypt.__about__ to
+# detect its backend and bcrypt removed that in 4.1, so the pair raises on any hash.
+bcrypt>=4.1
+PyJWT>=2.8
+# EmailStr in the auth schemas needs it; pydantic raises on import without it.
+email-validator>=2.0
+# The full IANA database for zoneinfo, backward-compatibility links included. The base image
+# carries only the canonical zones — Debian split the legacy links out into tzdata-legacy —
+# so ZoneInfo("Asia/Calcutta") raised, and engines/reports' parse_timezone refused it. That
+# is the exact name Chrome reports on an Indian Mac, so pinning a report card 422'd on a
+# perfectly valid IANA identifier. PEP 615 names this package as the fallback data source.
+tzdata>=2024.1
 pytest>=8.0
 pytest-asyncio>=0.23

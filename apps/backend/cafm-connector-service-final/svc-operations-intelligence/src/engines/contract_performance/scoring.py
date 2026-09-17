@@ -1102,8 +1102,14 @@ async def list_scorecards(
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     limit: int = 50,
+    # The caller's buildings: scorecards of the vendors with a footprint there.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(VendorMonthlyScorecard).order_by(VendorMonthlyScorecard.score_month.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        q = _access.orm_where(q, *_access.vendor_predicate(building_ids, "vendor_id"))
     if vendor_id:
         q = q.where(VendorMonthlyScorecard.vendor_id == vendor_id)
     if organization_id:

@@ -5,7 +5,7 @@ Wraps a LangGraph ReAct agent over all 54 CAFM tools with the CAFM system prompt
 Tool breakdown:
   Meta (6)        : write_todos, task, write_file, read_file, memory_set, memory_get
   UDR (13)        : get_schema, lookup_user, query_table, udr_agent_query,
-                    udr_list_tables, udr_describe_table, udr_read_records, udr_get_record,
+                    udr_list_tables, udr_describe_table, find_tables, table_card, udr_read_records, udr_get_record,
                     udr_search_records, udr_create_record, udr_update_record,
                     udr_delete_record, udr_execute_select
   WO Engine (22)  : 5 dynamic approval + 4 intelligent pipeline + 8 CRUD + 5 reference lookups
@@ -43,12 +43,26 @@ from langgraph.errors import GraphInterrupt
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 
-from ..config import settings
+from ..config import (
+    DEFAULT_COMPLIANCE_SUMMARY_MODEL,
+    DEFAULT_CONTRACT_ANALYST_MODEL,
+    settings,
+)
 from ..llm_factory import create_chat_model, friendly_openai_error
+from ..http_client import turn_catalogue_via_task as _turn_catalogue_via_task
+from ..http_client import turn_page_engines as _turn_page_engines
 from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
 from .compliance_offers import offers_for_missing_type, offers_for_row
 from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
-from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS
+from .energy_intelligence_agent import (
+    ENERGY_INTELLIGENCE_TOOLS,
+    # Not an energy tool. "Which documents are filed against this building" is asked of
+    # any building in any conversation, and Phase 2 engine tools are bound only once
+    # content has selected that engine — so while it sat on the energy list a documents
+    # question never reached it and fell through to semantic search, which finds
+    # documents whose TEXT mentions a building rather than the ones filed against it.
+    list_building_documents,
+)
 from .doc_rag_agent import (
     delete_document,
     extract_text,
@@ -61,6 +75,7 @@ from .doc_rag_agent import (
     semantic_search,
 )
 from .meta_tools import (
+    answer_delta_event,
     init_meta_tools,
     memory_get,
     memory_set,
@@ -139,6 +154,8 @@ from .phase2_intents import Phase2AgentId, resolve_phase2_engine
 from .agent_router import as_phase2_engine, select_agent
 from .compliance_facts import compute_pack_facts
 from .compliance_router import compliance_skill_path_enabled
+from . import activity_log
+from . import contract_answer
 from . import llm_cost
 from .skills import prompt_doc
 from .system_prompt import build_system_prompt
@@ -151,7 +168,7 @@ from .udr_agent import (
     get_asset_documents,
     udr_agent_query,
     udr_list_tables,
-    udr_describe_table,
+    udr_describe_table, find_tables, table_card,
     udr_read_records,
     udr_get_record,
     udr_search_records,
@@ -189,7 +206,13 @@ from .wo_engine_agent import (
     get_asset_details,
     search_locations,
     find_ppm_schedules,
+    # Maintenance page (4)
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
     get_dashboard_stats,
+    MAINTENANCE_READ_TOOLS,
 )
 
 log = structlog.get_logger(__name__)
@@ -242,9 +265,10 @@ ALL_TOOLS = [
     find_asset,
     find_location,
     get_asset_documents,
+    list_building_documents,
     udr_agent_query,
     udr_list_tables,
-    udr_describe_table,
+    udr_describe_table, find_tables, table_card,
     udr_read_records,
     udr_get_record,
     udr_search_records,
@@ -281,6 +305,11 @@ ALL_TOOLS = [
     search_locations,
     find_ppm_schedules,
     get_dashboard_stats,
+    # WO Engine — the Maintenance page (4)
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
     # Migration (8)
     start_migration,
     run_migration,
@@ -332,6 +361,11 @@ PHASE2_ENGINE_TOOLS: dict[str, list] = {
     "compliance": list(COMPLIANCE_ENGINE_TOOLS),
     "contract_performance": list(CONTRACT_PERFORMANCE_TOOLS),
     "energy_intelligence": list(ENERGY_INTELLIGENCE_TOOLS),
+    # The Maintenance page's questions, answered directly rather than through the general
+    # loop. READ tools only: the engines run without a checkpointer, so a create or approve
+    # reaching one would die on its first interrupt. Anything with a verb in it goes the long
+    # way round, where the work-order intake keeps its gates — see _decide_dispatch.
+    "wo_engine": list(MAINTENANCE_READ_TOOLS),
 }
 
 # Catalog for GET /tools (discovery) — includes Phase 2 engines even though
@@ -359,8 +393,10 @@ _TOOL_DOMAIN: dict[str, str] = {
     "read_file": "meta", "memory_set": "meta", "memory_get": "meta",
     # UDR (11+)
     "get_schema": "udr", "lookup_user": "udr", "query_table": "udr",
+    "find_tables": "udr", "table_card": "udr",
     "find_asset": "udr", "find_location": "udr",
     "get_asset_documents": "udr",
+    "list_building_documents": "udr",
     "udr_agent_query": "udr",
     "udr_list_tables": "udr",
     "udr_describe_table": "udr",
@@ -394,6 +430,9 @@ _TOOL_DOMAIN: dict[str, str] = {
     "search_assets": "wo_engine", "get_asset_details": "wo_engine",
     "search_locations": "wo_engine", "find_ppm_schedules": "wo_engine",
     "get_dashboard_stats": "wo_engine",
+    # WO Engine — the Maintenance page (4)
+    "get_maintenance_overview": "wo_engine", "list_maintenance_decisions": "wo_engine",
+    "get_inspection_intelligence": "wo_engine", "get_ppm_contracts": "wo_engine",
     # Migration (8)
     "start_migration": "migration", "run_migration": "migration",
     "submit_pre_semantic": "migration", "submit_field_mapping": "migration",
@@ -430,6 +469,9 @@ _TOOL_DOMAIN: dict[str, str] = {
     # Compliance Engine A1–A5 (11)
     "run_compliance_scan": "compliance",
     "list_building_certificates": "compliance",
+    "get_mees_summary": "compliance",
+    "record_regulatory_filing": "compliance",
+    "list_regulatory_filings": "compliance",
     "list_vendor_accreditations": "compliance",
     "upsert_compliance_certificate": "compliance",
     "set_remedial_status": "compliance",
@@ -473,6 +515,13 @@ _TOOL_DOMAIN: dict[str, str] = {
     "cross_ref_condition_consumption": "energy_intelligence",
     "log_site_occupancy_change": "energy_intelligence",
     "scan_energy_anomalies": "energy_intelligence",
+    "compute_building_rating": "energy_intelligence",
+    "get_ratings_position": "energy_intelligence",
+    "record_chiller_design": "energy_intelligence",
+    "ingest_chiller_readings": "energy_intelligence",
+    "scan_chiller_efficiency": "energy_intelligence",
+    "ingest_degree_days": "energy_intelligence",
+    "ingest_bms_trends": "energy_intelligence",
     "list_energy_anomalies": "energy_intelligence",
     "act_on_energy_anomaly": "energy_intelligence",
     "generate_monthly_energy_report": "energy_intelligence",
@@ -492,18 +541,46 @@ def _extract_interrupt(result: dict[str, Any]) -> dict | None:
 
 
 def _extract_tool_calls(messages: list) -> list[dict[str, Any]]:
-    """Extract the tool call trace from LangGraph message history."""
+    """Extract the tool call trace from LangGraph message history.
+
+    Paired by tool_call_id, because the orchestrator fires tools in parallel and the id is
+    the only thing that says which answer belongs to which call.
+
+    The previous version attached each result to ``tool_calls[-1]``. With one call in flight
+    that is the right entry by luck; with two it is not. Both entries were appended with no
+    output, the first result back was written onto the LAST entry, and the second was
+    dropped because that entry already had one. The faster agent's answer was therefore
+    filed under the slower agent's name and the faster agent showed null — which is why it
+    always looked like energy_intelligence failing, at 5s against udr's 18s, when in fact
+    its answer was sitting in udr's row.
+
+    A missing output reads as "this source said nothing". A misattributed one reads as "this
+    source said that", and nothing downstream can tell the difference.
+    """
+    outputs: dict[str, Any] = {}
+    for msg in messages:
+        is_tool = (
+            getattr(msg, "type", "") == "tool" or msg.__class__.__name__ == "ToolMessage"
+        )
+        tcid = getattr(msg, "tool_call_id", None)
+        if is_tool and tcid is not None:
+            outputs[str(tcid)] = getattr(msg, "content", None)
+
     tool_calls: list[dict[str, Any]] = []
     for msg in messages:
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append({
-                    "tool": tc.get("name"),
-                    "input": tc.get("args", {}),
-                })
-        if hasattr(msg, "name") and msg.name and hasattr(msg, "content"):
-            if tool_calls and "output" not in tool_calls[-1]:
-                tool_calls[-1]["output"] = msg.content
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            get = tc.get if isinstance(tc, dict) else lambda k, d=None: getattr(tc, k, d)
+            entry: dict[str, Any] = {
+                "tool": get("name"),
+                "input": get("args", {}) or {},
+            }
+            tcid = get("id")
+            # Only when the result is actually known. A call still in flight, or one whose
+            # ToolMessage never arrived, leaves the key absent rather than claiming null —
+            # "no answer yet" and "answered with nothing" are different facts.
+            if tcid is not None and str(tcid) in outputs:
+                entry["output"] = outputs[str(tcid)]
+            tool_calls.append(entry)
     return tool_calls
 
 
@@ -1304,10 +1381,17 @@ class DeepAgentOrchestrator:
                 "Answer with one of: compliance, contract, energy, general."
             )
         )
+        _t0 = time.perf_counter()
+        _model = getattr(self._llm, "model_name", None) or settings.openai_model
         try:
             resp = await self._llm.ainvoke([system, HumanMessage(content=text[:2000])])
         except Exception as exc:  # noqa: BLE001 — never let routing crash the turn
             log.warning("orchestrator.llm_route.failed", error=str(exc)[:200])
+            activity_log.fire_exchange(
+                agent="orchestrator", stage="classify_engine", system=system.content,
+                user=text[:2000], error=str(exc), model=_model,
+                latency_ms=(time.perf_counter() - _t0) * 1000,
+            )
             return None
         out = getattr(resp, "content", "")
         if isinstance(out, list):
@@ -1323,6 +1407,13 @@ class DeepAgentOrchestrator:
         elif "energy" in out:
             engine = "energy_intelligence"
         log.info("orchestrator.llm_route", classified=out[:40], engine=engine)
+        activity_log.fire_exchange(
+            agent="orchestrator", stage="classify_engine", system=system.content,
+            user=text[:2000], output={"raw": out, "engine": engine}, model=_model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            usage=getattr(resp, "usage_metadata", None),
+            summary_out=f"engine: {engine or 'general'}",
+        )
         return engine
 
     @staticmethod
@@ -1754,8 +1845,16 @@ class DeepAgentOrchestrator:
                 direction = "DESC" if str(sort.get("dir")).lower() == "desc" else "ASC"
                 sort_sql = f"c.{sfield} {direction} NULLS LAST"
 
+        # The caller's buildings, appended after whatever the model asked for: building
+        # certificates on their buildings plus vendor accreditations, the rule the compliance
+        # list applies upstream. The model cannot widen this — it is not part of the spec.
+        from ..services.principal import certificate_clause
+
+        bsql, bparams = certificate_clause("c")
+        if bsql:
+            where_sql = (where_sql + bsql) if where_sql else "WHERE " + bsql[len(" AND "):]
         sql = _sql(sql_template.format(where=where_sql, sort=sort_sql))
-        params: dict[str, Any] = {"limit": limit, **where_params}
+        params: dict[str, Any] = {"limit": limit, **where_params, **bparams}
         async with database.AsyncSessionLocal() as session:
             result = await session.execute(sql, params)
             raw_rows = [dict(r) for r in result.mappings().all()]
@@ -1815,6 +1914,15 @@ class DeepAgentOrchestrator:
             forged=sum(1 for r in rows if r.get("is_forged")),
             blocked=sum(1 for r in rows if r.get("is_blocked")),
             drafts=sum(1 for r in rows if r.get("is_draft")),
+        )
+        activity_log.fire(
+            agent="compliance", stage="fetch", direction="output",
+            summary=f"{len(rows)} rows from plenum_cafm.compliance_certificates",
+            payload={
+                "spec": spec, "limit": limit, "rows": len(rows), "by_status": by_status,
+                "columns": sorted(rows[0].keys()) if rows else [],
+                "sample": rows[:5],
+            },
         )
         if settings.compliance_debug_payloads:
             for r in rows:
@@ -2154,6 +2262,12 @@ class DeepAgentOrchestrator:
         if settings.compliance_debug_payloads:
             log.info("compliance.stage2.prompt_system", system=system_text)
             log.info("compliance.stage2.prompt_data", data=data_json)
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="input",
+            summary=(user_message or "")[:300],
+            payload={"question": user_message, "system": system_text, "data_json": data_json,
+                     "blocks": [b.get("source") for b in blocks]},
+        )
 
         # Claude first — this call has to apply compound row filters ("forged AND still
         # compliant") across the whole table, and the cheap general-purpose model used for
@@ -2179,6 +2293,12 @@ class DeepAgentOrchestrator:
                 for part in text
             )
         out = text.strip() if isinstance(text, str) and text.strip() else None
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "fallback model returned nothing")[:300], ok=bool(out),
+            model=getattr(self._llm, "model_name", None) or settings.openai_model,
+            payload={"answer": out, "provider": "openai_fallback"},
+        )
         if out:
             # STAGE 3 LOG — fallback model path.
             log.info(
@@ -2617,6 +2737,10 @@ class DeepAgentOrchestrator:
         """
         text = (user_message or "").strip()
         taxonomy = self._is_taxonomy_question(text)
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", summary=text[:300],
+            payload={"question": text, "taxonomy": taxonomy},
+        )
         default = {
             "reason": (
                 "Answer from the country certificate pack — the question is about what is "
@@ -2728,9 +2852,24 @@ class DeepAgentOrchestrator:
         # timeout — the handler below still logs `raw`, and an unbound local would turn a
         # recoverable planning failure into an exception that takes the whole turn with it.
         raw: Any = ""
+        _plan_t0 = time.perf_counter()
+        _plan_model = getattr(self._llm, "model_name", None) or settings.openai_model
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="input", model=_plan_model,
+            summary="planner prompt", payload={"system_prompt": system.content,
+                                                 "user_message": text[:1200]},
+        )
         try:
             resp = await self._llm.ainvoke(
                 [system, HumanMessage(content=text[:1200])]
+            )
+            # Every other stage of this pipeline records to the llm_cost ledger; the planner
+            # was the one call nobody had wired in, so its own step in the UI panel could
+            # never show a time or a $ figure. `usage_from_langchain_messages` reads whichever
+            # shape this model's client returned (OpenAI or Anthropic via LangChain).
+            _plan_usage, _ = llm_cost.usage_from_langchain_messages([resp])
+            llm_cost.record(
+                "plan", _plan_model, _plan_usage, (time.perf_counter() - _plan_t0) * 1000
             )
             raw = getattr(resp, "content", "") or ""
             if isinstance(raw, list):
@@ -2742,6 +2881,12 @@ class DeepAgentOrchestrator:
         except Exception as exc:  # noqa: BLE001 — planning must never break the turn
             log.warning(
                 "compliance.plan.failed", error=str(exc)[:200], raw=str(raw)[:600]
+            )
+            activity_log.fire(
+                agent="compliance", stage="plan", direction="error", summary=str(exc)[:200],
+                ok=False, error=str(exc), model=_plan_model,
+                latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+                payload={"model_output_raw": str(raw)[:4000], "fallback": default},
             )
             return default
         needs = [n for n in (plan.get("needs") or []) if n in self._PLAN_SOURCES]
@@ -2782,6 +2927,11 @@ class DeepAgentOrchestrator:
             # Kept for the single-question path and for logging.
             "query": subs[0]["query"],
         }
+        activity_log.fire(
+            agent="compliance", stage="plan", direction="output", summary=out["reason"][:300],
+            model=_plan_model, latency_ms=(time.perf_counter() - _plan_t0) * 1000,
+            payload={"plan": out, "model_output_raw": str(raw)},
+        )
         log.info(
             "compliance.stage0.plan",
             reason=out["reason"],
@@ -3127,20 +3277,23 @@ class DeepAgentOrchestrator:
 
         if database.AsyncSessionLocal is None:
             database.init_session_factory()
+        from ..services.principal import building_clause
+
+        bsql, bparams = building_clause("building_id")
         sql = _sql(
-            """
+            f"""
             SELECT id::text, work_order_id, title, status, priority, scheduled_date,
                    vendor_id::text AS vendor_id,
                    COALESCE(assigned_vendor, vendor) AS vendor_name,
                    asset, location, site_id::text AS site_id
             FROM plenum_cafm.work_orders
-            WHERE status IN ('Open','InProgress','In Progress','pending_approval')
+            WHERE status IN ('Open','InProgress','In Progress','pending_approval'){bsql}
             ORDER BY scheduled_date ASC NULLS LAST
             LIMIT :limit
             """
         )
         async with database.AsyncSessionLocal() as session:
-            result = await session.execute(sql, {"limit": limit})
+            result = await session.execute(sql, {"limit": limit, **bparams})
             return [dict(r) for r in result.mappings().all()]
 
     @staticmethod
@@ -3526,6 +3679,208 @@ class DeepAgentOrchestrator:
             out["cache_hit"] = True
         return out
 
+    #: Where a tool puts its rows. Compliance-only before, so an energy turn that fetched nine
+    #: anomalies reported "0 rows" — the count was looking for keys energy never returns.
+    _ROW_KEYS: tuple[str, ...] = (
+        "certificates", "buildings", "vendors", "types",          # compliance
+        "anomalies", "assets", "groups", "meters", "readings",    # energy
+        "work_orders", "visits", "contracts",                     # wo / contract performance
+        "decisions", "cards", "tiles",                            # the Maintenance page
+        # An asset investigation returns what it WALKED and what it FOUND, not a row list.
+        # Without these it reported "1 tool, 0 rows" for a call that examined six sources and
+        # produced two pieces of evidence — the same shape of miss as the compliance-only keys.
+        "sources", "evidence",                                    # asset investigation
+        "rows", "records", "items",                               # generic
+    )
+
+    #: The tool name the interface draws the run panel from. extractComplianceAnswer in
+    #: apps/frontend/src/logic/complianceLive.js matches it LITERALLY — an energy turn that
+    #: emitted `energy_pipeline` computed every step and cost and rendered none of it. The
+    #: name is the interface's contract for "a run panel", not a statement about compliance.
+    PIPELINE_PANEL_TOOL = "compliance_pipeline"
+
+    #: Verbs that make a maintenance question a maintenance ACTION. An action runs in the general
+    #: loop, where the work-order intake keeps its checkpointer and approval gates; the direct
+    #: engine has neither, so a create or approve reaching it would fail on its first interrupt.
+    #: "approval" is deliberately absent — "which orders are awaiting approval" is a question.
+    _WO_WRITE_VERBS = re.compile(
+        r"\b(raise|raising|create|creating|open a|log a|book|approve|approving|reject|close|"
+        r"closing|cancel|transition|update|updating|assign|reassign|dispatch|send|email|"
+        r"trigger|mark|escalate|schedule a)\b"
+    )
+
+    #: What makes a question about an asset's condition rather than its cost. "worst
+    #: performing chiller" is a cost question; "worst condition" and "graded poor" are not.
+    _ASSET_CONDITION = re.compile(r"\b(condition|health|healthy|unhealthy|graded?|grades)\b")
+
+    @classmethod
+    def _maintenance_read_question(cls, msg_l: str) -> bool:
+        return not cls._WO_WRITE_VERBS.search(msg_l or "")
+
+    @classmethod
+    def _decide_dispatch(
+        cls, routing: dict[str, Any] | None, msg_l: str
+    ) -> tuple[Phase2AgentId | None, str | None]:
+        """Where this turn runs: one engine directly, or the general loop carrying the decision.
+
+        Three cases send a question the long way even though the router named an engine:
+
+        - The engine is wo_engine and the question has a verb in it. Raising, approving and
+          closing need the intake's gates, which only the general loop has.
+        - The router named a SECOND domain (`also`). "Which assets are in the worst condition"
+          is inspector grades from wo_engine AND consumption from energy; a single engine
+          answers half and calls it the answer. The general loop is told to task() both and
+          write one summary — that is what an orchestrator is for.
+        - …except when the primary is compliance, whose analyst-and-reviewer pipeline only
+          runs on the direct path. Statutory exposure keeps its checks; the second domain is
+          named in the answer's note rather than fetched.
+        """
+        agent = str((routing or {}).get("agent") or "").strip() or None
+        engine = as_phase2_engine(agent)
+        also = [str(a).strip() for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        # An asset's CONDITION is two registers by definition — the inspector's grade lives with
+        # the work orders, the consumption evidence with energy — and the user asked, in so many
+        # words, that "worst condition" fetch both and the orchestrator write the summary. The
+        # router was asked for a strict `also` (a half-relevant second agent buries the answer)
+        # and, asked that, it stopped naming the second register here. So this one pairing is
+        # a rule rather than a judgement: whichever of the two the router picked, the other is
+        # added. Cost and consumption questions are not condition questions and stay single.
+        if engine in ("energy_intelligence", "wo_engine") and cls._ASSET_CONDITION.search(msg_l or ""):
+            partner = "wo_engine" if engine == "energy_intelligence" else "energy_intelligence"
+            if partner not in also:
+                also = [*also, partner]
+                routing = {**(routing or {}), "also": also}
+        if engine == "wo_engine" and not cls._maintenance_read_question(msg_l):
+            return None, cls._routing_note(routing, carry_engine=True)
+        if engine is not None and also and engine != "compliance":
+            return None, cls._routing_note(routing, carry_engine=True)
+        if engine is not None:
+            return engine, None
+        return None, cls._routing_note(routing)
+
+    @classmethod
+    def _general_loop_panel(
+        cls, user_message: str, tool_calls: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """The run panel for a turn the general loop answered on the router's instruction.
+
+        The engines draw one; a turn that fanned out to two sub-agents drew nothing, so the
+        most expensive kind of answer was the one with no cost on screen. Fail-soft: no
+        ledger, no panel.
+        """
+        steps = cls._early_pipeline_steps(tool_calls)
+        agents: list[str] = []
+        for tc in tool_calls:
+            if isinstance(tc, dict) and tc.get("tool") == "task" and isinstance(tc.get("input"), dict):
+                a = str(tc["input"].get("agent") or "").strip()
+                if a and a not in agents:
+                    agents.append(a)
+        if agents:
+            steps.append({
+                "stage": "agents",
+                "label": f"Delegated to {len(agents)} sub-agent{'s' if len(agents) != 1 else ''} — "
+                         + ", ".join(agents),
+                "detail": "each answered from its own tools; the orchestrator wrote the summary",
+            })
+        if not steps:
+            return None
+        ledger = llm_cost.current()
+        return {
+            "tool": cls.PIPELINE_PANEL_TOOL,
+            "input": {"question": (user_message or "")[:300]},
+            "output": {
+                "engine": "orchestrator",
+                "steps": steps,
+                "cost": ledger.log_summary(user_message) if ledger else None,
+            },
+        }
+
+    @staticmethod
+    def _claim_turn_for_page_engines(routing: dict[str, Any] | None) -> frozenset[str]:
+        """Close the database catalogue for this turn when the router gave it to page engines.
+
+        Compliance, vendor, energy, asset and maintenance questions are answered from the
+        page APIs, so the chat agrees with the screen. The engines' own tool lists hold no
+        UDR tool, so a direct dispatch cannot reach the catalogue — but a fanned-out turn or
+        an action verb runs in the general loop, which holds every tool. This records the
+        engines the router named in `turn_page_engines`; svc-udr calls then refuse until the
+        turn ends. Naming `udr` anywhere (a spare-parts-and-assets join, a page question
+        with a genuine database half) leaves the catalogue open: the router said it is needed.
+        Returns what was claimed, for the caller's log.
+        """
+        named = [str((routing or {}).get("agent") or "").strip()]
+        named += [str(a).strip() for a in ((routing or {}).get("also") or [])]
+        named = [n for n in named if n]
+        owners = frozenset(n for n in named if as_phase2_engine(n) is not None)
+        _turn_page_engines.set(owners)
+        # udr named beside page engines: the database half is real and runs inside task("udr");
+        # the general loop itself still may not read tables on this turn (catalogue_closed()).
+        _turn_catalogue_via_task.set("udr" in named)
+        return owners
+
+    @staticmethod
+    def _routing_note(routing: dict[str, Any] | None, *, carry_engine: bool = False) -> str | None:
+        """What the general loop is told when the router chose a sub-agent it cannot short-circuit to.
+
+        The router reads every question and picks one of seven agents, but only three are
+        phase-2 engines the orchestrator can hand the turn to directly. When it picked
+        wo_engine, udr, doc_rag or migration the decision was simply dropped, and the general
+        agent started cold — free to re-route by keyword, or to answer a maintenance question
+        from the compliance tools because "statutory" appeared in it. Measured 17 Sep 2026:
+        "which decisions are statutory?" went to the compliance engine and was answered as a
+        certificate question.
+
+        Returns None when there is nothing to carry: no decision, or a phase-2 engine that
+        the caller already acted on.
+        """
+        agent = str((routing or {}).get("agent") or "").strip()
+        if not agent or (as_phase2_engine(agent) is not None and not carry_engine):
+            return None
+        from .skills import routable_skills
+
+        if agent not in {s.agent for s in routable_skills()}:
+            return None
+        reason = str((routing or {}).get("reason") or "").strip()
+        also = [str(a).strip() for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        lines = [
+            "**Domain routing (decided before this turn):** the question was read and assigned "
+            f"to the `{agent}` sub-agent" + (f" — {reason}" if reason else "") + ".",
+            f"Call task(\"{agent}\", <the user's question, unedited>) FIRST. Do not call "
+            "select_skill to re-route it, and do not answer it from another domain's tools as "
+            "though it were the question asked. Only if that sub-agent returns nothing usable, "
+            "say so and name what was searched.",
+        ]
+        if also:
+            lines.append(
+                "The question also touches: " + ", ".join(f"`{a}`" for a in also)
+                + " — spawn one task() each in the same turn and merge the results yourself."
+            )
+        owners = [a for a in (agent, *also) if as_phase2_engine(a) is not None]
+        if owners and "udr" not in (agent, *also):
+            lines.append(
+                "These are page engines: they answer from the page's own API, which is the source "
+                "of record, so the chat agrees with the screen. Do not answer this from the database "
+                "catalogue or direct table reads (find_tables, table_card, get_schema, query_table, "
+                "udr_*) — those tools are closed for this turn and will refuse."
+            )
+        elif owners:
+            lines.append(
+                "The page engines answer their half from the page's own API — the source of record. "
+                "The database half runs inside task(\"udr\") ONLY: do not call find_tables, table_card, "
+                "get_schema, query_table or udr_* yourself on this turn — they are closed here and will "
+                "refuse — and do not re-count a page engine's figures from tables. Merge what the two "
+                "sub-agents return; where they disagree, the page engine's figure stands."
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _with_routing_note(extra_context: str | None, note: str | None) -> str | None:
+        if not note:
+            return extra_context
+        if extra_context and extra_context.strip():
+            return extra_context.rstrip() + "\n\n" + note
+        return note
+
     @classmethod
     def _early_pipeline_steps(cls, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The three steps before the analyst — routing, document choice, fetch — rebuilt from
@@ -3539,7 +3894,7 @@ class DeepAgentOrchestrator:
             steps.append(
                 {
                     "stage": "route",
-                    "label": f"Routed the question — {e.get('agent') or 'compliance'}",
+                    "label": f"Routed the question — {e.get('agent') or 'the engine'}",
                     "detail": str(e.get("reason") or ""),
                     **cls._step_cost("agent_router"),
                 }
@@ -3562,12 +3917,22 @@ class DeepAgentOrchestrator:
                 if isinstance(tc, dict)
                 and not str(tc.get("tool", "")).startswith(("phase2_engine:", "compliance_"))
             ]
+            # Counted apart from rows, and shown apart. An action is something the tool
+            # PROPOSES — expedite this order, claim this credit — not a record it fetched, so
+            # folding it into the row count would mean "12 rows" included one thing nobody
+            # retrieved. Reported in its own clause instead: the figure keeps meaning records,
+            # and the actions waiting on a decision are visible rather than buried.
+            actions = 0
             rows = 0
             for tc in tool_calls:
                 out_ = tc.get("output") if isinstance(tc, dict) and isinstance(tc.get("output"), dict) else {}
                 # Row lists sit at the top level or one level down (the coverage tool nests
                 # its per-scope report under "buildings" / "vendors").
-                for key in ("certificates", "buildings", "vendors", "types"):
+                acts = out_.get("actions")
+                if isinstance(acts, list):
+                    actions += len(acts)
+                before = rows
+                for key in cls._ROW_KEYS:
                     v = out_.get(key)
                     if isinstance(v, list):
                         rows += len(v)
@@ -3575,13 +3940,22 @@ class DeepAgentOrchestrator:
                         inner = v.get(key)
                         if isinstance(inner, list):
                             rows += len(inner)
+                # A tool whose list is legitimately empty still READ something. "Which assets
+                # have never been scored" returns an empty `assets` list and `in_scope: 53`;
+                # the panel said "1 tool, 0 rows" as if nothing had been fetched. Where a
+                # tool reports how many rows it examined, that is the figure to show.
+                if rows == before and isinstance(out_.get("in_scope"), int):
+                    rows += int(out_["in_scope"])
             steps.append(
                 {
                     "stage": "data",
                     "label": (
                         f"Fetched the data — {len(tools)} tool{'s' if len(tools) != 1 else ''}, "
                         f"{rows} row{'s' if rows != 1 else ''}"
+                        + (f", {actions} action{'s' if actions != 1 else ''} ready"
+                           if actions else "")
                     ),
+                    "actions_ready": actions,
                     "detail": ", ".join(tools),
                     **cls._step_cost("sub_agent"),
                 }
@@ -3646,7 +4020,7 @@ class DeepAgentOrchestrator:
         api_key = (getattr(settings, "anthropic_api_key", "") or "").strip()
         if not api_key:
             return None
-        model = (getattr(settings, "compliance_summary_model", "") or "claude-opus-5").strip()
+        model = (getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL).strip()
         # Everything the reader will see, including the panels code attaches after the model
         # has finished. The missing-duty panel was invisible here, so a statutory-list
         # question shipped with 22 "nothing on record" rows and 44 buttons beneath it and the
@@ -3700,6 +4074,22 @@ class DeepAgentOrchestrator:
                 else (getattr(settings, "compliance_review_effort", "") or "medium").strip()
             )
             _t0 = time.perf_counter()
+            activity_log.fire(
+                agent="compliance", stage="review", direction="input", model=model,
+                summary="review of: " + (user_message or "")[:250],
+                payload={
+                    "system_prompt": self._REVIEWER_PROMPT,
+                    "user_message": {
+                        "question": user_message[:1000],
+                        "pack_facts": pack_facts or {},
+                        "register_index": self._register_index(rows or []),
+                        "tool_results_digest": self._tool_results_digest(tool_results),
+                        "code_findings": code_findings,
+                        "answer_under_review": answer_text,
+                    },
+                    "params": {"effort": review_effort, "max_tokens": 4000, "schema": "review"},
+                },
+            )
             message = await client.messages.create(
                 model=model,
                 max_tokens=4000,
@@ -3730,6 +4120,10 @@ class DeepAgentOrchestrator:
             )
         except Exception as exc:  # noqa: BLE001 — review must never break the turn
             log.warning("compliance.review.failed", model=model, error=str(exc)[:300])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
         llm_cost.record(
             "reviewer",
@@ -3743,10 +4137,25 @@ class DeepAgentOrchestrator:
             "",
         )
         try:
-            return json.loads(raw)
+            review = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.review.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage="review", direction="error",
+                summary="unparsable review", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
+        activity_log.fire(
+            agent="compliance", stage="review", direction="output",
+            summary=str(review.get("verdict") or review.get("summary") or "review")[:300],
+            model=model, latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"review": review, "code_findings": code_findings,
+                     "answer_under_review": answer_text},
+        )
+        return review
 
     @staticmethod
     def _revision_brief(
@@ -3813,6 +4222,9 @@ class DeepAgentOrchestrator:
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
+        Every call is recorded in the activity log — input (question, data, sub-questions)
+        and output (the typed response) — so a wrong answer can be replayed.
+
         When `on_zone` is given it is awaited with (key, value) as each top-level zone
         finishes streaming, so the UI can paint the narrative and KPIs first.
         """
@@ -3820,7 +4232,7 @@ class DeepAgentOrchestrator:
         if not api_key:
             return None
         model = (
-            getattr(settings, "compliance_summary_model", "") or "claude-opus-5"
+            getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
         try:
             import anthropic
@@ -3833,6 +4245,21 @@ class DeepAgentOrchestrator:
             system_text = "\n\n---\n\n".join(
                 [self._ANALYST_CONTEXT_DOCS, self._ANALYST_PROMPT]
                 + ([self._TAXONOMY_DIRECTIVE] if taxonomy else [])
+            )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="input", model=model,
+                summary=(user_message or "")[:300],
+                payload={
+                    "system_prompt": system_text,
+                    "user_message": {
+                        "question": user_message,
+                        "sub_questions": self._sub_question_brief(sub_questions, user_message),
+                        "query_notes": query_notes,
+                        "data_json": data_json,
+                    },
+                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": 16000,
+                               "thinking": "adaptive", "schema": "compliance_response"},
+                },
             )
             async with client.messages.stream(
                 model=model,
@@ -3876,6 +4303,10 @@ class DeepAgentOrchestrator:
             log.warning(
                 "compliance.analyst.failed", model=model, error=str(exc)[:300]
             )
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         llm_cost.record(
@@ -3894,8 +4325,21 @@ class DeepAgentOrchestrator:
             payload = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.analyst.unparsable", error=str(exc)[:200])
+            activity_log.fire(
+                agent="compliance", stage=role, direction="error",
+                summary="unparsable analyst response", ok=False, error=str(exc), model=model,
+                payload={"raw": raw},
+            )
             return None
 
+        activity_log.fire(
+            agent="compliance", stage=role, direction="output",
+            summary=str(payload.get("narrative") or "")[:300], model=model,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"response": payload, "effort": effort, "taxonomy": taxonomy},
+        )
         log.info(
             "compliance.stage3.analyst",
             model=model,
@@ -3917,7 +4361,7 @@ class DeepAgentOrchestrator:
         if not api_key:
             return None
         model = (
-            getattr(settings, "compliance_summary_model", "") or "claude-opus-5"
+            getattr(settings, "compliance_summary_model", "") or DEFAULT_COMPLIANCE_SUMMARY_MODEL
         ).strip()
         try:
             import anthropic
@@ -3940,12 +4384,24 @@ class DeepAgentOrchestrator:
                 model=model,
                 error=str(exc)[:300],
             )
+            activity_log.fire(
+                agent="compliance", stage="summary", direction="error", summary=str(exc)[:300],
+                ok=False, error=str(exc), model=model,
+            )
             return None
 
         parts = [
             b.text for b in (message.content or []) if getattr(b, "type", "") == "text"
         ]
         out = "\n".join(p for p in parts if p).strip()
+        activity_log.fire(
+            agent="compliance", stage="summary", direction="output" if out else "error",
+            summary=(out or "empty answer")[:300], ok=bool(out), model=model,
+            input_tokens=getattr(message.usage, "input_tokens", None),
+            output_tokens=getattr(message.usage, "output_tokens", None),
+            payload={"answer": out, "stop_reason": getattr(message, "stop_reason", None),
+                     "provider": "anthropic"},
+        )
         if not out:
             return None
         # STAGE 3 LOG — the summary the model produced.
@@ -3978,6 +4434,13 @@ class DeepAgentOrchestrator:
         the summary plus the UNFILTERED vendor (and building, when in scope) portfolios, then let
         build_deterministic_compliance_answer group them into Blocked / Lapsed / At-risk sections.
         """
+        # Neither caller (_stateful_preflight_shortcut, run_stateful) opens a ledger before
+        # reaching here, so without this the compliance_pipeline output below always attaches
+        # cost=None — the turn's model calls (routing, any LLM this shortcut itself uses) were
+        # never being recorded at all. Guarded exactly like _invoke_phase2_engine's own
+        # begin_turn call, so a turn that DID start a ledger upstream keeps its entries.
+        if llm_cost.current() is None:
+            llm_cost.begin_turn(session_id)
         if compliance_skill_path_enabled():
             # COMPLIANCE_SKILL_PATH=1 — stand down so the question reaches the orchestrator
             # and, through it, the compliance sub-agent with its own skill files. This
@@ -4058,10 +4521,29 @@ class DeepAgentOrchestrator:
         # and returned on the result so the non-streaming path shows the same thing.
         pipeline: list[dict[str, Any]] = []
 
-        async def _step(step: dict[str, Any]) -> None:
+        async def _step(step: dict[str, Any]) -> dict[str, Any]:
             pipeline.append(step)
             if on_zone is not None:
                 await on_zone(self._STEP_ZONE, step)
+            return step
+
+        def _step_cost(role: str) -> dict[str, Any]:
+            """The most recent ledger entry for `role`, shaped for a step's own badge.
+
+            Read once, right after the call it describes returns — a step whose call has not
+            happened yet (the analyst step is emitted before its own call, so streaming shows
+            it as in progress) gets nothing here; its cost is merged in afterwards instead. A
+            role the ledger never recorded (no API key, the call raised) returns {} — the step
+            shows no badge rather than a guessed one.
+            """
+            ledger = llm_cost.current()
+            entry = ledger.last(role) if ledger else None
+            if not entry:
+                return {}
+            return {
+                "ms": entry.get("ms"), "usd": entry.get("usd"), "model": entry.get("model"),
+                "effort": entry.get("effort"), "cache_hit": entry.get("cache_hit"),
+            }
 
         if on_zone is not None and plan.get("reason"):
             # Streamed ahead of the data so the activity log shows the intent first.
@@ -4084,6 +4566,7 @@ class DeepAgentOrchestrator:
                     }
                     for sq in (plan.get("sub_questions") or [])
                 ],
+                **_step_cost("plan"),
             }
         )
 
@@ -4362,13 +4845,17 @@ class DeepAgentOrchestrator:
 
         answer_source = "analyst"
         answer: str | None = None
-        await _step(
+        # Emitted before the call it describes, unlike every other step here, so a streaming
+        # client sees "the analyst is working" for the ~30-60s this actually takes rather than
+        # nothing at all. Its own time/cost/model are filled in below once the call returns —
+        # the returned dict is the same one already in `pipeline`, so mutating it is enough.
+        analyse_step = await _step(
             {
                 "stage": "analyse",
                 "label": "Compliance analyst reasoning",
                 "detail": (
                     f"{len(fetched_rows)} row(s) handed to "
-                    f"{(getattr(settings, 'compliance_summary_model', '') or 'claude-opus-5')}"
+                    f"{(getattr(settings, 'compliance_summary_model', '') or DEFAULT_COMPLIANCE_SUMMARY_MODEL)}"
                     " to rank by operational urgency and write the answer"
                     if fetched_rows
                     else "Answering from the compliance engine tools"
@@ -4391,6 +4878,7 @@ class DeepAgentOrchestrator:
             query_notes=query_notes,
             taxonomy=is_taxonomy,
         )
+        analyse_step.update(_step_cost("analyst"))
         if analysis and (analysis.get("narrative") or "").strip():
             # EL gate — the orchestrator re-checks the sub-agent's answer against the rows it
             # was given before any of it reaches the user. Only meaningful on the direct-read
@@ -4525,6 +5013,7 @@ class DeepAgentOrchestrator:
                                 if isinstance(f, dict)
                             ]
                         )[:8],
+                        **_step_cost("reviewer"),
                     }
                 )
                 if needs_revision:
@@ -4574,6 +5063,11 @@ class DeepAgentOrchestrator:
                                     "disagree with the pack — shown below the answer"
                                 ),
                                 "issues": remaining[:8],
+                                # The revision call just above is recorded under the same
+                                # "analyst" role as the first pass; by this point in the
+                                # function it is the newest entry under that name, so `last`
+                                # names this call and not the original one.
+                                **_step_cost("analyst"),
                             }
                         )
                         analysis.setdefault("validation", {})["review"] = {
@@ -4606,7 +5100,18 @@ class DeepAgentOrchestrator:
                 {
                     "tool": "compliance_pipeline",
                     "input": {"question": user_message[:300]},
-                    "output": {"steps": pipeline},
+                    "output": {
+                        "steps": pipeline,
+                        # Every model call in this turn already went through the llm_cost
+                        # ledger (routing, doc selection, any LLM the shortcut itself used);
+                        # the UI's pipeline panel reads this the same way the full
+                        # compose_structured_compliance path already does.
+                        "cost": (
+                            llm_cost.current().log_summary(user_message)
+                            if llm_cost.current()
+                            else None
+                        ),
+                    },
                 }
             )
         log.info(
@@ -5276,6 +5781,22 @@ class DeepAgentOrchestrator:
                 "output": tc.get("output"),
             }
 
+        # The pipeline's steps, which the live path emits as the composer produces them. They
+        # are already sitting in the finished turn's compliance_pipeline call, so a replayed
+        # turn can show the same route instead of a trace with the pipeline missing from it —
+        # the reader could otherwise not tell why one answer records its steps and another,
+        # to the same question, does not.
+        pipeline = next(
+            (
+                tc.get("output")
+                for tc in (shortcut.get("tool_calls") or [])
+                if tc.get("tool") == "compliance_pipeline"
+            ),
+            None,
+        )
+        for step in (pipeline.get("steps") or []) if isinstance(pipeline, dict) else ():
+            yield self._compliance_zone_event(self._STEP_ZONE, step)
+
         analysis = next(
             (
                 tc.get("output")
@@ -5558,6 +6079,20 @@ class DeepAgentOrchestrator:
                 }
         return analysis, steps
 
+    @staticmethod
+    def _contract_analyst_model() -> str:
+        """The model that writes the vendor answer.
+
+        Separate from the compliance analyst on purpose: that one runs opus and a compliance
+        turn costs about a quarter of a dollar, which is the right trade for statutory exposure
+        and the wrong one for a scorecard question asked twenty times a day. Defaults to sonnet;
+        CONTRACT_ANALYST_MODEL overrides, and pointing it at the compliance model buys
+        compliance-grade answers at compliance-grade prices.
+        """
+        import os
+
+        return os.getenv("CONTRACT_ANALYST_MODEL", "").strip() or DEFAULT_CONTRACT_ANALYST_MODEL
+
     async def _invoke_phase2_engine(
         self,
         *,
@@ -5608,8 +6143,15 @@ class DeepAgentOrchestrator:
         inner_tool_calls: list[dict[str, Any]] = []
 
         async def _live(event: dict[str, Any]) -> None:
-            if on_zone is not None:
-                await on_zone(self._EVENT_ZONE, event)
+            if on_zone is None:
+                return
+            # Compliance streams its ANALYST's zones, not the sub-agent's prose — the prose is
+            # evidence-gathering the analyst rewrites, and showing it as a draft would put two
+            # different answers on screen in one turn. Every other engine's sub-agent text IS
+            # the answer (or the draft the vendor composer works from), so it streams.
+            if engine == "compliance" and event.get("type") == "answer_delta":
+                return
+            await on_zone(self._EVENT_ZONE, event)
 
         if on_zone is not None:
             await _live(
@@ -5703,6 +6245,38 @@ class DeepAgentOrchestrator:
         # the answer, and facts computed by code. All three are available from the tool
         # calls the agent itself made.
         structured: dict[str, Any] | None = None
+        if engine != "compliance":
+            # Every engine shows WHICH agent answered, WHAT it did and WHAT it cost. The whole
+            # panel used to sit behind `engine == "compliance"`, so an energy turn measured
+            # itself exactly as carefully and then displayed none of it — the ledger starts in
+            # this function, above, for every engine alike.
+            #
+            # Deliberately the first three steps only. The analyst, the grounding check and the
+            # reviewer are compliance stages that do not exist here, and inventing labels for
+            # work that did not happen would be worse than showing less: a panel saying
+            # "checked the answer against the rows" where nothing checked anything is a lie
+            # with a cost figure attached.
+            early_steps = self._early_pipeline_steps(inner_tool_calls)
+            if early_steps:
+                if on_zone is not None:
+                    for st in early_steps:
+                        await on_zone(self._STEP_ZONE, st)
+                ledger = llm_cost.current()
+                inner_tool_calls = [
+                    *inner_tool_calls,
+                    {
+                        # Under the name the interface reads, not `{engine}_pipeline`: that
+                        # name was emitted for weeks and drawn never. `engine` in the output
+                        # is what says whose panel this is.
+                        "tool": self.PIPELINE_PANEL_TOOL,
+                        "input": {"question": user_message[:300]},
+                        "output": {
+                            "engine": engine,
+                            "steps": early_steps,
+                            "cost": ledger.log_summary(user_message) if ledger else None,
+                        },
+                    },
+                ]
         if engine == "compliance":
             early_steps = self._early_pipeline_steps(inner_tool_calls)
             if on_zone is not None:
@@ -5833,6 +6407,27 @@ class DeepAgentOrchestrator:
                         chars=len(revised),
                     )
 
+        # The vendor engine's answer pass. The sub-agent gathered rows and wrote prose; an
+        # analyst now rewrites it from those rows into zones, code strips anything they do not
+        # support, and the result is emitted under the two names the interface draws cards
+        # from. Compliance has had this since it shipped; contract_performance answered in a
+        # paragraph with nothing between the model and the reader.
+        #
+        # Every failure is soft on purpose: no rows, a refused model, unparsable JSON — the
+        # prose answer stands. A worse answer beats no answer, and half a card set beats
+        # neither.
+        if engine == "contract_performance":
+            answer, inner_tool_calls, _meta = await contract_answer.compose(
+                question=user_message,
+                answer=str(answer or ""),
+                tool_calls=inner_tool_calls,
+                api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
+                model=self._contract_analyst_model(),
+                session_id=session_id,
+                cost=(llm_cost.current().log_summary(user_message)
+                      if llm_cost.current() else None),
+            )
+
         # Parse synthetic tool record so FE route_metadata shows the engine
         out = {
             "session_id": session_id,
@@ -5876,15 +6471,31 @@ class DeepAgentOrchestrator:
         input_: Any,
         thread_id: str,
         session_id: str,
+        routing_note: str | None = None,
     ) -> dict[str, Any]:
         """Invoke the agent and normalise the result into our response shape."""
         config = self._config(thread_id)
         set_session_context(thread_id)
+        activity_log.set_current_session(session_id, thread_id)
+        activity_log.ensure_turn()
+        _turn_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input",
+            summary=_latest_user_message(input_)[:300],
+            payload={"input": input_ if not isinstance(input_, dict) else {
+                "message_count": len(input_.get("messages") or []),
+                "latest_user_message": _latest_user_message(input_),
+            }},
+        )
         try:
             result = await self._agent.ainvoke(input_, config)
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+            )
             return {
                 "session_id": session_id,
                 "answer": "",
@@ -5907,6 +6518,21 @@ class DeepAgentOrchestrator:
 
         tool_calls = _extract_tool_calls(messages)
         answer = _extract_answer(messages)
+        # The general path reaches the vendor tools too — the meta agent hands the question to
+        # the contract sub-agent through `task` whenever the keyword table missed. Composing
+        # here as well is what stops the same question answering in cards or in prose depending
+        # on which words it happened to contain. No vendor rows in the turn: nothing happens.
+        if interrupt_payload is None:
+            answer, tool_calls, _ = await contract_answer.compose(
+                question=_latest_user_message(input_),
+                answer=str(answer or ""),
+                tool_calls=tool_calls,
+                api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(),
+                model=self._contract_analyst_model(),
+                session_id=session_id,
+                cost=(llm_cost.current().log_summary(_latest_user_message(input_))
+                      if llm_cost.current() else None),
+            )
         if has_udr_tool_calls(tool_calls) and interrupt_payload is None:
             answer, _ = await evaluate_udr_response(
                 user_message=_latest_user_message(input_),
@@ -5914,6 +6540,10 @@ class DeepAgentOrchestrator:
                 tool_calls=tool_calls,
                 llm=self._llm,
             )
+        if routing_note and interrupt_payload is None:
+            panel = self._general_loop_panel(_latest_user_message(input_), tool_calls)
+            if panel:
+                tool_calls = [*tool_calls, panel]
         out = {
             "session_id": session_id,
             "answer": answer,
@@ -5928,6 +6558,18 @@ class DeepAgentOrchestrator:
         if tool_calls:
             tool_name = str(tool_calls[-1].get("tool") or "")
             domain = _TOOL_DOMAIN.get(tool_name, "meta")
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(answer or "")[:300],
+            payload={
+                "answer": answer,
+                "tool_calls": tool_calls,
+                "domain": domain,
+                "interrupted": interrupt_payload is not None,
+                "interrupt_payload": interrupt_payload,
+            },
+            latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+        )
         return attach_route_to_result(
             out,
             session_id,
@@ -6005,13 +6647,22 @@ class DeepAgentOrchestrator:
             ROUTE_WO_CLARIFY,
         }
         engine = preferred_engine
+        routing_note: str | None = None
+        # A new turn opens the catalogue again before anything decides otherwise: a keyword
+        # route or a preferred engine skips select_agent, and a claim from the previous turn
+        # on this task must not outlive the turn that made it.
+        _turn_page_engines.set(frozenset())
+        _turn_catalogue_via_task.set(False)
         if engine is None and route_intent not in core_routes:
-            engine = as_phase2_engine(
-                (await select_agent(user_message, extra_context)).get("agent")
-            )
+            routing = await select_agent(user_message, extra_context)
+            engine, routing_note = self._decide_dispatch(routing, msg_l)
+            self._claim_turn_for_page_engines(routing)
             # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
             # intent classifier so the orchestrator comprehends meaning, not just exact keywords.
-            if engine is None:
+            # Not when the router made a decision the engines cannot take — wo_engine or udr is
+            # an answer, and a second classifier re-reading "statutory" into compliance is how
+            # a maintenance question left this function as a certificate question.
+            if engine is None and routing_note is None:
                 engine = await self._llm_classify_engine(user_message)
         if engine is not None and route_intent not in core_routes:
             # Any compliance data question is answered from the WHOLE portfolio: the shortcut
@@ -6174,9 +6825,12 @@ class DeepAgentOrchestrator:
                 return attach_route_to_result(shortcut, session_id)
             return shortcut
 
-        input_ = await self._build_stateful_input(session_id, user_message, extra_context)
-        log.info("orchestrator.run_stateful.start", session_id=session_id)
-        return await self._invoke(input_, session_id, session_id)
+        input_ = await self._build_stateful_input(
+            session_id, user_message, self._with_routing_note(extra_context, routing_note)
+        )
+        log.info("orchestrator.run_stateful.start", session_id=session_id,
+                 router_hint_carried=bool(routing_note))
+        return await self._invoke(input_, session_id, session_id, routing_note=routing_note)
 
     @staticmethod
     def _looks_like_work_request_without_wo_keyword(msg_l: str) -> bool:
@@ -6288,6 +6942,13 @@ class DeepAgentOrchestrator:
         sid = session_id or str(uuid.uuid4())
         thread_id = sid
         config = self._config(thread_id)
+        activity_log.set_current_session(sid, thread_id)
+        activity_log.ensure_turn()
+        _stream_t0 = time.perf_counter()
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="input", summary=user_message[:300],
+            payload={"message": user_message, "extra_context": extra_context, "mode": "stream"},
+        )
         set_session_context(sid)
         record_conversation_turn(sid, "user", user_message)
 
@@ -6381,6 +7042,12 @@ class DeepAgentOrchestrator:
             ROUTE_WO_INTAKE,
             ROUTE_WO_CLARIFY,
         }
+        routing_note: str | None = None
+        # A new turn opens the catalogue again before anything decides otherwise: a keyword
+        # route or a preferred engine skips select_agent, and a claim from the previous turn
+        # on this task must not outlive the turn that made it.
+        _turn_page_engines.set(frozenset())
+        _turn_catalogue_via_task.set(False)
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -6389,7 +7056,8 @@ class DeepAgentOrchestrator:
             # was never asked.
             llm_cost.begin_turn(sid)
             routing = await select_agent(user_message, extra_context)
-            phase2_engine = as_phase2_engine(routing.get("agent"))
+            phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
+            self._claim_turn_for_page_engines(routing)
             if phase2_engine is not None:
                 yield {
                     "type": "reasoning",
@@ -6461,7 +7129,25 @@ class DeepAgentOrchestrator:
                 )
                 return
 
-        input_ = await self._build_stateful_input(sid, user_message, extra_context)
+        if routing_note:
+            # The router chose a sub-agent the orchestrator cannot short-circuit to (wo_engine,
+            # udr, doc_rag, migration). Say so on the panel as the engines do, and carry the
+            # decision into the general agent's turn so it delegates there instead of starting
+            # cold and re-routing "statutory" into compliance.
+            routed_agent = str(routing_note.split("`")[1]) if "`" in routing_note else "sub-agent"
+            yield {
+                "type": "reasoning",
+                "label": "Domain routing",
+                "text": (
+                    f"Read the question → {routed_agent} sub-agent"
+                    + (f" — {routing.get('reason')}" if routing.get("reason") else "")
+                    + ". The orchestrator delegates there first."
+                ),
+                "domain": routed_agent,
+            }
+        input_ = await self._build_stateful_input(
+            sid, user_message, self._with_routing_note(extra_context, routing_note)
+        )
 
         last_domain: str | None = None
         final_answer = ""
@@ -6485,6 +7171,10 @@ class DeepAgentOrchestrator:
                         }
                     last_domain = domain
 
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="input",
+                        summary=tool_name, payload={"tool": tool_name, "input": tool_input},
+                    )
                     yield {
                         "type": "tool_started",
                         "tool": tool_name,
@@ -6509,6 +7199,10 @@ class DeepAgentOrchestrator:
                             "output": output,
                         }
                     )
+                    activity_log.fire(
+                        agent=f"tool:{domain}", stage="tool", direction="output",
+                        summary=tool_name, payload={"tool": tool_name, "output": output},
+                    )
                     yield {
                         "type": "tool_completed",
                         "tool": tool_name,
@@ -6522,6 +7216,18 @@ class DeepAgentOrchestrator:
                     if event.get("name") == "processing_step":
                         yield {"type": "processing_step", **(event.get("data") or {})}
 
+                elif kind == "on_chat_model_stream":
+                    # The orchestrator's own words as it writes them. Only the top-level model
+                    # run: a sub-agent a `task` call spawned inherits this run as its parent
+                    # and its model runs surface here too, nested deeper — its drafts are not
+                    # this answer. The interface shows deltas as a draft the final replaces.
+                    if len(event.get("parent_ids") or []) <= 2:
+                        delta = answer_delta_event(
+                            event.get("data", {}).get("chunk"), last_domain or "orchestrator"
+                        )
+                        if delta is not None:
+                            yield delta
+
                 elif kind == "on_chat_model_end":
                     output_msg = event.get("data", {}).get("output")
                     if output_msg and not getattr(output_msg, "tool_calls", None):
@@ -6532,12 +7238,22 @@ class DeepAgentOrchestrator:
         except GraphInterrupt as gi:
             payload = gi.args[0] if gi.args else {}
             log.info("orchestrator.stream.gate_interrupt", session_id=sid)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="output", summary="gate_interrupt",
+                payload={"gate_interrupt": payload, "tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "gate_interrupt", "payload": payload, "session_id": sid}
             return
 
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.stream.error", session_id=sid, error=err, exc_info=True)
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                ok=False, error=err, payload={"tool_calls": streamed_tool_calls},
+                latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+            )
             yield {"type": "error", "error": err, "session_id": sid}
             return
 
@@ -6549,8 +7265,18 @@ class DeepAgentOrchestrator:
                 llm=self._llm,
             )
         log.info("orchestrator.stream.done", session_id=sid)
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output",
+            summary=(final_answer or "")[:300],
+            payload={"answer": final_answer, "tool_calls": streamed_tool_calls, "mode": "stream"},
+            latency_ms=(time.perf_counter() - _stream_t0) * 1000,
+        )
         if final_answer.strip():
             record_conversation_turn(sid, "assistant", final_answer)
+        if routing_note:
+            panel = self._general_loop_panel(user_message, streamed_tool_calls)
+            if panel:
+                streamed_tool_calls = [*streamed_tool_calls, panel]
         yield workflow_stream_completion_payload(
             sid,
             answer=final_answer,

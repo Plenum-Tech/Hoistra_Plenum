@@ -54,18 +54,23 @@ export default function Vendors({ vals }) {
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <div title={vals.vpSourceDetail} style={{ display: "inline-flex", alignItems: "center", gap: "7px", padding: "6px 11px", borderRadius: "20px", border: "1px solid var(--color-divider)", fontSize: "11px", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+                <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: vals.vpSourceDot, flexShrink: "0" }}></span>
+                <span>{vals.vpSourceLabel}</span>
+                <span className="hv11" onClick={vals.vpRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.vpRetryShow }}>{"Retry"}</span>
+              </div>
               <div className="btn btn-primary" onClick={vals.vpRebuild} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer" }}>
                 {"Rebuild scorecards"}
               </div>
               <div className="hv4" onClick={vals.vpWeights} style={{ fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {"Scoring weights"}
               </div>
-              <div style={{ padding: "8px 13px", borderRadius: "9px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "2px", whiteSpace: "nowrap" }}>
+              <div title={"When the scorecards were last cut. No read endpoint returns that time yet, so it is shown as — rather than guessed."} style={{ padding: "8px 13px", borderRadius: "9px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "2px", whiteSpace: "nowrap" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {"Last rebuild"}
                 </span>
                 <span style={{ fontSize: "12.5px", fontVariantNumeric: "tabular-nums" }}>
-                  {"02:48 today"}
+                  {vals.vpLastRebuild}
                 </span>
               </div>
             </div>
@@ -82,7 +87,7 @@ export default function Vendors({ vals }) {
                 <div className="hv1" onClick={t.click} style={{ padding: "13px 14px 13px 16px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden", minWidth: "0", cursor: "pointer" }}>
                   <div style={{ position: "absolute", left: "0", top: "11px", bottom: "11px", width: "3px", borderRadius: "0 3px 3px 0", background: t.color }}></div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
-                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "23px", lineHeight: "1.1", color: t.color }}>
+                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "23px", lineHeight: "1.1", color: t.fg || t.color }}>
                       {t.value}
                     </span>
                     <i className="ph ph-arrow-up-right" style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}></i>
@@ -139,7 +144,18 @@ export default function Vendors({ vals }) {
               </React.Fragment>
             ))}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start" }}>
+          <div style={{ display: vals.vpEmptyShow, padding: "26px 22px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "16px" }}>
+            <div style={{ fontSize: "14px" }}>
+              {vals.vpEmptyTitle}
+            </div>
+            <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "7px 0 0", maxWidth: "76ch", lineHeight: "1.55" }}>
+              {vals.vpEmptyNote}
+            </p>
+            <div className="hv4" onClick={vals.vpRetry} style={{ display: vals.vpRetryShow === "none" ? "none" : "inline-block", marginTop: "13px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
+              {"Try the read again"}
+            </div>
+          </div>
+          <div style={{ display: vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start" }}>
             <div style={{ minWidth: "0", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "11px 15px", borderBottom: "1px solid var(--color-divider)" }}>
                 <span style={{ fontSize: "12.5px", flex: "1" }}>
@@ -182,7 +198,7 @@ export default function Vendors({ vals }) {
                         </span>
                       </div>
                       <div style={{ height: "4px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
-                        <div style={{ height: "100%", borderRadius: "2px", width: v.cov, background: v.covFg }}></div>
+                        <div style={{ height: "100%", borderRadius: "2px", width: v.covBar, background: v.covFg }}></div>
                       </div>
                     </div>
                   </div>
@@ -450,8 +466,11 @@ export default function Vendors({ vals }) {
                         </div>
                       </div>
                     </div>
+                    <div style={{ display: vals.vp.breachEmptyShow, padding: "14px 16px", fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.55" }}>
+                      {vals.vp.breachEmpty}
+                    </div>
                     <div style={{ display: "flex", gap: "9px", flexWrap: "wrap", padding: "12px 16px" }}>
-                      <div className="hv15" onClick={vals.vp.claim} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
+                      <div className="hv15" onClick={vals.vp.claim} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", display: vals.vp.claimShow }}>
                         {"Claim "}{vals.vp.creditTotal}{" in credits"}
                       </div>
                       <div className="hv4" onClick={vals.vp.evidence} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
@@ -556,7 +575,10 @@ export default function Vendors({ vals }) {
                         </div>
                       </React.Fragment>
                     ))}
-                    <div style={{ display: "flex", gap: "9px", flexWrap: "wrap", padding: "12px 16px" }}>
+                    <div style={{ display: vals.vp.invEmptyShow, padding: "14px 16px", fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.55" }}>
+                      {vals.vp.invEmpty}
+                    </div>
+                    <div style={{ display: vals.vp.invActionsShow, gap: "9px", flexWrap: "wrap", padding: "12px 16px" }}>
                       <div className="hv15" onClick={vals.vp.challenge} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer" }}>
                         {"Raise credit note · "}{vals.vp.invTotal}
                       </div>

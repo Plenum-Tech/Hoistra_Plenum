@@ -1,7 +1,11 @@
 ---
 name: work-order-engine
 agent: wo_engine
-description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog".
+description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together as a corpus (recommendations never converted to orders, which earlier inspection reports confirm or corroborate an energy anomaly, findings under warranty, condition grades). A question about what the inspection REPORTS say about orders, anomalies or warranty is this agent's, not the document reader's. Only an asset CONDITION or HEALTH question also touches energy_intelligence (consumption and anomalies) — name it under also then; a work-order, decision, PPM, approval or inspection-report question is this agent's alone and has no also. Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
+references:
+  - decisions
+  - work-orders
+  - dispatch
 triggers:
   - work order
   - workorder
@@ -38,6 +42,33 @@ triggers:
   - dashboard
   - technician
   - assign
+  - decisions owed
+  - what needs my decision
+  - blocked work order
+  - to raise
+  - awaiting approval
+  - deviation
+  - statutory
+  - ppm to plan
+  - behind plan
+  - missed visits
+  - inspection report
+  - recommendations
+  - under warranty
+  - unconverted
+  - decision
+  - decisions
+  - which decisions
+  - statutory decisions
+  - decisions are statutory
+  - never converted
+  - converted to orders
+  - reports confirm
+  - corroborate
+  - corroborated
+  - confirm the anomalies
+  - confirm the energy anomalies
+  - inspection reports
 ---
 
 # WO Engine — work order lifecycle

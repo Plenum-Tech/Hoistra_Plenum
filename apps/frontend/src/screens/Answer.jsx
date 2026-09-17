@@ -57,37 +57,33 @@ export default function Answer({ vals }) {
               <div style={{ fontSize: "11px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginBottom: "11px" }}>
                 {"The evidence"}
               </div>
-              {(vals.answer.rowHead || []).map((h, $index) => (
-                <React.Fragment key={$index}>
-                </React.Fragment>
-              ))}
-              {(vals.answerRows || []).map((r, $index) => (
-                <React.Fragment key={$index}>
-                </React.Fragment>
-              ))}
               <table className="table" style={{ width: "100%", fontSize: "12.5px" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--color-neutral-500)", fontWeight: "400", padding: "8px 10px" }}>
-                      {vals.h}
-                    </th>
+                    {(vals.answer.rowHead || []).map((h, $index) => (
+                      <th key={$index} style={{ textAlign: "left", fontSize: "10.5px", letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--color-neutral-500)", fontWeight: "400", padding: "8px 10px" }}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="hv19" onClick={vals.r.click} style={{ cursor: "pointer" }}>
-                    <td style={{ padding: "11px 10px" }}>
-                      {vals.r.c0}
-                    </td>
-                    <td style={{ padding: "11px 10px", color: "var(--color-neutral-300)" }}>
-                      {vals.r.c1}
-                    </td>
-                    <td style={{ padding: "11px 10px", fontFamily: "ui-monospace,monospace", color: vals.r.color }}>
-                      {vals.r.c2}
-                    </td>
-                    <td style={{ padding: "11px 10px", color: "var(--color-neutral-400)" }}>
-                      {vals.r.c3}
-                    </td>
-                  </tr>
+                  {(vals.answerRows || []).map((r, $index) => (
+                    <tr key={$index} className="hv19" onClick={r.click} style={{ cursor: "pointer" }}>
+                      <td style={{ padding: "11px 10px" }}>
+                        {r.c0}
+                      </td>
+                      <td style={{ padding: "11px 10px", color: "var(--color-neutral-300)" }}>
+                        {r.c1}
+                      </td>
+                      <td style={{ padding: "11px 10px", fontFamily: "ui-monospace,monospace", color: r.color }}>
+                        {r.c2}
+                      </td>
+                      <td style={{ padding: "11px 10px", color: "var(--color-neutral-400)" }}>
+                        {r.c3}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "9px", marginTop: "20px" }}>

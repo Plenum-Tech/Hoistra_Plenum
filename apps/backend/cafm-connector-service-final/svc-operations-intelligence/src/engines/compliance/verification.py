@@ -7,6 +7,7 @@ vendor is registered on-platform and currently compliant (or blocked/lapsed).
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 from urllib.parse import urlencode
@@ -94,7 +95,88 @@ def resolve_verification_register(
     return None
 
 
+async def persist_register_link(
+    session: AsyncSession,
+    certificate_id: Any,
+    link: dict[str, Any],
+) -> bool:
+    """Write the register link onto the certificate it was built for.
+
+    Two things this is careful about, both of which would be silent if got wrong.
+
+    It **merges**. ``raw_metadata.verification`` already holds the outcome of an actual
+    check — verified, status, checked_at — written by the CCC path. Replacing that block
+    with a link would erase the evidence that the vendor was verified at all, and the
+    register line would still render, so nobody would notice.
+
+    It **never touches `verified` or `status`**. A link to a register is not a check against
+    one. Storing the URL says where to look; it does not say anyone looked, and a
+    certificate that has only ever had a link built must not read as accredited.
+    """
+    from ...models.compliance import ComplianceCertificate
+
+    try:
+        cert = await session.get(ComplianceCertificate, certificate_id)
+    except Exception as exc:  # noqa: BLE001 — a stored link must never fail a verify
+        log.warning("verification.persist_link_failed", error=str(exc)[:200])
+        return False
+    if not cert:
+        return False
+
+    meta = dict(cert.raw_metadata or {})
+    ver = dict(meta.get("verification") or {})
+    ver.update({
+        "register_url": link.get("register_url"),
+        "verification_url": link.get("verification_url"),
+        "issuing_body": link.get("issuing_body"),
+        "register_prefilled": bool(link.get("prefills_number")),
+        "link_built_at": datetime.now(timezone.utc).isoformat(),
+    })
+    meta["verification"] = ver
+    cert.raw_metadata = meta
+    cert.updated_at = datetime.now(timezone.utc)
+    try:
+        # Committed, not just flushed. verify-now is otherwise a read-only endpoint whose
+        # session nobody commits, so a flush alone reported success and wrote nothing —
+        # the link came back marked stored and was gone on the next request.
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("verification.persist_link_commit_failed", error=str(exc)[:200])
+        await session.rollback()
+        return False
+    return True
+
+
 async def build_verify_now_link(
+    session: AsyncSession,
+    *,
+    certificate_type_code: str,
+    accreditation_number: str | None = None,
+    country_code: str = "UK",
+    vendor_name: str | None = None,
+    certificate_id: Any = None,
+) -> dict[str, Any]:
+    """Build the register link, and write it onto the certificate when one is named.
+
+    Wrapping rather than threading the write through four return paths: a link that is
+    persisted on three of them and not the fourth is the kind of gap nobody finds until a
+    particular register is used.
+    """
+    link = await _build_verify_now_link(
+        session,
+        certificate_type_code=certificate_type_code,
+        accreditation_number=accreditation_number,
+        country_code=country_code,
+        vendor_name=vendor_name,
+    )
+    if certificate_id and (link.get("verification_url") or link.get("register_url")):
+        link["stored_on_certificate"] = await persist_register_link(
+            session, certificate_id, link
+        )
+    return link
+
+
+async def _build_verify_now_link(
     session: AsyncSession,
     *,
     certificate_type_code: str,

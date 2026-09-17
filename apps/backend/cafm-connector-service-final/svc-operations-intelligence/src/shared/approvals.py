@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -130,6 +131,12 @@ def _hash_payload(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+#: ops_audit_log.source_feature is CHAR(1): A/B/C are the three product features. Platform
+#: administration (companies, invitations, allocation) is none of them, so it gets its own
+#: letter. Anything longer than one character is rejected by the database, not stored.
+PLATFORM_FEATURE = "P"
+
+
 async def write_audit(
     session: AsyncSession,
     *,
@@ -203,6 +210,7 @@ async def list_queue(
     status: str | None = "pending",
     source_feature: str | None = None,
     limit: int = 100,
+    scope: Any | None = None,
 ) -> list[ApprovalsQueueItem]:
     q = select(ApprovalsQueueItem).order_by(ApprovalsQueueItem.created_at.desc()).limit(limit)
     if organization_id:
@@ -211,7 +219,71 @@ async def list_queue(
         q = q.where(ApprovalsQueueItem.status == status)
     if source_feature:
         q = q.where(ApprovalsQueueItem.source_feature == source_feature)
-    return list((await session.execute(q)).scalars().all())
+    items = list((await session.execute(q)).scalars().all())
+    if scope is not None and getattr(scope, "restricted", False):
+        items = await _restrict_queue_by_building(session, items, scope)
+    return items
+
+
+async def _restrict_queue_by_building(
+    session: AsyncSession, items: list[ApprovalsQueueItem], scope: Any
+) -> list[ApprovalsQueueItem]:
+    """Narrows the unified queue to a building-restricted caller's allocation.
+
+    ``related_entity_type`` names what a queue item is about, and only two of the values
+    it takes are ever building- or site-specific: ``compliance_certificate`` (resolved via
+    the certificate's own building_id, same rule list_certificates() applies) and
+    ``energy_anomaly`` (which names its building directly — the column was called site_id
+    until Sep 2026 and never held a site id, and reading it as one dropped every energy
+    anomaly from a restricted queue). Every other type this queue carries today —
+    vendor, contract_sla_parameters, asset_criticality, invoice, document, site,
+    meter_reading_gap, energy_recommendation — is not building-scoped data in this schema
+    (the same reason vendor accreditation coverage is not narrowed either), so those items
+    are left as they are rather than hidden on a guess.
+    """
+    from ..models import ComplianceCertificate, EnergyAnomaly
+
+    cert_ids = [i.related_entity_id for i in items if i.related_entity_type == "compliance_certificate" and i.related_entity_id]
+    anomaly_ids = [i.related_entity_id for i in items if i.related_entity_type == "energy_anomaly" and i.related_entity_id]
+
+    cert_building: dict[str, str | None] = {}
+    if cert_ids:
+        rows = (
+            await session.execute(
+                select(ComplianceCertificate.id, ComplianceCertificate.building_id).where(
+                    ComplianceCertificate.id.in_(cert_ids)
+                )
+            )
+        ).all()
+        cert_building = {str(cid): (str(bid) if bid else None) for cid, bid in rows}
+
+    # An energy anomaly names its building directly. The column was called site_id until
+    # Sep 2026 and never held a site id, and this code took the name at its word: it looked
+    # the value up in a site-to-buildings map, matched nothing, and so dropped every energy
+    # anomaly from a restricted caller's queue. The building is the answer already.
+    anomaly_building: dict[str, str | None] = {}
+    if anomaly_ids:
+        rows = (
+            await session.execute(
+                select(EnergyAnomaly.id, EnergyAnomaly.building_id).where(EnergyAnomaly.id.in_(anomaly_ids))
+            )
+        ).all()
+        anomaly_building = {str(aid): (str(bid) if bid else None) for aid, bid in rows}
+
+    out: list[ApprovalsQueueItem] = []
+    for item in items:
+        if item.related_entity_type == "compliance_certificate":
+            bid = cert_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        if item.related_entity_type == "energy_anomaly":
+            bid = anomaly_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        out.append(item)
+    return out
 
 
 async def decide_queue_item(
@@ -528,15 +600,32 @@ async def send_platform_email(
     cc_address: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     commit: bool = True,
+    log_body: str | None = None,
+    html_body: str | None = None,
 ) -> dict[str, Any]:
-    """Platform sends email — Microsoft Graph (preferred) or SMTP."""
+    """Platform sends email — Microsoft Graph (preferred) or SMTP.
+
+    ``log_body`` is what gets written to ops_email_log in place of the message itself.
+    Every email is recorded here, which is right for an audit trail and wrong for a
+    message whose entire content is a live credential: a one-time code stored in a table
+    anyone with read access can query is not one-time in any useful sense, and it outlives
+    the ten minutes it was supposed to exist for. Callers sending a secret pass a redacted
+    stand-in, so the record still proves an email went out and no longer contains the
+    thing it was carrying.
+
+    ``html_body`` is optional: when given, ``body`` is still sent as the plain-text
+    alternative (SMTP's multipart/alternative, and what ``log_body`` redacts) and
+    ``html_body`` is what a client capable of rendering it shows instead. Every account
+    email that used to be a bare block of plain text with a raw link — the exact shape a
+    spam filter is tuned to flag — now has a real, branded HTML part.
+    """
     row = OpsEmailLog(
         id=uuid4(),
         organization_id=organization_id,
         queue_item_id=queue_item_id,
         to_address=to_address,
         subject=subject,
-        body=body,
+        body=log_body if log_body is not None else body,
         status="queued",
     )
     session.add(row)
@@ -583,9 +672,10 @@ async def send_platform_email(
             result = await send_via_microsoft_graph(
                 to_address=to_address,
                 subject=subject,
-                body=body,
+                body=html_body if html_body else body,
                 cc_address=cc_address,
                 attachments=attachments,
+                html=bool(html_body),
             )
             from_addr = str(result.get("from") or settings.outlook_user_mail)
         else:
@@ -603,6 +693,8 @@ async def send_platform_email(
                 msg["Cc"] = cc_address
             msg["Subject"] = subject
             msg.set_content(body)
+            if html_body:
+                msg.add_alternative(html_body, subtype="html")
             for att in attachments or []:
                 raw = att.get("content_base64") or ""
                 if not raw:
@@ -622,22 +714,28 @@ async def send_platform_email(
                     [p.strip() for p in cc_address.split(",") if p.strip()]
                 )
             use_ssl = bool(settings.smtp_use_ssl) or int(settings.smtp_port) == 465
-            if use_ssl:
-                with smtplib.SMTP_SSL(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
-            else:
-                with smtplib.SMTP(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    if settings.smtp_use_tls:
-                        smtp.ehlo()
-                        smtp.starttls()
-                        smtp.ehlo()
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
+
+            # smtplib is blocking: run inline it would hold the event loop — and every
+            # other request on this worker — for the whole exchange, up to the 30s timeout.
+            def _smtp_send() -> None:
+                if use_ssl:
+                    with smtplib.SMTP_SSL(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+                else:
+                    with smtplib.SMTP(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        if settings.smtp_use_tls:
+                            smtp.ehlo()
+                            smtp.starttls()
+                            smtp.ehlo()
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+
+            await asyncio.to_thread(_smtp_send)
             result = {"ok": True, "provider": "smtp", "from": from_addr}
 
         row.status = "sent"

@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
+from ...services.principal import Principal, current_principal, organization_for
 from ...config import settings
 from ...core.logging import get_logger
 
@@ -83,10 +84,34 @@ def _row_to_dict(row: Any) -> dict:
     }
 
 
+def _visible(principal: Principal) -> tuple[str, dict[str, Any]]:
+    """The predicate that limits run versions to ones this caller may see.
+
+    A superadmin sees all of them. Everyone else sees their own company's, plus rows with no
+    company: those predate this scoping and were listed for everybody, and hiding them would
+    empty the Scripts panel for existing users rather than protect anything. New runs are
+    stamped with the caller's company, so the null set does not grow.
+    """
+    if principal.is_superadmin:
+        return "", {}
+    return (" AND (organization_id = CAST(:scope_org AS UUID) OR organization_id IS NULL)",
+            {"scope_org": str(principal.organization_id) if principal.organization_id else None})
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/runs", status_code=status.HTTP_201_CREATED, summary="Save a new UDR run version")
-async def create_run(body: UdrRunCreateRequest, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_run(
+    body: UdrRunCreateRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Save a run version in the caller's company.
+
+    ``organization_id`` in the body is honoured only for a superadmin; for anyone else it
+    must be their own company or absent, rather than being written as sent.
+    """
+    org = organization_for(principal, body.organization_id)
     run_id = str(uuid.uuid4())
 
     next_no = (
@@ -115,7 +140,7 @@ async def create_run(body: UdrRunCreateRequest, session: AsyncSession = Depends(
     params = {
         "id": run_id,
         "session_id": body.session_id,
-        "organization_id": body.organization_id,
+        "organization_id": str(org) if org else None,
         "version_no": version_no,
         "custom_name": (body.custom_name or "").strip() or f"Version {version_no}",
         "phase": body.phase,
@@ -137,14 +162,18 @@ async def list_runs(
     session_id: str = Query(..., min_length=1),
     limit: int = Query(3, ge=1, le=50),
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
+    """The versions of one script. A session_id belonging to another company returns
+    nothing rather than that company's history — the id used to be the whole authorisation."""
+    clause, params = _visible(principal)
     rows = (
         await session.execute(
             text(
                 f"SELECT {_COLS} FROM {_SCHEMA}.udr_run_versions "
-                f"WHERE session_id = :sid ORDER BY version_no DESC LIMIT :lim"
+                f"WHERE session_id = :sid{clause} ORDER BY version_no DESC LIMIT :lim"
             ),
-            {"sid": session_id, "lim": limit},
+            {"sid": session_id, "lim": limit, **params},
         )
     ).fetchall()
     return {"session_id": session_id, "versions": [_row_to_dict(r) for r in rows]}
@@ -161,10 +190,11 @@ def _snap_get(snapshot: Any, key: str, default: Any = None) -> Any:
 @router.get("/scripts", summary="List UDR scripts (sessions with versions) for an org")
 async def list_scripts(
     organization_id: str | None = Query(
-        None, description="Filter to one org. Omit to list all (dev/global)."
+        None, description="Superadmin only; anyone else gets their own company."
     ),
     limit: int = Query(200, ge=1, le=1000, description="Max scripts to return."),
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
     """Group ``udr_run_versions`` by ``session_id`` — each session is one UDR
     "script" with an ordered version history. This is what the left-nav UDR
@@ -172,8 +202,13 @@ async def list_scripts(
     cleanup / device change). Completed migrations create a version (see the FE
     completion hook), so every completed migration surfaces here automatically.
     """
-    where = "WHERE organization_id = CAST(:org AS UUID)" if organization_id else ""
-    params: dict[str, Any] = {"org": organization_id} if organization_id else {}
+    # "Omit to list all" was the whole authorisation story: every company's scripts.
+    organization_for(principal, organization_id)
+    clause, params = _visible(principal)
+    if principal.is_superadmin and organization_id:
+        clause = " AND organization_id = CAST(:scope_org AS UUID)"
+        params = {"scope_org": organization_id}
+    where = f"WHERE TRUE{clause}"
     rows = (
         await session.execute(
             text(
@@ -249,14 +284,18 @@ async def rename_run(
     run_id: str,
     body: UdrRunRenameRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
+    """Rename a run the caller may see. One in another company is 404, not 403 — whether
+    that id exists elsewhere is not the caller's to learn."""
+    clause, params = _visible(principal)
     row = (
         await session.execute(
             text(
                 f"UPDATE {_SCHEMA}.udr_run_versions SET custom_name = :name "
-                f"WHERE id = CAST(:id AS UUID) RETURNING {_COLS}"
+                f"WHERE id = CAST(:id AS UUID){clause} RETURNING {_COLS}"
             ),
-            {"id": run_id, "name": body.custom_name.strip()},
+            {"id": run_id, "name": body.custom_name.strip(), **params},
         )
     ).first()
     if row is None:

@@ -22,3 +22,12 @@ apps/backend/config.toml
 .idea/
 .vscode/
 graphify-out/
+# local plugin working state — config + a hook cache, regenerated on demand
+.impeccable/
+
+# PR description drafts. Written to be pasted into a pull request, where the audience is
+# people who already have repo access — not into public git history. The current one names
+# the credentials that are readable in the container environment and still unrotated, and
+# this repository is public, so committing it would confirm in permanent history exactly
+# which live secrets to go looking for.
+PR_BODY.md
