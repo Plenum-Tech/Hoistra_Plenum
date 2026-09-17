@@ -1347,3 +1347,41 @@ async def get_maintenance_overview(building_id: str | None = None) -> dict:
         return resp.json()
     except Exception as exc:
         return _err(exc, "get_maintenance_overview")
+
+
+# ── Which of these tools a sub-agent may hold ─────────────────────────────────────────────
+#
+# The Maintenance page's questions can now be answered by a direct engine (PHASE2_ENGINE_TOOLS
+# in the orchestrator) rather than through the general loop. That engine runs without a
+# checkpointer, so it must never hold a tool that interrupts for approval or writes a record:
+# a "raise me an order" reaching it would die on the first gate. READ tools only, here.
+MAINTENANCE_READ_TOOLS = [
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
+    list_work_orders,
+    get_work_order,
+    get_work_order_history,
+    get_work_order_status_track,
+    get_approval_chain,
+    find_ppm_schedules,
+    get_dashboard_stats,
+    search_assets,
+    get_asset_details,
+    search_locations,
+]
+
+#: Everything the general loop's wo_engine sub-agent holds — the reads above plus the intake,
+#: approval and transition tools that need the loop's gates. Measured 17 Sep 2026: the runner
+#: built this list by hand and the four Maintenance-page tools were never added to it, so a
+#: question routed to wo_engine reached a sub-agent that could not call list_maintenance_decisions.
+WO_ENGINE_SUBAGENT_TOOLS = [
+    *MAINTENANCE_READ_TOOLS,
+    suggest_approval_chain, request_approval_chain, send_approval_request_email,
+    customize_approval_chain, respond_to_approval_step,
+    prepare_intelligent_work_order, confirm_intelligent_work_order_creation,
+    create_intelligent_work_order, trigger_ppm_work_order, process_email_work_order,
+    create_work_order, update_work_order, transition_work_order, approve_work_order,
+    close_work_order,
+]

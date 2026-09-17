@@ -493,6 +493,22 @@ async def compose(
                         else "nothing ungrounded")},
         ]
         emitted = as_tool_calls(zones, question=question, steps=steps, cost=cost)
+        # The engine may already have emitted a run panel for this turn — routing, agent, the
+        # tools it called and what they returned. The renderer draws the FIRST panel it finds,
+        # so a second one would hide either that or this. Extend it instead: the vendor
+        # analyst's three steps are the second half of the same run, not a different run.
+        existing = next(
+            (tc for tc in tool_calls
+             if isinstance(tc, dict) and str(tc.get("tool")) == "compliance_pipeline"
+             and isinstance(tc.get("output"), dict)),
+            None,
+        )
+        if existing is not None:
+            out = existing["output"]
+            out["steps"] = [*(out.get("steps") or []), *steps]
+            if cost is not None:
+                out["cost"] = cost
+            emitted = [tc for tc in emitted if tc.get("tool") != "compliance_pipeline"]
         return answer, [*tool_calls, *emitted], meta
     except Exception as exc:  # noqa: BLE001 — never lose the turn over presentation
         log.warning("contract.answer.failed", session_id=session_id, error=str(exc)[:200])

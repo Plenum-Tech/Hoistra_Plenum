@@ -209,6 +209,7 @@ from .wo_engine_agent import (
     get_inspection_intelligence,
     get_ppm_contracts,
     get_dashboard_stats,
+    MAINTENANCE_READ_TOOLS,
 )
 
 log = structlog.get_logger(__name__)
@@ -357,6 +358,11 @@ PHASE2_ENGINE_TOOLS: dict[str, list] = {
     "compliance": list(COMPLIANCE_ENGINE_TOOLS),
     "contract_performance": list(CONTRACT_PERFORMANCE_TOOLS),
     "energy_intelligence": list(ENERGY_INTELLIGENCE_TOOLS),
+    # The Maintenance page's questions, answered directly rather than through the general
+    # loop. READ tools only: the engines run without a checkpointer, so a create or approve
+    # reaching one would die on its first interrupt. Anything with a verb in it goes the long
+    # way round, where the work-order intake keeps its gates — see _decide_dispatch.
+    "wo_engine": list(MAINTENANCE_READ_TOOLS),
 }
 
 # Catalog for GET /tools (discovery) — includes Phase 2 engines even though
@@ -3675,12 +3681,162 @@ class DeepAgentOrchestrator:
         "certificates", "buildings", "vendors", "types",          # compliance
         "anomalies", "assets", "groups", "meters", "readings",    # energy
         "work_orders", "visits", "contracts",                     # wo / contract performance
+        "decisions", "cards", "tiles",                            # the Maintenance page
         # An asset investigation returns what it WALKED and what it FOUND, not a row list.
         # Without these it reported "1 tool, 0 rows" for a call that examined six sources and
         # produced two pieces of evidence — the same shape of miss as the compliance-only keys.
         "sources", "evidence",                                    # asset investigation
         "rows", "records", "items",                               # generic
     )
+
+    #: The tool name the interface draws the run panel from. extractComplianceAnswer in
+    #: apps/frontend/src/logic/complianceLive.js matches it LITERALLY — an energy turn that
+    #: emitted `energy_pipeline` computed every step and cost and rendered none of it. The
+    #: name is the interface's contract for "a run panel", not a statement about compliance.
+    PIPELINE_PANEL_TOOL = "compliance_pipeline"
+
+    #: Verbs that make a maintenance question a maintenance ACTION. An action runs in the general
+    #: loop, where the work-order intake keeps its checkpointer and approval gates; the direct
+    #: engine has neither, so a create or approve reaching it would fail on its first interrupt.
+    #: "approval" is deliberately absent — "which orders are awaiting approval" is a question.
+    _WO_WRITE_VERBS = re.compile(
+        r"\b(raise|raising|create|creating|open a|log a|book|approve|approving|reject|close|"
+        r"closing|cancel|transition|update|updating|assign|reassign|dispatch|send|email|"
+        r"trigger|mark|escalate|schedule a)\b"
+    )
+
+    #: What makes a question about an asset's condition rather than its cost. "worst
+    #: performing chiller" is a cost question; "worst condition" and "graded poor" are not.
+    _ASSET_CONDITION = re.compile(r"\b(condition|health|healthy|unhealthy|graded?|grades)\b")
+
+    @classmethod
+    def _maintenance_read_question(cls, msg_l: str) -> bool:
+        return not cls._WO_WRITE_VERBS.search(msg_l or "")
+
+    @classmethod
+    def _decide_dispatch(
+        cls, routing: dict[str, Any] | None, msg_l: str
+    ) -> tuple[Phase2AgentId | None, str | None]:
+        """Where this turn runs: one engine directly, or the general loop carrying the decision.
+
+        Three cases send a question the long way even though the router named an engine:
+
+        - The engine is wo_engine and the question has a verb in it. Raising, approving and
+          closing need the intake's gates, which only the general loop has.
+        - The router named a SECOND domain (`also`). "Which assets are in the worst condition"
+          is inspector grades from wo_engine AND consumption from energy; a single engine
+          answers half and calls it the answer. The general loop is told to task() both and
+          write one summary — that is what an orchestrator is for.
+        - …except when the primary is compliance, whose analyst-and-reviewer pipeline only
+          runs on the direct path. Statutory exposure keeps its checks; the second domain is
+          named in the answer's note rather than fetched.
+        """
+        agent = str((routing or {}).get("agent") or "").strip() or None
+        engine = as_phase2_engine(agent)
+        also = [str(a).strip() for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        # An asset's CONDITION is two registers by definition — the inspector's grade lives with
+        # the work orders, the consumption evidence with energy — and the user asked, in so many
+        # words, that "worst condition" fetch both and the orchestrator write the summary. The
+        # router was asked for a strict `also` (a half-relevant second agent buries the answer)
+        # and, asked that, it stopped naming the second register here. So this one pairing is
+        # a rule rather than a judgement: whichever of the two the router picked, the other is
+        # added. Cost and consumption questions are not condition questions and stay single.
+        if engine in ("energy_intelligence", "wo_engine") and cls._ASSET_CONDITION.search(msg_l or ""):
+            partner = "wo_engine" if engine == "energy_intelligence" else "energy_intelligence"
+            if partner not in also:
+                also = [*also, partner]
+                routing = {**(routing or {}), "also": also}
+        if engine == "wo_engine" and not cls._maintenance_read_question(msg_l):
+            return None, cls._routing_note(routing, carry_engine=True)
+        if engine is not None and also and engine != "compliance":
+            return None, cls._routing_note(routing, carry_engine=True)
+        if engine is not None:
+            return engine, None
+        return None, cls._routing_note(routing)
+
+    @classmethod
+    def _general_loop_panel(
+        cls, user_message: str, tool_calls: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """The run panel for a turn the general loop answered on the router's instruction.
+
+        The engines draw one; a turn that fanned out to two sub-agents drew nothing, so the
+        most expensive kind of answer was the one with no cost on screen. Fail-soft: no
+        ledger, no panel.
+        """
+        steps = cls._early_pipeline_steps(tool_calls)
+        agents: list[str] = []
+        for tc in tool_calls:
+            if isinstance(tc, dict) and tc.get("tool") == "task" and isinstance(tc.get("input"), dict):
+                a = str(tc["input"].get("agent") or "").strip()
+                if a and a not in agents:
+                    agents.append(a)
+        if agents:
+            steps.append({
+                "stage": "agents",
+                "label": f"Delegated to {len(agents)} sub-agent{'s' if len(agents) != 1 else ''} — "
+                         + ", ".join(agents),
+                "detail": "each answered from its own tools; the orchestrator wrote the summary",
+            })
+        if not steps:
+            return None
+        ledger = llm_cost.current()
+        return {
+            "tool": cls.PIPELINE_PANEL_TOOL,
+            "input": {"question": (user_message or "")[:300]},
+            "output": {
+                "engine": "orchestrator",
+                "steps": steps,
+                "cost": ledger.log_summary(user_message) if ledger else None,
+            },
+        }
+
+    @staticmethod
+    def _routing_note(routing: dict[str, Any] | None, *, carry_engine: bool = False) -> str | None:
+        """What the general loop is told when the router chose a sub-agent it cannot short-circuit to.
+
+        The router reads every question and picks one of seven agents, but only three are
+        phase-2 engines the orchestrator can hand the turn to directly. When it picked
+        wo_engine, udr, doc_rag or migration the decision was simply dropped, and the general
+        agent started cold — free to re-route by keyword, or to answer a maintenance question
+        from the compliance tools because "statutory" appeared in it. Measured 17 Sep 2026:
+        "which decisions are statutory?" went to the compliance engine and was answered as a
+        certificate question.
+
+        Returns None when there is nothing to carry: no decision, or a phase-2 engine that
+        the caller already acted on.
+        """
+        agent = str((routing or {}).get("agent") or "").strip()
+        if not agent or (as_phase2_engine(agent) is not None and not carry_engine):
+            return None
+        from .skills import routable_skills
+
+        if agent not in {s.agent for s in routable_skills()}:
+            return None
+        reason = str((routing or {}).get("reason") or "").strip()
+        also = [str(a).strip() for a in ((routing or {}).get("also") or []) if str(a).strip()]
+        lines = [
+            "**Domain routing (decided before this turn):** the question was read and assigned "
+            f"to the `{agent}` sub-agent" + (f" — {reason}" if reason else "") + ".",
+            f"Call task(\"{agent}\", <the user's question, unedited>) FIRST. Do not call "
+            "select_skill to re-route it, and do not answer it from another domain's tools as "
+            "though it were the question asked. Only if that sub-agent returns nothing usable, "
+            "say so and name what was searched.",
+        ]
+        if also:
+            lines.append(
+                "The question also touches: " + ", ".join(f"`{a}`" for a in also)
+                + " — spawn one task() each in the same turn and merge the results yourself."
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _with_routing_note(extra_context: str | None, note: str | None) -> str | None:
+        if not note:
+            return extra_context
+        if extra_context and extra_context.strip():
+            return extra_context.rstrip() + "\n\n" + note
+        return note
 
     @classmethod
     def _early_pipeline_steps(cls, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -6052,7 +6208,10 @@ class DeepAgentOrchestrator:
                 inner_tool_calls = [
                     *inner_tool_calls,
                     {
-                        "tool": f"{engine}_pipeline",
+                        # Under the name the interface reads, not `{engine}_pipeline`: that
+                        # name was emitted for weeks and drawn never. `engine` in the output
+                        # is what says whose panel this is.
+                        "tool": self.PIPELINE_PANEL_TOOL,
                         "input": {"question": user_message[:300]},
                         "output": {
                             "engine": engine,
@@ -6255,6 +6414,7 @@ class DeepAgentOrchestrator:
         input_: Any,
         thread_id: str,
         session_id: str,
+        routing_note: str | None = None,
     ) -> dict[str, Any]:
         """Invoke the agent and normalise the result into our response shape."""
         config = self._config(thread_id)
@@ -6323,6 +6483,10 @@ class DeepAgentOrchestrator:
                 tool_calls=tool_calls,
                 llm=self._llm,
             )
+        if routing_note and interrupt_payload is None:
+            panel = self._general_loop_panel(_latest_user_message(input_), tool_calls)
+            if panel:
+                tool_calls = [*tool_calls, panel]
         out = {
             "session_id": session_id,
             "answer": answer,
@@ -6426,13 +6590,16 @@ class DeepAgentOrchestrator:
             ROUTE_WO_CLARIFY,
         }
         engine = preferred_engine
+        routing_note: str | None = None
         if engine is None and route_intent not in core_routes:
-            engine = as_phase2_engine(
-                (await select_agent(user_message, extra_context)).get("agent")
-            )
+            routing = await select_agent(user_message, extra_context)
+            engine, routing_note = self._decide_dispatch(routing, msg_l)
             # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
             # intent classifier so the orchestrator comprehends meaning, not just exact keywords.
-            if engine is None:
+            # Not when the router made a decision the engines cannot take — wo_engine or udr is
+            # an answer, and a second classifier re-reading "statutory" into compliance is how
+            # a maintenance question left this function as a certificate question.
+            if engine is None and routing_note is None:
                 engine = await self._llm_classify_engine(user_message)
         if engine is not None and route_intent not in core_routes:
             # Any compliance data question is answered from the WHOLE portfolio: the shortcut
@@ -6595,9 +6762,12 @@ class DeepAgentOrchestrator:
                 return attach_route_to_result(shortcut, session_id)
             return shortcut
 
-        input_ = await self._build_stateful_input(session_id, user_message, extra_context)
-        log.info("orchestrator.run_stateful.start", session_id=session_id)
-        return await self._invoke(input_, session_id, session_id)
+        input_ = await self._build_stateful_input(
+            session_id, user_message, self._with_routing_note(extra_context, routing_note)
+        )
+        log.info("orchestrator.run_stateful.start", session_id=session_id,
+                 router_hint_carried=bool(routing_note))
+        return await self._invoke(input_, session_id, session_id, routing_note=routing_note)
 
     @staticmethod
     def _looks_like_work_request_without_wo_keyword(msg_l: str) -> bool:
@@ -6809,6 +6979,7 @@ class DeepAgentOrchestrator:
             ROUTE_WO_INTAKE,
             ROUTE_WO_CLARIFY,
         }
+        routing_note: str | None = None
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -6817,7 +6988,7 @@ class DeepAgentOrchestrator:
             # was never asked.
             llm_cost.begin_turn(sid)
             routing = await select_agent(user_message, extra_context)
-            phase2_engine = as_phase2_engine(routing.get("agent"))
+            phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
             if phase2_engine is not None:
                 yield {
                     "type": "reasoning",
@@ -6889,7 +7060,25 @@ class DeepAgentOrchestrator:
                 )
                 return
 
-        input_ = await self._build_stateful_input(sid, user_message, extra_context)
+        if routing_note:
+            # The router chose a sub-agent the orchestrator cannot short-circuit to (wo_engine,
+            # udr, doc_rag, migration). Say so on the panel as the engines do, and carry the
+            # decision into the general agent's turn so it delegates there instead of starting
+            # cold and re-routing "statutory" into compliance.
+            routed_agent = str(routing_note.split("`")[1]) if "`" in routing_note else "sub-agent"
+            yield {
+                "type": "reasoning",
+                "label": "Domain routing",
+                "text": (
+                    f"Read the question → {routed_agent} sub-agent"
+                    + (f" — {routing.get('reason')}" if routing.get("reason") else "")
+                    + ". The orchestrator delegates there first."
+                ),
+                "domain": routed_agent,
+            }
+        input_ = await self._build_stateful_input(
+            sid, user_message, self._with_routing_note(extra_context, routing_note)
+        )
 
         last_domain: str | None = None
         final_answer = ""
@@ -7003,6 +7192,10 @@ class DeepAgentOrchestrator:
         )
         if final_answer.strip():
             record_conversation_turn(sid, "assistant", final_answer)
+        if routing_note:
+            panel = self._general_loop_panel(user_message, streamed_tool_calls)
+            if panel:
+                streamed_tool_calls = [*streamed_tool_calls, panel]
         yield workflow_stream_completion_payload(
             sid,
             answer=final_answer,

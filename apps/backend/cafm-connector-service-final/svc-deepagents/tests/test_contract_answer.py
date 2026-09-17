@@ -281,6 +281,32 @@ async def test_a_turn_that_read_the_vendor_tools_gets_cards_whichever_path_it_to
     assert answer.startswith("Gough and Kelly")
 
 
+async def test_an_existing_run_panel_is_extended_not_duplicated():
+    """The phase-2 engine now emits a run panel for every engine before this composer runs.
+
+    The interface draws the first `compliance_pipeline` it finds. Two of them on a vendor turn
+    meant either the engine's routing-and-tools half or the analyst's gather-analyse-ground half
+    was invisible, depending on order. They are one run; they belong in one panel.
+    """
+    panel = {"tool": "compliance_pipeline", "input": {"question": "q"},
+             "output": {"engine": "contract_performance",
+                        "steps": [{"stage": "route", "label": "Routed"}], "cost": None}}
+    _, calls, _ = await ca.compose(
+        question="how is gough doing",
+        answer="72.4.",
+        tool_calls=[*SCORECARD_CALLS, panel],
+        api_key="k",
+        cost={"total_usd": 0.01},
+        client=_FakeAnthropic('{"narrative": "Gough and Kelly scored 72.4.", "kpis": []}'),
+    )
+    panels = [c for c in calls if c["tool"] == "compliance_pipeline"]
+    assert len(panels) == 1
+    stages = [s["stage"] for s in panels[0]["output"]["steps"]]
+    assert stages == ["route", "gather", "analyse", "ground"]
+    assert panels[0]["output"]["cost"] == {"total_usd": 0.01}
+    assert panels[0]["output"]["engine"] == "contract_performance"
+
+
 async def test_a_turn_that_read_no_vendor_rows_is_left_exactly_as_it_was():
     calls_in = [{"tool": "list_buildings", "output": {"buildings": [{"name": "Mob"}]}}]
     answer, calls, meta = await ca.compose(

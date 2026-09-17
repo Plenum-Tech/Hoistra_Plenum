@@ -197,9 +197,12 @@ async def run_phase2_engine_verbose(
             json.dumps({"error": "Task runner not initialised. Call init_meta_tools() at startup."}),
             [],
         )
-    if agent not in ("compliance", "contract_performance", "energy_intelligence"):
+    if agent not in ("compliance", "contract_performance", "energy_intelligence", "wo_engine"):
         return json.dumps({"error": f"Not a Phase 2 engine '{agent}'."}), []
-    return await _task_runner.run_verbose(agent, prompt, on_event=on_event)
+    # The Maintenance page's engine is the wo_engine sub-agent with its write tools removed.
+    # Same skill, same prompt, no interrupts — see WO_ENGINE_SUBAGENT_TOOLS for why.
+    runner_key = "maintenance" if agent == "wo_engine" else agent
+    return await _task_runner.run_verbose(runner_key, prompt, on_event=on_event)
 
 
 class _TaskRunner:
@@ -248,6 +251,7 @@ class _TaskRunner:
             start_fiix_schema_mapping,
             test_fiix_connection,
         )
+        from .wo_engine_agent import MAINTENANCE_READ_TOOLS, WO_ENGINE_SUBAGENT_TOOLS
         from .schema_mapper_agent import continue_schema_mapping_gate
         from .udr_agent import (
             find_asset,
@@ -324,19 +328,17 @@ class _TaskRunner:
                 # agent happening to call the tool itself, which it did about half the time.
                 list_building_documents,
             ], prompt=agent_system_prompt("doc_rag")),
-            "wo_engine": create_react_agent(llm, tools=[
-                suggest_approval_chain, request_approval_chain, send_approval_request_email,
-                get_approval_chain,
-                customize_approval_chain, respond_to_approval_step,
-                prepare_intelligent_work_order, confirm_intelligent_work_order_creation,
-                create_intelligent_work_order,
-                trigger_ppm_work_order, process_email_work_order,
-                create_work_order, get_work_order, update_work_order, list_work_orders,
-                transition_work_order, approve_work_order, close_work_order,
-                get_work_order_history, get_work_order_status_track,
-                search_assets, get_asset_details,
-                search_locations, find_ppm_schedules, get_dashboard_stats,
-            ], prompt=agent_system_prompt("wo_engine")),
+            # One list, owned by wo_engine_agent, so a tool added there reaches this sub-agent.
+            # The four Maintenance-page tools sat in ALL_TOOLS for a week and not here, and
+            # every question the router sent to wo_engine landed on an agent without them.
+            "wo_engine": create_react_agent(
+                llm, tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=agent_system_prompt("wo_engine")
+            ),
+            # The same agent with its write tools removed: what run_phase2_engine_verbose runs
+            # when the router hands a Maintenance-page QUESTION straight to the engine.
+            "maintenance": create_react_agent(
+                llm, tools=list(MAINTENANCE_READ_TOOLS), prompt=agent_system_prompt("wo_engine")
+            ),
             "compliance": create_react_agent(
                 llm,
                 tools=[

@@ -37,7 +37,7 @@ _FLAG = "ORCHESTRATOR_LLM_ROUTING"
 #: Agents that answer a turn by themselves through _invoke_phase2_engine. Any other agent the
 #: router names is handed to the orchestrator loop, which already knows how to task() it.
 PHASE2_ENGINES: frozenset[str] = frozenset(
-    {"compliance", "contract_performance", "energy_intelligence"}
+    {"compliance", "contract_performance", "energy_intelligence", "wo_engine"}
 )
 
 
@@ -52,8 +52,11 @@ _PROMPT = (
     "mentioning a contractor is about contract performance only if it asks about that "
     "contractor's work, SLAs, invoices or scorecard; if it asks what a contractor must HOLD "
     "to do regulated work, it is a statutory compliance question. Decide from meaning.\n\n"
-    "Choose exactly one agent from the catalogue. If the question plainly spans two domains, "
-    "name the one that owns the answer's core and list the other under also. If nothing "
+    "Choose exactly one agent from the catalogue. List a second agent under also ONLY when "
+    "the question cannot be answered in full without that agent's own data — two registers "
+    "the answer must join. A question one agent answers completely has an empty also, even "
+    "if the page the user is on shows other things: also costs a second agent run, and a "
+    "half-relevant one buries the answer under a paragraph nobody asked for. If nothing "
     "fits, return clarify.\n\n"
     "Return JSON only: {\"agent\": \"<id or clarify>\", \"also\": [ids], "
     "\"reason\": \"one short sentence\"}."
