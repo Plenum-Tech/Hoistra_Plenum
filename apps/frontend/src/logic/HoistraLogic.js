@@ -13,6 +13,8 @@ import { complianceLiveMethods } from './complianceLive.js';
 import { homeLiveMethods } from './homeLive.js';
 import { vendorsLiveMethods } from './vendorsLive.js';
 import { vendorsWriteMethods } from './vendorsWrite.js';
+import { CB_DEFAULTS, chatBuildingMethods } from './chatBuilding.js';
+import { CC_CASE_DEFAULTS, chatCaseMethods } from './chatCases.js';
 import { buildingsLiveMethods } from './buildingsLive.js';
 import { energyLiveMethods } from './energyLive.js';
 import { assetsLiveMethods } from './assetsLive.js';
@@ -114,6 +116,12 @@ export class HoistraLogic extends Controller {
     // one term open for editing, and `vpEditValue` its draft; only one row edits at a time
     // because each save is its own PATCH.
     vpConfirmArmed: false, vpEditField: "", vpEditValue: "",
+    // Which structured term (the labour rate card) is expanded on the Contract terms tab.
+    vpCardOpen: "",
+    // Which building a chat attachment is filed against (logic/chatBuilding.js).
+    ...CB_DEFAULTS,
+    // The held document this session is answering (logic/chatCases.js).
+    ...CC_CASE_DEFAULTS,
     ccPivot: "buildings", ccTab: 0, ccFocus: { kind: "building", name: "Bishopsgate Tower" }, nyView: "building",
     ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform", "Email"],
     // Compliance register from svc-operations-intelligence (null = seed data shown).
@@ -257,4 +265,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);

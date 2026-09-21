@@ -152,7 +152,7 @@ def document_ids_from(tool_calls: Any) -> list[str]:
     return found
 
 
-async def documents_from_session(session_id: str) -> list[str]:
+async def documents_from_session(session_id: str, *, within_hours: int = 1) -> list[str]:
     """The documents this upload produced, found by the mark the uploader leaves.
 
     Every file is saved as "{session_id}_{filename}" before it is handed on, and doc-rag

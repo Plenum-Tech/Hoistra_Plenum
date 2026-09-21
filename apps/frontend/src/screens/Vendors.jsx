@@ -394,12 +394,38 @@ export default function Vendors({ vals }) {
                             {t.src}
                           </span>
                         </div>
+                        {t.hasLines ? (
+                          <div style={{ padding: "0 16px 9px", borderBottom: "1px solid var(--color-divider)" }}>
+                            <button type="button" className="hv13" onClick={t.toggleLines} style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "none", border: "none", padding: "4px 0", fontSize: "11px", color: "var(--color-accent)", cursor: "pointer" }}>
+                              <i className={`ph ${t.linesOpen ? "ph-caret-down" : "ph-caret-right"}`} style={{ fontSize: "11px" }}></i>
+                              {t.linesOpen ? "Hide the rates" : "Show every trade"}
+                            </button>
+                            {t.linesOpen ? (
+                              <div style={{ marginTop: "5px", border: "1px solid var(--color-divider)", borderRadius: "8px", overflow: "hidden" }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: "12px", padding: "6px 11px", background: "var(--color-bg)", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                                  <span>{"Trade"}</span>
+                                  <span style={{ textAlign: "right", minWidth: "62px" }}>{"Straight"}</span>
+                                  <span style={{ textAlign: "right", minWidth: "62px" }}>{"Overtime"}</span>
+                                </div>
+                                {(t.lines || []).map((ln, $i) => (
+                                  <React.Fragment key={$i}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: "12px", padding: "6px 11px", borderTop: "1px solid var(--color-divider)", fontSize: "11.5px" }}>
+                                      <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ln.trade}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace", textAlign: "right", minWidth: "62px" }}>{ln.straight}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace", textAlign: "right", minWidth: "62px", color: "var(--color-neutral-400)" }}>{ln.overtime}</span>
+                                    </div>
+                                  </React.Fragment>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </React.Fragment>
                     ))}
                     <div style={{ padding: "12px 16px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                       {"A default is not a contract term. Anything marked default was not found in the signed document, so the score is measured against a platform assumption rather than something the vendor agreed to — worth closing before the next renewal."}
                     </div>
-                    <div style={{ display: vals.vp.confirmShow, flexDirection: "column", gap: "9px", padding: "13px 16px", borderTop: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                    <div style={{ display: vals.vp.confirmShow || "none", flexDirection: "column", gap: "9px", padding: "13px 16px", borderTop: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: vals.vp.confirmStatusBg, color: vals.vp.confirmStatusFg }}>
                           {vals.vp.confirmStatus}

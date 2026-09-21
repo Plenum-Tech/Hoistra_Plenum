@@ -65,13 +65,36 @@ export const vendorsWriteMethods = {
     const id = String(contractId || '').trim();
     if (!id) return this.flash('No contract on record for this vendor — there is nothing to confirm.');
     if (this._vpWriting) return this.flash('One change at a time — the last one is still going.');
+    // The server refuses a confirmation with no named person — a decision nobody is
+    // attributed for is not one. Caught here so the reader gets a sentence rather than
+    // "confirmed_by_required", and so a refusal is never mistaken for a broken button.
+    const actor = actorUuid(this.state.account);
+    if (!actor) {
+      return this.flash(
+        "We cannot identify you well enough to record who confirmed this. Sign in again, "
+        + "then confirm — the decision has to carry a name."
+      );
+    }
     this._vpWriting = true;
     try {
-      const actor = actorUuid(this.state.account);
-      const r = await opsApi.confirmContract(id, actor ? { confirmed_by: actor } : {});
+      const r = await opsApi.confirmContract(id, { confirmed_by: actor });
       // A 200 is not a success on this router: the engine reports its own refusals in the
       // body, and `ok: false` with a 200 is how "not_found" and "already confirmed" arrive.
-      if (r && r.ok === false) throw new Error(r.error || 'not confirmed');
+      // The engine names its refusals in codes. A code is not an explanation, and the two
+      // it can return are both things the reader can act on.
+      if (r && r.ok === false) {
+        if (r.error === 'no_contract_terms') {
+          throw new Error(
+            'nothing in this contract was read from the document — all '
+            + (r.fields ? r.fields + ' ' : '') + 'values are platform defaults. '
+            + 'Confirming would make them binding on the vendor. Check the file, or re-ingest it.'
+          );
+        }
+        if (r.error === 'confirmed_by_required') {
+          throw new Error('a confirmation has to name who made it, and no user was attached.');
+        }
+        throw new Error(r.error || 'not confirmed');
+      }
       this.flash('Contract terms confirmed — scoring will use them from now on.');
       await this.vpLoad({ force: true });
     } catch (e) {

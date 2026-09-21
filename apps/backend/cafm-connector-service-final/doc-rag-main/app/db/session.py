@@ -47,7 +47,19 @@ def init_db() -> None:
 
     # Idempotent column additions for existing deployments.
     # SQLAlchemy's create_all only creates missing *tables*, not missing columns.
-    _run_migrations()
+    #
+    # Gated. These statements are idempotent but NOT free: each ALTER TABLE takes an
+    # exclusive lock whether or not the column already exists, and a pending exclusive lock
+    # blocks every later reader. Set RUN_MIGRATIONS_ON_STARTUP=true for a deployment that
+    # is meant to change the schema; leave it off and a restart touches nothing.
+    if getattr(settings, "run_migrations_on_startup", False):
+        logger.info("Startup migrations enabled — issuing DDL")
+        _run_migrations()
+    else:
+        logger.info(
+            "Startup migrations skipped (run_migrations_on_startup=false). "
+            "Set RUN_MIGRATIONS_ON_STARTUP=true on a deployment that changes the schema."
+        )
 
 
 def _run_migrations() -> None:

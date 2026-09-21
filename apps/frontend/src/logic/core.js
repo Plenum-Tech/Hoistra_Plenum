@@ -71,6 +71,10 @@ export const coreMethods = {
     this.ccLoad();
     this.homeLoad();
     this.vpLoad();
+    // What the server still holds. A document held in another browser — or before the chat
+    // could answer one at all — is otherwise invisible: five were open on 21 Sep with
+    // nothing in the UI pointing at any of them. Silent if it fails.
+    if (typeof this.ccCaseSync === 'function') this.ccCaseSync();
     // buildingsLive.js loads the per-table graph counts once bldLoad answers.
     this.bldLoad();
     this.energyLoad();

@@ -1,3 +1,4 @@
+import { docLabel } from './chatCases.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER } from './constants.js';
@@ -9,6 +10,11 @@ import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { documentUrl } from '../api/docRag.js';
+
+// What a staged document means when the ask bar is empty. Matches the wording the
+// ingestion panel already uses, so the same instruction reaches the orchestrator from
+// either route.
+const INGEST_ASK = "Validate and ingest this document.";
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -315,15 +321,19 @@ export const renderValsMethods = {
       // The home ask bar. A question goes to the live orchestrator through the dock chat
       // (askScoped → ccAsk on this view); Run on an empty bar opens the chat instead.
       setQuery: (e) => this.setState({ query: e.target.value }),
+      // An ATTACHMENT IS ITSELF THE INSTRUCTION. Staging a document and pressing Run with an
+      // empty box is not an empty question — it is "file this". Without this the bar would
+      // open the chat and leave the document sitting there unexplained, which reads as the
+      // control having done nothing.
       onKey: (e) => {
         if (e.key !== "Enter") return;
-        const q = (s.query || "").trim();
+        const q = (s.query || "").trim() || ((s.ccFiles || []).length ? INGEST_ASK : "");
         if (!q) return;
         this.setState({ query: "" });
         this.askScoped(q);
       },
       runQuery: () => {
-        const q = (s.query || "").trim();
+        const q = (s.query || "").trim() || ((s.ccFiles || []).length ? INGEST_ASK : "");
         if (!q) return this.ccOpenChat();
         this.setState({ query: "" });
         this.askScoped(q);
@@ -1072,6 +1082,15 @@ export const renderValsMethods = {
             // ── editing ──
             // Only a draft is editable. A confirmed set is already what scoring runs on, so
             // changing a value there would move the goalposts under scores already published.
+            // A rate card is a table, not a value: it carries its own lines and opens
+            // in place. Everything else on this tab is one line, so it stays collapsed
+            // until asked for rather than pushing seventeen terms off the screen.
+            lines: t.lines || null,
+            hasLines: !!(t.lines && t.lines.length),
+            linesOpen: s.vpCardOpen === t.field,
+            toggleLines: () => this.setState((pp) => ({
+              vpCardOpen: pp.vpCardOpen === t.field ? "" : t.field
+            })),
             canEdit: !!(t.editable && R.contract.id && !R.contract.confirmed),
             editing: s.vpEditField === t.field,
             draft: s.vpEditField === t.field ? s.vpEditValue : "",
@@ -1881,7 +1900,65 @@ export const renderValsMethods = {
         drop: () => this.ccDropFile(i)
       })),
       orchFileCount: (s.ccFiles || []).length,
+      // ── the held document this composer is answering (logic/chatCases.js) ──
+      // Shown whenever a case is open, because the next sentence goes somewhere other than
+      // the orchestrator and the reader must never have to guess which.
+      ...(() => {
+        const open = !!s.ccCaseId;
+        const doc = docLabel(s.ccCaseDoc);
+        return {
+          ccCaseShow: open ? "flex" : "none",
+          ccCaseLabel: open ? "Answering a held document — " + doc : "",
+          ccCaseQuestion: open ? (s.ccCaseQuestion || "") : "",
+          ccCaseDrop: () => this.ccCaseClear()
+        };
+      })(),
       orchPickFiles: (e) => { this.ccAddFiles(e.target.files); e.target.value = ""; },
+      // ── which building an attachment is FILED against (logic/chatBuilding.js) ──
+      // Shown only when files are staged: a question with no attachment is not a filing.
+      // Without a building the backend indexes the file and skips validation entirely, so
+      // nothing reaches the ingestion audit trail and the document binds to nothing — which
+      // is a consequence worth stating rather than a default worth hiding.
+      ...(() => {
+        const staged = (s.ccFiles || []).length > 0;
+        const chosenId = this.cbFilingBuildingId();
+        const acct = s.account || {};
+        const all = Array.isArray(acct.buildings) ? acct.buildings : [];
+        const chosen = chosenId ? (all.find((b) => b.id === chosenId) || null) : null;
+        const q = String(s.cbQuery || "").trim().toLowerCase();
+        // Searched on code as well as name: three buildings called "MixedUse 004" is normal
+        // in this data, and a list of identical names cannot be chosen from.
+        const matches = (q
+          ? all.filter((b) => String(b.name || "").toLowerCase().includes(q)
+            || String(b.building_code || "").toLowerCase().includes(q))
+          : all).slice(0, 60);
+        return {
+          cbShow: staged ? "flex" : "none",
+          cbChosen: !!chosenId,
+          cbLabel: chosenId
+            ? "Filing against " + (chosen ? chosen.name : (s.cbBuildingName || s.declFor || "a building"))
+              + (chosen && chosen.building_code ? " · " + chosen.building_code : "")
+            : "No building selected",
+          cbWarn: chosenId
+            ? "Each file is checked against this building before it is bound. Anything that does not belong is held and put back to you as a question."
+            : "No building selected — the documents will be indexed and searchable, but not validated, not filed against a building, and not recorded in the audit trail.",
+          cbPickerOpen: !!s.cbPickerOpen && staged,
+          cbQuery: s.cbQuery || "",
+          cbOpen: () => this.cbOpenPicker(),
+          cbClose: () => this.cbClosePicker(),
+          cbSetQuery: (e) => this.cbSetQueryText(e),
+          cbClear: () => this.cbClearBuilding(),
+          cbHoist: () => this.cbHoistNew(),
+          cbEmpty: matches.length === 0,
+          cbMatches: matches.map((b) => ({
+            id: b.id,
+            name: b.name || "(unnamed)",
+            code: b.building_code || "",
+            on: b.id === chosenId,
+            pick: () => this.cbPickBuilding(b.id, b.name)
+          }))
+        };
+      })(),
       closeOrch: () => this.closeOrch(),
       // The top-bar icon opens the dock beside a page; on the chat page the page is already the
       // orchestrator, so it just puts the caret in the composer.

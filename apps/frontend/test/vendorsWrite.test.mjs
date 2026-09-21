@@ -80,16 +80,19 @@ test('a uuid account is named as the person who confirmed', async () => {
   cleanup();
 });
 
-test('a non-uuid account id is left out rather than sent and rejected', async () => {
-  // The auth tables were integer-keyed at one point. An integer in a uuid field is a 422,
-  // and a refused confirm looks to the reader exactly like a broken button.
+test('a non-uuid account id never becomes an unattributed confirm', async () => {
+  // SUPERSEDED RULE. This used to send the confirm anyway with confirmed_by omitted, to
+  // avoid a 422 on the integer-keyed auth tables. On 21 Sep 2026 the orchestrator did
+  // exactly that — confirmed a set with confirmed_by NULL, unattended — and the audit row
+  // read `actor: pm`, indistinguishable from a person deciding. The server now refuses an
+  // unattributed confirm outright, so omitting the field is no longer a way through; the
+  // honest outcome is to stop here and say why.
   c.setState({ account: { id: 41, email: 'pm@test.local' } });
   okConfirm();
   await c.vpConfirmContract(CID);
-  const post = calls.find((x) => x.method === 'POST');
-  assert.ok(post, 'the confirm must still be sent');
-  assert.ok(!('confirmed_by' in (post.body || {})),
-    'an id a uuid column cannot hold is omitted, not guessed at');
+  assert.ok(!calls.some((x) => x.method === 'POST'),
+    'sending it would only earn a refusal the reader cannot act on');
+  assert.match(String(c.state.toast || ''), /sign in|identify/i);
   cleanup();
 });
 
@@ -354,5 +357,29 @@ test('an ordinary partial read keeps the plain coverage line', () => {
   const vp = seed();
   assert.match(vp.sourceNote, /4 of 8 terms were read/i);
   assert.doesNotMatch(vp.sourceNote, /may not be a service contract/i);
+  cleanup();
+});
+
+// ── the server now refuses an unattributed or empty confirm ──────────────────────────────
+
+test('a confirm with no identifiable user is stopped here, with a reason', async () => {
+  // The panel used to send {} when account.id was not a uuid. The server now refuses that,
+  // and "confirmed_by_required" is not a sentence anyone can act on.
+  c.setState({ account: { id: 41, email: 'pm@test.local' } });
+  okConfirm();
+  await c.vpConfirmContract(CID);
+  assert.ok(!calls.some((x) => x.method === 'POST'), 'the server would refuse it anyway');
+  assert.match(String(c.state.toast || ''), /sign in|identify/i);
+  cleanup();
+});
+
+test('the server refusing a term-less set is reported in plain words', async () => {
+  handlers['POST ' + B + '/contracts/' + CID + '/confirm'] =
+    [200, { ok: false, error: 'no_contract_terms', fields: 17 }];
+  await c.vpConfirmContract(CID);
+  const msg = String(c.state.toast || '');
+  assert.match(msg, /nothing.*read|no contract terms/i);
+  assert.doesNotMatch(msg, /no_contract_terms/, 'an error code is not an explanation');
+  assert.ok(!c._reloaded);
   cleanup();
 });

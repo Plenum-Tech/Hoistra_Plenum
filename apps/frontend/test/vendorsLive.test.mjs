@@ -505,3 +505,73 @@ test('PPM obligations that are only a mention do not read as "stated"', () => {
   const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
   assert.equal(R.terms.find((t) => t.label === 'PPM obligations').value, 'mentioned, no detail');
 });
+
+// ── the labour rate card a contract states, per trade ────────────────────────────────────
+// WKU prices twelve trades by the hour in US dollars. The panel had one row for it —
+// "Labour rate — day £350 default" — which is a figure nobody agreed to, in the wrong
+// currency, sitting where the real rates should be.
+
+const withCard = (card) => Object.assign({}, contracts, {
+  parameters: contracts.parameters.map((p) => Object.assign({}, p, { rate_card: card }))
+});
+const WKU_CARD = {
+  currency: 'USD', basis: 'hour', source: 'Appendix B',
+  lines: [
+    { trade: 'Heating, Ventilation and Cooling (HVAC)', straight: 51.4, overtime: 77.1 },
+    { trade: 'Plumbers', straight: 51.71, overtime: 77.56 },
+    { trade: 'Custodial', straight: 18.18, overtime: 27.27 }
+  ]
+};
+const shape = (cs) => shapeLiveVendors({ summary, contracts: cs, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+
+test('a contract with a rate card gets a labour rates row naming the trades and currency', () => {
+  const R = shape(withCard(WKU_CARD));
+  const row = R.terms.find((t) => t.label === 'Labour rates');
+  assert.ok(row, 'twelve stated rates and no row to show them');
+  assert.match(row.value, /3 trades/);
+  assert.match(row.value, /USD/);
+  assert.match(row.value, /hour/);
+  assert.equal(row.src, 'contract');
+});
+
+test('the card lines carry each trade with its straight and overtime rate', () => {
+  const R = shape(withCard(WKU_CARD));
+  const row = R.terms.find((t) => t.label === 'Labour rates');
+  assert.equal(row.lines.length, 3);
+  assert.equal(row.lines[0].trade, 'Heating, Ventilation and Cooling (HVAC)');
+  assert.equal(row.lines[0].straight, '$51.40');
+  assert.equal(row.lines[0].overtime, '$77.10');
+});
+
+test('a dollar card is not rendered in pounds', () => {
+  // The whole point. £51.40 would be a new lie in place of the one this replaces.
+  const R = shape(withCard(WKU_CARD));
+  const row = R.terms.find((t) => t.label === 'Labour rates');
+  assert.ok(row.lines.every((l) => !/£/.test(l.straight)), 'the toggle governs the portfolio, not what one document says');
+});
+
+test('an unstated currency shows the number bare rather than guessing a symbol', () => {
+  const R = shape(withCard({ basis: 'hour', lines: [{ trade: 'HVAC', straight: 51.4, overtime: null }] }));
+  const row = R.terms.find((t) => t.label === 'Labour rates');
+  assert.equal(row.lines[0].straight, '51.40');
+  assert.equal(row.lines[0].overtime, '—');
+});
+
+test('with a rate card present the scalar rate rows stop asserting a default', () => {
+  // Two answers to "what does labour cost?" and the wrong one looked authoritative.
+  const R = shape(withCard(WKU_CARD));
+  const day = R.terms.find((t) => t.label === 'Labour rate — day');
+  assert.match(day.value, /per trade/i, 'a £350 default beside a real card is the trap this closes');
+  assert.equal(day.editable, false, 'editing it would write a figure the contract contradicts');
+});
+
+test('without a rate card nothing about the panel changes', () => {
+  const R = shape(contracts);
+  assert.equal(R.terms.find((t) => t.label === 'Labour rates'), undefined);
+  assert.equal(R.terms.find((t) => t.label === 'Labour rate — day').value, '£350 / day');
+});
+
+test('a card with no lines is treated as no card', () => {
+  const R = shape(withCard({ currency: 'USD', lines: [] }));
+  assert.equal(R.terms.find((t) => t.label === 'Labour rates'), undefined);
+});

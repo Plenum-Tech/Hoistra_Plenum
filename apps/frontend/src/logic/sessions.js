@@ -324,7 +324,13 @@ export const sessionsMethods = {
     this.setState({
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, ccTraceIdx: null, ccStepsOpen: {},
       view: 'home', query: '', detail: null, flow: null, flowDone: '', queueOpen: false, paletteOpen: false,
-      orchOpen: false, orchTask: null, orchDone: 0, orchQuery: ''
+      orchOpen: false, orchTask: null, orchDone: 0, orchQuery: '',
+      // The building an attachment was being filed against belongs to the conversation that
+      // chose it. Carried into the next one it is how a document ends up filed in the wrong
+      // place — the reader would have no reason to look at a control they never opened.
+      cbBuildingId: null, cbBuildingName: '', cbPickerOpen: false, cbQuery: '', declForId: null, declFor: '',
+      // A held document belongs to the conversation that uploaded it.
+      ccCaseId: null, ccCaseDoc: '', ccCaseQuestion: ''
     });
     if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
   }

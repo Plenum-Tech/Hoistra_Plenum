@@ -51,6 +51,12 @@ class ContractConfirmRequest(BaseModel):
     confirmed_by: UUID | None = None
 
 
+class ContractReopenRequest(BaseModel):
+    """Undoing a confirmation. Optional body: an anonymous reopen is still audited."""
+
+    reopened_by: UUID | None = None
+
+
 class AssetCriticalityRequest(BaseModel):
     asset_id: UUID
     asset_code: str | None = None

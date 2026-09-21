@@ -147,8 +147,34 @@ def test_foreign_buildings_are_rejected_before_any_write():
     assert e.value.detail["building_ids"] == [str(stranger)]
 
 
+def _all_paths(routes) -> set[str]:
+    """Every path reachable from an app, descending through included routers.
+
+    `app.routes` is not a flat list of Routes. FastAPI wraps each `include_router()` in an
+    `_IncludedRouter`, which has no `.path` — so the obvious `{r.path for r in app.routes}`
+    raised AttributeError at COLLECTION time and pytest never ran a single test in this
+    file. Nineteen of them check that admin and superadmin routes refuse a caller without
+    the role; the guarantee this file exists to hold was not being checked at all.
+
+    Worse, the naive version could not have worked even without the crash: only six routes
+    (/health, /docs, /metrics…) sit directly on the app. Every API path lives one level
+    down, on the included router's `original_router`.
+    """
+    out: set[str] = set()
+    for r in routes:
+        path = getattr(r, "path", None)
+        if path:
+            out.add(path)
+        inner = getattr(r, "original_router", None) or (r if hasattr(r, "routes") and not path else None)
+        if inner is not None and inner is not r:
+            out |= _all_paths(getattr(inner, "routes", []))
+        elif inner is r:
+            out |= _all_paths(getattr(r, "routes", []))
+    return out
+
+
 def test_the_new_routes_are_all_registered():
-    paths = {r.path for r in app.routes}
+    paths = _all_paths(app.routes)
     for p in ("/api/superadmin/companies", "/api/superadmin/companies/{organization_id}",
               "/api/superadmin/companies/{organization_id}/invite-admin", "/api/superadmin/credits",
               "/api/admin/users", "/api/admin/users/invite", "/api/admin/users/{user_id}",

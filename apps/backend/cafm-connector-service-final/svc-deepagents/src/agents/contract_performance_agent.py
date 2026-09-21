@@ -316,7 +316,16 @@ async def confirm_contract_parameters(
     parameters_id: str,
     confirmed_by: str | None = None,
 ) -> dict:
-    """B1 — Confirm contract SLA parameters after PM review."""
+    """B1 — Confirm contract SLA parameters. A PERSON'S DECISION, NEVER YOURS.
+
+    Confirming turns extracted readings into the numbers a vendor is scored, breached and
+    invoiced against. Call this ONLY when the reader has asked, on this turn, for these
+    terms to be confirmed. Never as the tail of an ingest, never to tidy a draft, and never
+    because a recipe looks unfinished — a draft is a correct resting state.
+
+    `confirmed_by` is the reader's user id and is REQUIRED; the server refuses a
+    confirmation with no named person, and refuses any set where nothing was read from the
+    document."""
     try:
         resp = await _request(
             "POST",

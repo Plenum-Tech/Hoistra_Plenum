@@ -161,6 +161,19 @@ function readSlice(storage) {
   if (isStrArray(d.ccBuildings)) out.ccBuildings = d.ccBuildings;
   if (typeof d.ccPivot === 'string' && ['buildings', 'vendors', 'matrix'].indexOf(d.ccPivot) > -1) out.ccPivot = d.ccPivot;
 
+  // The held document this session is answering. A case only restores WITH its session —
+  // it belongs to that conversation, and a case id floating free of one would point the
+  // composer at a document the transcript never mentions.
+  //
+  // This half was missed the first time: buildSlice wrote the three keys and readSlice,
+  // which validates every key explicitly and drops anything it does not know, threw them
+  // away on the way back. Writing a value is not persisting it.
+  if (out.sessionId && typeof d.ccCaseId === 'string' && d.ccCaseId) {
+    out.ccCaseId = d.ccCaseId;
+    out.ccCaseDoc = typeof d.ccCaseDoc === 'string' ? d.ccCaseDoc : '';
+    out.ccCaseQuestion = typeof d.ccCaseQuestion === 'string' ? d.ccCaseQuestion : '';
+  }
+
   // Signing out must not leave a restorable page behind.
   if (!out.signedIn) return {};
   return out;
@@ -209,7 +222,14 @@ function buildSlice(state) {
     ccCountries: state.ccCountries || [],
     ccStates: state.ccStates || [],
     ccBuildings: state.ccBuildings || [],
-    ccPivot: state.ccPivot || 'buildings'
+    ccPivot: state.ccPivot || 'buildings',
+    // The held document this session is answering. sessionId is persisted, so the case that
+    // belongs to it must be too: a hard refresh — the very thing needed to pick up new code
+    // — otherwise drops it, and the document stays held on the server with nothing in the
+    // UI pointing at it.
+    ccCaseId: state.ccCaseId || null,
+    ccCaseDoc: state.ccCaseDoc || '',
+    ccCaseQuestion: state.ccCaseQuestion || ''
   };
 }
 
@@ -247,3 +267,6 @@ export function saveSession(state, prevState) {
     /* storage unavailable or full — the app must still work, just without restore */
   }
 }
+
+// Exposed for tests: the slice is what survives a reload, and what it omits is lost.
+export const buildSliceForTest = buildSlice;

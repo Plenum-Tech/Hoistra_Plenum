@@ -1045,6 +1045,20 @@ export const complianceLiveMethods = {
       ccChat: (p.ccChat || []).concat([{ role: "you", text: q, files: files.map((f) => f.name) }])
     }));
 
+    // A HELD DOCUMENT IS ANSWERED HERE, NOT BY THE ROUTER.
+    //
+    // The held-upload reply promises "reply with your reason and I will put it to the
+    // check". On 21 Sep 2026 that reply went to the orchestrator, whose router read the
+    // words "upload" and "file", sent it to the migration sub-agent, and answered "the file
+    // cannot be found in the system". The case was never touched. Routing is what failed,
+    // so this does not route: an open case takes the next message, unless it carries files
+    // — a document is an ingest, not an explanation.
+    if (this.ccCaseShouldAnswer(files.length > 0)) {
+      const turn = await this.ccCaseAnswer(q);
+      this.setState((p) => ({ ccBusy: false, ccChat: (p.ccChat || []).concat([turn]) }));
+      return;
+    }
+
     const t0 = Date.now();
     // The rail's clock. Stream events are bursty — without this the elapsed reading would
     // sit still through a long tool call and read as a hung run.
@@ -1069,9 +1083,11 @@ export const complianceLiveMethods = {
       // Only sent with files: it is a filing instruction, not a property of the question.
       const r = files.length
         ? await deepAgentsApi.runStatefulWithFiles(
-            q, sid, context, files, ctrl && ctrl.signal, this.state.declForId || null)
+            q, sid, context, files, ctrl && ctrl.signal, this.cbFilingBuildingId())
         : await this.ccStreamTurn(q, context, ctrl);
 
+      // A held upload comes back with validation_cases; the composer answers it next.
+      this.ccCaseFromTurn(r);
       const answer = (r && r.answer) || "";
       const calls = (r && r.tool_calls) || [];
       if (r && r.success === false) throw new Error(r.error || "the orchestrator returned no answer");

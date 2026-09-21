@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import threading
 import time
 import uuid
@@ -140,6 +141,103 @@ class ExtractedDocument:
             ],
         }
 
+
+
+def parse_model_json(raw: str) -> dict:
+    """Read the model's answer as JSON, repairing what can be repaired.
+
+    A 200 response whose body is cut off is not a permanent failure, but it was treated as
+    one: the only retry in this file fires on Anthropic API errors, so a truncated answer
+    went straight to `raise RuntimeError`. Both contracts tested on 17 Sep 2026 died there —
+
+        Claude returned non-JSON response for c41b8c82…pdf:
+        Expecting ',' delimiter: line 25 column 1177 (char 9447)
+
+    — after the model had already read twenty-four pages correctly. Asking again costs
+    minutes and may truncate at the same place, so repair comes first:
+
+      1. strip markdown fences and any prose wrapped around the object
+      2. drop trailing commas, which are valid to a model and not to json
+      3. if the tail is cut mid-object, keep the complete elements that did arrive and
+         mark the result `truncated` so the caller knows the end is missing
+
+    Raises ValueError when there is no JSON object in the text at all — that is a genuine
+    refusal or a wrong answer, and worth asking again for.
+    """
+    text_to_parse = (raw or "").strip()
+
+    # Fenced blocks: ```json … ``` or a bare ``` … ```
+    if text_to_parse.startswith("```"):
+        text_to_parse = text_to_parse.split("\n", 1)[-1]
+        text_to_parse = text_to_parse.rsplit("```", 1)[0]
+        text_to_parse = text_to_parse.strip()
+
+    # Prose either side of the object: take from the first brace to the last.
+    start = text_to_parse.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in the model's answer")
+    end = text_to_parse.rfind("}")
+    candidate = text_to_parse[start:end + 1] if end > start else text_to_parse[start:]
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    # Trailing commas — "[{…},]" and "{…,}" are both common and both invalid.
+    repaired = re.sub(r",(\s*[}\]])", r"\1", candidate)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    salvaged = _salvage_truncated(text_to_parse[start:])
+    if salvaged is not None:
+        return salvaged
+    raise ValueError("the model's answer is not JSON and could not be repaired")
+
+
+def _salvage_truncated(body: str) -> dict | None:
+    """Keep the complete top-level elements of a cut-off answer.
+
+    Scans for the first array in the object and walks it counting braces outside strings,
+    remembering the end of each element that closed. Everything up to the last complete one
+    is real data the model produced; discarding it because the tail is half-written throws
+    away nearly all of the work.
+    """
+    m = re.search(r'"(\w+)"\s*:\s*\[', body)
+    if not m:
+        return None
+    key = m.group(1)
+    i = m.end()
+    depth, in_str, esc, last_complete = 0, False, False, None
+    for pos in range(i, len(body)):
+        ch = body[pos]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0:
+                last_complete = pos + 1
+            elif depth < 0:      # the array itself closed
+                break
+    if last_complete is None:
+        return None
+    try:
+        items = json.loads("[" + body[i:last_complete] + "]")
+    except json.JSONDecodeError:
+        return None
+    return {key: items, "truncated": True}
 
 class ExtractionService:
     """PDF + DOCX extraction with table awareness."""
@@ -407,22 +505,25 @@ class ExtractionService:
             final.usage.input_tokens, final.usage.output_tokens, len(raw),
         )
 
-        # Strip accidental markdown fences before parsing
-        text_to_parse = raw.strip()
-        if text_to_parse.startswith("```"):
-            text_to_parse = text_to_parse.split("\n", 1)[-1]
-            text_to_parse = text_to_parse.rsplit("```", 1)[0]
-
+        # Fences, prose and trailing commas are repaired; a body cut off mid-object keeps
+        # the pages that did arrive. Only an answer with no JSON in it at all is asked
+        # again for — a second extraction costs minutes and may truncate identically.
         try:
-            data = json.loads(text_to_parse)
-        except json.JSONDecodeError as e:
+            data = parse_model_json(raw)
+        except ValueError as e:
             logger.error(
-                "Claude PDF response was not valid JSON | file={} | err={} | raw={}",
+                "Claude PDF response was not usable JSON | file={} | err={} | raw={}",
                 path.name, e, raw[:500],
             )
             raise RuntimeError(
                 f"Claude returned non-JSON response for {path.name}: {e}"
             ) from e
+        if data.get("truncated"):
+            logger.warning(
+                "Claude PDF answer was cut off | file={} | pages kept={} — the tail is "
+                "missing, so later pages of this document are not indexed",
+                path.name, len(data.get("pages") or []),
+            )
 
         raw_pages = data.get("pages") or []
         if not raw_pages:

@@ -25,6 +25,11 @@ CONTRACT_FIELDS = [
     "sla_completion_p3_hours",
     "sla_completion_p4_hours",
     "labour_day_rate",
+    # An hourly rate, and the per-trade card when the contract carries one. WKU prices
+    # twelve trades by the hour in Appendix B; the model was never asked for any of it, so
+    # the panel showed a £350/day platform default and called the contract silent on rates.
+    "labour_hour_rate",
+    "rate_card_json",
     "overtime_rate",
     "call_out_rate",
     "payment_terms",
@@ -242,6 +247,11 @@ async def _claude_contract_extract(
         "parts_pricing_json as {part_code: price}. "
         "kpi_clauses_json and ppm_obligations_json as objects. "
         "task_criticality_json as {L1,L2,L3: description} if defined.\n"
+        "rate_card_json is the labour RATE CARD when the contract prices work by trade: "
+        "{\"currency\": \"USD\", \"basis\": \"hour\", \"source\": \"Appendix B\", "
+        "\"lines\": [{\"trade\": \"HVAC\", \"straight\": 51.40, \"overtime\": 77.10}]}. "
+        "Read every row of a charge-rate schedule, not just the first. Give the currency the "
+        "document uses — do not convert. Null when the contract states no rates.\n"
         "Use null where the contract does not STATE a value — never guess. A contract often "
         "references 'specified priority timescales' without stating the hours; that is still "
         "null. Look hardest at schedules titled Charges and Key Performance Indicators.\n"
@@ -416,11 +426,28 @@ async def extract_contract_parameters(
     field_confidence: dict[str, str] = {}
     extracted = dict(extracted_fields or {})
 
-    if not extracted and source_text:
+    # A PDF ON ITS OWN IS A DOCUMENT. This read `if not extracted and source_text:`, so an
+    # upload with a PDF and no accompanying text — which is what an uploaded PDF IS — skipped
+    # extraction entirely and returned ok: True with nothing in it. The contract was then
+    # ingested with every value a platform default, indistinguishable from a document that
+    # genuinely states none. Found 21 Sep 2026 re-ingesting the WKU contract: the same file
+    # yields 21 fields including its twelve-trade rate card the moment the model is actually
+    # asked. Nothing was wrong with the extraction; it was never invoked.
+    #
+    # The heuristic fallback still needs text — it is regex over a string and has no way to
+    # read a PDF — so a PDF with no API key is a genuine "cannot read this", not a silence.
+    if not extracted and (source_text or pdf_base64):
         if settings.anthropic_api_key:
             result = await _claude_contract_extract(source_text, pdf_base64)
-        else:
+        elif source_text:
             result = _heuristic_contract_extract(source_text)
+        else:
+            log.warning(
+                "contract_performance.pdf_without_extractor",
+                detail="a PDF was uploaded but no ANTHROPIC_API_KEY is set; there is no way "
+                       "to read it, and the parameters would otherwise be all defaults",
+            )
+            result = {"extracted": {}, "field_confidence": {}}
         extracted = {k: v for k, v in (result.get("extracted") or {}).items() if v is not None}
         field_confidence = result.get("field_confidence") or {}
 

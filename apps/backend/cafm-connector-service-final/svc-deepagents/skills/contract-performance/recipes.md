@@ -63,9 +63,22 @@ explaining the weights in the abstract.
 ## "Set up a new contract"
 
 `extract_contract_from_document(source_text=…)` → present the draft **with `defaults_used`
-marked** → `update_contract_parameters(parameters_id=…, updates={…})` for the PM's edits →
-`confirm_contract_parameters(parameters_id=…)`. Unconfirmed parameters persist as a draft and
-still score — say so.
+marked** → `update_contract_parameters(parameters_id=…, updates={…})` for the PM's edits.
+
+**STOP THERE.** Confirming is not the last step of this recipe — it is a separate decision a
+PERSON makes, on a later turn, having read the draft. Never call
+`confirm_contract_parameters` as part of an ingest, and never because the chain looks
+unfinished. On 21 Sep 2026 that is exactly what happened: a set was created and confirmed one
+second later, unattended, with seventeen platform defaults and nothing read from the
+document. Those assumptions became the terms a vendor is judged and invoiced against.
+
+Call it only when the reader has said, on this turn, that they want these terms confirmed.
+The server now refuses an unattributed confirm and refuses any set with no contract-sourced
+term, so an attempt will fail — but the reason it must not be attempted is that confirming
+is theirs to do.
+
+A draft does NOT score. Scoring loads a vendor's *confirmed* contract, so an unconfirmed set
+governs nothing — say that, and say what is still needed to confirm it.
 
 ## "Which assets are critical?"
 

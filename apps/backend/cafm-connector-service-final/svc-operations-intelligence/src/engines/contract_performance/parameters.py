@@ -141,6 +141,16 @@ def merge_extraction_with_defaults(
         merged["payment_terms"] = extracted["payment_terms"]
         field_sources["payment_terms"] = "contract"
 
+    # The rate card is sourced HERE, not when it is written. field_sources is returned to
+    # the caller in the extract response, and the card used to be marked "contract" later,
+    # during ingest — so the chat counted 12 terms from a document whose stored row had 13.
+    # Two surfaces disagreeing about one ingest is the exact defect the count fix closed for
+    # vendor_name and signed_date. Not stored in `merged`: rate_card_json is not a mapped
+    # column, and ingest writes it through rate_card.write_for once the row has an id.
+    _card = extracted.get("rate_card_json")
+    if isinstance(_card, dict) and (_card.get("lines") or []):
+        field_sources["rate_card_json"] = "contract"
+
     return merged, defaults_used, field_sources
 
 
@@ -451,6 +461,18 @@ async def ingest_contract_parameters(
     row.document_id = row.document_id or uuid4()
     await _attach_graph(row, row.document_id)
 
+    # The per-trade rate card, when the contract states one. Written separately because
+    # rate_card_json is not on every database yet: rate_card.write_for probes once and
+    # returns False when the column is absent, which leaves the contract exactly as it is
+    # ingested today. See migrations/add_contract_rate_card.sql.
+    _card_raw = (extracted or {}).get("rate_card_json")
+    if _card_raw:
+        from . import rate_card as _rc
+
+        # field_sources already records this as contract-sourced (merge_extraction_with_
+        # defaults), so the row and the extract response agree. Nothing to re-mark here.
+        await _rc.write_for(session, row.id, _card_raw)
+
     if has_confirmed:
         # A confirmed contract already governs this reference. It is not overwritten — the
         # confirmation is a PM decision with their overrides in it — so this becomes a
@@ -583,6 +605,43 @@ async def confirm_contract_parameters(
     row = await session.get(ContractSlaParameters, parameters_id)
     if not row:
         return {"ok": False, "error": "not_found"}
+
+    # A CONFIRMATION NOBODY IS NAMED FOR IS NOT A DECISION.
+    #
+    # On 21 Sep 2026 the orchestrator created a parameter set and confirmed it one second
+    # later with confirmed_by NULL, unattended, because a skill recipe listed confirming as
+    # step four of an ingest chain. The audit row then read `actor: pm` — indistinguishable
+    # from a person having decided. Undoing that is what `reopen` is for; not doing it in
+    # the first place is what this is for.
+    if confirmed_by is None:
+        log.warning(
+            "contract_params.confirm_refused_unattributed",
+            parameters_id=str(parameters_id),
+            detail="confirming makes a vendor's numbers binding; it needs a named person",
+        )
+        return {"ok": False, "error": "confirmed_by_required"}
+
+    # A SET THAT READ NOTHING FROM ITS DOCUMENT CANNOT BE CONFIRMED.
+    #
+    # Confirming turns every value into an agreed term. Where none came from the contract,
+    # that is seventeen platform assumptions becoming the figures a vendor is judged and
+    # invoiced against — the exact case above, and the Moreland contract before it.
+    #
+    # "filename" does not count: contract_ref falls back to the uploaded file's name when
+    # the document names no reference, and a uuid-prefixed filename is not something the
+    # contract said.
+    sources = row.field_sources or {}
+    from_document = sum(1 for v in sources.values() if str(v).strip().lower() == "contract")
+    if not from_document:
+        log.warning(
+            "contract_params.confirm_refused_no_terms",
+            parameters_id=str(parameters_id),
+            fields=len(sources),
+            detail="nothing in this set came from the document; confirming would make "
+                   "platform defaults binding on the vendor",
+        )
+        return {"ok": False, "error": "no_contract_terms", "fields": len(sources)}
+
     row.status = "confirmed"
     row.confirmed_by = confirmed_by
     row.confirmed_at = datetime.now(timezone.utc)
@@ -597,6 +656,50 @@ async def confirm_contract_parameters(
     )
     await session.commit()
     return {"ok": True, "parameters": params_to_dict(row)}
+
+
+async def reopen_contract_parameters(
+    session: AsyncSession,
+    parameters_id: UUID,
+    *,
+    reopened_by: UUID | None = None,
+) -> dict[str, Any]:
+    """Undo a confirmation: the set goes back to draft and scoring refuses it again.
+
+    Confirming turns extracted readings into the numbers every later judgement is enforced
+    with, and until this existed there was no way back — `extract`, `ingest`, `patch` and
+    `confirm` were the whole router, so a set confirmed by mistake could only be replaced by
+    re-ingesting the document it came from.
+
+    That is not academic. A contract confirmed on 18 Sep 2026 had read 0 of 16 terms: the
+    document was a property management agreement, not a service contract, so all sixteen
+    values behind it are platform defaults now standing as agreed terms for that vendor.
+
+    The confirmation is CLEARED, not merely outranked by the status. A draft that still
+    names a confirmer reads as confirmed to anything checking the column rather than the
+    status, and those two disagreeing is worse than either alone.
+
+    Reopening a set that is already a draft is not an error. Two people on the same screen,
+    or a double click, should arrive at the state that was asked for.
+    """
+    row = await session.get(ContractSlaParameters, parameters_id)
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    was = row.status
+    row.status = "draft"
+    row.confirmed_by = None
+    row.confirmed_at = None
+    row.updated_at = datetime.now(timezone.utc)
+    await write_audit(
+        session,
+        actor=str(reopened_by) if reopened_by else "pm",
+        action_type="contract_params.reopen",
+        source_feature="B",
+        organization_id=row.organization_id,
+        output_payload={"id": str(row.id), "was": was},
+    )
+    await session.commit()
+    return {"ok": True, "parameters": params_to_dict(row), "was": was}
 
 
 async def get_contract_parameters(
@@ -663,6 +766,35 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001 — names are a convenience, never fail the list
             for d in out:
                 d.setdefault("vendor_name", None)
+
+    # The rate card, for the page in one query. Not a mapped column on purpose: a model
+    # attribute for a column the database lacks fails EVERY select on that table, and
+    # rate_card_json is new — anything that has not run the migration would lose its whole
+    # contract list to a feature it does not have. rate_card.column_present() probes once,
+    # and when the column is absent nothing below runs at all.
+    for d in out:
+        d.setdefault("rate_card", None)
+    if out:
+        from . import rate_card as _rc
+
+        if await _rc.column_present(session):
+            try:
+                from sqlalchemy import text as _text
+
+                res = await session.execute(
+                    _text(
+                        "SELECT id::text AS id, rate_card_json FROM "
+                        "plenum_cafm.contract_sla_parameters WHERE id::text = ANY(:ids) "
+                        "AND rate_card_json IS NOT NULL"
+                    ),
+                    {"ids": [str(d["id"]) for d in out]},
+                )
+                cards = {r["id"]: _rc.normalise(r["rate_card_json"]) for r in res.mappings().all()}
+                for d in out:
+                    d["rate_card"] = cards.get(str(d["id"]))
+            except Exception:  # noqa: BLE001 — a card is an enrichment; losing it must
+                # never cost the reader the contract list.
+                pass
 
     # The same treatment for whoever confirmed each set. A uuid is not an answer to "who
     # decided these numbers are binding?", and this is the only place the reader can be told.

@@ -20,6 +20,7 @@ from ..schemas.contract_performance import (
     AssetCriticalityApproveRequest,
     AssetCriticalityRequest,
     ContractConfirmRequest,
+    ContractReopenRequest,
     ContractExtractRequest,
     ContractIngestRequest,
     ContractUpdateRequest,
@@ -160,6 +161,19 @@ async def confirm_contract(
 ):
     return await params_svc.confirm_contract_parameters(
         session, parameters_id, confirmed_by=body.confirmed_by
+    )
+
+
+# An action with no inverse is a trap. Confirming makes a vendor's numbers binding, and
+# before this the only way back was re-ingesting the source document.
+@router.post("/contracts/{parameters_id}/reopen")
+async def reopen_contract(
+    parameters_id: UUID,
+    body: ContractReopenRequest | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    return await params_svc.reopen_contract_parameters(
+        session, parameters_id, reopened_by=(body.reopened_by if body else None)
     )
 
 

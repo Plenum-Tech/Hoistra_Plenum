@@ -112,6 +112,53 @@ const COMPONENTS = [
     basis: "jobs attended while the vendor's accreditation was current", requires: "current on every job" }
 ];
 
+// A rate in the currency the CONTRACT states, not the currency the portfolio toggle shows.
+// gbp() hardcodes £, and WKU's rates are dollars: rendering $51.40 as £51.40 would be a new
+// lie in place of the one the rate card exists to remove. An unstated currency renders the
+// number bare rather than guessing a symbol.
+const CURRENCY_SYMBOL = { USD: "$", GBP: "£", EUR: "€", AED: "AED ", SGD: "S$", CAD: "C$", AUD: "A$" };
+const moneyIn = (cur) => (v) => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const sym = cur ? (CURRENCY_SYMBOL[String(cur).toUpperCase()] || (String(cur).toUpperCase() + " ")) : "";
+  return sym + n.toFixed(2);
+};
+
+// The card as the panel shows it, or null when the contract prices no trades. An empty
+// shell reads as "rates are on file" while holding none, which is the same misdirection a
+// £350 default produces.
+const rateCardRow = (card) => {
+  const lines = (card && Array.isArray(card.lines) ? card.lines : []).filter((l) => l && l.trade);
+  if (!lines.length) return null;
+  const cur = card.currency || null;
+  const m = moneyIn(cur);
+  return {
+    label: "Labour rates",
+    value: plural(lines.length, "trade", "trades")
+      + (cur ? " · " + String(cur).toUpperCase() : "")
+      + (card.basis ? " / " + card.basis : ""),
+    src: "contract",
+    srcLabel: "document",
+    field: "rate_card_json",
+    editable: false,
+    raw: null,
+    clause: null,
+    page: 0,
+    currency: cur,
+    basis: card.basis || null,
+    source: card.source || null,
+    note: "Read from " + (card.source || "the signed contract")
+      + ". Each trade is priced separately, so there is no single labour rate to check an "
+      + "invoice against — the line's own trade decides.",
+    lines: lines.map((l) => ({
+      trade: String(l.trade),
+      straight: m(l.straight),
+      overtime: m(l.overtime)
+    }))
+  };
+};
+
 // ── the contract parameter fields, in the order the Terms tab lists them ─
 const money = (suffix) => (v) => gbp(v) + suffix;
 const TERM_FIELDS = [
@@ -416,6 +463,23 @@ export function shapeLiveVendors(input, now) {
           : f.label + " was not found in " + (docName(p.document_name) || p.contract_ref || "the contract document") + ". The platform default of " + value + " applies until the term is agreed in writing."
       };
     }) : [];
+    // The rate card sits with the other terms, and where one exists the scalar rate rows
+    // stop asserting a platform default beside it. Two answers to "what does labour cost?"
+    // is worse than one — and the wrong one looked authoritative, sitting in the same
+    // column as twelve figures the contract actually states.
+    const _card = rateCardRow(p && p.rate_card);
+    if (_card) {
+      const at = terms.findIndex((t) => t.field === "labour_day_rate");
+      terms.splice(at >= 0 ? at : terms.length, 0, _card);
+      terms.forEach((t) => {
+        if (t.field === "labour_day_rate" || t.field === "labour_hour_rate") {
+          t.value = "priced per trade — see Labour rates";
+          t.editable = false;
+          t.note = "This contract prices labour per trade, so a single rate here would "
+            + "contradict the rate card above. Correct it there, or on the document.";
+        }
+      });
+    }
     const read = terms.filter((t) => t.src === "contract").length;
     const fields = terms.length;
     if (p) { contractsN += 1; termsRead += read; termsDefault += fields - read; }

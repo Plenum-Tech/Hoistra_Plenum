@@ -178,7 +178,7 @@ export default function Chat({ vals }) {
 
           {/* ── composer ─────────────────────────────────────────────────── */}
           <div style={{ position: "sticky", bottom: "0", background: "var(--color-bg)", padding: "10px 0 18px", borderTop: "1px solid var(--color-divider)" }}>
-            <div style={{ display: vals.orchAttachShow, flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+            <div style={{ display: vals.orchAttachShow || "none", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
               {(vals.orchFiles || []).map((f) => (
                 <React.Fragment key={f.key}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", fontSize: "11px", maxWidth: "100%" }}>
@@ -191,6 +191,67 @@ export default function Chat({ vals }) {
                   </span>
                 </React.Fragment>
               ))}
+            </div>
+            <div style={{ display: vals.ccCaseShow || "none", flexDirection: "column", gap: "6px", marginBottom: "9px", padding: "9px 11px", borderRadius: "9px", border: "1px solid var(--color-accent)", background: "var(--color-accent-900)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "9px", flexWrap: "wrap" }}>
+                <i className="ph ph-seal-question" style={{ fontSize: "14px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+                <span style={{ flex: "1", minWidth: "0", fontSize: "12px", fontWeight: "500", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {vals.ccCaseLabel}
+                </span>
+                <button type="button" className="hv13" onClick={vals.ccCaseDrop} title="Leave it held and go back to asking questions" style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {"Not now"}
+                </button>
+              </div>
+              {vals.ccCaseQuestion ? (
+                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45" }}>
+                  {vals.ccCaseQuestion}
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: vals.cbShow || "none", flexDirection: "column", gap: "7px", marginBottom: "9px", padding: "9px 11px", borderRadius: "9px", border: "1px solid " + (vals.cbChosen ? "var(--color-divider)" : "var(--st-warn)"), background: vals.cbChosen ? "var(--color-surface)" : "var(--st-warn-bg)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "9px", flexWrap: "wrap" }}>
+                <i className={`ph ${vals.cbChosen ? "ph-buildings" : "ph-warning"}`} style={{ fontSize: "14px", color: vals.cbChosen ? "var(--color-accent)" : "var(--st-warn)", flexShrink: "0" }}></i>
+                <span style={{ flex: "1", minWidth: "0", fontSize: "12px", fontWeight: vals.cbChosen ? "500" : "400", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {vals.cbLabel}
+                </span>
+                <button type="button" className="hv13" onClick={vals.cbOpen} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {vals.cbChosen ? "Change" : "Choose a building"}
+                </button>
+                {vals.cbChosen ? (
+                  <button type="button" className="hv21" onClick={vals.cbClear} title="File against no building" style={{ ...BARE, display: "flex", opacity: "0.6", cursor: "pointer" }}>
+                    <i className="ph ph-x" style={{ fontSize: "11px" }}></i>
+                  </button>
+                ) : (
+                  <button type="button" className="hv13" onClick={vals.cbHoist} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    {"Hoist a new one"}
+                  </button>
+                )}
+              </div>
+              <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45" }}>
+                {vals.cbWarn}
+              </span>
+              {vals.cbPickerOpen ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "2px", padding: "8px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                  <input className="input" autoFocus value={vals.cbQuery} onChange={vals.cbSetQuery}
+                    onKeyDown={(e) => { if (e.key === "Escape") vals.cbClose(); }}
+                    placeholder="Search by name or code" style={{ fontSize: "12px", padding: "6px 9px" }} />
+                  <div style={{ display: "flex", flexDirection: "column", maxHeight: "188px", overflowY: "auto" }}>
+                    {(vals.cbMatches || []).map((b) => (
+                      <React.Fragment key={b.id}>
+                        <button type="button" className="hv13" onClick={b.pick} style={{ ...BARE, display: "flex", alignItems: "center", gap: "8px", padding: "6px 8px", borderRadius: "6px", cursor: "pointer", textAlign: "left", background: b.on ? "var(--color-accent-900)" : "transparent" }}>
+                          <span style={{ flex: "1", minWidth: "0", fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.name}</span>
+                          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", flexShrink: "0" }}>{b.code}</span>
+                        </button>
+                      </React.Fragment>
+                    ))}
+                    {vals.cbEmpty ? (
+                      <span style={{ padding: "8px", fontSize: "11px", color: "var(--color-neutral-500)" }}>
+                        {"No building matches that. Check the code, or hoist a new one."}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div style={{ display: "flex", gap: "8px", alignItems: "stretch" }}>
               <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: "flex", width: "42px", flexShrink: "0", borderRadius: "10px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
