@@ -141,6 +141,14 @@ export default function Chat({ vals }) {
                               </div>
                             : <Markdown text={m.text} />}
                         <div style={{ display: m.interruptShow, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
+                        <div style={{ display: m.migShow, gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+                          {(m.migIds || []).map((g) => (
+                            <button key={g.id} type="button" className="hv13" onClick={g.open} title={g.id} style={{ ...BARE, fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                              <i className="ph ph-file-arrow-up" style={{ fontSize: "12px" }}></i>
+                              {"Open migration " + g.short + " — review its gates"}
+                            </button>
+                          ))}
+                        </div>
                         <div style={{ display: m.stoppedShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>{"Stopped."}</div>
                         <div style={{ display: m.toolsShow, fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid var(--color-divider)" }}>{m.tools}</div>
                       </div>
@@ -191,6 +199,15 @@ export default function Chat({ vals }) {
                   </span>
                 </React.Fragment>
               ))}
+            </div>
+            <div style={{ display: vals.orchMigrateShow || "none", alignItems: "center", gap: "9px", flexWrap: "wrap", marginBottom: "9px", padding: "8px 11px", borderRadius: "9px", border: "1px solid var(--color-divider)", background: "var(--color-surface)" }}>
+              <i className="ph ph-file-xls" style={{ fontSize: "14px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+              <span style={{ flex: "1", minWidth: "0", fontSize: "12px", lineHeight: "1.4" }}>
+                {"Spreadsheets go through the migration pipeline. Sent from here the run stops at its first gate and links back; the Migration page walks every gate."}
+              </span>
+              <button type="button" className="hv13" onClick={vals.orchMigrateHere} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                {"Open on the Migration page"}
+              </button>
             </div>
             <div style={{ display: vals.ccCaseShow || "none", flexDirection: "column", gap: "6px", marginBottom: "9px", padding: "9px 11px", borderRadius: "9px", border: "1px solid var(--color-accent)", background: "var(--color-accent-900)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "9px", flexWrap: "wrap" }}>

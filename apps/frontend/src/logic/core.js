@@ -12,7 +12,7 @@ import { flattenCards } from './reports.js';
 const IN_FLIGHT_GUARDS = [
   '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
   '_enLoading', '_enPosLoading', '_asLiveLoading', '_asCondLoading', '_asCondSeeded', '_mxLiveLoading', '_spLoading',
-  '_glTablesLoading', '_usLiveLoading', '_rpLoading'
+  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading'
 ];
 
 export const coreMethods = {
@@ -45,6 +45,8 @@ export const coreMethods = {
     this.rpStart();
     // A reload that lands on the conversation page re-checks the orchestrator link.
     if (this.state.view === "chat") this.chatConnect();
+    // A reload that lands on the Migration page resumes following the run it had open.
+    if (this.state.view === "migration") { this.mgListLoad(); if (this.state.mgId) this.mgPoll(true); }
   },
 
   componentWillUnmount() {
@@ -60,6 +62,7 @@ export const coreMethods = {
     clearTimeout(this._auLiveRetry);
     clearTimeout(this._saLiveRetry); clearTimeout(this._saLiveRefresh);
     clearInterval(this._ingT);
+    clearTimeout(this._mgTimer);
   },
 
   // The account-scoped reads: the Buildings table, compliance register, home tiles,
@@ -107,6 +110,7 @@ export const coreMethods = {
     // The request itself is disowned by the orgEpoch stamp in api/client.js; releasing
     // the guard here is what lets the correctly-scoped read actually go out.
     IN_FLIGHT_GUARDS.forEach((k) => { this[k] = false; });
+    clearTimeout(this._mgTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
@@ -127,6 +131,9 @@ export const coreMethods = {
       mxRaw: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
       mxGroup: "State", mxOpenG: null, mxAnswer: null, mxAsked: "", mxAskBusy: false, mxAskError: "",
       spaces: null, spLoading: false, spError: "",
+      // A migration belongs to the company it was uploaded into; the next company starts
+      // on the upload panel with its own recent runs.
+      mgId: null, mgStatus: null, mgError: "", mgDec: {}, mgArmed: false, mgList: null, mgListError: "",
       // A report card belongs to the person who pinned it, not to the company, so it is the
       // one register a company switch leaves alone — but a sign-in that swaps ACCOUNTS in
       // this tab must not leave the previous person's cards in the navigator, on the home
@@ -241,6 +248,7 @@ export const coreMethods = {
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
     if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
+    if (s.view === "migration") return "Migration";
     if (s.view === "answer") return "Query";
     if (s.view === "chat") return "Orchestrator";
     if (s.view === "sessions") return "Sessions";

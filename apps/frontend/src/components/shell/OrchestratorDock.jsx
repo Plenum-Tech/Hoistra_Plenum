@@ -758,6 +758,16 @@ export default function OrchestratorDock({ vals }) {
             </React.Fragment>
           ))}
         </div>
+        {/* A staged spreadsheet is a migration; the Migration page walks its gates. */}
+        <div style={{ display: vals.orchMigrateShow || "none", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "8px", padding: "7px 10px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+          <i className="ph ph-file-xls" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+          <span style={{ flex: "1", minWidth: "0", fontSize: "11px", lineHeight: "1.4", color: "var(--color-neutral-400)" }}>
+            {"Spreadsheets run through the migration pipeline; sent from here the run stops at its first gate."}
+          </span>
+          <button type="button" className="hv13" onClick={vals.orchMigrateHere} style={{ font: "inherit", background: "transparent", margin: "0", fontSize: "10.5px", padding: "3px 9px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap", color: "inherit" }}>
+            {"Open on the Migration page"}
+          </button>
+        </div>
         <div style={{ display: "flex", gap: "6px", marginTop: "10px", alignItems: "stretch" }}>
           <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: vals.orchAttachShow, width: "34px", flexShrink: "0", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
             <i className="ph ph-paperclip" style={{ fontSize: "14px", color: "var(--color-neutral-400)" }}></i>

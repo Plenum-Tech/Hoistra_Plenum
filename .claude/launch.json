@@ -14,16 +14,47 @@
       "autoPort": true
     },
     {
-      "name": "attached-page",
-      "runtimeExecutable": "python",
+      "name": "frontend-verify",
+      "runtimeExecutable": "npm",
       "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8099",
-        "--directory",
-        "C:\\Users\\balap\\AppData\\Local\\Temp\\claude\\C--CMMS-Hoistra\\61c4c064-3028-458a-abc9-390bd363abec\\scratchpad"
+        "run",
+        "dev",
+        "--prefix",
+        "apps/frontend",
+        "--",
+        "--mode",
+        "verify",
+        "--port",
+        "5175",
+        "--strictPort"
       ],
-      "port": 8099
+      "port": 5175
+    },
+    {
+      "name": "schema-mapper-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "apps/backend/cafm-connector-service-final/svc-ai-schema-mapper-ui",
+        "--",
+        "--port",
+        "5174",
+        "--strictPort"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "plenum-cafm-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "C:/CMMS/Plenum-CAFM/apps/frontend"
+      ],
+      "port": 3000
     }
   ]
 }

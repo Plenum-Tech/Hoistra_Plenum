@@ -15,6 +15,7 @@ import InspectionReports from './screens/InspectionReports.jsx';
 import Sessions from './screens/Sessions.jsx';
 import Space from './screens/Space.jsx';
 import Integrations from './screens/Integrations.jsx';
+import Migration from './screens/Migration.jsx';
 import ConnectModal from './components/shell/ConnectModal.jsx';
 import PasswordModal from './components/shell/PasswordModal.jsx';
 import Buildings from './screens/Buildings.jsx';
@@ -60,6 +61,7 @@ export default function App() {
       {vals.isSessions ? <Sessions vals={vals} /> : null}
       {vals.isSpace ? <Space vals={vals} /> : null}
       {vals.isInteg ? <Integrations vals={vals} /> : null}
+      {vals.isMigration ? <Migration vals={vals} /> : null}
       {vals.intModalOn ? <ConnectModal vals={vals} /> : null}
       {vals.pwOpen ? <PasswordModal vals={vals} /> : null}
       {vals.isBuildings ? <Buildings vals={vals} /> : null}

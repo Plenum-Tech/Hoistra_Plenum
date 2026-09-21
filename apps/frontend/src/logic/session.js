@@ -38,7 +38,7 @@ const KEY = SESSION_KEY;
 // failed this allow-list and fell back to view: 'home' below, same as landing on an
 // unrecognised value would. They take no companion id (same as 'home'/'cc'/'vp'), so
 // nothing else needs restoring alongside them.
-const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'audit', 'insp'];
+const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'audit', 'insp', 'migration'];
 
 const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isStr = (v) => typeof v === 'string';
@@ -154,6 +154,11 @@ function readSlice(storage) {
   // (logic/sessions.js) and the next question continues the same orchestrator thread.
   if (typeof d.sessionId === 'string' && d.sessionId) out.sessionId = d.sessionId;
 
+  // The migration open on the Migration page. A gate waits for a person, and the person
+  // who reloads mid-review must land back on the same run, not on the upload panel.
+  // Restored on its own — it is useful from any page's nav badge, not only from `migration`.
+  if (isStr(d.mgId) && /^[0-9a-f-]{8,64}$/i.test(d.mgId)) out.mgId = d.mgId;
+
   // Compliance scope, so a reload of the console returns to the same slice of the
   // register rather than the whole portfolio.
   if (isStrArray(d.ccCountries)) out.ccCountries = d.ccCountries;
@@ -217,6 +222,7 @@ function buildSlice(state) {
     spaceKey: state.spaceKey || null,
     reportKey: state.reportKey || null,
     sessionId: state.sessionId || null,
+    mgId: state.mgId || null,
     answerKey: state.answerKey || null,
     askedQuery: state.askedQuery || '',
     ccCountries: state.ccCountries || [],

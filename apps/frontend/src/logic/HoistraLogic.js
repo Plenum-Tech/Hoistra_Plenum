@@ -36,6 +36,7 @@ import { superAdminMethods } from './superAdmin.js';
 import { usersLiveMethods } from './usersLive.js';
 import { auditLiveMethods } from './auditLive.js';
 import { ingestionLiveMethods } from './ingestionLive.js';
+import { migrationMethods } from './migration.js';
 import { superAdminLiveMethods } from './superAdminLive.js';
 import { AX_USERS, SA_COMPANIES, AU_SEED } from '../data/hoistra-access.js';
 
@@ -210,7 +211,14 @@ export class HoistraLogic extends Controller {
     // responses (month_total/billing_note ride here) and the usage cards keyed by
     // organization_id — loaded when the overlay opens (auth.js's menu item), never at mount.
     saLiveRaw: null, saCardsLive: {}, saLiveCardError: "",
-    saLiveLoading: false, saLiveError: "", saLiveLoadedAt: null
+    saLiveLoading: false, saLiveError: "", saLiveLoadedAt: null,
+    // The Migration page (logic/migration.js): the run that is open (mgId, persisted so a
+    // reload lands back on it) and the status document the service last returned for it;
+    // the staged upload; the decisions taken at the open gate, keyed as mgVals sets them and
+    // dropped whenever the gate changes; the write gate's armed step; the recent-runs list.
+    mgId: null, mgStatus: null, mgLoading: false, mgError: "", mgLoadedAt: null, mgBusy: "",
+    mgFiles: [], mgCmms: "Custom", mgAuto: true, mgDec: {}, mgArmed: false, mgOpenNodes: {},
+    mgList: null, mgListLoading: false, mgListError: ""
   };
 
   constructor() {
@@ -265,4 +273,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);

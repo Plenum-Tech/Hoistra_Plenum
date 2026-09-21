@@ -10,6 +10,7 @@
 import { MODULES } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
+import { isSpreadsheet } from './migration.js';
 import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 import { errorFromAnswer } from './chat.js';
 import { isStaleScope } from '../api/client.js';
@@ -1083,7 +1084,11 @@ export const complianceLiveMethods = {
       // Only sent with files: it is a filing instruction, not a property of the question.
       const r = files.length
         ? await deepAgentsApi.runStatefulWithFiles(
-            q, sid, context, files, ctrl && ctrl.signal, this.cbFilingBuildingId())
+            q, sid, context, files, ctrl && ctrl.signal, this.cbFilingBuildingId(),
+            // A spreadsheet is a migration with human gates. Interactive: the run stops at
+            // its first gate and the reply links to the Migration page, instead of the
+            // backend approving every gate on the reader's behalf.
+            { interactiveMigration: files.some(isSpreadsheet) })
         : await this.ccStreamTurn(q, context, ctrl);
 
       // A held upload comes back with validation_cases; the composer answers it next.
@@ -1104,6 +1109,8 @@ export const complianceLiveMethods = {
         ccChat: (p.ccChat || []).concat([{
           role: "bot",
           text: answer || "The orchestrator returned an empty answer.",
+          // Runs this turn's attachments started; the bubble links each to the Migration page.
+          migrations: (r && Array.isArray(r.ingested_migration_ids)) ? r.ingested_migration_ids.filter(Boolean).map(String) : [],
           // Named tools behind this reply, so the route is visible per message.
           calls: calls.map((t) => t.tool).filter(Boolean),
           interrupted: !!(r && r.interrupted),

@@ -10,6 +10,7 @@ import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { documentUrl } from '../api/docRag.js';
+import { isSpreadsheet } from './migration.js';
 
 // What a staged document means when the ask bar is empty. Matches the wording the
 // ingestion panel already uses, so the same instruction reaches the orchestrator from
@@ -1198,6 +1199,7 @@ export const renderValsMethods = {
       ...this.auditVals(s),
       ...this.ingestionVals(s),
       ...this.saVals(s),
+      ...this.mgVals(s),
 
       /* Query-first: every non-admin report opens with the ask bar above the
          analysis, scoped to the page you are on. Admin pages (Buildings admin,
@@ -1756,6 +1758,10 @@ export const renderValsMethods = {
         fileNames: (m.files || []).join(" · "),
         filesShow: (m.files || []).length ? "block" : "none",
         stoppedShow: m.stopped ? "block" : "none",
+        // A reply whose attachment started a migration links to that run on the Migration
+        // page — the gates are answered there, not in the transcript.
+        migIds: (m.migrations || []).map((id) => ({ id: id, short: String(id).slice(0, 8), open: () => this.mgOpen(id) })),
+        migShow: (m.migrations || []).length ? "flex" : "none",
         // On the chat page the trace rail owns the route, so the in-answer copy of it starts
         // closed — the same steps twice on one screen made the answer harder to read, not
         // better evidenced. The console's dock has no rail, so there it stays open.
@@ -1900,6 +1906,10 @@ export const renderValsMethods = {
         drop: () => this.ccDropFile(i)
       })),
       orchFileCount: (s.ccFiles || []).length,
+      // A staged spreadsheet is a migration, and the Migration page shows every gate of one;
+      // sent from the chat it stops at the first gate with a link back. Offered, not forced.
+      orchMigrateShow: (s.ccFiles || []).some(isSpreadsheet) ? "flex" : "none",
+      orchMigrateHere: () => this.mgFromChat(),
       // ── the held document this composer is answering (logic/chatCases.js) ──
       // Shown whenever a case is open, because the next sentence goes somewhere other than
       // the orchestrator and the reader must never have to guess which.

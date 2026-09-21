@@ -86,12 +86,18 @@ export const deepAgentsApi = {
   // mentioned in the context, a building is something an agent has to read and choose to
   // act on; sent as a field it is a foreign key the endpoint can bind. Optional, because a
   // question with an attachment is not always a filing.
-  runStatefulWithFiles: (message, sessionId, context, files, signal, buildingId) => {
+  //
+  // `opts.interactiveMigration` sets the route's interactive_migration flag: a CSV/Excel
+  // attachment then stops at its first human gate (answered on the Migration page, which
+  // ingested_migration_ids in the reply points at) instead of every gate being approved
+  // server-side as proposed.
+  runStatefulWithFiles: (message, sessionId, context, files, signal, buildingId, opts) => {
     const form = new FormData();
     form.append('message', message || '');
     form.append('session_id', sessionId || '');
     if (context) form.append('context', context);
     if (buildingId) form.append('building_id', buildingId);
+    if (opts && opts.interactiveMigration) form.append('interactive_migration', 'true');
     const org = getActingOrg();
     if (org) form.append('organization_id', org);
     (files || []).forEach((f) => form.append('files', f, f.name));
