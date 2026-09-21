@@ -30,6 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..state import ExtraFieldConfig, MigrationState
 from ..event_enrich import append_event
+from .building_link import (
+    ASSET_BUILDING_SQL, ASSET_LOOKUP_SQL, BuildingResolver, asset_match_code,
+    build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
+)
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 
@@ -550,7 +554,9 @@ async def write_node(state: MigrationState) -> MigrationState:
                             "[Node 9] ✓ Schema-aligned inserts applied: "
                             f"{aligned_result.get('rows_inserted', 0)} row(s) across "
                             f"{aligned_result.get('tables_written', 0)} table(s), "
-                            f"{aligned_result.get('rows_skipped', 0)} skipped"
+                            f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                            f"{aligned_result.get('rows_merged', 0)} merged, "
+                            f"{aligned_result.get('buildings_linked', 0)} building link(s)"
                         )
                     except Exception as aligned_exc:
                         logger.exception(
@@ -834,8 +840,10 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             else:
                 normalized.pop("asset_type")
 
-        # FK columns that require UUID resolution — cannot be filled from a text
-        # value at write time, so drop them rather than creating phantom columns.
+        # FK columns that need UUID resolution are not written as text. The site / building
+        # reference is NOT lost, though: _apply_records_with_schema_alignment reads it off the
+        # raw row (building_link.building_hint) and resolves it to buildings.building_id before
+        # the insert — the ten building-less assets of 21 Sep 2026 came from dropping it here.
         for _fk_col in ("site_id", "location", "location_code", "category"):
             normalized.pop(_fk_col, None)
 
@@ -1235,6 +1243,46 @@ async def _apply_records_with_schema_alignment(
                 requested_org_id=organization_id,
                 schema_name=schema_name,
             )
+            # ── Building links ──────────────────────────────────────────────────────────────────
+            # A source row names its building by a site reference, a name or a code; the target
+            # needs buildings.building_id. Resolved here (building_link.py), once per distinct
+            # hint, inside a savepoint so a lookup that fails cannot poison the write. Assets that
+            # already exist under the same code are MERGED into their row instead of duplicated,
+            # and a work order with no building inherits its asset's.
+            async def _fetch(_sql: str, _params: dict) -> list:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(text(_sql), _params)
+                        return [tuple(r) for r in _rs.fetchall()]
+                except Exception as _lookup_exc:  # a missing column, a bad cast — never fatal
+                    logger.debug(f"[Node 9] building lookup failed: {str(_lookup_exc)[:160]}")
+                    return []
+
+            _buildings = BuildingResolver(
+                _fetch, effective_org_id, schema_name,
+                site_names_from_run(cleaned_tables, table_routing),
+            )
+            _asset_ids: dict[str, str] = {}          # asset code → existing assets.id ("" = none)
+            _asset_building_cache: dict[str, str] = {}  # asset ref → building_id ("" = none)
+            rows_merged = 0
+            buildings_linked = 0
+
+            async def _existing_asset_id(_code: str) -> str:
+                if _code not in _asset_ids:
+                    _hit = await _fetch(ASSET_LOOKUP_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "code": _code})
+                    _asset_ids[_code] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_ids[_code]
+
+            async def _asset_building(_ref: str) -> str:
+                if not _ref:
+                    return ""
+                if _ref not in _asset_building_cache:
+                    _hit = await _fetch(ASSET_BUILDING_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "ref": _ref})
+                    _asset_building_cache[_ref] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_building_cache[_ref]
+
             # ── Parent-before-child write order ─────────────────────────────────────────────────
             # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
             # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
@@ -1416,6 +1464,7 @@ async def _apply_records_with_schema_alignment(
                 for row in records:
                     if not isinstance(row, dict):
                         continue
+                    _hint = building_hint(row) if safe_table in ("assets", "work_orders") else None
                     normalized = _normalize_row_for_table(
                         safe_table, row, effective_org_id
                     )
@@ -1428,6 +1477,19 @@ async def _apply_records_with_schema_alignment(
                         if safe_k not in db_cols and safe_k not in missing_columns:
                             if raw_v is not None and str(raw_v) != "":
                                 missing_columns[safe_k] = _infer_sql_type_for_value(raw_v)
+                    # The building link. A hint that resolves becomes building_id; one that does
+                    # not is removed rather than written into a UUID column as text. A work order
+                    # with no hint of its own takes its asset's building.
+                    if safe_table in ("assets", "work_orders") and "building_id" in db_cols \
+                            and not looks_like_uuid(safe_row.get("building_id")):
+                        _bid = await _buildings.resolve(_hint) if _hint else None
+                        if not _bid and safe_table == "work_orders":
+                            _bid = await _asset_building(str(safe_row.get("asset_id") or "").strip()) or None
+                        if _bid:
+                            safe_row["building_id"] = _bid
+                            buildings_linked += 1
+                        else:
+                            safe_row.pop("building_id", None)
                     normalized_records.append(safe_row)
 
                 if missing_columns and safe_table in _KNOWN_CORE_TABLES:
@@ -1576,6 +1638,27 @@ async def _apply_records_with_schema_alignment(
                     if not filtered:
                         continue
 
+                    # An asset re-imported under a code the organisation already has is the SAME
+                    # asset: merge into that row (building kept, code filled in) rather than insert
+                    # a twin with a fresh id and no building. The June 2026 import stored the code
+                    # in `id` with no asset_code, so the lookup matches on either.
+                    if safe_table == "assets":
+                        _code = asset_match_code(filtered)
+                        _existing = await _existing_asset_id(_code) if _code else ""
+                        if _existing:
+                            _usql, _uparams = build_asset_merge_update(schema_name, filtered, _existing)
+                            try:
+                                async with session.begin_nested():
+                                    _ures = await session.execute(text(_usql), _uparams)
+                                    table_rows += int(getattr(_ures, "rowcount", 0) or 0)
+                                rows_merged += 1
+                                continue
+                            except Exception as _merge_exc:
+                                logger.warning(
+                                    f"[Node 9] assets: merge into existing {_existing} for code "
+                                    f"{_code!r} failed ({str(_merge_exc)[:120]}); inserting instead"
+                                )
+
                     try:
                         dml_sql, params = _build_dml_for_row(
                             schema_name, safe_table, filtered, unique_sets
@@ -1668,8 +1751,15 @@ async def _apply_records_with_schema_alignment(
             logger.info(
                 f"[Node 9] Schema-aligned write done — "
                 f"{rows_inserted} row(s) across {tables_written} table(s), "
-                f"{rows_skipped} skipped"
+                f"{rows_skipped} skipped, {rows_merged} merged into existing assets, "
+                f"{buildings_linked} building link(s) resolved"
+                + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
+            if _buildings.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "building: " + ", ".join(sorted(set(_buildings.ambiguous))[:5])
+                    + " matched more than one building — the rows were written without a building link"
+                )
             await session.commit()
         except Exception:
             await session.rollback()
@@ -1679,6 +1769,8 @@ async def _apply_records_with_schema_alignment(
         "rows_inserted": rows_inserted,
         "tables_written": tables_written,
         "rows_skipped": rows_skipped,
+        "rows_merged": rows_merged,
+        "buildings_linked": buildings_linked,
         "row_errors": row_errors,
     }
 
