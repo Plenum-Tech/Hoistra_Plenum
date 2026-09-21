@@ -69,6 +69,26 @@ const rateH = (v) => gbpExact(v) + "/h";
 const hours = (h) => (h === 1 ? "1 hour" : h + " hours");
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
 const keysOf = (o) => (o && typeof o === "object" ? Object.keys(o) : []);
+
+// Keys the extractor writes ABOUT a term rather than as one. The Claude path returns
+// {note, description} when a contract mentions a subject without committing to anything;
+// the heuristic path returns {detected, raw_snippet} for the same situation.
+const _COMMENTARY_KEYS = new Set(["note", "notes", "description", "summary", "detected", "raw_snippet", "text", "comment"]);
+const substantiveKeys = (o) => keysOf(o).filter((k) => !_COMMENTARY_KEYS.has(String(k).toLowerCase()));
+
+// How a structured term reads on the panel.
+//
+// Counting every key called WKU's KPI value "2 clauses · document" — and the two keys were
+// a description of KPIs being "monitored" and a note reading "No specific KPI targets or
+// metrics are stated in the contract." The badge claimed the contract supplied KPI terms
+// while the value itself said the opposite. A contract that raises a subject and commits to
+// nothing is neither "2 clauses" nor "none stated"; it is its own answer, because the reader
+// is about to confirm these values as binding.
+const countedTerm = (v, one, many, emptyWord) => {
+  const real = substantiveKeys(v).length;
+  if (real) return plural(real, one, many);
+  return keysOf(v).length ? "mentioned, " + emptyWord : "none stated";
+};
 const lower = (s) => String(s || "").toLowerCase();
 // "PUBLIC_LIABILITY" → "Public Liability": the register sometimes stores the code as the name.
 const prettyCode = (code) => String(code || "").split(/[_\s]+/).filter(Boolean)
@@ -109,12 +129,18 @@ const TERM_FIELDS = [
   { key: "overtime_rate", label: "Overtime rate", fmt: money("") },
   { key: "call_out_rate", label: "Call-out rate", fmt: money("") },
   { key: "payment_terms", label: "Payment terms", fmt: (v) => (/^\d+$/.test(String(v).trim()) ? String(v).trim() + " days" : String(v)) },
-  { key: "parts_pricing_json", label: "Parts pricing", fmt: (v) => (keysOf(v).length ? plural(keysOf(v).length, "price", "prices") : "none stated") },
-  { key: "kpi_clauses_json", label: "KPI clauses", fmt: (v) => (keysOf(v).length ? plural(keysOf(v).length, "clause", "clauses") : "none stated") },
-  { key: "ppm_obligations_json", label: "PPM obligations", fmt: (v) => (keysOf(v).length ? "stated" : "none stated") },
-  { key: "task_criticality_json", label: "Task criticality", fmt: (v) => (keysOf(v).length ? plural(keysOf(v).length, "level", "levels") : "none stated") }
+  { key: "parts_pricing_json", label: "Parts pricing", fmt: (v) => countedTerm(v, "price", "prices", "no prices") },
+  { key: "kpi_clauses_json", label: "KPI clauses", fmt: (v) => countedTerm(v, "clause", "clauses", "no targets") },
+  { key: "ppm_obligations_json", label: "PPM obligations", fmt: (v) => (substantiveKeys(v).length ? "stated" : (keysOf(v).length ? "mentioned, no detail" : "none stated")) },
+  { key: "task_criticality_json", label: "Task criticality", fmt: (v) => countedTerm(v, "level", "levels", "no levels") }
 ];
 const isEmptyValue = (v) => v === null || v === undefined || v === "" || (typeof v === "object" && !keysOf(v).length);
+
+// Terms that hold a structure rather than a value. They render as a count ("4 clauses") and
+// cannot be edited from a text box without losing what the count was counting.
+const STRUCTURED_TERMS = new Set([
+  "parts_pricing_json", "kpi_clauses_json", "ppm_obligations_json", "task_criticality_json"
+]);
 
 // The register's status vocabulary → the four tags the Coverage tab shows.
 function certStatus(raw) {
@@ -335,11 +361,19 @@ export function shapeLiveVendors(input, now) {
         }).filter(Boolean);
         requires = parts.length ? parts.join(" · ") : "platform default hours per priority";
       }
+      // The badge describes the contract ON SCREEN. When a current parameter row exists, its own
+      // field_sources decide the label; the card's recorded `parameter_source` is consulted only
+      // when there is no row at all. Production, 17 Sep 2026: Gough and Kelly's SLA rows read
+      // "contract-sourced · UKRI-2938" while UKRI-2938 itself said `default` for every SLA
+      // field — the label came from a January 2024 card scored against a different, since-
+      // deleted contract (ae5ad29f-…). A 2024 provenance stitched onto 2026 default hours is
+      // true of a contract that is gone and false of the one the reader is looking at.
       const srcTag = c.sla
-        ? (fromContract ? "contract · " + (p.contract_ref || "terms on file")
+        ? (p
+          ? (fromContract ? "contract · " : "default · ") + (p.contract_ref || "terms on file")
           : /default/i.test(String(bd.parameter_source || "")) ? "platform default"
-          : bd.parameter_source ? "contract-sourced · " + (p ? (p.contract_ref || "terms on file") : "parameters not on record")
-          : (p ? "default · " + (p.contract_ref || "terms on file") : "platform default"))
+          : bd.parameter_source ? "contract-sourced · parameters not on record"
+          : "platform default")
         : "platform rule";
       return {
         k: c.k, label: c.label, w: w, basis: c.basis, unit: "%", ceiling: false, target: 100,
@@ -367,6 +401,15 @@ export function shapeLiveVendors(input, now) {
       const value = isEmptyValue(v) ? "—" : f.fmt(typeof v === "string" && f.fmt === hours ? Number(v) : v);
       return {
         label: f.label, value: value, src: src, clause: null, page: 0,
+        // The column this row would be written back to. The panel knows a row as "P1
+        // response"; the PATCH route knows it only as sla_response_p1_hours, and without
+        // the name here the editor cannot address the value it is showing.
+        field: f.key,
+        // Parts pricing, KPI clauses, PPM obligations and the criticality ladder are
+        // objects. A single-line box would flatten one into a string and destroy the
+        // structure the engine reads, so those rows stay read-only.
+        editable: !STRUCTURED_TERMS.has(f.key),
+        raw: isEmptyValue(v) ? null : v,
         srcLabel: src === "contract" ? (p.document_name ? "document" : "contract") : "default",
         note: src === "contract"
           ? f.label + " was read from " + (docName(p.document_name) || p.contract_ref || "the signed contract") + " — the extracted value is " + value + "."
@@ -377,11 +420,33 @@ export function shapeLiveVendors(input, now) {
     const fields = terms.length;
     if (p) { contractsN += 1; termsRead += read; termsDefault += fields - read; }
     const contract = {
+      // The parameter set's own id. Everything the panel can DO — confirm the set, patch a
+      // term — addresses this, and until it was carried here the panel could only describe
+      // the contract, never act on it.
+      id: p ? (p.id ? String(p.id) : null) : null,
       ref: p ? (p.contract_ref || null) : null,
       signed: p && p.signed_date ? fmtDay(p.signed_date) : "—",
       expires: null, pages: null, read: read, fields: fields,
+      // How many terms are platform defaults rather than anything the document said.
+      // Confirming turns every one of them into an agreed value, so the count is what the
+      // confirmation step has to be able to state out loud.
+      defaults: fields - read,
       doc: p ? (p.document_name ? docName(p.document_name) : null) : null,
       status: p ? (p.status || null) : null,
+      // Scoring runs against a confirmed set and refuses a draft; the panel disables its
+      // button on this rather than re-confirming something already in force.
+      confirmed: !!(p && lower(p.status) === "confirmed"),
+      // WHO made these numbers binding, and when. The service resolves the uuid to a name;
+      // when it cannot, the name stays empty rather than showing the uuid, which reads as
+      // data and answers nothing. The date is worth showing either way.
+      confirmedBy: (p && typeof p.confirmed_by_name === "string" && p.confirmed_by_name.trim())
+        ? p.confirmed_by_name.trim() : null,
+      confirmedOn: p && p.confirmed_at ? fmtDay(p.confirmed_at) : null,
+      // A contract that yielded NOTHING is a different event from one with a few gaps, and
+      // the table of `default` badges renders both identically. Moreland's ingest read 0 of
+      // 16 — correctly, because the document is a property management agreement and not a
+      // service contract — and it was confirmed on the strength of a screen that did not say so.
+      readNothing: !!(p && fields > 0 && read === 0),
       line: p
         ? (p.contract_ref || "Contract") + " · signed " + (p.signed_date ? fmtDay(p.signed_date) : "date not on record") +
           (p.status ? " · " + p.status : "") + " · " + read + " of " + fields + " terms read" + (p.document_name ? " from " + docName(p.document_name) : " from the contract document")

@@ -88,6 +88,10 @@ export function shapeLiveUser(u, bldNameById, now) {
     buildingCount: numOf(u.building_count) !== null ? u.building_count : (u.buildings || []).length,
     ingest: !!u.can_ingest,
     status: statusLabel(u.status),
+    // platform_role, as the API sends it. The audit trail's person picker groups admins
+    // from users and this is the only field that tells them apart; absent reads as the
+    // lesser of the two, because guessing upwards would show an ordinary account as an admin.
+    role: u.role === "admin" || u.role === "superadmin" ? u.role : "user",
     queries: numOf(usage.queries) !== null ? usage.queries : 0,
     ingests: numOf(usage.ingests) !== null ? usage.ingests : 0,
     last: lastActiveLabel(usage.last_active, now),

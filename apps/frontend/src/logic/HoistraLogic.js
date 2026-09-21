@@ -12,6 +12,7 @@ import { renderValsMethods } from './renderVals.js';
 import { complianceLiveMethods } from './complianceLive.js';
 import { homeLiveMethods } from './homeLive.js';
 import { vendorsLiveMethods } from './vendorsLive.js';
+import { vendorsWriteMethods } from './vendorsWrite.js';
 import { buildingsLiveMethods } from './buildingsLive.js';
 import { energyLiveMethods } from './energyLive.js';
 import { assetsLiveMethods } from './assetsLive.js';
@@ -107,6 +108,12 @@ export class HoistraLogic extends Controller {
     docQuery: "", docPage: 0,
     ugText: "", ugParsed: false,
     vpVendor: "v1", vpTab: 0,
+    // Contract terms panel, write side (logic/vendorsWrite.js). `vpConfirmArmed` is the
+    // confirmation step in front of Confirm — it exists so the count of platform defaults
+    // is read before those defaults become agreed values, not after. `vpEditField` is the
+    // one term open for editing, and `vpEditValue` its draft; only one row edits at a time
+    // because each save is its own PATCH.
+    vpConfirmArmed: false, vpEditField: "", vpEditValue: "",
     ccPivot: "buildings", ccTab: 0, ccFocus: { kind: "building", name: "Bishopsgate Tower" }, nyView: "building",
     ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform", "Email"],
     // Compliance register from svc-operations-intelligence (null = seed data shown).
@@ -158,6 +165,19 @@ export class HoistraLogic extends Controller {
     // Ingestion audit trail (logic/auditTrail.js) — every flagged ingestion, clarification,
     // override and approval. The ingestion validation agent (logic/ingestion.js) prepends to it.
     audit: AU_SEED.slice(), auFilter: "All", auOpen: null,
+    // The audit trail's filter bar. `auRange` opens on Today — the trail is read to answer
+    // "what happened today", and All is one click away. auTotal is the server's own count,
+    // filled by auLiveLoad; auNow exists so a test can pin the clock the ranges read.
+    auQuery: "", auBuilding: "", auPerson: "", auRange: "Today", auTotal: 0, auNow: null,
+    // The person picker: a standing scope (everyone / admins / users), one name when one is
+    // picked, and the popover's own open state and type-ahead.
+    auPeopleScope: "", auPeopleOpen: false, auPeopleQuery: "", auPersonId: "",
+    // The building picker, the same shape: the popover's open state and its type-ahead. The
+    // building in force is auBuilding above — this pair is only how it gets chosen.
+    auBldOpen: false, auBldQuery: "",
+    // The register's own tallies, filled by auLiveLoad — counting the fetched page instead
+    // would describe 200 rows beside a line that said 919.
+    auByOutcome: {}, auActors: [],
     // The live trail behind it (logic/auditLive.js): {count, by_outcome} of the last
     // successful read — the shaped rows themselves replace `audit` in place.
     auLiveRaw: null, auLiveLoading: false, auLiveError: "", auLiveLoadedAt: null,
@@ -237,4 +257,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, renderValsMethods);

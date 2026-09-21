@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -300,26 +301,24 @@ async def _claude_contract_extract(
 
 
 async def _default_org_for_vendor_create(session: AsyncSession) -> Any:
-    """The platform organization, in whatever type the column actually uses.
+    """There is no default. An ingest with no company registers no vendor.
 
-    Not compliance's resolve_default_org, deliberately. That one casts the row to UUID
-    because its caller assigns the result to a UUID column — but plenum_cafm.organizations.id
-    is an INTEGER, so the cast always throws and the function always returns None. Vendor
-    creation needs a truthy organization_id and writes it to vendors.organization_id, itself
-    a legacy INTEGER, so the value is used here exactly as the database stores it.
+    This used to run ``SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1`` and
+    hand back whichever tenant sorted first — on this database, always
+    00000000-…-000000000001. A contract that arrived without an organization therefore
+    registered its supplier inside an unrelated company's register, where that company's
+    staff could then see it. Guessing a tenant is a disclosure, not a fallback.
+
+    Every route that reaches here already resolves the caller's organization and passes it
+    (see api/routes/contract_performance.py), so this path is the exception rather than the
+    rule. When it is taken, the contract is still ingested — it simply keeps no vendor, and
+    ``_resolve_contract_vendor`` reports ``could_not_create`` so the reply says so.
     """
-    try:
-        from sqlalchemy import text as _sql
-
-        row = (
-            await session.execute(
-                _sql("SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1")
-            )
-        ).mappings().first()
-        return row["id"] if row else None
-    except Exception as exc:  # noqa: BLE001
-        log.warning("contract_performance.default_org_lookup_failed", error=str(exc)[:200])
-        return None
+    log.warning(
+        "contract_performance.vendor_create_without_organization",
+        detail="no organization on this ingest; refusing to register the supplier under a guess",
+    )
+    return None
 
 
 async def _resolve_contract_vendor(
@@ -348,9 +347,31 @@ async def _resolve_contract_vendor(
         return {"vendor_id": None, "vendor_name": None, "status": "not_named_in_contract"}
 
     try:
+        from ...shared.vendor_identity import find_vendor_id
         from ..compliance.contractors import resolve_or_create_vendor
 
         org = organization_id or await _default_org_for_vendor_create(session)
+
+        # Half the register carries legacy ids ("V-01"), which a uuid vendor_id column
+        # cannot hold. That is not "we could not create the vendor" — the vendor is right
+        # there — so it gets its own status, and the reply says what actually needs doing.
+        raw_match = await find_vendor_id(session, name, organization_id=org)
+        if raw_match is not None:
+            try:
+                UUID(str(raw_match))
+            except (TypeError, ValueError):
+                log.warning(
+                    "contract_performance.vendor_legacy_id_unlinkable",
+                    vendor_name=name[:80],
+                    legacy_vendor_id=str(raw_match)[:40],
+                )
+                return {
+                    "vendor_id": None,
+                    "vendor_name": name,
+                    "status": "legacy_id_unlinkable",
+                    "legacy_vendor_id": str(raw_match),
+                }
+
         existing = await resolve_or_create_vendor(
             session, company_name=name, organization_id=org, create_if_missing=False
         )
@@ -682,7 +703,11 @@ async def extract_and_verify_invoice(
         # here. It cannot invent one.
         from ...shared.vendor_identity import vendor_named_in
 
-        vendor_id = await vendor_named_in(session, source_text)
+        # Only this company's register may answer. An invoice matched against every
+        # tenant's vendor names attributes spend to a supplier the reader cannot see.
+        vendor_id = await vendor_named_in(
+            session, source_text, organization_id=organization_id
+        )
         if vendor_id:
             log.info("invoice.vendor_matched_from_document", vendor_id=str(vendor_id))
 

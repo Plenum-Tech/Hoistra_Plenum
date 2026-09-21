@@ -320,3 +320,188 @@ test('the scorecards list is the fallback when the summary did not answer', () =
   assert.equal(m.tiles.pending, null);
   assert.equal(m.V[A1].rows.find((r) => r.k === 'recall').w, 15);
 });
+
+// ── the SLA badge describes the contract on screen, not the one the card was scored against ──
+//
+// Production, 17 Sep 2026: Gough and Kelly's SLA rows carried "contract-sourced · UKRI-2938"
+// while the UKRI-2938 row itself said `default` for every SLA field. The badge was read from
+// the January 2024 scorecard's `parameter_source`, recorded when a DIFFERENT, since-deleted
+// contract (ae5ad29f-…) was confirmed. The card stitched a 2024 provenance onto 2026 default
+// hours — true of a contract that is gone, false of the one the reader is looking at.
+//
+// Rule: when a current contract row is on screen, the badge describes THAT row. The scorecard's
+// recorded source is a fallback for when there is no row at all (A1's case, pinned above).
+
+test('a current contract whose SLA terms are defaults is badged default, whatever an old card recorded', () => {
+  const R = full().V[GK];
+  const sla = R.rows.find((r) => r.k === 'sla_response');
+  assert.match(sla.srcTag, /^default · UKRI-2938/i, 'the row on screen says default; the badge must too');
+  assert.doesNotMatch(sla.srcTag, /contract-sourced/i, 'that label belonged to a contract that no longer exists');
+  assert.match(R.rows.find((r) => r.k === 'sla_completion').srcTag, /^default · UKRI-2938/i);
+});
+
+test('a current contract whose SLA terms were read from the document is badged as the contract', () => {
+  // The same fixture, with GK's response hours now read from the document. The card still says
+  // "Contract-sourced" from 2024 — irrelevant: the row on screen decides.
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => p.vendor_id !== GK ? p : Object.assign({}, p, {
+      field_sources: Object.assign({}, p.field_sources, {
+        sla_response_p1_hours: 'contract', sla_response_p2_hours: 'contract',
+        sla_response_p3_hours: 'contract', sla_response_p4_hours: 'contract'
+      })
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage, packs }, NOW).V[GK];
+  assert.match(R.rows.find((r) => r.k === 'sla_response').srcTag, /^contract · UKRI-2938/i);
+  assert.match(R.rows.find((r) => r.k === 'sla_completion').srcTag, /^default · UKRI-2938/i,
+    'each SLA family is judged on its own fields');
+});
+
+// ── what the Contract terms panel needs in order to write, not just read ──────────────
+// The panel gained a Confirm button and per-term editing. Both address the parameter SET by
+// id and a term by its COLUMN NAME, neither of which the view model used to carry: the
+// panel knew a row was called "P1 response" and had no idea it was sla_response_p1_hours.
+
+test('the contract carries the id the confirm and patch routes address', () => {
+  const R = shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.id, 'd723efa2',
+    'without this the panel can only describe the contract, never act on it');
+});
+
+test('a vendor with no contract has no id to act on, and says so rather than sending null', () => {
+  const R = shapeLiveVendors({ summary, contracts: { ok: true, count: 0, parameters: [] },
+    weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[A1];
+  assert.equal(R.contract.id, null);
+});
+
+test('every term names the column it would be patched into', () => {
+  const R = shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.terms.find((t) => t.label === 'P1 response').field, 'sla_response_p1_hours');
+  assert.equal(R.terms.find((t) => t.label === 'Labour rate — day').field, 'labour_day_rate');
+  assert.equal(R.terms.find((t) => t.label === 'Payment terms').field, 'payment_terms');
+  assert.ok(R.terms.every((t) => typeof t.field === 'string' && t.field.length),
+    'a row with no field is a row the editor cannot save');
+});
+
+test('structured terms are marked not editable, scalar ones are', () => {
+  const R = shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  // KPI clauses, PPM obligations, parts pricing and the criticality ladder are objects.
+  // A single-line box would flatten them, so the panel must not offer one.
+  assert.equal(R.terms.find((t) => t.label === 'KPI clauses').editable, false);
+  assert.equal(R.terms.find((t) => t.label === 'PPM obligations').editable, false);
+  assert.equal(R.terms.find((t) => t.label === 'Task criticality').editable, false);
+  assert.equal(R.terms.find((t) => t.label === 'P1 response').editable, true);
+  assert.equal(R.terms.find((t) => t.label === 'Labour rate — day').editable, true);
+});
+
+test('the contract counts its platform defaults, because that is what confirming makes binding', () => {
+  const R = shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  // 17 terms, 5 read from the document — so 12 are platform defaults, and confirming turns
+  // all 12 into agreed values. The confirmation step has to be able to say the number.
+  assert.equal(R.contract.defaults, 12);
+  assert.equal(R.contract.defaults, R.contract.fields - R.contract.read);
+});
+
+test('a confirmed contract is marked confirmed so the panel can refuse to re-confirm it', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, { status: 'confirmed' }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.confirmed, true);
+  assert.equal(R.contract.status, 'confirmed');
+});
+
+// ── (1) who confirmed, (2) a contract that read nothing, (3) counting a clause ──────────
+
+test('a confirmed contract carries the person and the date, not just the flag', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      status: 'confirmed',
+      confirmed_by: '00000000-0000-0000-0001-000000000017',
+      confirmed_by_name: 'Aasim Shaik',
+      confirmed_at: '2026-09-18T07:01:51+00:00'
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.confirmedBy, 'Aasim Shaik',
+    'CONFIRMED with nobody attached is not a record of a decision');
+  assert.equal(R.contract.confirmedOn, '18 Sep 2026');
+});
+
+test('an unresolvable confirmer leaves the name empty rather than showing a uuid', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      status: 'confirmed', confirmed_by: '00000000-0000-0000-0001-000000000017',
+      confirmed_by_name: null, confirmed_at: '2026-09-18T07:01:51+00:00'
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.confirmedBy, null, 'a uuid on screen reads as data and answers nothing');
+  assert.equal(R.contract.confirmedOn, '18 Sep 2026', 'the date is still worth showing');
+});
+
+test('a contract that read nothing at all is flagged as such, not shown as a table of defaults', () => {
+  // Moreland: a property management agreement ingested as a service contract. Every term
+  // defaulted, and the panel presented it identically to a contract with a few gaps.
+  const empty = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      field_sources: Object.keys(p.field_sources || {}).reduce((a, k) => { a[k] = 'default'; return a; }, {})
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: empty, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.read, 0);
+  assert.equal(R.contract.readNothing, true);
+});
+
+test('a contract with a few gaps is not flagged as having read nothing', () => {
+  const R = shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.contract.read, 5);
+  assert.equal(R.contract.readNothing, false);
+});
+
+test('a clause count counts clauses, not the sentence saying there are none', () => {
+  // WKU's stored value, verbatim: two keys, both prose about KPIs being "monitored", and the
+  // note itself says no targets are stated. "2 clauses · document" claimed the contract
+  // supplied KPI terms when it supplied an aspiration.
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      kpi_clauses_json: {
+        note: 'No specific KPI targets or metrics are stated in the contract.',
+        description: "Key Performance Indicators (KPI's) are monitored to ensure that the delivery of maintenance services meets desired standards."
+      }
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.terms.find((t) => t.label === 'KPI clauses').value, 'mentioned, no targets');
+});
+
+test('the heuristic extractor’s placeholder is not counted as clauses either', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      kpi_clauses_json: { detected: true, raw_snippet: 'KPI/penalty language present — PM to confirm' }
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.terms.find((t) => t.label === 'KPI clauses').value, 'mentioned, no targets');
+});
+
+test('real clauses are still counted as clauses', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      kpi_clauses_json: { first_fix: '85% minimum', service_credit: '2% per breach', note: 'from schedule 4' }
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.terms.find((t) => t.label === 'KPI clauses').value, '2 clauses',
+    'the note beside two real clauses is not a third clause');
+});
+
+test('PPM obligations that are only a mention do not read as "stated"', () => {
+  const patched = Object.assign({}, contracts, {
+    parameters: contracts.parameters.map((p) => Object.assign({}, p, {
+      ppm_obligations_json: { detected: true, note: 'PPM obligations mentioned — PM to confirm schedule' }
+    }))
+  });
+  const R = shapeLiveVendors({ summary, contracts: patched, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage }, NOW).V[GK];
+  assert.equal(R.terms.find((t) => t.label === 'PPM obligations').value, 'mentioned, no detail');
+});

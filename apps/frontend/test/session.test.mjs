@@ -14,6 +14,7 @@ globalThis.window = {
 };
 
 const { loadSession, loadSharedSession, saveSession, SESSION_KEY } = await import('../src/logic/session.js');
+const { getActingOrg, setActingOrg } = await import('../src/api/client.js');
 
 const ACCOUNT = { id: 'u-1', email: 'sam@example.com', full_name: 'Sam Okafor', organization_id: 'org-1', organization_name: 'TechCorp Facilities LLC', status: 'active', email_verified: true, role: 'user', role_label: 'Facilities manager', last_login_at: null };
 const OTHER_ACCOUNT = { id: 'u-2', email: 'plenum-admin@plenum-tech.com', full_name: 'P Admin', organization_id: 'org-2', organization_name: 'Plenum Tech LLC', status: 'active', email_verified: true, role: 'admin', role_label: 'Admin', last_login_at: null };
@@ -151,6 +152,38 @@ test('a restored viewOrgId survives a reload for a superadmin account', () => {
   const s = loadSession();
   assert.equal(s.viewOrgId, 'org-plenum');
   assert.equal(s.viewOrgName, 'Plenum Tech LLC');
+});
+
+test('a restored view-as also scopes the API, not just the header label', () => {
+  // Reported from the Azure deployment on 17 Sep 2026: the top bar read "Plenum Tech LLC"
+  // while the chat answered out of TechCorp's register — a contract (UKRI-2938) belonging
+  // to the account's OWN company, not the one named on screen.
+  //
+  // Two halves have to move together. `viewOrgId`/`viewOrgName` are what the top bar reads;
+  // client.js's `actingOrgId` is what actually puts `organization_id` on a request, and it
+  // is the only thing workflow.py's _resolve_acting_org ever sees. The reload restored the
+  // first and not the second, so the label said one company and every answer came from the
+  // other. The bug this file already records was the same split the other way round — the
+  // label was dropped and the scope was right. Fixing one half and not the other left them
+  // disagreeing, which is worse than both being wrong together: nothing on screen is
+  // untrue-looking, so nobody checks.
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: SUPER, view: 'home', role: 'admin', viewOrgId: 'org-plenum', viewOrgName: 'Plenum Tech LLC' });
+  loadSession();
+  assert.equal(getActingOrg(), 'org-plenum', 'the header says Plenum Tech; every API call must too');
+});
+
+test('no stored view-as leaves the API scoped to the account itself', () => {
+  setActingOrg('org-stale');
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: SUPER, view: 'home', role: 'admin' });
+  loadSession();
+  assert.equal(getActingOrg(), null, 'a slice with no view-as must clear a stale override, not inherit it');
+});
+
+test('a plain admin\'s hand-edited view-as never reaches the API either', () => {
+  setActingOrg(null);
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: ACCOUNT, view: 'home', role: 'admin', viewOrgId: 'org-plenum', viewOrgName: 'Plenum Tech LLC' });
+  loadSession();
+  assert.equal(getActingOrg(), null, 'view-as is superadmin-only at the API boundary as well as in state');
 });
 
 test('viewOrgId does NOT restore for a plain admin, even if the stored slice claims it', () => {

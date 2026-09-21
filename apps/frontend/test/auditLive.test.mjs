@@ -246,19 +246,25 @@ test('auLiveLoad replaces the seed in place, newest first, and sends no organiza
   assert.equal(c.state.auLiveError, '');
   assert.ok(c.state.auLiveLoadedAt);
   assert.equal(c.state.auLiveRaw.count, 3);
-  // The untouched auditVals machinery over live rows: count, fold, and the 8-field record.
-  c.setState({ signedIn: true, view: 'audit' });
+  // The auditVals machinery over live rows: count, fold, and the 8-field record. The range
+  // is opened to All deliberately — auRows now answers to the filter bar, and this fixture's
+  // rows are dated 12 Sep, so the page's own Today default would (correctly) hide them. What
+  // is under test here is the status fold, not the range.
+  c.setState({ signedIn: true, view: 'audit', auRange: 'All' });
   const v = c.auditVals(c.state);
   assert.equal(v.auCount, '3');
   assert.equal(v.auLiveSourceLabel, 'Live · svc-operations-intelligence');
   assert.equal(v.auLiveRetryShow, 'none');
   assert.equal(v.auRows.length, 3);
+  // The chip is a SERVER filter now (auditQuery.test.mjs pins what goes on the wire), so on
+  // live rows it no longer folds here: the register has already answered this question and a
+  // second pass could only ever hide rows it deliberately sent. The client fold still exists
+  // and still folds approved_on_confirmation — it is what serves the sample trail before any
+  // read answers, and test/auditTrail.test.mjs covers it there.
   c.setState({ auFilter: 'Accepted' });
-  const folded = c.auditVals(c.state).auRows.map((r) => r.id);
-  assert.deepEqual(folded, ['e-13', 'e-12'], 'the Accepted chip folds approved_on_confirmation in client-side');
-  c.setState({ auFilter: 'Rejected' });
-  assert.deepEqual(c.auditVals(c.state).auRows.map((r) => r.id), ['e-11']);
-  const rejected = c.auditVals(c.state).auRows[0];
+  assert.deepEqual(c.auditVals(c.state).auRows.map((r) => r.id), ['e-13', 'e-12', 'e-11'],
+    'live rows are rendered as the register sent them');
+  const rejected = c.auditVals(c.state).auRows.find((r) => r.outcome === 'Rejected');
   assert.equal(rejected.fields.length, 8, 'the 8-field expanded record is intact on live rows');
   assert.equal(rejected.route, 'Riverside Court', 'a rejected row routes to nowhere');
   clearTimeout(c._auLiveRetry);

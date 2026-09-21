@@ -114,6 +114,9 @@ class TestB1OverlappingContracts:
             overrides_log=[],
             field_sources={},
             confirmed_at=confirmed_at or datetime.now(timezone.utc),
+            # params_to_dict now returns WHO confirmed as well as when — a screen that
+            # shows CONFIRMED and cannot say by whom is not a record of a decision.
+            confirmed_by=None,
         )
 
     def test_params_to_dict_includes_signed_date(self):

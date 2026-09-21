@@ -149,17 +149,23 @@ async def default_org_native(session: AsyncSession) -> Any:
     the value exactly as stored. Keeping the two lookups separate is the point: one feeds a
     UUID column, the other feeds an integer one, and forcing either to serve both is what
     broke this.
+
+    UPDATE, 17 Sep 2026: none of the above is true of this database — organizations.id is
+    uuid, as is vendors.organization_id — and the "platform organization" this returned was
+    simply whichever tenant sorted first. A certificate arriving without an organization
+    therefore registered its supplier inside an unrelated company, where that company's
+    staff could see it and where it counted towards their coverage. Seven certificates in
+    the live database are attached to another tenant's vendor; this is one of the two ways
+    that happened.
+
+    There is no default. The certificate still lands — it simply keeps no vendor until
+    someone attaches one, which is the honest state.
     """
-    try:
-        row = (
-            await session.execute(
-                text("SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1")
-            )
-        ).mappings().first()
-        return row["id"] if row else None
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cert.default_org_native_failed", error=str(exc)[:200])
-        return None
+    log.warning(
+        "cert.vendor_create_without_organization",
+        detail="no organization on this certificate; refusing to register its vendor under a guess",
+    )
+    return None
 
 
 async def resolve_default_org(session: AsyncSession) -> UUID | None:
@@ -1442,10 +1448,9 @@ async def upsert_certificate(
                 company = m.group(1).strip()
             elif re.search(r"pest[\s_-]?guard", src, re.I):
                 company = "PestGuard"
-        # org_id is the UUID the certificate row stores, and is None whenever the
-        # organizations table keys on integers — which it does. Vendor creation needs the
-        # org as the vendors table stores it, so it gets its own lookup rather than
-        # inheriting a value shaped for a different column.
+        # The certificate's own company scopes both the match and the create. When the
+        # certificate carries none, default_org_native no longer guesses one — it returns
+        # None, and the certificate keeps no vendor rather than borrowing another tenant's.
         vendor_org = org_id if org_id is not None else await default_org_native(session)
         resolved = await resolve_or_create_vendor(
             session,
@@ -2609,14 +2614,12 @@ async def _link_document_to_entities(
         or f"{cert.certificate_type_code or 'certificate'}.pdf"
     )[:255]
     doc_url = f"/backend/deep-agents/api/documents/{cert.document_id}/download"
-    try:
-        org_val: int | None = (
-            int(cert.organization_id or cert.org_id)
-            if (cert.organization_id or cert.org_id)
-            else None
-        )
-    except (TypeError, ValueError):
-        org_val = None
+    # The company id goes into files.organization_id exactly as the certificate carries it.
+    # This used to read int(cert.organization_id or cert.org_id) — int() on a uuid always
+    # throws, the except swallowed it, and every file row a certificate created was written
+    # with no organization at all, visible to whichever query forgot to filter.
+    org_val = cert.organization_id or cert.org_id
+    org_val = str(org_val) if org_val else None
 
     def _as_uuid(v: Any) -> str | None:
         try:
@@ -3052,7 +3055,11 @@ async def create_vendor_for_certificate(
     # Reuse an existing vendor of the same name; else insert a new stub row.
     # Same identity rule the contract path uses, so "Gough & Kelly Limited" on a certificate
     # and "Gough and Kelly Ltd." on a contract resolve to one vendor rather than two.
-    _matched_id = await find_vendor_id(session, name)
+    # Scoped to this certificate's own company. Without it, a certificate for one tenant
+    # attached itself to another tenant's supplier of the same name — seven live rows did.
+    _matched_id = await find_vendor_id(
+        session, name, organization_id=(cert.organization_id or cert.org_id)
+    )
     existing = {"id": _matched_id} if _matched_id else None
     # Merge form/profile fields into a whitelist-guarded column set (trade_category → trade).
     prof = dict(profile or {})
@@ -3081,14 +3088,11 @@ async def create_vendor_for_certificate(
                 pass
     else:
         vendor_id = str(uuid4())
-        try:
-            org_val: int | None = (
-                int(cert.organization_id or cert.org_id)
-                if (cert.organization_id or cert.org_id)
-                else None
-            )
-        except (TypeError, ValueError):
-            org_val = None
+        # Same cast, same lie about a "legacy INTEGER org column": int() on a uuid throws,
+        # the except turned that into None, and this INSERT then created a vendor belonging
+        # to no company — a row every tenant's unfiltered query can see.
+        org_val = cert.organization_id or cert.org_id
+        org_val = str(org_val) if org_val else None
         binds: dict[str, Any] = {"id": vendor_id, "org": org_val, "name": name[:255]}
         col_sql = ["id", "organization_id", "vendor_name", "status", "created_at"]
         val_sql = [":id", ":org", ":name", "'active'", "now()"]

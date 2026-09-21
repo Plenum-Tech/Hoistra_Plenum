@@ -12,6 +12,8 @@
 import { BASES, currentOrgId, apiFetch } from './client.js';
 
 const B = BASES.opsIntelligence;
+// Writes wait longer than reads: confirming and patching both commit and audit in one call.
+const T_WRITE = 30000;
 // currentOrgId() is ORG_ID (the build's default tenant) unless a superadmin is viewing
 // as another company, in which case that company's id takes over for every read here.
 const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
@@ -38,6 +40,23 @@ export const opsApi = {
   // One contract parameter set by id — scorecards name the set they were scored against.
   contract: (parametersId) =>
     apiFetch(B, '/api/contract-performance/contracts/' + encodeURIComponent(parametersId)),
+
+  // ── The two writes on this router ──────────────────────────────────────
+  // A draft parameter set is what an ingest produces; scoring refuses to run against one.
+  // Confirming is the act that turns extracted numbers into agreed ones, so it is deliberate
+  // and it is audited — `confirmed_by` names the person when the session has a uuid for them.
+  //
+  // Correct before you confirm, not after: a confirmed set is already being scored against.
+  // `updates` carries ONLY the fields that changed, because the route writes what it is given
+  // and a whole-row body would silently restate every value the reader never looked at.
+  confirmContract: (parametersId, body) =>
+    apiFetch(B, '/api/contract-performance/contracts/' + encodeURIComponent(parametersId) + '/confirm', {
+      method: 'POST', body: body || {}, timeoutMs: T_WRITE
+    }),
+  updateContract: (parametersId, updates, actor) =>
+    apiFetch(B, '/api/contract-performance/contracts/' + encodeURIComponent(parametersId), {
+      method: 'PATCH', body: { updates: updates, actor: actor || null }, timeoutMs: T_WRITE
+    }),
   // The scoring weights in force (SLA response / completion / first fix / recall /
   // accreditation percentages, the blocked-score cap, the invoice adversary threshold).
   weights: () =>

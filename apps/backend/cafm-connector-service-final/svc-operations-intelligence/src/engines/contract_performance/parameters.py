@@ -196,6 +196,12 @@ def params_to_dict(row: ContractSlaParameters) -> dict[str, Any]:
         "overrides_log": row.overrides_log or [],
         "field_sources": row.field_sources or {},
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        # WHO confirmed, not only when. Confirming turns extracted readings into the numbers
+        # every later judgement is enforced with — SLA breaches, service credits, whether an
+        # invoice line is overcharged. ops_audit_log has recorded the actor since the route
+        # was written; this dict dropped it, so a reader saw "CONFIRMED" with no way to learn
+        # whose decision it was. list_contract_parameters resolves it to a name.
+        "confirmed_by": str(row.confirmed_by) if row.confirmed_by else None,
     }
 
 
@@ -657,6 +663,31 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001 — names are a convenience, never fail the list
             for d in out:
                 d.setdefault("vendor_name", None)
+
+    # The same treatment for whoever confirmed each set. A uuid is not an answer to "who
+    # decided these numbers are binding?", and this is the only place the reader can be told.
+    # One query for the page, and only when something on it is actually confirmed.
+    for d in out:
+        d.setdefault("confirmed_by_name", None)
+    confirmer_ids = sorted({str(d.get("confirmed_by")) for d in out if d.get("confirmed_by")})
+    if confirmer_ids:
+        try:
+            from sqlalchemy import text as _text
+
+            res = await session.execute(
+                _text(
+                    "SELECT id::text AS id, full_name, email FROM plenum_cafm.users "
+                    "WHERE id::text = ANY(:ids)"
+                ),
+                {"ids": confirmer_ids},
+            )
+            # A person's name if the row carries one, otherwise the address they sign in with.
+            # Falling back to the uuid would be worse than saying nothing: it reads as data.
+            who = {r.id: ((r.full_name or "").strip() or (r.email or "").strip() or None) for r in res}
+            for d in out:
+                d["confirmed_by_name"] = who.get(str(d.get("confirmed_by") or ""))
+        except Exception:  # noqa: BLE001 — a missing name never costs the reader the list
+            pass
     # Source document filename, so the UI can show WHICH file these parameters
     # were extracted from (contract_documents is the B1 one-to-many mapping).
     doc_ids = sorted({str(d.get("document_id")) for d in out if d.get("document_id")})

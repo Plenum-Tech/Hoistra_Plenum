@@ -121,6 +121,9 @@ export function shapeLiveAudit(entry, blds, now) {
     live: true,
     id: String(e.id || ""),
     when: whenLabel(e.occurred_at, now),
+    // The raw instant, kept alongside the label: the trail groups by day and filters by
+    // range, and neither can be read back out of "Mon 16:20".
+    at: e.occurred_at || null,
     who: e.actor_name || e.actor_email || "—",
     role: e.actor_role === "admin" || e.actor_role === "superadmin" ? "Admin" : "User",
     building: building,
@@ -141,7 +144,41 @@ export function shapeLiveAudit(entry, blds, now) {
 }
 
 // ── controller methods ──────────────────────────────────────────────────
+//: What the page is asking the register for, as query parameters. Two things are
+//: deliberately absent. `organization_id` is never sent: the company comes from the token,
+//: and the one place that parameter IS honoured is admin_scope's superadmin act-as override
+//: — a plain read carrying one would be asking to read as somebody else. And "All", on the
+//: chip or the range, is the ABSENCE of a filter rather than a value: sent as a token it
+//: would match no outcome at all and empty the page.
+export function auditQuery(s) {
+  const q = { limit: 200 };
+  const chip = s.auFilter || "All";
+  if (chip !== "All") q.outcome = chip === "Accepted" ? "accepted" : chip.toLowerCase();
+  const text = String(s.auQuery || "").trim();
+  if (text) q.q = text;
+  if (s.auBuilding) q.building_id = s.auBuilding;
+  if (s.auPersonId) q.actor_user_id = s.auPersonId;
+  else if (s.auPeopleScope === "admins") q.actor_role = "admin";
+  else if (s.auPeopleScope === "users") q.actor_role = "user";
+  const days = { "Today": 0, "7 days": 6, "14 days": 13 }[s.auRange || "Today"];
+  if (days !== undefined) {
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - days);
+    q.since = from.toISOString();
+  }
+  return q;
+}
+
 export const auditLiveMethods = {
+  // A filter change is a new question for the register, not a narrowing of the page already
+  // in hand — the page holds at most 200 of however many thousand there are, and narrowing
+  // it would answer about the slice while the counts beside it described the whole.
+  async auApplyFilter(patch) {
+    this.setState(Object.assign({ auOpen: null }, patch || {}));
+    await this.auLiveLoad();
+  },
+
   async auLiveLoad(opts) {
     // A refresh asked for mid-flight must queue, not drop: a decision's trail refresh can
     // race the mount read, whose response — fetched before the decision — then replaces
@@ -152,7 +189,7 @@ export const auditLiveMethods = {
     clearTimeout(this._auLiveRetry);
     this.setState({ auLiveLoading: true });
     try {
-      const res = await adminApi.ingestionAudit({ limit: 200 });
+      const res = await adminApi.ingestionAudit(auditQuery(this.state));
       // apiFetch returns null for an empty 200 — that is a malformed answer, not an empty
       // trail (an empty trail is {ok, count: 0, entries: []}), so it must not eat the seed.
       const entries = res && Array.isArray(res.entries) ? res.entries.slice() : null;
@@ -164,6 +201,13 @@ export const auditLiveMethods = {
       this._auLiveAttempts = 0;
       this.setState({
         audit: entries.map((e) => shapeLiveAudit(e, names, now)),
+        // What the server holds, not what this page fetched: the trail reads "N of M
+        // entries", and M is the whole register behind the 100-row page.
+        auTotal: (res && res.count) || entries.length,
+        // The register's own tallies, kept rather than recomputed. Counting the fetched page
+        // would describe 200 rows while the line beside it said 919.
+        auByOutcome: (res && res.by_outcome) || {},
+        auActors: (res && Array.isArray(res.actors)) ? res.actors : [],
         auLiveRaw: { count: res.count, by_outcome: res.by_outcome || {} },
         auLiveLoading: false, auLiveError: "", auLiveLoadedAt: now.toISOString()
       });

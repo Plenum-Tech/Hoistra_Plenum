@@ -8,10 +8,44 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...shared.vendor_identity import find_vendor_id
+from ...shared.vendor_identity import _org_clause, find_vendor_id
 from ...core.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _as_linkable_uuid(vendor_id: Any, *, name: str) -> UUID | None:
+    """The matched vendor's id, if a uuid column can actually hold it.
+
+    ``plenum_cafm.vendors.id`` is character varying, and 1,025 of the 2,073 rows carry
+    legacy ids — "V-01", "VEN-CLIMATE-001". Every column that points at a vendor
+    (compliance_certificates.vendor_id, contract_sla_parameters.vendor_id) is uuid, and
+    there is no foreign key between them, so nothing has ever forced the two into
+    agreement.
+
+    This used to be a bare ``UUID(str(matched))`` inside the function's blanket
+    ``except Exception``. A contract naming "Apex Lifts" therefore FOUND Apex Lifts, threw
+    the answer away as if the lookup had failed, and saved with no vendor — reported to the
+    reader as "Ingestion complete". The distinction matters because the two cases need
+    different fixes: a genuine lookup failure is a bug here, an unlinkable legacy id is a
+    schema migration that only a DBA can run.
+
+    Returns None either way — a legacy id genuinely cannot go in a uuid column — but says
+    which one happened, under its own event name.
+    """
+    try:
+        return UUID(str(vendor_id))
+    except (TypeError, ValueError):
+        log.warning(
+            "contractors.vendor_legacy_id_unlinkable",
+            vendor_id=str(vendor_id)[:40],
+            name=name[:80],
+            detail=(
+                "vendor exists but its id is not a uuid, and every column that links to a "
+                "vendor is; the row needs migrating before it can be attached"
+            ),
+        )
+        return None
 
 #: None until probed. vendor_contacts.is_primary is present in one deployment and absent in
 #: the other, and the two databases disagree on more than this one column.
@@ -186,39 +220,41 @@ async def resolve_or_create_vendor(
     name = re.sub(r"\s+", " ", name)
     try:
         # Exact, then normalised ("Gough & Kelly Limited" is "Gough and Kelly Ltd."), both
-        # ordered so a name that matches several rows always returns the same one.
-        matched = await find_vendor_id(session, name)
-        if matched:
-            return UUID(str(matched))
+        # ordered so a name that matches several rows always returns the same one, and both
+        # scoped to the caller's own company — the register holds every tenant's suppliers.
+        matched = await find_vendor_id(session, name, organization_id=organization_id)
+        if matched is not None:
+            return _as_linkable_uuid(matched, name=name)
+        like_binds = {"like": f"%{name[:40]}%"}
+        like_org = _org_clause(organization_id, like_binds)
         async with session.begin_nested():
             row = (
                 await session.execute(
                     text(
-                        """
+                        f"""
                         SELECT id FROM plenum_cafm.vendors
                         WHERE vendor_name ILIKE :like
+                          {like_org}
                         ORDER BY created_at NULLS LAST, id
                         LIMIT 1
                         """
                     ),
-                    {"like": f"%{name[:40]}%"},
+                    like_binds,
                 )
             ).mappings().first()
             if row:
-                return UUID(str(row["id"]))
+                return _as_linkable_uuid(row["id"], name=name)
             if not create_if_missing or not organization_id:
                 return None
             new_id = uuid4()
-            # organization_id is a legacy INTEGER column; a UUID/str org that doesn't fit
-            # becomes NULL (the column is nullable) so the insert never fails on a type
-            # mismatch. Combined with dropping the non-existent updated_at column above,
-            # this makes vendor auto-create robust on the legacy vendors schema.
-            try:
-                org_val: int | None = (
-                    int(organization_id) if organization_id is not None else None
-                )
-            except (TypeError, ValueError):
-                org_val = None
+            # vendors.organization_id is a uuid column — as is every one of the 120
+            # organization_id columns in plenum_cafm, and organizations.id itself. There is no
+            # legacy integer column here and never was on this database. A comment claiming
+            # otherwise had this line cast the company id to an int before the INSERT:
+            # int(UUID('00000000-…-000000000001')) is 1, which a uuid column rejects every
+            # time. The failure was swallowed below into a warning and a None, so contracts
+            # were written with no vendor and certificates went unlinked for three weeks
+            # while every upload reported "complete". The id goes through as itself.
             await session.execute(
                 text(
                     """
@@ -228,7 +264,7 @@ async def resolve_or_create_vendor(
                       (:id, :org, :name, 'active', now())
                     """
                 ),
-                {"id": str(new_id), "org": org_val, "name": name[:255]},
+                {"id": str(new_id), "org": str(organization_id), "name": name[:255]},
             )
             # Best-effort block_state column (added in Phase 2 migration)
             try:

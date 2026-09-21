@@ -1118,8 +1118,18 @@ export const complianceLiveMethods = {
       }
       // A dead upstream reaches here either as a gateway 5xx or as a raw connect error,
       // depending on whether the gateway or the browser gave up first.
-      const unreachable = (e && (e.status === 502 || e.status === 503 || e.status === 504)) ||
-        /ECONNREFUSED|ENOTFOUND|network|failed to fetch|timed out/i.test(msg);
+      //
+      // A TIMEOUT IS NOT THAT, and used to be counted as one. On 17 Sep 2026 an ingest ran
+      // past the browser's 180s budget while the service was up and answering — the header
+      // beside the transcript read "Connected · 172 tools" — and the reader was told to
+      // start a running service and check its LLM key. The two need different advice: a
+      // dead upstream did nothing, whereas a timeout may still be finishing on the server,
+      // which makes "upload it again" the one genuinely harmful next step.
+      const timedOut = /timed out/i.test(msg);
+      const unreachable = !timedOut && (
+        (e && (e.status === 502 || e.status === 503 || e.status === 504)) ||
+        /ECONNREFUSED|ENOTFOUND|network|failed to fetch/i.test(msg)
+      );
       this.setState((p) => ({
         ccBusy: false,
         ccChat: (p.ccChat || []).concat([{
@@ -1128,7 +1138,9 @@ export const complianceLiveMethods = {
           text: "Could not answer: " + msg +
             (unreachable
               ? " — svc-deepagents is not reachable at /backend/deep-agents. Start that service and give it an LLM key; the compliance register is unaffected."
-              : "")
+              : timedOut
+                ? " — the service was reached but did not answer in time, and the run may still be completing on the server. Document ingests call document search and contract extraction in turn, so a long contract can outlast this wait. Check the Ingestion audit trail before sending the same file again."
+                : "")
         }])
       }));
     } finally {

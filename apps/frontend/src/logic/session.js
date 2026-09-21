@@ -26,6 +26,8 @@
 // tab was used. sessionStorage is private to this one tab and survives its reloads, so it
 // is checked first and is authoritative once it holds anything; localStorage is now only
 // the fallback a genuinely fresh tab (empty sessionStorage) inherits.
+import { getActingOrg, setActingOrg } from '../api/client.js';
+
 export const SESSION_KEY = 'hoistra.session.v1';
 const KEY = SESSION_KEY;
 
@@ -115,6 +117,19 @@ function readSlice(storage) {
     out.viewOrgId = d.viewOrgId;
     if (isStr(d.viewOrgName)) out.viewOrgName = d.viewOrgName;
   }
+  // The OTHER half of that restore, and the half that was missing. viewOrgId is only what
+  // the top bar reads; client.js's actingOrgId is what actually puts organization_id on a
+  // request, and it is the only thing svc-deepagents' _resolve_acting_org ever sees.
+  // Restoring the label alone produced the Azure report of 17 Sep 2026: the bar read
+  // "Plenum Tech LLC" while the chat answered out of TechCorp's register — the account's
+  // OWN company. Two halves of one fact disagreeing is worse than both being wrong: the
+  // screen looks right, so nobody checks it. Set unconditionally, so a slice with no
+  // view-as also CLEARS an override left over from before the reload.
+  // Only when it actually differs. setActingOrg bumps client.js's orgEpoch, which is how a
+  // request already in flight learns the company changed under it and discards its answer —
+  // so calling it on a restore that changes nothing aborts a token refresh that was already
+  // in the air. (Caught by auth.test.mjs's two refresh tests, which is what they are for.)
+  if ((getActingOrg() || null) !== (out.viewOrgId || null)) setActingOrg(out.viewOrgId || null);
 
   if (typeof d.view === 'string' && VIEWS.indexOf(d.view) > -1) {
     // A view that needs a companion value is only restored with it.

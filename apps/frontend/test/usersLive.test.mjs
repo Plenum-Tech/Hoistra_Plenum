@@ -31,7 +31,7 @@ test('an active server row shapes to exactly the seed shape, under the SERVER id
   assert.deepEqual(u, {
     id: U1, name: 'Amara Osei', email: 'amara@plenum.co', title: 'Facilities lead',
     buildings: ['Riverside Court', 'Bishopsgate Tower'], allB: false, buildingCount: 2,
-    ingest: true, status: 'Active',
+    ingest: true, status: 'Active', role: 'user',
     queries: 214, ingests: 38, last: '12 min ago', live: true
   });
 });
@@ -439,4 +439,13 @@ test('your own row offers neither the status pill click nor the trash icon', asy
   row.stClick(null);
   assert.equal(c.state.usArmed, null, 'clicking your own status pill never arms it');
   assert.match(c.state.toast, /cannot change your own status/);
+});
+
+test('a shaped user carries the role the API sent', () => {
+  // The audit trail's person picker groups admins from users, and the role is the only
+  // thing that tells them apart. platform_role arrives as `role` and was being dropped here.
+  assert.equal(shapeLiveUser({ id: 'u-1', full_name: 'Marcus Hale', role: 'admin' }, {}).role, 'admin');
+  assert.equal(shapeLiveUser({ id: 'u-2', full_name: 'Clara Novak', role: 'user' }, {}).role, 'user');
+  assert.equal(shapeLiveUser({ id: 'u-3', full_name: 'No Role' }, {}).role, 'user',
+    'an absent role reads as the lesser of the two, never as an admin');
 });

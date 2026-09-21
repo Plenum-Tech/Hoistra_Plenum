@@ -371,9 +371,25 @@ export default function Vendors({ vals }) {
                           <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {t.label}
                           </span>
-                          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", whiteSpace: "nowrap", color: t.valFg }}>
-                            {t.value}
-                          </span>
+                          {t.editing ? (
+                            <span style={{ display: "inline-flex", gap: "6px", alignItems: "center" }}>
+                              <input value={t.draft} autoFocus onChange={(e) => t.setDraft(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") t.saveEdit(); if (e.key === "Escape") t.cancelEdit(); }}
+                                style={{ width: "112px", fontFamily: "ui-monospace,monospace", fontSize: "11.5px", padding: "3px 6px", borderRadius: "5px", border: "1px solid var(--color-accent)", background: "var(--color-bg)", color: "var(--color-text)" }} />
+                              <button onClick={t.saveEdit} style={{ fontSize: "10px", padding: "3px 8px", borderRadius: "5px", border: "none", background: "var(--color-accent)", color: "#fff", cursor: "pointer" }}>
+                                {"Save"}
+                              </button>
+                              <button onClick={t.cancelEdit} style={{ fontSize: "10px", padding: "3px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                                {"Cancel"}
+                              </button>
+                            </span>
+                          ) : (
+                            <span onClick={t.canEdit ? t.startEdit : undefined}
+                              title={t.canEdit ? "Click to correct this term" : undefined}
+                              style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", whiteSpace: "nowrap", color: t.valFg, cursor: t.canEdit ? "text" : "default", borderBottom: t.canEdit ? "1px dashed var(--color-divider)" : "none" }}>
+                              {t.value}
+                            </span>
+                          )}
                           <span onClick={t.open} style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", padding: "2px 6px", borderRadius: "5px", whiteSpace: "nowrap", background: t.bg, color: t.fg, cursor: t.cursor, minWidth: "74px", textAlign: "center" }}>
                             {t.src}
                           </span>
@@ -382,6 +398,36 @@ export default function Vendors({ vals }) {
                     ))}
                     <div style={{ padding: "12px 16px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                       {"A default is not a contract term. Anything marked default was not found in the signed document, so the score is measured against a platform assumption rather than something the vendor agreed to — worth closing before the next renewal."}
+                    </div>
+                    <div style={{ display: vals.vp.confirmShow, flexDirection: "column", gap: "9px", padding: "13px 16px", borderTop: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: vals.vp.confirmStatusBg, color: vals.vp.confirmStatusFg }}>
+                          {vals.vp.confirmStatus}
+                        </span>
+                        <span style={{ flex: "1", minWidth: "0", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
+                          {vals.vp.confirmNote}
+                        </span>
+                        {vals.vp.confirmDone || vals.vp.confirmArmed ? null : (
+                          <button onClick={vals.vp.confirmArm} style={{ fontSize: "11.5px", padding: "6px 13px", borderRadius: "7px", border: "none", background: "var(--color-accent)", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            {"Confirm terms"}
+                          </button>
+                        )}
+                      </div>
+                      {vals.vp.confirmArmed ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "9px", padding: "11px 12px", borderRadius: "8px", border: "1px solid var(--st-warn)", background: "var(--st-warn-bg)" }}>
+                          <span style={{ fontSize: "11.5px", color: "var(--color-text)", lineHeight: "1.55" }}>
+                            {vals.vp.confirmWarn}
+                          </span>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button onClick={vals.vp.confirmGo} style={{ fontSize: "11.5px", padding: "6px 13px", borderRadius: "7px", border: "none", background: "var(--color-accent)", color: "#fff", cursor: "pointer" }}>
+                              {"Yes, confirm these terms"}
+                            </button>
+                            <button onClick={vals.vp.confirmCancel} style={{ fontSize: "11.5px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "transparent", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                              {"Not yet"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </>
                 ) : null}

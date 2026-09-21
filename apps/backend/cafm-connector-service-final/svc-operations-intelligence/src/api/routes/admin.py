@@ -16,6 +16,7 @@ may act on another company by passing ?organization_id=; a company admin who tri
 """
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -397,15 +398,32 @@ async def company_usage(
 @router.get("/ingestion-audit")
 async def ingestion_audit_trail(
     outcome: str | None = Query(None, description="accepted | reassigned | overridden | rejected | approved_on_confirmation"),
+    q: str | None = Query(None, description="Matches document, uploader name or email, and building."),
+    building_id: UUID | None = Query(None, description="One building — the one it was filed against or moved to."),
+    actor_user_id: UUID | None = Query(None, description="One uploader."),
+    actor_role: str | None = Query(None, description="admin (includes superadmin) | user"),
+    since: datetime | None = Query(None, description="Inclusive lower bound on occurred_at."),
+    until: datetime | None = Query(None, description="Exclusive upper bound on occurred_at."),
     limit: int = Query(100, le=500),
     offset: int = 0,
     session: AsyncSession = Depends(get_session),
     scope: access.Scope = Depends(admin_scope),
 ):
-    """Every flagged ingestion, clarification, override and approval for the company."""
+    """Every flagged ingestion, clarification, override and approval for the company.
+
+    The company is taken from the verified scope and is never a parameter of this handler:
+    `admin_scope` already owns `organization_id` as the superadmin act-as override, and a
+    second one here would let any admin read another tenant's trail by adding it to the URL.
+
+    `building_ids=None` below is deliberate and is NOT the building filter — it is the
+    caller's allocation, and an admin reading their own company sees all of it. The reader's
+    chosen building arrives separately as `building_id`, which can only narrow further.
+    """
     out = await ingestion_audit.list_events(
         session, organization_id=scope.organization_id, outcome=outcome,
-        building_ids=None, limit=limit, offset=offset,
+        building_ids=None, building_id=building_id, actor_user_id=actor_user_id,
+        actor_role=actor_role, q=q, since=since, until=until,
+        limit=limit, offset=offset,
     )
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=out)

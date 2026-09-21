@@ -1049,7 +1049,15 @@ export const renderValsMethods = {
             { label: "L3 · low", n: R.crit ? String(R.crit.L3) : "—", note: "misses weigh 0.5×", color: "var(--color-neutral-400)" }
           ],
           critNote: R.critNote || "Criticality is set per asset and approved by a person, not inferred. Unapproved assets default to L2 until someone confirms otherwise, so a mis-set L1 cannot quietly triple a vendor's penalty.",
-          sourceNote: R.sourceNote || (R.contract.read + " of " + R.contract.fields + " terms were read from the signed contract — " + Math.round((R.contract.read / Math.max(1, R.contract.fields)) * 100) + "% source coverage. The rest fell back to platform defaults, which are named below."),
+          // "0 of 16 terms were read — 0% source coverage" is accurate and reads as a contract
+          // with poor coverage. It is a different thing entirely: the extractor found no
+          // contract terms because the document is not a service contract. The reader meets
+          // this line before the table and long before the confirm bar, so it says so here.
+          sourceNote: R.sourceNote || (R.contract.readNothing
+            ? "NO CONTRACT TERMS were read from this document — all " + R.contract.fields +
+              " values below are platform defaults, not anything the document said. This may " +
+              "not be a service contract. Check the file before confirming anything here."
+            : R.contract.read + " of " + R.contract.fields + " terms were read from the signed contract — " + Math.round((R.contract.read / Math.max(1, R.contract.fields)) * 100) + "% source coverage. The rest fell back to platform defaults, which are named below."),
           terms: R.terms.map((t) => ({
             label: t.label, value: t.value,
             valFg: t.src === "contract" ? "var(--color-text)" : "var(--color-neutral-400)",
@@ -1060,8 +1068,68 @@ export const renderValsMethods = {
             open: () => t.note ? this.flash(t.note)
               : t.src === "contract"
               ? this.flash("Opening " + R.contract.ref + " at clause " + t.clause + ", page " + t.page + " — the text this term was read from.")
-              : this.flash(t.label + " was not found in " + R.contract.ref + ". The platform default of " + t.value + " applies until the term is agreed in writing.")
+              : this.flash(t.label + " was not found in " + R.contract.ref + ". The platform default of " + t.value + " applies until the term is agreed in writing."),
+            // ── editing ──
+            // Only a draft is editable. A confirmed set is already what scoring runs on, so
+            // changing a value there would move the goalposts under scores already published.
+            canEdit: !!(t.editable && R.contract.id && !R.contract.confirmed),
+            editing: s.vpEditField === t.field,
+            draft: s.vpEditField === t.field ? s.vpEditValue : "",
+            startEdit: () => this.setState({
+              vpEditField: t.field,
+              // The stored value, not the formatted one: "£350 / day" is for reading, and
+              // 350 is what the column holds and what a correction has to start from.
+              vpEditValue: t.raw === null || t.raw === undefined ? "" : String(t.raw),
+              vpConfirmArmed: false
+            }),
+            setDraft: (v) => this.setState({ vpEditValue: v }),
+            cancelEdit: () => this.setState({ vpEditField: "", vpEditValue: "" }),
+            saveEdit: () => {
+              const field = t.field, value = s.vpEditValue;
+              this.setState({ vpEditField: "", vpEditValue: "" });
+              return this.vpEditTerm(R.contract.id, field, value);
+            }
           })),
+          // ── the confirm bar ──
+          // Shown only where there is something to confirm. A vendor with no contract has no
+          // draft to act on, and the panel already says so in its source note.
+          confirmShow: R.contract.id ? "flex" : "none",
+          confirmStatus: R.contract.confirmed ? "confirmed" : (R.contract.status || "draft"),
+          confirmStatusBg: R.contract.confirmed ? "var(--st-ok-bg)" : "var(--st-warn-bg)",
+          confirmStatusFg: R.contract.confirmed ? "var(--st-ok)" : "var(--st-warn)",
+          confirmDone: !!R.contract.confirmed,
+          confirmArmed: !!s.vpConfirmArmed && !R.contract.confirmed,
+          // What confirming actually commits to, in the reader's own numbers. A contract
+          // ingested on 17 Sep 2026 carried a £350/day labour rate the document never
+          // stated — priced per hour, per trade — and the panel called it "default", which
+          // is true and reads like a shrug. Confirming would have made it the agreed rate
+          // every invoice is checked against. The count goes in front of the button.
+          // A document that yielded NOTHING gets its own sentence. Moreland's ingest read 0
+          // of 16 terms because the file is a property management agreement, not a service
+          // contract — and the panel showed it as a table of `default` badges, identical to a
+          // contract with a few gaps. It was confirmed on the strength of that screen.
+          confirmWarn: R.contract.readNothing
+            ? "NO CONTRACT TERMS were read from this document — all " + R.contract.fields +
+              " are platform defaults. This may not be a service contract at all. Confirming " +
+              "would make " + R.contract.fields + " assumed values binding on the vendor, and " +
+              "every SLA breach and invoice check would be judged against them."
+            : R.contract.defaults > 0
+            ? R.contract.defaults + " of " + R.contract.fields + " terms are platform defaults, not contract terms. " +
+              "Confirming makes them the agreed values — scoring and invoice checks will treat them as though the contract said so. " +
+              "Correct anything wrong first."
+            : "All " + R.contract.fields + " terms were read from the document. Confirming makes them the agreed values scoring runs on.",
+          confirmNote: R.contract.confirmed
+            ? "These terms are confirmed and scoring runs against them" +
+              (R.contract.confirmedBy ? " — confirmed by " + R.contract.confirmedBy : "") +
+              (R.contract.confirmedOn ? (R.contract.confirmedBy ? " on " : " — confirmed ") + R.contract.confirmedOn : "") +
+              ". Re-ingest the document to replace them."
+            : "Scoring is blocked until these terms are confirmed.",
+          confirmArm: () => this.setState({ vpConfirmArmed: true, vpEditField: "", vpEditValue: "" }),
+          confirmCancel: () => this.setState({ vpConfirmArmed: false }),
+          confirmGo: () => {
+            this.setState({ vpConfirmArmed: false });
+            return this.vpConfirmContract(R.contract.id);
+          },
           breaches: R.breaches.map((b) => ({
             wo: b.wo, asset: b.asset, building: b.building, crit: b.crit, metric: b.metric,
             target: b.target, actual: b.actual, mult: b.mult, cost: b.cost,
