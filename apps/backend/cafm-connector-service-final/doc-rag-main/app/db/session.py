@@ -101,13 +101,16 @@ def _run_migrations() -> None:
                 )
 
     if stmts:
-        with engine.begin() as conn:
-            for stmt in stmts:
-                try:
-                    conn.execute(text(stmt))
-                    logger.info("Migration applied: {}", stmt[:80])
-                except Exception as exc:
-                    logger.warning("Migration skipped ({}): {}", type(exc).__name__, stmt[:80])
+        # One statement per transaction, a five-second lock timeout, and no lock at all for a
+        # column that already exists — see app/db/ddl.py for the 17 Sep 2026 outage behind this.
+        # The old single transaction also meant one failed statement aborted every one after it.
+        from app.db.ddl import run_ddl
+
+        outcomes: dict[str, int] = {}
+        for stmt in stmts:
+            outcome = run_ddl(engine, stmt, log=logger)
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        logger.info("Startup migrations: " + ", ".join(f"{k}={v}" for k, v in sorted(outcomes.items())))
 
 
 def get_db() -> Generator[Session, None, None]:

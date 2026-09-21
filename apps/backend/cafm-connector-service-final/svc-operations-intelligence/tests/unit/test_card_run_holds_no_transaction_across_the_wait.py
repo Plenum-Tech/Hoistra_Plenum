@@ -141,6 +141,72 @@ class TestMigrationsCannotQueueBehindAReader:
         assert calls["n"] == 3
 
 
+class TestAColumnThatExistsTakesNoLock:
+    """17 Sep 2026, 19:04–19:07: thirteen files of ADD COLUMN IF NOT EXISTS, every column already
+    there, each paying four lock timeouts because a reader held the table — a start that took
+    minutes and left the identity service on 502. The catalogue is asked first; that takes no lock."""
+
+    @staticmethod
+    def _engine(column_present: bool, executed: list):
+        class _Result:
+            def scalar(self): return 1 if column_present else None
+
+        class _Conn:
+            async def execute(self, clause, params=None):
+                executed.append(("execute", str(clause), params)); return _Result()
+            async def exec_driver_sql(self, sql):
+                executed.append(("ddl", sql, None))
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+
+        class _Engine:
+            def connect(self): return _Conn()
+            def begin(self): return _Conn()
+        return _Engine()
+
+    def test_only_the_plain_form_is_pre_checkable(self):
+        from src import db
+        assert db._parse_add_column("ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ") \
+            == ("plenum_cafm", "users", "password_changed_at")
+        assert db._parse_add_column("DO $uuid_default$ BEGIN ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS x INT; END $uuid_default$") is None
+        assert db._parse_add_column("CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (c)") is None
+
+    async def test_an_existing_column_never_reaches_the_alter(self, monkeypatch):
+        from src import db
+        executed = []
+        monkeypatch.setattr(db, "engine", self._engine(True, executed))
+        await db._run_ddl_statement("ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ")
+        assert [k for k, *_ in executed] == ["execute"], executed
+        assert "information_schema.columns" in executed[0][1]
+        assert executed[0][2] == {"s": "plenum_cafm", "t": "users", "c": "password_changed_at"}
+
+    async def test_a_missing_column_is_added_under_the_lock_timeout(self, monkeypatch):
+        from src import db
+        executed = []
+        monkeypatch.setattr(db, "engine", self._engine(False, executed))
+        await db._run_ddl_statement("ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS x INT")
+        kinds = [k for k, *_ in executed]
+        assert kinds == ["execute", "ddl", "ddl"]
+        assert executed[1][1].startswith("SET LOCAL lock_timeout")
+
+    async def test_a_do_block_skips_the_pre_check_and_runs(self, monkeypatch):
+        from src import db
+        executed = []
+        monkeypatch.setattr(db, "engine", self._engine(True, executed))
+        await db._run_ddl_statement("DO $x$ BEGIN ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS y INT; END $x$")
+        assert [k for k, *_ in executed] == ["ddl", "ddl"]
+
+    async def test_a_failing_pre_check_falls_through_to_the_statement(self, monkeypatch):
+        from src import db
+        executed = []
+        eng = self._engine(True, executed)
+        def _broken_connect(): raise RuntimeError("no catalogue access")
+        eng.connect = _broken_connect
+        monkeypatch.setattr(db, "engine", eng)
+        await db._run_ddl_statement("ALTER TABLE plenum_cafm.users ADD COLUMN IF NOT EXISTS x INT")
+        assert [k for k, *_ in executed] == ["ddl", "ddl"]
+
+
 async def test_the_run_is_still_recorded_after_the_wait(wired):
     session = wired
     run = await C.run_card(session, session.card.id, trigger="schedule", claimed=True)

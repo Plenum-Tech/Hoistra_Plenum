@@ -221,6 +221,48 @@ def _is_lock_timeout(exc: BaseException) -> bool:
     return "lock timeout" in text_ or "lock_timeout" in text_ or "locknotavailable" in text_
 
 
+_IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+#: The plain form only. A `DO $$ … $$` block is not pre-checkable and runs under the lock timeout.
+_ADD_COLUMN = re.compile(
+    rf"^\s*ALTER\s+TABLE\s+(?:ONLY\s+)?(?:(?P<schema>{_IDENT})\.)?(?P<table>{_IDENT})\s+"
+    rf"ADD\s+(?:COLUMN\s+)?IF\s+NOT\s+EXISTS\s+(?P<column>{_IDENT})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_COLUMN_EXISTS_SQL = (
+    "SELECT 1 FROM information_schema.columns "
+    "WHERE table_schema = COALESCE(:s, current_schema()) AND table_name = :t AND column_name = :c "
+    "LIMIT 1"
+)
+
+
+def _parse_add_column(stmt: str) -> tuple[str | None, str, str] | None:
+    m = _ADD_COLUMN.match(stmt or "")
+    return (m.group("schema"), m.group("table"), m.group("column")) if m else None
+
+
+async def _column_already_exists(stmt: str) -> bool:
+    """True when `stmt` is a plain ADD COLUMN IF NOT EXISTS whose column is already there.
+
+    `ADD COLUMN IF NOT EXISTS` takes ACCESS EXCLUSIVE before it discovers the column exists, so
+    on a steady-state database every start paid the lock for nothing — and on 17 Sep 2026, with
+    readers holding the tables, paid four lock timeouts per statement, thirteen files deep, for
+    a start that took minutes and left the identity service on 502. Asking the catalogue costs a
+    share lock on nothing. Any failure to ask counts as "not known to exist": the ALTER is the
+    authority, this is only the shortcut.
+    """
+    parsed = _parse_add_column(stmt)
+    if not parsed:
+        return False
+    from sqlalchemy import text as _text
+    schema, table, column = parsed
+    try:
+        async with engine.connect() as conn:
+            row = (await conn.execute(_text(_COLUMN_EXISTS_SQL), {"s": schema, "t": table, "c": column})).scalar()
+        return row is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _run_ddl_statement(stmt: str) -> None:
     """One migration statement, with a lock timeout and a short retry loop.
 
@@ -230,6 +272,10 @@ async def _run_ddl_statement(stmt: str) -> None:
     wait that takes the rest of the service down with it.
     """
     import asyncio as _asyncio
+
+    if await _column_already_exists(stmt):
+        log.debug("db.migration.already_applied", statement=str(stmt).strip()[:120])
+        return
 
     for attempt in range(1, _DDL_LOCK_RETRIES + 1):
         try:
