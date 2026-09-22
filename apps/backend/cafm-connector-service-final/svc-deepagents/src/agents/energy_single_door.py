@@ -20,10 +20,10 @@ import io
 from pathlib import Path
 from typing import Any
 
-import httpx
 import structlog
 
 from ..config import settings
+from ..http_client import request as _request
 
 log = structlog.get_logger(__name__)
 
@@ -99,14 +99,28 @@ async def route_energy_upload(
         data = {"source": "csv", "detect_gaps": "true"}
         if organization_id:
             data["organization_id"] = str(organization_id)
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{base}/api/energy/readings/ingest/csv",
-                files={"file": (name, raw, "text/csv")},
-                data=data,
-            )
-            resp.raise_for_status()
-            body = resp.json()
+        # Through the shared client, not a bare one. operations-intelligence requires a
+        # caller on every route and scopes what it returns to that caller's company and
+        # buildings; the shared client is what forwards the signed-in person's own token.
+        # Posting this with a naked httpx client sent no Authorization header at all, so
+        # every meter file a person uploaded came back 401 Unauthorized — the one ingestion
+        # path in this service that did not go through it, while compliance, contracts and
+        # doc-rag all did.
+        #
+        # max_attempts=1 on purpose: this writes readings. A retry after a partial write is
+        # how the same half-hour lands twice, and a failed ingest a person can repeat is
+        # better than a silent duplicate they cannot see.
+        resp = await _request(
+            "POST",
+            base,
+            "/api/energy/readings/ingest/csv",
+            service="operations_intelligence",
+            timeout=300.0,
+            max_attempts=1,
+            files={"file": (name, raw, "text/csv")},
+            data=data,
+        )
+        body = resp.json()
     except Exception as exc:  # noqa: BLE001
         log.error("single_door.energy.route_failed", file=name, error=str(exc)[:300])
         return {
