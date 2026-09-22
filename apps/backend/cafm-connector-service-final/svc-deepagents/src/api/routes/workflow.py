@@ -653,6 +653,10 @@ async def run_stateful_workflow_with_files(
                 user_message=message,
                 skip_row_match=interactive_doc_match,
                 interactive_migration=interactive_migration,
+                # The building the uploader chose. Documents are bound to it after the
+                # fact by the validation gate below; a meter has no document to bind, so
+                # it has to travel with the ingest or the readings land on nothing.
+                building_id=building,
             )
             # ── the check that runs before the building owns it ──────────────────────
             # Indexing is reversible; binding is what makes a document evidence — from that

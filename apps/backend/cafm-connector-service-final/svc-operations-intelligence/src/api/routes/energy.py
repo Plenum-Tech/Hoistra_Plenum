@@ -142,6 +142,12 @@ async def ingest_readings_csv(
     file: UploadFile = File(...),
     meter_id: UUID | None = Form(None),
     organization_id: UUID | None = Form(None),
+    building_id: UUID | None = Form(
+        None,
+        description="The building these readings are for. Used only when the MPAN/MPRN is "
+                    "not already registered to one - the register always wins, so a file "
+                    "filed against the wrong building cannot move a meter already placed.",
+    ),
     source: str = Form("csv"),
     detect_gaps: bool = Form(True),
     session: AsyncSession = Depends(get_session),
@@ -150,6 +156,9 @@ async def ingest_readings_csv(
     """Half-hourly smart-meter CSV → MeterReading (+ auto-create meter from MPAN/MPRN)."""
     access.assert_can_ingest(s)
     organization_id = access.organization_for(s, organization_id)
+    # Naming a building here places meters on it, so the caller must be allowed to act on it.
+    if building_id is not None:
+        access.assert_building(s, building_id, action="file readings against")
     raw = await file.read()
     try:
         text = raw.decode("utf-8")
@@ -160,6 +169,7 @@ async def ingest_readings_csv(
         csv_text=text,
         meter_id=meter_id,
         organization_id=organization_id,
+        building_id=building_id,
         source=source,
         detect_gaps=detect_gaps,
     )

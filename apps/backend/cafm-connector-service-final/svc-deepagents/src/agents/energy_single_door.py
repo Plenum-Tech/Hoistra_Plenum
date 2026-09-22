@@ -86,8 +86,16 @@ async def route_energy_upload(
     file_path: str,
     organization_id: str | None = None,
     user_query: str | None = None,
+    building_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Send a recognised meter export to Feature C ingestion. None when not meter data."""
+    """Send a recognised meter export to Feature C ingestion. None when not meter data.
+
+    ``building_id`` is the building chosen in the composer. A meter file carries an MPAN or
+    an MPRN and no building, so the first file for a newly hoisted building used to create a
+    meter attached to nothing: the readings landed, counted towards no building and no EUI,
+    and looked ingested. The service only falls back to this where its own register cannot
+    answer, so naming a building cannot move a meter that is already placed.
+    """
     kind = classify_energy_document(file_path, user_query)
     if kind is None:
         return None
@@ -99,6 +107,8 @@ async def route_energy_upload(
         data = {"source": "csv", "detect_gaps": "true"}
         if organization_id:
             data["organization_id"] = str(organization_id)
+        if building_id:
+            data["building_id"] = str(building_id)
         # Through the shared client, not a bare one. operations-intelligence requires a
         # caller on every route and scopes what it returns to that caller's company and
         # buildings; the shared client is what forwards the signed-in person's own token.

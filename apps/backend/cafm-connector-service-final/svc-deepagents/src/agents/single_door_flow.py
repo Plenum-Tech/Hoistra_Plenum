@@ -1131,6 +1131,7 @@ async def run_single_door_ingestion_sequence(
     user_message: str | None = None,
     skip_row_match: bool = False,
     interactive_migration: bool = False,
+    building_id: str | None = None,
 ) -> SingleDoorResult:
     """
     Execute the "single-door" sequence for uploaded files:
@@ -1274,6 +1275,7 @@ async def run_single_door_ingestion_sequence(
             file_path=_energy_path,
             organization_id=organization_id,
             user_query=user_query,
+            building_id=building_id,
         )
         if _er:
             n_energy += 1

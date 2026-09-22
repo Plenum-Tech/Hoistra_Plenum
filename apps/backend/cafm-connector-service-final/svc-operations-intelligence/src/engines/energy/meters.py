@@ -646,10 +646,18 @@ async def ingest_readings_csv(
     detect_gaps: bool = True,
     meter_type: str = "electricity",
     tariff_gbp_per_kwh: float = 0.28,
+    building_id: UUID | None = None,
 ) -> dict[str, Any]:
     """
     Ingest CSV readings. If meter_id is omitted, resolve/create from row mpan/mprn.
     Rows may target multiple meters when identifiers differ.
+
+    ``building_id`` is the building the person filing the readings said they were for, and
+    it is used only where the portfolio cannot answer for itself: an MPAN nobody has
+    registered. Without it the first meter file for a new building creates a meter attached
+    to nothing, and every reading on it is stranded - present in the table, counted by no
+    building, contributing to no EUI. The register still wins where it knows, so a file
+    uploaded against the wrong building cannot move a meter that is already placed.
     """
     try:
         rows = parse_readings_csv(csv_text)
@@ -691,7 +699,7 @@ async def ingest_readings_csv(
             # A meter an earlier ingest created before this lookup existed carries no
             # building, and every reading written against it is stranded. Ask now.
             if existing.building_id is None:
-                owner = await building_for_meter(session, mpan=mpan, mprn=mprn)
+                owner = await building_for_meter(session, mpan=mpan, mprn=mprn) or building_id
                 if owner is not None:
                     existing.building_id = owner
                     await session.commit()
@@ -706,8 +714,14 @@ async def ingest_readings_csv(
         # Whose meter this is, before it is created — so it is never written without the
         # link and then relied on to be corrected later.
         owner = await building_for_meter(session, mpan=mpan, mprn=mprn)
+        owner_from = "register" if owner is not None else None
+        if owner is None and building_id is not None:
+            owner, owner_from = building_id, "upload"
         if owner is None:
             log.warning("energy.meter_building_unknown", mpan=mpan, mprn=mprn)
+        else:
+            log.info("energy.meter_building_resolved", mpan=mpan, mprn=mprn,
+                     building_id=str(owner), via=owner_from)
         created = await upsert_meter(
             session,
             {
