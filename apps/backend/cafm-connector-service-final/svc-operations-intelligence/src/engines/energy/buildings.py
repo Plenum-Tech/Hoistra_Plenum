@@ -420,8 +420,11 @@ def shape_building_row(
         # It used to be neither. create_building wrote a hard 0 that nothing ever updated,
         # so every hoisted building reported a Hoist Score of zero - read as "scored, and
         # scored nothing" rather than "not scored", which is the one thing it did not mean.
-        "hoist_score": stored_hoist_score if stored_hoist_score is not None else completeness,
-        "hoist_score_source": "recorded" if stored_hoist_score is not None else "record_completeness",
+        # 0 until the graph holds something about this building. apply_graph_rollup()
+        # raises it as each domain arrives; record completeness is a different question and
+        # keeps its own field below.
+        "hoist_score": stored_hoist_score if stored_hoist_score is not None else 0,
+        "hoist_score_source": "recorded" if stored_hoist_score is not None else "graph_coverage",
         "record_completeness_pct": completeness,
         "completeness_missing": missing,
         # What a client quotes back as expected_updated_at so a patch cannot silently
@@ -541,6 +544,49 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: What a building is scored on: the operational record, not its own description. Filling
+#: in a form is not coverage — a building with a name, a floor count and an area is a
+#: building nobody has ingested anything about yet, and it scores nothing.
+#:
+#: Each domain is one equal share of the score, and each is present or absent: a building
+#: is not covered because one branch is full. The share rises as each kind of record
+#: arrives, which is the whole point — the score tracks ingestion, not data entry.
+HOIST_SCORE_DOMAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("assets", ("assets",)),
+    ("compliance", ("certificates",)),
+    ("contracts", ("contracts",)),
+    # A meter is how energy arrives. Readings and an EUI follow from it, and are counted
+    # by the caller when it has them, so the domain is met by either.
+    ("energy", ("meters",)),
+    ("maintenance", ("work_orders",)),
+)
+
+
+def hoist_score_for(
+    counts: dict[str, Any] | None, *, has_eui: bool = False
+) -> dict[str, Any]:
+    """How completely this building is held in the graph, from what the graph counted.
+
+    Returns the score out of 100, the domains that are covered, and the ones still missing,
+    so a reader is told what would raise it rather than being handed a number to guess at.
+    """
+    c = counts or {}
+    covered: list[str] = []
+    missing: list[str] = []
+    for domain, relations in HOIST_SCORE_DOMAINS:
+        hit = any(int(c.get(r) or 0) > 0 for r in relations)
+        if domain == "energy" and has_eui:
+            hit = True
+        (covered if hit else missing).append(domain)
+    share = 100.0 / len(HOIST_SCORE_DOMAINS)
+    return {
+        "score": int(round(len(covered) * share)),
+        "covered": covered,
+        "missing": missing,
+        "of": [d for d, _ in HOIST_SCORE_DOMAINS],
+    }
+
+
 def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict[str, Any]:
     """Overlay what the graph counted onto a shaped row, and say where each figure came from.
 
@@ -598,6 +644,15 @@ def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict
                 row["building_type"] = tm46_type_for(roll["dominant_use"])
     row["spaces"] = roll.get("spaces")
     row["graph_counts"] = roll.get("counts") or {}
+    # The Hoist Score, from what was counted rather than from what was typed. A recorded
+    # figure still wins — a judgement outranks a derivation — and the row says which it is.
+    if row.get("hoist_score_source") != "recorded":
+        hs = hoist_score_for(row["graph_counts"], has_eui=row.get("eui_kwh_per_m2") is not None)
+        row["hoist_score"] = hs["score"]
+        row["hoist_score_source"] = "graph_coverage"
+        row["hoist_score_covered"] = hs["covered"]
+        row["hoist_score_missing"] = hs["missing"]
+        row["hoist_score_domains"] = hs["of"]
     # Named rather than merely implied by two fields disagreeing, so a UI can show "the
     # graph knows part of this building" without the reader having to spot it.
     row["partial_counts"] = partial
