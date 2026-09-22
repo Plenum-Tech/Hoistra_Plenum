@@ -11,6 +11,7 @@ import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { documentUrl } from '../api/docRag.js';
 import { isSpreadsheet } from './migration.js';
+import { accountCanIngest } from './auth.js';
 
 // What a staged document means when the ask bar is empty. Matches the wording the
 // ingestion panel already uses, so the same instruction reaches the orchestrator from
@@ -1326,6 +1327,8 @@ export const renderValsMethods = {
         const branch = fetched && fetched.documents;
         const certBranch = fetched && fetched.certificates;
         const state = (this.state.bgTree || {})[key] || {};
+        // Same gate as removing a building, read once for the whole list rather than per row.
+        const canRemoveDocs = this.dcVals().dcCanRemove;
         const files = ((branch && branch.rows) || []).map((r) => {
           // A document IS the document — the reference question is answered by its own
           // existence, so only "is there anything to serve" is left to ask.
@@ -1350,7 +1353,15 @@ export const renderValsMethods = {
               + ". Nothing is stored for it — no file and no extracted text — so this is a "
               + "record that the document exists, not a copy of it.")),
             // Only ever drawn on a row that has something behind it.
-            download: open || (() => {})
+            download: open || (() => {}),
+            // Removing the document removes what was read out of it — the certificate on
+            // Compliance, the contract terms on Vendors — because nothing in the database
+            // ties those to it. The click only opens the dialog; the dialog reads the
+            // counts off a dry run before anything is deleted. Drawn for the roles that
+            // may remove a building, hidden for everyone else rather than shown and
+            // refused at the click.
+            delShow: canRemoveDocs ? "inline" : "none",
+            del: () => this.dcAskDelete({ id: r.id, file: tidyFileName(r.label) }, b)
           };
         });
         return {
@@ -1630,6 +1641,8 @@ export const renderValsMethods = {
       // Buildings table — live rows from svc-operations-intelligence, seed as fallback (buildingsLive.js).
       ...this.bldVals(),
       ...this.bcVals(),
+      ...this.dcVals(),
+      ...this.oxVals(),
       ...this.bgVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
@@ -1758,10 +1771,12 @@ export const renderValsMethods = {
         fileNames: (m.files || []).join(" · "),
         filesShow: (m.files || []).length ? "block" : "none",
         stoppedShow: m.stopped ? "block" : "none",
-        // A reply whose attachment started a migration links to that run on the Migration
-        // page — the gates are answered there, not in the transcript.
+        // A reply whose attachment started a migration reopens that run in the card below.
+        // The newest opened on arrival; this is how an EARLIER turn's run is picked back up.
         migIds: (m.migrations || []).map((id) => ({ id: id, short: String(id).slice(0, 8), open: () => this.mgOpen(id) })),
         migShow: (m.migrations || []).length ? "flex" : "none",
+        // The answer to "migrations" — rendered as the recent-runs list rather than prose.
+        mgListShow: m.mgList ? "flex" : "none",
         // On the chat page the trace rail owns the route, so the in-answer copy of it starts
         // closed — the same steps twice on one screen made the answer harder to read, not
         // better evidenced. The console's dock has no rail, so there it stays open.
@@ -1897,6 +1912,10 @@ export const renderValsMethods = {
       // Documents and photos staged for the next question. The backend routes by type:
       // CSV/Excel to the migration flow, PDF/Word/images to doc-rag indexing.
       orchAttachShow: chatView ? "flex" : "none",
+      // The attach BUTTON, as distinct from the tray of files already staged above:
+      // orchAttachShow answers "is this the chat view", this also answers "may this
+      // account add data at all" (logic/auth.js's accountCanIngest).
+      orchAttachPickShow: chatView && accountCanIngest(s) ? "flex" : "none",
       orchFiles: (s.ccFiles || []).map((f, i) => ({
         key: i,
         name: f.name,
@@ -1906,10 +1925,12 @@ export const renderValsMethods = {
         drop: () => this.ccDropFile(i)
       })),
       orchFileCount: (s.ccFiles || []).length,
-      // A staged spreadsheet is a migration, and the Migration page shows every gate of one;
-      // sent from the chat it stops at the first gate with a link back. Offered, not forced.
+      // A staged spreadsheet is a migration. Sending it with nothing typed starts the run
+      // here and opens its first gate in the transcript; this is the same thing with a
+      // button on it, for a reader who has typed a question and wants the file migrated
+      // rather than asked about.
       orchMigrateShow: (s.ccFiles || []).some(isSpreadsheet) ? "flex" : "none",
-      orchMigrateHere: () => this.mgFromChat(),
+      orchMigrateHere: () => this.mgStartFromChat(),
       // ── the held document this composer is answering (logic/chatCases.js) ──
       // Shown whenever a case is open, because the next sentence goes somewhere other than
       // the orchestrator and the reader must never have to guess which.
@@ -1923,14 +1944,37 @@ export const renderValsMethods = {
           ccCaseDrop: () => this.ccCaseClear()
         };
       })(),
-      orchPickFiles: (e) => { this.ccAddFiles(e.target.files); e.target.value = ""; },
+      // The same gate the controls are hidden behind, applied where the files actually
+      // arrive. Hiding a control is a statement about the screen; this is the one place
+      // every attach point funnels through, so a stale render, a re-opened dock or a
+      // control that got drawn before /me answered cannot stage a file the account is not
+      // allowed to send. The input is still cleared, so nothing sits half-picked.
+      orchPickFiles: (e) => {
+        if (accountCanIngest(s)) this.ccAddFiles(e.target.files);
+        e.target.value = "";
+      },
       // ── which building an attachment is FILED against (logic/chatBuilding.js) ──
       // Shown only when files are staged: a question with no attachment is not a filing.
       // Without a building the backend indexes the file and skips validation entirely, so
       // nothing reaches the ingestion audit trail and the document binds to nothing — which
       // is a consequence worth stating rather than a default worth hiding.
       ...(() => {
+        // ASKED FOR A SPREADSHEET TOO, AND HERE IS WHY.
+        //
+        // It is tempting to read this as a question about documents only — a migration's
+        // rows land in plenum_cafm through the gates, not "filed against a building". On
+        // 22 Sep 2026 it was hidden for a tray of only spreadsheets on exactly that
+        // reasoning, and the reasoning was wrong: svc-deepagents' batch worker calls
+        // bind_and_log(building_id), record_ingestion_audit(building_id=…) and
+        // record_usage(building_id=…) for EVERY file it drives, spreadsheets included
+        // (workers/ingest_batch_worker.py). Without a building a migration binds to
+        // nothing and leaves no audit row — the same consequence a document has.
+        const sheets = (s.ccFiles || []).filter(isSpreadsheet);
+        const docFiles = (s.ccFiles || []).filter((f) => !isSpreadsheet(f));
         const staged = (s.ccFiles || []).length > 0;
+        // What is actually at stake differs by what is staged, so the warning says the
+        // true consequence rather than one sentence stretched over both.
+        const kind = docFiles.length && sheets.length ? "both" : sheets.length ? "sheets" : "docs";
         const chosenId = this.cbFilingBuildingId();
         const acct = s.account || {};
         const all = Array.isArray(acct.buildings) ? acct.buildings : [];
@@ -1950,8 +1994,14 @@ export const renderValsMethods = {
               + (chosen && chosen.building_code ? " · " + chosen.building_code : "")
             : "No building selected",
           cbWarn: chosenId
-            ? "Each file is checked against this building before it is bound. Anything that does not belong is held and put back to you as a question."
-            : "No building selected — the documents will be indexed and searchable, but not validated, not filed against a building, and not recorded in the audit trail.",
+            ? (kind === "sheets"
+                ? "The migration is recorded against this building — the ingest is bound to it and the audit trail names it."
+                : "Each file is checked against this building before it is bound. Anything that does not belong is held and put back to you as a question.")
+            : (kind === "sheets"
+                ? "No building selected — the migration still runs and its rows still land in plenum_cafm, but it binds to no building and leaves no row in the ingestion audit trail."
+                : kind === "both"
+                  ? "No building selected — the documents will be indexed and searchable but not validated, and neither they nor the migration will be filed against a building or recorded in the audit trail."
+                  : "No building selected — the documents will be indexed and searchable, but not validated, not filed against a building, and not recorded in the audit trail."),
           cbPickerOpen: !!s.cbPickerOpen && staged,
           cbQuery: s.cbQuery || "",
           cbOpen: () => this.cbOpenPicker(),
@@ -1993,7 +2043,11 @@ export const renderValsMethods = {
       // via ccAsk/askScoped), not a canned completion message. Files ride the same tray the
       // composer's attach button stages (ccFiles/orchFiles below) — attach from either place
       // and it is there for both, since it is one upload waiting on one send.
-      fIngest: s.flow === "ingest",
+      // The dock's Ingest documents card. Gated at the flow rather than inside the card:
+      // an account that may not add data has no use for a building picker with nothing to
+      // attach under it, and `flow` survives a reload, so the card could otherwise come
+      // back on screen after the toggle was turned off.
+      fIngest: s.flow === "ingest" && accountCanIngest(s),
       iBuilding: s.declFor || "",
       iBuildingOpts: BUILDINGS.map((b) => b.name).concat(this.bldIsLive() ? this.bldData().map((b) => b.name).filter((n) => !BUILDINGS.some((sb) => sb.name === n)) : []),
       // The dropdown is a list of names because that is what a person picks from. The id

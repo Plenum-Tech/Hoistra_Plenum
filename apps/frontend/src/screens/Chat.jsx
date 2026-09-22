@@ -16,6 +16,8 @@ import React, { useRef } from 'react';
 import Markdown from '../components/shell/Markdown.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
+import MigrationRun from '../components/shell/MigrationRun.jsx';
+import HoistBuildingCard from '../components/shell/HoistBuildingCard.jsx';
 import { useFollowBottom } from '../components/shell/useFollowBottom.js';
 import { useTraceSpy } from '../components/shell/useTraceSpy.js';
 
@@ -149,6 +151,25 @@ export default function Chat({ vals }) {
                             </button>
                           ))}
                         </div>
+                        {/* "migrations" — the runs this company has started, each one a
+                            door back into the gates it stopped at. */}
+                        <div style={{ display: m.mgListShow, flexDirection: "column", gap: "5px", marginTop: "10px" }}>
+                          {/* A list that could not be read says why. Without this a failed
+                              read looks exactly like a company with no migrations. */}
+                          {vals.mgRecentNote ? (
+                            <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.mgRecentNote}</div>
+                          ) : null}
+                          {(vals.mgRecent || []).map((r) => (
+                            <button key={r.id} type="button" className="hv13" onClick={r.open} title={r.id}
+                              style={{ ...BARE, display: "flex", alignItems: "center", gap: "10px", padding: "7px 10px", borderRadius: "8px", border: "1px solid " + (r.active ? "var(--color-accent)" : "var(--color-divider)"), textAlign: "left", width: "100%" }}>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.short}</span>
+                              <span style={{ fontSize: "11.5px" }}>{r.cmms}</span>
+                              <span style={{ flex: "1" }}></span>
+                              <span style={{ fontSize: "10.5px", color: r.tone }}>{r.status}</span>
+                              <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.when}</span>
+                            </button>
+                          ))}
+                        </div>
                         <div style={{ display: m.stoppedShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>{"Stopped."}</div>
                         <div style={{ display: m.toolsShow, fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid var(--color-divider)" }}>{m.tools}</div>
                       </div>
@@ -157,6 +178,66 @@ export default function Chat({ vals }) {
                 )}
               </React.Fragment>
             ))}
+
+            {/* Hoisting a building is an instruction to the platform, so it is carried out
+                where the instruction was given rather than on a page of its own. */}
+            {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
+
+            {/* And the step that follows it. "Ingest documents now" on step 3 arms this
+                flow and closes the hoist card; the dock rendered it and the Orchestrator
+                did not, so on this page the button used to leave the reader in front of
+                nothing — the card went away and no panel replaced it. */}
+            {vals.fIngest ? (
+              <div style={{ marginTop: "18px", padding: "14px 16px", borderRadius: "12px", background: "var(--color-surface)", border: "1px solid var(--color-accent)", animation: "fadeUp 0.25s ease both" }}>
+                <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>{"Ingest documents"}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "11px", maxWidth: "460px" }}>
+                  <span style={KICKER}>{"Which building"}</span>
+                  {/* A real blank choice — without one the browser shows the first building
+                      selected the moment the list has options, whether or not one was
+                      actually picked. */}
+                  <select className="input" value={vals.iBuilding} onChange={vals.setIBuilding} style={{ width: "100%", boxSizing: "border-box", fontSize: "12px", padding: "7px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)" }}>
+                    <option value="" disabled>{"Choose a building…"}</option>
+                    {(vals.iBuildingOpts || []).map((o, i) => <option key={i} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5", marginTop: "10px", maxWidth: "80ch" }}>
+                  {"Everything ingested carries that building's ID as a foreign key. Certificates, contracts, asset registers, meter data or invoices — the orchestrator reads each one and files it where it belongs."}
+                </div>
+                <label className="hv13" style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "11px", padding: "9px 11px", borderRadius: "8px", border: "1px dashed var(--color-divider)", cursor: "pointer", maxWidth: "460px" }}>
+                  <i className="ph ph-file-arrow-up" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+                  <span style={{ fontSize: "11.5px", color: "var(--color-neutral-400)" }}>
+                    {vals.orchFileCount
+                      ? vals.orchFileCount + (vals.orchFileCount === 1 ? " document attached — add another…" : " documents attached — add another…")
+                      : "Attach the documents…"}
+                  </span>
+                  <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+                </label>
+                {/* The staged files show once, in the composer's tray below: this panel and
+                    the composer share one list. */}
+                {vals.iHint ? <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "9px" }}>{vals.iHint}</div> : null}
+                <div style={{ display: "flex", gap: "8px", marginTop: "13px" }}>
+                  <button type="button" className="hv7" onClick={vals.iRun} style={{ ...BARE, fontSize: "12px", padding: "8px 16px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.iCanRun ? "pointer" : "default", opacity: vals.iCanRun ? "1" : "0.5" }}>
+                    {"Start ingestion"}
+                  </button>
+                  <button type="button" className="hv11" onClick={vals.fCancel} style={{ ...BARE, fontSize: "12px", padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)" }}>
+                    {"Cancel"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* What a finished flow left behind — the hoist's "keyed as B-42, no documents
+                ingested yet" line, and the same for the flows the dock reports this way. */}
+            {vals.fDone ? (
+              <div style={{ marginTop: "18px", padding: "12px 14px", borderRadius: "10px", background: "var(--st-ok-bg)", display: "flex", gap: "10px", alignItems: "flex-start" }}>
+                <i className="ph ph-check-circle" style={{ fontSize: "15px", color: "var(--st-ok)", marginTop: "1px" }}></i>
+                <span style={{ fontSize: "12px", lineHeight: "1.55", color: "var(--color-text)" }}>{vals.fDoneText}</span>
+              </div>
+            ) : null}
+
+            {/* A migration started from this conversation is answered in it — every gate,
+                up to and including the write. */}
+            {vals.mgHasRun ? <MigrationRun vals={vals} /> : null}
 
             {/* The answer being written. Its route is in the rail, so this stays a place
                 for the answer's own zones to land as they arrive. */}
@@ -203,10 +284,18 @@ export default function Chat({ vals }) {
             <div style={{ display: vals.orchMigrateShow || "none", alignItems: "center", gap: "9px", flexWrap: "wrap", marginBottom: "9px", padding: "8px 11px", borderRadius: "9px", border: "1px solid var(--color-divider)", background: "var(--color-surface)" }}>
               <i className="ph ph-file-xls" style={{ fontSize: "14px", color: "var(--color-accent)", flexShrink: "0" }}></i>
               <span style={{ flex: "1", minWidth: "0", fontSize: "12px", lineHeight: "1.4" }}>
-                {"Spreadsheets go through the migration pipeline. Sent from here the run stops at its first gate and links back; the Migration page walks every gate."}
+                {"Spreadsheets go through the migration pipeline. Send with nothing typed and the run opens below at its first gate — every gate is answered here, and nothing reaches plenum_cafm until the last one."}
               </span>
+              {/* What the run is labelled with, and what the mapper picks its alias pack
+                  from. Free text, as the migration page had it: the service takes any
+                  name, and a blank one is sent as Custom. */}
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+                {"Source system"}
+                <input className="input" value={vals.mgCmms} onChange={vals.mgSetCmms} placeholder="Custom" aria-label="Source system"
+                  style={{ fontSize: "11px", padding: "4px 8px", width: "130px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
+              </label>
               <button type="button" className="hv13" onClick={vals.orchMigrateHere} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                {"Open on the Migration page"}
+                {"Migrate it"}
               </button>
             </div>
             <div style={{ display: vals.ccCaseShow || "none", flexDirection: "column", gap: "6px", marginBottom: "9px", padding: "9px 11px", borderRadius: "9px", border: "1px solid var(--color-accent)", background: "var(--color-accent-900)" }}>
@@ -271,10 +360,14 @@ export default function Chat({ vals }) {
               ) : null}
             </div>
             <div style={{ display: "flex", gap: "8px", alignItems: "stretch" }}>
-              <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: "flex", width: "42px", flexShrink: "0", borderRadius: "10px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                <i className="ph ph-paperclip" style={{ fontSize: "15px", color: "var(--color-neutral-400)" }}></i>
-                <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
-              </label>
+              {/* No attach for an account whose "Can ingest" is off. The composer itself
+                  stays — the conversation is not the thing being withheld. */}
+              {vals.canIngest ? (
+                <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: "flex", width: "42px", flexShrink: "0", borderRadius: "10px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <i className="ph ph-paperclip" style={{ fontSize: "15px", color: "var(--color-neutral-400)" }}></i>
+                  <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+                </label>
+              ) : null}
               <input id="chat-composer" className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder={vals.orchPlaceholder} aria-label="Message the orchestrator" autoFocus style={{ flex: "1", minWidth: "0", fontSize: "14px", padding: "11px 14px", borderRadius: "10px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", boxShadow: "var(--shadow-sm)" }} />
               <button type="button" className="hv7" onClick={vals.orchSendClick} title={vals.orchSendTitle} aria-label={vals.orchSendTitle} style={{ ...BARE, width: "42px", borderRadius: "10px", background: vals.orchSendBg, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: "0" }}>
                 <i className={`ph ${vals.orchSendIcon}`} style={{ fontSize: "15px" }}></i>

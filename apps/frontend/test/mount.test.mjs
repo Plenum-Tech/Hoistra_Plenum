@@ -87,3 +87,30 @@ test('a card overdue from a previous visit does not get auto-run by this tab —
   assert.equal(c.state.reports[0].cards[0].status, 'pending', 'read back exactly as the backend sent it, untouched');
   cleanup();
 });
+
+// A reload that lands on the Orchestrator must READ the run it had open. mgId is persisted,
+// so the card otherwise renders from the id alone and never fetches the document: the pill
+// reads "Not loaded", every node sits hollow, and the blurb claims the pipeline is working.
+// The Migration page re-polled on arrival; deleting the page deleted that line and left its
+// comment standing over nothing.
+test('a reload on the Orchestrator resumes following the run it had open', async () => {
+  const MID = '2f9f3738-016d-4a5b-bd7b-0971c4b13e6d';
+  // Terminal on purpose: pollDelay() arms no timer for a finished run, so the read is
+  // proved without leaving a poll behind to outlive the suite.
+  handlers['GET /backend/schema-mapper/api/migration/' + MID + '/status'] = [200, {
+    migration_id: MID, status: 'complete', current_step: 9, pending_gate_type: null,
+    pending_gate_payload: {}, nodes: []
+  }];
+  c.setState({ view: 'chat', mgId: MID, mgStatus: null });
+  try {
+    c.componentDidMount();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.ok(calls.some((k) => k.includes('/migration/' + MID + '/status')), 'the open run was read');
+    assert.ok(c.state.mgStatus, 'so the card renders a real document');
+  } finally {
+    c.setState({ view: 'home' });
+    clearTimeout(c._mgTimer);
+    c.authStop && c.authStop();
+    cleanup();
+  }
+});

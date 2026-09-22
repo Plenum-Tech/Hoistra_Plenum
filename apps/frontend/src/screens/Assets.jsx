@@ -44,6 +44,13 @@ export default function Assets({ vals }) {
             {vals.asWeeksUnit}{" or more"}
           </span>
         </div>
+        {/* The steppers write a rule the whole company is banded by, so the row says what
+            happened to the write. Silent when there is nothing to report. */}
+        {vals.asRuleNote ? (
+          <span style={{ fontSize: "11px", color: vals.asRuleNoteTone === "risk" ? "var(--st-risk)" : vals.asRuleNoteTone === "warn" ? "var(--st-warn)" : "var(--color-neutral-500)" }}>
+            {vals.asRuleNote}
+          </span>
+        ) : null}
         <div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap", fontSize: "11px", color: "var(--color-neutral-400)", marginLeft: "auto" }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
             <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "var(--st-risk)" }}></span>

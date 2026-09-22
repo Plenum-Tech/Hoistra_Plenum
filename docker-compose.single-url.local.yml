@@ -282,6 +282,52 @@ services:
       - svc-operations-intelligence
     restart: unless-stopped
 
+  # Vite dev server with hot reload — the loop apps/frontend/README.md calls "the frontend
+  # dev loop", now a container instead of a bare `npm run dev` in a background shell.
+  #
+  # The bare-process version kept dying silently: nohup/disown protects a process from its
+  # spawning shell exiting, not from the whole session that shell belonged to going away, and
+  # this Mac alone logged 43 sleep/wakes in one day. A container has no such dependency — it
+  # is supervised by dockerd the same way the other 10 services already are, none of which
+  # have ever needed restarting themselves this whole time. restart: unless-stopped is enough
+  # to bring it back with `docker compose up -d` after Docker Desktop itself restarts, exactly
+  # like every other service here — this is not magic survival through a full host reboot.
+  #
+  # gateway-app:8080 is the CONTAINER port (the internal address the docker network resolves,
+  # not 3000 — that is only the host-side mapping nginx's own port line publishes below).
+  # host: true in vite.config.js is required for this to be reachable at all: a container's
+  # own localhost is not what the 5174:5174 mapping forwards to, and Vite defaults to binding
+  # only that — the failure mode is a silent "connection refused" with nothing in the Vite log.
+  frontend-dev:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/frontend:/app
+      # A named volume, not the bind mount above, for node_modules — the host's own copy
+      # (macOS, if `npm install` has ever run there) carries native builds (esbuild,
+      # @rollup/rollup-*, fsevents) for the wrong OS entirely; this keeps the container's
+      # own linux install of them intact across restarts instead of being shadowed by
+      # whatever the bind mount above is hiding underneath it.
+      - frontend_dev_node_modules:/app/node_modules
+    environment:
+      PORT: "5174"
+      VITE_DEV_PROXY_TARGET: http://gateway-app:8080
+      # macOS's Docker Desktop bind-mount backend (virtiofs/gRPC-FUSE) does not forward
+      # native inotify events into the container — chokidar (Vite's watcher) sees the byte
+      # content change (confirmed: `docker exec cat` shows a host edit immediately) but
+      # never fires on it, silently: no error, no HMR update, edits just stop applying.
+      # Both are chokidar's own documented env vars, read automatically — no vite.config.js
+      # change needed, and unset (so still native-events, still fast) for every host-run
+      # `npm run dev`, since this bind-mount limitation is specific to the container.
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    ports:
+      - "5174:5174"
+    depends_on:
+      - gateway-app
+    restart: unless-stopped
+
   gateway-app:
     build:
       context: ./apps/frontend/infra/single-url
@@ -297,3 +343,6 @@ services:
       - svc-deepagents
       - svc-operations-intelligence
     restart: unless-stopped
+
+volumes:
+  frontend_dev_node_modules:

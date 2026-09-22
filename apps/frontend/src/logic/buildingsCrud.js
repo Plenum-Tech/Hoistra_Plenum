@@ -27,6 +27,7 @@ import { energyApi } from '../api/energy.js';
 import { udrApi } from '../api/udr.js';
 import { adminApi } from '../api/admin.js';
 import { currentOrgId } from '../api/client.js';
+import { accountCanIngest } from './auth.js';
 
 // What the form offers. `Mall` is deliberately here: a facilities manager calls it a mall,
 // and the service maps it to the Retail enum member and says so in the response. `Laboratory`
@@ -58,6 +59,19 @@ export const GRANULARITIES = [
 // whose screen is uncluttered. When a real role model arrives, this set is the one line to
 // change — and the check belongs on the service at the same time.
 export const HOIST_ROLES = new Set(['superadmin', 'admin']);
+
+// Saying it opens the form. Matched on the WHOLE normalised message, never a substring:
+// "which building has the worst hoist score?" contains both words and is a question, and
+// "hoist a building in Dubai with 24 floors" carries values no field was told about — the
+// orchestrator can ask about those, this form cannot. Same discipline as chatCases.js's
+// CC_YES, for the same reason.
+const BC_HOIST = new Set([
+  'hoist a building', 'hoist building', 'hoist a new building',
+  'add a building', 'add building', 'new building'
+]);
+export const bcIsHoistRequest = (text) =>
+  BC_HOIST.has(String(text || '').trim().toLowerCase().replace(/[.!?\s]+$/, ''));
+
 
 // auth.js's Admin/User view toggle only ever relabels s.role for an account that is really
 // an admin (canAdmin gates the toggle itself) — it previews the restricted reports layout,
@@ -131,15 +145,29 @@ export const buildingsCrudMethods = {
   // dock or starting another flow puts it away with everything else.
 
   bcOpenForm() {
-    // A new task, a fresh panel: whatever conversation was already in the dock is cleared,
-    // not left showing underneath the form — it is already saved under Recent tasks.
-    this.ccChatReset();
-    this.orchWith('Hoist building', this.ctxLabel(), 'declare', {
+    clearTimeout(this._bcCodeTimer);
+    const patch = {
       bcMode: 'create', bcTarget: null, bcStep: 0, bcResult: null,
       bcOpen: true, bcForm: Object.assign({}, BLANK), bcMix: BLANK_MIX.map((m) => Object.assign({}, m)),
-      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: ''
-    });
+      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: '',
+      // A fresh create starts un-touched — BLANK already carries country_code/use_type
+      // defaults (region is the one field nobody has typed yet), so the preview below
+      // shows the flat-scheme fallback immediately rather than an empty box.
+      bcCodeTouched: false
+    };
+    // On the Orchestrator the conversation IS the surface: the form renders in the
+    // transcript under the sentence that asked for it, and the dock stays shut — laying a
+    // dock over the conversation that asked would hide the request behind its own answer.
+    // Everywhere else the dock opens exactly as before: a new task, a fresh panel, with
+    // whatever conversation was in the dock cleared rather than left under the form.
+    if (this.state.view === 'chat') {
+      this.setState(Object.assign({ flow: 'declare', flowDone: '' }, patch));
+    } else {
+      this.ccChatReset();
+      this.orchWith('Hoist building', this.ctxLabel(), 'declare', patch);
+    }
     this.bcSitesLoad();
+    this.bcCodePreview();
   },
 
   // Opening Edit on a row. `bcTarget` carries the building_id the PATCH addresses and the
@@ -211,7 +239,14 @@ export const buildingsCrudMethods = {
     const r = this.state.bcResult || {};
     this.setState({
       flow: null, bcOpen: false,
-      flowDone: (r.name || 'The building') + ' is hoisted and keyed as ' + (r.code || '—') + '. No documents ingested — its Hoist Score stays at 0% until they arrive. Run Ingest documents whenever you are ready.'
+      // "Run Ingest documents whenever you are ready" is only true for an account that may:
+      // with Can ingest off, this is now the card's only exit and pointing at a control
+      // that is no longer on screen would be the wrong instruction.
+      flowDone: (r.name || 'The building') + ' is hoisted and keyed as ' + (r.code || '—')
+        + '. No documents ingested — its Hoist Score stays at 0% until they arrive. '
+        + (accountCanIngest(this.state)
+           ? 'Run Ingest documents whenever you are ready.'
+           : 'Your account is not set up to add them — an administrator can turn on Can ingest under Users & access.')
     });
   },
 
@@ -265,8 +300,43 @@ export const buildingsCrudMethods = {
     this.setState((p) => ({
       bcForm: Object.assign({}, p.bcForm, { [field]: value }),
       // Clearing the error as they type is the whole point of keying errors by field.
-      bcErrors: Object.assign({}, p.bcErrors, { [field]: undefined })
+      bcErrors: Object.assign({}, p.bcErrors, { [field]: undefined }),
+      // Typing into the code field directly is the one thing that stops
+      // bcCodePreview() from overwriting it — every other field keeps auto-filling.
+      bcCodeTouched: field === 'building_code' ? true : p.bcCodeTouched
     }));
+    // Any of the three fields the code is built from changing previews the new code.
+    // bcCodePreview() itself is what actually decides whether a preview belongs here —
+    // this call site does not have to be the one place that gets the gating right.
+    if (field === 'country_code' || field === 'state' || field === 'use_type') this.bcCodePreview();
+  },
+
+  // Debounced, and guarded the same way bcSitesLoad() already is: a token taken before the
+  // request and checked after, so a slow response can never land and overwrite either a
+  // newer preview or a code the person has since typed over themselves. Every guard lives
+  // here rather than split across call sites — bcOpenForm() calls this directly too.
+  bcCodePreview() {
+    clearTimeout(this._bcCodeTimer);
+    // Never on edit — an existing building's stored code is not silently rewritten by
+    // reopening its country/region/use — and never once the field has been typed into
+    // directly. Checked here, not just before scheduling: both can turn true again during
+    // the debounce wait below (edit is never entered from a create form already open, but
+    // bcCodeTouched very much can, by exactly the field this delay exists for).
+    if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+    this._bcCodeTimer = setTimeout(() => {
+      if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+      const f = this.state.bcForm || {};
+      const token = (this._bcCodeToken = (this._bcCodeToken || 0) + 1);
+      energyApi.previewBuildingCode({
+        organization_id: sitesOrgId(this.state) || undefined,
+        country_code: f.country_code, region: f.state, use_type: f.use_type
+      }).then((res) => {
+        if (this._bcCodeToken !== token) return; // superseded by a newer preview
+        if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+        const code = res && res.building_code;
+        if (code) this.setState((p) => ({ bcForm: Object.assign({}, p.bcForm, { building_code: code }) }));
+      }).catch(() => {}); // a failed preview leaves the field as it was — never an error banner
+    }, 300);
   },
 
   bcMixSet(i, key, value) {

@@ -758,21 +758,28 @@ export default function OrchestratorDock({ vals }) {
             </React.Fragment>
           ))}
         </div>
-        {/* A staged spreadsheet is a migration; the Migration page walks its gates. */}
+        {/* A staged spreadsheet is a migration; its gates are answered in the Orchestrator. */}
         <div style={{ display: vals.orchMigrateShow || "none", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "8px", padding: "7px 10px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
           <i className="ph ph-file-xls" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
           <span style={{ flex: "1", minWidth: "0", fontSize: "11px", lineHeight: "1.4", color: "var(--color-neutral-400)" }}>
-            {"Spreadsheets run through the migration pipeline; sent from here the run stops at its first gate."}
+            {"Spreadsheets run through the migration pipeline. Send with nothing typed and the run opens in the Orchestrator at its first gate."}
           </span>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+            {"Source"}
+            <input className="input" value={vals.mgCmms} onChange={vals.mgSetCmms} placeholder="Custom" aria-label="Source system"
+              style={{ fontSize: "10.5px", padding: "3px 7px", width: "96px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
+          </label>
           <button type="button" className="hv13" onClick={vals.orchMigrateHere} style={{ font: "inherit", background: "transparent", margin: "0", fontSize: "10.5px", padding: "3px 9px", borderRadius: "6px", border: "1px solid var(--color-divider)", cursor: "pointer", whiteSpace: "nowrap", color: "inherit" }}>
-            {"Open on the Migration page"}
+            {"Migrate it"}
           </button>
         </div>
         <div style={{ display: "flex", gap: "6px", marginTop: "10px", alignItems: "stretch" }}>
-          <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: vals.orchAttachShow, width: "34px", flexShrink: "0", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-            <i className="ph ph-paperclip" style={{ fontSize: "14px", color: "var(--color-neutral-400)" }}></i>
-            <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
-          </label>
+          {vals.orchAttachPickShow === "none" ? null : (
+            <label className="hv13" title="Attach documents or photos — CSV and Excel go to migration, PDF, Word and images are indexed for search" style={{ display: vals.orchAttachPickShow, width: "34px", flexShrink: "0", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+              <i className="ph ph-paperclip" style={{ fontSize: "14px", color: "var(--color-neutral-400)" }}></i>
+              <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+            </label>
+          )}
           <input id="orch-composer" className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder={vals.orchPlaceholder} style={{ flex: "1", minWidth: "0", fontSize: "12px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
           <div className="hv7" onClick={vals.orchSendClick} title={vals.orchSendTitle} style={{ width: "34px", borderRadius: "7px", background: vals.orchSendBg, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: "0" }}>
             <i className={`ph ${vals.orchSendIcon}`} style={{ fontSize: "13px" }}></i>

@@ -41,7 +41,7 @@ beforeEach(() => {
   c = new HoistraLogic();
   c.setState({ signedIn: true, view: 'buildings', role: 'user', bldLive: [] });
 });
-const cleanup = () => { clearInterval(c._orchTick); clearInterval(c._ccTick); clearTimeout(c._tt); clearTimeout(c._bldRetry); if (c._ccAbort) c._ccAbort.abort(); };
+const cleanup = () => { clearInterval(c._orchTick); clearInterval(c._ccTick); clearTimeout(c._tt); clearTimeout(c._bldRetry); clearTimeout(c._bcCodeTimer); if (c._ccAbort) c._ccAbort.abort(); };
 
 const aFile = (name) => new File(['x'.repeat(10)], name, { type: 'application/pdf' });
 

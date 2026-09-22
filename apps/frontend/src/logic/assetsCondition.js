@@ -69,6 +69,56 @@ export const RULE_NOT_MODEL = 'A named rule over recorded signals, not a fitted 
 const OPEN_WO = new Set(['pending_approval', 'preparing', 'prepared', 'active']);
 const DAY = 86400000;
 
+// ── the two steppers ─────────────────────────────────────────────────────────────────
+// They are a control over a stored rule, not a slider over a browser copy. The rule lives
+// in plenum_cafm.asset_condition_rules, one row per organisation, and it is what the engine
+// bands every asset by — so a step has to reach the server and the bands have to be read
+// back. Before this, bump() moved a number in state and nothing else happened: the page
+// opened on the values below whatever the company's rule actually was, and moving a stepper
+// re-coloured the sections while leaving every asset banded by the server's untouched rule.
+//
+// The range is the PAGE's, narrower than the route's (0–500% / 0–520 weeks): these are the
+// values a facilities rule is plausibly written at, and a stepper that can walk to 500% in
+// steps of 5 is not a stepper anybody would use.
+export const RULE_BOUNDS = {
+  asPct: { step: 5, lo: 5, hi: 40 },
+  asWeeks: { step: 1, lo: 1, hi: 12 }
+};
+
+// Long enough that holding + does not fire a write per click — each one re-bands the whole
+// portfolio for everyone in the company — short enough that the page is not lying for long
+// about which rule is in force.
+export const RULE_SAVE_MS = 400;
+
+export function nextRuleValue(key, current, direction) {
+  const b = RULE_BOUNDS[key];
+  if (!b) return current;
+  const n = Number(current);
+  const from = Number.isFinite(n) ? n : b.lo;
+  return Math.max(b.lo, Math.min(b.hi, from + b.step * (direction < 0 ? -1 : 1)));
+}
+
+// Which thresholds decided what is on screen. The engine's, whenever it gave them: it is
+// the engine that banded the assets, and a page that colours its sections by the stepper
+// while the assets above them were banded by the stored rule is showing two rules at once —
+// which is exactly what it did. `pending` is the honest name for the gap between the two,
+// open only while a step is in flight or after one failed to save.
+export function rulesInForce(state) {
+  const s = state || {};
+  const r = s.asCondRules || null;
+  const srvPct = r && typeof r.section_over_reference_pct === 'number' ? r.section_over_reference_pct : null;
+  const srvWks = r && typeof r.anomaly_persistent_weeks === 'number' ? r.anomaly_persistent_weeks : null;
+  const pct = srvPct === null ? s.asPct : srvPct;
+  const weeks = srvWks === null ? s.asWeeks : srvWks;
+  return {
+    pct, weeks,
+    fromServer: srvPct !== null || srvWks !== null,
+    isDefault: !!(r && r.is_default),
+    updatedAt: (r && r.updated_at) || null,
+    pending: s.asPct !== pct || s.asWeeks !== weeks
+  };
+}
+
 // Open anomalies keyed by the asset they are attributed to. Rows with no asset_id are the
 // common case (a meter with no asset link); they are dropped rather than spread over the
 // assets in the building, which would invent an attribution the data does not make.
@@ -177,7 +227,18 @@ export const assetsConditionMethods = {
   // Locations and open anomalies — the two reads the condition tree needs that the live
   // register does not already hold. Both are optional: the tree degrades to buildings →
   // "Location not set" and to no anomaly attribution rather than failing.
-  async asCondLoad() {
+  // The promise is kept, not just the flag: a caller that needs the bands re-read after it
+  // changed the rule (asRuleSave) has to be able to WAIT for a read already in flight. With
+  // only the flag, it returned undefined at the guard and the save finished while the page
+  // still showed bands decided under the old threshold — the exact failure this control
+  // exists to avoid.
+  asCondLoad() {
+    if (this._asCondLoading) return this._asCondLoadP || Promise.resolve();
+    this._asCondLoadP = this.asCondLoadNow();
+    return this._asCondLoadP;
+  },
+
+  async asCondLoadNow() {
     if (this._asCondLoading) return;
     this._asCondLoading = true;
     this.setState({ asCondLoading: true });
@@ -203,7 +264,18 @@ export const assetsConditionMethods = {
       const list = (v, ...keys) => Array.isArray(v) ? v
         : keys.map((k) => v && Array.isArray(v[k]) ? v[k] : null).find(Boolean)
         || (v && Array.isArray(v.data) ? v.data : []);
-      this.setState({
+      // The steppers show the ORGANISATION's rule, which arrives on this read under
+      // `rules`. Seeding them is the difference between a row that states the threshold the
+      // bands beneath it were decided by and a row that states the number this build was
+      // compiled with. Skipped while a step of the user's own is unsaved or in flight —
+      // that is the one moment the stepper is deliberately ahead of the server, and
+      // overwriting it here would yank the control back under the hand that moved it.
+      const rule = (cond && !cond.__err && cond.rules) || null;
+      const seed = (rule && !this._asRulePending) ? {
+        asPct: typeof rule.section_over_reference_pct === 'number' ? rule.section_over_reference_pct : this.state.asPct,
+        asWeeks: typeof rule.anomaly_persistent_weeks === 'number' ? rule.anomaly_persistent_weeks : this.state.asWeeks
+      } : {};
+      this.setState(Object.assign(seed, {
         asLocations: list(locs, 'locations'), asLocationsError: locs && locs.__err ? locs.__err : '',
         asAnoms: list(anoms, 'anomalies'), asAnomsError: anoms && anoms.__err ? anoms.__err : '',
         asSections: list(sections, 'sections'), asSectionsSummary: (sections && sections.summary) || null,
@@ -224,12 +296,87 @@ export const assetsConditionMethods = {
         asCondLastRun: csum && !csum.__err ? (csum.last_run || null) : null,
         asCondSummaryError: csum && csum.__err ? csum.__err : '',
         asCondLoading: false, asCondLoadedAt: new Date().toISOString()
-      });
+      }));
     } catch (e) {
       if (isStaleScope(e)) return;
       this.setState({ asCondLoading: false, asCondError: (e && e.message) || String(e) });
     } finally {
       this._asCondLoading = false;
+    }
+  },
+
+  // ── moving a stepper ───────────────────────────────────────────────────────────────
+  // A step is a WRITE, and the page cannot honour it on its own: Threat / Watch / In
+  // control, the four cards and the section lines are all the engine's answer, banded on
+  // the rule stored for the organisation. So the number moves at once (the person pressed
+  // a button and must see it), the rule is written, and the bands are read back at it.
+  //
+  // Debounced because holding + would otherwise write — and re-band the whole portfolio,
+  // for everyone in the company — once per click.
+  asRuleStep(key, direction) {
+    if (!RULE_BOUNDS[key]) return;
+    const next = nextRuleValue(key, this.state[key], direction);
+    if (next === this.state[key]) return;   // already at the bound; nothing to write
+    // Disowns a write already on the wire. Without this, that write's answer comes back
+    // while a newer step is armed, clears the pending flag and re-seeds the steppers from
+    // the value it wrote — pulling the number back out from under the hand still pressing
+    // the button. Its row is still written server-side; the newer write replaces it.
+    this._asRuleToken = (this._asRuleToken || 0) + 1;
+    this._asRulePending = true;
+    this.setState({ [key]: next, asRuleSaving: true, asRuleError: '' });
+    clearTimeout(this._asRuleTimer);
+    this._asRuleTimer = setTimeout(() => this.asRuleSave(), RULE_SAVE_MS);
+  },
+
+  async asRuleSave() {
+    clearTimeout(this._asRuleTimer);
+    const token = (this._asRuleToken = (this._asRuleToken || 0) + 1);
+    const pct = Number(this.state.asPct), weeks = Number(this.state.asWeeks);
+    // What the engine holds right now — where the steppers go back to if the write is
+    // refused. Falling back to the shipped defaults instead would replace one wrong number
+    // with another; when the engine has never said, the steppers are all there is and they
+    // are left where they are.
+    const held = rulesInForce(this.state);
+    this.setState({ asRuleSaving: true, asRuleError: '' });
+    try {
+      const out = await energyApi.setConditionRules({
+        section_over_reference_pct: pct, anomaly_persistent_weeks: weeks });
+      // A later click already owns the rule; this answer is about a value nobody is on.
+      if (token !== this._asRuleToken) return;
+      this._asRulePending = false;
+      this.setState({
+        asRuleSaving: false, asRuleError: '',
+        asCondRules: out && typeof out.section_over_reference_pct === 'number'
+          ? { section_over_reference_pct: out.section_over_reference_pct,
+              anomaly_persistent_weeks: out.anomaly_persistent_weeks,
+              is_default: !!out.is_default, updated_at: out.updated_at || null }
+          : { section_over_reference_pct: pct, anomaly_persistent_weeks: weeks,
+              is_default: false, updated_at: null }
+      });
+      // Re-read rather than re-decide. The page cannot re-band from here — it does not hold
+      // the section deviations the engine bands on for every asset, and deciding it twice
+      // in two places is how the sections and the assets came to disagree in the first place.
+      //
+      // A read already in flight was issued under the OLD rule, so joining it would answer
+      // with the bands this write was meant to change. It is waited out, then a fresh one
+      // goes at the new threshold.
+      if (this._asCondLoading) { try { await this._asCondLoadP; } catch (e) { /* its own catch reports it */ } }
+      await this.asCondLoad();
+      const cf = this.state.asCondFilter;
+      if (cf && cf.band) {
+        const LABEL = { threat: 'Threat', watch: 'Watch', in_control: 'In control' };
+        await this.asCondSetFilter(LABEL[cf.band]);
+      }
+    } catch (e) {
+      if (token !== this._asRuleToken) return;
+      // The company changed under the write: the correctly-scoped page is already loading
+      // and will seed its own steppers. Reverting to this company's rule would fight it.
+      if (isStaleScope(e)) { this._asRulePending = false; return; }
+      this._asRulePending = false;
+      this.setState(Object.assign(
+        { asRuleSaving: false, asRuleError: (e && e.message) || String(e) },
+        held.fromServer ? { asPct: held.pct, asWeeks: held.weeks } : {}
+      ));
     }
   },
 
@@ -300,10 +447,14 @@ export const assetsConditionMethods = {
   /* Asset condition. Two thresholds the user owns, applied to real numbers: how far over
      its reference a building must be, and how long an anomaly must have been open. */
   asVals(s) {
+    // Two different numbers, and the difference matters. `pct`/`wks` are where the STEPPERS
+    // stand — what the person last pressed, which may be a step that has not landed yet.
+    // `inForce` is the rule the ENGINE banded by, which is what every band, card and section
+    // line on this page was actually decided against. Anything describing what is on screen
+    // must quote inForce; only the steppers themselves show pct/wks.
     const pct = s.asPct, wks = s.asWeeks;
-    // The thresholds the server actually banded on, which are held per organisation in
-    // asset_condition_rules and are not necessarily the ones these steppers show. Where they
-    // differ the server's are the ones that decided the bands, so they are what gets quoted.
+    const inForce = rulesInForce(s);
+    const thrPct = inForce.pct, thrWks = inForce.weeks;
     const serverRules = s.asCondRules || null;
     const assets = s.asLive || [];
     const now = Date.now();
@@ -412,7 +563,7 @@ export const assetsConditionMethods = {
       // Fallback: the condition read failed, or this asset is outside what it returned. The
       // band is then decided here off the BUILDING's deviation, which is the coarser answer
       // — so it is marked as such and the page says so rather than presenting it as equal.
-      const c = conditionOf({ deviation: buildingDeviation, pct, anomaly, anomalyDays, weeks: wks, healthScore: score });
+      const c = conditionOf({ deviation: buildingDeviation, pct: thrPct, anomaly, anomalyDays, weeks: thrWks, healthScore: score });
       return { a, b, source: 'page', deviation: buildingDeviation, buildingDeviation,
                sectionMeasured: null, sectionId: null, sectionName: null,
                reasons: [], explanation: '', anomaly, anomalyDays, score, ...c };
@@ -468,8 +619,7 @@ export const assetsConditionMethods = {
     // different thing for a section than for the building around it.
     const why = (x) => {
       const bits = [];
-      const thr = (serverRules && typeof serverRules.section_over_reference_pct === 'number')
-        ? serverRules.section_over_reference_pct : pct;
+      const thr = thrPct;
       if (x.source === 'server') {
         if (x.sectionMeasured === false) {
           bits.push('The section this asset sits in has no sub-meter, so it was banded on the anomaly signal alone — one of the two things that would have been checked could not be read. That is not the same as checked and clean.');
@@ -486,7 +636,7 @@ export const assetsConditionMethods = {
         bits.push('No EUI on record for this building, so the energy rule cannot run on it.');
       } else {
         bits.push('Building ' + (x.deviation > 0 ? '+' : '') + x.deviation + '% against its reference, '
-          + (x.over ? 'over' : 'inside') + ' the ' + pct + '% threshold. Banded in the page on the building figure, '
+          + (x.over ? 'over' : 'inside') + ' the ' + thrPct + '% threshold. Banded in the page on the building figure, '
           + 'not on the section, because the condition read did not come back.');
       }
       if (x.anomaly) bits.push('An anomaly is attributed to this asset (' + (x.anomaly.anomaly_type || 'anomaly') + ', open ' + (x.anomalyDays === null ? 'unknown' : x.anomalyDays + ' days') + ').');
@@ -584,7 +734,7 @@ export const assetsConditionMethods = {
       const measured = sc.measured !== false && typeof sc.eui_kwh_per_m2 === 'number';
       const ref = typeof sc.reference_eui_kwh_m2 === 'number' ? sc.reference_eui_kwh_m2 : null;
       const d = measured && typeof sc.deviation_pct === 'number' ? Math.round(sc.deviation_pct) : null;
-      const over = d !== null && d > pct;
+      const over = d !== null && d > thrPct;
       const sk = bk + '|sec|' + sc.section_id;
       const sOpen = (s.asOpenS || []).indexOf(sk) > -1;
       return {
@@ -660,7 +810,7 @@ export const assetsConditionMethods = {
           if (s.asCondLoading) return 'Reading sections…';
           const scs = secsByB[bk] || [];
           const meas = scs.filter((x) => x.measured !== false && typeof x.eui_kwh_per_m2 === 'number');
-          const over = meas.filter((x) => typeof x.deviation_pct === 'number' && x.deviation_pct > pct).length;
+          const over = meas.filter((x) => typeof x.deviation_pct === 'number' && x.deviation_pct > thrPct).length;
           return scs.length
             ? over + ' of ' + meas.length + ' metered sections over reference · ' + scs.length + ' on record'
             : 'No sections on record for this building';
@@ -742,7 +892,6 @@ export const assetsConditionMethods = {
       if (seeds.length) Promise.resolve().then(() => this.asCondSeedIntel(seeds));
     }
 
-    const bump = (k, d, lo, hi) => () => this.setState((p) => ({ [k]: Math.max(lo, Math.min(hi, p[k] + d)) }));
     const vaR = s.asVar || null;
     const anomCovered = all.filter((x) => x.anomaly).length;
     const euiCovered = all.filter((x) => x.deviation !== null).length;
@@ -805,8 +954,28 @@ export const assetsConditionMethods = {
           color: t('ok').color }
       ],
       asPct: pct + '%', asWeeks: String(wks), asWeeksUnit: wks === 1 ? 'week' : 'weeks',
-      asPctDown: bump('asPct', -5, 5, 40), asPctUp: bump('asPct', 5, 5, 40),
-      asWkDown: bump('asWeeks', -1, 1, 12), asWkUp: bump('asWeeks', 1, 1, 12),
+      asPctDown: () => this.asRuleStep('asPct', -1), asPctUp: () => this.asRuleStep('asPct', 1),
+      asWkDown: () => this.asRuleStep('asWeeks', -1), asWkUp: () => this.asRuleStep('asWeeks', 1),
+      asRuleSaving: !!s.asRuleSaving,
+      // What the row has to be able to say, in order of how much it matters: a write in
+      // flight, a write that was refused (and therefore which rule the bands on screen were
+      // really decided by), whose rule this is, and — when the engine never answered — that
+      // these steppers are describing the page's own fallback rather than a stored rule.
+      asRuleNote: s.asRuleSaving ? 'Saving…'
+        : s.asRuleError
+          ? 'Not saved — ' + s.asRuleError
+            + (inForce.fromServer
+               ? ' · the bands on screen are still the engine\u2019s ' + inForce.pct + '% / '
+                 + inForce.weeks + (inForce.weeks === 1 ? ' week' : ' weeks')
+               : '')
+        : !inForce.fromServer
+          ? (s.asCondBandsError
+             ? 'Engine unreachable — these thresholds are the page\u2019s own fallback, not a stored rule'
+             : '')
+        : inForce.isDefault ? 'Platform default — not yet set for your company'
+        : 'Set for your company'
+          + (inForce.updatedAt ? ' · ' + String(inForce.updatedAt).slice(0, 16).replace('T', ' ') : ''),
+      asRuleNoteTone: s.asRuleError ? 'risk' : s.asRuleSaving ? 'warn' : 'muted',
       asGroups: outGroups,
       asWithheldShow: withheld ? 'block' : 'none',
       asWithheldText: withheld + (withheld === 1 ? ' asset was' : ' assets were') + ' returned by the asset register but sit'

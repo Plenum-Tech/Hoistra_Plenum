@@ -63,6 +63,23 @@ const retryAfter = (e) => { const n = Number(detailOf(e).retry_after_seconds); r
 const attemptsLeft = (e) => { const n = detailOf(e).attempts_remaining; return typeof n === 'number' ? n : null; };
 const trimmed = (v) => String(v || '').trim();
 
+// May this person add data at all — the "Can ingest" toggle on Users & access, read back
+// for the person signed in rather than only shown as a column about other people. Every
+// ingest control on the page hides behind it.
+//
+// Two deliberate choices. The role is NOT folded in again: the server already does that
+// (tokens.py — can_ingest OR admin/superadmin), and doing it twice here would keep the
+// affordance for an admin who was explicitly turned off. And a missing key reads as
+// ALLOWED, not denied: only GET /me carries the flag, authLoadScope() is best-effort and
+// silent, so treating "nothing has said yet" as No would blink the control off on every
+// sign-in and hide it for good whenever that one read fails.
+export function accountCanIngest(s) {
+  // `can_ingest === false` is the ONLY denial. Not an absent account, not an absent key —
+  // both of those are "nothing has said", and the paragraph above is why that must read as
+  // allowed. Signed out is different: there is no account to ingest on behalf of.
+  return !!(s && s.signedIn) && !(s.account && s.account.can_ingest === false);
+}
+
 export const authMethods = {
   // ── lifecycle ──────────────────────────────────────────────────────────
   // Installs the client hooks, then renews a stored session. The stored account already
@@ -220,6 +237,13 @@ export const authMethods = {
       if (typeof this.usLiveLoad === 'function') this.usLiveLoad();
       if (typeof this.auLiveLoad === 'function') this.auLiveLoad();
     }
+    // The held-document sync, for the same reason and one worse: core.js's mount fires it
+    // before authBoot() has rebuilt the access token — it is never persisted — so the
+    // request goes out with no bearer, comes back 401 `missing_token`, and is not retried
+    // (only `expired` is). ccCaseSync swallows failures by design, so the whole thing was
+    // invisible except as a pair of 401s in the service log, and a document held in another
+    // session never surfaced after a reload. Re-kicked here, where a token exists.
+    if (typeof this.ccCaseSync === 'function') this.ccCaseSync();
     // this.state.saOn already covers both cases: true on a fresh superadmin sign-in (line
     // 136 above) and true on a reload that restored an open console (session.js) — either
     // way the overlay is about to be on screen and needs its companies read, same as the
@@ -233,8 +257,10 @@ export const authMethods = {
     this.authLoadScope();
   },
 
-  // Refreshes building_ids/all_buildings/selected_building_id/buildings from GET /me onto
-  // the account already in state (which resp.user alone never carries — see authEnter).
+  // Refreshes can_ingest/building_ids/all_buildings/selected_building_id/buildings from
+  // GET /me onto the account already in state (which resp.user alone never carries — see
+  // authEnter: public_user() names the fields that may leave the service and neither
+  // can_ingest nor the building scope is among them; /me adds both afterwards).
   // Best-effort and silent: called on every sign-in/refresh and after every building
   // switch, so a transient failure here is invisible rather than a flashed error on top of
   // whatever else just succeeded.
@@ -262,6 +288,12 @@ export const authMethods = {
         // by the time it lands — silently showing someone else's allocation.
         this.setState((p) => (p.account && u.id && p.account.id === u.id ? {
           account: Object.assign({}, p.account, {
+            // Whether this person may add data at all — the "Can ingest" toggle on Users &
+            // access. This read is the ONLY place the browser learns it for the person
+            // signed in, and every ingest control on the page is hidden behind it. Left
+            // alone when the answer does not carry the key, so a response from an older
+            // build cannot silently revoke it.
+            can_ingest: u.can_ingest === undefined ? p.account.can_ingest : !!u.can_ingest,
             building_ids: u.building_ids === undefined ? p.account.building_ids : u.building_ids,
             all_buildings: u.all_buildings === true,
             selected_building_id: u.selected_building_id || null,
@@ -636,7 +668,9 @@ export const authMethods = {
       this.setState({ bldOpen: false, bldQuery: '' });
       this.authSelectBuilding(id);
     };
+    const canIngest = accountCanIngest(s);
     return {
+      canIngest,
       // the gate
       email: s.email, setEmail: field('email'),
       password: s.password, setPassword: field('password'),

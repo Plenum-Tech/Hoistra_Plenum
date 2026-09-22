@@ -88,7 +88,7 @@ export const deepAgentsApi = {
   // question with an attachment is not always a filing.
   //
   // `opts.interactiveMigration` sets the route's interactive_migration flag: a CSV/Excel
-  // attachment then stops at its first human gate (answered on the Migration page, which
+  // attachment then stops at its first human gate (answered in the Orchestrator, which
   // ingested_migration_ids in the reply points at) instead of every gate being approved
   // server-side as proposed.
   runStatefulWithFiles: (message, sessionId, context, files, signal, buildingId, opts) => {
@@ -98,6 +98,11 @@ export const deepAgentsApi = {
     if (context) form.append('context', context);
     if (buildingId) form.append('building_id', buildingId);
     if (opts && opts.interactiveMigration) form.append('interactive_migration', 'true');
+    // The source system the spreadsheets came out of. The route has always taken it
+    // (workflow.py's `cmms_name: str = Form("Custom")`) and this client never sent it, so
+    // every run started from the chat was labelled Custom however the composer was filled
+    // in. It picks the mapper's alias pack, so it is not just a caption.
+    if (opts && opts.cmmsName) form.append('cmms_name', opts.cmmsName);
     const org = getActingOrg();
     if (org) form.append('organization_id', org);
     (files || []).forEach((f) => form.append('files', f, f.name));

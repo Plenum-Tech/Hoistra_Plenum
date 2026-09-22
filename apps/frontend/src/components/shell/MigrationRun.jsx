@@ -1,6 +1,14 @@
-// Migration — CSV / Excel into plenum_cafm through svc-ai-schema-mapper's gated pipeline.
-// `vals` is the view model from useHoistra() (logic/migration.js's mgVals). Every control
-// here is a callback on a row the view model shaped; the screen decides nothing itself.
+// MigrationRun — a CSV / Excel migration, answered in the conversation that started it.
+//
+// There is no Migration page any more. A run is one card in the Orchestrator transcript:
+// the nodes that have finished stack above, collapsed, and the gate waiting on a person
+// sits at the bottom where the composer's scroll lands. The gate bodies below came from
+// screens/Migration.jsx unchanged — they read `vals` and decide nothing themselves, so
+// moving them was a move, not a rewrite.
+//
+// The nine nodes, the body each gate is answered with, the polling cadence and the
+// two-step arm/confirm on the write are all still logic/migration.js's; this file renders
+// what mgVals() already returned to the page.
 import React from 'react';
 
 const BARE = { font: "inherit", background: "transparent", border: "none", padding: "0", margin: "0", cursor: "pointer", color: "inherit" };
@@ -339,170 +347,143 @@ function GateBody({ vals }) {
   }
 }
 
-// ── the page ────────────────────────────────────────────────────────────────────────
 
-function UploadPanel({ vals }) {
+// ── the run, in the transcript ───────────────────────────────────────────────────────
+//
+// The same shape the Migration page had in production: a head that says which run this is
+// and how far along, the nine-node pipeline down the left, and the gate waiting on a person
+// on the right. The page is gone; the layout is not, because it is the layout that tells
+// you where you are in a nine-step process — a stack of finished steps alone never does.
+//
+// The conversation column is ~930px (.chat-grid is minmax(0,1fr) 320px inside max-width
+// 1280px), so the tracker column is narrower here than the page's 280px and the gate's own
+// tables scroll horizontally inside themselves when a mapping has many columns.
+export default function MigrationRun({ vals }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(260px,1fr)", gap: "20px", alignItems: "start", marginTop: "22px" }}>
-      <div style={CARD}>
-        <div style={KICKER}>{"New migration"}</div>
-        <label onDragOver={(e) => e.preventDefault()} onDrop={vals.mgDropFiles}
-          style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", marginTop: "12px", padding: "28px 16px", borderRadius: "10px", border: "1.5px dashed var(--color-rule-strong)", background: "var(--color-bg)", cursor: "pointer", textAlign: "center" }}>
-          <i className="ph ph-file-arrow-up" style={{ fontSize: "26px", color: "var(--color-accent)" }}></i>
-          <span style={{ fontSize: "13px" }}>{"Drop a CMMS export here, or click to choose"}</span>
-          <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.mgFilesNote}</span>
-          <input type="file" multiple accept=".csv,.tsv,.xlsx,.xlsm,.xls" onChange={vals.mgPickFiles} style={{ display: "none" }} />
-        </label>
-        {!vals.mgFilesEmpty ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px" }}>
-            {vals.mgFiles.map((f) => (
-              <span key={f.key} style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", fontSize: "11.5px", maxWidth: "100%" }}>
-                <i className={`ph ${f.icon}`} style={{ fontSize: "13px", color: "var(--color-accent)" }}></i>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                <span style={{ ...MONO, fontSize: "9.5px", color: "var(--color-neutral-500)" }}>{f.size}</span>
-                <button type="button" className="hv21" onClick={f.drop} title={"Remove " + f.name} style={{ ...BARE, display: "flex", opacity: "0.6" }}><i className="ph ph-x" style={{ fontSize: "10px" }}></i></button>
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <div style={{ display: "flex", gap: "10px", alignItems: "flex-end", flexWrap: "wrap", marginTop: "14px" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: "4px", flex: "1 1 200px" }}>
-            <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{"Source system"}</span>
-            <input className="input" value={vals.mgCmms} onChange={vals.mgSetCmms} placeholder="Custom" style={{ fontSize: "13px" }} />
-          </label>
-          <button type="button" className="hv7" onClick={vals.mgCanStart ? vals.mgStart : undefined} disabled={!vals.mgCanStart}
-            style={{ ...BARE, fontSize: "13px", padding: "10px 16px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", opacity: vals.mgCanStart ? "1" : "0.5", cursor: vals.mgCanStart ? "pointer" : "default" }}>
-            {vals.mgStartLabel}
-          </button>
-        </div>
-        {vals.mgError ? <div style={{ marginTop: "10px", fontSize: "12px", padding: "8px 11px", borderRadius: "8px", background: "var(--st-risk-bg)", color: "var(--st-risk)" }}>{vals.mgError}</div> : null}
-        <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", marginTop: "12px" }}>
-          {"The file is migrated into " + vals.mgOrg + ". Every gate is a screen on this page; nothing is written to the database until the last one is confirmed."}
-        </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-        <div style={CARD}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={KICKER}>{"Recent runs"}</span>
-            <i className="ph ph-arrow-clockwise hv6" onClick={vals.mgRecentReload} title="Reload" style={{ fontSize: "13px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", marginTop: "8px" }}>
-            {vals.mgRecent.map((m) => (
-              <button key={m.id} type="button" className="hv2" onClick={m.open} style={{ ...BARE, display: "grid", gridTemplateColumns: "64px minmax(0,1fr) auto", gap: "10px", alignItems: "center", padding: "7px 8px", borderRadius: "7px", textAlign: "left", background: m.active ? "var(--color-accent-900)" : "transparent" }}>
-                <span style={{ ...MONO, fontSize: "11px", color: "var(--color-neutral-500)" }}>{m.short}</span>
-                <span style={{ minWidth: "0" }}>
-                  <span style={{ display: "block", fontSize: "12px", color: m.tone }}>{m.status}</span>
-                  <span style={{ display: "block", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{m.cmms + " · " + m.mapped + " mapped"}</span>
-                </span>
-                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{m.when}</span>
-              </button>
-            ))}
-            {vals.mgRecentEmpty ? <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", padding: "6px 8px" }}>{"No runs yet for this company."}</span> : null}
-            {vals.mgRecentNote ? <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", padding: "6px 8px" }}>{vals.mgRecentNote}</span> : null}
-          </div>
-        </div>
-        <div style={CARD}>
-          <div style={KICKER}>{"What runs, in order"}</div>
-          <ol style={{ margin: "10px 0 0", padding: "0", listStyle: "none", display: "flex", flexDirection: "column", gap: "8px" }}>
-            {vals.mgNodes.map((n) => (
-              <li key={n.id} style={{ display: "grid", gridTemplateColumns: "20px minmax(0,1fr)", gap: "10px" }}>
-                <span style={{ ...MONO, fontSize: "11px", color: "var(--color-neutral-500)", paddingTop: "1px" }}>{n.id}</span>
-                <span>
-                  <span style={{ display: "block", fontSize: "12.5px" }}>{n.name}</span>
-                  <span style={{ display: "block", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{n.blurb}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </div>
-    </div>
-  );
-}
+    <div style={{ marginTop: "18px", border: "1px solid var(--color-divider)", borderRadius: "12px", background: "var(--color-surface)", overflow: "hidden", animation: "fadeUp 0.25s ease both" }}>
 
-function Run({ vals }) {
-  return (
-    <>
-      <div style={{ ...CARD, marginTop: "22px", display: "flex", flexDirection: "column", gap: "12px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+      {/* ── which run this is, and how far along ── */}
+      <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: "11px", borderBottom: "1px solid var(--color-divider)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          {/* The page had an <h2>Migration</h2> above this row to say what it was. In a
+              transcript the card has to say so itself — it arrives among answers, notes
+              and forms, and a filename alone does not tell you which of them this is. */}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
+            <i className="ph ph-file-arrow-up" style={{ fontSize: "14px", color: "var(--color-accent)" }}></i>
+            {"Migration"}
+          </span>
           <Pill {...vals.mgPill} />
-          <span style={{ fontSize: "13px", fontWeight: "500" }}>{vals.mgFile || "Migration " + vals.mgIdShort}</span>
-          <span style={{ ...MONO, fontSize: "11px", color: "var(--color-neutral-500)" }} title={vals.mgId}>{vals.mgIdShort}</span>
-          <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{[vals.mgCmmsName, vals.mgStarted ? "started " + vals.mgStarted : "", vals.mgStepLabel].filter(Boolean).join(" · ")}</span>
+          {/* Only when a document has told us the file name. The fallback used to be
+              "Migration <short id>", which printed the id immediately before the id chip
+              below — the same eight characters twice, on the one card that has no file
+              name to show because nothing has been read yet. */}
+          {vals.mgFile ? (
+            <span style={{ fontSize: "12.5px", fontWeight: "500", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "34ch" }} title={vals.mgFile}>
+              {vals.mgFile}
+            </span>
+          ) : null}
+          <span style={{ ...MONO, fontSize: "10.5px", color: "var(--color-neutral-500)" }} title={vals.mgId}>{vals.mgIdShort}</span>
+          <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+            {[vals.mgCmmsName, vals.mgStarted ? "started " + vals.mgStarted : "", vals.mgStepLabel].filter(Boolean).join(" · ")}
+          </span>
           <span style={{ flex: "1" }}></span>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11.5px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap" }}>
             <input type="checkbox" checked={vals.mgAuto} onChange={vals.mgToggleAuto} />
             {"Continue past step pauses automatically"}
           </label>
-          <button type="button" className="hv13" onClick={vals.mgRefresh} style={{ ...BARE, fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)" }}>
-            <i className="ph ph-arrow-clockwise" style={{ fontSize: "12px", marginRight: "5px" }}></i>{"Refresh"}
+          <button type="button" className="hv13" onClick={vals.mgRefresh} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
+            <i className="ph ph-arrow-clockwise" style={{ fontSize: "11px", marginRight: "5px" }}></i>{"Refresh"}
+          </button>
+          <button type="button" className="hv11" onClick={vals.mgNew} title="Put this run aside — it keeps running and stays in the list" style={{ ...BARE, fontSize: "11px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
+            {"Close"}
           </button>
         </div>
+
+        {/* Scaled, not resized. The page animated this bar's `width`, which lays out the
+            document on every frame of the transition; scaleX is composited instead and
+            looks identical — the fill carries no radius of its own (the 2px is on the
+            track, which clips it) and no text, so there is nothing for the scale to
+            distort. */}
         <div style={{ height: "4px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
-          <div style={{ height: "100%", width: vals.mgProgress + "%", background: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-accent)", transition: "width 0.4s ease" }}></div>
+          <div style={{ height: "100%", width: "100%", transformOrigin: "left", transform: "scaleX(" + Math.max(0, Math.min(100, Number(vals.mgProgress) || 0)) / 100 + ")", background: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-accent)", transition: "transform 0.4s ease" }}></div>
         </div>
+
         {vals.mgCoverage.length ? (
-          <div style={{ display: "flex", gap: "18px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
             {vals.mgCoverage.map((c) => (
-              <span key={c.label} style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>
-                <span style={{ ...MONO, fontSize: "14px", color: "var(--color-text)", marginRight: "5px" }}>{c.value}</span>{c.label}
+              <span key={c.label} style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                <span style={{ ...MONO, fontSize: "13px", color: "var(--color-text)", marginRight: "5px" }}>{c.value}</span>{c.label}
               </span>
             ))}
           </div>
         ) : null}
       </div>
 
-      {vals.mgError ? <div style={{ marginTop: "12px", fontSize: "12px", padding: "9px 12px", borderRadius: "8px", background: "var(--st-risk-bg)", color: "var(--st-risk)" }}>{vals.mgError}</div> : null}
+      {vals.mgError ? (
+        <div style={{ margin: "12px 16px 0", fontSize: "11.5px", padding: "9px 12px", borderRadius: "8px", background: "var(--st-risk-bg)", color: "var(--st-risk)" }}>{vals.mgError}</div>
+      ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: "280px minmax(0,1fr)", gap: "20px", alignItems: "start", marginTop: "16px" }}>
-        {/* ── tracker ── */}
-        <div style={CARD}>
+      <div className="mg-run-grid" style={{ display: "grid", gridTemplateColumns: "minmax(190px, 240px) minmax(0,1fr)", gap: "16px", alignItems: "start", padding: "14px 16px 16px" }}>
+
+        {/* ── the nine nodes, whether or not they have run ── */}
+        <div>
           <div style={KICKER}>{"Pipeline"}</div>
-          <ol style={{ margin: "10px 0 0", padding: "0", listStyle: "none", display: "flex", flexDirection: "column", gap: "2px" }}>
+          <ol style={{ margin: "9px 0 0", padding: "0", listStyle: "none", display: "flex", flexDirection: "column", gap: "2px" }}>
             {vals.mgNodes.map((n) => (
               <li key={n.id} style={{ borderRadius: "7px", background: n.current ? "var(--color-accent-900)" : "transparent", padding: "6px 8px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "18px minmax(0,1fr) auto", gap: "8px", alignItems: "start" }}>
-                  <i className={`ph ${n.icon}`} style={{ fontSize: "14px", color: n.tone, marginTop: "2px", animation: n.spin ? "spin 1.1s linear infinite" : "none" }}></i>
+                <div style={{ display: "grid", gridTemplateColumns: "16px minmax(0,1fr) auto", gap: "7px", alignItems: "start" }}>
+                  <i className={`ph ${n.icon}`} style={{ fontSize: "13px", color: n.tone, marginTop: "2px", animation: n.spin ? "spin 1.1s linear infinite" : "none" }}></i>
                   <div style={{ minWidth: "0" }}>
-                    <div style={{ fontSize: "12.5px", color: n.status === "pending" ? "var(--color-neutral-500)" : "var(--color-text)" }}>{n.id + ". " + n.name}</div>
-                    {n.outcome ? <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "1px" }}>{n.outcome}</div> : null}
+                    <div style={{ fontSize: "11.5px", color: n.status === "pending" ? "var(--color-neutral-500)" : "var(--color-text)" }}>{n.id + ". " + n.name}</div>
+                    {n.outcome ? <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.4", marginTop: "1px" }}>{n.outcome}</div> : null}
                     {n.hasLogs ? (
-                      <button type="button" className="hv11" onClick={n.toggle} style={{ ...BARE, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "3px" }}>
+                      <button type="button" className="hv11" onClick={n.toggle} style={{ ...BARE, fontSize: "10px", color: "var(--color-accent)", marginTop: "3px" }}>
                         {n.logsOpen ? "Hide log" : "Show log (" + n.logs.length + ")"}
                       </button>
                     ) : null}
                     {n.logsOpen ? (
-                      <pre style={{ ...MONO, fontSize: "10.5px", lineHeight: "1.45", margin: "6px 0 0", padding: "8px", borderRadius: "6px", background: "var(--color-neutral-900)", whiteSpace: "pre-wrap", maxHeight: "260px", overflow: "auto" }}>{n.logs.join("\n")}</pre>
+                      <pre style={{ ...MONO, fontSize: "10px", lineHeight: "1.45", margin: "6px 0 0", padding: "8px", borderRadius: "6px", background: "var(--color-neutral-900)", whiteSpace: "pre-wrap", maxHeight: "240px", overflow: "auto" }}>{n.logs.join("\n")}</pre>
                     ) : null}
                   </div>
-                  <span style={{ ...MONO, fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{n.ms}</span>
+                  <span style={{ ...MONO, fontSize: "9.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{n.ms}</span>
                 </div>
               </li>
             ))}
           </ol>
         </div>
 
-        {/* ── the open gate / step / result ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px", minWidth: "0" }}>
-          <div style={CARD}>
+        {/* ── the gate waiting on a person ── */}
+        <div style={{ minWidth: "0", display: "flex", flexDirection: "column", gap: "14px" }}>
+          <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" }}>
-              <h3 style={{ fontSize: "17px", margin: "0", lineHeight: "1.2" }}>{vals.mgGateTitle}</h3>
-              {vals.mgGateCount ? <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.mgGateCount}</span> : null}
+              <span style={{ fontSize: "15px" }}>{vals.mgGateTitle}</span>
+              {vals.mgGateCount ? <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{vals.mgGateCount}</span> : null}
               <span style={{ flex: "1" }}></span>
               {vals.mgDecided ? (
-                <button type="button" className="hv11" onClick={vals.mgResetDecisions} style={{ ...BARE, fontSize: "11px", color: "var(--color-neutral-500)" }}>{"Reset " + vals.mgDecided + " change" + (vals.mgDecided === 1 ? "" : "s")}</button>
+                <button type="button" className="hv11" onClick={vals.mgResetDecisions} style={{ ...BARE, fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
+                  {"Reset " + vals.mgDecided + " change" + (vals.mgDecided === 1 ? "" : "s")}
+                </button>
               ) : null}
             </div>
-            <p style={{ fontSize: "12.5px", color: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-neutral-400)", margin: "6px 0 0", lineHeight: "1.5", maxWidth: "80ch" }}>{vals.mgGateBlurb}</p>
+            <p style={{ fontSize: "11.5px", color: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-neutral-400)", margin: "5px 0 0", lineHeight: "1.5", maxWidth: "80ch" }}>{vals.mgGateBlurb}</p>
 
-            {vals.mgLoading ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)", marginTop: "14px" }}>{"Reading the migration…"}</div> : null}
+            {vals.mgLoading ? <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "12px" }}>{"Reading the migration…"}</div> : null}
 
-            {vals.mgKind === "gate" ? <div style={{ marginTop: "14px" }}><GateBody vals={vals} /></div> : null}
+            {/* A run that claims to be working but has not moved in minutes. "Working…" on
+                its own is indistinguishable from abandoned, which cost five hours once. */}
+            {vals.mgStallNote ? (
+              <div style={{ display: "grid", gridTemplateColumns: "14px minmax(0,1fr)", gap: "8px", alignItems: "start", marginTop: "12px", padding: "9px 11px", borderRadius: "8px", background: "var(--st-warn-bg)", color: "var(--st-warn)", fontSize: "11.5px", lineHeight: "1.5" }}>
+                <i className="ph ph-warning-circle" style={{ fontSize: "13px", marginTop: "2px" }}></i>
+                <span>{vals.mgStallNote}</span>
+              </div>
+            ) : null}
+
+            {vals.mgKind === "gate" ? <div style={{ marginTop: "12px" }}><GateBody vals={vals} /></div> : null}
 
             {vals.mgKind === "step" && vals.mgStepFacts.length ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "14px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "7px", marginTop: "12px" }}>
                 {vals.mgStepFacts.map((f) => (
-                  <span key={f.label} style={{ fontSize: "11px", padding: "5px 9px", borderRadius: "6px", background: "var(--color-neutral-900)" }}>
+                  <span key={f.label} style={{ fontSize: "10.5px", padding: "5px 9px", borderRadius: "6px", background: "var(--color-neutral-900)" }}>
                     <span style={{ color: "var(--color-neutral-500)" }}>{f.label + " "}</span><span style={MONO}>{f.value}</span>
                   </span>
                 ))}
@@ -510,65 +491,28 @@ function Run({ vals }) {
             ) : null}
 
             {vals.mgPrimary ? (
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--color-divider)" }}>
-                <button type="button" className="hv7" onClick={vals.mgPrimary.run} style={{ ...BARE, fontSize: "13px", padding: "9px 16px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", opacity: vals.mgBusy ? "0.7" : "1" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginTop: "14px", paddingTop: "12px", borderTop: "1px solid var(--color-divider)" }}>
+                <button type="button" className="hv7" onClick={vals.mgPrimary.run} style={{ ...BARE, fontSize: "12.5px", padding: "9px 16px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", opacity: vals.mgBusy ? "0.7" : "1" }}>
                   {vals.mgPrimary.label}
                 </button>
-                <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.mgKind === "gate" ? "Rows you did not change are sent as the pipeline proposed them." : ""}</span>
+                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{vals.mgKind === "gate" ? "Rows you did not change are sent as the pipeline proposed them." : ""}</span>
               </div>
             ) : null}
           </div>
 
           {vals.mgOutputs.length ? (
-            <div style={CARD}>
+            <div>
               <div style={KICKER}>{"Artefacts"}</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "7px", marginTop: "9px" }}>
                 {vals.mgOutputs.map((o) => (
-                  <a key={o.label} href={o.href} target="_blank" rel="noreferrer" className="hv13" style={{ fontSize: "12px", padding: "7px 12px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-text)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                    <i className="ph ph-download-simple" style={{ fontSize: "13px", color: "var(--color-accent)" }}></i>{o.label}
+                  <a key={o.label} href={o.href} target="_blank" rel="noreferrer" className="hv13" style={{ fontSize: "11px", padding: "6px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-text)", display: "inline-flex", alignItems: "center", gap: "6px", textDecoration: "none" }}>
+                    <i className="ph ph-download-simple" style={{ fontSize: "12px", color: "var(--color-accent)" }}></i>{o.label}
                   </a>
                 ))}
               </div>
             </div>
           ) : null}
         </div>
-      </div>
-    </>
-  );
-}
-
-export default function Migration({ vals }) {
-  return (
-    <div style={{ flex: "1", display: "flex", justifyContent: "flex-start", padding: "0 40px 80px" }}>
-      <div style={{ width: "100%", maxWidth: "1400px", animation: "fadeUp 0.28s ease both" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "24px 0 0" }}>
-          <div className="hv6" onClick={vals.goHome} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-            <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
-            <span>{"Home"}</span>
-          </div>
-          <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"/"}</span>
-          <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Migration"}</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "16px 24px", marginTop: "18px" }}>
-          <div style={{ minWidth: "0", flex: "1 1 340px" }}>
-            <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-accent)" }}>{"Data migration · CSV and Excel"}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginTop: "7px" }}>
-              <h2 style={{ fontSize: "28px", margin: "0", lineHeight: "1.15" }}>{"Migration"}</h2>
-              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", letterSpacing: "0.09em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: "var(--color-accent)", color: "var(--accent-ink)" }}>{"Admin only"}</span>
-            </div>
-            <p style={{ fontSize: "13px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "88ch", lineHeight: "1.55" }}>
-              {"A CMMS export becomes plenum_cafm rows in nine steps: tables and keys, column groups, destination columns, semantic matches, hierarchy, then the write. Each decision is a gate on this page, and the database is only touched at the last one."}
-            </p>
-          </div>
-          {vals.mgHasRun ? (
-            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
-              <button type="button" className="hv4" onClick={vals.mgNew} style={{ ...BARE, fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
-                <i className="ph ph-plus" style={{ fontSize: "12px", marginRight: "5px" }}></i>{"New migration"}
-              </button>
-            </div>
-          ) : null}
-        </div>
-        {vals.mgHasRun ? <Run vals={vals} /> : <UploadPanel vals={vals} />}
       </div>
     </div>
   );
