@@ -167,9 +167,20 @@ async def load(session: AsyncSession, building_id: UUID | str) -> BuildingOntolo
         SELECT name, level::text AS level FROM plenum_cafm.floors
          WHERE building_id = CAST(:b AS uuid) LIMIT 100""", {"b": bid}), "name", "level")
 
+    # Both tables, because a deployment may carry either and they are not the same thing.
+    # plenum_cafm.meters is an eighteen-row register that predates the energy engine; the
+    # meters a building actually has are in energy_meters, which is what an ingest writes to.
+    # Reading only the former made every half-hourly upload look like it named a meter nobody
+    # had heard of, moments after creating that meter on that building.
     o.meters = _vals(await _rows(session, """
         SELECT mpan_mprn, meter_type FROM plenum_cafm.meters
          WHERE building_id = CAST(:b AS uuid) LIMIT 100""", {"b": bid}), "mpan_mprn")
+    for _m in _vals(await _rows(session, """
+        SELECT mpan, mprn, dcc_device_id FROM plenum_cafm.energy_meters
+         WHERE building_id = CAST(:b AS uuid) LIMIT 200""", {"b": bid}),
+            "mpan", "mprn", "dcc_device_id"):
+        if _m not in o.meters:
+            o.meters.append(_m)
 
     certs = await _rows(session, """
         SELECT certificate_type_code, certificate_number, issuer, building_name

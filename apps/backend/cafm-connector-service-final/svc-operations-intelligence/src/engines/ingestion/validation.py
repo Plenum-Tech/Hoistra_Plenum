@@ -192,6 +192,29 @@ def compare(c: Claims, o: BuildingOntology) -> list[Finding]:
                                f"The document names “{c.vendors[0]}”; this building has no "
                                f"vendors on record to check against.", c.vendors, []))
 
+    # ── the supply it meters ─────────────────────────────────────────────────────────
+    # A half-hourly export names an MPAN or an MPRN and nothing else. Checked against the
+    # building's assets it always conflicts, because a supply number is not an asset code and
+    # never appears in the asset register.
+    if c.meters:
+        if o.meters:
+            hits = [m for m in c.meters
+                    if any(normalise(m) == normalise(k) for k in o.meters)]
+            if hits:
+                out.append(Finding("meters", SUPPORTS, 2.0,
+                                   f"The document reads meter {', '.join(hits[:4])}, which "
+                                   f"{'is' if len(hits) == 1 else 'are'} on this building.",
+                                   hits, None))
+            else:
+                out.append(Finding("meters", CONFLICTS, 1.0,
+                                   f"The document reads meter "
+                                   f"{', '.join(c.meters[:4])}; this building's meters are "
+                                   f"{', '.join(o.meters[:4])}.", c.meters, o.meters[:8]))
+        else:
+            out.append(Finding("meters", UNKNOWN, 0.0,
+                               f"The document reads meter {c.meters[0]}; this building has no "
+                               f"meters on record to check against.", c.meters, []))
+
     # ── the plant it talks about ─────────────────────────────────────────────────────
     if c.assets:
         if o.assets:

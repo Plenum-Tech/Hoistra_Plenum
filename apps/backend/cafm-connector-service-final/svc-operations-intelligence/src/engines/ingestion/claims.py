@@ -78,6 +78,8 @@ _FIELD_SOURCES: dict[str, tuple[str, ...]] = {
     "states": ("state", "province", "emirate"),
     "postcodes": ("postcode", "post_code", "zip", "zip_code"),
     "assets": ("asset_code", "asset", "equipment", "plant_ref", "serial_number"),
+    "meters": ("mpan", "mprn", "mpan_mprn", "meter_ref", "meter_reference", "meter_point",
+               "supply_number", "meter_serial", "msn", "meter_number"),
     "contract_refs": ("contract_ref", "contract_number", "agreement_ref", "po_number"),
     "certificate_numbers": ("certificate_number", "certificate_ref", "EPC ref no."),
 }
@@ -94,6 +96,7 @@ class Claims:
     states: list[str] = field(default_factory=list)
     postcodes: list[str] = field(default_factory=list)
     assets: list[str] = field(default_factory=list)
+    meters: list[str] = field(default_factory=list)
     contract_refs: list[str] = field(default_factory=list)
     certificate_numbers: list[str] = field(default_factory=list)
     sources: dict[str, str] = field(default_factory=dict)   # claim → where it came from
@@ -110,14 +113,15 @@ class Claims:
     def is_empty(self) -> bool:
         return not any((self.buildings, self.codes, self.vendors, self.countries,
                         self.regions, self.states, self.postcodes, self.assets,
-                        self.contract_refs, self.certificate_numbers))
+                        self.meters, self.contract_refs, self.certificate_numbers))
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "buildings": self.buildings, "codes": self.codes, "vendors": self.vendors,
             "countries": self.countries, "country_names": self.country_names,
             "regions": self.regions, "states": self.states, "postcodes": self.postcodes,
-            "assets": self.assets, "contract_refs": self.contract_refs,
+            "assets": self.assets, "meters": self.meters,
+            "contract_refs": self.contract_refs,
             "certificate_numbers": self.certificate_numbers, "sources": self.sources,
             "empty": self.is_empty(),
         }
@@ -193,6 +197,16 @@ def from_document(
         stem = re.sub(r"[_\-]+", " ", stem)
         if any(len(re.sub(r"[^a-z]", "", t)) >= 3 for t in tokens(stem)):
             _add(c.buildings, stem, sources=c.sources, origin="filename")
+
+    # A supply number is one thing, not two. NB-B-102-E0 matches the hyphenated-code pattern
+    # that looks for asset codes, so a half-hourly export claimed its MPAN as an asset as
+    # well, and the asset check then said "none of the asset references are on this building"
+    # — of a reference that is not an asset and never appears in an asset register. What the
+    # document presented under a meter column wins, because that is the document saying what
+    # the value is, against a pattern guessing.
+    if c.meters:
+        _known = {normalise(m) for m in c.meters}
+        c.assets = [a for a in c.assets if normalise(a) not in _known]
 
     return c
 
