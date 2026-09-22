@@ -21,6 +21,7 @@ from ...engines.energy import cost_drivers as cost
 from ...engines.energy import building_create as bld_create
 from ...engines.energy import building_update as bld_update
 from ...engines.energy import building_tree as bld_tree
+from ...engines.energy import document_delete as doc_delete
 from ...engines.energy import condition as cond_svc
 from ...engines.energy import eui as eui_svc
 from ...engines.energy import meters as meter_svc
@@ -314,13 +315,65 @@ class CreateBuildingRequest(BaseModel):
     source: str | None = Field(None, description='Who is creating this, e.g. "hoistra-ui".')
 
     site_id: str | None = Field(None, description="An EXISTING site. Never allocated here.")
-    building_code: str | None = Field(None, description="Allocated as the next free B-NNN when absent.")
+    building_code: str | None = Field(
+        None,
+        description=(
+            "Allocated as ORG-COUNTRY-NN-REGION-USE when absent and organization_id, "
+            "country_code, region and use_type are all present; the flat B-NN scheme "
+            "otherwise. See GET /buildings/next-code to preview it before submitting."
+        ),
+    )
     city: str | None = None
     postcode: str | None = None
     gfa_sqm: float | None = Field(None, description="Square METRES. Converted to the sqft column on write.")
     metering_route: str | None = None
     organization_id: str | None = None
     created_by: str | None = None
+
+
+@router.get("/buildings/next-code")
+async def preview_building_code(
+    country_code: str | None = Query(None),
+    region: str | None = Query(None, description="Also accepted as `state`."),
+    state: str | None = Query(None),
+    use_type: str | None = Query(None, description="Mall is accepted and previews as Retail."),
+    organization_id: str | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """A read-only preview of the code POST /buildings would allocate for this org, country,
+    region and use — so the Hoist-a-building form can show it filling in as the fields above
+    it are, rather than only after the button is pressed. Calls the exact same allocator
+    create_building itself does, so this can never drift from what actually gets stored.
+
+    Not authoritative for very long: two people previewing the same bucket a moment apart can
+    both see the same next number, and only the one who actually submits first gets it — the
+    other's create then allocates the number after theirs, same as it always could before this
+    existed. A preview commits nothing and takes no lock.
+
+    Every input is optional, same as create_building's own fallback: a field left blank (or
+    not yet chosen) previews the flat B-NN scheme rather than refusing to answer.
+    """
+    requested = UUID(organization_id) if organization_id else None
+    org_id = access.organization_for(s, requested)
+
+    cc = (country_code or "").strip().upper()
+    if cc == "GB":
+        cc = "UK"
+    if cc == "UAE":
+        cc = "AE"
+
+    raw_use = (use_type or "").strip().lower()
+    primary_use = bld_create.USE_TYPE_STORES_AS.get(raw_use)
+
+    code = await bld_create._next_building_code(
+        session,
+        organization_id=str(org_id) if org_id else None,
+        country_code=cc or None,
+        region=(region or state or "").strip() or None,
+        primary_use=primary_use,
+    )
+    return {"ok": True, "building_code": code}
 
 
 @router.post("/buildings", status_code=201)
@@ -463,6 +516,48 @@ async def delete_building(
     out = await bld_create.delete_building(
         session, building_id, confirm=confirm, detach=detach,
         actor=actor, organization_id=organization_id,
+    )
+    response.status_code = int(out.get("status") or (200 if out.get("ok") else 400))
+    return out
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    response: Response,
+    confirm: bool = Query(False, description="Required to actually delete. Without it this reports what would be removed and changes nothing."),
+    actor: str = Query("hoistra-ui"),
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Remove a document and everything read out of it. Reports what it would remove
+    unless confirm=true.
+
+    The opposite decision to ``DELETE /buildings/{id}``, deliberately. That route detaches
+    its children and keeps them, because a certificate outliving its building is still the
+    record of an inspection that happened. A certificate extracted from a document that
+    should never have been ingested is not the record of anything, and while the document is
+    the only thing a person can see and delete, there is no way to be rid of it. So this
+    cascades: the certificate on Compliance, the contract terms and invoice lines on
+    Vendors, and the chunks the assistant answers from all go with the document.
+
+    Nothing in the database enforces that — no foreign key points at plenum_cafm.documents —
+    so the list is written out in the engine and covered by tests. The original file is kept
+    in blob storage; a delete made in error can be re-ingested, but the rows do not come back.
+    """
+    organization_id = access.organization_for(s, organization_id)
+    # Deleting is not ingesting: a user allocated to a building may add documents to it, and
+    # that is not the same permission as destroying one and every record read out of it.
+    access.assert_admin(s, action="delete a document")
+    # Narrows to this caller's company and their allocated buildings, and 404s an id that is
+    # not theirs rather than confirming it exists. `documents` carries building_id, so the
+    # allocation check is real here rather than waved through.
+    await access.assert_owned(
+        session, s, "documents", document_id, action="delete", id_column="document_id",
+    )
+    out = await doc_delete.delete_document(
+        session, document_id, confirm=confirm, actor=actor, organization_id=organization_id,
     )
     response.status_code = int(out.get("status") or (200 if out.get("ok") else 400))
     return out

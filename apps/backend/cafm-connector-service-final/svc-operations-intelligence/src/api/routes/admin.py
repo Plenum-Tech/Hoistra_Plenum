@@ -16,15 +16,23 @@ may act on another company by passing ?organization_id=; a company admin who tri
 """
 from __future__ import annotations
 
+import csv
+import io
+import json
+import zipfile
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core.logging import get_logger
 from ...db import get_session
+from ...engines.admin import org_export
 from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.auth import invitations as invite_engine
@@ -33,6 +41,7 @@ from ...engines.auth import usage as usage_engine
 from ...shared.approvals import PLATFORM_FEATURE, write_audit
 from .auth import current_principal, require_admin, token_engine
 
+log = get_logger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["company-admin"])
 
 
@@ -428,3 +437,257 @@ async def ingestion_audit_trail(
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=out)
     return out
+
+
+# ── the company's data, as a file ────────────────────────────────────────────
+
+#: Rows pulled from the database per round trip while writing a table's CSV. The readings
+#: tables run past half a million rows, so the export streams in batches rather than
+#: materialising a table in memory and falling over on the largest customer.
+_EXPORT_BATCH = 2000
+
+#: Column types whose values can each be megabytes: LangGraph/job state, pgvector
+#: embeddings, extracted document text.
+_WIDE_TYPES = frozenset({"jsonb", "json", "ARRAY", "USER-DEFINED"})
+
+#: Rows per round trip for a table carrying one of those. The gateway drops a response that
+#: goes 300s without bytes, and that timer only resets when a batch is handed out — so the
+#: bound that matters is how long ONE batch takes, not how long the export takes. A narrow
+#: table moves fast at 2000; a table of jsonb blobs has to ask for far fewer at a time or a
+#: single batch can outlast the timeout on its own.
+_EXPORT_BATCH_WIDE = 200
+
+
+def _batch_for(table: str, heavy: set[str]) -> int:
+    return _EXPORT_BATCH_WIDE if table in heavy else _EXPORT_BATCH
+
+
+async def _export_manifest(
+    session: AsyncSession, organization_id: UUID,
+) -> tuple[dict[str, Any], dict[str, org_export.Rule], dict[str, str], set[str]]:
+    """What this export would contain, table by table, counted before anything is written."""
+    # BASE TABLE only. information_schema.columns lists views too, and plenum_cafm has
+    # three (`contracts` and `invoices` are views over contract_sla_parameters and the
+    # invoice tables, which are themselves exported). Including them shipped the same rows
+    # twice under two names, which reads as a discrepancy in the customer's own data.
+    rows = (
+        await session.execute(
+            text(
+                """SELECT c.table_name, c.column_name, c.data_type
+                     FROM information_schema.columns c
+                     JOIN information_schema.tables t
+                       ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                    WHERE c.table_schema = 'plenum_cafm'
+                      AND t.table_type = 'BASE TABLE'"""
+            )
+        )
+    ).all()
+    shape: dict[str, set[str]] = {}
+    heavy: set[str] = set()
+    for table, column, data_type in rows:
+        shape.setdefault(str(table), set()).add(str(column))
+        # Tables whose rows can each be very large: jsonb state, embedding vectors, long
+        # extracted text. These are read in much smaller batches — see _batch_for.
+        if str(data_type) in _WIDE_TYPES:
+            heavy.add(str(table))
+
+    included, excluded = org_export.plan_export(shape)
+
+    tables: dict[str, Any] = {}
+    for name, rule in sorted(included.items()):
+        try:
+            n = (
+                await session.execute(
+                    text(f"SELECT count(*) FROM plenum_cafm.{rule.table} WHERE {rule.where}"),
+                    {"org": str(organization_id)},
+                )
+            ).scalar()
+        except Exception as exc:  # noqa: BLE001 — one unreadable table must not lose the file
+            log.warning("org_export.count_failed", table=name, error=str(exc)[:200])
+            tables[name] = {"rows": None, "error": str(exc)[:160],
+                            "scoped_by": rule.kind}
+            continue
+        tables[name] = {
+            "rows": int(n or 0),
+            "scoped_by": rule.kind if rule.kind != "parent" else f"parent: {rule.parent}",
+        }
+
+    manifest = {
+        "organization_id": str(organization_id),
+        "taken_at": datetime.utcnow().isoformat() + "Z",
+        "schema": "plenum_cafm",
+        "tables": tables,
+        "excluded": dict(sorted(excluded.items())),
+        "row_total": sum(t["rows"] or 0 for t in tables.values()),
+        "notes": [
+            "Every table here is filtered to this organization. Tables that cannot be "
+            "filtered are listed under `excluded` with the reason, and are not in the file.",
+            "Credentials (sessions, one-time codes, action tokens) are never exported.",
+            "Buildings are identified by the organization-scoped rows that reference them, "
+            "because plenum_cafm.sites.organization_id is an integer and cannot be joined to "
+            "an organization uuid. A building with nothing recorded against it will not "
+            "appear here.",
+        ],
+    }
+    return manifest, included, excluded, heavy
+
+
+@router.get("/export", summary="Download everything this company holds, as a zip of CSVs")
+async def export_organization(
+    preview: bool = Query(
+        False, description="Return the manifest only — what the file would contain, and what it would not."),
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """One zip: a CSV per table, plus `manifest.json` saying what is in it and what is not.
+
+    Read-only. Admin and superadmin only, and always scoped to the caller's company —
+    `admin_scope` owns the act-as-another-company override, so an admin cannot widen this by
+    adding a parameter to the URL.
+
+    `?preview=true` returns the manifest alone, with a row count per table and a reason per
+    exclusion. It is the honest answer to "is everything really in there", and it costs a
+    count rather than a download.
+    """
+    organization_id = scope.organization_id
+    manifest, included, _, heavy = await _export_manifest(session, organization_id)
+
+    if preview:
+        return {"ok": True, **manifest}
+
+    # Streamed, not buffered — and the difference is the whole feature working or not.
+    #
+    # Measured against the live database: building this zip takes ~406 seconds, and the
+    # gateway in front of this service sets `proxy_read_timeout 300s`. Buffering the file
+    # first meant nginx saw no bytes for 406s and cut the connection at 300, so the download
+    # failed every time on anything but a small tenant. That timeout measures the gap
+    # BETWEEN reads, so a zip written out as it is produced never approaches it: the first
+    # bytes leave within a second and keep coming.
+    #
+    # zipfile writes to a non-seekable sink by emitting data descriptors, so the archive
+    # stays valid without ever seeking back to patch a header. The cost is that the total
+    # size is unknown when the response headers go out, so there is no Content-Length —
+    # the browser shows a progressing download rather than a percentage.
+    org = str(organization_id)
+    written: dict[str, int] = {}
+
+    class _Sink:
+        """Collects what zipfile writes so it can be handed out between batches."""
+
+        def __init__(self) -> None:
+            self._parts: list[bytes] = []
+            self._pos = 0
+
+        def write(self, data) -> int:
+            b = bytes(data)
+            self._parts.append(b)
+            self._pos += len(b)
+            return len(b)
+
+        def tell(self) -> int:
+            return self._pos
+
+        def flush(self) -> None:
+            return None
+
+        def seekable(self) -> bool:
+            return False
+
+        def drain(self) -> bytes:
+            out = b"".join(self._parts)
+            self._parts.clear()
+            return out
+
+    async def _zip_stream():
+        sink = _Sink()
+        with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, rule in sorted(included.items()):
+                count = 0
+                try:
+                    result = await session.stream(
+                        text(f"SELECT * FROM plenum_cafm.{rule.table} WHERE {rule.where}"),
+                        {"org": org},
+                    )
+                    # A table with no rows still gets its file, empty. "Not in the zip" and
+                    # "you have none of these" are different findings, and a reader cannot
+                    # tell them apart from an absence.
+                    with zf.open(f"{name}.csv", "w") as entry:
+                        header_done = False
+                        async for batch in result.mappings().partitions(_batch_for(name, heavy)):
+                            buf = io.StringIO()
+                            writer = None
+                            for row in batch:
+                                if writer is None:
+                                    writer = csv.DictWriter(buf, fieldnames=list(row.keys()))
+                                    if not header_done:
+                                        writer.writeheader()
+                                        header_done = True
+                                writer.writerow(
+                                    {k: ("" if v is None else v) for k, v in row.items()}
+                                )
+                                count += 1
+                            entry.write(buf.getvalue().encode("utf-8"))
+                            # Hand the finished bytes to the client before reading the next
+                            # batch — this is what keeps the connection alive on a table
+                            # like meter_readings, which is half a million rows on its own.
+                            chunk = sink.drain()
+                            if chunk:
+                                yield chunk
+                except Exception as exc:  # noqa: BLE001 — one bad table must not lose the file
+                    log.warning("org_export.table_failed", table=name, error=str(exc)[:200])
+                    manifest["tables"].setdefault(name, {})["error"] = str(exc)[:160]
+                    continue
+                written[name] = count
+                chunk = sink.drain()
+                if chunk:
+                    yield chunk
+
+            # Written last, so it reports what actually went in rather than what was planned.
+            manifest["rows_written"] = written
+            manifest["row_total"] = sum(written.values())
+            manifest["tables_written"] = len(written)
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str))
+
+        # The central directory is only emitted when ZipFile closes, so this last drain is
+        # what makes the archive openable. Dropping it yields a file that looks complete and
+        # will not open.
+        tail = sink.drain()
+        if tail:
+            yield tail
+
+        log.info("org_export.done", organization_id=org,
+                 tables=len(written), rows=sum(written.values()))
+
+    # Audited before the bytes go out. The alternative is auditing inside the generator,
+    # where a client that disconnects halfway leaves no record that an export was started.
+    try:
+        async with session.begin_nested():
+            await write_audit(
+                session,
+                actor="hoistra-ui",
+                action_type="organization.export",
+                source_feature=PLATFORM_FEATURE,
+                organization_id=organization_id,
+                input_payload={"organization_id": org},
+                output_payload={"tables_planned": len(included),
+                                "rows_planned": manifest["row_total"]},
+                detail={"planned": {k: v.get("rows") for k, v in manifest["tables"].items()},
+                        "excluded": list(manifest["excluded"])},
+            )
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — failing to log must not withhold the export
+        log.error("org_export.audit_failed", error=str(exc)[:200])
+
+    stamp = datetime.utcnow().strftime("%Y-%m-%d")
+    filename = f"hoistra-export-{org[:8]}-{stamp}.zip"
+    return StreamingResponse(
+        _zip_stream(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Planned figures: the real ones are only known once the stream ends, and
+            # headers go out first. The manifest inside the zip carries what was written.
+            "X-Export-Tables-Planned": str(len(included)),
+            "X-Export-Rows-Planned": str(manifest["row_total"]),
+        },
+    )
