@@ -328,6 +328,80 @@ async def record_gaps_for_meter(
     return gap_rows
 
 
+async def link_report(
+    session: AsyncSession,
+    *,
+    building_ids: list[UUID] | None = None,
+) -> dict[str, Any]:
+    """Whether each meter is linked, and whether its readings can reach a building.
+
+    Counting rows cannot answer this. Nearly every link in the energy chain is a plain uuid
+    with no foreign key behind it, so a wrong value inserts cleanly, joins to nothing, and the
+    rows leave the page with no error raised anywhere. Only meter_readings.meter_id is a real
+    constraint, which is why a reading with no meter fails loudly and a meter with no building
+    fails in silence.
+
+    Returned in a shape the chat can read back after an ingest, because the person who just
+    uploaded the file is the one who needs to know, and asking them to run a script to find
+    out whether their upload worked is not an answer.
+    """
+    clause, params = "", {}
+    if building_ids is not None:
+        if not building_ids:
+            return {"ok": True, "meters": [], "linked": 0, "unlinked": 0, "readings": 0,
+                    "summary": "No buildings in scope."}
+        clause = " WHERE m.building_id = ANY(CAST(:bids AS uuid[]))"
+        params["bids"] = [str(b) for b in building_ids]
+
+    rows = (await session.execute(text(f"""
+        SELECT coalesce(m.mpan, m.mprn) AS supply, m.meter_type, m.is_sub_meter, m.active,
+               b.building_code, b.name AS building_name, sec.name AS section, f.name AS floor,
+               (SELECT count(*) FROM plenum_cafm.meter_readings r WHERE r.meter_id = m.id)
+                   AS readings
+          FROM plenum_cafm.energy_meters m
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
+          LEFT JOIN plenum_cafm.building_sections sec ON sec.section_id = m.section_id
+          LEFT JOIN plenum_cafm.floors f ON f.floor_id = sec.floor_id
+          {clause}
+         ORDER BY b.building_code NULLS FIRST, m.meter_type"""), params)).mappings().all()
+
+    meters = []
+    for r in rows:
+        meters.append({
+            "supply": r["supply"], "meter_type": r["meter_type"],
+            "is_sub_meter": bool(r["is_sub_meter"]), "active": bool(r["active"]),
+            "building": r["building_name"], "building_code": r["building_code"],
+            "section": r["section"], "floor": r["floor"],
+            "readings": int(r["readings"] or 0),
+            "linked": r["building_code"] is not None,
+        })
+    linked = [m for m in meters if m["linked"]]
+    unlinked = [m for m in meters if not m["linked"]]
+    no_readings = [m for m in linked if m["readings"] == 0]
+    total_readings = sum(m["readings"] for m in meters)
+
+    if not meters:
+        summary = "No meters on record, so nothing was linked."
+    elif unlinked:
+        summary = (
+            f"{len(unlinked)} of {len(meters)} meters reached no building. Their readings are "
+            f"stored and counted towards nothing: not the building's intensity, not its "
+            f"benchmark, not an anomaly."
+        )
+    else:
+        where = []
+        for m in linked:
+            place = m["section"] or ("the whole building" if not m["is_sub_meter"] else "nowhere")
+            where.append(f"{m['supply']} ({m['meter_type']}) on {m['building']}, {place}, "
+                         f"{m['readings']:,} readings")
+        summary = f"All {len(meters)} meters are linked. " + "; ".join(where) + "."
+        if no_readings:
+            summary += (f" {len(no_readings)} of them carry no readings yet.")
+
+    return {"ok": True, "meters": meters, "linked": len(linked), "unlinked": len(unlinked),
+            "readings": total_readings, "summary": summary}
+
+
 async def detect_gaps_for_meters(
     session: AsyncSession,
     *,

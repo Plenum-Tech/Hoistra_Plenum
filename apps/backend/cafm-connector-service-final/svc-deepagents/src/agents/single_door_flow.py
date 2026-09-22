@@ -751,6 +751,42 @@ async def _detect_meter_gaps(building_id: str | None, organization_id: str | Non
         return None
 
 
+async def _meter_link_report(building_id: str | None,
+                             organization_id: str | None) -> dict | None:
+    """Whether the meters this run touched are linked, in words the chat can say.
+
+    A migration reports rows written. Rows written is not the question: nearly every link in
+    the energy chain is a plain uuid with no constraint behind it, so readings can land
+    perfectly and reach no building, and the page stays empty while the run reports success.
+    The person who just uploaded the file is the one who needs to know that, and asking them
+    to run a script to find out whether their own upload worked is not an answer.
+
+    Never fatal. A report that cannot be fetched does not undo a write that succeeded.
+    """
+    if not building_id:
+        return None
+    base = settings.operations_intelligence_base_url.rstrip("/")
+    try:
+        resp = await _request(
+            "GET",
+            base,
+            "/api/energy/meters/link-report",
+            service="operations_intelligence",
+            timeout=60.0,
+            max_attempts=2,
+            params={k: v for k, v in (("building_id", building_id),
+                                      ("organization_id", organization_id)) if v},
+        )
+        out = resp.json()
+        log.info("single_door.link_report", building=building_id,
+                 linked=out.get("linked"), unlinked=out.get("unlinked"))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("single_door.link_report_failed", building=building_id,
+                    error=str(exc)[:200])
+        return None
+
+
 async def ingest_structured_batch(
     *,
     file_paths: list[str],
@@ -835,13 +871,28 @@ async def ingest_structured_batch(
         tool_calls.append({"tool": "detect_meter_gaps",
                            "input": {"building_id": building_id}, "output": _gaps})
 
+    # And rows written is not the same as rows that reach a building. Say which.
+    _links = await _meter_link_report(building_id, organization_id)
+    _summary = driven["summary"]
+    if _links and _links.get("meters"):
+        _summary = f"{_summary}\n\nMeter links — {_links['summary']}"
+        if _gaps is not None:
+            _flagged = int(_gaps.get("gaps_flagged") or 0)
+            _summary += (
+                f" Gap check: {_flagged} gap(s) flagged across "
+                f"{_gaps.get('meters_scanned', 0)} meter(s)."
+            )
+        tool_calls.append({"tool": "meter_link_report",
+                           "input": {"building_id": building_id}, "output": _links})
+
     return {
         "kind": "structured",
         "status": driven["status"],
         "file_names": names,
-        "summary": driven["summary"],
+        "summary": _summary,
         "migration_id": migration_id,
         "meter_gaps": _gaps,
+        "meter_links": _links,
         "gate_type": driven.get("gate_type"),
         "error": driven.get("error"),
         "tool_calls": tool_calls + driven["tool_calls"],

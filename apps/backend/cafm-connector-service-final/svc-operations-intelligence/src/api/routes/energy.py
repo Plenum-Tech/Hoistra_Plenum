@@ -237,6 +237,21 @@ async def process_gap_retries(session: AsyncSession = Depends(get_session)):
     return await meter_svc.process_gap_retries(session)
 
 
+@router.get("/meters/link-report")
+async def meter_link_report(
+    building_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Whether each meter is linked, in a shape the chat can read back after an ingest.
+
+    Asking someone to run a script to find out whether their own upload worked is not an
+    answer. This is the same walk of the joins that db/tools/check_meter_links.py does.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await meter_svc.link_report(session, building_ids=ids)
+
+
 @router.post("/gaps/detect")
 async def detect_meter_gaps(
     building_id: UUID | None = None,

@@ -175,3 +175,43 @@ class TestAMeterOnlyUploadIsAskedWhereTheMeterIs:
 
     def test_both_branches_still_say_nothing_was_written(self):
         assert source(_FLOW).count("Nothing has been written.") == 2
+
+
+class TestTheChatSaysWhetherTheMetersLinked:
+    """Rows written is not the question a person asked by uploading a file.
+
+    Nearly every link in the energy chain is a plain uuid with no constraint behind it, so
+    readings can land perfectly and reach no building: the run reports success and the page
+    stays empty. Telling them to run a script to find out whether their own upload worked is
+    not an answer.
+    """
+
+    def test_the_flow_asks_for_a_link_report(self):
+        src = source(_FLOW)
+        assert "async def _meter_link_report(" in src
+        assert "/api/energy/meters/link-report" in src
+
+    def test_it_reaches_the_chat_and_not_only_the_log(self):
+        """The summary is what the person reads. A report only in tool_calls is invisible."""
+        src = source(_FLOW)
+        assert "Meter links — " in src
+        assert '"summary": _summary,' in src
+
+    def test_the_gap_result_is_said_in_the_same_breath(self):
+        src = source(_FLOW)
+        assert "Gap check:" in src
+
+    def test_a_failed_report_does_not_fail_the_ingest(self):
+        """A report that cannot be fetched must not undo a write that succeeded."""
+        src = source(_FLOW)
+        assert "single_door.link_report_failed" in src
+
+    def test_it_is_returned_for_anything_downstream(self):
+        assert '"meter_links": _links,' in source(_FLOW)
+
+    def test_nothing_is_reported_when_no_building_was_chosen(self):
+        """Without a building there is nothing to scope the report to, and the run was held
+        before it started anyway."""
+        fn = function(_FLOW, "_meter_link_report")
+        body = ast.dump(fn)
+        assert "building_id" in body
