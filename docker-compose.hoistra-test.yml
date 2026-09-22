@@ -64,13 +64,15 @@ services:
   connector-app:
     environment:
       <<: *db_env
+      # The base file seeds a default company here too. An organisation nobody created
+      # is the same problem as a building nobody ingested.
+      SEED_DEFAULT_PLENUM_ORG: "false"
 
   backend-app:
     environment:
       <<: *db_env
-      # Off, or the container crash-loops before it serves anything: the seed script targets an
-      # older shape of plenum_cafm.work_orders. The approvals rail reads approvals_queue_items,
-      # and with no rows it says nothing is waiting, which is true.
+      # Off for two reasons. It crash-loops the container - the script targets an older shape
+      # of plenum_cafm.work_orders - and it is demo data, which this database is not for.
       SEED_APPROVAL_DEMO: "false"
 
   schema-mapper-app:
@@ -91,3 +93,12 @@ services:
       # The organisation the three accounts in hoistra_test belong to, and the one an ingest
       # lands in when nothing else names a company.
       AUTH_DEFAULT_ORGANIZATION_ID: "00000000-0000-0000-0000-000000000001"
+      # Nine demo buildings are written into plenum_cafm.sites at EVERY startup unless this
+      # is off (config.py auto_seed_portfolio_buildings, default true). They are real rows,
+      # so they are indistinguishable from ingested ones on every page — which is exactly
+      # how an emptied database came back with a full Energy portfolio after a restart. A
+      # database being filled by ingestion must not also be filled by the service.
+      AUTO_SEED_PORTFOLIO_BUILDINGS: "false"
+      # Likewise: do not invent a company. The organisations in hoistra_test are the ones
+      # its users belong to.
+      SEED_DEFAULT_PLENUM_ORG: "false"
