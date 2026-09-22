@@ -206,3 +206,44 @@ class TestADeadConnection:
             pass
         else:
             raise AssertionError("should have raised")
+
+
+class TestWhereverItSurfaces:
+    """A lost connection reaches the handler two ways, and both must say the same thing.
+
+    _insert_rows raises ConnectionLost when the insert itself died. But the first statement of
+    the NEXT table is a read of information_schema, and if the connection went during the
+    previous table that read is what fails — with PendingRollbackError, outside any handler
+    that knows what it means. That is exactly what happened to the second of two meter files:
+    three milliseconds after "Table 'meter_readings': 17520 records", before a single row of
+    it had been attempted.
+    """
+
+    @staticmethod
+    def _handler_source():
+        import inspect
+        return inspect.getsource(wn.write_node)
+
+    def test_the_generic_handler_also_recognises_a_lost_connection(self):
+        src = self._handler_source()
+        assert "isinstance(aligned_exc, ConnectionLost) or _is_connection_lost(aligned_exc)" in src
+
+    def test_a_pending_rollback_error_is_recognised_as_a_lost_connection(self):
+        """The exact wording the second file failed with."""
+        assert wn._is_connection_lost(Exception(
+            "Can't reconnect until invalid transaction is rolled back.  "
+            "Please rollback() fully before proceeding"
+        )) is True
+
+    def test_it_says_nothing_partial_was_kept(self):
+        """The reader's next question is whether half a year of readings is now on record."""
+        assert "Nothing partial was kept" in self._handler_source()
+
+    def test_it_points_away_from_the_file(self):
+        src = self._handler_source()
+        assert "not the" in src and "file" in src
+        assert "try the same upload again" in src
+
+    def test_a_real_data_failure_still_says_the_write_failed(self):
+        """Not everything is the connection. A genuine schema fault must not be excused."""
+        assert "Schema-aligned write failed:" in self._handler_source()

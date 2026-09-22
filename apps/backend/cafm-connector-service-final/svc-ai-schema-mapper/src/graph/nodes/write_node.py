@@ -592,20 +592,24 @@ async def write_node(state: MigrationState) -> MigrationState:
                     f"{aligned_result.get('buildings_linked', 0)} building link(s), "
                     f"{aligned_result.get('meters_linked', 0)} reading(s) placed on a meter"
                 )
-            except ConnectionLost as lost_exc:
-                # Not a data problem. Saying "write failed" here sends the reader looking at
-                # their file, which is the one place the answer is not.
-                logger.error(f"[Node 9] The database connection closed mid-write: {lost_exc}")
-                state["error_message"] = (
-                    "The database connection closed part way through the write, so the run "
-                    "stopped. Nothing partial was kept. This is the connection, not the file "
-                    "— try the same upload again. "
-                    f"({str(lost_exc)[:160]})"
-                )
-                state["error_node"] = 9
-                state["el_m9_passed"] = False
-                return state
             except Exception as aligned_exc:
+                # A lost connection reaches here two ways. _insert_rows raises ConnectionLost
+                # when it is the insert that died; but the first statement of the NEXT table is
+                # a read of information_schema, and if the connection went during the previous
+                # table that read is what fails, with PendingRollbackError, outside any handler
+                # that knows what it means. Both are the same event and both must say so.
+                if isinstance(aligned_exc, ConnectionLost) or _is_connection_lost(aligned_exc):
+                    logger.error(
+                        f"[Node 9] The database connection closed mid-write: {aligned_exc}"
+                    )
+                    state["error_message"] = (
+                        "The database connection closed part way through the write, so the run "
+                        "stopped. Nothing partial was kept. This is the connection, not the "
+                        f"file — try the same upload again. ({str(aligned_exc)[:160]})"
+                    )
+                    state["error_node"] = 9
+                    state["el_m9_passed"] = False
+                    return state
                 logger.exception(f"[Node 9] Schema-aligned inserts failed: {aligned_exc}")
                 state["error_message"] = f"Schema-aligned write failed: {str(aligned_exc)[:300]}"
                 state["error_node"] = 9
