@@ -1232,8 +1232,23 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # ── Build initial table_routing ────────────────────────────────────
         # Maps each source sheet name → target entity type for IntermediateSchema routing.
         # Priority: (1) source table name pattern, (2) dominant mapped canonical fields.
+        # A sheet whose name IS a real plenum_cafm table is matched directly at step (0)
+        # below, before these patterns are consulted. That is right for every table but one:
+        # a sheet called "Meters" matches plenum_cafm.meters, an eighteen-row register that
+        # nothing reads for consumption, and the readings then have no meter to belong to.
+        # Energy lives in energy_meters and meter_readings.
+        _DIRECT_NAME_DENY = {"meters", "meter"}
+
         _TABLE_NAME_PATTERNS = [
             ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
+            # Energy. The readings patterns come first because "Meter Readings" contains
+            # "meter", and a reading sheet routed to energy_meters writes eighteen thousand
+            # meters and no consumption at all.
+            ("meter_reading", "meter_readings"), ("meter reading", "meter_readings"),
+            ("half_hour", "meter_readings"), ("half hour", "meter_readings"),
+            ("consumption", "meter_readings"), ("reading", "meter_readings"),
+            ("energy_meter", "energy_meters"), ("energy meter", "energy_meters"),
+            ("mpan", "energy_meters"), ("mprn", "energy_meters"), ("meter", "energy_meters"),
             ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
             ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
             ("part", "spare_parts"), ("inventory", "spare_parts"),
@@ -1249,6 +1264,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
             "technicians":       {"user_full_name", "user_title", "user_name", "reports_to"},
             "findings":          {"inspector_name", "inspection_date", "finding_type", "risk_level"},
             "locations":         {"site_id", "site_name", "site_type"},
+            "energy_meters":     {"mpan", "mprn", "meter_type", "meter_ref", "meter_reference"},
+            "meter_readings":    {"consumption_kwh", "kwh", "reading_at", "period_minutes"},
         }
 
         # (_ingest_table_matches computed above — Node 1 name+LLM table match — also
@@ -1286,6 +1303,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
                 for targets in (_db_tables, list(_ENTITY_FIELD_SIGNALS.keys())):
                     for tgt in targets:
                         t = tgt.lower()
+                        if t in _DIRECT_NAME_DENY:
+                            continue      # see _DIRECT_NAME_DENY: "Meters" is not plenum_cafm.meters
                         if t in sheet_variants or t.rstrip("s") in sheet_variants:
                             matched_entity = tgt
                             break

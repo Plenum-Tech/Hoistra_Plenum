@@ -34,6 +34,9 @@ from .building_link import (
     ASSET_BUILDING_SQL, ASSET_LOOKUP_SQL, BuildingResolver, asset_match_code,
     build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
 )
+from .meter_link import (
+    CREATE_METER_SQL, MeterResolver, meter_hint, meter_type_for, supply_numbers,
+)
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 
@@ -42,6 +45,24 @@ logger = get_logger(__name__)
 
 # plenum_cafm schema prefix used in all DDL
 _SCHEMA = "plenum_cafm"
+
+#: Tables whose rows carry a building_id that can be resolved from a site reference.
+#:
+#: energy_meters joined this list on 22 Sep 2026. It went through the same writer and came out
+#: unlinked, and unlike a missing asset link that failure is silent: energy_meters.building_id
+#: is a plain uuid with no constraint behind it, so the row inserts, the anomaly scan sweeps
+#: the meter, and every finding it raises is written with a null building. Those findings are
+#: invisible on a building-scoped page and no EUI snapshot is produced at all, so the scan
+#: reports success over an empty screen.
+_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters")
+
+#: Tables whose rows are READ for a building reference. meter_readings does not carry a
+#: building column of its own, but a reading sheet often names the site, and that is what
+#: decides whether a meter can be created for it.
+_BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readings")
+
+#: Tables that can take their building from the asset they name, when they name no site.
+_BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
 _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
@@ -878,6 +899,41 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             normalized["type"] = normalized.get("site_type")
         if not normalized.get("type"):
             normalized["type"] = "site"
+    elif t == "energy_meters":
+        # meter_type is NOT NULL with no default, so a meter sheet that does not carry one
+        # fails every row before it ever reaches the building link. Read the fuel the sheet
+        # states, or infer it from which supply number is present — the same rule the chat
+        # upload path uses, so the two agree about what a row is.
+        _mpan, _mprn = supply_numbers(row)
+        if _mpan and not normalized.get("mpan"):
+            normalized["mpan"] = _mpan
+        if _mprn and not normalized.get("mprn"):
+            normalized["mprn"] = _mprn
+        if not normalized.get("meter_type"):
+            normalized["meter_type"] = meter_type_for(row)
+        # Source spellings that have now been read into a real column. Left in place they
+        # would be proposed as new columns on the table.
+        for _k in ("fuel", "fuel_type", "supply_type", "utility", "commodity", "energy_type",
+                   "mpan_mprn", "meter_ref", "meter_reference", "supply_number",
+                   "meter_number", "msn"):
+            normalized.pop(_k, None)
+    elif t == "meter_readings":
+        # The meter itself is resolved in the writer, which has the session. Only the column
+        # names are canonicalised here.
+        for _src, _dst in (("timestamp", "reading_at"), ("read_at", "reading_at"),
+                           ("datetime", "reading_at"), ("reading_date", "reading_at"),
+                           ("kwh", "consumption_kwh"), ("consumption", "consumption_kwh"),
+                           ("usage", "consumption_kwh"), ("value", "consumption_kwh")):
+            if _src not in normalized:
+                continue
+            if not normalized.get(_dst):
+                normalized[_dst] = normalized.pop(_src)
+            else:
+                normalized.pop(_src, None)
+        # The reference the meter was named by; it is resolved to meter_id, not stored.
+        for _k in ("mpan", "mprn", "mpan_mprn", "meter_ref", "meter_reference",
+                   "supply_number", "meter_number", "msn", "meter"):
+            normalized.pop(_k, None)
     elif t == "work_orders":
         # work_order_id is NOT NULL in the actual DB schema — map from any available code.
         if not normalized.get("work_order_id"):
@@ -1262,10 +1318,33 @@ async def _apply_records_with_schema_alignment(
                 _fetch, effective_org_id, schema_name,
                 site_names_from_run(cleaned_tables, table_routing),
             )
+            # ── Meter links ─────────────────────────────────────────────────────────────
+            # A reading names its meter by a supply number, and meter_readings.meter_id is NOT
+            # NULL behind a real foreign key, so before this every reading row was rejected and
+            # counted as skipped. A meter that does not exist yet is created — but only when the
+            # row also names a building that resolves. See meter_link for why that refusal
+            # matters more than it looks.
+            async def _create_meter(*, mpan, mprn, meter_type, building_id) -> str | None:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(
+                            text(CREATE_METER_SQL.format(schema=schema_name)),
+                            {"org": effective_org_id, "bid": building_id,
+                             "mtype": meter_type, "mpan": mpan, "mprn": mprn},
+                        )
+                        _row = _rs.first()
+                        return str(_row[0]) if _row and _row[0] else None
+                except Exception as _create_exc:     # a constraint, a bad cast — never fatal
+                    logger.debug(f"[Node 9] meter create failed: {str(_create_exc)[:160]}")
+                    return None
+
+            _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
+
             _asset_ids: dict[str, str] = {}          # asset code → existing assets.id ("" = none)
             _asset_building_cache: dict[str, str] = {}  # asset ref → building_id ("" = none)
             rows_merged = 0
             buildings_linked = 0
+            meters_linked = 0
 
             async def _existing_asset_id(_code: str) -> str:
                 if _code not in _asset_ids:
@@ -1464,7 +1543,7 @@ async def _apply_records_with_schema_alignment(
                 for row in records:
                     if not isinstance(row, dict):
                         continue
-                    _hint = building_hint(row) if safe_table in ("assets", "work_orders") else None
+                    _hint = building_hint(row) if safe_table in _BUILDING_HINT_TABLES else None
                     normalized = _normalize_row_for_table(
                         safe_table, row, effective_org_id
                     )
@@ -1480,16 +1559,38 @@ async def _apply_records_with_schema_alignment(
                     # The building link. A hint that resolves becomes building_id; one that does
                     # not is removed rather than written into a UUID column as text. A work order
                     # with no hint of its own takes its asset's building.
-                    if safe_table in ("assets", "work_orders") and "building_id" in db_cols \
+                    if safe_table in _BUILDING_LINKED_TABLES and "building_id" in db_cols \
                             and not looks_like_uuid(safe_row.get("building_id")):
                         _bid = await _buildings.resolve(_hint) if _hint else None
-                        if not _bid and safe_table == "work_orders":
+                        if not _bid and safe_table in _BUILDING_VIA_ASSET_TABLES:
                             _bid = await _asset_building(str(safe_row.get("asset_id") or "").strip()) or None
                         if _bid:
                             safe_row["building_id"] = _bid
                             buildings_linked += 1
                         else:
                             safe_row.pop("building_id", None)
+
+                    # The meter link. A reading carries no building of its own; it reaches one
+                    # through its meter, so resolving the meter is what places the reading.
+                    if safe_table == "meter_readings" \
+                            and not looks_like_uuid(safe_row.get("meter_id")):
+                        _mh = meter_hint(row)
+                        _mid = None
+                        if _mh:
+                            _mpan, _mprn = supply_numbers(row)
+                            _mid = await _meters.resolve(
+                                _mh,
+                                building_id=(await _buildings.resolve(_hint)) if _hint else None,
+                                meter_type=meter_type_for(row), mpan=_mpan, mprn=_mprn,
+                            )
+                        if _mid:
+                            safe_row["meter_id"] = _mid
+                            meters_linked += 1
+                        else:
+                            # Left absent rather than guessed. meter_id is NOT NULL, so the row
+                            # is skipped and reported, which is the honest outcome: a reading on
+                            # the wrong meter is a year of consumption on the wrong building.
+                            safe_row.pop("meter_id", None)
                     normalized_records.append(safe_row)
 
                 if missing_columns and safe_table in _KNOWN_CORE_TABLES:
@@ -1752,13 +1853,27 @@ async def _apply_records_with_schema_alignment(
                 f"[Node 9] Schema-aligned write done — "
                 f"{rows_inserted} row(s) across {tables_written} table(s), "
                 f"{rows_skipped} skipped, {rows_merged} merged into existing assets, "
-                f"{buildings_linked} building link(s) resolved"
+                f"{buildings_linked} building link(s) resolved, "
+                f"{meters_linked} reading(s) placed on a meter "
+                f"({_meters.created} meter(s) created)"
                 + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
             if _buildings.ambiguous and len(row_errors) < 20:
                 row_errors.append(
                     "building: " + ", ".join(sorted(set(_buildings.ambiguous))[:5])
                     + " matched more than one building — the rows were written without a building link"
+                )
+            if _meters.unlinked and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.unlinked))[:5])
+                    + " named no meter already on record, and the rows named no building to "
+                      "create one against — those readings were skipped rather than written "
+                      "to a meter that belongs to no building"
+                )
+            if _meters.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.ambiguous))[:5])
+                    + " matched more than one meter — those readings were skipped"
                 )
             await session.commit()
         except Exception:
@@ -1771,6 +1886,9 @@ async def _apply_records_with_schema_alignment(
         "rows_skipped": rows_skipped,
         "rows_merged": rows_merged,
         "buildings_linked": buildings_linked,
+        "meters_linked": meters_linked,
+        "meters_created": _meters.created,
+        "meters_unlinked": sorted(set(_meters.unlinked)),
         "row_errors": row_errors,
     }
 
