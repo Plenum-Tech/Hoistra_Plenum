@@ -148,6 +148,12 @@ class AdversaryRequest(BaseModel):
 class VerifyNowRequest(BaseModel):
     certificate_type_code: str
     accreditation_number: str | None = None
+    certificate_number: str | None = Field(
+        None,
+        description="The certificate's own number. On the GOV.UK energy register a lodged "
+                    "certificate has its own public page addressed by this, so supplying it "
+                    "makes Verify now open the certificate rather than a search form.",
+    )
     country_code: str = "UK"
     vendor_name: str | None = None
     certificate_id: UUID | None = Field(

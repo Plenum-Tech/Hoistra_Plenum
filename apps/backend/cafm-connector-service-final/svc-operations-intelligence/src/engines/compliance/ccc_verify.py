@@ -83,6 +83,7 @@ async def verify_certificate_type(
             certificate_type_code=certificate_type_code or canon or "",
             accreditation_number=accreditation_number or certificate_number,
             vendor_name=vendor_name,
+            certificate_number=certificate_number,
         )
         result = {
             "ok": True,
@@ -260,6 +261,7 @@ async def verify_certificate_type(
             certificate_type_code=certificate_type_code or canon or "",
             accreditation_number=accreditation_number or certificate_number,
             vendor_name=vendor_name,
+            certificate_number=certificate_number,
         )
         url = (
             (search_info.get("deep_link") if search_info else None)
@@ -400,6 +402,7 @@ async def verify_certificate_type(
         certificate_type_code=certificate_type_code or canon or "",
         accreditation_number=accreditation_number or certificate_number,
         vendor_name=vendor_name,
+        certificate_number=certificate_number,
     )
     url = source_url or verify_now.get("verification_url")
     status = "website_only" if channel == "website" or api_available == "no" else "needs_human"

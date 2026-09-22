@@ -155,6 +155,7 @@ async def build_verify_now_link(
     country_code: str = "UK",
     vendor_name: str | None = None,
     certificate_id: Any = None,
+    certificate_number: str | None = None,
 ) -> dict[str, Any]:
     """Build the register link, and write it onto the certificate when one is named.
 
@@ -168,6 +169,7 @@ async def build_verify_now_link(
         accreditation_number=accreditation_number,
         country_code=country_code,
         vendor_name=vendor_name,
+        certificate_number=certificate_number,
     )
     if certificate_id and (link.get("verification_url") or link.get("register_url")):
         link["stored_on_certificate"] = await persist_register_link(
@@ -183,12 +185,18 @@ async def _build_verify_now_link(
     accreditation_number: str | None = None,
     country_code: str = "UK",
     vendor_name: str | None = None,
+    certificate_number: str | None = None,
 ) -> dict[str, Any]:
     """
     Opens the relevant register in a new tab.
     Pre-fills accreditation number only when the register supports it
     (see verification_registers.prefills_number in the UK pack).
     Navigation action only — no scraping or automation.
+
+    ``certificate_number`` is separate from ``accreditation_number`` because on the GOV.UK
+    energy register the certificate has its own public page, addressed by the certificate's
+    own lodgement reference — not by anything about the assessor. Handed both, that register
+    is the one place where the link can open the document itself rather than a search form.
     """
     pack = await get_pack_type(
         session, certificate_type_code, country_code=country_code
@@ -211,6 +219,7 @@ async def _build_verify_now_link(
             accreditation_number=accreditation_number,
             vendor_name=vendor_name,
             prefills_number=prefills,
+            certificate_number=certificate_number,
         )
         return {
             "ok": True,
@@ -254,6 +263,7 @@ async def _build_verify_now_link(
         accreditation_number=accreditation_number,
         vendor_name=vendor_name,
         prefills_number=prefills,
+        certificate_number=certificate_number,
     )
 
     return {
@@ -284,15 +294,52 @@ async def _build_verify_now_link(
     }
 
 
+#: A GOV.UK energy-certificate lodgement reference: five groups of four digits.
+_RRN_RE = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{4}-\d{4}$")
+
+#: The GOV.UK energy register, where a lodged certificate has its own public page.
+_GOVUK_ENERGY_HOST = "https://find-energy-certificate.service.gov.uk"
+
+
+def govuk_energy_certificate_url(reference: str | None) -> str | None:
+    """The public page for one lodged energy certificate, or None.
+
+    The register addresses a certificate by its own lodgement reference, so this is the one
+    link in the platform that opens the document a person is holding rather than a search
+    form they still have to fill in. None when the reference is not a lodgement reference:
+    a made-up number would build a URL that renders an error page, which reads as a broken
+    link rather than as "this certificate is not on the register".
+    """
+    ref = (reference or "").strip()
+    return f"{_GOVUK_ENERGY_HOST}/energy-certificate/{ref}" if _RRN_RE.match(ref) else None
+
+
 def _append_register_search_params(
     base_url: str,
     *,
     accreditation_number: str | None,
     vendor_name: str | None,
     prefills_number: bool,
+    certificate_number: str | None = None,
 ) -> str:
     """Append register-specific search params when prefill is supported."""
     url = base_url
+
+    # GOV.UK energy register: open the certificate itself when its reference is known. Its
+    # search form takes `reference_number`, so that is the fallback - never the generic `q`
+    # below, which this service ignores and which would land a person on an empty form.
+    if _GOVUK_ENERGY_HOST in url.lower():
+        direct = govuk_energy_certificate_url(
+            certificate_number
+        ) or govuk_energy_certificate_url(accreditation_number)
+        if direct:
+            return direct
+        ref = (certificate_number or accreditation_number or "").strip()
+        if ref:
+            sep = "&" if "?" in url else "?"
+            return f"{url}{sep}{urlencode({'reference_number': ref})}"
+        return url
+
     if not prefills_number:
         return url
     number = (accreditation_number or "").strip()
@@ -352,6 +399,7 @@ async def check_vendor_registration_compliance(
     cert_scope: str | None = "Vendor",
     country_code: str = "UK",
     organization_id: UUID | None = None,
+    certificate_number: str | None = None,
 ) -> dict[str, Any]:
     """
     Search whether the vendor is registered on-platform and currently compliant
@@ -389,6 +437,7 @@ async def check_vendor_registration_compliance(
         accreditation_number=accreditation_number,
         country_code=country_code,
         vendor_name=name or None,
+        certificate_number=certificate_number,
     )
 
     vendor_row: dict[str, Any] | None = None
