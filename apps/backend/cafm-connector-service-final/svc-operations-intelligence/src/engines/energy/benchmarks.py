@@ -175,13 +175,32 @@ async def _facts(session: AsyncSession, building_ids: list[UUID]) -> list[dict[s
     rows = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name, b.primary_use::text AS primary_use,
                b.gross_area_sqft, b.organization_id::text AS organization_id, b.site_id AS site_key,
-               coalesce(s.country_code, b.raw_metadata->>'country_code') AS country_code,
+               -- The LOCATION carries the country, and the country picks the pack. This
+               -- read looked everywhere but there: at the site, which a building standing
+               -- on its own does not have, and at a raw_metadata key the create endpoint
+               -- does not write (it stores "country", not "country_code"). So a hoisted
+               -- building had no country here, no pack, and therefore an EUI computed and
+               -- stored against no benchmark at all - a number on the page with nothing to
+               -- compare it to, while the Buildings list beside it showed United Kingdom
+               -- correctly because IT joins locations. Both readings now come from the
+               -- same place, and the metadata keys stay as a fallback for rows written
+               -- before locations carried this.
+               coalesce(l.country_code, s.country_code,
+                        b.raw_metadata->>'country_code', b.raw_metadata->>'country') AS country_code,
                s.use_type, s.use_mix, s.gfa_sqm, s.eui_kwh_per_m2 AS recorded_eui,
                s.benchmark_kwh_per_m2 AS recorded_benchmark,
                p.building_type AS profile_type, p.gia_m2 AS profile_gia_m2,
                (SELECT count(*) FROM plenum_cafm.energy_meters em WHERE em.active AND em.building_id = b.building_id) AS meters_active
           FROM plenum_cafm.buildings b
           LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          -- Same two-clause match building_rollup.py uses: locations.id is uuid on this
+          -- deployment, and a legacy integer id is wrapped by building_create.py into a
+          -- deterministic '00000000-0000-0000-0000-<12 digits>' stand-in. The two must
+          -- stay in lockstep.
+          LEFT JOIN plenum_cafm.locations l ON (
+                l.id::text = b.location_id::text
+             OR '00000000-0000-0000-0000-' || lpad(l.id::text, 12, '0') = b.location_id::text
+          )
           LEFT JOIN plenum_cafm.building_energy_profiles p ON p.building_id = b.building_id
          WHERE b.building_id = ANY(CAST(:ids AS uuid[]))
          ORDER BY b.name
