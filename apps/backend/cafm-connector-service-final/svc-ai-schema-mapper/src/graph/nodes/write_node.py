@@ -592,6 +592,19 @@ async def write_node(state: MigrationState) -> MigrationState:
                     f"{aligned_result.get('buildings_linked', 0)} building link(s), "
                     f"{aligned_result.get('meters_linked', 0)} reading(s) placed on a meter"
                 )
+            except ConnectionLost as lost_exc:
+                # Not a data problem. Saying "write failed" here sends the reader looking at
+                # their file, which is the one place the answer is not.
+                logger.error(f"[Node 9] The database connection closed mid-write: {lost_exc}")
+                state["error_message"] = (
+                    "The database connection closed part way through the write, so the run "
+                    "stopped. Nothing partial was kept. This is the connection, not the file "
+                    "— try the same upload again. "
+                    f"({str(lost_exc)[:160]})"
+                )
+                state["error_node"] = 9
+                state["el_m9_passed"] = False
+                return state
             except Exception as aligned_exc:
                 logger.exception(f"[Node 9] Schema-aligned inserts failed: {aligned_exc}")
                 state["error_message"] = f"Schema-aligned write failed: {str(aligned_exc)[:300]}"
@@ -1042,6 +1055,113 @@ def _to_safe_identifier(raw: str) -> str | None:
     if not _SAFE_SQL_IDENT.match(normalized):
         return None
     return normalized
+
+
+#: How many rows go to the database in one statement.
+#:
+#: Row at a time is three round trips each and this path routinely carries a year of
+#: half-hourly readings. Batching is not a speed nicety here: the connection was being held
+#: open long enough for the server to close it mid-write.
+_WRITE_CHUNK = 500
+
+#: What a dead connection or a poisoned transaction looks like, whatever raised it.
+_CONNECTION_LOST_SIGNS = (
+    "connection was closed",
+    "connection is closed",
+    "server closed the connection",
+    "terminating connection",
+    "invalid transaction is rolled back",
+    "connection does not exist",
+    "cannot perform operation: another operation is in progress",
+)
+
+
+class ConnectionLost(RuntimeError):
+    """The database went away. Not a bad row, and not something to retry per row."""
+
+
+def _is_connection_lost(exc: BaseException) -> bool:
+    text_ = str(exc).lower()
+    return any(sign in text_ for sign in _CONNECTION_LOST_SIGNS)
+
+
+async def _insert_rows(
+    session: AsyncSession,
+    *,
+    schema_name: str,
+    table_name: str,
+    pending: list[tuple[dict, str, dict]],
+    unique_sets: set[frozenset] | None,
+    nullable_cols: set[str],
+) -> dict:
+    """Insert a batch in as few round trips as the data allows.
+
+    Rows that share a column set share a statement, so they go in one executemany. A batch
+    that fails is retried a row at a time, so one bad row costs its own row rather than the
+    other four hundred and ninety-nine — and only then is the orphan-foreign-key retry worth
+    doing, because it needs to know which row it was.
+
+    Raises ConnectionLost rather than reporting skipped rows when the database has gone. The
+    two are not the same thing and a run that confuses them tells the reader nothing.
+    """
+    inserted = 0
+    skipped = 0
+    errors: list[str] = []
+    orphans: dict[str, int] = {}
+
+    by_stmt: dict[str, list[tuple[dict, dict]]] = {}
+    for filtered, dml_sql, params in pending:
+        by_stmt.setdefault(dml_sql, []).append((filtered, params))
+
+    for dml_sql, group in by_stmt.items():
+        try:
+            async with session.begin_nested():
+                result = await session.execute(text(dml_sql), [p for _f, p in group])
+            _n = int(getattr(result, "rowcount", 0) or 0)
+            # executemany reports -1 on some drivers; the batch went in either way.
+            inserted += _n if _n >= 0 else len(group)
+            continue
+        except Exception as batch_exc:
+            if _is_connection_lost(batch_exc):
+                raise ConnectionLost(str(batch_exc)) from batch_exc
+            # Something in this batch is bad. Find out which, one row at a time.
+            pass
+
+        for filtered, params in group:
+            try:
+                async with session.begin_nested():
+                    res = await session.execute(text(dml_sql), params)
+                inserted += int(getattr(res, "rowcount", 0) or 0)
+                continue
+            except Exception as row_exc:
+                if _is_connection_lost(row_exc):
+                    raise ConnectionLost(str(row_exc)) from row_exc
+                # Orphan foreign key: the row points at a parent that is not there. Null the
+                # offending column IF it is nullable and retry once, so the row lands without
+                # the broken link rather than not at all. A NOT NULL foreign key cannot be
+                # nulled, so that row is skipped as before.
+                _fk_cols = _foreign_key_columns_from_error(row_exc)
+                _nullable_fk = [c for c in _fk_cols if c in nullable_cols and c in filtered]
+                if _nullable_fk:
+                    try:
+                        _retry = {k: v for k, v in filtered.items() if k not in _nullable_fk}
+                        _dml2, _p2 = _build_dml_for_row(
+                            schema_name, table_name, _retry, unique_sets
+                        )
+                        async with session.begin_nested():
+                            _res2 = await session.execute(text(_dml2), _p2)
+                        inserted += int(getattr(_res2, "rowcount", 0) or 0)
+                        for _c in _nullable_fk:
+                            orphans[_c] = orphans.get(_c, 0) + 1
+                        continue
+                    except Exception as retry_exc:
+                        if _is_connection_lost(retry_exc):
+                            raise ConnectionLost(str(retry_exc)) from retry_exc
+                skipped += 1
+                if len(errors) < 20:
+                    errors.append(f"{table_name}: {str(row_exc)[:220]}")
+
+    return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans}
 
 
 def _build_dml_for_row(
@@ -1837,6 +1957,9 @@ async def _apply_records_with_schema_alignment(
                 type_mismatch_by_col: dict[str, tuple[int, str, str]] = {}
                 # Per-column orphan-FK tally: {fk_column: rows nulled because the parent was absent}.
                 orphan_fk_by_col: dict[str, int] = {}
+                #: Rows waiting to go in one statement. Flushed every _WRITE_CHUNK and
+                #: again at the end of the table.
+                _pending_rows: list[tuple[dict, str, dict]] = []
                 for normalized in normalized_records:
                     filtered = {
                         k: v for k, v in normalized.items()
@@ -1893,14 +2016,25 @@ async def _apply_records_with_schema_alignment(
                         dml_sql, params = _build_dml_for_row(
                             schema_name, safe_table, filtered, unique_sets
                         )
-                        # SAVEPOINT per row: a failed INSERT must not abort the
-                        # outer transaction, which would poison every subsequent
-                        # session.execute() call (InFailedSQLTransactionError).
-                        _row_count = 0
-                        async with session.begin_nested():
-                            result = await session.execute(text(dml_sql), params)
-                            _row_count = int(getattr(result, "rowcount", 0) or 0)
-                        table_rows += _row_count
+                        _pending_rows.append((dict(filtered), dml_sql, params))
+                        if len(_pending_rows) >= _WRITE_CHUNK:
+                            _batch = await _insert_rows(
+                                session, schema_name=schema_name, table_name=safe_table,
+                                pending=_pending_rows, unique_sets=unique_sets,
+                                nullable_cols=db_nullable_cols,
+                            )
+                            _pending_rows = []
+                            table_rows += _batch["inserted"]
+                            rows_skipped += _batch["skipped"]
+                            tbl_rows_skipped += _batch["skipped"]
+                            for _c, _n in _batch["orphans"].items():
+                                orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                            for _e in _batch["errors"]:
+                                if len(row_errors) < 20:
+                                    row_errors.append(_e)
+                        continue
+                    except ConnectionLost:
+                        raise
                     except Exception as row_exc:
                         # Orphan foreign key: the row references a parent that isn't present (e.g.
                         # work_orders.asset_id = 'A0050145' with no such asset). Rather than drop the
@@ -1935,6 +2069,28 @@ async def _apply_records_with_schema_alignment(
                             f"[Node 9] Skipping bad row in {safe_table}: {row_exc}"
                         )
                         continue
+
+                # Whatever is left over from the last partial batch.
+                if _pending_rows:
+                    _batch = await _insert_rows(
+                        session, schema_name=schema_name, table_name=safe_table,
+                        pending=_pending_rows, unique_sets=unique_sets,
+                        nullable_cols=db_nullable_cols,
+                    )
+                    _pending_rows = []
+                    table_rows += _batch["inserted"]
+                    rows_skipped += _batch["skipped"]
+                    tbl_rows_skipped += _batch["skipped"]
+                    for _c, _n in _batch["orphans"].items():
+                        orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                    for _e in _batch["errors"]:
+                        if len(row_errors) < 20:
+                            row_errors.append(_e)
+                    if _batch["skipped"]:
+                        logger.warning(
+                            f"[Node 9] {safe_table}: {_batch['skipped']} row(s) skipped; "
+                            f"first: {(_batch['errors'] or ['-'])[0]}"
+                        )
 
                 # Surface any type mismatches: a column whose source values don't fit the
                 # destination column's type. These were dropped (row still inserted) — the user
