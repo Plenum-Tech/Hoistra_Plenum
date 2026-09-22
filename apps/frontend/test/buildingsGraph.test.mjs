@@ -104,3 +104,51 @@ test('cost drivers are fetched once per building and cached, not re-fetched on e
   assert.equal(hits, 1);
   cleanup();
 });
+
+test('a building that is gone is asked about once, not on every render', async () => {
+  // The failure this exists for: an error was cached, the guard read "cached and not an
+  // error", so the next render counted it as nothing cached and asked again — immediately,
+  // for as long as the tab stayed open. One deleted building code put the gateway under a
+  // request per frame from every tab.
+  let graphCalls = 0;
+  let costCalls = 0;
+  handlers[GRAPH_PATH] = () => { graphCalls += 1; return [404, { detail: { ok: false, reason: 'building_not_found' } }]; };
+  handlers[COST_PATH] = () => { costCalls += 1; return [404, { detail: { ok: false, reason: 'building_not_found' } }]; };
+
+  c.bgToggle(ID);
+  await settle();
+  assert.equal(graphCalls, 1);
+  assert.equal(costCalls, 1);
+
+  // Whatever re-renders next must not turn a settled "no" back into a question.
+  for (let i = 0; i < 5; i += 1) { c.bgLoad(ID); await settle(); }
+  assert.equal(graphCalls, 1, 'a 404 is final — the building is gone and asking again cannot change that');
+  assert.equal(costCalls, 1);
+  cleanup();
+});
+
+test('a 401 is not retried either — signing in is what fixes it, not asking again', async () => {
+  let calls = 0;
+  handlers[GRAPH_PATH] = () => { calls += 1; return [401, { detail: { ok: false, reason: 'missing_token' } }]; };
+  handlers[COST_PATH] = () => [401, { detail: { ok: false } }];
+  c.bgToggle(ID);
+  await settle();
+  for (let i = 0; i < 4; i += 1) { c.bgLoad(ID); await settle(); }
+  assert.equal(calls, 1);
+  cleanup();
+});
+
+test('a server error IS retried, but a bounded number of times', async () => {
+  // A 5xx or a dropped connection may genuinely differ next time — a restart mid-request is
+  // the ordinary case — so these are worth re-asking. Bounded, so a service that stays down
+  // does not become the same flood by another route.
+  let calls = 0;
+  handlers[GRAPH_PATH] = () => { calls += 1; return [503, { detail: 'restarting' }]; };
+  handlers[COST_PATH] = () => [503, { detail: 'restarting' }];
+  c.bgToggle(ID);
+  await settle();
+  for (let i = 0; i < 8; i += 1) { c.bgLoad(ID); await settle(); }
+  assert.ok(calls > 1, 'a transient failure is worth asking about again');
+  assert.ok(calls <= 3, 'but not without end — got ' + calls);
+  cleanup();
+});

@@ -1,5 +1,30 @@
 import { energyApi } from '../api/energy.js';
 
+// A failed read is still an answer about this building, and re-asking will not change it.
+// The guards below used to read "cached and not an error", so an error cached one render
+// ago counted as nothing cached and the next render asked again — immediately, with no cap
+// and no backoff. One stale building code in the page state was enough to put the gateway
+// under a request per frame, from every open tab.
+//
+// A 4xx is final: the building is gone, the id is wrong, or the caller is not signed in.
+// None of those are fixed by asking again, so they are never retried. Anything else (a
+// network drop, a 5xx, a restart mid-request) may genuinely differ next time, and gets a
+// small fixed number of attempts.
+const BG_RETRY_MAX = 3;
+
+function bgTerminal(entry) {
+  const st = entry && entry.status;
+  return typeof st === "number" && st >= 400 && st < 500;
+}
+
+function bgSettled(entry) {
+  if (!entry) return false;                       // never asked
+  if (entry.loading) return true;                 // in flight — do not ask twice
+  if (!entry.error) return true;                  // answered
+  if (bgTerminal(entry)) return true;             // answered, and the answer is no
+  return (entry.attempts || 0) >= BG_RETRY_MAX;   // out of attempts
+}
+
 // buildingsGraph — the drawer that opens under a building row.
 //
 // It draws the canonical graph as a tree:
@@ -88,16 +113,21 @@ export const buildingsGraphMethods = {
 
   async bgLoad(id) {
     this.bgLoadCost(id);
-    const cache = this.state.bgTree || {};
-    if (cache[id] && !cache[id].error) return;
-    this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: { loading: true } }) }));
+    const prev = (this.state.bgTree || {})[id];
+    if (bgSettled(prev)) return;
+    const attempts = (prev && prev.attempts) || 0;
+    this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: { loading: true, attempts: attempts } }) }));
     try {
       const res = await energyApi.buildingGraph(id);
       this.setState((p) => ({ bgTree: Object.assign({}, p.bgTree, { [id]: res }) }));
     } catch (e) {
       this.setState((p) => ({
         bgTree: Object.assign({}, p.bgTree, {
-          [id]: { error: (e && e.message) || String(e) }
+          [id]: {
+            error: (e && e.message) || String(e),
+            status: e && e.status,
+            attempts: attempts + 1
+          }
         })
       }));
     }
@@ -107,15 +137,22 @@ export const buildingsGraphMethods = {
   // tree and cached per building. Ranked on the gap over contract, not on billed — the
   // biggest spender is usually the biggest asset and tells you nothing.
   async bgLoadCost(id) {
-    const cache = this.state.bgCost || {};
-    if (cache[id] && !cache[id].error) return;
-    this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: { loading: true } }) }));
+    const prev = (this.state.bgCost || {})[id];
+    if (bgSettled(prev)) return;
+    const attempts = (prev && prev.attempts) || 0;
+    this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: { loading: true, attempts: attempts } }) }));
     try {
       const res = await energyApi.costDrivers(id);
       this.setState((p) => ({ bgCost: Object.assign({}, p.bgCost, { [id]: res || {} }) }));
     } catch (e) {
       this.setState((p) => ({
-        bgCost: Object.assign({}, p.bgCost, { [id]: { error: (e && e.message) || String(e), status: e && e.status } })
+        bgCost: Object.assign({}, p.bgCost, {
+          [id]: {
+            error: (e && e.message) || String(e),
+            status: e && e.status,
+            attempts: attempts + 1
+          }
+        })
       }));
     }
   },
