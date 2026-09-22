@@ -1246,6 +1246,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
             # meters and no consumption at all.
             ("meter_reading", "meter_readings"), ("meter reading", "meter_readings"),
             ("half_hour", "meter_readings"), ("half hour", "meter_readings"),
+            ("halfhourly", "meter_readings"), ("half_hourly", "meter_readings"),
+            ("kwh", "meter_readings"),
             ("consumption", "meter_readings"), ("reading", "meter_readings"),
             ("energy_meter", "energy_meters"), ("energy meter", "energy_meters"),
             ("mpan", "energy_meters"), ("mprn", "energy_meters"), ("meter", "energy_meters"),

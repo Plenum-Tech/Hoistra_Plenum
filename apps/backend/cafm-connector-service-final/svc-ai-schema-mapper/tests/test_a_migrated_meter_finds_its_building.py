@@ -284,6 +284,15 @@ class TestTheSheetReachesTheRightTable:
                       "Consumption 2026", "Electricity Readings"):
             assert self._route(sheet) == "meter_readings", sheet
 
+    def test_the_names_a_half_hourly_export_actually_carries(self):
+        """The Northbridge files are named harbour_point_electricity_halfhourly.csv. "half
+        hour" with a separator does not match "halfhourly", so the pattern that was supposed
+        to catch them caught nothing."""
+        for sheet in ("harbour_point_electricity_halfhourly",
+                      "ashgrove_court_gas_halfhourly",
+                      "site_kwh_export", "Half Hourly Data", "half_hourly_2026"):
+            assert self._route(sheet) == "meter_readings", sheet
+
     def test_a_meter_sheet_routes_to_energy_meters(self):
         for sheet in ("Meters", "Energy Meters", "MPAN List", "MPRN Register"):
             assert self._route(sheet) == "energy_meters", sheet
