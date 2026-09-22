@@ -20,6 +20,8 @@ import asyncio
 import importlib.util
 import os
 
+import pytest
+
 _HERE = os.path.dirname(__file__)
 _NODES = os.path.join(_HERE, "..", "src", "graph", "nodes")
 _SPEC = importlib.util.spec_from_file_location(
@@ -52,10 +54,12 @@ class FakeDb:
         return [(m[0],) for m in self.meters
                 if k in {(m[1] or "").lower(), (m[2] or "").lower(), m[0]}]
 
-    async def create(self, *, mpan, mprn, meter_type, building_id):
+    async def create(self, *, mpan, mprn, meter_type, building_id,
+                     section_id=None, is_sub_meter=False):
         new_id = f"created-{len(self.creates)}"
         self.creates.append({"mpan": mpan, "mprn": mprn, "meter_type": meter_type,
-                             "building_id": building_id})
+                             "building_id": building_id, "section_id": section_id,
+                             "is_sub_meter": is_sub_meter})
         self.meters.append((new_id, mpan, mprn))
         return new_id
 
@@ -142,7 +146,8 @@ class TestResolvingToAMeter:
                             mprn="NB-B-102-G1"))
         assert got == "created-0"
         assert db.creates == [{"mpan": None, "mprn": "NB-B-102-G1", "meter_type": "gas",
-                               "building_id": HARBOUR}]
+                               "building_id": HARBOUR, "section_id": None,
+                               "is_sub_meter": False}]
         assert r.created == 1
 
     def test_a_meter_is_never_created_without_a_building(self):
@@ -370,3 +375,59 @@ class TestTheWriteActuallyHappens:
     def test_a_run_with_nothing_to_align_says_so_rather_than_silently_writing_literals(self):
         src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
         assert "no cleaned tables are on the state" in src
+
+
+class TestAMeterPerFloor:
+    """A tower with a meter on every floor.
+
+    Those rows are identical but for where they say the meter sits. Created without that,
+    each one becomes the building's incoming supply, and the building's consumption is counted
+    once per floor — a number that is wrong by a factor of however many meters there are, and
+    wrong in the direction that looks like a finding.
+    """
+
+    @pytest.mark.parametrize("row,expected", [
+        ({"Floor": "Level 3"}, "Level 3"),
+        ({"section": "Tenant floors"}, "Tenant floors"),
+        ({"Zone": "Car park"}, "Car park"),
+        ({"Level": "7"}, "7"),
+        ({"Demise": "Unit 4B"}, "Unit 4B"),
+    ])
+    def test_a_row_says_where_its_meter_sits(self, row, expected):
+        assert ml.section_hint(row) == expected
+
+    def test_a_building_level_meter_names_nowhere(self):
+        assert ml.section_hint({"mpan": "NB-B-101-E0", "kwh": 4.2}) is None
+
+    def test_a_meter_that_sits_somewhere_is_a_sub_meter(self):
+        assert ml.is_sub_meter_for({"mpan": "X", "floor": "Level 3"}) is True
+
+    def test_a_meter_that_names_nowhere_is_the_incoming_supply(self):
+        assert ml.is_sub_meter_for({"mpan": "NB-B-101-E0"}) is False
+
+    @pytest.mark.parametrize("value,expected", [
+        ("true", True), ("Yes", True), ("1", True), ("sub-meter", True), ("tenant", True),
+        ("false", False), ("No", False), ("0", False), ("main", False), ("incoming", False),
+    ])
+    def test_a_sheet_that_says_outright_is_believed(self, value, expected):
+        assert ml.is_sub_meter_for({"is_sub_meter": value, "floor": "Level 3"}) is expected, value
+
+    def test_saying_main_beats_naming_a_floor(self):
+        """An incoming supply sitting in the basement plant room is still the incoming supply."""
+        assert ml.is_sub_meter_for({"meter_role": "main", "floor": "Basement"}) is False
+
+    def test_creation_carries_both(self):
+        assert "is_sub_meter" in ml.CREATE_METER_SQL
+        assert "section_id" in ml.CREATE_METER_SQL
+
+    def test_a_section_is_looked_up_within_its_own_building(self):
+        """"Level 3" means this building's third floor, not another tower's."""
+        sql = ml.SECTION_LOOKUP_SQL
+        assert "s.building_id = CAST(:b AS uuid)" in sql
+        assert "floors" in sql and "f.level" in sql
+
+    def test_the_writer_places_a_meter_sheet_row(self):
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        assert 'if safe_table == "energy_meters":' in src
+        assert "_section_for(" in src
+        assert "is_sub_meter_for(row)" in src

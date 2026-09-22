@@ -35,7 +35,8 @@ from .building_link import (
     build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
 )
 from .meter_link import (
-    CREATE_METER_SQL, MeterResolver, meter_hint, meter_type_for, supply_numbers,
+    CREATE_METER_SQL, SECTION_LOOKUP_SQL, MeterResolver, is_sub_meter_for, meter_hint,
+    meter_type_for, section_hint, supply_numbers,
 )
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
@@ -1387,13 +1388,34 @@ async def _apply_records_with_schema_alignment(
             # counted as skipped. A meter that does not exist yet is created — but only when the
             # row also names a building that resolves. See meter_link for why that refusal
             # matters more than it looks.
-            async def _create_meter(*, mpan, mprn, meter_type, building_id) -> str | None:
+            _section_cache: dict[tuple[str, str], str | None] = {}
+
+            async def _section_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's section by name, type, or the floor it sits on.
+
+                Scoped to the building, so "Level 3" means this building's third floor and not
+                another tower's. A hint that matches two sections resolves to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _section_cache:
+                    return _section_cache[key]
+                _hit = await _fetch(SECTION_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _ids = sorted({str(r[0]) for r in _hit if r and r[0]})
+                _section_cache[key] = _ids[0] if len(_ids) == 1 else None
+                return _section_cache[key]
+
+            async def _create_meter(*, mpan, mprn, meter_type, building_id,
+                                    section_id=None, is_sub_meter=False) -> str | None:
                 try:
                     async with session.begin_nested():
                         _rs = await session.execute(
                             text(CREATE_METER_SQL.format(schema=schema_name)),
                             {"org": effective_org_id, "bid": building_id,
-                             "mtype": meter_type, "mpan": mpan, "mprn": mprn},
+                             "mtype": meter_type, "mpan": mpan, "mprn": mprn,
+                             "sid": section_id, "is_sub": bool(is_sub_meter)},
                         )
                         _row = _rs.first()
                         return str(_row[0]) if _row and _row[0] else None
@@ -1657,6 +1679,23 @@ async def _apply_records_with_schema_alignment(
                         else:
                             safe_row.pop("building_id", None)
 
+                    # A meter sheet places each meter where it sits. A tower with a meter per
+                    # floor produces rows identical but for that, and without it every one of
+                    # them is created as the building's main meter — so the building's
+                    # consumption is counted once per floor.
+                    if safe_table == "energy_meters":
+                        if not looks_like_uuid(safe_row.get("section_id")):
+                            _sid = await _section_for(safe_row.get("building_id"),
+                                                      section_hint(row))
+                            if _sid:
+                                safe_row["section_id"] = _sid
+                            else:
+                                safe_row.pop("section_id", None)
+                        if safe_row.get("is_sub_meter") in (None, ""):
+                            safe_row["is_sub_meter"] = is_sub_meter_for(row)
+                        if not safe_row.get("meter_type"):
+                            safe_row["meter_type"] = meter_type_for(row)
+
                     # The meter link. A reading carries no building of its own; it reaches one
                     # through its meter, so resolving the meter is what places the reading.
                     if safe_table == "meter_readings" \
@@ -1665,11 +1704,13 @@ async def _apply_records_with_schema_alignment(
                         _mid = None
                         if _mh:
                             _mpan, _mprn = supply_numbers(row)
+                            _mbid = ((await _buildings.resolve(_hint)) if _hint else None)                                 or _default_building
                             _mid = await _meters.resolve(
                                 _mh,
-                                building_id=((await _buildings.resolve(_hint)) if _hint else None)
-                                            or _default_building,
+                                building_id=_mbid,
                                 meter_type=meter_type_for(row), mpan=_mpan, mprn=_mprn,
+                                section_id=await _section_for(_mbid, section_hint(row)),
+                                is_sub_meter=is_sub_meter_for(row),
                             )
                         if _mid:
                             safe_row["meter_id"] = _mid

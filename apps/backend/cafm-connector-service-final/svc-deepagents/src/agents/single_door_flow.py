@@ -1258,17 +1258,40 @@ async def run_single_door_ingestion_sequence(
     if structured_paths and not building_id:
         _names = ", ".join(Path(p).name for p in structured_paths[:4])
         _more = f" and {len(structured_paths) - 4} more" if len(structured_paths) > 4 else ""
-        return SingleDoorResult(
-            summary_text=(
+        _meters_only = structured_paths and all(
+            classify_energy_document(p, user_query) for p in structured_paths
+        )
+        if _meters_only:
+            # The one upload where the answer is not in the file. A meter export names an
+            # MPAN and a consumption figure and nothing about where the meter is, so both
+            # the building and the floor have to come from whoever attached it.
+            _ask = (
+                f"Which building are these meters on?\n\n"
+                f"{_names}{_more}\n\n"
+                f"Choose the building in the composer and send them again.\n\n"
+                f"If these are floor or tenant sub-meters, name the floor or section too "
+                f"— either as a column in the file (floor, level, section or zone) or in "
+                f"your message. A meter recorded against the whole building when it only "
+                f"reads one floor counts that consumption once per meter.\n\n"
+                f"If it is the building's incoming supply, say nothing about a floor and "
+                f"it will be recorded as the main meter. Nothing has been written."
+            )
+            _note = "awaiting_building_and_floor_selection"
+        else:
+            _ask = (
                 f"Which building are these for?\n\n"
                 f"{_names}{_more}\n\n"
                 f"Choose the building in the composer and send them again. A spreadsheet "
-                f"reaches a building through a site column or through the building you pick; "
-                f"a meter export has neither until you choose one, so the readings would be "
-                f"stored and then counted towards nothing. Nothing has been written."
-            ),
+                f"reaches a building through a site column or through the building you "
+                f"pick; a meter export has neither until you choose one, so the readings "
+                f"would be stored and then counted towards nothing. "
+                f"Nothing has been written."
+            )
+            _note = "awaiting_building_selection"
+        return SingleDoorResult(
+            summary_text=_ask,
             tool_calls=[],
-            context_note="awaiting_building_selection",
+            context_note=_note,
             step_summaries=[
                 f"[Held] {len(structured_paths)} spreadsheet(s) await a building selection"
             ],

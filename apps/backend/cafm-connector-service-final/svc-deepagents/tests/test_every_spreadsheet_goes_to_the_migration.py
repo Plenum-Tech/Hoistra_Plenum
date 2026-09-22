@@ -137,3 +137,41 @@ class TestTheseAreStillSeparateQuestions:
         """A certificate PDF names its building in the document. Holding those too would stop
         a compliance upload that never needed the selection."""
         assert "if structured_paths and not building_id:" in source(_FLOW)
+
+
+class TestAMeterOnlyUploadIsAskedWhereTheMeterIs:
+    """A meter export is the one upload whose answer is not in the file.
+
+    It names an MPAN and a consumption figure and nothing about where the meter sits. Both the
+    building and the floor have to come from whoever attached it, and a meter recorded against
+    the whole building when it only reads one floor counts that consumption once per meter.
+    """
+
+    def test_a_meter_only_upload_gets_its_own_question(self):
+        src = source(_FLOW)
+        assert "_meters_only = structured_paths and all(" in src
+        assert "awaiting_building_and_floor_selection" in src
+
+    def test_it_asks_for_the_floor_as_well_as_the_building(self):
+        src = source(_FLOW)
+        assert "Which building are these meters on?" in src
+        assert "floor, level, section or zone" in src
+
+    def test_it_says_what_happens_if_no_floor_is_named(self):
+        """Silence has to mean something definite, or the person cannot answer safely."""
+        src = source(_FLOW)
+        assert "incoming supply" in src
+        assert "recorded as the main meter" in src
+
+    def test_it_says_why_the_floor_matters(self):
+        src = source(_FLOW)
+        assert "once per meter" in src
+
+    def test_a_mixed_upload_keeps_the_plain_building_question(self):
+        """An asset export names its site in a column. Asking it about floors would be noise."""
+        src = source(_FLOW)
+        assert 'Which building are these for?' in src
+        assert src.count("_note = \"awaiting_building_selection\"") == 1
+
+    def test_both_branches_still_say_nothing_was_written(self):
+        assert source(_FLOW).count("Nothing has been written.") == 2

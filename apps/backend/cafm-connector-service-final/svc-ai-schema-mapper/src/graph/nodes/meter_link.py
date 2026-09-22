@@ -59,6 +59,16 @@ _EITHER_KEYS = (
     "meter_number", "meter_serial", "msn", "serial_number", "meter", "meter_id",
 )
 
+#: Columns that name where in the building a meter sits. A building with a meter per floor
+#: has several rows that differ only here.
+_SECTION_KEYS = (
+    "section", "section_name", "floor", "floor_name", "level", "storey", "story",
+    "zone", "area", "location", "sub_location", "space", "demise", "unit",
+)
+
+#: Columns that say outright that a meter is a sub-meter.
+_SUB_METER_KEYS = ("is_sub_meter", "sub_meter", "submeter", "meter_level", "meter_role")
+
 #: Columns that say which fuel a row is about.
 _FUEL_KEYS = ("meter_type", "fuel", "fuel_type", "supply_type", "utility", "commodity", "energy_type")
 
@@ -147,6 +157,59 @@ def _fuel_word(lower: dict) -> str | None:
     return None
 
 
+def section_hint(row: dict | None) -> str | None:
+    """Where in the building this meter sits, as the row names it.
+
+    A tower with a meter per floor produces rows that are identical but for this. Without it
+    every one of them is created as the building's main meter, and the building's consumption
+    is counted once per floor.
+    """
+    if not isinstance(row, dict):
+        return None
+    lower = _keys(row)
+    for key in _SECTION_KEYS:
+        v = _clean(lower.get(key))
+        if v and not looks_like_uuid(v):
+            return v
+    return None
+
+
+def is_sub_meter_for(row: dict | None) -> bool:
+    """Whether this row describes a sub-meter rather than the building's incoming supply.
+
+    Believed when the row says so outright; otherwise inferred from it naming a floor, a zone
+    or a section, because a meter that sits somewhere in particular is not the whole building.
+    A main meter is the one that names nowhere.
+    """
+    if not isinstance(row, dict):
+        return False
+    lower = _keys(row)
+    for key in _SUB_METER_KEYS:
+        v = _clean(lower.get(key)).lower()
+        if not v:
+            continue
+        if v in ("true", "yes", "y", "1", "sub", "submeter", "sub_meter", "sub-meter", "tenant"):
+            return True
+        if v in ("false", "no", "n", "0", "main", "incoming", "primary", "site"):
+            return False
+    return section_hint(row) is not None
+
+
+#: A section of THIS building, by its own name, its type, or the floor it sits on. Scoped to
+#: the building so "Level 3" means this building's third floor and not another tower's.
+SECTION_LOOKUP_SQL = """
+SELECT s.section_id::text
+  FROM {schema}.building_sections s
+  LEFT JOIN {schema}.floors f ON f.floor_id = s.floor_id
+ WHERE s.building_id = CAST(:b AS uuid)
+   AND (lower(s.name) = :k
+     OR lower(coalesce(s.section_type, '')) = :k
+     OR lower(coalesce(f.name, '')) = :k
+     OR coalesce(f.level::text, '') = :k)
+ LIMIT 2
+"""
+
+
 def meter_type_for(row: dict | None) -> str:
     """`energy_meters.meter_type` is NOT NULL with no default, so a meter sheet that does not
     carry one fails every row. Read the fuel the row states; otherwise infer it from which
@@ -178,8 +241,10 @@ SELECT id::text FROM {schema}.energy_meters
 #: every excess figure on the page with a number nobody chose.
 CREATE_METER_SQL = """
 INSERT INTO {schema}.energy_meters
-       (id, organization_id, building_id, meter_type, mpan, mprn, active)
-VALUES (gen_random_uuid(), CAST(:org AS uuid), CAST(:bid AS uuid), :mtype, :mpan, :mprn, true)
+       (id, organization_id, building_id, meter_type, mpan, mprn, active,
+        is_sub_meter, section_id)
+VALUES (gen_random_uuid(), CAST(:org AS uuid), CAST(:bid AS uuid), :mtype, :mpan, :mprn, true,
+        :is_sub, CAST(:sid AS uuid))
 RETURNING id::text
 """
 
@@ -208,6 +273,7 @@ class MeterResolver:
     async def resolve(
         self, hint: str | None, *, building_id: str | None = None,
         meter_type: str = ELECTRICITY, mpan: str | None = None, mprn: str | None = None,
+        section_id: str | None = None, is_sub_meter: bool = False,
     ) -> str | None:
         if not hint:
             return None
@@ -227,6 +293,7 @@ class MeterResolver:
             if building_id:
                 found = await self._create(
                     mpan=mpan, mprn=mprn, meter_type=meter_type, building_id=building_id,
+                    section_id=section_id, is_sub_meter=is_sub_meter,
                 )
                 if found:
                     self.created += 1
