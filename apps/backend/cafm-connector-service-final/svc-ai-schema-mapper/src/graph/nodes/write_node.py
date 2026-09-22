@@ -548,13 +548,56 @@ async def write_node(state: MigrationState) -> MigrationState:
         sql_script = (state.get("output_sql_script") or "").strip()
         _routed = {str(v).lower() for v in (state.get("table_routing") or {}).values()}
         _needs = _routed & _NEEDS_RESOLUTION
-        if sql_script and _needs:
-            logger.info(
-                "[Node 9] %s need reference resolution - using schema-aligned inserts rather "
-                "than the SQL artifact, which writes literals", ", ".join(sorted(_needs))
+        # The schema-aligned path is the ONLY one that resolves a building from a site name or
+        # a meter from a supply number, so for these tables it is chosen rather than reached.
+        #
+        # It used to be reachable only from the SQL artifact's exception handler. Emptying the
+        # artifact to force it therefore did the opposite: control fell past both writes to
+        # the svc-ingestion POST below, a service this deployment does not run, and a
+        # migration that had passed every gate died with "Cannot connect to host
+        # svc-ingestion:8001" having written nothing.
+        _use_aligned = bool(_needs) and isinstance(state.get("cleaned_tables"), dict)
+        if _needs and not _use_aligned:
+            logger.warning(
+                "[Node 9] %s need reference resolution but no cleaned tables are on the state; "
+                "falling back to the SQL artifact, which writes literals",
+                ", ".join(sorted(_needs)),
             )
-            sql_script = ""
-        if sql_script:
+
+        if _use_aligned:
+            logger.info(
+                "[Node 9] %s need reference resolution - applying schema-aligned inserts",
+                ", ".join(sorted(_needs)),
+            )
+            try:
+                aligned_result = await _apply_records_with_schema_alignment(
+                    cleaned_tables=state.get("cleaned_tables", {}),
+                    organization_id=str(state.get("organization_id") or ""),
+                    table_routing=state.get("table_routing", {}) or {},
+                    approved_new_columns=_collect_approved_new_columns(state),
+                    confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                    default_building_id=state.get("building_id") or None,
+                )
+                state["handoff_status"] = "applied_sql_aligned"
+                state["svc_ingestion_response"] = {
+                    "status": "applied_sql_aligned",
+                    **aligned_result,
+                }
+                logger.info(
+                    "[Node 9] Schema-aligned inserts applied: "
+                    f"{aligned_result.get('rows_inserted', 0)} row(s) across "
+                    f"{aligned_result.get('tables_written', 0)} table(s), "
+                    f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                    f"{aligned_result.get('buildings_linked', 0)} building link(s), "
+                    f"{aligned_result.get('meters_linked', 0)} reading(s) placed on a meter"
+                )
+            except Exception as aligned_exc:
+                logger.exception(f"[Node 9] Schema-aligned inserts failed: {aligned_exc}")
+                state["error_message"] = f"Schema-aligned write failed: {str(aligned_exc)[:300]}"
+                state["error_node"] = 9
+                state["el_m9_passed"] = False
+                return state
+        elif sql_script:
             logger.info("[Node 9] Applying output SQL artifact directly to target DB")
             try:
                 sql_apply_result = await _apply_sql_artifact(sql_script)

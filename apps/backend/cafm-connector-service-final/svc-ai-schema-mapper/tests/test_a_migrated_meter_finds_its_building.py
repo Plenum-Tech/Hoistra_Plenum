@@ -316,3 +316,57 @@ class TestTheSheetReachesTheRightTable:
         assert "mprn" in signals["energy_meters"]
         assert "consumption_kwh" in signals["meter_readings"]
         assert "reading_at" in signals["meter_readings"]
+
+
+class TestTheWriteActuallyHappens:
+    """The resolving write path must be chosen, not reached by accident.
+
+    It used to live only inside the SQL artifact's exception handler. Emptying the artifact
+    to force it therefore did the opposite of what it looked like: control fell past both
+    writes to a POST to svc-ingestion, a service this deployment does not run, and a
+    migration that had passed every gate died with "Cannot connect to host svc-ingestion:8001"
+    having written nothing at all.
+    """
+
+    @staticmethod
+    def _write_node():
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "write_node":
+                return node
+        raise AssertionError("write_node not found")
+
+    def test_the_resolving_write_is_not_only_an_error_handler(self):
+        fn = self._write_node()
+        handled = {id(n) for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler)
+                   for n in ast.walk(h)}
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) == "_apply_records_with_schema_alignment"]
+        assert calls, "the resolving write is not called at all"
+        assert any(id(c) not in handled for c in calls), \
+            "the resolving write is only reachable when something else has already failed"
+
+    def test_the_three_write_paths_are_one_chain(self):
+        """aligned, then the artifact, then the handoff. Not a fall-through."""
+        fn = self._write_node()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "_use_aligned":
+                chain = ["_use_aligned"]
+                cur = node
+                while cur.orelse and len(cur.orelse) == 1 and isinstance(cur.orelse[0], ast.If):
+                    cur = cur.orelse[0]
+                    chain.append(ast.unparse(cur.test))
+                assert chain == ["_use_aligned", "sql_script"], chain
+                assert cur.orelse, "there is still a handoff branch for everything else"
+                return
+        raise AssertionError("no _use_aligned branch")
+
+    def test_energy_tables_never_reach_the_handoff(self):
+        """svc-ingestion is not part of this deployment. A meter sheet must not depend on it."""
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        assert "_use_aligned = bool(_needs) and isinstance(state.get(\"cleaned_tables\"), dict)" in src
+        assert "meter_readings" in src
+
+    def test_a_run_with_nothing_to_align_says_so_rather_than_silently_writing_literals(self):
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        assert "no cleaned tables are on the state" in src
