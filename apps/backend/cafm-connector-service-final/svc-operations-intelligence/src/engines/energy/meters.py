@@ -7,7 +7,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import false as sa_false, select, text
+from sqlalchemy import false as sa_false, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -224,6 +224,160 @@ async def upsert_meter(
     return {"ok": True, "meter": meter_to_dict(row)}
 
 
+async def record_gaps_for_meter(
+    session: AsyncSession,
+    *,
+    meter_id: UUID,
+    organization_id: UUID | None = None,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    """Flag runs of missing half-hours on one meter, and record the ones not already open.
+
+    Lifted out of ingest_readings on 22 Sep 2026 so that a second caller could run the same
+    rule. Readings now reach the database two ways — the Feature C upload, which calls this
+    inline, and the migration, which inserts rows directly and knew nothing about gaps, so a
+    meter migrated rather than uploaded had a series nobody ever checked for holes.
+
+    The window is widened by an hour at each end because a gap that straddles the edge of an
+    upload is still a gap; the reading that would close it may have arrived in an earlier
+    batch. Does not commit — the caller owns the transaction.
+    """
+    gap_rows: list[dict[str, Any]] = []
+    # Widened by an hour at each end so a gap straddling the edge of an upload is still
+    # seen: the reading that would close it may have arrived in an earlier batch.
+    #
+    # Clamped to the readings this meter actually has, because otherwise the widening
+    # invents a gap. A series starting at midnight was reported as missing the two
+    # half-hours before midnight, so every clean upload arrived with one gap against it
+    # and the count meant nothing. A hole needs readings on both sides of it; before the
+    # first reading there is no hole, only the beginning.
+    bounds = (
+        await session.execute(
+            select(func.min(MeterReading.reading_at), func.max(MeterReading.reading_at))
+            .where(MeterReading.meter_id == meter_id)
+        )
+    ).first()
+    first_seen, last_seen = (bounds or (None, None))
+    if first_seen is None or last_seen is None:
+        # No readings at all. That is a meter with no data, not a meter with a hole in
+        # its data, and the widened window would otherwise report the two hours around
+        # an empty series as missing.
+        return gap_rows
+    gap_window_start = window_start - timedelta(hours=1)
+    gap_window_end = window_end + timedelta(hours=1)
+    if first_seen is not None:
+        gap_window_start = max(gap_window_start, _aware(first_seen))
+    if last_seen is not None:
+        gap_window_end = min(gap_window_end, _aware(last_seen))
+    if gap_window_end <= gap_window_start:
+        return gap_rows
+    existing_in_window = list(
+        (
+            await session.execute(
+                select(MeterReading.reading_at).where(
+                    MeterReading.meter_id == meter_id,
+                    MeterReading.reading_at >= gap_window_start,
+                    MeterReading.reading_at <= gap_window_end,
+                )
+            )
+        ).scalars().all()
+    )
+    # A gap already being chased is not news. Re-flagging it would restart its retry count
+    # and it would never escalate.
+    already_open = {
+        (
+            _aware(g.gap_start).replace(second=0, microsecond=0),
+            _aware(g.gap_end).replace(second=0, microsecond=0),
+        )
+        for g in (
+            await session.execute(
+                select(MeterReadingGap).where(
+                    MeterReadingGap.meter_id == meter_id,
+                    MeterReadingGap.status.in_(["open", "retrying"]),
+                )
+            )
+        ).scalars().all()
+    }
+    for g_start, g_end, count in find_half_hour_gaps(
+        existing_in_window, window_start=gap_window_start, window_end=gap_window_end
+    ):
+        if (g_start, g_end) in already_open:
+            continue
+        gap = MeterReadingGap(
+            id=uuid4(),
+            organization_id=organization_id,
+            meter_id=meter_id,
+            gap_start=g_start,
+            gap_end=g_end,
+            missing_periods=count,
+            retry_count=0,
+            status="open",
+        )
+        session.add(gap)
+        await session.flush()
+        already_open.add((g_start, g_end))
+        gap_rows.append(
+            {
+                "id": str(gap.id),
+                "gap_start": g_start.isoformat(),
+                "gap_end": g_end.isoformat(),
+                "missing_periods": count,
+            }
+        )
+    return gap_rows
+
+
+async def detect_gaps_for_meters(
+    session: AsyncSession,
+    *,
+    building_ids: list[UUID] | None = None,
+    meter_ids: list[UUID] | None = None,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """Run the gap rule over what is already on record, for a set of meters or buildings.
+
+    What the migration calls after it writes readings. It inserts into meter_readings
+    directly, so nothing had looked at the series for holes; a meter that arrived by
+    migration rather than by upload reported no gaps because none had been sought.
+
+    Each meter is scanned across its own full range of readings rather than a fixed window,
+    because a migration may carry a year in one run.
+    """
+    q = select(EnergyMeter).where(EnergyMeter.active.is_(True))
+    if meter_ids:
+        q = q.where(EnergyMeter.id.in_(meter_ids))
+    if building_ids:
+        q = q.where(EnergyMeter.building_id.in_(building_ids))
+    if organization_id:
+        q = q.where(EnergyMeter.organization_id == organization_id)
+    meters = list((await session.execute(q)).scalars().all())
+
+    out: list[dict[str, Any]] = []
+    total = 0
+    for m in meters:
+        bounds = (
+            await session.execute(
+                select(func.min(MeterReading.reading_at), func.max(MeterReading.reading_at))
+                .where(MeterReading.meter_id == m.id)
+            )
+        ).first()
+        lo, hi = (bounds or (None, None))
+        if lo is None or hi is None:
+            out.append({"meter_id": str(m.id), "readings": 0, "gaps": 0})
+            continue
+        rows = await record_gaps_for_meter(
+            session, meter_id=m.id, organization_id=m.organization_id or organization_id,
+            window_start=_aware(lo), window_end=_aware(hi),
+        )
+        total += len(rows)
+        out.append({"meter_id": str(m.id), "gaps": len(rows),
+                    "from": _aware(lo).isoformat(), "to": _aware(hi).isoformat()})
+    await session.commit()
+    log.info("energy.gaps.detect", meters=len(meters), gaps=total)
+    return {"ok": True, "meters_scanned": len(meters), "gaps_flagged": total, "results": out}
+
+
 async def ingest_readings(
     session: AsyncSession,
     *,
@@ -305,59 +459,10 @@ async def ingest_readings(
 
     gap_rows: list[dict[str, Any]] = []
     if detect_gaps:
-        gap_window_start = window_start - timedelta(hours=1)
-        gap_window_end = window_end + timedelta(hours=1)
-        existing_in_window = list(
-            (
-                await session.execute(
-                    select(MeterReading.reading_at).where(
-                        MeterReading.meter_id == meter_id,
-                        MeterReading.reading_at >= gap_window_start,
-                        MeterReading.reading_at <= gap_window_end,
-                    )
-                )
-            ).scalars().all()
+        gap_rows = await record_gaps_for_meter(
+            session, meter_id=meter_id, organization_id=org_id,
+            window_start=window_start, window_end=window_end,
         )
-        already_open = {
-            (
-                _aware(g.gap_start).replace(second=0, microsecond=0),
-                _aware(g.gap_end).replace(second=0, microsecond=0),
-            )
-            for g in (
-                await session.execute(
-                    select(MeterReadingGap).where(
-                        MeterReadingGap.meter_id == meter_id,
-                        MeterReadingGap.status.in_(["open", "retrying"]),
-                    )
-                )
-            ).scalars().all()
-        }
-        for g_start, g_end, count in find_half_hour_gaps(
-            existing_in_window, window_start=gap_window_start, window_end=gap_window_end
-        ):
-            if (g_start, g_end) in already_open:
-                continue
-            gap = MeterReadingGap(
-                id=uuid4(),
-                organization_id=org_id,
-                meter_id=meter_id,
-                gap_start=g_start,
-                gap_end=g_end,
-                missing_periods=count,
-                retry_count=0,
-                status="open",
-            )
-            session.add(gap)
-            await session.flush()
-            already_open.add((g_start, g_end))
-            gap_rows.append(
-                {
-                    "id": str(gap.id),
-                    "gap_start": g_start.isoformat(),
-                    "gap_end": g_end.isoformat(),
-                    "missing_periods": count,
-                }
-            )
 
     await write_audit(
         session,

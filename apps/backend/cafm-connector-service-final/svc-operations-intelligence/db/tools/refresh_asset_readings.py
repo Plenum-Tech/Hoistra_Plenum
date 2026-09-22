@@ -306,8 +306,34 @@ async def run(args: argparse.Namespace) -> None:
         print(f"  loop: writing every {SLOT_MINUTES} minutes. Ctrl-C to stop.")
         while True:
             slot = snap(utcnow())
-            n = await write_slots(c, targets, bands, [slot], apply)
-            print(f"  [{utcnow():%H:%M:%S}] slot {slot:%Y-%m-%d %H:%M} -> {n} readings")
+            try:
+                n = await write_slots(c, targets, bands, [slot], apply)
+                print(f"  [{utcnow():%H:%M:%S}] slot {slot:%Y-%m-%d %H:%M} -> {n} readings")
+            except (asyncpg.PostgresError, OSError, asyncpg.exceptions._base.InterfaceError) as exc:
+                # A feed that dies the first time the database blinks is not a feed. Azure
+                # drops idle connections, and a container rebuild drops all of them; this
+                # loop is meant to outlive both, so it reconnects and carries on rather than
+                # exiting and leaving the page frozen on its last value.
+                print(f"  [{utcnow():%H:%M:%S}] lost the connection ({type(exc).__name__}); "
+                      f"reconnecting")
+                try:
+                    await c.close()
+                except Exception:
+                    pass
+                for attempt in range(1, 7):
+                    try:
+                        c = await asyncpg.connect(dsn_for(), database=args.db, timeout=90)
+                        print(f"  [{utcnow():%H:%M:%S}] reconnected")
+                        break
+                    except Exception as retry_exc:
+                        wait = min(5 * attempt, 30)
+                        print(f"  [{utcnow():%H:%M:%S}] reconnect {attempt}/6 failed "
+                              f"({str(retry_exc)[:60]}); retrying in {wait}s")
+                        await asyncio.sleep(wait)
+                else:
+                    print("  could not reconnect after six attempts; stopping.")
+                    return
+                continue
             nxt = slot + timedelta(minutes=SLOT_MINUTES)
             await asyncio.sleep(max((nxt - utcnow()).total_seconds(), 5))
     elif args.once or not args.backfill:

@@ -237,6 +237,28 @@ async def process_gap_retries(session: AsyncSession = Depends(get_session)):
     return await meter_svc.process_gap_retries(session)
 
 
+@router.post("/gaps/detect")
+async def detect_meter_gaps(
+    building_id: UUID | None = None,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Run the gap rule over readings already on record.
+
+    The Feature C upload flags gaps as it ingests, so it never needed this. A migration
+    writes meter_readings directly and knew nothing about gaps, which meant a meter that
+    arrived by migration rather than by upload reported a clean series because nobody had
+    looked. This is what the migration calls afterwards, and it runs the same rule rather
+    than a second copy of it.
+    """
+    org_id = access.organization_for(s, organization_id)
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await meter_svc.detect_gaps_for_meters(
+        session, building_ids=ids, organization_id=org_id
+    )
+
+
 @router.post("/buildings/profile")
 async def building_profile(
     body: BuildingProfileRequest, session: AsyncSession = Depends(get_session),

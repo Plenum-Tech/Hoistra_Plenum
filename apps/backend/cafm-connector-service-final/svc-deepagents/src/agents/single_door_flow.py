@@ -21,6 +21,7 @@ from .session_workspace import (
     set_ingestion_mode_structured,
 )
 from ..config import settings
+from ..http_client import request as _request
 from .doc_rag_agent import (
     get_document_metadata,
     index_document,
@@ -716,6 +717,40 @@ async def _drive_migration_gates(
     }
 
 
+async def _detect_meter_gaps(building_id: str | None, organization_id: str | None) -> dict | None:
+    """Ask the energy engine to look for holes in what the migration just wrote.
+
+    The Feature C upload flagged gaps as it ingested; the migration inserts meter_readings
+    directly and knew nothing about them, so a meter that arrived by migration reported a
+    clean series because nobody had looked. Same rule, called after the write rather than
+    during it.
+
+    Never fatal. A migration that wrote its rows and could not reach the gap check has still
+    written its rows, and saying so beats failing the run.
+    """
+    if not building_id:
+        return None
+    base = settings.operations_intelligence_base_url.rstrip("/")
+    try:
+        resp = await _request(
+            "POST",
+            base,
+            "/api/energy/gaps/detect",
+            service="operations_intelligence",
+            timeout=120.0,
+            max_attempts=2,
+            params={k: v for k, v in (("building_id", building_id),
+                                      ("organization_id", organization_id)) if v},
+        )
+        out = resp.json()
+        log.info("single_door.gaps.detected", building=building_id,
+                 meters=out.get("meters_scanned"), gaps=out.get("gaps_flagged"))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("single_door.gaps.failed", building=building_id, error=str(exc)[:200])
+        return None
+
+
 async def ingest_structured_batch(
     *,
     file_paths: list[str],
@@ -794,12 +829,19 @@ async def ingest_structured_batch(
         migration_id=migration_id,
         interactive_migration=interactive_migration,
     )
+    # Readings written by a migration have had nobody look at them for holes.
+    _gaps = await _detect_meter_gaps(building_id, organization_id)
+    if _gaps and _gaps.get("gaps_flagged"):
+        tool_calls.append({"tool": "detect_meter_gaps",
+                           "input": {"building_id": building_id}, "output": _gaps})
+
     return {
         "kind": "structured",
         "status": driven["status"],
         "file_names": names,
         "summary": driven["summary"],
         "migration_id": migration_id,
+        "meter_gaps": _gaps,
         "gate_type": driven.get("gate_type"),
         "error": driven.get("error"),
         "tool_calls": tool_calls + driven["tool_calls"],
