@@ -4652,8 +4652,28 @@ def create_app() -> FastAPI:
                 except (ValueError, TypeError):
                     raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
 
-            # Build query
-            query = select(MigrationJob).where(MigrationJob.organization_id == org_id)
+            # NINE COLUMNS, NOT THE WHOLE ROW.
+            #
+            # MigrationJob carries pending_gate_payload, field_mapping_draft and node_logs,
+            # all JSONB — a single gate payload runs to hundreds of kilobytes and node_logs
+            # is append-only, so a row is megabytes. select(MigrationJob) fetched every one
+            # of them to render nine small fields per run: listing 12 took ~3.6s against a
+            # 829-row organization and limit=50 did not return at all.
+            #
+            # MigrationListItem needs exactly these, so exactly these are read. The
+            # response is unchanged; only the bytes crossing the wire are.
+            cols = (
+                MigrationJob.id,
+                MigrationJob.cmms_name,
+                MigrationJob.status,
+                MigrationJob.progress_pct,
+                MigrationJob.t1_mapped_count,
+                MigrationJob.t2_auto_count,
+                MigrationJob.t2_human_count,
+                MigrationJob.started_at,
+                MigrationJob.completed_at,
+            )
+            query = select(*cols).where(MigrationJob.organization_id == org_id)
 
             if status:
                 query = query.where(MigrationJob.status == status)
@@ -4669,7 +4689,7 @@ def create_app() -> FastAPI:
             # Fetch paginated results
             query = query.order_by(MigrationJob.started_at.desc()).limit(limit).offset(offset)
             result = await session.execute(query)
-            jobs = result.scalars().all()
+            jobs = result.all()
 
             items = [
                 MigrationListItem(
@@ -4678,7 +4698,9 @@ def create_app() -> FastAPI:
                     status=j.status,
                     progress_pct=j.progress_pct,
                     t1_count=j.t1_mapped_count,
-                    t2_count=j.t2_auto_count + j.t2_human_count,
+                    # A count column is nullable on a run that has not mapped anything yet,
+                    # and None + None raises rather than reading as nothing mapped.
+                    t2_count=(j.t2_auto_count or 0) + (j.t2_human_count or 0),
                     started_at=j.started_at,
                     completed_at=j.completed_at,
                 )
