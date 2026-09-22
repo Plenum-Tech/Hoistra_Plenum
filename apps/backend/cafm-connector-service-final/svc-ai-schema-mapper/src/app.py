@@ -983,6 +983,11 @@ def create_app() -> FastAPI:
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
         ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
         """
@@ -1087,6 +1092,7 @@ def create_app() -> FastAPI:
             initial_state: dict = {
                 "migration_id": mid_str,
                 "organization_id": organization_id,
+                "building_id": building_id,
                 "cmms_name": cmms_name,
                 "source_filename": filename,
                 "source_system": cmms_name,
@@ -1183,6 +1189,11 @@ def create_app() -> FastAPI:
         organization_id: str = Form(
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
+        ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
         ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
@@ -1429,6 +1440,7 @@ def create_app() -> FastAPI:
                 initial_state: dict = {
                     "migration_id": mid_str,
                     "organization_id": organization_id,
+                    "building_id": building_id,
                     "cmms_name": cmms_name,
                     "source_filename": combined_filename,
                     "source_system": cmms_name,

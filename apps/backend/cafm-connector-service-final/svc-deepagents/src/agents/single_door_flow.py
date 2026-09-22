@@ -92,6 +92,21 @@ def document_type_hint(file_path: str) -> str:
     return "auto"
 
 
+#: Every spreadsheet goes to the migration. One door for tabular data.
+#:
+#: Until 22 Sep 2026 a CSV was sorted before anyone saw it: an invoice or contract workbook
+#: went to the contract-performance extractor, a smart-meter export to the energy ingest, and
+#: only what was left reached the migration. The sort was a guess from a filename and a header
+#: row that decided which schema the file would be mapped against, and it flipped on whether
+#: the covering message happened to contain the word "migrate" — so the same file took
+#: different routes depending on how someone phrased a sentence.
+#:
+#: The migration now resolves what those routes resolved: a building from a site column or
+#: from the uploader's own selection, and a meter from a supply number. So there is one door,
+#: one set of gates, and one place to look when something does not land.
+STRUCTURED_ALWAYS_MIGRATE = True
+
+
 @dataclass
 class SingleDoorResult:
     summary_text: str
@@ -707,6 +722,7 @@ async def ingest_structured_batch(
     organization_id: str | None = None,
     cmms_name: str = "Custom",
     interactive_migration: bool = False,
+    building_id: str | None = None,
 ) -> dict[str, Any]:
     """TRACK 1 — start ONE migration covering ALL structured files, then drive its gates.
 
@@ -718,7 +734,8 @@ async def ingest_structured_batch(
     tool_calls: list[dict[str, Any]] = []
 
     started = await start_migration_multi.ainvoke(
-        {"file_paths": file_paths, "cmms_name": cmms_name, "organization_id": org}
+        {"file_paths": file_paths, "cmms_name": cmms_name, "organization_id": org,
+         "building_id": building_id}
     )
     tool_calls.append(
         {"tool": "start_migration_multi", "input": {"file_paths": file_paths}, "output": started}
@@ -799,6 +816,7 @@ async def ingest_single_file(
     skip_row_match: bool = False,
     interactive_migration: bool = False,
     preindexed: dict | None = None,
+    building_id: str | None = None,
 ) -> dict[str, Any]:
     """Process one uploaded file through migration or doc-rag. Used inline and in bulk batches.
 
@@ -883,7 +901,7 @@ async def ingest_single_file(
                 force_migration = any(
                     k in msg_l for k in ("migrate", "migration", "cmms import", "schema map")
                 )
-                if not force_migration:
+                if not force_migration and not STRUCTURED_ALWAYS_MIGRATE:
                     return {
                         "file_name": path.name,
                         "kind": "contract_performance",
@@ -895,7 +913,8 @@ async def ingest_single_file(
                     }
 
         started = await start_migration.ainvoke(
-            {"file_path": file_path, "cmms_name": cmms_name, "organization_id": org}
+            {"file_path": file_path, "cmms_name": cmms_name, "organization_id": org,
+             "building_id": building_id}
         )
         tool_calls.append(
             {"tool": "start_migration", "input": {"file_path": file_path}, "output": started}
@@ -1173,7 +1192,7 @@ async def run_single_door_ingestion_sequence(
         p
         for p in structured_all
         if classify_contract_performance_doc(p, user_query) and not force_migration
-    ]
+    ] if not STRUCTURED_ALWAYS_MIGRATE else []
     # Feature C — smart-meter exports. Recognised by their header (MPAN/MPRN + timestamp +
     # kWh), so a work-order CSV cannot be mistaken for one. Taken out of the migration set
     # for the same reason contracts are: mapping half-hourly readings against the asset and
@@ -1184,11 +1203,35 @@ async def run_single_door_ingestion_sequence(
         if p not in set(cp_structured_paths)
         and classify_energy_document(p, user_query)
         and not force_migration
-    ]
+    ] if not STRUCTURED_ALWAYS_MIGRATE else []
     structured_paths = [
         p for p in structured_all
         if p not in set(cp_structured_paths) and p not in set(energy_paths)
     ]
+    # A spreadsheet reaches a building through a site column or through the selection made
+    # when it was attached. A half-hourly meter export has no site column at all, and an asset
+    # export often names a site reference this database has never seen, so without a selection
+    # the rows land attached to nothing and every page ignores them. Ask first: an unanswered
+    # question costs a moment, and a silent write costs a demo.
+    if structured_paths and not building_id:
+        _names = ", ".join(Path(p).name for p in structured_paths[:4])
+        _more = f" and {len(structured_paths) - 4} more" if len(structured_paths) > 4 else ""
+        return SingleDoorResult(
+            summary_text=(
+                f"Which building are these for?\n\n"
+                f"{_names}{_more}\n\n"
+                f"Choose the building in the composer and send them again. A spreadsheet "
+                f"reaches a building through a site column or through the building you pick; "
+                f"a meter export has neither until you choose one, so the readings would be "
+                f"stored and then counted towards nothing. Nothing has been written."
+            ),
+            tool_calls=[],
+            context_note="awaiting_building_selection",
+            step_summaries=[
+                f"[Held] {len(structured_paths)} spreadsheet(s) await a building selection"
+            ],
+        )
+
     schema_paths = [p for p in file_paths if _file_kind(p) == "schema"]
     document_paths = [p for p in file_paths if _file_kind(p) == "document"]
     skipped_paths = [p for p in file_paths if _file_kind(p) == "skipped"]
@@ -1233,6 +1276,7 @@ async def run_single_door_ingestion_sequence(
                 user_query=user_query,
                 run_doc_rag_pipeline=False,
                 interactive_migration=False,
+                building_id=building_id,
             )
             tool_calls.extend(result.get("tool_calls") or [])
             summary = str(result.get("summary") or "")
@@ -1307,6 +1351,7 @@ async def run_single_door_ingestion_sequence(
             organization_id=organization_id,
             cmms_name=cmms_name,
             interactive_migration=interactive_migration,
+            building_id=building_id,
         )
         tool_calls.extend(batch.get("tool_calls") or [])
         n_structured = len(structured_paths)
@@ -1334,6 +1379,7 @@ async def run_single_door_ingestion_sequence(
             user_query=user_query,
             run_doc_rag_pipeline=False,
             interactive_migration=False,
+            building_id=building_id,
         )
         tool_calls.extend(result.get("tool_calls") or [])
         n_schema += 1
@@ -1496,6 +1542,7 @@ async def run_single_door_ingestion_sequence(
                 skip_row_match=skip_row_match,
                 interactive_migration=False,
                 preindexed=preindexed_by_path.get(file_path),
+                building_id=building_id,
             )
         except Exception as exc:  # noqa: BLE001 — one file must not block siblings
             log.warning("single_door.document_ingest_failed", path=file_path, error=str(exc))

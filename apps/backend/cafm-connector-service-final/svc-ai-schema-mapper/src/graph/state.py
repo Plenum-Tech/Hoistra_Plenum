@@ -80,6 +80,11 @@ class MigrationState(TypedDict, total=False):
     # ── Session & Metadata ────────────────────────────────────────────────
     migration_id: str
     organization_id: str
+    #: The building the uploader had selected when they attached the file. A CMMS export
+    #: names its site in a column; a half-hourly meter export names an MPAN and nothing else,
+    #: so without this there is nothing to place its meter against and every reading is
+    #: skipped. Used only where a row names no site of its own — a Sites sheet always wins.
+    building_id: Optional[str]
     cmms_name: str  # "Maximo", "Fiix", "SAP PM", "Archibus", "Custom"
     source_filename: str  # original uploaded filename (for #10 document inventory)
     source_system: str  # source CMMS identifier from customer

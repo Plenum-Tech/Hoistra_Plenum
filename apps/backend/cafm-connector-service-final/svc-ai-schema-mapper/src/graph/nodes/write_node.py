@@ -63,6 +63,16 @@ _BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readin
 
 #: Tables that can take their building from the asset they name, when they name no site.
 _BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
+
+#: Tables whose rows carry references that only the schema-aligned path can resolve: a
+#: building from a site name, a meter from a supply number.
+#:
+#: The primary write path applies a generated SQL artifact of literal values with no
+#: resolution of any kind, and the aligned path was only ever reached by that one throwing
+#: first. For these tables that is the difference between rows that link and rows that do
+#: not, so the choice is made deliberately rather than left to whether an INSERT happens
+#: to fail.
+_NEEDS_RESOLUTION = frozenset({"assets", "work_orders", "energy_meters", "meter_readings"})
 _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
@@ -536,6 +546,14 @@ async def write_node(state: MigrationState) -> MigrationState:
 
         # ── Primary write path: apply generated SQL artifact directly ─────────
         sql_script = (state.get("output_sql_script") or "").strip()
+        _routed = {str(v).lower() for v in (state.get("table_routing") or {}).values()}
+        _needs = _routed & _NEEDS_RESOLUTION
+        if sql_script and _needs:
+            logger.info(
+                "[Node 9] %s need reference resolution - using schema-aligned inserts rather "
+                "than the SQL artifact, which writes literals", ", ".join(sorted(_needs))
+            )
+            sql_script = ""
         if sql_script:
             logger.info("[Node 9] Applying output SQL artifact directly to target DB")
             try:
@@ -565,6 +583,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                             table_routing=state.get("table_routing", {}) or {},
                             approved_new_columns=_collect_approved_new_columns(state),
                             confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                            default_building_id=state.get("building_id") or None,
                         )
                         state["handoff_status"] = "applied_sql_aligned"
                         state["svc_ingestion_response"] = {
@@ -1266,6 +1285,7 @@ async def _apply_records_with_schema_alignment(
     table_routing: dict | None = None,
     approved_new_columns: dict[str, set[str]] | None = None,
     confirmed_hierarchies: list | None = None,
+    default_building_id: str | None = None,
 ) -> dict:
     """
     Insert cleaned records while filtering to real DB columns.
@@ -1339,6 +1359,24 @@ async def _apply_records_with_schema_alignment(
                     return None
 
             _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
+
+            # The uploader's selection, checked once. A building_id that names no building of
+            # this organisation is dropped rather than written, because a row pointing at
+            # somebody else's building is worse than a row pointing at none.
+            _default_building: str | None = None
+            if default_building_id:
+                _hit = await _fetch(
+                    f"SELECT building_id::text FROM {schema_name}.buildings "
+                    f"WHERE building_id::text = :b AND organization_id::text = :org",
+                    {"b": str(default_building_id), "org": effective_org_id},
+                )
+                _default_building = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else None
+                if _default_building:
+                    logger.info("[Node 9] rows naming no site will be filed against building %s",
+                                _default_building)
+                else:
+                    logger.warning("[Node 9] selected building %s is not a building of org %s "
+                                   "- ignored", default_building_id, effective_org_id)
 
             _asset_ids: dict[str, str] = {}          # asset code → existing assets.id ("" = none)
             _asset_building_cache: dict[str, str] = {}  # asset ref → building_id ("" = none)
@@ -1564,6 +1602,12 @@ async def _apply_records_with_schema_alignment(
                         _bid = await _buildings.resolve(_hint) if _hint else None
                         if not _bid and safe_table in _BUILDING_VIA_ASSET_TABLES:
                             _bid = await _asset_building(str(safe_row.get("asset_id") or "").strip()) or None
+                        # Last: the building the uploader had selected. A half-hourly export
+                        # names an MPAN and nothing else, so this is the only thing that can
+                        # place its meter. A site named in the file always wins over it,
+                        # because the file is evidence and the selection is context.
+                        if not _bid and _default_building:
+                            _bid = _default_building
                         if _bid:
                             safe_row["building_id"] = _bid
                             buildings_linked += 1
@@ -1580,7 +1624,8 @@ async def _apply_records_with_schema_alignment(
                             _mpan, _mprn = supply_numbers(row)
                             _mid = await _meters.resolve(
                                 _mh,
-                                building_id=(await _buildings.resolve(_hint)) if _hint else None,
+                                building_id=((await _buildings.resolve(_hint)) if _hint else None)
+                                            or _default_building,
                                 meter_type=meter_type_for(row), mpan=_mpan, mprn=_mprn,
                             )
                         if _mid:
