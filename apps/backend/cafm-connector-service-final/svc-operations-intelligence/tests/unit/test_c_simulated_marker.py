@@ -76,14 +76,21 @@ class TestTheFrontendShowsIt:
         assert "vals.enSimulatedShow" in module and "vals.enSimulatedText" in module
         assert "a.simulatedShow" in module
 
-    def test_the_seed_portfolio_is_never_marked_simulated(self):
-        """The demo portfolio is not the simulator's output, and a banner there would be
-        telling the truth about the wrong thing."""
+    def test_there_is_no_seed_portfolio_left_to_mark(self):
+        """This used to assert the demo portfolio was never flagged as simulated. There is
+        no demo portfolio now: the Energy page reads the database or it reads nothing, so
+        the question cannot arise. Kept as the guard against it coming back — a bundled
+        portfolio rendered against an empty database is indistinguishable from real data,
+        which is exactly how one came to be read as real."""
         energy = self._read("logic", "energy.js")
-        # Sliced between the two DEFINITIONS: both names also appear in the dispatcher
-        # above them, and slicing on the bare name cuts the seed body out entirely — the
-        # test then passes by reading nothing.
-        seed = energy[energy.index("enBuildingValsSeed(s) {"):energy.index("enBuildingValsLive(s) {")]
-        assert "rawGroups" in seed, "the slice missed the seed body"
-        assert 'enSimulatedShow: "none"' in seed
-        assert "b.simulated" not in seed
+        assert "enBuildingValsSeed" not in energy
+        assert "BUILDINGS" not in energy, "the bundled nine-building constant is back"
+        assert "this.D()" not in energy, "the bundled anomalies are back"
+
+    def test_the_live_list_still_marks_a_simulated_feed(self):
+        """The marker itself is not what went away. A real building fed by the simulator
+        still says so, per row and once above the list."""
+        energy = self._read("logic", "energy.js")
+        live = energy[energy.index("enBuildingValsLive(s) {"):]
+        assert "simulatedShow: a.simulated" in live
+        assert "enSimulatedShow:" in live and "b.simulated && b.simulated.any" in live

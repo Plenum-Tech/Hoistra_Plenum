@@ -493,7 +493,9 @@ async def create_building(
         # The company, when the column exists (access_control.sql adds it). Without it
         # the building is invisible to every company admin until a superadmin assigns it.
         "organization_id": clean.get("organization_id"),
-        "hoist_score": 0,
+        # Deliberately not written. A score of 0 is a claim about the building; leaving it
+        # unset lets the read derive one from what the graph holds, and says "not scored"
+        # rather than "scored zero" if it ever cannot.
         "raw_metadata": json.dumps(extras),
     }
     stored_extras = sorted(extras) if "raw_metadata" in have else []

@@ -357,7 +357,7 @@ def shape_building_row(
         }
     else:
         met["metering_source"] = "energy_meters" if meters else None
-    hoist_score = _int(site.get("hoist_score"))
+    stored_hoist_score = _int(site.get("hoist_score"))
 
     present = {
         "name": bool(site.get("building_name") or site.get("name")),
@@ -411,7 +411,17 @@ def shape_building_row(
         "benchmark_source": bench_source,
         "benchmark_comparables": None,
         "deviation_pct": round(deviation, 1) if deviation is not None else None,
-        "hoist_score": hoist_score,
+        # The Hoist Score is how completely a building is held in the graph - coverage
+        # first. That is exactly what `completeness` above measures, from the rows that
+        # exist rather than from anything typed in. So a building with nothing stored is
+        # scored on what the graph actually holds, and a stored figure still wins: it is
+        # someone's judgement, and a judgement outranks a derivation.
+        #
+        # It used to be neither. create_building wrote a hard 0 that nothing ever updated,
+        # so every hoisted building reported a Hoist Score of zero - read as "scored, and
+        # scored nothing" rather than "not scored", which is the one thing it did not mean.
+        "hoist_score": stored_hoist_score if stored_hoist_score is not None else completeness,
+        "hoist_score_source": "recorded" if stored_hoist_score is not None else "record_completeness",
         "record_completeness_pct": completeness,
         "completeness_missing": missing,
         # What a client quotes back as expected_updated_at so a patch cannot silently
