@@ -360,27 +360,27 @@ async def _load_readings(
     meter_id: UUID,
     *,
     days: int = 35,
+    as_of: datetime | None = None,
 ) -> list[tuple[datetime, float]]:
     """Load the most recent `days` of readings that actually exist.
 
     Windowing from *now* made historical CSV imports (e.g. Dec–Jan loaded in
     August) look empty to the detectors, so Scan reported complete with nothing.
     """
-    latest = (
-        await session.execute(
-            select(func.max(MeterReading.reading_at)).where(MeterReading.meter_id == meter_id)
-        )
-    ).scalar_one_or_none()
+    q = select(func.max(MeterReading.reading_at)).where(MeterReading.meter_id == meter_id)
+    if as_of is not None:
+        q = q.where(MeterReading.reading_at <= as_of)
+    latest = (await session.execute(q)).scalar_one_or_none()
     if latest is None:
         return []
     start = _aware(latest) - timedelta(days=days)
+    where = [MeterReading.meter_id == meter_id, MeterReading.reading_at >= start]
+    if as_of is not None:
+        where.append(MeterReading.reading_at <= as_of)
     rows = list(
         (
             await session.execute(
-                select(MeterReading.reading_at, MeterReading.consumption_kwh).where(
-                    MeterReading.meter_id == meter_id,
-                    MeterReading.reading_at >= start,
-                )
+                select(MeterReading.reading_at, MeterReading.consumption_kwh).where(*where)
             )
         ).all()
     )
@@ -511,8 +511,14 @@ async def scan_meter_anomalies(
     meter_id: UUID,
     organization_id: UUID | None = None,
     persist: bool = True,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
     """Run every rule this meter's data can arm.
+
+    ``as_of`` runs them as they would have run on that date: the window ends there, the
+    occupancy check covers that fortnight rather than this one, and what is written is
+    stamped with the window examined instead of with now. A finding from last November
+    belongs in November. See backfill_meter_anomalies, which walks a year this way.
 
     ``persist=False`` is the same run with nothing written: the hits come back in
     ``anomalies`` (marked ``dry_run``) and nothing is opened, re-stamped or queued — what the
@@ -523,7 +529,7 @@ async def scan_meter_anomalies(
         return {"ok": False, "error": "meter_not_found"}
     tariff = float(meter.tariff_gbp_per_kwh or 0.28)
     currency = await currency_for_building(session, meter.building_id)
-    readings = await _load_readings(session, meter_id)
+    readings = await _load_readings(session, meter_id, as_of=as_of)
     detectors = [detect_weekend_spike, detect_baseline_drift]
     if meter.is_sub_meter:
         detectors.append(detect_asset_spike)
@@ -583,7 +589,7 @@ async def scan_meter_anomalies(
     # PRD: baseline drift only when no logged occupancy change in the window
     from .occupancy import has_occupancy_change
 
-    end_now = datetime.now(timezone.utc)
+    end_now = _aware(as_of) if as_of is not None else datetime.now(timezone.utc)
     occupancy_changed = await has_occupancy_change(
         session,
         building_id=meter.building_id,
@@ -591,6 +597,7 @@ async def scan_meter_anomalies(
         window_end=end_now,
     )
 
+    _window_end = _aware(as_of) if as_of is not None else datetime.now(timezone.utc)
     created: list[dict[str, Any]] = []
     for det in detectors:
         if det is detect_baseline_drift and occupancy_changed:
@@ -623,21 +630,31 @@ async def scan_meter_anomalies(
         # guard each run wrote another anomaly AND another approval for the same event: one
         # weekend appeared five times, and the August report priced it five times over.
         # Re-detecting a live event is not news — note that we saw it again and move on.
+        # Re-detecting a live event is not news: the spike stays in the readings, so every
+        # later scan finds it again, and without this each run wrote another anomaly AND
+        # another approval for the same weekend.
+        #
+        # A historical sweep is the opposite case. The same rule firing in March and again
+        # in July is two events, and collapsing them would report one. So when the run is
+        # dated, the window is part of what makes a finding distinct.
+        _dedupe = [
+            EnergyAnomaly.meter_id == meter.id,
+            EnergyAnomaly.anomaly_type == hit["anomaly_type"],
+            EnergyAnomaly.metric_pct == Decimal(str(hit["metric_pct"])),
+            EnergyAnomaly.status.notin_(_SETTLED_STATUSES),
+        ]
+        if as_of is not None:
+            _dedupe.append(func.date(EnergyAnomaly.window_end) == _aware(as_of).date())
         existing = (
             await session.execute(
                 select(EnergyAnomaly)
-                .where(
-                    EnergyAnomaly.meter_id == meter.id,
-                    EnergyAnomaly.anomaly_type == hit["anomaly_type"],
-                    EnergyAnomaly.metric_pct == Decimal(str(hit["metric_pct"])),
-                    EnergyAnomaly.status.notin_(_SETTLED_STATUSES),
-                )
+                .where(*_dedupe)
                 .order_by(EnergyAnomaly.detected_at.desc())
                 .limit(1)
             )
         ).scalars().first()
         if existing is not None:
-            existing.window_end = datetime.now(timezone.utc)
+            existing.window_end = _window_end
             log.info(
                 "energy.anomaly.already_open",
                 meter_id=str(meter_id),
@@ -653,7 +670,12 @@ async def scan_meter_anomalies(
             meter_id=meter.id,
             asset_id=meter.asset_id,
             anomaly_type=hit["anomaly_type"],
-            window_end=datetime.now(timezone.utc),
+            # The window examined, not the moment of the run. Stamping "now" on a finding
+            # from last November puts every historical firing in today's register, in the
+            # order they were computed rather than the order they happened.
+            window_start=_window_end - timedelta(days=35),
+            window_end=_window_end,
+            detected_at=_window_end,
             metric_pct=Decimal(str(hit["metric_pct"])),
             # NULL where the rule could not price the firing. The column is nullable and
             # NULL is the honest answer; 0 would say "this costs nothing", which is a
@@ -767,6 +789,112 @@ async def act_on_anomaly(
         "pm_action": row.pm_action,
         "note": "Stored for future Work Order Engine consumption; no WO created in this phase.",
     }
+
+
+#: How far apart two sweep windows sit. Every rule here reads a fortnight or a month of
+#: readings, so a weekly step gives each firing a fresh comparison without walking the same
+#: evidence four times over.
+SWEEP_STEP_DAYS = 7
+
+
+async def backfill_meter_anomalies(
+    session: AsyncSession,
+    *,
+    meter_id: UUID,
+    organization_id: UUID | None = None,
+    history_days: int = 365,
+    step_days: int = SWEEP_STEP_DAYS,
+) -> dict[str, Any]:
+    """Run the rules across history, not just over the newest readings.
+
+    A scan answers "what is wrong now": every rule reads the last 35 days, because that is
+    what they are defined over - a weekend against the other three in the month, this week
+    against last. Ingest a year and a single scan still reports on its final month, which
+    reads as "the year was quiet" when in fact nobody has looked at it.
+
+    So the same rules are asked the same question at weekly intervals across the data that
+    exists, each with the window that week would have had. Nothing new is computed and no
+    threshold is relaxed; the only difference is where the window ends. A firing in November
+    is stamped and dated November, so the register reads as a history rather than as a pile
+    of findings that all arrived today.
+
+    Idempotent by window: re-sweeping the same year re-detects the same events and writes
+    nothing, because a finding is identified by its rule, its size and the window it was
+    found in.
+    """
+    bounds = (
+        await session.execute(
+            select(func.min(MeterReading.reading_at), func.max(MeterReading.reading_at))
+            .where(MeterReading.meter_id == meter_id)
+        )
+    ).first()
+    if not bounds or bounds[0] is None:
+        return {"ok": True, "meter_id": str(meter_id), "windows": 0, "created": 0,
+                "reason": "no readings on this meter"}
+
+    earliest, latest = _aware(bounds[0]), _aware(bounds[1])
+    horizon = max(earliest, latest - timedelta(days=history_days))
+    # The first window needs a full 35 days behind it, or the rules compare against a
+    # fortnight that is not there - and an empty comparison is not a quiet week.
+    first_end = min(horizon + timedelta(days=35), latest)
+
+    created: list[dict[str, Any]] = []
+    windows = 0
+    end = first_end
+    while True:
+        windows += 1
+        try:
+            out = await scan_meter_anomalies(
+                session, meter_id=meter_id, organization_id=organization_id, as_of=end
+            )
+            created.extend(out.get("anomalies") or [])
+        except Exception as exc:  # noqa: BLE001 - one bad window must not end the sweep
+            log.warning("energy.anomaly.sweep_window_failed",
+                        meter_id=str(meter_id), as_of=end.isoformat(), error=str(exc)[:200])
+        if end >= latest:
+            break
+        end = min(end + timedelta(days=step_days), latest)
+
+    log.info("energy.anomaly.sweep_complete", meter_id=str(meter_id),
+             windows=windows, created=len(created))
+    return {
+        "ok": True,
+        "meter_id": str(meter_id),
+        "windows": windows,
+        "created": len(created),
+        "window_from": first_end.isoformat(),
+        "window_to": latest.isoformat(),
+        "anomalies": created,
+    }
+
+
+async def backfill_all_active_meters(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    history_days: int = 365,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """The sweep above, for every active meter. What a first ingest of a year should run."""
+    q = select(EnergyMeter).where(EnergyMeter.active.is_(True)).limit(limit)
+    if organization_id:
+        q = q.where(EnergyMeter.organization_id == organization_id)
+    meters = list((await session.execute(q)).scalars().all())
+    results, total = [], 0
+    for m in meters:
+        try:
+            r = await backfill_meter_anomalies(
+                session, meter_id=m.id,
+                organization_id=organization_id or m.organization_id,
+                history_days=history_days,
+            )
+            total += int(r.get("created") or 0)
+            results.append({"meter_id": str(m.id), "ok": r.get("ok"),
+                            "windows": r.get("windows"), "created": r.get("created")})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("energy.anomaly.sweep_meter_failed", meter_id=str(m.id), error=str(exc)[:200])
+            results.append({"meter_id": str(m.id), "ok": False, "error": str(exc)[:200]})
+    return {"ok": True, "meters_swept": len(meters), "created": total, "results": results}
 
 
 async def scan_all_active_meters(

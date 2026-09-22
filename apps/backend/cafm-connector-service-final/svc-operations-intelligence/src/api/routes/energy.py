@@ -941,10 +941,22 @@ async def scan_anomalies(
 @router.post("/anomalies/scan-all")
 async def scan_all_anomalies(
     organization_id: UUID | None = None,
+    history_days: int | None = Query(
+        None, ge=1, le=1095,
+        description="Sweep this many days of history instead of scanning only the newest "
+                    "readings. Every rule reads a 35-day window, so a year of readings "
+                    "scanned once reports on its final month alone; a sweep asks the same "
+                    "rules the same question at weekly intervals across the year, and dates "
+                    "each finding to the window it was found in.",
+    ),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
     organization_id = access.organization_for(s, organization_id)
+    if history_days:
+        return await anom_svc.backfill_all_active_meters(
+            session, organization_id=organization_id, history_days=history_days
+        )
     return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
 
 
