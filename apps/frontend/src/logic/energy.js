@@ -1,14 +1,18 @@
 // energy — energy scope, ratings, buildings list and the investigate conversation.
 //
-// Live-or-seed, same shape as compliance/vendors/buildings: buildings come from
-// buildingsLive.js's bldData() (bldIsLive() says which), open anomalies from
-// energyLive.js's enAnomalies() once energyLoad() has answered. The seed
-// (src/logic/constants.js BUILDINGS, src/data/hoistway-data.js D.anomalies) is the
-// fallback while the backend has not answered, or has not answered yet for a given
-// building (a live building with no EUI reading shows "—", never a fabricated number).
+// Database only. Buildings come from buildingsLive.js's bldData(), open anomalies from
+// energyLive.js's enAnomalies(), market profiles and ratings from the engines that compute
+// them. There is no seed fallback and no bundled portfolio: a page with nothing behind it
+// shows nothing and says so. A demo portfolio rendered against an empty database is
+// indistinguishable from real data, and was read as exactly that.
+//
+// What stays hard-coded is the rule book, never the readings: which standard a market is
+// held to and what its tariff and data routes are (PACKS/ENC), the attribute rows of the
+// market profile (EN_ATTRS), and the detection rules themselves (HOISTRA_EN). None of that
+// is ingested; all of it is the reference an ingested reading is judged against.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { BUILDINGS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ENC_MIXED_AVAIL, ENC_MIXED_HELD, t } from './constants.js';
+import { PACKS, ENC, EN_ATTRS, ENC_MIXED_AVAIL, ENC_MIXED_HELD, t } from './constants.js';
 import { HOISTRA_EN } from '../data/hoistra-energy.js';
 import { moneyGBP, IMPLEMENTED_RULE_IDS } from './energyLive.js';
 
@@ -69,22 +73,21 @@ export const energyMethods = {
 
   enVals(s) {
     const sc = this.enScope(s);
-    const isLive = this.bldIsLive();
     // "All countries" means the whole portfolio, not "whichever of these four codes
-    // matches" — a live building with no country on record is still in scope until a
-    // specific market is picked, at which point it honestly drops out of that market.
-    const allBuildings = isLive ? this.bldData() : BUILDINGS;
+    // matches" — a building with no country on record is still in scope until a specific
+    // market is picked, at which point it honestly drops out of that market.
+    const allBuildings = this.bldData();
     const bs = sc.isAll ? allBuildings : allBuildings.filter((b) => sc.sel.indexOf(b.cc) > -1);
     const hasEui = (b) => typeof b.euiN === "number" && typeof b.benchN === "number";
-    const m2 = (b) => isLive ? (typeof b.areaM2 === "number" ? b.areaM2 : 0) : parseInt(String(b.area).replace(/[^0-9]/g, ""), 10) * 0.0929;
+    const m2 = (b) => (typeof b.areaM2 === "number" ? b.areaM2 : 0);
     const measured = bs.filter(hasEui);
     const area = measured.reduce((q, b) => q + m2(b), 0);
     const eui = area ? measured.reduce((q, b) => q + b.euiN * m2(b), 0) / area : null;
     const bench = area ? measured.reduce((q, b) => q + b.benchN * m2(b), 0) / area : null;
     const excess = measured.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * (ENC[b.cc] || ENC.UK).tariff, 0);
 
-    const allAnoms = isLive ? this.enAnomalies() : this.D().anomalies;
-    const anomCc = (a) => isLive ? a.cc : (CC_OF[a.building] || "UK");
+    const allAnoms = this.enAnomalies();
+    const anomCc = (a) => a.cc;
     const anoms = sc.isAll ? allAnoms : allAnoms.filter((a) => sc.sel.indexOf(anomCc(a)) > -1);
     const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
     const cc0 = sc.sel[0];
@@ -95,7 +98,7 @@ export const energyMethods = {
     // Ratings follow a country picker inside the section; it falls back to the
     // first market in scope whenever the previous pick drops out of scope.
     const rcc = sc.single ? cc0 : (sc.sel.indexOf(s.enRatingCc) > -1 ? s.enRatingCc : cc0);
-    const unattributed = isLive ? allBuildings.filter((b) => !b.cc || b.cc === "—").length : 0;
+    const unattributed = allBuildings.filter((b) => !b.cc || b.cc === "—").length;
 
     return {
       isEnergy: s.view === "module" && s.module === "energy",
@@ -133,7 +136,7 @@ export const energyMethods = {
       enScopeCards: [
         { l: "Buildings in scope", v: String(bs.length), s: sc.single ? PACKS[cc0].flag + " " + PACKS[cc0].name : sc.sel.map((cc) => PACKS[cc].flag).join(" ") + " " + sc.sel.length + " markets", tone: "ok" },
         { l: "EUI, area weighted", v: eui === null ? "—" : Math.round(eui) + "",
-          s: eui === null ? (isLive ? "no EUI reading on record for any building in scope yet" : "—")
+          s: eui === null ? "no EUI reading on record for any building in scope yet"
             : (delta > 0 ? "+" : "") + delta + "% against " + (sc.single ? (cc0 === "AE" ? "the rolling portfolio benchmark" : P.std) : "each building's own pack"),
           tone: eui === null ? "dormant" : delta > 8 ? "risk" : delta > 0 ? "warn" : "ok" },
         { l: "Cost above benchmark / year", v: eui === null ? "—" : money(excess),
@@ -154,11 +157,11 @@ export const energyMethods = {
       enAvailTitle: sc.single ? "Available at this scope" : "Available across every market in scope",
 
       enMatrixCols: "168px repeat(" + sc.sel.length + ", minmax(200px,1fr))",
-      // Header counts and cells come from the API when it has answered: the table then says
-      // what THIS deployment measures, not what a constant assumed. The constant stays as
-      // the seed fallback so the demo portfolio still renders a table.
+      // EN_ATTRS supplies the ROWS this table has, which is structure and the same for
+      // every deployment. Every VALUE comes from the engine or reads "—". A sample value
+      // standing in for a measurement is what made an empty database look full.
       enMatrixHead: sc.sel.map((cc) => {
-        const live = isLive && s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
+        const live = s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
         const n = live ? live.buildings : allBuildings.filter((b) => b.cc === cc).length;
         return { label: PACKS[cc].flag + " " + PACKS[cc].name, n: n + (n === 1 ? " building" : " buildings") };
       }),
@@ -172,14 +175,14 @@ export const energyMethods = {
         AE: ["Which chillers drift against cooling degree days?", "What does the DEWA bill show that the BMS cannot see?", "Rank UAE buildings by RT per m²"],
         SG: ["Is the BCA submission consistent with the retailer feed?", "Which building drifted furthest from its own baseline?", "What does the retail contract say about data at renewal?"]
       })[cc0] : ["Which markets drive the excess cost?", "Which buildings are worst against their own pack?", "Where does the data route limit what I can see?"]),
-      enMatrixRows: ((isLive && s.enProfilesLive && s.enProfilesLive.attributes) || EN_ATTRS).map((a, i, attrs) => ({
+      enMatrixRows: ((s.enProfilesLive && s.enProfilesLive.attributes) || EN_ATTRS).map((a, i, attrs) => ({
         section: i === 0 || attrs[i - 1][0] !== a[0] ? a[0] : "",
         sectionShow: i === 0 || attrs[i - 1][0] !== a[0] ? "flex" : "none",
         label: a[1],
         cells: sc.sel.map((cc) => {
-          const live = isLive && s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
+          const live = s.enProfilesLive && s.enProfilesLive.markets && s.enProfilesLive.markets[cc];
           const c = live && live.cells ? live.cells[a[2]] : null;
-          if (!c) return { v: (EN_PROFILE[cc] || {})[a[2]] || "—", basis: "", basisShow: "none", note: "" };
+          if (!c) return { v: "—", basis: "", basisShow: "none", note: "not measured in this deployment yet" };
           // A measured or derived cell earns a small label saying so, with how many
           // buildings or meters stand behind it; a reference one says it is reference.
           const tag = c.basis === "reference" ? "reference"
@@ -218,10 +221,12 @@ export const energyMethods = {
   enRatingsFromPosition(cc) {
     const pos = (this.state.enPosByCc || {})[cc];
     if (!pos || (pos.loading && !((pos.tiles || []).length))) {
-      return (EN_RATINGS[cc] || []).map((r) => ({
-        l: r.l, v: "…", s: "loading from the ratings engine", color: "var(--color-neutral-500)",
+      // One honest placeholder. Listing the tiles a constant expects would name positions
+      // this deployment may not hold, and they would read as computed once filled in.
+      return [{
+        l: "Ratings", v: "…", s: "loading from the ratings engine", color: "var(--color-neutral-500)",
         badge: "", badgeFg: "var(--color-neutral-500)", confShow: "none", confPct: "0%", confFg: "var(--color-neutral-500)"
-      }));
+      }];
     }
     if (pos.error && !(pos.tiles || []).length) {
       return [{
@@ -240,97 +245,12 @@ export const energyMethods = {
     });
   },
 
-  /* Investigation. A live building or anomaly asks the real orchestrator (askScoped,
-     same as Compliance/Vendors/Buildings) and answers in the Energy page's side dock. A
-     seed one (Assets, Maintenance, or the Energy page before the backend has answered)
-     keeps the scripted four-stage walk below — nothing here reads real data, so it stays
-     out of scope for this pass rather than half-converted. */
+  /* Investigation. Every building and anomaly on this page is a database row, so every
+     investigation asks the real orchestrator (askScoped, same as Compliance/Vendors/
+     Buildings) and answers in the Energy page's side dock. The scripted four-stage walk
+     that used to run for seed rows went with the seed rows. */
   investigate(kind, o) {
-    if (o && o.live) return this.investigateLive(kind, o);
-    const EN = HOISTRA_EN;
-    if (!EN) return;
-    const fill = (str, m) => String(str).replace(/\{(\w+)\}/g, (_, k) => (m[k] != null ? m[k] : "{" + k + "}"));
-    let tpl, m, title, sub;
-    if (kind === "anomaly") {
-      const b = BUILDINGS.find((x) => x.name === o.building) || {};
-      const vendor = CC_OF[o.building] === "AE" ? "Gulf Cooling" : CC_OF[o.building] === "US" ? "Metro Facilities" : CC_OF[o.building] === "SG" ? "Sembawang M&E" : "Apex M&E";
-      m = { asset: o.asset, building: o.building, impact: o.impact, vendor: vendor };
-      tpl = EN.T[o.type] || EN.T["Baseline drift"];
-      title = o.asset + " · " + o.building;
-      sub = o.type + " · " + o.impact + " annualised · " + (b.route || "meter feed") + " · " + (b.gran || "");
-    } else {
-      const b = BUILDINGS.find((x) => x.name === o.name) || {};
-      const D = this.D();
-      const an = D.anomalies.filter((a) => a.building === o.name && a.status !== "Resolved");
-      const anomSum = an.reduce((q, a) => q + parseInt(a.impact.replace(/[^0-9]/g, ""), 10), 0);
-      const m2 = parseInt(String(b.area || "0").replace(/[^0-9]/g, ""), 10) * 0.0929;
-      const excessN = Math.max(0, (b.euiN || 0) - (b.benchN || 0)) * m2 * ((ENC[b.cc] || ENC.UK).tariff);
-      const money = (n) => "£" + (n >= 1000 ? Math.round(n / 1000) + "k" : Math.round(n));
-      const over = (b.euiN || 0) > (b.benchN || 0);
-      const delta = b.benchN ? Math.round((((b.euiN || 0) - b.benchN) / b.benchN) * 100) : 0;
-      m = {
-        building: o.name, route: (b.route || "meter feed") + " · " + (b.gran || ""), nAnom: String(an.length),
-        eui: (b.euiN || 0) + " kWh/m²/yr", bench: (b.benchN || 0) + " kWh/m²/yr",
-        delta: (delta > 0 ? "+" : "") + delta + "%", excess: over ? money(excessN) : "£0",
-        anomExcess: money(anomSum), anomShare: excessN > 0 ? Math.min(100, Math.round((anomSum / excessN) * 100)) + "%" : "none of the gap — the building is under reference",
-        hours: b.use === "Commercial" ? "06:00–22:00 vs 08:00–18:00 assumed" : b.use === "Hospital" ? "24h vs 24h assumed" : b.use === "Retail" || b.use === "Mixed" ? "07:00–23:00 vs 09:00–21:00 assumed" : "as assumed",
-        plant: b.floors > 20 ? "chillers 2009 · AHUs 2009 · L1: 4 assets" : "boilers 2004 · AHUs 2012 · L1: 2 assets",
-        rating: b.cc === "UK" ? "EPC D · improvement report lists LED and BMS optimisation" : b.cc === "US" ? "Energy Star 71 · LL84 filed" : b.cc === "SG" ? "BCA return filed · no Green Mark" : "no operational rating scheme",
-        hoursFinding: b.use === "Hospital" ? "Operating hours match the pack assumption; the gap is not an hours question." : "The building keeps longer hours than its pack assumes. Part of the gap is a benchmark-fit question, not waste.",
-        plantFinding: b.floors > 20 ? "Central plant is 2009 vintage; the two L1 chillers are past mid-life and dominate the load." : "Boilers are 2004 vintage, well past design life; the EPC improvement report already names the measures.",
-        cause: over
-          ? "Structural in the main — plant age and hours — with " + money(anomSum) + " of anomalies on top. Fixing anomalies narrows the gap; it does not close it."
-          : "Under reference. The open anomalies are the only cost on the table; there is no structural gap to fund.",
-        capex: b.floors > 20 ? "chiller replacement or sequencing upgrade · payback case from the graph" : "LED and BMS optimisation from the EPC report · payback case from the graph"
-      };
-      tpl = EN.B;
-      title = o.name;
-      sub = "EUI vs " + ((PACKS[b.cc] || PACKS.UK).std === "NA" ? "rolling portfolio benchmark" : (PACKS[b.cc] || PACKS.UK).std) + " · " + m.delta + " · " + m.excess + " a year";
-    }
-    const query = kind === "anomaly"
-      ? "Why is " + o.asset + " at " + o.building + " showing a " + o.type.toLowerCase() + " worth " + o.impact + " a year, and what should I do about it?"
-      : "Why is " + o.name + " at " + m.eui + " against a reference of " + m.bench + ", and how much of that gap can I act on?";
-    const inv = {
-      kind: kind, title: title, sub: sub, query: query, replies: [],
-      sources: tpl.sources.map((r) => ({ tbl: r[0], what: fill(r[1], m), n: fill(r[2], m) })),
-      findings: tpl.findings.map((f) => ({ t: fill(f.t, m), src: f.src, conf: f.conf })),
-      cause: fill(tpl.cause, m), costLine: fill(tpl.costLine, m),
-      actions: tpl.actions.map((a) => ({ l: fill(a.l, m), s: fill(a.s, m), k: a.k, done: false }))
-    };
-    // Inconclusive evidence escalates: if the strongest finding is under 85% or a
-    // record the contract requires is missing, the FM is asked and an inspection
-    // is planned rather than a cause asserted.
-    const maxConf = Math.max.apply(null, inv.findings.map((f) => f.conf));
-    const hasGap = inv.findings.some((f) => /gap/.test(f.src));
-    inv.escalate = maxConf < 85 || hasGap;
-    inv.escText = hasGap
-      ? "A record the contract requires is missing, so the cause rests on inference. The FM lead is asked to confirm and the missing document is requested before anything is claimed."
-      : "No finding clears 85% confidence. Rather than assert a cause, the orchestrator asks the FM lead why and books an inspection to settle it.";
-    if (inv.escalate && !inv.actions.some((a) => a.k === "email")) {
-      inv.actions.unshift({ l: "Ask the FM lead why", s: "draft email with the evidence attached · reply closes or reopens the case", k: "email", done: false });
-    }
-    if (inv.escalate && !inv.actions.some((a) => a.k === "wo" || a.k === "inspect")) {
-      inv.actions.splice(1, 0, { l: "Plan an inspection", s: "PPM-linked visit · findings written back to the asset record", k: "inspect", done: false });
-    }
-    const chain = [
-      { a: "Orchestrator", t: "Intent: investigate " + title.toLowerCase() + " · why is it where it is, and what can be done" },
-      { a: "Planner", t: "Walk " + inv.sources.length + " tables: " + inv.sources.map((r) => r.tbl).join(", ") },
-      { a: "Worker", t: "Retrieving rows, weighing each finding by source and confidence, flagging any record that should exist and does not" },
-      { a: "Quality", t: inv.escalate ? "Evidence inconclusive or a record missing — escalation armed: ask the FM, plan an inspection" : "Cause supported at ≥85% — actions drafted, none executed until approved" }
-    ];
-    clearInterval(this._invTick);
-    this.orch("Investigate", title, chain);
-    this.setState({ inv: inv, invStage: 0, invSrcDone: 0, flow: "investigate", flowDone: "", detail: null });
-    // Sources tick in one by one, then each stage lands.
-    this._invTick = setInterval(() => {
-      this.setState((p) => {
-        if (!p.inv) { clearInterval(this._invTick); return {}; }
-        if (p.invSrcDone < p.inv.sources.length) return { invSrcDone: p.invSrcDone + 1 };
-        const n = p.invStage + 1;
-        if (n >= 3) clearInterval(this._invTick);
-        return { invStage: Math.min(n, 3) };
-      });
-    }, 420);
+    return this.investigateLive(kind, o);
   },
 
   // A live building or anomaly: no scripted stages to play, because there is nothing
@@ -357,101 +277,7 @@ export const energyMethods = {
   /* Building-centric energy list: one row per building under its market,
      EUI against its own pack first, its anomalies underneath on open. */
   enBuildingVals(s) {
-    return this.bldIsLive() ? this.enBuildingValsLive(s) : this.enBuildingValsSeed(s);
-  },
-
-  enBuildingValsSeed(s) {
-    const sc = this.enScope(s);
-    const D = this.D();
-    const f = s.filter || "All";
-    const query = String(s.enBldQuery || "").trim().toLowerCase();
-    const money = (n) => "£" + (n >= 1000 ? Math.round(n / 1000) + "k" : Math.round(n));
-    const anomHit = (a) => f === "New" ? a.status === "New" : f === "Above £20k" ? parseInt(a.impact.replace(/[^0-9]/g, ""), 10) > 20000 : true;
-    const rawGroups = [];
-    let total = 0;
-    sc.sel.forEach((cc) => {
-      const P = PACKS[cc];
-      const list = BUILDINGS.filter((B) => B.cc === cc)
-        .filter((B) => !query || B.name.toLowerCase().indexOf(query) > -1)
-        .map((B) => {
-        const b = { name: B.name, eui: B.euiN, bench: B.benchN };
-        const m2 = (parseInt(String(B.area || "100,000").replace(/[^0-9]/g, ""), 10)) * 0.0929;
-        const excess = Math.max(0, b.eui - b.bench) * m2 * (ENC[cc] || ENC.UK).tariff;
-        const all = D.anomalies.filter((a) => a.building === b.name && a.status !== "Resolved");
-        const anoms = all.filter(anomHit);
-        const anomSum = anoms.reduce((q, a) => q + parseInt(a.impact.replace(/[^0-9]/g, ""), 10), 0);
-        return { b: b, B: B, excess: excess, all: all, anoms: anoms, anomSum: anomSum };
-      }).filter((x) => {
-        if (f === "Over benchmark") return x.b.eui > x.b.bench;
-        if (f === "With anomalies") return x.all.length > 0;
-        if (f === "New" || f === "Above £20k") return x.anoms.length > 0;
-        return true;
-      }).sort((p, q) => (q.excess + q.anomSum) - (p.excess + p.anomSum));
-      total += BUILDINGS.filter((B) => B.cc === cc).length;
-      if (!list.length) return;
-      const gExcess = list.reduce((q, x) => q + x.excess, 0);
-      const gAnom = list.reduce((q, x) => q + x.anomSum, 0);
-      rawGroups.push({
-        label: P.flag + " " + P.name,
-        std: P.std === "NA" ? "rolling portfolio benchmark" : P.std,
-        meta: list.length + (list.length === 1 ? " building" : " buildings") + " · " + money(gExcess) + " above reference · " + money(gAnom) + " in anomalies",
-        buildings: list.map((x) => {
-          const b = x.b, B = x.B;
-          const delta = Math.round(((b.eui - b.bench) / b.bench) * 100);
-          const over = b.eui > b.bench;
-          const open = s.enOpenB === b.name;
-          const tone = b.eui > b.bench + 10 ? "risk" : over ? "warn" : "ok";
-          return {
-            name: b.name, eui: b.eui + " kWh/m²", bench: "ref " + b.bench,
-            delta: (delta > 0 ? "+" : "") + delta + "%", deltaFg: t(tone).color,
-            barPct: Math.min(100, Math.round((b.eui / 260) * 100)) + "%", barColor: t(tone).color,
-            refPct: Math.min(100, Math.round((b.bench / 260) * 100)) + "%",
-            route: (B.route || "meter feed") + " · " + (B.gran || "building-level"),
-            granFg: B.gran === "sub-metered" ? "var(--color-neutral-500)" : "var(--st-dormant)",
-            excess: over ? money(x.excess) : "at or under reference", excessFg: over ? "var(--color-text)" : "var(--st-ok)",
-            anomN: x.all.length ? x.all.length + (x.all.length === 1 ? " anomaly" : " anomalies") + " · " + money(x.all.reduce((q, a) => q + parseInt(a.impact.replace(/[^0-9]/g, ""), 10), 0)) : "no open anomalies",
-            anomFg: x.all.length ? "var(--st-warn)" : "var(--color-neutral-500)",
-            caret: open ? "ph-caret-down" : "ph-caret-right",
-            openShow: open ? "block" : "none",
-            bg: open ? "var(--color-neutral-900)" : "var(--color-surface)",
-            toggle: () => this.setState((p) => ({ enOpenB: p.enOpenB === b.name ? null : b.name })),
-            investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("building", b); },
-            emptyShow: x.anoms.length ? "none" : "block",
-            emptyText: x.all.length ? "No anomalies match the current filter." : "No open anomalies. Any gap above reference here is structural — investigate the building to size the capex case.",
-            anomalies: x.anoms.map((a) => ({
-              asset: a.asset, type: a.type, impact: a.impact, status: a.status, days: a.days + " days active",
-              simulatedShow: "none",
-              color: t(a.tone).color, bg: t(a.tone).bg,
-              open: () => this.setState({ detail: this.anomalyDetail(a) }),
-              investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("anomaly", a); }
-            }))
-          };
-        })
-      });
-    });
-    const paged = paginateBuildingGroups(rawGroups, s.enBldPage);
-    const pageStart = paged.flatTotal ? paged.page * ENERGY_PAGE_SIZE + 1 : 0;
-    const pageEnd = Math.min(paged.flatTotal, (paged.page + 1) * ENERGY_PAGE_SIZE);
-    return {
-      enGroups: paged.groups,
-      enSimulatedShow: "none",
-      enSimulatedText: "",
-
-      enListSummary: (paged.flatTotal ? pageStart + "–" + pageEnd : "0") + " of " + total + " buildings"
-        + (f === "All" ? "" : " · filter: " + f) + (query ? " · matching “" + s.enBldQuery + "”" : ""),
-      enListEmpty: rawGroups.length ? "none" : "block",
-      enBldQuery: s.enBldQuery || "",
-      setEnBldQuery: (e) => this.setState({ enBldQuery: e.target.value, enBldPage: 0 }),
-      enBldQueryShow: total > ENERGY_PAGE_SIZE ? "flex" : "none",
-      enBldPage: paged.page,
-      enBldPageCount: paged.pageCount,
-      enBldPagerShow: paged.flatTotal > ENERGY_PAGE_SIZE ? "flex" : "none",
-      enBldPagePrevShow: paged.page > 0,
-      enBldPageNextShow: paged.page < paged.pageCount - 1,
-      enBldPagePrev: () => this.setState((p) => ({ enBldPage: Math.max(0, (p.enBldPage || 0) - 1) })),
-      enBldPageNext: () => this.setState((p) => ({ enBldPage: Math.min(paged.pageCount - 1, (p.enBldPage || 0) + 1) })),
-      isNotEnergy: !(s.view === "module" && (s.module === "energy" || s.module === "assets" || s.module === "ops"))
-    };
+    return this.enBuildingValsLive(s);
   },
 
   // Live building rows have no fixed per-country membership to iterate — most buildings
@@ -641,10 +467,9 @@ export const energyMethods = {
     const b0 = this.enScope(s);
     const stage = s.invStage || 0;
     const rules = EN ? EN.RULES : [];
-    // Rule coverage for the scope: how many buildings in scope can arm each rule, from
-    // the live Buildings table once it has loaded, the seed otherwise.
-    const isLive = this.bldIsLive();
-    const allBuildings = isLive ? this.bldData() : BUILDINGS;
+    // Rule coverage for the scope: how many buildings in scope can arm each rule, read
+    // from the Buildings table.
+    const allBuildings = this.bldData();
     const bs = b0.isAll ? allBuildings : allBuildings.filter((b) => b0.sel.indexOf(b.cc) > -1);
     return {
       fInvestigate: s.flow === "investigate" && !!inv,
