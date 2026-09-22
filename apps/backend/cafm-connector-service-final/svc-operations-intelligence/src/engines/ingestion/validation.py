@@ -398,6 +398,49 @@ async def _building_name(session: AsyncSession, building_id: str | None) -> str 
         {"b": str(building_id)})).scalar()
 
 
+METER_LOOKUP_SQL = """
+SELECT lower(coalesce(m.mpan, '')) AS mpan, lower(coalesce(m.mprn, '')) AS mprn,
+       m.building_id::text AS building_id
+  FROM plenum_cafm.energy_meters m
+ WHERE m.organization_id::text = :org
+"""
+
+
+async def reclassify_meter_claims(
+    session: AsyncSession, c: Claims, *, organization_id: UUID | str | None,
+) -> Claims:
+    """Move any claimed value that names a real meter out of assets and into meters.
+
+    A supply number matches the hyphenated-code pattern that looks for asset codes, so on a
+    CSV — where the reader sees the file as text and no column is consulted — it arrives as an
+    asset claim and is then checked against a register it can never appear in. Four Ashgrove
+    cases were opened that way, each asking why a document should be filed against a building
+    when the only reference it carried was that building's own meter.
+
+    This asks the register instead of guessing. The scope is the organisation, not the
+    building, so a meter belonging to somewhere else is still recognised AS a meter and still
+    conflicts — accurately, rather than as an asset nobody has heard of.
+    """
+    if not c.assets or not organization_id:
+        return c
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(
+                text(METER_LOOKUP_SQL), {"org": str(organization_id)})).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("validation.meter_lookup_failed", error=str(exc)[:200])
+        return c
+    known = {v for r in rows for v in (r["mpan"], r["mprn"]) if v}
+    if not known:
+        return c
+    hits = [a for a in c.assets if str(a).strip().lower() in known]
+    if not hits:
+        return c
+    c.meters = list(dict.fromkeys(list(c.meters) + hits))
+    c.assets = [a for a in c.assets if str(a).strip().lower() not in known]
+    return c
+
+
 async def open_case(
     session: AsyncSession,
     *,
@@ -425,6 +468,8 @@ async def open_case(
 
     c = claims_engine.from_document(text=text_body, file_name=document_name,
                                     extracted=extracted, doc_type=doc_type)
+    c = await reclassify_meter_claims(
+        session, c, organization_id=organization_id or o.organization_id)
     findings = compare(c, o)
     verdict, confidence = verdict_for(findings, o)
     candidates = await rank_candidates(
@@ -677,6 +722,87 @@ async def decide(
     return {"ok": True, **(final or {}),
             "message": ("Filed against " + str((case.get("ontology") or {}).get("name"))
                         if approve else "Not filed. The document was not ingested.")}
+
+
+async def revalidate_open(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Re-run the protocol on cases still waiting for an answer, and close the ones that pass.
+
+    A case records what the check concluded at the time. When the check itself is corrected,
+    the cases it opened keep asking their old question — and a question with no true answer is
+    the worst kind to leave in front of a person. Four Ashgrove cases asked why a half-hourly
+    export should be filed against a building when the only reference it carried was that
+    building's own meter; the honest reply was that the premise was wrong.
+
+    Claims are rebuilt from what the case stored rather than from the document, which is no
+    longer to hand, and then put through the same reclassification and comparison a new case
+    gets. A case that still does not pass is left exactly as it was: this closes cases the
+    rules got wrong, not cases a person needs to answer.
+    """
+    rows = (await session.execute(text("""
+        SELECT id::text, selected_building_id::text AS building_id, organization_id::text AS org,
+               claims, document_name
+          FROM plenum_cafm.ingestion_validation_cases
+         WHERE status IN (:c1, :c2)
+           AND (CAST(:org AS uuid) IS NULL OR organization_id = CAST(:org AS uuid))
+         ORDER BY created_at DESC LIMIT :lim"""),
+        {"c1": NEEDS_CLARIFICATION, "c2": NEEDS_CONFIRMATION,
+         "org": str(organization_id) if organization_id else None,
+         "lim": max(1, min(int(limit), 1000))},
+    )).mappings().all()
+
+    closed, kept, skipped = [], [], []
+    for r in rows:
+        o = await onto.load(session, r["building_id"]) if r["building_id"] else None
+        if o is None:
+            skipped.append({"case_id": r["id"], "reason": "building_not_found"})
+            continue
+        stored = r["claims"] if isinstance(r["claims"], dict) else {}
+        c = Claims(
+            buildings=list(stored.get("buildings") or []),
+            codes=list(stored.get("codes") or []),
+            vendors=list(stored.get("vendors") or []),
+            countries=list(stored.get("countries") or []),
+            country_names=list(stored.get("country_names") or []),
+            regions=list(stored.get("regions") or []),
+            states=list(stored.get("states") or []),
+            postcodes=list(stored.get("postcodes") or []),
+            assets=list(stored.get("assets") or []),
+            meters=list(stored.get("meters") or []),
+            contract_refs=list(stored.get("contract_refs") or []),
+            certificate_numbers=list(stored.get("certificate_numbers") or []),
+            sources=dict(stored.get("sources") or {}),
+        )
+        c = await reclassify_meter_claims(session, c, organization_id=r["org"] or o.organization_id)
+        findings = compare(c, o)
+        verdict, confidence = verdict_for(findings, o)
+        if verdict != MATCHED:
+            kept.append({"case_id": r["id"], "verdict": verdict,
+                         "document_name": r["document_name"]})
+            continue
+        await session.execute(text("""
+            UPDATE plenum_cafm.ingestion_validation_cases
+               SET verdict = :v, confidence = :conf, status = :st, question = NULL,
+                   findings = CAST(:f AS jsonb), claims = CAST(:cl AS jsonb),
+                   events = events || CAST(:ev AS jsonb), updated_at = now()
+             WHERE id = CAST(:id AS uuid)"""),
+            {"id": r["id"], "v": verdict, "conf": confidence, "st": VALIDATED,
+             "f": json.dumps([f.as_dict() for f in findings], default=str),
+             "cl": json.dumps(c.as_dict(), default=str),
+             "ev": json.dumps([_event("revalidated", verdict=verdict, confidence=confidence,
+                                      reason="the check that raised this has since been "
+                                             "corrected")], default=str)},
+        )
+        closed.append({"case_id": r["id"], "document_name": r["document_name"],
+                       "confidence": confidence})
+    await session.commit()
+    log.info("validation.revalidate", closed=len(closed), kept=len(kept), skipped=len(skipped))
+    return {"ok": True, "examined": len(rows), "closed": closed, "still_open": kept,
+            "skipped": skipped}
 
 
 async def get(session: AsyncSession, case_id: UUID | str) -> dict[str, Any] | None:

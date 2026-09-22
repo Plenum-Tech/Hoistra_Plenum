@@ -105,11 +105,19 @@ class BuildingOntology:
 
 
 async def _rows(session: AsyncSession, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """One guarded read. A deployment without the table loses this signal, not the profile."""
+    """One guarded read. A deployment without the table loses this signal, not the profile.
+
+    The guard is a SAVEPOINT, not a rollback of the caller's transaction. It used to be the
+    latter, which meant a read this function was willing to lose took the caller's writes with
+    it: revalidating held cases updated eight rows, loaded the next building, had that load
+    fail its join to sites, and lost all eight — silently, reporting success, every run.
+    A read that is allowed to fail must not be able to undo anything but itself.
+    """
     try:
-        return [dict(r) for r in (await session.execute(text(sql), params or {})).mappings().all()]
+        async with session.begin_nested():
+            return [dict(r) for r in
+                    (await session.execute(text(sql), params or {})).mappings().all()]
     except Exception as exc:  # noqa: BLE001 — a missing table is a thinner profile, not an error
-        await session.rollback()
         log.info("ontology.read_skipped", error=str(exc)[:160])
         return []
 
@@ -134,7 +142,7 @@ async def load(session: AsyncSession, building_id: UUID | str) -> BuildingOntolo
                s.site_code, s.country, s.country_code, s.state, s.region, s.city,
                s.postcode, s.address
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
          WHERE b.building_id = CAST(:b AS uuid)
          LIMIT 1""", {"b": bid})
     if not head:
@@ -262,7 +270,7 @@ async def portfolio(
                s.site_name, s.building_name, s.site_code, s.country_code, s.country,
                s.state, s.region, s.city, s.postcode
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
           {clause}
          ORDER BY b.name
          LIMIT :lim""", params)
