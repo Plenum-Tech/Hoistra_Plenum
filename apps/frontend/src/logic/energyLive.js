@@ -185,6 +185,41 @@ export const energyLiveMethods = {
 
   enRetryNow() { this._enAttempts = 0; return this.energyLoad({ announce: true }); },
 
+  // "Run energy scan" runs the scan. It used to hand the words to the orchestrator and let
+  // a model choose a tool, which is the right shape for a question and the wrong one for a
+  // fixed verb: the rules are deterministic, the button has one meaning, and routing it
+  // through a model added failure modes with nothing in return. With an invalid key it did
+  // nothing at all, and said nothing about why. The Assets and Operations buttons already
+  // call their own reads directly; this one now matches them.
+  //
+  // It sweeps a year by default, because a scan that reports only on the last five weeks of
+  // a year of readings reads as "the year was quiet".
+  async enRunScan(opts) {
+    if (this.state.enScanning) return false;
+    const days = (opts && opts.historyDays) || 365;
+    this.setState({ enScanning: true });
+    this.flash('Energy scan running — every rule, every meter, across ' + days + ' days');
+    try {
+      const res = await energyApi.scanAll(days);
+      const made = (res && typeof res.created === 'number') ? res.created : null;
+      const meters = (res && (res.meters_swept || res.meters_scanned)) || 0;
+      this.flash(
+        made === null
+          ? 'Energy scan complete — ' + meters + ' meter(s) examined'
+          : 'Energy scan complete — ' + made + ' new finding(s) across ' + meters + ' meter(s)'
+      );
+      // The register on screen is now out of date by exactly what the scan just wrote.
+      await this.energyLoad({ announce: false });
+      if (typeof this.enPositionLoad === 'function') this.enPositionLoad();
+      return true;
+    } catch (e) {
+      this.flash('Energy scan failed — ' + ((e && e.message) || String(e)));
+      return false;
+    } finally {
+      this.setState({ enScanning: false });
+    }
+  },
+
   // The ratings-and-duties tiles (MEES/EPCs, LL97/Energy Star/LL84, BCA/Green Mark, the AE
   // rolling benchmark and chiller position) are assembled server-side now
   // (GET /api/energy/ratings/position) from real records — an EPC's energy_rating column, a

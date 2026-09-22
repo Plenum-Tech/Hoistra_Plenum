@@ -125,6 +125,19 @@ export const energyApi = {
     apiFetch(B, '/api/energy/anomalies/rollup', {
       query: withOrg(Object.assign({ status: 'open' }, query || {})), timeoutMs: 20000 }),
 
+  // Run the detection rules over every active meter in the company. `historyDays` sweeps
+  // that much history instead of only the newest readings: each rule reads a 35-day window,
+  // so a year ingested and scanned once reports on its final month alone. Idempotent by
+  // window — re-running re-detects the same events and writes nothing.
+  //
+  // Minutes, not seconds: a year is ~49 windows per meter, and the timeout says so.
+  scanAll: (historyDays) =>
+    apiFetch(B, '/api/energy/anomalies/scan-all', {
+      method: 'POST',
+      query: withOrg(historyDays ? { history_days: historyDays } : {}),
+      timeoutMs: 300000,
+    }),
+
   // ── Condition engine (docs/api/condition-engine-api.md) ─────────────────
   // Threat / Watch / In control, decided on the server from the section's deviation and the
   // anomalies attributed to the asset, at thresholds held per organisation in

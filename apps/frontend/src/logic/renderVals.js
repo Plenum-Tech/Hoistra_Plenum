@@ -2838,6 +2838,9 @@ export const renderValsMethods = {
         scan: () => modKey === "assets"
           ? (this.asCondLoad(), this.asLiveRetryNow())
           : modKey === "ops" ? this.mxLiveRetryNow()
+          // Energy joins them: the scan is a deterministic run of the detection rules, not
+          // a question for a model to route. See energyLive.js enRunScan.
+          : modKey === "energy" ? this.enRunScan()
           : this.orch(mod.scanLabel, mod.name),
         export: () => this.orch(mod.exportLabel, mod.name)
       };
