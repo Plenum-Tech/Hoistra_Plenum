@@ -35,10 +35,12 @@ export default function AuditTrail({ vals }) {
               <span>{vals.auLiveSourceLabel}</span>
               <span className="hv11" onClick={vals.auLiveRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.auLiveRetryShow }}>{"Retry"}</span>
             </span>
-            <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
-              <i className="ph ph-play" style={{ fontSize: "12px" }}></i>
-              <span>{"Run a sample ingestion"}</span>
-            </div>
+            {vals.canIngest ? (
+              <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
+                <i className="ph ph-play" style={{ fontSize: "12px" }}></i>
+                <span>{"Run a sample ingestion"}</span>
+              </div>
+            ) : null}
             {[["In view", vals.auInView], ["Clean rate", vals.auCleanRate], ["Needs review", vals.auNeedsReview]].map((t, $i) => (
               <div key={$i} style={{ padding: "8px 13px", borderRadius: "9px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "2px", whiteSpace: "nowrap", minWidth: "78px" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{t[0]}</span>

@@ -276,8 +276,107 @@ def validate_payload(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, st
     return c, e
 
 
-async def _next_building_code(session: AsyncSession) -> str:
-    """The next free B-NNN, read inside the caller's transaction.
+#: Primary use → its 3-letter segment in the composite code. An explicit map rather than
+#: a blind first-3-letters slice, because Hospital and Hotel share their first two letters —
+#: a slice would collide them onto the same code and _next_building_code_composite's own
+#: not-hand-a-number-to-the-wrong-building guarantee would then be silently wrong for both.
+_USE_SHORT: dict[str, str] = {
+    "Commercial": "COM", "Retail": "RET", "Residential": "RES", "Mixed": "MIX",
+    "Hospital": "HSP", "Hotel": "HTL", "Industrial": "IND", "Logistics": "LOG",
+    "Education": "EDU", "Laboratory": "LAB", "Leisure": "LEI", "Other": "OTH",
+}
+_ALPHA_ONLY = re.compile(r"[^A-Z]")
+
+
+def _region_short(region: str | None) -> str:
+    """A region/state/emirate is free text (validate_payload's `region`, no fixed enum
+    behind it) — there is no lookup table in this codebase mapping "new jersey" to "NJ" or
+    "Abu Dhabi" to a standard abbreviation. First 3 letters, alpha only, is a short,
+    deterministic segment that needs none — not a real state/province code."""
+    return _ALPHA_ONLY.sub("", (region or "").upper())[:3] or "REG"
+
+
+def _use_short(primary_use: str | None) -> str:
+    if not primary_use:
+        return "OTH"
+    return _USE_SHORT.get(primary_use) or (_ALPHA_ONLY.sub("", primary_use.upper())[:3] or "OTH")
+
+
+async def _org_code(session: AsyncSession, organization_id: str) -> str | None:
+    """organizations.code — NOT NULL and unique in the live schema (superadmin.py's
+    _unique_code), so any organization_id that resolves at all has one."""
+    try:
+        row = (
+            await session.execute(
+                text("SELECT code FROM plenum_cafm.organizations WHERE id = CAST(:id AS UUID)"),
+                {"id": organization_id},
+            )
+        ).first()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("building_create.org_code_lookup_failed", error=str(exc)[:200])
+        return None
+    return _s(row[0]) if row else None
+
+
+async def _next_building_code(
+    session: AsyncSession,
+    *, organization_id: str | None = None, country_code: str | None = None,
+    region: str | None = None, primary_use: str | None = None,
+) -> str:
+    """The next free building code, read inside the caller's transaction.
+
+    org-country-number-region-use — e.g. TC-FMGMT-UK-01-LON-COM. The number sits in the
+    middle, not on the end, because that is the order the pattern was specified in; it
+    still counts only the buildings that share the other four segments, not a global
+    total, so it means something — the first building this org has hoisted in that
+    country's that region for that use, not an arbitrary always-increasing integer shared
+    across every other org's buildings too.
+
+    Falls back to the legacy flat B-NN scheme when any of the four inputs is missing —
+    validate_payload does not require an organization_id, and a code this pattern cannot
+    honestly build (no org, no country, no region, no use) should not be guessed at.
+
+    Matched by regex against building_code alone, same technique the legacy scheme already
+    uses: country and region are columns on locations, not buildings (see this module's own
+    docstring), so a join buys nothing a deterministically-rebuilt prefix does not already
+    give for free.
+
+    Allocated from the highest existing matching code rather than a count, for the same
+    reason the legacy scheme is: a deleted building must not hand its number to the next
+    one — two buildings sharing a code would resolve documents to whichever the matcher saw
+    first.
+    """
+    org_code = await _org_code(session, organization_id) if organization_id else None
+    if not (org_code and country_code and region and primary_use):
+        return await _legacy_next_building_code(session)
+
+    rs = _region_short(region)
+    us = _use_short(primary_use)
+    pattern = f"^{re.escape(org_code)}-{re.escape(country_code)}-([0-9]{{2,6}})-{rs}-{us}$"
+    try:
+        rows = (
+            await session.execute(
+                text("SELECT building_code FROM plenum_cafm.buildings WHERE building_code ~ :pat"),
+                {"pat": pattern},
+            )
+        ).all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("building_create.code_scan_failed", error=str(exc)[:200])
+        rows = []
+    highest = 0
+    num_re = re.compile(pattern)
+    for r in rows:
+        m = num_re.match(str(r[0] or ""))
+        if m:
+            highest = max(highest, int(m.group(1)))
+    return f"{org_code}-{country_code}-{highest + 1:02d}-{rs}-{us}"
+
+
+async def _legacy_next_building_code(session: AsyncSession) -> str:
+    """The flat B-NN scheme — kept for a building created without an organization_id (or
+    missing one of the other three segments the composite scheme above needs), since
+    validate_payload does not require an org and a code the composite scheme cannot
+    honestly build should not be guessed at.
 
     Allocated from the highest existing code rather than a count, because a deleted building
     must not hand its number to the next one — two buildings sharing a code would resolve
@@ -448,7 +547,13 @@ async def create_building(
                 "conflict_building_id": taken[0],
             }
     else:
-        clean["building_code"] = await _next_building_code(session)
+        clean["building_code"] = await _next_building_code(
+            session,
+            organization_id=clean.get("organization_id"),
+            country_code=clean.get("country_code"),
+            region=clean.get("region"),
+            primary_use=clean.get("primary_use"),
+        )
 
     # A site_id is a reference, never an allocation. Pointing a building at a site that is
     # not there breaks every rollup that joins through it.

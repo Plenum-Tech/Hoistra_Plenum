@@ -9,7 +9,7 @@
 // naming any other company is 403 wrong_organization); orgQuery() sends it only when a
 // superadmin has explicitly chosen to view/act as another company (superAdmin.js's
 // viewAsCompany), never as a standing default.
-import { BASES, getActingOrg, apiFetch } from './client.js';
+import { BASES, getActingOrg, apiFetch, accessToken, errorMessage } from './client.js';
 
 const B = BASES.opsIntelligence;
 const orgQuery = () => { const id = getActingOrg(); return id ? { organization_id: id } : {}; };
@@ -61,5 +61,59 @@ export const adminApi = {
   // the UI's "Accepted" chip folds approved_on_confirmation in client-side. `count` is the
   // filtered total (the pagination denominator); by_outcome ignores the filter.
   ingestionAudit: (query) =>
-    apiFetch(B, '/api/admin/ingestion-audit', { query: Object.assign({ limit: 100, offset: 0 }, orgQuery(), query || {}) })
+    apiFetch(B, '/api/admin/ingestion-audit', { query: Object.assign({ limit: 100, offset: 0 }, orgQuery(), query || {}) }),
+
+  // What a full export WOULD contain: a row count per table, and a reason per table left
+  // out. Costs a count rather than a download, so the dialog can say what is in the file
+  // before anyone waits for one — and so "is everything really in there" has an answer
+  // that is checkable rather than claimed.
+  exportPreview: () =>
+    apiFetch(B, '/api/admin/export', { query: Object.assign({ preview: true }, orgQuery()), timeoutMs: 120000 })
 };
+
+// The export itself. It cannot go through apiFetch: that parses every response as JSON and
+// this one is a zip. So it repeats the two things apiFetch does that matter here — the
+// Authorization header and the acting-company query — and nothing else. A 401 is reported
+// rather than retried; the preview call above runs first and would have refreshed a stale
+// token already.
+export async function downloadOrgExport() {
+  const org = getActingOrg();
+  const url = B + '/api/admin/export' + (org ? '?organization_id=' + encodeURIComponent(org) : '');
+  const token = accessToken();
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: token ? { Authorization: 'Bearer ' + token } : {}
+  });
+  if (!res.ok) {
+    // The failure body is JSON even though the success body is not.
+    let msg = 'Export failed (' + res.status + ')';
+    try { const d = await res.json(); msg = errorMessage(d, res) || msg; } catch (e) { /* not json */ }
+    throw new Error(msg);
+  }
+  // Content-Disposition names the file; falling back to a generated name rather than
+  // letting the browser save it as "export".
+  const disp = res.headers.get('Content-Disposition') || '';
+  const named = /filename="([^"]+)"/.exec(disp);
+  const name = named ? named[1] : 'hoistra-export.zip';
+
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoked on the next tick: revoking synchronously races the click in some browsers and
+  // the download silently never starts.
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+  // Planned figures, not written ones: the zip is streamed, so its real totals are only
+  // known once the last byte has gone and headers go out first. manifest.json inside the
+  // file carries what was actually written.
+  return {
+    name: name,
+    bytes: blob.size,
+    tables: Number(res.headers.get('X-Export-Tables-Planned') || 0),
+    rows: Number(res.headers.get('X-Export-Rows-Planned') || 0)
+  };
+}

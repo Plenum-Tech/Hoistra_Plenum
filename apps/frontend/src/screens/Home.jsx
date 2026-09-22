@@ -198,11 +198,15 @@ export default function Home({ vals }) {
             <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "15px 18px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderBottom: "2px solid var(--color-accent)" }}>
               <i className="ph ph-sparkle" style={{ fontSize: "17px", color: "var(--color-accent)" }}></i>
               <input className="input" value={vals.query} onChange={vals.setQuery} onKeyDown={vals.onKey} placeholder="Which buildings put me at risk this month?" style={{ flex: "1", background: "transparent", border: "none", fontSize: "16px", color: "var(--color-text)", padding: "0", outline: "none", fontFamily: "var(--font-body)" }} />
-              <label className="hv13" title="Ingest a document — attach a contract, certificate or invoice and file it against a building" style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: "pointer", flexShrink: "0" }}>
-                <i className="ph ph-paperclip" style={{ fontSize: "15px", color: "var(--color-neutral-400)" }}></i>
-                <span style={{ fontSize: "12px", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>{"Ingest"}</span>
-                <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
-              </label>
+              {/* Hidden outright for an account whose "Can ingest" is off — asking a
+                  question is not ingesting, so only this control goes. */}
+              {vals.canIngest ? (
+                <label className="hv13" title="Ingest a document — attach a contract, certificate or invoice and file it against a building" style={{ display: "flex", alignItems: "center", gap: "6px", padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: "pointer", flexShrink: "0" }}>
+                  <i className="ph ph-paperclip" style={{ fontSize: "15px", color: "var(--color-neutral-400)" }}></i>
+                  <span style={{ fontSize: "12px", color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>{"Ingest"}</span>
+                  <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
+                </label>
+              ) : null}
               <div className="btn btn-primary" onClick={vals.runQuery} style={{ fontSize: "12px", padding: "7px 15px", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {"Run"}
               </div>

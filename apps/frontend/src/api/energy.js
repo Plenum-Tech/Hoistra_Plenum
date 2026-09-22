@@ -31,6 +31,13 @@ export const energyApi = {
   // Hoist-a-building form: create, or patch an existing building (only the sent fields are
   // touched). Both return the row in the same shape listBuildings() does.
   createBuilding: (body) => apiFetch(B, '/api/energy/buildings', { method: 'POST', body: body, timeoutMs: 20000 }),
+
+  // A read-only preview of the code createBuilding would allocate for this org, country,
+  // region and use — GET /buildings/next-code calls the exact same allocator create_building
+  // itself does, so this can never drift from what actually gets stored. withOrg() so a
+  // superadmin previewing while viewing as another company sees THAT company's code, same
+  // as every other read here.
+  previewBuildingCode: (query) => apiFetch(B, '/api/energy/buildings/next-code', { query: withOrg(query || {}), timeoutMs: 8000 }),
   patchBuilding: (buildingId, body) =>
     apiFetch(B, '/api/energy/buildings/' + enc(buildingId), { method: 'PATCH', body: body, timeoutMs: 20000 }),
   // opts: { confirm (default false — a dry-run report), detach (default true), actor }.
@@ -41,6 +48,23 @@ export const energyApi = {
       method: 'DELETE',
       query: withOrg({ confirm: !!o.confirm, detach: o.detach === undefined ? true : !!o.detach, actor: o.actor }),
       timeoutMs: 20000
+    });
+  },
+
+  // Remove a document and everything read out of it — the certificate on Compliance, the
+  // contract terms and invoice lines on Vendors, the chunks the assistant answers from.
+  // The opposite of deleteBuilding, which detaches its children and keeps them: an extract
+  // from a document that should not have been ingested is not a record of anything.
+  //
+  // Same two-phase shape. confirm:false changes nothing and reports what it would remove,
+  // which is what the dialog reads out; confirm:true deletes, and nothing comes back.
+  // The original file is kept in blob storage either way.
+  deleteDocument: (documentId, opts) => {
+    const o = opts || {};
+    return apiFetch(B, '/api/energy/documents/' + enc(documentId), {
+      method: 'DELETE',
+      query: withOrg({ confirm: !!o.confirm, actor: o.actor }),
+      timeoutMs: 30000
     });
   },
 
@@ -113,6 +137,19 @@ export const energyApi = {
   conditionAssets: (query) =>
     apiFetch(B, '/api/energy/condition/assets', {
       query: withOrg(Object.assign({ limit: 2000 }, query || {})), timeoutMs: 20000 }),
+  // The two steppers at the top of the Assets page, as the ORGANISATION holds them in
+  // plenum_cafm.asset_condition_rules — not as this build ships them. `is_default` is true
+  // until somebody sets them, and the same object rides along on every conditionAssets()
+  // answer under `rules`, so the page normally learns them without a second call.
+  conditionRules: () => apiFetch(B, '/api/energy/condition/rules', { query: withOrg() }),
+  // Move them. A live write, and the only one this page makes: it changes the rule every
+  // future read of /condition/assets and /condition/summary is banded by, for everyone in
+  // the company — so the caller re-reads the bands afterwards rather than re-deciding them
+  // in the browser. Both thresholds are sent every time; the route takes the pair.
+  setConditionRules: (body) =>
+    apiFetch(B, '/api/energy/condition/rules', {
+      method: 'PUT', query: withOrg(), body: body, timeoutMs: 20000 }),
+
   // The band counts, the building and section rollups, and the last scan's stamp.
   // summary.section_not_measured counts assets banded on ONE signal because their section
   // has no sub-meter; they are not "checked and clean" and should not read as such.

@@ -27,6 +27,8 @@ import { spacesMethods } from './spacesLive.js';
 import { FALLBACK_PRESETS, reportsMethods } from './reports.js';
 import { loadHidden } from './reportCards.js';
 import { buildingsCrudMethods } from './buildingsCrud.js';
+import { DC_DEFAULTS, documentsCrudMethods } from './documentsCrud.js';
+import { OX_DEFAULTS, orgExportMethods } from './orgExport.js';
 import { buildingsGraphMethods } from './buildingsGraph.js';
 import { AUTH_DEFAULTS, authMethods, canAdmin } from './auth.js';
 import { usersMethods } from './users.js';
@@ -43,6 +45,8 @@ import { AX_USERS, SA_COMPANIES, AU_SEED } from '../data/hoistra-access.js';
 export class HoistraLogic extends Controller {
   state = {
     ...AUTH_DEFAULTS,
+    ...DC_DEFAULTS,
+    ...OX_DEFAULTS,
     view: "home", module: null, answerKey: null, askedQuery: "",
     query: "", queueOpen: false, paletteOpen: false, detail: null,
     chainOpen: true, toast: "", filter: "All", navOpen: false,
@@ -98,7 +102,11 @@ export class HoistraLogic extends Controller {
     // list is searched rather than scrolled; neither field is persisted, since a reload
     // should reopen on the current scope, not on a half-typed search.
     bldOpen: false, bldQuery: "",
-    pq: "", asPct: 10, asWeeks: 3, asOpenB: [], asOpenS: [], iotOpen: null, asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {}, inspQ: "", inspDraft: "", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
+    // asPct / asWeeks are the two Condition rules steppers. These are the values the build
+    // ships with; the organisation's own rule (plenum_cafm.asset_condition_rules, read back
+    // on GET /api/energy/condition/assets) replaces them as soon as that read lands, and a
+    // step writes them through PUT /api/energy/condition/rules — see logic/assetsCondition.js.
+    pq: "", asPct: 10, asWeeks: 3, asRuleSaving: false, asRuleError: "", asOpenB: [], asOpenS: [], iotOpen: null, asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {}, inspQ: "", inspDraft: "", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
     bkDate: "2026-09-16", bkWindow: "08:00–12:00",
     nv: { name: "", email: "", id: "", phone: "" }, nvSpec: "Lifts — LOLER",
     emTo: "", emSubject: "", emBody: "", emKicker: "", emKind: "",
@@ -212,7 +220,7 @@ export class HoistraLogic extends Controller {
     // organization_id — loaded when the overlay opens (auth.js's menu item), never at mount.
     saLiveRaw: null, saCardsLive: {}, saLiveCardError: "",
     saLiveLoading: false, saLiveError: "", saLiveLoadedAt: null,
-    // The Migration page (logic/migration.js): the run that is open (mgId, persisted so a
+    // The migration flow (logic/migration.js): the run that is open (mgId, persisted so a
     // reload lands back on it) and the status document the service last returned for it;
     // the staged upload; the decisions taken at the open gate, keyed as mgVals sets them and
     // dropped whenever the gate changes; the write gate's armed step; the recent-runs list.
@@ -273,4 +281,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);

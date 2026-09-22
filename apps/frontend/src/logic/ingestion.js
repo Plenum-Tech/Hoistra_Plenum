@@ -9,9 +9,15 @@
 import { AX_BUILDINGS, AX_CHECKS, ING_DOCS } from '../data/hoistra-access.js';
 import { canAdmin } from './auth.js';
 import { mapCaseToPhase, checksFromFindings } from './ingestionLive.js';
+import { accountCanIngest } from './auth.js';
 
 export const ingestionMethods = {
   ingStart() {
+    // The same gate its two buttons are hidden behind, applied where the modal actually
+    // opens. Every caller is gated already; this is what stops a stale render, a restored
+    // session or a future caller from putting the ingestion agent on screen for an account
+    // that may not add data.
+    if (!accountCanIngest(this.state)) return;
     clearInterval(this._ingT);
     const names = this.ingBldList ? this.ingBldList() : AX_BUILDINGS;
     const b = names.indexOf(this.state.ingB) > -1 ? this.state.ingB : (names[0] || "Riverside Court");

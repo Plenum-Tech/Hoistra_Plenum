@@ -324,3 +324,13 @@
   .rt-scroll { max-height: 300px; }
   .rt.is-idle { display: none; }
 }
+
+/* The migration card (components/shell/MigrationRun.jsx) carries the pipeline beside the
+   open gate, the way the Migration page did. Below this width the gate's own tables — a
+   column mapping can run to six columns — leave the tracker nothing to sit in, so the two
+   stack and the tracker reads as the run's contents list above the decision. */
+@media (max-width: 900px) {
+  .mg-run-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

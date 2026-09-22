@@ -45,8 +45,12 @@ export const coreMethods = {
     this.rpStart();
     // A reload that lands on the conversation page re-checks the orchestrator link.
     if (this.state.view === "chat") this.chatConnect();
-    // A reload that lands on the Migration page resumes following the run it had open.
-    if (this.state.view === "migration") { this.mgListLoad(); if (this.state.mgId) this.mgPoll(true); }
+    // A reload that lands on the Orchestrator resumes following the run it had open. mgId
+    // is persisted, so without this the card renders from the id alone and never reads the
+    // document: "Not loaded", every node hollow, and a blurb claiming the pipeline is
+    // working. The Migration page did this on arrival; deleting the page deleted the line
+    // and left this comment standing over nothing.
+    if (this.state.view === "chat" && this.state.mgId) this.mgPoll(true);
   },
 
   componentWillUnmount() {
@@ -115,6 +119,13 @@ export const coreMethods = {
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
     clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
     clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh); clearTimeout(this._spRetry);
+    // A debounced rule write belongs to the company whose steppers were moved. Left armed,
+    // it would land on the next company — writing one company's threshold onto another's,
+    // which is the one mistake this control must never make. The token bump also disowns a
+    // write already on the wire, so its answer cannot seed the new company's steppers.
+    clearTimeout(this._asRuleTimer);
+    this._asRuleToken = (this._asRuleToken || 0) + 1;
+    this._asRulePending = false;
     this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
     this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
     this._mxLiveAttempts = 0; this._spAttempts = 0;
@@ -127,6 +138,12 @@ export const coreMethods = {
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
       asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
       asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,
+      // The condition rule is per organisation, so none of it survives a company switch:
+      // the bands, the thresholds they were decided by, and the steppers all go back to the
+      // page's own defaults until the new company's read seeds them.
+      asCondBands: [], asCondRules: null, asCondBandsError: "", asCondSummary: null,
+      asCondBuildings: [], asCondLastRun: null, asCondSummaryError: "", asCondFilter: null,
+      asPct: 10, asWeeks: 3, asRuleSaving: false, asRuleError: "",
       asLiveOpenB: [], asLiveCost: {},
       mxRaw: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
       mxGroup: "State", mxOpenG: null, mxAnswer: null, mxAsked: "", mxAskBusy: false, mxAskError: "",
@@ -248,7 +265,6 @@ export const coreMethods = {
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
     if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
-    if (s.view === "migration") return "Migration";
     if (s.view === "answer") return "Query";
     if (s.view === "chat") return "Orchestrator";
     if (s.view === "sessions") return "Sessions";

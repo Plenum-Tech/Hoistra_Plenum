@@ -1,13 +1,18 @@
-// migration — the CSV / Excel migration page (screens/Migration.jsx), against
-// svc-ai-schema-mapper's migration pipeline (api/schemaMapper.js).
+// migration — a CSV / Excel migration, against svc-ai-schema-mapper's pipeline
+// (api/schemaMapper.js), answered in the Orchestrator conversation that started it
+// (components/shell/MigrationRun.jsx).
 //
 // A migration is one upload walked through nine nodes with human gates between them.
-// This module owns: the staged upload (mgFiles → start), the open run (mgId + the status
-// document the service last returned), the poll that keeps that document current, the
-// step-pause auto-continue, and the decisions the reader makes at each gate before the
-// gate is answered. Nothing is written to plenum_cafm until the LAST gate — `write` — is
-// confirmed, and that confirmation is a two-step control here (arm, then confirm) because it
-// is the one click on this page that changes the database.
+// This module owns: the upload (staged in the composer's tray → mgStartFromChat), the open
+// run (mgId + the status document the service last returned), the poll that keeps that
+// document current, the step-pause auto-continue, and the decisions the reader makes at
+// each gate before the gate is answered. Nothing is written to plenum_cafm until the LAST
+// gate — `write` — is confirmed, and that confirmation is a two-step control here (arm,
+// then confirm) because it is the one click in this flow that changes the database.
+//
+// It had a page of its own until 21 Sep 2026. Moving it into the conversation changed
+// where a run is SHOWN and how one is STARTED; the nine nodes, the body each gate is
+// answered with and the arm/confirm write are exactly as they were.
 //
 // Where a gate's body shape came from: the gate handlers in svc-ai-schema-mapper/src/app.py
 // and the nodes that consume them (human_review_node.py for field_mapping,
@@ -51,8 +56,39 @@ export function pollDelay(status) {
 // blank on some platforms and "application/vnd.ms-excel" on others.
 export const isSpreadsheet = (f) => /\.(csv|tsv|xlsx|xlsm|xls)$/i.test(String((f && f.name) || ''));
 
+// A request to SEE the runs, matched on the WHOLE normalised message and never a substring.
+// "why did that migration fail?" contains the word and is a question for the orchestrator;
+// these six phrases are the only ones that can only mean "show me the list". The same
+// discipline as chatCases.js's CC_YES, and for the same reason: a substring match on a
+// word that appears in ordinary questions steals them.
+const MG_LIST = new Set([
+  'migrations', 'my migrations', 'show my migrations', 'show me my migrations',
+  'recent migrations', 'list migrations'
+]);
+export const mgIsListRequest = (text) =>
+  MG_LIST.has(String(text || '').trim().toLowerCase().replace(/[.!?\s]+$/, ''));
+
 export const fmtBytes = (n) => n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 export const shortId = (id) => String(id || '').slice(0, 8);
+
+// What the run is labelled with. The service takes any string and uses it to pick its
+// alias pack, so a field left blank — or left as spaces — is 'Custom', not ''.
+// What "moving" means for a run: the status it reports, the node it is on, how many nodes
+// have finished, and which gate it waits at. A pipeline that is working changes one of
+// these within seconds; one that has been abandoned changes none of them ever.
+export function progressKey(doc) {
+  if (!doc) return '';
+  const nodes = Array.isArray(doc.nodes) ? doc.nodes : [];
+  const done = nodes.filter((n) => String(n.status || '') === 'complete').length;
+  return [doc.status, doc.current_step, done, doc.pending_gate_type || ''].join('|');
+}
+
+// How long a run may report the same thing before the card stops calling it work. Nodes
+// take seconds and a gate answer resumes in seconds, so minutes of silence is a stall —
+// see the ARQ-worker case in test/chatMigration.test.mjs.
+export const STALL_AFTER_MS = 3 * 60 * 1000;
+
+export const cmmsName = (v) => (String(v == null ? '' : v).trim() || 'Custom');
 const pct = (x) => (x === null || x === undefined || isNaN(x)) ? '—' : Math.round(Number(x) * 100) + '%';
 
 // "3 min ago" for the recent-runs list; absolute past a day, since the list spans weeks.
@@ -253,26 +289,34 @@ export function scalarFacts(payload) {
 
 export const migrationMethods = {
   // ── navigation ────────────────────────────────────────────────────────────────────
+  //
+  // There is no page. A migration is answered in the conversation that started it:
+  // openChat() puts the transcript up and MigrationRun.jsx renders the open gate under it.
   mgShow() {
-    window.scrollTo(0, 0);
-    this.setState({ view: 'migration', navOpen: true, detail: null, queueOpen: false, paletteOpen: false });
+    this.openChat();
     this.mgListLoad();
     if (this.state.mgId) this.mgPoll(true);
   },
 
-  // Opens one run on the page — from the recent list, from a chat reply that started one,
-  // or on reload. A different run than before drops the previous document and decisions.
+  // Opens one run in the conversation — from the recent list, from a chat reply that
+  // started one, or on reload. A different run than before drops the previous document
+  // and decisions. A run already open is NOT re-opened into a fresh chat: mgPoll alone
+  // refreshes it, so answering a gate never scrolls the transcript back to the top.
   mgOpen(id) {
     const same = this.state.mgId === id;
-    window.scrollTo(0, 0);
+    // The card renders in the Orchestrator's transcript and nowhere else, so a run opened
+    // from a page that merely keeps a dock (Buildings, Home, the console) must land on the
+    // chat — chatView() is true on those and would have left the gates rendered nowhere.
+    // Already on the chat: only the state changes, so answering a gate never scrolls the
+    // transcript back to the top or drops a form the dock was showing.
+    if (this.state.view !== 'chat') this.openChat();
     this.setState({
-      view: 'migration', navOpen: true, detail: null, queueOpen: false, paletteOpen: false,
       mgId: id, mgError: '', mgArmed: false,
       mgStatus: same ? this.state.mgStatus : null,
       mgDec: same ? this.state.mgDec : {},
       mgOpenNodes: same ? this.state.mgOpenNodes : {}
     });
-    if (!same) this._mgAdvanced = null;
+    if (!same) { this._mgAdvanced = null; this._mgProgressKey = null; this._mgMovedAt = Date.now(); }
     this.mgPoll(true);
   },
 
@@ -299,13 +343,90 @@ export const migrationMethods = {
   },
   mgDropFile(i) { this.setState((p) => ({ mgFiles: (p.mgFiles || []).filter((f, j) => j !== i) })); },
 
-  // The chat's staged spreadsheets, brought here instead of being sent to the orchestrator.
-  mgFromChat() {
-    const files = (this.state.ccFiles || []).filter(isSpreadsheet);
-    if (!files.length) return;
-    this.setState((p) => ({ ccFiles: (p.ccFiles || []).filter((f) => !isSpreadsheet(f)), mgId: null, mgStatus: null, mgDec: {}, mgArmed: false }));
-    this.mgPickFiles(files);
-    this.mgShow();
+  // The chat's staged spreadsheets ARE the migration. Pressing send with nothing typed
+  // starts it here, and the gates open under the message that started them.
+  //
+  // No model is asked whether a .xlsx is a migration. There is nothing to judge, and
+  // chatCases.js records what happened the one time a file-shaped message was left to the
+  // router: it read the words "upload" and "file", chose the migration sub-agent for a
+  // held contract, and answered "the file cannot be found in the system".
+  //
+  // Only the spreadsheets leave the tray. A PDF staged beside them is a document for the
+  // next question, not part of this job.
+  async mgStartFromChat() {
+    const staged = (this.state.ccFiles || []).filter(isSpreadsheet);
+    if (!staged.length || this.state.mgBusy || this.state.ccBusy) return;
+    const names = staged.map((f) => f.name).join(', ');
+
+    // THROUGH THE ORCHESTRATOR'S UPLOAD ROUTE, NOT STRAIGHT TO SCHEMA-MAPPER.
+    //
+    // Both routes start the same nine-node run, and the direct one is a shorter trip — it
+    // is also the one that records nothing. svc-deepagents' /run-stateful-with-files takes
+    // the building the composer has chosen and, for every file it drives (spreadsheets
+    // included), calls bind_and_log, record_ingestion_audit and record_usage with it;
+    // schema-mapper's /start-with-upload takes file, cmms_name and organization_id and has
+    // nowhere to put a building. Going direct meant a migration bound to nothing and no row
+    // in the ingestion audit trail — invisible, and only noticed because the composer
+    // stopped offering to choose a building at all.
+    //
+    // No model decides anything here either: the route splits files by TYPE
+    // (workers/ingest_batch_worker.py), and interactive_migration stops the run at its
+    // first gate instead of approving them all server-side. Five files or fewer run inline,
+    // so the reply carries ingested_migration_ids and the card opens at gate 1.
+    await this.ccAsk('Migrate ' + names);
+    if (this.state.mgId) return;
+
+    // The orchestrator answered, but with nothing that started a run. Only a definitively
+    // unreachable upstream is retried: a TIMEOUT may still be completing server-side, and
+    // a second upload would be a second migration of the same file — which is exactly what
+    // ccAsk's own timeout wording tells the reader not to do by hand.
+    const chat = this.state.ccChat || [];
+    const last = chat[chat.length - 1] || {};
+    if (!last.unreachable) return;
+
+    // Straight to schema-mapper, so a dead orchestrator does not stop a migration
+    // altogether — and say plainly what that costs.
+    this.setState({ mgBusy: 'Uploading…', mgError: '' });
+    this._mgAdvanced = null;
+    try {
+      const r = await schemaMapperApi.start(staged, cmmsName(this.state.mgCmms), currentOrgId() || undefined);
+      const id = r && r.migration_id;
+      if (!id) throw new Error('the service accepted the upload but returned no migration id');
+      this.setState((p) => ({
+        mgBusy: '',
+        ccChat: (p.ccChat || []).concat([{
+          role: 'bot', isNote: true,
+          text: names + ' is migrating as run ' + shortId(id) + ', started directly against the mapper because the orchestrator could not be reached. Every gate is below. It is not bound to a building and leaves no row in the ingestion audit trail — the orchestrator is what writes those.'
+        }])
+      }));
+      this.mgOpen(id);
+    } catch (e) {
+      if (isStaleScope(e)) { this.setState({ mgBusy: '' }); return; }
+      this.setState((p) => ({
+        mgBusy: '',
+        ccChat: (p.ccChat || []).concat([{
+          role: 'bot', isNote: true, error: true,
+          text: names + ' did not start a migration: ' + ((e && e.message) || String(e))
+        }])
+      }));
+    }
+  },
+
+  // The composer's migrate strip and the dock's both land here.
+  mgFromChat() { return this.mgStartFromChat(); },
+
+  // "migrations" — the runs this company has started, as a card in the transcript.
+  async mgAnswerList() {
+    await this.mgListLoad();
+    const n = (this.state.mgList || []).length;
+    this.setState((p) => ({
+      ccChat: (p.ccChat || []).concat([{
+        role: 'bot', mgList: true,
+        text: n
+          ? 'The runs this company has started. Open one to pick its gates back up.'
+          : 'No migrations yet. Attach a CMMS export below and press send — the run opens here at its first gate.'
+      }])
+    }));
   },
 
   async mgStart() {
@@ -313,7 +434,7 @@ export const migrationMethods = {
     if (!files.length || this.state.mgBusy) return;
     this.setState({ mgBusy: 'Uploading…', mgError: '' });
     try {
-      const r = await schemaMapperApi.start(files, this.state.mgCmms || 'Custom', currentOrgId() || undefined);
+      const r = await schemaMapperApi.start(files, cmmsName(this.state.mgCmms), currentOrgId() || undefined);
       const id = r && r.migration_id;
       if (!id) throw new Error('the service accepted the upload but returned no migration id');
       this.setState({ mgBusy: '', mgFiles: [] });
@@ -342,13 +463,17 @@ export const migrationMethods = {
       this._mgPolling = false;
       if (isStaleScope(e) || this.state.mgId !== id) return;
       this.setState({ mgLoading: false, mgError: 'Could not read the migration: ' + ((e && e.message) || String(e)) });
-      if (this.state.view === 'migration') this._mgTimer = setTimeout(() => this.mgPoll(), 6000);
+      if (this.state.view === 'chat') this._mgTimer = setTimeout(() => this.mgPoll(), 6000);
       return;
     }
     this._mgPolling = false;
     if (this.state.mgId !== id) return;
     const prevGate = this.state.mgStatus ? this.state.mgStatus.pending_gate_type : null;
     const gateChanged = (doc.pending_gate_type || null) !== (prevGate || null);
+    // The stall clock: restarted whenever the document says something new, so the card can
+    // tell "still working" from "nothing is coming".
+    const moved = progressKey(doc);
+    if (moved !== this._mgProgressKey) { this._mgProgressKey = moved; this._mgMovedAt = Date.now(); }
     this.setState({
       mgStatus: doc, mgLoading: false, mgError: '', mgLoadedAt: Date.now(),
       mgDec: gateChanged ? {} : this.state.mgDec,
@@ -365,7 +490,7 @@ export const migrationMethods = {
       return this.mgAdvance();
     }
     const delay = pollDelay(doc.status);
-    if (delay && this.state.view === 'migration') this._mgTimer = setTimeout(() => this.mgPoll(), delay);
+    if (delay && this.state.view === 'chat') this._mgTimer = setTimeout(() => this.mgPoll(), delay);
   },
 
   async mgAdvance() {
@@ -640,21 +765,13 @@ export const migrationMethods = {
     const files = s.mgFiles || [];
 
     return {
-      isMigration: s.signedIn && s.view === 'migration',
-      openMigration: () => this.mgShow(),
-
-      // upload panel
+      // The upload panel went with the page. A migration is started from the composer now
+      // (mgStartFromChat), so what is left here is the source-system the run is labelled
+      // with and the staged-file list the dock's tray still reads.
       mgFiles: files.map((f, i) => ({ key: i, name: f.name, size: fmtBytes(f.size), icon: /\.csv$|\.tsv$/i.test(f.name) ? 'ph-file-csv' : 'ph-file-xls', drop: () => this.mgDropFile(i) })),
-      mgFilesEmpty: files.length === 0,
-      mgFilesNote: files.length > 1 ? files.length + ' files go as ONE job, so keys between them can be found.' : files.length === 1 ? 'A workbook with several sheets is one job; each sheet becomes a table.' : 'CSV, XLSX or XLS. Several files at once are migrated as one job.',
-      mgPickFiles: (e) => { this.mgPickFiles(e.target.files); e.target.value = ''; },
-      mgDropFiles: (e) => { e.preventDefault(); this.mgPickFiles(e.dataTransfer && e.dataTransfer.files); },
-      mgCmms: s.mgCmms || 'Custom',
+      mgCmms: s.mgCmms === undefined || s.mgCmms === null ? 'Custom' : s.mgCmms,
       mgSetCmms: (e) => this.setState({ mgCmms: e.target.value }),
-      mgCanStart: files.length > 0 && !busy,
       mgStart: () => this.mgStart(),
-      mgStartLabel: busy ? s.mgBusy : 'Start migration',
-      mgOrg: currentOrgId() || 'the default company',
 
       // recent runs
       mgRecent: list.map((m) => ({
@@ -710,8 +827,19 @@ export const migrationMethods = {
       // the open gate / step
       mgGate: gate,
       mgGateTitle: kind === 'gate' ? text[0] : kind === 'step' ? (payload.label || 'Step finished') : kind === 'done' ? 'Migration complete' : kind === 'failed' ? 'Migration stopped' : 'Working…',
-      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.') : 'The pipeline is working on the current node; this page follows it.',
+      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
+        // No document at all is not "working" — it is "nobody has looked". Saying the
+        // pipeline is busy when nothing has been read is how a restored run sat at
+        // "Not loaded" for ever and read as progress.
+        : !doc ? (s.mgLoading ? 'Reading the migration…' : 'This run has not been read yet — Refresh reads it.')
+        : 'The pipeline is working on the current node; this page follows it.',
       mgGateCount: payload.total_reviewable ? payload.total_reviewable + ' item' + (payload.total_reviewable === 1 ? '' : 's') + ' to review' : '',
+      // A run that has stopped moving. Only ever said of a run that claims to be WORKING:
+      // a gate waits for a person and may wait all day, and a finished or failed run is
+      // not waiting for anything.
+      mgStallNote: ((kind === 'running' || kind === 'step') && this._mgMovedAt && (now - this._mgMovedAt) > STALL_AFTER_MS)
+        ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. A node takes seconds, so the pipeline is probably not processing it: answering a gate hands the run to the migration worker (arq src.worker.WorkerSettings), and if that worker is not running the job waits in the queue and nothing here will change.'
+        : '',
       mgPrimary: primary,
       mgStepFacts: stepFacts,
       mgOutputs: outputs,

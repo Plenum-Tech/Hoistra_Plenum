@@ -101,10 +101,19 @@ async def register_uploads(
                     # the parameter unknown at each site and both resolve to the same type.
                     # It compiles cleanly either way, so this only ever fails against a real
                     # server; here it failed on every upload and was swallowed by design.
+                    # THE ID IS SUPPLIED, NOT ASSUMED.
+                    #
+                    # db/01_schema.sql declares `id uuid DEFAULT gen_random_uuid() NOT NULL`,
+                    # so omitting it reads as correct against the file. The DEPLOYED table
+                    # has no such default, and every held upload failed on
+                    # "null value in column id of relation ingestion_documents" — logged,
+                    # swallowed, and invisible because binding is best-effort. The schema
+                    # file is 80 tables behind production; generating the id here is true
+                    # either way and costs nothing when a default does exist.
                     """INSERT INTO plenum_cafm.ingestion_documents
-                           (original_filename, source_type, agent_id, status, document_type)
-                       SELECT CAST(:n AS varchar), 'document', 'uploader', 'received',
-                              CAST(:dt AS varchar)
+                           (id, original_filename, source_type, agent_id, status, document_type)
+                       SELECT gen_random_uuid(), CAST(:n AS varchar), 'document', 'uploader',
+                              'received', CAST(:dt AS varchar)
                         WHERE NOT EXISTS (
                               SELECT 1 FROM plenum_cafm.ingestion_documents
                                WHERE original_filename = CAST(:n AS varchar)

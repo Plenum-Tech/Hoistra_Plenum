@@ -1,0 +1,8 @@
+<!-- The tab mark, drawn to match the logo in TopBar.jsx: a 26px accent-outlined rounded
+     square holding a 9px accent dot, scaled to a 32px viewport. #FF5A1F is --color-accent
+     from styles/tokens.css. Without this the browser asks for /favicon.ico on every load
+     and takes a 404 for it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect x="2.5" y="2.5" width="27" height="27" rx="8" fill="none" stroke="#FF5A1F" stroke-width="2.5"/>
+  <circle cx="16" cy="16" r="5.5" fill="#FF5A1F"/>
+</svg>

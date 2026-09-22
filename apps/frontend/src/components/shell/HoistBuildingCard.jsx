@@ -94,7 +94,7 @@ export default function HoistBuildingCard({ vals }) {
               </select>
             </Field>
             <Field label="Building code" error={vals.bcErr("building_code")}>
-              <input className="input" value={f.building_code} onChange={vals.bcSet("building_code")} placeholder="allocated as B-NN" style={INPUT} />
+              <input className="input" value={f.building_code} onChange={vals.bcSet("building_code")} placeholder="allocated as ORG-CC-NN-REGION-USE" style={INPUT} />
             </Field>
             <Field label="Site it belongs to" hint={vals.bcSitesLoading ? "Loading sites…" : "Optional — leave blank if this building stands on its own"} error={vals.bcErr("site_id")}>
               <div style={{ position: "relative" }}>
@@ -189,13 +189,17 @@ export default function HoistBuildingCard({ vals }) {
       {vals.bcStep3 ? (
         <>
           <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
-            {"The record exists but holds no evidence. Ingest now, or come back to it — the building simply carries a 0% Hoist Score until documents arrive."}
+            {vals.canIngest
+              ? "The record exists but holds no evidence. Ingest now, or come back to it — the building simply carries a 0% Hoist Score until documents arrive."
+              : "The record exists but holds no evidence, so the building carries a 0% Hoist Score until documents arrive. Your account is not set up to add them — an administrator can turn on Can ingest under Users & access."}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "11px" }}>
-            <div className="hv7" onClick={vals.bcIngestNow} style={{ padding: "10px 11px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
-              <div style={{ fontSize: "12px" }}>{"Ingest documents now"}</div>
-              <div style={{ fontSize: "10.5px", opacity: "0.8", marginTop: "2px", lineHeight: "1.4" }}>{"Certificates, contracts, asset registers, meter consent"}</div>
-            </div>
+            {vals.canIngest ? (
+              <div className="hv7" onClick={vals.bcIngestNow} style={{ padding: "10px 11px", borderRadius: "8px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                <div style={{ fontSize: "12px" }}>{"Ingest documents now"}</div>
+                <div style={{ fontSize: "10.5px", opacity: "0.8", marginTop: "2px", lineHeight: "1.4" }}>{"Certificates, contracts, asset registers, meter consent"}</div>
+              </div>
+            ) : null}
             <div className="hv14" onClick={vals.bcLater} style={{ padding: "10px 11px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: "pointer" }}>
               <div style={{ fontSize: "12px" }}>{"Do it later"}</div>
               <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", lineHeight: "1.4" }}>{"Hoist the record only — live and waiting"}</div>

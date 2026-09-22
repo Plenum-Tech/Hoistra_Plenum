@@ -101,14 +101,6 @@ export const integrationsMethods = {
         chip: s.view === "integ" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "integ", role: "admin", navOpen: true, detail: null }); }
       }, {
-        // CSV / Excel migration (logic/migration.js). The badge says when a run is waiting
-        // on a decision, since a gate does not move until someone answers it.
-        label: "Migration", icon: "ph-file-arrow-up",
-        badge: s.mgStatus && s.mgStatus.status === "awaiting_review" ? "review" : (s.mgId ? "open" : ""),
-        color: s.view === "migration" ? "var(--color-accent)" : "var(--color-neutral-300)",
-        chip: s.view === "migration" ? "var(--color-accent-900)" : "transparent",
-        click: () => this.mgShow()
-      }, {
         label: "Users & access", icon: "ph-users-three", badge: String(s.users.length),
         color: s.view === "users" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "users" ? "var(--color-accent-900)" : "transparent",

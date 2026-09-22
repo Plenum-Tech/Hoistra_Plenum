@@ -10,7 +10,8 @@
 import { MODULES } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
-import { isSpreadsheet } from './migration.js';
+import { isSpreadsheet, mgIsListRequest, cmmsName } from './migration.js';
+import { bcIsHoistRequest } from './buildingsCrud.js';
 import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 import { errorFromAnswer } from './chat.js';
 import { isStaleScope } from '../api/client.js';
@@ -1060,6 +1061,45 @@ export const complianceLiveMethods = {
       return;
     }
 
+    // "migrations" IS A REQUEST TO SEE THE LIST, NOT A QUESTION ABOUT ONE.
+    //
+    // Answered here for the same reason the held case is: there is nothing to judge, and
+    // the answer is a list this browser can already read. mgIsListRequest matches the whole
+    // message, so "why did that migration fail?" is untouched and goes to the orchestrator
+    // like any other question. A message carrying files is never a list request — an
+    // attachment is a job, not an enquiry.
+    if (!files.length && mgIsListRequest(q)) {
+      await this.mgAnswerList();
+      this.setState({ ccBusy: false });
+      return;
+    }
+
+    // HOISTING A BUILDING IS A FORM, NOT AN ANSWER.
+    //
+    // The record it writes needs a country, a use mix, a floor area in square metres and a
+    // metering route; a model cannot invent those and must not guess them. Saying "hoist a
+    // building" therefore opens the form here — under the sentence that asked for it —
+    // rather than starting a conversation about what the building might be.
+    if (!files.length && bcIsHoistRequest(q)) {
+      // The same affordance the Buildings page uses. HOIST_ROLES is not a permission —
+      // the service authorises neither route — but opening a form here for an account
+      // whose own screens omit it would have them fill in a record on the strength of
+      // nothing. So the answer names who can instead.
+      if (!this.renderVals().bcCanHoist) {
+        this.setState((p) => ({
+          ccBusy: false,
+          ccChat: (p.ccChat || []).concat([{
+            role: 'bot', isNote: true,
+            text: 'Hoisting a building is an administrator action — adding one to the portfolio is company-wide, so it is not offered on a building-restricted account. An administrator can do it from Buildings, or here.'
+          }])
+        }));
+        return;
+      }
+      this.bcOpenForm();
+      this.setState({ ccBusy: false });
+      return;
+    }
+
     const t0 = Date.now();
     // The rail's clock. Stream events are bursty — without this the elapsed reading would
     // sit still through a long tool call and read as a hung run.
@@ -1086,9 +1126,11 @@ export const complianceLiveMethods = {
         ? await deepAgentsApi.runStatefulWithFiles(
             q, sid, context, files, ctrl && ctrl.signal, this.cbFilingBuildingId(),
             // A spreadsheet is a migration with human gates. Interactive: the run stops at
-            // its first gate and the reply links to the Migration page, instead of the
+            // its first gate and the run opens in the transcript, instead of the
             // backend approving every gate on the reader's behalf.
-            { interactiveMigration: files.some(isSpreadsheet) })
+            { interactiveMigration: files.some(isSpreadsheet),
+              // Only meaningful alongside a spreadsheet, and only sent then.
+              cmmsName: files.some(isSpreadsheet) ? cmmsName(this.state.mgCmms) : null })
         : await this.ccStreamTurn(q, context, ctrl);
 
       // A held upload comes back with validation_cases; the composer answers it next.
@@ -1098,6 +1140,11 @@ export const complianceLiveMethods = {
       if (r && r.success === false) throw new Error(r.error || "the orchestrator returned no answer");
       // A turn can "succeed" while the engine it routed to failed — the answer is then a
       // bare JSON error. Say so, and say where it came from.
+      // A turn whose attachment started a migration opens it here. The reply used to carry
+      // a link to a page; the page is gone, and the gates belong under the answer that
+      // produced them.
+      const startedRuns = (r && Array.isArray(r.ingested_migration_ids)) ? r.ingested_migration_ids.filter(Boolean).map(String) : [];
+
       const engineError = errorFromAnswer(answer);
       if (engineError) {
         const via = calls.map((t) => t.tool).filter(Boolean).filter((t, j, a) => a.indexOf(t) === j);
@@ -1109,8 +1156,9 @@ export const complianceLiveMethods = {
         ccChat: (p.ccChat || []).concat([{
           role: "bot",
           text: answer || "The orchestrator returned an empty answer.",
-          // Runs this turn's attachments started; the bubble links each to the Migration page.
-          migrations: (r && Array.isArray(r.ingested_migration_ids)) ? r.ingested_migration_ids.filter(Boolean).map(String) : [],
+          // Runs this turn's attachments started. The bubble still names them — an older
+          // turn's run is reopened from it — and the newest opens in the card below.
+          migrations: startedRuns,
           // Named tools behind this reply, so the route is visible per message.
           calls: calls.map((t) => t.tool).filter(Boolean),
           interrupted: !!(r && r.interrupted),
@@ -1130,6 +1178,9 @@ export const complianceLiveMethods = {
           ms: Date.now() - t0
         }])
       }));
+      // The newest run this turn started opens under the answer, at whichever gate it
+      // stopped on. Opened after the turn lands so the card is below the reply, not above.
+      if (startedRuns.length) this.mgOpen(startedRuns[startedRuns.length - 1]);
     } catch (e) {
       const msg = (e && e.message) || String(e);
       if (e && e.cancelled) {
@@ -1158,6 +1209,10 @@ export const complianceLiveMethods = {
         ccChat: (p.ccChat || []).concat([{
           role: "bot",
           error: true,
+          // Whether the upstream did NOTHING is the one thing a caller may safely retry on.
+          // A timeout must never be retried automatically: the run may still be completing
+          // server-side, and a second upload would be a second migration.
+          unreachable: unreachable,
           text: "Could not answer: " + msg +
             (unreachable
               ? " — svc-deepagents is not reachable at /backend/deep-agents. Start that service and give it an LLM key; the compliance register is unaffected."
@@ -1424,7 +1479,10 @@ export const complianceLiveMethods = {
   // the draft stays in the box: the button is Stop, and Enter says so.
   orchSubmitNow() {
     const q = String(this.state.orchQuery || "").trim();
-    if (!q) return;
+    // Nothing typed, but a spreadsheet staged: send starts its migration. A CMMS export is
+    // not a question waiting for a sentence to go with it — the gates are the conversation.
+    // An empty send with nothing staged is still nothing.
+    if (!q) return (this.state.ccFiles || []).some(isSpreadsheet) ? this.mgStartFromChat() : undefined;
     if (this.state.ccBusy) return this.flash("Still answering — stop it first, or wait for it to finish.");
     this.setState({ orchQuery: "" });
     this.askScoped(q);

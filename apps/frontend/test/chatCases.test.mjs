@@ -434,3 +434,29 @@ test('a decision that fails leaves the case open rather than losing it', async (
   assert.equal(c.state.ccCaseId, CASE, 'a decision that never landed must not close the case');
   cleanup();
 });
+
+// The sync must run where a token exists. core.js's mount fires it before authBoot() has
+// rebuilt the access token (it is never persisted), so the request goes out with no bearer,
+// returns 401 `missing_token`, and is not retried — only `expired` is. ccCaseSync swallows
+// failures by design, so this showed up only as 401s in the service log, and a document
+// held in another session never surfaced after a reload.
+test('entering a session re-kicks the held-document sync, mount being too early for it', () => {
+  let called = 0;
+  c.ccCaseSync = async () => { called += 1; };
+  // A fresh sign-in re-reads every register; stubbed so this test is about the sync alone
+  // and leaves no retry timers behind to outlive the suite.
+  c.resetLiveData = () => {}; c.loadLiveData = () => {};
+  c.usLiveLoad = async () => {}; c.auLiveLoad = async () => {}; c.saLiveLoad = async () => {};
+  c.authEnter({
+    user: { id: 'u1', email: 'a@b.c', role: 'user', status: 'active' },
+    tokens: { access_token: 'a', refresh_token: 'r', token_type: 'bearer', expires_in: 3600 }
+  }, { keepView: true });
+  assert.equal(called, 1, 'the reload refresh syncs once a token exists');
+
+  c.authEnter({
+    user: { id: 'u1', email: 'a@b.c', role: 'admin', status: 'active' },
+    tokens: { access_token: 'a', refresh_token: 'r', token_type: 'bearer', expires_in: 3600 }
+  }, {});
+  assert.equal(called, 2, 'and so does a fresh sign-in');
+  cleanup();
+});

@@ -59,7 +59,7 @@ beforeEach(() => {
   c = new HoistraLogic();
   c.setState({ signedIn: true, view: 'buildings', role: 'user' });
 });
-const cleanup = () => { clearInterval(c._orchTick); clearTimeout(c._tt); clearTimeout(c._bldRetry); };
+const cleanup = () => { clearInterval(c._orchTick); clearTimeout(c._tt); clearTimeout(c._bldRetry); clearTimeout(c._bcCodeTimer); };
 
 // ── who may hoist / edit / remove ──
 
@@ -102,6 +102,53 @@ test('Hoist a building opens a blank create form', () => {
   assert.equal(v.bcForm.site_name, '');
   assert.equal(v.bcForm.country_code, 'UK');
   assert.equal(v.bcSubmitLabel, 'Write the record');
+  cleanup();
+});
+
+// ── the building code fills in live, from country/region/use ──
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('the building code fills in on open, and again as country/region/use change', async () => {
+  let seen = null;
+  handlers['/backend/ops-intelligence/api/energy/buildings/next-code'] = (u) => {
+    seen = Object.fromEntries(u.searchParams);
+    return [200, { ok: true, building_code: 'TC-FMGMT-UK-01-LON-COM' }];
+  };
+  c.renderVals().addBuilding(); // BLANK's own defaults: country_code UK, use_type Commercial
+  await wait(320);
+  assert.equal(c.state.bcForm.building_code, 'TC-FMGMT-UK-01-LON-COM', 'previewed as soon as the form opens');
+  assert.equal(seen.country_code, 'UK');
+  assert.equal(seen.use_type, 'Commercial');
+
+  handlers['/backend/ops-intelligence/api/energy/buildings/next-code'] = () => [200, { ok: true, building_code: 'TC-FMGMT-AE-01-DUB-RET' }];
+  c.bcSet('country_code', 'AE');
+  c.bcSet('state', 'Dubai');
+  c.bcSet('use_type', 'Retail');
+  await wait(320); // one debounced call for the three, not three
+  assert.equal(c.state.bcForm.building_code, 'TC-FMGMT-AE-01-DUB-RET');
+  cleanup();
+});
+
+test('typing into the code field by hand stops it from being overwritten', async () => {
+  handlers['/backend/ops-intelligence/api/energy/buildings/next-code'] = () => [200, { ok: true, building_code: 'TC-FMGMT-UK-01-LON-COM' }];
+  c.renderVals().addBuilding();
+  await wait(320);
+  c.bcSet('building_code', 'MY-OWN-CODE');
+  c.bcSet('state', 'Manchester'); // would otherwise preview a different code
+  await wait(320);
+  assert.equal(c.state.bcForm.building_code, 'MY-OWN-CODE', 'a typed code is never overwritten by a later preview');
+  cleanup();
+});
+
+test('editing an existing building never previews a new code for it', async () => {
+  let called = false;
+  handlers['/backend/ops-intelligence/api/energy/buildings/next-code'] = () => { called = true; return [200, { ok: true, building_code: 'X' }]; };
+  c.bcOpenEdit(ROW);
+  c.bcSet('state', 'Manchester');
+  await wait(320);
+  assert.equal(called, false, 'no preview call at all while editing');
+  assert.equal(c.state.bcForm.building_code, ROW.code, 'the stored code is left exactly as it was');
   cleanup();
 });
 
@@ -468,4 +515,180 @@ test("with no company being viewed the body names none, and the service falls ba
   await c.bcSubmit();
   assert.equal('organization_id' in sent, false,
     'naming no company is different from naming the wrong one — the service falls back to the caller');
+});
+
+// ── hoisting from the conversation, and the assignment that follows ──
+//
+// The hoist form was reachable from a button on the Buildings page and from a recorded
+// task's chain. It is an instruction to the platform, so it is now also reachable by
+// saying so in the Orchestrator — and the card renders in the transcript there rather
+// than in a dock laid over the conversation that asked for it.
+//
+// The phrase is matched on the WHOLE message. "hoist a building in Dubai with 24 floors"
+// is an instruction the form cannot take — it carries values no field was told about — so
+// it goes to the orchestrator, which can ask about them.
+
+test('"hoist a building" opens the form; a question that merely contains the words does not', async () => {
+  const { bcIsHoistRequest } = await import('../src/logic/buildingsCrud.js');
+  assert.ok(bcIsHoistRequest('hoist a building'));
+  assert.ok(bcIsHoistRequest('Hoist Building'));
+  assert.ok(bcIsHoistRequest('  add a building  '));
+  assert.ok(bcIsHoistRequest('new building'));
+  assert.ok(!bcIsHoistRequest('which building has the worst hoist score?'));
+  assert.ok(!bcIsHoistRequest('hoist a building in Dubai with 24 floors'), 'a qualified instruction is a question');
+  assert.ok(!bcIsHoistRequest(''), 'an empty message opens nothing');
+  cleanup();
+});
+
+test('hoisting from the chat opens the card in the transcript and leaves the dock shut', async () => {
+  handlers['GET /backend/udr/api/udr/sites'] = [200, { sites: [] }];
+  handlers['GET /backend/deep-agents/api/tools'] = [200, { tools: [] }];
+  c.setState({ view: 'chat', role: 'admin', account: { id: 'u1', role: 'admin' } });
+  await c.ccAsk('hoist a building');
+  assert.ok(c.state.bcOpen, 'the form is open');
+  assert.equal(c.state.orchOpen, false, 'the dock is not laid over the conversation');
+  assert.equal(c.state.view, 'chat', 'and the conversation is still the page');
+  assert.equal(c.state.bcStep, 0, 'at step 1 of 3');
+  assert.equal(c.state.bcMode, 'create');
+  cleanup();
+});
+
+test('hoisting from a page keeps its dock, exactly as before', () => {
+  handlers['GET /backend/udr/api/udr/sites'] = [200, { sites: [] }];
+  c.setState({ view: 'buildings', role: 'admin', account: { id: 'u1', role: 'admin' } });
+  c.bcOpenForm();
+  assert.ok(c.state.bcOpen);
+  assert.equal(c.state.orchOpen, true, 'the dock still opens where there is no transcript');
+  cleanup();
+});
+
+// building_ids is a FULL replacement server side (adminApi.patchUser). Sending only the new
+// building would silently strip every building the person already held — the bug this test
+// exists to catch if the append is ever simplified away.
+test('assigning the new building appends it to the user\'s allocation and never replaces it', async () => {
+  let sent = null;
+  handlers['GET /backend/ops-intelligence/api/admin/users'] = [200, { users: [
+    { id: 'u-7', full_name: 'Marcus Hale', email: 'm@h.c', buildings: [{ id: 'b-old-1' }, { id: 'b-old-2' }] }
+  ] }];
+  handlers['PATCH /backend/ops-intelligence/api/admin/users/u-7'] = (u, opts) => {
+    sent = JSON.parse(opts.body);
+    return [200, { ok: true, user_id: 'u-7', changed: ['building_ids'] }];
+  };
+  c.setState({ bcResult: { buildingId: 'b-new', name: 'Bishopsgate Tower', code: 'B-01' }, bcStep: 2 });
+  await c.bcUsersLoad();
+  c.bcSetAssignUser('u-7');
+  await c.bcAssignSubmit();
+  assert.deepEqual(sent.building_ids, ['b-old-1', 'b-old-2', 'b-new'],
+    'the two buildings they already held survive the assignment');
+  assert.equal(c.state.bcAssignedTo, 'Marcus Hale');
+  assert.match(c.state.toast, /Bishopsgate Tower is now assigned to Marcus Hale/);
+  cleanup();
+});
+
+test('assigning a building the user already holds does not send it twice', async () => {
+  let sent = null;
+  handlers['GET /backend/ops-intelligence/api/admin/users'] = [200, { users: [
+    { id: 'u-7', full_name: 'Marcus Hale', email: 'm@h.c', buildings: [{ id: 'b-new' }] }
+  ] }];
+  handlers['PATCH /backend/ops-intelligence/api/admin/users/u-7'] = (u, opts) => {
+    sent = JSON.parse(opts.body);
+    return [200, { ok: true }];
+  };
+  c.setState({ bcResult: { buildingId: 'b-new', name: 'Bishopsgate Tower' }, bcStep: 2 });
+  await c.bcUsersLoad();
+  c.bcSetAssignUser('u-7');
+  await c.bcAssignSubmit();
+  assert.deepEqual(sent.building_ids, ['b-new']);
+  cleanup();
+});
+
+test('a refused assignment says whose it was and leaves the step usable', async () => {
+  handlers['GET /backend/ops-intelligence/api/admin/users'] = [200, { users: [
+    { id: 'u-7', full_name: 'Marcus Hale', email: 'm@h.c', buildings: [] }
+  ] }];
+  handlers['PATCH /backend/ops-intelligence/api/admin/users/u-7'] = [403, { detail: { ok: false, error: 'wrong_organization' } }];
+  c.setState({ bcResult: { buildingId: 'b-new', name: 'Bishopsgate Tower' }, bcStep: 2 });
+  await c.bcUsersLoad();
+  c.bcSetAssignUser('u-7');
+  await c.bcAssignSubmit();
+  assert.match(c.state.toast, /Could not assign Bishopsgate Tower to Marcus Hale/);
+  assert.equal(c.state.bcAssigning, false, 'the button is usable again');
+  assert.equal(c.state.bcAssignedTo, '', 'and nothing claims it succeeded');
+  cleanup();
+});
+
+test('the step-3 picker lists the company\'s people and is entirely optional', async () => {
+  handlers['GET /backend/ops-intelligence/api/admin/users'] = [200, { users: [
+    { id: 'u-7', full_name: 'Marcus Hale', email: 'm@h.c', buildings: [] },
+    { id: 'u-8', full_name: '', email: 'dana@h.c', buildings: [] }
+  ] }];
+  c.setState({ bcOpen: true, bcResult: { buildingId: 'b-new', name: 'Bishopsgate Tower', code: 'B-01' }, bcStep: 1 });
+  c.bcNext();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(c.state.bcStep, 2, 'step 3');
+  const v = c.renderVals();
+  assert.ok(v.bcStep3, 'the third step is the one showing');
+  assert.equal((c.state.bcUsers || []).length, 2);
+  // Both exits work without anybody having been picked.
+  c.bcLater();
+  assert.equal(c.state.bcOpen, false);
+  assert.match(c.state.flowDone, /is hoisted and keyed as B-01/);
+  cleanup();
+});
+
+// The typed phrase must not hand a form to an account whose screens deliberately omit it.
+// HOIST_ROLES is an affordance, not a permission — the service authorises neither — but a
+// chat that opens a flow the Buildings page hides from the same account is incoherent, and
+// the person would be filling in a form on the strength of nothing.
+test('a plain user typing "hoist a building" is told who can, and gets no form', async () => {
+  handlers['GET /backend/deep-agents/api/tools'] = [200, { tools: [] }];
+  c.setState({ view: 'chat', role: 'user', account: { id: 'u1', role: 'user', status: 'active' } });
+  await c.ccAsk('hoist a building');
+  assert.ok(!c.state.bcOpen, 'no form opened');
+  const turn = (c.state.ccChat || []).filter((m) => m.role === 'bot').pop();
+  assert.match(turn.text, /administrator/i, 'and it says who can do it');
+  cleanup();
+});
+
+test('an admin previewing User view can still hoist from the chat — the account decides, not the label', async () => {
+  handlers['GET /backend/udr/api/udr/sites'] = [200, { sites: [] }];
+  handlers['GET /backend/deep-agents/api/tools'] = [200, { tools: [] }];
+  c.setState({ view: 'chat', role: 'user', account: { id: 'u1', role: 'admin', status: 'active' } });
+  await c.ccAsk('hoist a building');
+  assert.ok(c.state.bcOpen, 'the form opens for a real admin account');
+  cleanup();
+});
+
+// ── the step after a hoist: ingesting the documents, in the conversation ──
+//
+// Step 3 offers "Ingest documents now", which arms the ingest flow (flow: 'ingest') and
+// closes the hoist card. The dock renders that flow; the Orchestrator did not, so on the
+// chat page the button put the reader in front of nothing at all — the card vanished and
+// no ingest panel replaced it.
+test('ingest-now from a hoist arms the ingest flow and names the new building', () => {
+  handlers['GET /backend/udr/api/udr/sites'] = [200, { sites: [] }];
+  c.setState({
+    view: 'chat', role: 'admin', account: { id: 'u1', role: 'admin' },
+    bcOpen: true, bcStep: 2,
+    bcResult: { buildingId: 'b-new', name: 'Orchestrator Test Tower', code: 'B-42' }
+  });
+  c.bcIngestNow();
+  const v = c.renderVals();
+  assert.equal(c.state.flow, 'ingest', 'the ingest flow is armed');
+  assert.equal(c.state.bcOpen, false, 'and the hoist card steps aside');
+  assert.ok(v.fIngest, 'so the conversation has an ingest panel to render');
+  assert.equal(c.state.declFor, 'Orchestrator Test Tower', 'filed against what was just hoisted');
+  cleanup();
+});
+
+test('"Do it later" closes the hoist without arming anything, and says where it left off', () => {
+  c.setState({
+    view: 'chat', bcOpen: true, bcStep: 2,
+    bcResult: { buildingId: 'b-new', name: 'Orchestrator Test Tower', code: 'B-42' }
+  });
+  c.bcLater();
+  assert.equal(c.state.flow, null);
+  assert.equal(c.state.bcOpen, false);
+  assert.match(c.state.flowDone, /hoisted and keyed as B-42/);
+  cleanup();
 });

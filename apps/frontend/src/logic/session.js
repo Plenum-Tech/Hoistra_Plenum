@@ -38,7 +38,7 @@ const KEY = SESSION_KEY;
 // failed this allow-list and fell back to view: 'home' below, same as landing on an
 // unrecognised value would. They take no companion id (same as 'home'/'cc'/'vp'), so
 // nothing else needs restoring alongside them.
-const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'audit', 'insp', 'migration'];
+const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'audit', 'insp'];
 
 const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isStr = (v) => typeof v === 'string';
@@ -131,6 +131,12 @@ function readSlice(storage) {
   // in the air. (Caught by auth.test.mjs's two refresh tests, which is what they are for.)
   if ((getActingOrg() || null) !== (out.viewOrgId || null)) setActingOrg(out.viewOrgId || null);
 
+  // A session written by a build that still had the Migration page. The page is gone and
+  // the run is answered in the Orchestrator, so the stored view is TRANSLATED rather than
+  // dropped: dropping it lands a reader who was mid-review on Home, with the run restored,
+  // no card rendered and no nav entry left to find it by.
+  if (d && d.view === 'migration') d = Object.assign({}, d, { view: 'chat' });
+
   if (typeof d.view === 'string' && VIEWS.indexOf(d.view) > -1) {
     // A view that needs a companion value is only restored with it.
     const ok = d.view === 'module' ? typeof d.module === 'string' && !!d.module
@@ -154,7 +160,7 @@ function readSlice(storage) {
   // (logic/sessions.js) and the next question continues the same orchestrator thread.
   if (typeof d.sessionId === 'string' && d.sessionId) out.sessionId = d.sessionId;
 
-  // The migration open on the Migration page. A gate waits for a person, and the person
+  // The migration open in the Orchestrator. A gate waits for a person, and the person
   // who reloads mid-review must land back on the same run, not on the upload panel.
   // Restored on its own — it is useful from any page's nav badge, not only from `migration`.
   if (isStr(d.mgId) && /^[0-9a-f-]{8,64}$/i.test(d.mgId)) out.mgId = d.mgId;

@@ -279,17 +279,14 @@ afterEach(() => {
   clearInterval(c._orchTick); clearInterval(c._ccTick);
 });
 
-test('Migration sits in the admin nav, not in the user nav, and its click opens the page', () => {
+// Migration had a nav entry of its own while it was a page. It is a conversation now, and
+// a nav item that merely opened the chat would be a second door onto the same room.
+test('Migration has no nav entry of its own — a run is reached through the conversation', () => {
   const admin = c.renderVals().navAdmin.map((a) => a.label);
-  assert.deepEqual(admin, ['Integrations', 'Migration', 'Users & access', 'Audit trail']);
+  assert.deepEqual(admin, ['Integrations', 'Users & access', 'Audit trail']);
   c.setState({ role: 'user' });
   assert.deepEqual(c.renderVals().navAdmin, []);
   assert.ok(!c.renderVals().navSections.some((n) => n.label === 'Migration'), 'the user nav is reports only');
-  c.setState({ role: 'admin' });
-  c.renderVals().navAdmin[1].click();
-  assert.equal(c.state.view, 'migration');
-  assert.ok(c.renderVals().isMigration);
-  assert.equal(c.ctxLabel(), 'Migration');
 });
 
 test('opening a run reads its status and shows the pk gate with the detected keys pre-selected', async () => {
@@ -389,7 +386,7 @@ test('a finished run shows its artefacts and stops polling; a failed one shows t
   assert.match(v.mgGateBlurb, /relation "trade" already exists/);
 });
 
-test('one file starts on start-with-upload, several on the multi route as one job, and the page opens the run', async () => {
+test('one file starts on start-with-upload, several on the multi route as one job, and the run opens in the conversation', async () => {
   handlers['POST /backend/schema-mapper/api/migration/start-with-upload'] = { migration_id: ID, status: 'running' };
   handlers['POST /backend/schema-mapper/api/migration/start-with-upload-multi'] = { migration_id: ID, status: 'running' };
   handlers[STATUS] = doc({ status: 'running', pending_gate_type: null, pending_gate_payload: {} });
@@ -403,7 +400,7 @@ test('one file starts on start-with-upload, several on the multi route as one jo
   assert.equal(post.body.get('cmms_name'), 'Custom');
   assert.equal(post.body.get('file').name, 'assets.csv');
   assert.equal(c.state.mgId, ID);
-  assert.equal(c.state.view, 'migration');
+  assert.equal(c.state.view, 'chat', 'the run is answered in the Orchestrator, not on a page');
   assert.deepEqual(c.state.mgFiles, []);
   clearTimeout(c._mgTimer);
 
@@ -442,7 +439,7 @@ test('the recent list reads the company\'s runs and opens one on click', async (
   assert.ok(c.state.mgStatus);
 });
 
-test('a chat reply that started a migration links to it, and a staged spreadsheet offers the Migration page', async () => {
+test('a staged spreadsheet migrates from the composer, and a reply that started a run reopens it', async () => {
   c.setState({ view: 'chat', ccChat: [{ role: 'you', text: 'migrate this' }, { role: 'bot', text: 'Paused at the primary-key gate.', migrations: [ID] }] });
   let v = c.renderVals();
   const bot = v.orchChat[1];
@@ -453,11 +450,16 @@ test('a chat reply that started a migration links to it, and a staged spreadshee
   c.ccAddFiles([new File(['a'], 'assets.csv'), new File(['b'], 'cert.pdf')]);
   v = c.renderVals();
   assert.equal(v.orchMigrateShow, 'flex');
+  // Through the orchestrator's upload route: that is the one that binds the ingest to a
+  // building and writes the audit row (svc-deepagents' batch worker), which schema-mapper's
+  // own start-with-upload has no field for. Both files go — it splits them by type.
+  handlers['POST /backend/deep-agents/api/workflow/run-stateful-with-files'] = { session_id: 's1', answer: 'Paused at the primary-key gate.', tool_calls: [], success: true, ingested_migration_ids: [ID] };
   handlers[STATUS] = doc();
-  v.orchMigrateHere();
-  assert.equal(c.state.view, 'migration');
-  assert.deepEqual(c.state.mgFiles.map((f) => f.name), ['assets.csv'], 'the spreadsheet moved to the migration panel');
-  assert.deepEqual(c.state.ccFiles.map((f) => f.name), ['cert.pdf'], 'the PDF stays with the chat');
+  await v.orchMigrateHere();
+  await settle();
+  assert.equal(c.state.view, 'chat', 'there is no page to go to');
+  assert.equal(c.state.mgId, ID, 'the spreadsheet started its run where it was attached');
+  assert.deepEqual(c.state.ccFiles, [], 'the whole tray went with the turn');
 
   bot.migIds[0].open();
   await settle();
@@ -478,11 +480,48 @@ test('a chat turn with a spreadsheet attached asks the orchestrator for an inter
   assert.deepEqual(bot.migrations, [ID]);
 });
 
-test('a reload lands back on the open run: the view and the migration id both persist', async () => {
+test('opening a run puts it in the Orchestrator, not on a page of its own', async () => {
+  handlers[STATUS] = doc();
+  c.mgOpen(ID);
+  await settle();
+  assert.equal(c.state.view, 'chat', 'the run is answered in the conversation');
+  assert.equal(c.state.mgId, ID);
+  assert.ok(c.renderVals().mgHasRun, 'the card has a run to render');
+});
+
+// The status document runs to ~500 KB, so it is only re-read where it is rendered. That
+// was one view; it is now wherever the conversation is — the chat page, or a page keeping
+// its dock. A guard still naming 'migration' stops the run dead the moment it is opened.
+test('a run is read where it is rendered: polling follows the Orchestrator and stops off it', async () => {
+  handlers[STATUS] = doc();
+  c.setState({ view: 'chat' });
+  c.mgOpen(ID);
+  await settle();
+  assert.ok(c._mgTimer, 'the next status read is scheduled from the chat');
+  clearTimeout(c._mgTimer);
+  c._mgTimer = null;
+  // A page that merely keeps a dock does not render the card, so it does not re-read a
+  // ~500 KB status document either.
+  c.setState({ view: 'buildings' });
+  await c.mgPoll(true);
+  await settle();
+  assert.ok(!c._mgTimer, 'a dock page does not follow the run');
+});
+
+test('a run opened from a dock page lands on the Orchestrator, where its gates render', async () => {
+  handlers[STATUS] = doc();
+  c.setState({ view: 'buildings' });
+  c.mgOpen(ID);
+  await settle();
+  assert.equal(c.state.view, 'chat', 'the gates are never rendered nowhere');
+  assert.equal(c.state.orchOpen, false, 'and the dock it came from is closed behind it');
+});
+
+test('a reload lands back on the open run: the conversation and the migration id both persist', async () => {
   const { loadSession, saveSession } = await import('../src/logic/session.js');
-  saveSession({ signedIn: true, refreshToken: 'ref-1', email: 'a@b.c', role: 'admin', account: { id: 'u1', email: 'a@b.c', role: 'admin', status: 'active' }, view: 'migration', mgId: ID }, { signedIn: true });
+  saveSession({ signedIn: true, refreshToken: 'ref-1', email: 'a@b.c', role: 'admin', account: { id: 'u1', email: 'a@b.c', role: 'admin', status: 'active' }, view: 'chat', mgId: ID }, { signedIn: true });
   const back = loadSession();
-  assert.equal(back.view, 'migration');
+  assert.equal(back.view, 'chat');
   assert.equal(back.mgId, ID);
   saveSession({ signedIn: true, refreshToken: 'ref-1', email: 'a@b.c', role: 'admin', account: { id: 'u1', email: 'a@b.c', role: 'admin', status: 'active' }, view: 'home', mgId: 'not an id at all!' }, { signedIn: true });
   assert.equal(loadSession().mgId, undefined, 'a malformed id is not restored');

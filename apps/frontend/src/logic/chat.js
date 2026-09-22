@@ -61,6 +61,10 @@ export const chatMethods = {
     this.setState({ view: "chat", orchOpen: false, queueOpen: false, paletteOpen: false, detail: null });
     if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
     this.chatConnect();
+    // A run restored from the session has an id and no document until something reads it.
+    // Arriving here is that something — mgOpen does its own read, so this only fires for a
+    // run that was already open and has never been fetched.
+    if (this.state.mgId && !this.state.mgStatus) this.mgPoll(true);
   },
 
   // "Connected · N tools" — one read of the tool catalogue, retried on request.

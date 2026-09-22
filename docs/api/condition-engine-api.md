@@ -92,13 +92,29 @@ surface, so a raised row falls back to the page's own test — `inChipSet()`.
 own figure and stays where it is. Nor is `assetIntelligence()` for the opened-asset drawer.
 This is only about which surface decides the band.
 
-**The two steppers are the open question.** `section_over_reference_pct` and
-`anomaly_persistent_weeks` are per organisation and only `PUT /api/energy/condition/rules`
-moves them, so a stepper that writes changes the thresholds for everyone in the company, not
-just for the person dragging it. The page therefore reads the server's thresholds back
-(`asCondRules`) and quotes those in each row's explanation, and the steppers were left as they
-were rather than silently turned into a shared write. Wiring them to the PUT is a product
-decision, not a mechanical one.
+**The two steppers now write** (21 Sep 2026). They were left unwired while this was an open
+product question, because `section_over_reference_pct` and `anomaly_persistent_weeks` are per
+organisation: moving a stepper changes the thresholds for **everyone in the company**, not
+just for the person pressing it. That decision has been taken, and the steppers are the
+control they look like.
+
+What that means in the page (`logic/assetsCondition.js`):
+
+* They **open on the organisation's rule**, not on the values the build ships with. The rule
+  rides along on every `GET /condition/assets` answer under `rules`, so no extra call is made;
+  `energyApi.conditionRules()` exists for a page that needs it on its own.
+* A step is **optimistic, debounced (400 ms) and then written** with `PUT
+  /condition/rules` — both thresholds every time, since the route takes the pair. Holding `+`
+  is one write, not one per click.
+* A saved rule **re-reads the bands** rather than re-deciding them here. A read already in
+  flight was issued under the old rule, so it is waited out and a fresh one goes after it.
+* A refused write **puts the steppers back** to what the engine actually holds and says so in
+  the row, rather than leaving a number on screen that decided nothing.
+* Everything that describes what is on screen — the section rows, each building's *"n of m
+  metered sections over reference"*, the per-asset explanation — now quotes the **thresholds
+  in force** (`rulesInForce()`), which is the engine's rule whenever the engine gave one.
+  Before this the sections were coloured by the stepper while the assets above them were
+  banded by the stored rule: two rules on one screen.
 
 ---
 

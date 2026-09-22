@@ -242,3 +242,238 @@ def test_the_pseudo_uuid_is_the_exact_shape_the_rollup_join_matches():
         out = _int_location_id_to_uuid(n)
         assert len(out) == 36, out
         assert uuid.UUID(out)
+
+
+# ── the composite building code: org-country-number-region-use ─────────────────
+
+
+def test_region_short_takes_the_first_three_letters_alpha_only():
+    from src.engines.energy.building_create import _region_short
+
+    assert _region_short("South East") == "SOU"
+    assert _region_short("new jersey") == "NEW"
+    assert _region_short("Abu Dhabi") == "ABU"
+    assert _region_short("") == "REG"
+    assert _region_short(None) == "REG"
+
+
+def test_use_short_never_collides_hospital_with_hotel():
+    from src.engines.energy.building_create import USE_TYPE_STORES_AS, _use_short
+
+    # The whole reason this is an explicit map and not a blind 3-letter slice.
+    assert _use_short("Hospital") == "HSP"
+    assert _use_short("Hotel") == "HTL"
+    assert _use_short("Hospital") != _use_short("Hotel")
+    # Every canonical enum value the UI can actually store has its own 3-letter code, and
+    # no two collide — a slice-based fallback would only ever run for a value this map
+    # does not know, which should not happen for anything USE_TYPE_STORES_AS produces.
+    codes = {_use_short(v) for v in set(USE_TYPE_STORES_AS.values())}
+    assert len(codes) == len(set(USE_TYPE_STORES_AS.values()))
+    assert _use_short(None) == "OTH"
+    assert _use_short("Something new") == "SOM"
+
+
+class _FakeResult:
+    """MagicMock stands in for the sync .first()/.all() SQLAlchemy hands back from an
+    awaited session.execute(...) — the await is on execute() itself, not on reading its
+    result, so these need to be plain synchronous values, not coroutines."""
+
+    def __init__(self, first=None, all_rows=None):
+        self._first = first
+        self._all = all_rows or []
+
+    def first(self):
+        return self._first
+
+    def all(self):
+        return self._all
+
+
+def _fake_session(org_row, code_rows):
+    """Same fake_execute-counts-calls pattern test_b2_scoring.py already uses for an async
+    session: the org-code lookup is always the first execute() a composite request makes,
+    the building_code regex scan is always the second."""
+    from unittest.mock import AsyncMock
+
+    calls = {"n": 0}
+
+    async def fake_execute(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FakeResult(first=org_row)
+        return _FakeResult(all_rows=code_rows)
+
+    session = AsyncMock()
+    session.execute = fake_execute
+    return session
+
+
+async def test_the_first_building_in_a_bucket_is_numbered_01():
+    from src.engines.energy.building_create import _next_building_code
+
+    session = _fake_session(org_row=("TC-FMGMT",), code_rows=[])
+    code = await _next_building_code(
+        session, organization_id="11111111-1111-1111-1111-111111111111",
+        country_code="UK", region="London", primary_use="Commercial",
+    )
+    assert code == "TC-FMGMT-UK-01-LON-COM"
+
+
+async def test_the_number_counts_only_buildings_sharing_the_other_four_segments():
+    from src.engines.energy.building_create import _next_building_code
+
+    # Two existing buildings in this exact bucket (03 and 07, not consecutive — the
+    # highest is what matters, same rule the legacy B-NN scheme already follows).
+    session = _fake_session(
+        org_row=("TC-FMGMT",),
+        code_rows=[("TC-FMGMT-UK-03-LON-COM",), ("TC-FMGMT-UK-07-LON-COM",)],
+    )
+    code = await _next_building_code(
+        session, organization_id="11111111-1111-1111-1111-111111111111",
+        country_code="UK", region="London", primary_use="Commercial",
+    )
+    assert code == "TC-FMGMT-UK-08-LON-COM"
+
+
+async def test_a_different_bucket_never_shows_up_in_the_scan():
+    """The regex is anchored to this exact org/country/region/use — a Retail building in
+    the same org and country does not bump the Commercial count, and could not: the SQL
+    WHERE clause itself only matches rows whose code fits this bucket's own pattern."""
+    from src.engines.energy.building_create import _next_building_code
+
+    session = _fake_session(
+        org_row=("TC-FMGMT",),
+        # A Retail building would never be returned by the WHERE building_code ~ :pat this
+        # function sends — modelled here by simply not including it in code_rows, since the
+        # fake session's job is to stand in for what postgres itself would have filtered.
+        code_rows=[],
+    )
+    code = await _next_building_code(
+        session, organization_id="11111111-1111-1111-1111-111111111111",
+        country_code="UK", region="London", primary_use="Commercial",
+    )
+    assert code == "TC-FMGMT-UK-01-LON-COM"
+
+
+async def test_no_organization_id_falls_back_to_the_flat_scheme():
+    """No organization_id means _org_code is never called at all — the legacy path's own
+    building_code scan is the FIRST and only execute(), unlike every case above where an
+    org lookup comes first. A one-call fake, not _fake_session's two-call one."""
+    from unittest.mock import AsyncMock
+
+    from src.engines.energy.building_create import _next_building_code
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_FakeResult(all_rows=[("B-04",)]))
+    code = await _next_building_code(
+        session, organization_id=None, country_code="UK", region="London",
+        primary_use="Commercial",
+    )
+    assert code == "B-05"
+
+
+async def test_a_missing_region_or_use_also_falls_back_even_with_an_organization_id():
+    from src.engines.energy.building_create import _next_building_code
+
+    session = _fake_session(org_row=("TC-FMGMT",), code_rows=[])
+    code = await _next_building_code(
+        session, organization_id="11111111-1111-1111-1111-111111111111",
+        country_code="UK", region=None, primary_use="Commercial",
+    )
+    assert code == "B-01"
+
+
+async def test_an_organization_id_that_resolves_to_no_org_code_also_falls_back():
+    """organizations.code is NOT NULL and unique on the live schema, but a stale or
+    cross-environment organization_id that matches no row must not crash the create — it
+    falls back the same as a missing organization_id would."""
+    from src.engines.energy.building_create import _next_building_code
+
+    session = _fake_session(org_row=None, code_rows=[("B-01",)])
+    code = await _next_building_code(
+        session, organization_id="11111111-1111-1111-1111-111111111111",
+        country_code="UK", region="London", primary_use="Commercial",
+    )
+    assert code == "B-02"
+
+
+# ── GET /buildings/next-code — the preview the form calls live ─────────────────
+
+
+def _preview_client():
+    """Same fixture pattern test_body_organization_scoped.py already uses for a route-level
+    test with no real database: get_session is overridden with a fake, current_principal
+    with a fixed admin on ORG."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+    from uuid import UUID
+
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import auth as auth_routes
+    from src.app import app
+    from src.db import get_session
+    from src.engines.auth.tokens import Principal
+
+    org = UUID("11111111-1111-1111-1111-111111111111")
+
+    async def _session():
+        s = AsyncMock()
+        s.execute = AsyncMock(return_value=_FakeResult(first=("TC-FMGMT",), all_rows=[]))
+        yield s
+
+    async def _principal():
+        return Principal(user_id=UUID(int=2), email="a@example.com", organization_id=org,
+                          session_id=None, issued_at=datetime.now(timezone.utc),
+                          password_changed_at=0, role="admin", can_ingest=True,
+                          building_ids=None)
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[auth_routes.current_principal] = _principal
+    return TestClient(app), org
+
+
+def test_the_preview_route_returns_the_same_shape_the_create_route_would_allocate():
+    client, org = _preview_client()
+    try:
+        r = client.get("/api/energy/buildings/next-code", params={
+            "organization_id": str(org), "country_code": "UK", "region": "London",
+            "use_type": "Commercial",
+        })
+    finally:
+        from src.app import app
+        app.dependency_overrides.clear()
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "building_code": "TC-FMGMT-UK-01-LON-COM"}
+
+
+def test_the_preview_route_normalises_gb_and_maps_mall_to_retail():
+    """The same GB→UK and Mall→Retail rules validate_payload already applies — a preview
+    that used the raw values instead would show a code the real create would never
+    allocate, since Mall previews as MAL while the actual insert stores Retail (RET)."""
+    client, org = _preview_client()
+    try:
+        r = client.get("/api/energy/buildings/next-code", params={
+            "organization_id": str(org), "country_code": "GB", "state": "London",
+            "use_type": "Mall",
+        })
+    finally:
+        from src.app import app
+        app.dependency_overrides.clear()
+    assert r.status_code == 200, r.text
+    assert r.json()["building_code"] == "TC-FMGMT-UK-01-LON-RET"
+
+
+def test_the_preview_route_falls_back_when_a_field_is_not_chosen_yet():
+    """The Hoist-a-building form's fields fill in one at a time — a preview asked for
+    before use_type is chosen previews the flat scheme rather than refusing to answer."""
+    client, org = _preview_client()
+    try:
+        r = client.get("/api/energy/buildings/next-code", params={
+            "organization_id": str(org), "country_code": "UK", "region": "London",
+        })
+    finally:
+        from src.app import app
+        app.dependency_overrides.clear()
+    assert r.status_code == 200, r.text
+    assert r.json()["building_code"] == "B-01"

@@ -69,9 +69,15 @@ export default function Buildings({ vals }) {
             </div>
             {vals.bcCanHoist ? (
               <>
-                <div className="btn" onClick={vals.ingestDocuments} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
-                  {"Ingest documents"}
-                </div>
+                {/* Two different permissions, so two gates: hoisting a building is a role,
+                    adding data to one is the "Can ingest" toggle. An admin has both by
+                    default — the server folds the role into can_ingest — but one turned
+                    off explicitly must lose this and keep Hoist. */}
+                {vals.canIngest ? (
+                  <div className="btn" onClick={vals.ingestDocuments} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
+                    {"Ingest documents"}
+                  </div>
+                ) : null}
                 <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
                   {"Hoist a building"}
                 </div>
@@ -799,10 +805,12 @@ export default function Buildings({ vals }) {
                       </p>
                     </div>
                     <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", flexShrink: "0", alignItems: "center" }}>
-                      <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
-                        <i className="ph ph-upload-simple" style={{ fontSize: "13px" }}></i>
-                        <span>{"Ingest data"}</span>
-                      </div>
+                      {vals.canIngest ? (
+                        <div className="btn btn-primary" onClick={vals.ingStart} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: "7px" }}>
+                          <i className="ph ph-upload-simple" style={{ fontSize: "13px" }}></i>
+                          <span>{"Ingest data"}</span>
+                        </div>
+                      ) : null}
                       {(vals.docStats || []).map((d, $index) => (
                         <React.Fragment key={$index}>
                           <div>
@@ -888,6 +896,11 @@ export default function Buildings({ vals }) {
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
                                         <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
                                         <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        {/* Removing the document removes what was read out of
+                                            it — the certificate on Compliance, the contract
+                                            terms on Vendors. The click only opens the dialog,
+                                            which counts those before anything happens. */}
+                                        <i className="ph ph-trash hv6" onClick={d.del} title="Delete this document everywhere" style={{ display: d.delShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>
@@ -937,10 +950,12 @@ export default function Buildings({ vals }) {
                                   it lands. It attaches a document to THIS building, so it
                                   says so — and carries an icon, because it is the one
                                   control on this card that adds something. */}
-                              <div className="hv4" onClick={b.ingestMore} title={"Attach a document to " + b.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                                <i className="ph ph-file-arrow-up" style={{ fontSize: "13px" }}></i>
-                                {"Ingest a document"}
-                              </div>
+                              {vals.canIngest ? (
+                                <div className="hv4" onClick={b.ingestMore} title={"Attach a document to " + b.name} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+                                  <i className="ph ph-file-arrow-up" style={{ fontSize: "13px" }}></i>
+                                  {"Ingest a document"}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -979,6 +994,32 @@ export default function Buildings({ vals }) {
           <div style={{ padding: "14px 22px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
             <div className="btn" onClick={vals.bcDelCancel} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Keep it"}</div>
             <div className="btn" onClick={vals.bcDelConfirm} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.bcDelWorking ? "default" : "pointer", color: "var(--st-warn)", border: "1px solid var(--st-warn)", borderRadius: "8px", opacity: vals.bcDelWorking ? "0.6" : "1" }}>{vals.bcDelBusyLabel}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Remove a document ─────────────────────────────────────────────────
+          Same two-phase shape as removing a building, opposite outcome. That
+          dialog says what will be UNLINKED and kept; this one says what will be
+          DELETED, because an extract from a document that should not have been
+          ingested is not a record of anything. Both numbers come from a DELETE
+          with no confirm, which changes nothing — the counts are the dialog. */}
+      <div style={{ display: vals.dcDelShow, position: "fixed", inset: "0", zIndex: "61", background: "rgba(8,14,13,0.44)", alignItems: "center", justifyContent: "center", padding: "24px" }} onClick={vals.dcDelCancel}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "480px", background: "var(--color-surface)", borderRadius: "14px", boxShadow: "var(--shadow-lg,0 24px 60px rgba(0,0,0,.28))", overflow: "hidden" }}>
+          <div style={{ padding: "20px 22px 6px" }}>
+            <h2 style={{ margin: "0", fontSize: "18px", lineHeight: "1.3", wordBreak: "break-word" }}>{"Delete " + vals.dcDelName + "?"}</h2>
+            <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "4px", fontFamily: "ui-monospace,monospace" }}>{vals.dcDelType}</div>
+          </div>
+          <div style={{ padding: "10px 22px 18px", fontSize: "13px", lineHeight: "1.55", color: "var(--color-neutral-400)" }}>
+            <div style={{ display: vals.dcDelLoading ? "block" : "none" }}>{"Checking what this document became…"}</div>
+            <div style={{ display: vals.dcDelBodyShow }}>{vals.dcDelBody}</div>
+            <div style={{ display: vals.dcDelCascadeShow, marginTop: "8px" }}>{vals.dcDelCascade}</div>
+            <div style={{ display: vals.dcDelBodyShow, marginTop: "10px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{vals.dcDelKept}</div>
+            <div style={{ display: vals.dcDelErrorShow, marginTop: "10px", fontSize: "12px", color: "var(--st-warn)" }}>{vals.dcDelError}</div>
+          </div>
+          <div style={{ padding: "14px 22px", borderTop: "1px solid var(--color-divider)", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="btn" onClick={vals.dcDelCancel} style={{ fontSize: "12.5px", padding: "8px 15px", cursor: "pointer", color: "var(--color-neutral-400)" }}>{"Keep it"}</div>
+            <div className="btn" onClick={vals.dcDelConfirm} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.dcDelWorking ? "default" : "pointer", color: "var(--st-warn)", border: "1px solid var(--st-warn)", borderRadius: "8px", opacity: vals.dcDelWorking ? "0.6" : "1" }}>{vals.dcDelBusyLabel}</div>
           </div>
         </div>
       </div>
