@@ -428,3 +428,44 @@ test('delete calls DELETE without confirm first, reports what is attached, then 
   assert.match(c.state.toast, /Deleted Bishopsgate Tower/);
   cleanup();
 });
+
+test("a building is created in the company being VIEWED, not the signed-in one", async () => {
+  // A superadmin looking at another company created a building and it vanished: the create
+  // body carried no organization_id, so the service filed it under the caller's own company,
+  // while the page that created it reads scoped to the company on screen. Every read here
+  // already sends the viewed company; the write must agree with them.
+  const { setActingOrg } = await import('../src/api/client.js');
+  const VIEWED = '5e5f47ab-ae04-55d4-ae64-f784076be886';
+  let sent = null;
+  handlers['POST /backend/ops-intelligence/api/energy/buildings'] = (_u, opts) => {
+    sent = JSON.parse(opts.body);
+    return [201, { building_id: 'b-new', building_code: 'B-101', stored_as: {} }];
+  };
+  handlers['GET /backend/ops-intelligence/api/energy/buildings'] = () => BUILDINGS_ENVELOPE([]);
+
+  setActingOrg(VIEWED);
+  try {
+    c.renderVals().addBuilding();
+    c.bcSet('site_name', 'Harbour Point');
+    await c.bcSubmit();
+  } finally {
+    setActingOrg(null);
+  }
+  assert.equal(sent.organization_id, VIEWED,
+    'the building belongs to the company on screen, not to whoever is signed in');
+  assert.equal(sent.site_name, 'Harbour Point');
+});
+
+test("with no company being viewed the body names none, and the service falls back", async () => {
+  let sent = null;
+  handlers['POST /backend/ops-intelligence/api/energy/buildings'] = (_u, opts) => {
+    sent = JSON.parse(opts.body);
+    return [201, { building_id: 'b-new', building_code: 'B-01', stored_as: {} }];
+  };
+  handlers['GET /backend/ops-intelligence/api/energy/buildings'] = () => BUILDINGS_ENVELOPE([]);
+  c.renderVals().addBuilding();
+  c.bcSet('site_name', 'Ashgrove Court');
+  await c.bcSubmit();
+  assert.equal('organization_id' in sent, false,
+    'naming no company is different from naming the wrong one — the service falls back to the caller');
+});

@@ -308,6 +308,16 @@ export const buildingsCrudMethods = {
     ['city', 'postcode', 'metering_route', 'building_code', 'site_id'].forEach((k) => {
       if (String(f[k] || '').trim()) body[k] = String(f[k]).trim();
     });
+    // The company being VIEWED, which every read on this page already sends. Without it the
+    // service falls back to the caller's own company, so a superadmin viewing as another
+    // one filed the building under themselves — and the page they created it on, scoped to
+    // the company they were looking at, then did not show it. The building was not lost; it
+    // was in a company they were not looking at, which is worse than an error.
+    //
+    // Safe for everyone else: naming your own company is a no-op, and naming another is
+    // refused with 403 wrong_organization rather than honoured (access.organization_for).
+    const org = currentOrgId();
+    if (org) body.organization_id = org;
     return body;
   },
 
