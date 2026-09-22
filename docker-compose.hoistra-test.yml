@@ -1,0 +1,93 @@
+# Point the LOCAL stack at the Azure hoistra_test database. Production stays where it is.
+#
+# Why this file exists
+# -------------------
+# Both databases live on the same Azure server, and docker-compose.single-url.local.yml feeds
+# every service ${PLENUM_DB_DSN} from .env — which names plenum_agent. So the "local" stack as
+# documented reads and writes production, with SEED_DEFAULT_PLENUM_ORG, SEED_APPROVAL_DEMO and
+# AUTO_SEED_UK_PACK all true, all of which write. This overlay names hoistra_test explicitly, so
+# .env cannot reach the services and nothing here can touch plenum_agent.
+#
+# The deployed Azure container app is unaffected: it carries its own environment and never reads
+# this file or this repository's .env.
+#
+# The DSN is NOT written here
+# ---------------------------
+# It carries the database password and this repository is public, so the value comes from
+# ${HOISTRA_TEST_DSN} in the gitignored root .env. Add it there as the plenum_agent DSN with the
+# database name changed:
+#
+#   HOISTRA_TEST_DSN=postgresql+asyncpg://USER:PASSWORD@plenum-agentic-ai.postgres.database.azure.com:5432/hoistra_test
+#
+# Compose fails loudly if it is unset, which is the intended behaviour: a silent fallback here
+# would be a fallback to production.
+#
+# Every spelling, on every service
+# --------------------------------
+# apps/backend/.env is loaded as an env_file and defines the Azure DSN under BOTH `db_url` and
+# `DB_URL`. To compose those are two different variables, and pydantic-settings matches case
+# insensitively, so overriding one leaves the other in the container still pointing at production
+# and which one the service reads is down to iteration order. Setting all four removes the
+# question. This is the same reasoning as docker-compose.local-db.yml, against a remote database.
+#
+# Usage — note --no-deps
+# ----------------------
+# --no-deps stops compose starting its own postgres on 5432. There is no local database in this
+# arrangement: every service talks to Azure.
+#
+#   docker compose \
+#     -f docker-compose.single-url.local.yml \
+#     -f docker-compose.dev-ports.yml \
+#     -f docker-compose.hoistra-test.yml \
+#     up -d --no-deps redis connector-app backend-app schema-mapper-app \
+#                     svc-udr svc-deepagents svc-operations-intelligence
+#
+# Check what a service actually connected to before trusting a screen:
+#   docker compose -f docker-compose.single-url.local.yml -f docker-compose.hoistra-test.yml \
+#     exec svc-operations-intelligence sh -c 'echo $DATABASE_URL'
+#
+# What to expect on first boot
+# ----------------------------
+# hoistra_test holds its users and organisations and nothing else. The UK, UAE and US certificate
+# packs and the verification sources re-seed themselves at startup, so compliance has its rule book
+# back without anyone running anything. Everything else arrives by ingestion.
+
+x-hoistra-test-db: &hoistra_test_db ${HOISTRA_TEST_DSN:?set HOISTRA_TEST_DSN in .env — refusing to fall back to plenum_agent}
+
+x-db-env: &db_env
+  DATABASE_URL: *hoistra_test_db
+  DB_URL: *hoistra_test_db
+  db_url: *hoistra_test_db
+  PLENUM_DB_URL: *hoistra_test_db
+
+services:
+  connector-app:
+    environment:
+      <<: *db_env
+
+  backend-app:
+    environment:
+      <<: *db_env
+      # Off, or the container crash-loops before it serves anything: the seed script targets an
+      # older shape of plenum_cafm.work_orders. The approvals rail reads approvals_queue_items,
+      # and with no rows it says nothing is waiting, which is true.
+      SEED_APPROVAL_DEMO: "false"
+
+  schema-mapper-app:
+    environment:
+      <<: *db_env
+
+  svc-udr:
+    environment:
+      <<: *db_env
+
+  svc-deepagents:
+    environment:
+      <<: *db_env
+
+  svc-operations-intelligence:
+    environment:
+      <<: *db_env
+      # The organisation the three accounts in hoistra_test belong to, and the one an ingest
+      # lands in when nothing else names a company.
+      AUTH_DEFAULT_ORGANIZATION_ID: "00000000-0000-0000-0000-000000000001"
