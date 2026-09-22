@@ -708,6 +708,65 @@ async def get_building(
     return {"ok": False, "error": "building_not_found", "site_id": needle}
 
 
+async def resolve_building_id(
+    session: AsyncSession,
+    identifier: Any,
+    *,
+    organization_id: UUID | None = None,
+) -> UUID | None:
+    """The building's own id, given either that id or the code a person reads off the page.
+
+    A building has two names in this system: the uuid the rows key on, and the short code
+    (``B-001``) that every screen and every document shows. Routes that accept only the uuid
+    refuse the one people actually have, and the refusal reads as "that is not a uuid" -
+    which describes the string rather than the problem. Resolving first means the caller may
+    hand over whichever one it holds, and a building that is genuinely gone is reported as
+    missing rather than as malformed.
+
+    Returns None when nothing matches, and also when the code matches more than one building
+    - two buildings sharing a code is a data fault, and picking one would hide it.
+    """
+    ident = str(identifier or "").strip()
+    if not ident:
+        return None
+    shape = (await building_rollup.graph_shape(session))["buildings"]
+    if not shape["exists"]:
+        return None
+    key, cols = shape["key"], shape["columns"]
+
+    try:
+        ident_uuid: UUID | None = UUID(ident)
+    except (ValueError, TypeError):
+        ident_uuid = None
+
+    org_sql, params = "", {"ident": ident}
+    if organization_id is not None and "organization_id" in cols:
+        org_sql = " AND organization_id::text = :org"
+        params["org"] = str(organization_id)
+
+    # The uuid is checked for existence rather than trusted: a deleted building must answer
+    # "no such building", not an empty graph that reads as a building with nothing in it.
+    if ident_uuid is not None:
+        sql = f"SELECT {key}::text FROM plenum_cafm.buildings WHERE {key}::text = :ident{org_sql}"
+    elif "building_code" in cols:
+        sql = (f"SELECT {key}::text FROM plenum_cafm.buildings "
+               f"WHERE upper(building_code) = upper(:ident){org_sql} LIMIT 2")
+    else:
+        return None
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(sql), params)).all()
+    except Exception as exc:  # noqa: BLE001 - a lookup must never raise at a caller
+        log.warning("buildings.resolve_failed", error=str(exc)[:200], identifier=ident[:60])
+        return None
+    if len(rows) != 1:
+        return None
+    try:
+        return UUID(str(rows[0][0]))
+    except (ValueError, TypeError):
+        return None
+
+
 async def site_to_buildings(session: AsyncSession) -> dict[str, list[str]]:
     """The energy tables' ``site_id`` -> the ``buildings.building_id``(s) on that site.
 

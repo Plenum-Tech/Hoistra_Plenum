@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Response,
+                     UploadFile, status)
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -566,6 +567,46 @@ async def graph_tables(session: AsyncSession = Depends(get_session)):
     return await bld_tree.graph_tables(session)
 
 
+async def _building_or_404(
+    session: AsyncSession,
+    s: access.Scope,
+    identifier: str,
+) -> UUID:
+    """The building this request is about, named by its id OR by the code on the screen.
+
+    Every screen and every certificate shows the short code, so a route that accepts only
+    the uuid refuses the identifier people actually hold - and it refuses it with
+    "building_id is not a UUID", which describes the string rather than the problem. A
+    client retrying on that error cannot tell that it should stop, which is how one stale
+    building code turned into a request loop.
+
+    An id that IS a uuid takes exactly the path it always did: access is checked first, so a
+    caller who is not allocated to a building is refused without learning whether it exists.
+    Only a non-uuid is looked up, and only within the caller's own company - so the lookup
+    can reveal nothing the caller could not already list.
+    """
+    ident = str(identifier or "").strip()
+    try:
+        as_uuid: UUID | None = UUID(ident)
+    except (ValueError, TypeError):
+        as_uuid = None
+    if as_uuid is not None:
+        access.assert_building(s, as_uuid, action="read")
+        return as_uuid
+
+    resolved = await bld_svc.resolve_building_id(
+        session, ident, organization_id=s.organization_id
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"ok": False, "error": "No building with that id or code.",
+                    "reason": "building_not_found", "building": ident},
+        )
+    access.assert_building(s, resolved, action="read")
+    return resolved
+
+
 @router.get("/buildings/{building_id}/graph")
 async def building_graph(
     building_id: str,
@@ -573,7 +614,6 @@ async def building_graph(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
-    access.assert_building(s, building_id, action="read")
     """Everything hanging off one building, nested as the graph is written.
 
         buildings
@@ -593,7 +633,8 @@ async def building_graph(
     cannot tell the two apart will say "nothing billed here" about a building that has
     invoices.
     """
-    out = await bld_tree.building_tree(session, building_id)
+    bid = await _building_or_404(session, s, building_id)
+    out = await bld_tree.building_tree(session, str(bid))
     if not out.get("ok"):
         response.status_code = int(out.get("status") or 400)
     return out
@@ -606,7 +647,6 @@ async def building_cost_drivers(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
-    access.assert_building(s, building_id, action="read")
     """Which plant is driving spend on this building, ranked by how far over contract.
 
     Ranked on the gap between billed and contracted rather than on billed alone — the
@@ -615,7 +655,8 @@ async def building_cost_drivers(
     is in the building total, but it cannot be blamed on a piece of plant, and spreading it
     across the ranking would invent an attribution nobody recorded.
     """
-    return await cost.building_cost_drivers(session, building_id, limit=limit)
+    bid = await _building_or_404(session, s, building_id)
+    return await cost.building_cost_drivers(session, str(bid), limit=limit)
 
 
 @router.get("/assets/{asset_id}/work-history")
