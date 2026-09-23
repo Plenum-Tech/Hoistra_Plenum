@@ -202,13 +202,24 @@ async def mees_summary(
         params["bids"] = ids
     rows = (await session.execute(text(f"""
         SELECT DISTINCT ON (c.building_id)
-               c.building_id::text, b.name, b.gross_area_sqft, c.energy_rating, c.energy_score,
+               c.building_id::text, b.name, b.gross_area_sqft,
+               -- The band is read from energy_rating, and from result when that is empty and
+               -- result is a single letter A to G. An EPC arriving with its band under result
+               -- had no rating here at all, so the MEES tiles counted a band-C building as
+               -- neither below E nor below B: zero and zero, over a certificate that said C.
+               -- The regex is the guard: result also carries Satisfactory and Pass on other
+               -- certificate types, and none of those is a band.
+               coalesce(c.energy_rating,
+                        CASE WHEN c.result ~ '^[A-Ga-g]$' THEN upper(c.result) END) AS energy_rating,
+               c.energy_score,
                c.expiry_date, c.certificate_number, c.id::text AS certificate_id
           FROM plenum_cafm.compliance_certificates c
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = c.building_id
          WHERE {' AND '.join(where)}
-         ORDER BY c.building_id, (c.energy_rating IS NULL), c.issue_date DESC NULLS LAST,
-                  c.created_at DESC
+         ORDER BY c.building_id,
+                  (coalesce(c.energy_rating,
+                            CASE WHEN c.result ~ '^[A-Ga-g]$' THEN c.result END) IS NULL),
+                  c.issue_date DESC NULLS LAST, c.created_at DESC
     """), params)).mappings().all()
 
     buildings = []

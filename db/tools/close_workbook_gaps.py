@@ -75,13 +75,17 @@ COMPLIANCE_HEADER = [
     "inspector_accreditation_number", "issue_date", "expiry_date", "next_due_date",
     "inspection_frequency_months", "result", "status", "country_code", "defects_found",
     "remedial_actions", "remedial_status",
+    # What the MEES tile reads. Blank on everything but an EPC.
+    "energy_rating", "energy_score",
 ]
 
 
 def _c(num, typ, scope, bldg, asset, vcode, vname, issuer, inspector, accred,
-       issued, expires, months, result, defects=None, remedial=None, rstatus=None):
+       issued, expires, months, result, defects=None, remedial=None, rstatus=None,
+       rating=None, score=None):
     return [num, typ, scope, bldg, asset, vcode, vname, issuer, inspector, accred,
-            issued, expires, expires, months, result, "valid", "GB", defects, remedial, rstatus]
+            issued, expires, expires, months, result, "valid", "GB", defects, remedial, rstatus,
+            rating, score]
 
 
 #: Certificates about a building or an asset in it, keyed by the building they belong to.
@@ -95,7 +99,7 @@ BY_BUILDING: dict[str, list[list]] = {
         # truncated number looks like a certificate and verifies as nothing.
         _c("0660-5580-7384-4815-3898", "EPC", "Building", "B-101", None, None, None,
            "Elmwood Energy Assessors", "Ruth Callaghan", "EPC/NDEA 0221847",
-           "2017-05-18", "2027-05-18", 120, "C"),
+           "2017-05-18", "2027-05-18", 120, "C", rating="C", score=74),
         _c("FAS-B-101-202603", "FIRE_ALARM_SERVICE", "Building", "B-101", None, "BRLT",
            "Brightline Electrical", "Brightline Electrical", "Owen Fletcher",
            "BAFE SP203-1 5581", "2026-03-02", "2026-09-02", 6, "Satisfactory",
@@ -128,7 +132,7 @@ BY_BUILDING: dict[str, list[list]] = {
            "2026-03-04", "2031-03-04", 60, "Satisfactory"),
         _c("0421-4815-1433-2575-9823", "EPC", "Building", "B-102", None, None, None,
            "Elmwood Energy Assessors", "Ruth Callaghan", "EPC/NDEA 0221847",
-           "2024-03-24", "2034-03-24", 120, "B"),
+           "2024-03-24", "2034-03-24", 120, "B", rating="B", score=84),
         _c("CP17-B-102-2026-0619", "CP17", "Building", "B-102", None, "MERI",
            "Meridian Mechanical Ltd", "Meridian Mechanical Ltd", "Sam Whitlock",
            "Gas Safe 559120", "2026-06-19", "2027-06-19", 12, "Pass"),
