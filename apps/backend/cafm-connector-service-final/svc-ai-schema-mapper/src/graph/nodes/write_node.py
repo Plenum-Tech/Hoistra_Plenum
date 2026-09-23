@@ -56,12 +56,14 @@ _SCHEMA = "plenum_cafm"
 #: the meter, and every finding it raises is written with a null building. Those findings are
 #: invisible on a building-scoped page and no EUI snapshot is produced at all, so the scan
 #: reports success over an empty screen.
-_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections")
+_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections",
+                           "compliance_certificates")
 
 #: Tables whose rows are READ for a building reference. meter_readings does not carry a
 #: building column of its own, but a reading sheet often names the site, and that is what
 #: decides whether a meter can be created for it.
-_BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readings")
+_BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readings",
+                         "building_sections", "compliance_certificates")
 
 #: Tables that can take their building from the asset they name, when they name no site.
 _BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
@@ -74,7 +76,8 @@ _BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
 #: first. For these tables that is the difference between rows that link and rows that do
 #: not, so the choice is made deliberately rather than left to whether an INSERT happens
 #: to fail.
-_NEEDS_RESOLUTION = frozenset({"assets", "work_orders", "energy_meters", "meter_readings"})
+_NEEDS_RESOLUTION = frozenset({"assets", "work_orders", "energy_meters", "meter_readings",
+                               "building_sections", "compliance_certificates"})
 _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
@@ -1456,6 +1459,7 @@ _NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
     # On 23 Sep 2026 that cost all 35,040 meter readings in one ingest — no building meant no
     # meter could be created, and meter_readings.meter_id is NOT NULL, so every row was rejected.
     "buildings": (("building_code",),),
+    "compliance_certificates": (("certificate_number",),),
     "vendors": (("vendor_code",), ("vendor_name",)),
     "ppm_visits": (("ppm_ref",),),
     "resources": (("engineer_id",), ("resource_code",)),
@@ -1815,6 +1819,7 @@ async def _apply_records_with_schema_alignment(
                 "maintenance_plans": ("assets", "buildings"),
                 "inspections": ("assets",),
                 "spare_parts": ("vendors",),
+                "compliance_certificates": ("buildings", "assets", "vendors"),
                 "work_order_parts": ("work_orders", "spare_parts"),
             }
             for _c, _ps in _CORE_PARENTS.items():
