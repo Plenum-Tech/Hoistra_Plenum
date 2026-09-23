@@ -71,6 +71,33 @@ PLAN: list[tuple[str, list[str]]] = [
         "asset_readings", "asset_documents", "asset_offline_log", "asset_warranties",
         "assets", "asset_reading_bands", "building_sections",
     ]),
+    # Invoices are contract-performance data about a vendor. With the vendors gone they are
+    # bills from nobody, and the scorecard was still counting them ("Invoices 1").
+    ("vendors · invoices", [
+        "invoice_verifications", "invoice_lines", "invoices",
+    ]),
+    # Figures derived from the rows above. Left behind, they are the previous run's numbers
+    # sitting under the new run's data — a scorecard for a vendor that no longer exists is
+    # what the Vendors page showed as "Vendor 6623", named by the only thing it had left, the
+    # id. vendor_score_weight_config is NOT here: it is how a vendor is scored, not a score.
+    ("derived · compliance and vendor run state", [
+        "compliance_risk_snapshots", "compliance_scan_runs", "vendor_monthly_scorecards",
+    ]),
+    # The uploaded files as the database records them. The ingest deduplicates on SHA-256
+    # against ingestion_documents, so leaving these means re-uploading the same PDFs is
+    # skipped as a duplicate and the document path cannot be tested at all. The pipeline
+    # tables that key on an ingestion go with it: they are the history of runs whose output
+    # has just been deleted. The blobs in Azure storage are not touched.
+    ("documents · ingested files and their pipeline history", [
+        "document_chunks", "documents",
+        "review_queue", "corrections_log", "ingestion_audit_log", "claude_api_usage",
+        "ingestion_documents",
+    ]),
+    # An empty portfolio has nothing awaiting a decision. Everything the queue was raised
+    # about is gone, so the whole queue goes, with the emails and tokens that hang off it.
+    ("approvals · the whole queue", [
+        "ops_email_log", "approval_action_tokens", "approvals_queue_items",
+    ]),
 ]
 
 #: Rows that point at something being deleted but must themselves survive: the reference is
@@ -167,9 +194,12 @@ async def main() -> None:
 
         print("\n  what remains\n")
         for t in ("organizations", "users", "buildings", "sites", "locations", "floors",
-                  "compliance_certificates", "documents",
+                  "compliance_verification_sources", "country_certificate_packs",
+                  "vendor_score_weight_config",
+                  "compliance_certificates", "documents", "ingestion_documents",
                   "assets", "energy_meters", "meter_readings", "work_orders", "ppm_visits",
-                  "vendors", "spare_parts", "approvals_queue_items"):
+                  "vendors", "invoices", "vendor_monthly_scorecards", "spare_parts",
+                  "approvals_queue_items"):
             if t in present:
                 n = await c.fetchval(f"SELECT count(*) FROM plenum_cafm.{t}")
                 print(f"    {t:30} {n:>8,}")
