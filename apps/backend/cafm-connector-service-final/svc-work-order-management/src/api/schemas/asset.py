@@ -49,10 +49,29 @@ class AssetResponse(BaseModel):
     condition_score:      Optional[int] = None
     condition_provenance: Optional[dict] = None
     condition_updated_at: Optional[datetime] = None
+    #: What the failure model and the value-at-risk figure are computed from. Returned in the
+    #: LIST response on purpose: the page bands every asset at once, and a field it has to open
+    #: each asset to read cannot be used for that. Without these the register showed "Est. asset
+    #: value at risk GBP0 — 0 of 12 assets contributing" over assets that carried all of it.
+    replacement_value: Optional[float] = None
+    design_life_years: Optional[float] = None
+    wear_coefficient:  Optional[float] = None
+    #: The section of the building the asset sits in, so the page can group without a second call.
+    section_id:        Optional[str] = None
+    #: The vendor who holds the asset, for the same reason.
+    vendor_id:         Optional[str] = None
 
     model_config = {"from_attributes": True}
 
-    @field_validator("asset_id", "building_id", "category_id", "location_id", mode="before")
+    @field_validator("replacement_value", "design_life_years", "wear_coefficient",
+                     mode="before")
+    @classmethod
+    def coerce_decimal(cls, v):
+        """Numeric comes back as Decimal, which is not JSON."""
+        return float(v) if v is not None else v
+
+    @field_validator("asset_id", "building_id", "category_id", "location_id", "section_id",
+                     "vendor_id", mode="before")
     @classmethod
     def coerce_to_str(cls, v) -> str:
         return str(v) if v is not None else v
