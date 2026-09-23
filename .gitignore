@@ -14,6 +14,12 @@ __pycache__/
 .env.*.local
 apps/backend/.env
 apps/frontend/.env.local
+# Copies of an env file carry the same secrets as the original and are missed by the
+# rules above, which match exact names. 23 Sep 2026: two .env.local.bak-* files sat
+# untracked-but-committable in a public repo holding an Anthropic key and an Azure
+# client secret.
+.env*.bak*
+*.env.bak*
 apps/backend/config.toml
 
 # tooling
