@@ -79,7 +79,10 @@ BY_BUILDING: dict[str, list[list]] = {
         _c("EICR-B-101-2026-0917", "EICR", "Building", "B-101", None, "BRLT",
            "Brightline Electrical", "Brightline Electrical", "Owen Fletcher", "NICEIC 021874",
            "2026-09-17", "2031-09-17", 60, "Satisfactory"),
-        _c("0660-5580-7384-4815-38", "EPC", "Building", "B-101", None, None, None,
+        # The full twenty-digit RRN, not a shortened one. It is the key the GOV.UK register is
+        # queried by — energy_verification deep-links to /energy-certificate/<RRN> — so a
+        # truncated number looks like a certificate and verifies as nothing.
+        _c("0660-5580-7384-4815-3898", "EPC", "Building", "B-101", None, None, None,
            "Elmwood Energy Assessors", "Ruth Callaghan", "EPC/NDEA 0221847",
            "2017-05-18", "2027-05-18", 120, "C"),
         _c("FAS-B-101-202603", "FIRE_ALARM_SERVICE", "Building", "B-101", None, "BRLT",
@@ -101,7 +104,7 @@ BY_BUILDING: dict[str, list[list]] = {
         _c("EICR-B-102-2026-0304", "EICR", "Building", "B-102", None, "BRLT",
            "Brightline Electrical", "Brightline Electrical", "Owen Fletcher", "NICEIC 021874",
            "2026-03-04", "2031-03-04", 60, "Satisfactory"),
-        _c("0421-4815-1433-2575-98", "EPC", "Building", "B-102", None, None, None,
+        _c("0421-4815-1433-2575-9823", "EPC", "Building", "B-102", None, None, None,
            "Elmwood Energy Assessors", "Ruth Callaghan", "EPC/NDEA 0221847",
            "2024-03-24", "2034-03-24", 120, "B"),
         _c("CP17-B-102-2026-0619", "CP17", "Building", "B-102", None, "MERI",
