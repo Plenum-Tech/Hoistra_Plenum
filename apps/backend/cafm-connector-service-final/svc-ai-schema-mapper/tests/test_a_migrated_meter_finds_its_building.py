@@ -481,3 +481,54 @@ class TestIngestingTheSameMeterTwice:
         branch = src.split('if safe_table == "energy_meters":', 1)[1].split("\n\n", 1)[0]
         assert "_meters.find(" in branch, "a meter row must be matched against the register"
         assert 'safe_row["id"] = ' in branch, "a match must be reused as the row's own id"
+
+
+class TestLookingForAMeterDoesNotStopItBeingMade:
+    """The meter sheet and the reading sheet share one resolver, and one cache.
+
+    resolve() answers from that cache BEFORE it looks anything up or creates anything, so a null
+    left in it is final for the rest of the run. find() used to write its misses there, which
+    made this sequence fatal:
+
+      1. the Energy_Meters sheet asks find('nb-b-101-e0') — not on record yet — caching None
+      2. the writer inserts that meter
+      3. the Meter_Readings rows ask resolve('nb-b-101-e0') — the cached None comes straight
+         back, with no lookup and no create
+
+    meter_id is NOT NULL, so all 35,040 readings were rejected against a meter that existed by
+    then. The log said "lookup and create both returned nothing", and it was right: neither ran.
+
+    A hit is safe to remember — a meter does not stop existing mid-run. A miss is true only at
+    the instant it is asked, because the caller asks precisely because it is about to insert one.
+    """
+
+    def test_a_miss_does_not_stop_a_later_resolve_creating_the_meter(self):
+        db = FakeDb([])                                  # nothing on record yet
+        r = resolver(db)
+        assert run(r.find("NB-B-101-E0")) is None        # the meter sheet asks first
+        got = run(r.resolve("NB-B-101-E0", building_id=HARBOUR, meter_type="electricity",
+                            mpan="NB-B-101-E0"))
+        assert got is not None, "the cached miss must not survive into resolve()"
+        assert db.creates, "resolve() must still be free to create the meter"
+
+    def test_a_miss_then_an_insert_then_a_resolve_finds_the_inserted_meter(self):
+        """The real order of a workbook: sheet asks, writer inserts, readings resolve."""
+        db = FakeDb([])
+        r = resolver(db)
+        run(r.find("NB-B-101-E0"))
+        db.meters.append((ELEC, "NB-B-101-E0", None))    # the Energy_Meters row lands
+        assert run(r.resolve("NB-B-101-E0", building_id=HARBOUR)) == ELEC
+        assert not db.creates, "it was already there; creating a second is the other bug"
+
+    def test_a_hit_is_still_cached_so_a_year_of_readings_costs_one_read(self):
+        db = FakeDb([(ELEC, "NB-B-101-E0", None)])
+        r = resolver(db)
+        assert run(r.find("NB-B-101-E0")) == ELEC
+        for _ in range(50):
+            assert run(r.resolve("NB-B-101-E0", building_id=HARBOUR)) == ELEC
+        assert db.reads == 1, "the whole point of the cache"
+
+    def test_find_still_never_creates(self):
+        db = FakeDb([])
+        assert run(resolver(db).find("NB-B-101-E0")) is None
+        assert db.creates == []

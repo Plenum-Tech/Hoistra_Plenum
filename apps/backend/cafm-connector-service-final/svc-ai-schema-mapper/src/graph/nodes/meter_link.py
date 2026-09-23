@@ -322,7 +322,17 @@ class MeterResolver:
         if key in self._cache:
             return self._cache[key]
         found, _ambiguous = await self._existing(key)
-        self._cache[key] = found
+        # A HIT is cached; a MISS is not, and the difference is the whole of this method's
+        # relationship with resolve(). resolve() answers from this cache before it looks
+        # anything up or creates anything, so a null left here is final for the rest of the run.
+        #
+        # "Not on record" is only true at this instant: the caller asked because it is about to
+        # INSERT that meter. Caching the miss made the reading rows that follow unplaceable —
+        # resolve() returned the cached null without a lookup or a create, meter_id stayed null,
+        # and all 35,040 readings were rejected against a meter that did by then exist. Found on
+        # 23 Sep 2026, introduced by this method the same day.
+        if found is not None:
+            self._cache[key] = found
         return found
 
     async def _existing(self, key: str) -> tuple[str | None, bool]:
