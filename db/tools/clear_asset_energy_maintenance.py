@@ -15,10 +15,15 @@ WHAT IS KEPT, and why:
                               test. The workbook's Buildings sheet re-states them anyway.
   floors                      building_sections are cleared; floors are the fabric the sections
                               hang off and nothing re-creates them
-  compliance_certificates,    a different page and not in scope. Eight certificates reference an
-  documents                   asset, so those references are set to NULL rather than the
-                              certificates deleted — a certificate outlives the asset record it
-                              was once attached to.
+  documents                   the uploaded files themselves. A certificate row is cleared with the
+                              rest (see below); the document it was extracted from is not, because
+                              the ingest does not recreate files.
+
+WHAT CHANGED ON 23 SEP 2026: compliance_certificates is now cleared too. It was kept while the
+workbooks carried no certificates, because clearing it would have destroyed rows nothing could
+put back. The workbooks now carry a Compliance_Certificates sheet that states every certificate
+on record, so a fresh ingest restores them - and leaving them behind meant the compliance figures
+after an ingest were partly yesterday's, which is the thing this script exists to prevent.
 
 Order matters: a child row is deleted before the parent it points at, or the foreign key stops
 it. Everything runs in ONE transaction, so a failure anywhere leaves the database untouched.
@@ -59,6 +64,9 @@ PLAN: list[tuple[str, list[str]]] = [
         "meter_readings", "energy_anomalies", "eui_snapshots",
         "building_energy_profiles", "energy_ratings", "energy_meters", "meters",
     ]),
+    ("compliance", [
+        "compliance_certificates",
+    ]),
     ("assets", [
         "asset_readings", "asset_documents", "asset_offline_log", "asset_warranties",
         "assets", "asset_reading_bands", "building_sections",
@@ -67,13 +75,11 @@ PLAN: list[tuple[str, list[str]]] = [
 
 #: Rows that point at something being deleted but must themselves survive: the reference is
 #: cleared instead. A certificate is a record in its own right and outlives the asset row.
-DETACH: list[tuple[str, str]] = [
-    ("compliance_certificates", "asset_id"),
-]
+DETACH: list[tuple[str, str]] = []
 
 #: Queue items raised BY the things being deleted. Leaving them behind is how the approvals
 #: queue filled with 174 items pointing at nothing earlier in this project.
-APPROVAL_PREFIXES = ("energy_anomaly_", "contract_params_")
+APPROVAL_PREFIXES = ("energy_anomaly_", "contract_params_", "certificate")
 
 
 def dsn() -> str:
