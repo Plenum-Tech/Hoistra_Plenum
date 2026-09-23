@@ -1815,14 +1815,17 @@ async def _apply_records_with_schema_alignment(
                     # floor produces rows identical but for that, and without it every one of
                     # them is created as the building's main meter — so the building's
                     # consumption is counted once per floor.
+                    # Anything that sits in a section names it the same way, so the lookup is
+                    # not the meter's alone. An asset carries one too, and without it the
+                    # Assets page cannot group it under the part of the building it is in.
+                    if "section_id" in db_cols and not looks_like_uuid(safe_row.get("section_id")):
+                        _sid = await _section_for(safe_row.get("building_id"), section_hint(row))
+                        if _sid:
+                            safe_row["section_id"] = _sid
+                        else:
+                            safe_row.pop("section_id", None)
+
                     if safe_table == "energy_meters":
-                        if not looks_like_uuid(safe_row.get("section_id")):
-                            _sid = await _section_for(safe_row.get("building_id"),
-                                                      section_hint(row))
-                            if _sid:
-                                safe_row["section_id"] = _sid
-                            else:
-                                safe_row.pop("section_id", None)
                         if safe_row.get("is_sub_meter") in (None, ""):
                             safe_row["is_sub_meter"] = is_sub_meter_for(row)
                         if not safe_row.get("meter_type"):
