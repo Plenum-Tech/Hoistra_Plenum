@@ -100,6 +100,10 @@ export function shapeLiveAnomaly(a, buildingsByUuid, metersById, equipmentByUuid
     id: a.id,
     building: b ? b.name : (a.site_id ? "Unattributed site" : "Unattributed"),
     buildingUuid: a.site_id || null,
+    // Which supply the finding was measured on. Several rules firing on one meter are
+    // different readings of the same consumption, so the total has to know they share a
+    // meter before it decides whether to add them.
+    meterId: a.meter_id || null,
     cc: b ? b.cc : "—",
     // No asset resolved: name the meter instead of pretending the reading is whole-building
     // when it is not, and pretending it is whole-building when a meter is on record.

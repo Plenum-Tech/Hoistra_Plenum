@@ -18,6 +18,35 @@ import { moneyGBP, IMPLEMENTED_RULE_IDS } from './energyLive.js';
 
 const impactNum = (a) => (typeof a.impactN === "number" ? a.impactN : parseInt(String(a.impact || "0").replace(/[^0-9]/g, ""), 10) || 0);
 
+// The same rule the API uses — engines/energy/anomaly_rollup.py, "rule:largest-single-finding/v1".
+//
+// Several rules fire on one meter in one window and each annualises the excess it sees, but
+// they read the SAME consumption from different angles: an overnight floor that has drifted up
+// shows as baseline drift, as a non-occupancy spike and as a weekend spike, and the hours one
+// covers are hours another covers too. Adding them counts that energy two and three times.
+// Measured on hoistra_test: five findings on Harbour Point's electricity supply summed to 103%
+// of everything the meter used in a year — more waste than it consumed.
+//
+// So a meter contributes its largest single finding, and a building its largest meter, because
+// a parent and a sub-meter on one supply are the same mistake a level up. Buildings then add,
+// being genuinely separate supplies. A finding with no priced impact is left out rather than
+// counted as zero, which is a different claim.
+const anomalyTotal = (list) => {
+  const byBuilding = {};
+  (list || []).forEach((a) => {
+    const amount = impactNum(a);
+    if (!(amount > 0)) return;
+    const bk = a.buildingUuid || "__none";
+    const mk = a.meterId || ("__whole:" + bk);
+    const b = byBuilding[bk] || (byBuilding[bk] = {});
+    if (!(b[mk] >= amount)) b[mk] = amount;
+  });
+  return Object.keys(byBuilding).reduce((total, bk) => {
+    const meters = byBuilding[bk];
+    return total + Object.keys(meters).reduce((mx, mk) => Math.max(mx, meters[mk]), 0);
+  }, 0);
+};
+
 // Same page size the Buildings page uses. A live portfolio can put 600+ buildings in one
 // country group — rendering all of them inline was the actual bug report.
 const ENERGY_PAGE_SIZE = 20;
@@ -113,7 +142,7 @@ export const energyMethods = {
     const allAnoms = this.enAnomalies();
     const anomCc = (a) => a.cc;
     const anoms = sc.isAll ? allAnoms : allAnoms.filter((a) => sc.sel.indexOf(anomCc(a)) > -1);
-    const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
+    const anomSum = anomalyTotal(anoms);
     const cc0 = sc.sel[0];
     // Say the rate that was actually charged. Where the buildings in scope carry their own
     // contracted rates and those differ, one number would be a fiction, so the range is named.
@@ -176,7 +205,7 @@ export const energyMethods = {
         { l: "Cost above benchmark / year", v: eui === null ? "—" : money(excess),
           s: eui === null ? "no EUI reading to compare against a benchmark" : "(EUI − reference) × area × tariff",
           tone: eui === null ? "dormant" : "risk" },
-        { l: "Anomaly cost / year", v: money(anomSum), s: anoms.length + (anoms.length === 1 ? " anomaly" : " anomalies") + " · deviation from own baseline × tariff", tone: anoms.length > 4 ? "warn" : "ok" }
+        { l: "Anomaly cost / year", v: money(anomSum), s: anoms.length + (anoms.length === 1 ? " anomaly" : " anomalies") + " · largest finding per meter, not added — overlapping rules read the same consumption", tone: anoms.length > 4 ? "warn" : "ok" }
       ].map((c) => ({ l: c.l, v: c.v, s: c.s, color: c.tone === "dormant" ? "var(--color-neutral-500)" : t(c.tone).color })),
 
       enAvail: (sc.single ? E.avail : ENC_MIXED_AVAIL).map((x) => ({ label: x })),
@@ -337,7 +366,7 @@ export const energyMethods = {
       const n = x.all.length + (x.all.length === 1 ? " anomaly" : " anomalies");
       const r = roll && (roll[String(b.buildingId)] || roll[String(b.uuid)] || roll[String(b.id)]);
       if (!r || !r.headline) {
-        return n + " · " + money(x.all.reduce((q, a) => q + impactNum(a), 0)) + " · added, may double count";
+        return n + " · " + money(anomalyTotal(x.all)) + " · largest finding per meter, not added";
       }
       const head = money(r.headline.amount) + " " + r.headline.label.toLowerCase();
       // Only worth saying when adding would actually have given something different.
@@ -364,7 +393,7 @@ export const energyMethods = {
         const excess = hasEui ? Math.max(0, b.euiN - b.benchN) * m2 * (typeof b.tariffN === "number" && b.tariffN > 0 ? b.tariffN : (ENC[cc] || ENC.UK).tariff) : 0;
         const all = allAnoms.filter((a) => a.buildingUuid && a.buildingUuid === b.uuid);
         const anoms = all.filter(anomHit);
-        const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
+        const anomSum = anomalyTotal(anoms);
         return { b: b, hasEui: hasEui, excess: excess, all: all, anoms: anoms, anomSum: anomSum };
       }).filter((x) => {
         if (f === "Over benchmark") return x.hasEui && x.b.euiN > x.b.benchN;

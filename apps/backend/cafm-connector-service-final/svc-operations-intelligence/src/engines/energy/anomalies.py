@@ -505,6 +505,53 @@ async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime
     return [(r[0], r[1], float(r[2]), float(r[3])) for r in rows]
 
 
+def _observe_again(existing, hit: dict[str, Any], *, window_end: datetime,
+                   window_start: datetime, tariff: float, currency: str) -> None:
+    """Fold a fresh sighting into the finding it continues.
+
+    The finding keeps its identity — when it was first detected, and its approval — and takes
+    the newest measurement of how it stands. The money is a rate, kWh per year at the observed
+    deviation, so the current estimate is the newest one rather than the largest or the sum;
+    summing rates over overlapping windows is what produced a building whose anomalies cost
+    more than its entire energy bill.
+
+    Nothing is lost: the peak and the number of sightings are kept on detail_json, so a fault
+    that was worse in February than it is today still says so.
+    """
+    seen = dict(existing.detail_json or {})
+    history = dict(seen.get("recurrence") or {})
+    prior_peak = history.get("peak_financial_gbp")
+    amount = hit.get("financial_gbp")
+    peak = max([v for v in (prior_peak, float(existing.financial_gbp or 0) or None, amount)
+                if v is not None], default=None)
+    history.update({
+        "observations": int(history.get("observations") or 1) + 1,
+        "first_window_end": history.get("first_window_end")
+                            or (existing.window_end.isoformat() if existing.window_end else None),
+        "latest_window_end": window_end.isoformat(),
+        "peak_financial_gbp": peak,
+        "peak_metric_pct": max([v for v in (history.get("peak_metric_pct"),
+                                            float(existing.metric_pct or 0),
+                                            float(hit["metric_pct"]))
+                                if v is not None], default=None),
+    })
+    seen["recurrence"] = history
+    seen.update({k: v for k, v in (hit.get("detail") or {}).items()})
+    seen["impact"] = hit.get("impact")
+
+    # The window grows to cover everything this finding has been seen across.
+    if existing.window_start is None or window_start < _aware(existing.window_start):
+        existing.window_start = window_start
+    existing.window_end = window_end
+    existing.metric_pct = Decimal(str(hit["metric_pct"]))
+    existing.excess_kwh = _dec(hit.get("excess_kwh"))
+    existing.annualised_excess_kwh = _dec(hit.get("annualised_excess_kwh"))
+    existing.financial_gbp = _dec(amount)
+    existing.currency = hit.get("currency") or currency
+    existing.tariff_used = Decimal(str(tariff))
+    existing.detail_json = seen
+
+
 async def scan_meter_anomalies(
     session: AsyncSession,
     *,
@@ -626,35 +673,43 @@ async def scan_meter_anomalies(
                             "impact": hit.get("impact"), "dry_run": True})
             continue
 
-        # A spike stays in the readings, so every later scan detects it again. Without this
+        # A fault stays in the readings, so every later scan detects it again. Without this
         # guard each run wrote another anomaly AND another approval for the same event: one
         # weekend appeared five times, and the August report priced it five times over.
-        # Re-detecting a live event is not news — note that we saw it again and move on.
-        # Re-detecting a live event is not news: the spike stays in the readings, so every
-        # later scan finds it again, and without this each run wrote another anomaly AND
-        # another approval for the same weekend.
         #
-        # A historical sweep is the opposite case. The same rule firing in March and again
-        # in July is two events, and collapsing them would report one. So when the run is
-        # dated, the window is part of what makes a finding distinct.
-        _dedupe = [
-            EnergyAnomaly.meter_id == meter.id,
-            EnergyAnomaly.anomaly_type == hit["anomaly_type"],
-            EnergyAnomaly.metric_pct == Decimal(str(hit["metric_pct"])),
-            EnergyAnomaly.status.notin_(_SETTLED_STATUSES),
-        ]
-        if as_of is not None:
-            _dedupe.append(func.date(EnergyAnomaly.window_end) == _aware(as_of).date())
+        # What makes two detections the same finding is that they looked at overlapping time.
+        # The sweep steps a 35-day window forward 7 days, so consecutive windows share 28 days
+        # of readings and a standing fault is seen in every one of them — Harbour Point held 48
+        # rows for a single schedule fault, each annualised in full, summing to GBP576k for
+        # something costing about GBP20k a year. Overlap also says the thing the old guard
+        # wanted and could not express: the same rule firing in March and again in July looked
+        # at disjoint months, so it stays two events.
+        #
+        # metric_pct is deliberately NOT part of the key. It was meant to tell two different
+        # firings apart, but a drift that deepens weekly reports a new percentage every window
+        # and so slipped through anyway. Overlap decides identity; the percentage then says how
+        # the issue stands now, which is why it is updated below rather than matched on.
+        _new_window_start = _window_end - timedelta(days=35)
         existing = (
             await session.execute(
                 select(EnergyAnomaly)
-                .where(*_dedupe)
+                .where(
+                    EnergyAnomaly.meter_id == meter.id,
+                    EnergyAnomaly.anomaly_type == hit["anomaly_type"],
+                    EnergyAnomaly.status.notin_(_SETTLED_STATUSES),
+                    # Overlap. window_start is NULL on rows written before it was recorded,
+                    # so the test is on window_end alone: a finding whose window ended after
+                    # this one began was looking at some of the same readings.
+                    func.coalesce(EnergyAnomaly.window_end,
+                                  EnergyAnomaly.detected_at) >= _new_window_start,
+                )
                 .order_by(EnergyAnomaly.detected_at.desc())
                 .limit(1)
             )
         ).scalars().first()
         if existing is not None:
-            existing.window_end = _window_end
+            _observe_again(existing, hit, window_end=_window_end,
+                           window_start=_new_window_start, tariff=tariff, currency=currency)
             log.info(
                 "energy.anomaly.already_open",
                 meter_id=str(meter_id),
