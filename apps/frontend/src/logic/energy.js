@@ -64,9 +64,28 @@ export const energyMethods = {
 
   /* Energy scope. An empty selection means the whole portfolio; one country
      means the analysis can use that market's route and standard; two or more
-     means only what the markets share survives. */
+     means only what the markets share survives.
+
+     The markets are the ones the buildings on record are actually in. This used to be
+     the four packs the platform holds, which made every portfolio mixed: two buildings
+     both in the United Kingdom reported four markets in scope, and the page then
+     withheld the single ranking, the half-hourly pattern analysis and the regulatory
+     exposure number on the grounds that they do not survive a mix. There was no mix.
+     A pack existing is not a market being in scope.
+
+     Buildings with no country are deliberately not a market of their own — they stay in
+     scope under 'all countries' and drop out the moment a specific one is picked, which
+     is what the filter below already does. */
   enScope(s) {
-    const all = ["UK", "US", "AE", "SG"];
+    const packs = ["UK", "US", "AE", "SG"];
+    const onRecord = {};
+    (this.bldData() || []).forEach((b) => {
+      if (b && b.cc && packs.indexOf(b.cc) > -1) onRecord[b.cc] = true;
+    });
+    // Pack order, so the chips do not reshuffle as buildings load. Falling back to every
+    // pack only while the register is still empty: mid-load is not a portfolio.
+    const found = packs.filter((cc) => onRecord[cc]);
+    const all = found.length ? found : packs;
     const sel = (s.eScope || []).length ? s.eScope : all;
     return { all: all, sel: sel, single: sel.length === 1, isAll: !(s.eScope || []).length };
   },
