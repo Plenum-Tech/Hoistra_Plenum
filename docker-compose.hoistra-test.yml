@@ -79,6 +79,15 @@ services:
     environment:
       <<: *db_env
 
+  # The worker, not the app, runs the LangGraph nodes — including node 9, which is the one that
+  # WRITES. It was missing from this overlay, so it kept the base file's DB_URL and pointed at
+  # plenum_agent while every other service here pointed at hoistra_test. A migration answered in
+  # a test app would have written its rows into production. Found 23 Sep 2026 with a run parked
+  # one gate short of exactly that.
+  schema-mapper-worker:
+    environment:
+      <<: *db_env
+
   svc-udr:
     environment:
       <<: *db_env
