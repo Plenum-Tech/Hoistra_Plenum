@@ -110,8 +110,18 @@ async def company_usage(session: AsyncSession, organization_id: UUID) -> dict[st
              OR EXISTS (SELECT 1 FROM plenum_cafm.assets a WHERE a.building_id = b.building_id)
              OR EXISTS (SELECT 1 FROM plenum_cafm.floors f WHERE f.building_id = b.building_id))
     """), p)).scalar()
+    # c.country_code, qualified and deliberately the CERTIFICATE's. Unqualified this was
+    # ambiguous — both tables carry the column — and the endpoint returned a 500 the moment a
+    # company had one certificate. Qualifying it to the building would have fixed the crash and
+    # answered wrongly: buildings.country_code is null on every row in both databases, because a
+    # building records its country on plenum_cafm.locations. The console would then have shown a
+    # certificate count beside an empty country list and looked merely uninformative.
+    #
+    # The certificate's own country is the right figure here regardless: it names the regime the
+    # certificate was issued under, which is what a count of certificates is worth knowing by.
     certs = (await q(text("""
-        SELECT count(*) AS n, array_remove(array_agg(DISTINCT country_code), NULL) AS countries
+        SELECT count(*) AS n,
+               array_remove(array_agg(DISTINCT c.country_code), NULL) AS countries
           FROM plenum_cafm.compliance_certificates c
           JOIN plenum_cafm.buildings b ON b.building_id = c.building_id
          WHERE b.organization_id = :o"""), p)).mappings().first()
