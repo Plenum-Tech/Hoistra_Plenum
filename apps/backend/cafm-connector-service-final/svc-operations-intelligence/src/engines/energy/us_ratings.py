@@ -337,7 +337,7 @@ async def _building_facts(session: AsyncSession, building_id: UUID) -> dict[str,
                b.organization_id::text AS organization_id,
                s.use_type, s.use_mix, s.gfa_sqm, s.country_code
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
          WHERE b.building_id = CAST(:b AS uuid)
          LIMIT 1
     """), {"b": str(building_id)})).mappings().first()

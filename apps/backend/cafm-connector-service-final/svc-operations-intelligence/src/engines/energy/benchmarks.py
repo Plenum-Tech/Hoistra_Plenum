@@ -192,7 +192,7 @@ async def _facts(session: AsyncSession, building_ids: list[UUID]) -> list[dict[s
                p.building_type AS profile_type, p.gia_m2 AS profile_gia_m2,
                (SELECT count(*) FROM plenum_cafm.energy_meters em WHERE em.active AND em.building_id = b.building_id) AS meters_active
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
           -- Same two-clause match building_rollup.py uses: locations.id is uuid on this
           -- deployment, and a legacy integer id is wrapped by building_create.py into a
           -- deterministic '00000000-0000-0000-0000-<12 digits>' stand-in. The two must

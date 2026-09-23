@@ -190,13 +190,20 @@ async def _buildings_by_market(session: AsyncSession, building_ids: list[UUID]) 
         return {}
     rows = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name,
-               upper(coalesce(s.country_code, b.raw_metadata->>'country_code')) AS country_code,
+               upper(coalesce(l.country_code, s.country_code,
+                              b.raw_metadata->>'country_code')) AS country_code,
                s.use_type, s.site_type, b.primary_use::text AS primary_use,
                s.eui_kwh_per_m2::float AS eui_kwh_per_m2,
                s.benchmark_kwh_per_m2::float AS benchmark_kwh_per_m2,
                coalesce(s.gfa_sqm::float, b.gross_area_sqft::float / 10.7639) AS gfa_sqm
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
+          -- Same two-clause match building_rollup.py uses: locations.id is uuid on this
+          -- database and integer on the other, so the second clause rebuilds the uuid form.
+          LEFT JOIN plenum_cafm.locations l ON (
+                l.id::text = b.location_id::text
+             OR '00000000-0000-0000-0000-' || lpad(l.id::text, 12, '0') = b.location_id::text
+          )
          WHERE b.building_id = ANY(CAST(:ids AS uuid[]))
     """), {"ids": [str(b) for b in building_ids]})).mappings().all()
     out: dict[str, list[dict[str, Any]]] = {}
@@ -224,7 +231,7 @@ async def _meters_by_market(session: AsyncSession, building_ids: list[UUID]) -> 
                        array_remove(array_agg(DISTINCT s.metering_granularity), NULL) AS granularities
                   FROM plenum_cafm.energy_meters m
                   JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
-                  LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+                  LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
                  WHERE m.active AND m.building_id = ANY(CAST(:ids AS uuid[]))
                  GROUP BY 1
             """), {"ids": [str(b) for b in building_ids]})).mappings().all()

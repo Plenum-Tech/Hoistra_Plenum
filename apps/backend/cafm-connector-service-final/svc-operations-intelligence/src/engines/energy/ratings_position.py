@@ -77,14 +77,24 @@ async def _buildings_in_country(session: AsyncSession, building_ids: list[UUID],
     # precedence the buildings table applies, so a tile and the table never disagree.
     rows = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name, b.gross_area_sqft,
-               coalesce(s.country_code, b.raw_metadata->>'country_code') AS country_code,
+               -- locations first: it is where a hoisted building records its country,
+               -- and reading only sites meant a building with no site row had no
+               -- country at all, so it was in no market and every tile read zero.
+               coalesce(l.country_code, s.country_code,
+                        b.raw_metadata->>'country_code') AS country_code,
                coalesce(snap.eui_kwh_per_m2, s.eui_kwh_per_m2) AS eui_kwh_per_m2,
                coalesce(snap.benchmark_kwh_per_m2, s.benchmark_kwh_per_m2) AS benchmark_kwh_per_m2,
                CASE WHEN snap.eui_kwh_per_m2 IS NOT NULL THEN 'derived'
                     WHEN s.eui_kwh_per_m2 IS NOT NULL THEN 'recorded' END AS eui_source,
                s.use_type, b.primary_use::text AS primary_use
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
+          -- Same two-clause match building_rollup.py uses: locations.id is uuid on this
+          -- database and integer on the other, so the second clause rebuilds the uuid form.
+          LEFT JOIN plenum_cafm.locations l ON (
+                l.id::text = b.location_id::text
+             OR '00000000-0000-0000-0000-' || lpad(l.id::text, 12, '0') = b.location_id::text
+          )
           LEFT JOIN LATERAL (
                SELECT e.eui_kwh_per_m2, e.benchmark_kwh_per_m2
                  FROM plenum_cafm.eui_snapshots e

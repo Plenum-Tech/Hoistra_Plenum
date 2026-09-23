@@ -125,9 +125,16 @@ async def coverage(
     ids = [str(b) for b in building_ids]
     blds = (await session.execute(text("""
         SELECT b.building_id::text AS building_id, b.name,
-               coalesce(s.country_code, b.raw_metadata->>'country_code') AS country_code
+               coalesce(l.country_code, s.country_code,
+                        b.raw_metadata->>'country_code') AS country_code
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
+          -- Same two-clause match building_rollup.py uses: locations.id is uuid on this
+          -- database and integer on the other, so the second clause rebuilds the uuid form.
+          LEFT JOIN plenum_cafm.locations l ON (
+                l.id::text = b.location_id::text
+             OR '00000000-0000-0000-0000-' || lpad(l.id::text, 12, '0') = b.location_id::text
+          )
          WHERE b.building_id = ANY(CAST(:ids AS uuid[])) ORDER BY b.name"""), {"ids": ids})).mappings().all()
     meters = (await session.execute(text("""
         SELECT id::text, building_id::text AS building_id, meter_type, is_sub_meter, asset_id::text AS asset_id,

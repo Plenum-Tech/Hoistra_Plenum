@@ -198,7 +198,7 @@ UK_BUILDINGS = """
                ROW_NUMBER() OVER (PARTITION BY b.organization_id ORDER BY b.name, b.building_id) - 1 AS slot,
                COUNT(*) OVER (PARTITION BY b.organization_id) AS n
           FROM plenum_cafm.buildings b
-          LEFT JOIN plenum_cafm.sites s ON s.id = b.site_id OR s.site_id = b.site_id
+          LEFT JOIN plenum_cafm.sites s ON s.id::text = b.site_id::text OR s.site_id::text = b.site_id::text
          WHERE coalesce(s.country_code, b.raw_metadata->>'country_code') IN ('UK', 'GB')
            AND b.name NOT LIKE 'MixedUse%')
 """
