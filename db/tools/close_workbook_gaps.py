@@ -84,7 +84,7 @@ def _c(num, typ, scope, bldg, asset, vcode, vname, issuer, inspector, accred,
        issued, expires, months, result, defects=None, remedial=None, rstatus=None,
        rating=None, score=None):
     return [num, typ, scope, bldg, asset, vcode, vname, issuer, inspector, accred,
-            issued, expires, expires, months, result, "valid", "GB", defects, remedial, rstatus,
+            issued, expires, expires, months, result, "valid", "UK", defects, remedial, rstatus,
             rating, score]
 
 
@@ -195,6 +195,25 @@ EXTRA_BY_VENDOR: dict[str, list[list]] = {
 }
 
 
+#: The platform keys every pack, tariff band and verification source on UK. ISO 3166 says GB,
+#: and an export written to ISO will say GB, so a country_code column is conformed on the way
+#: through rather than trusted. Two places in the engine tolerate GB; the rest look the code up.
+_COUNTRY_TO_PLATFORM = {"GB": "UK", "GBR": "UK", "UNITED KINGDOM": "UK", "U.K.": "UK"}
+
+
+def _conform_country(hdr: list[str], rows: list[list]) -> int:
+    """Rewrite country_code values to the platform code; returns how many changed."""
+    if "country_code" not in hdr:
+        return 0
+    i, n = hdr.index("country_code"), 0
+    for r in rows:
+        v = str(r[i] or "").strip().upper() if i < len(r) else ""
+        if v in _COUNTRY_TO_PLATFORM and _COUNTRY_TO_PLATFORM[v] != r[i]:
+            r[i] = _COUNTRY_TO_PLATFORM[v]
+            n += 1
+    return n
+
+
 def read(wb, name):
     rows = list(wb[name].iter_rows(values_only=True))
     hdr = [str(h) for h in (rows[0] if rows else ()) if h is not None]
@@ -258,6 +277,10 @@ def close_gaps(path: str) -> None:
                 t = str(r[j] or "").strip()
                 r.append(t[:117].rstrip() + "…" if len(t) > 120 else t)
             print(f"    Work_Orders            title on {len(rows)} row(s)")
+
+        fixed = _conform_country(hdr, rows)
+        if fixed:
+            print(f"    {name:22} country_code conformed on {fixed} row(s) -> UK")
 
         ws = out.create_sheet(name)
         ws.append(hdr)
