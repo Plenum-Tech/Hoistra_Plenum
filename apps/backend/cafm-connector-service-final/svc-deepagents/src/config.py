@@ -160,9 +160,15 @@ class Settings(BaseSettings):
     deep_agents_upload_dir: str = "/tmp/deepagents_uploads"
     # Cumulative cap for a with-files migration upload, enforced (streamed) in the
     # run-stateful-with-files endpoint. Default aligns with the nginx gateway's client_max_body_size
-    # (200m) so the front door, the gateway, and the client agree on one ceiling. Override via env.
+    # (1g) so the front door, the gateway, and the client agree on one ceiling. Override via env.
+    #
+    # The upload is streamed a megabyte at a time, so accepting a gigabyte costs a gigabyte of
+    # disk under deep_agents_upload_dir and one chunk of memory. What follows is the expensive
+    # part: a workbook is parsed in full, and openpyxl holds far more than the file's own size
+    # while it does. A gigabyte of spreadsheet is a memory problem for the parser long before it
+    # is a transfer problem here.
     deep_agents_max_upload_mb: int = Field(
-        200,
+        1024,
         validation_alias=AliasChoices("DEEP_AGENTS_MAX_UPLOAD_MB"),
     )
     ingest_batch_inline_threshold: int = Field(
