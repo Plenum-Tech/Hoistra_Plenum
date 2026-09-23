@@ -144,7 +144,13 @@ class ReferenceResolver:
                 self.ambiguous.append(f"{column}={hint}")
             else:
                 self.unresolved.setdefault(column, set()).add(str(hint))
-        self._cache[key] = found
+        # A HIT is cached; a MISS is not. These resolvers live for the whole run, and a
+        # reference that is absent when one table asks may be written by the time the next
+        # one does — vendors are loaded after work_orders, so caching work_orders' miss left
+        # every later table with a null vendor_id. Found 23 Sep 2026: 13 work orders and 64
+        # PPM visits all showing "Unassigned" against vendors that were on record.
+        if found is not None:
+            self._cache[key] = found
         return found
 
     def report(self) -> dict:

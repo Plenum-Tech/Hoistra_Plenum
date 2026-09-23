@@ -56,7 +56,7 @@ _SCHEMA = "plenum_cafm"
 #: the meter, and every finding it raises is written with a null building. Those findings are
 #: invisible on a building-scoped page and no EUI snapshot is produced at all, so the scan
 #: reports success over an empty screen.
-_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters")
+_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections")
 
 #: Tables whose rows are READ for a building reference. meter_readings does not carry a
 #: building column of its own, but a reading sheet often names the site, and that is what
@@ -1796,6 +1796,29 @@ async def _apply_records_with_schema_alignment(
                 _parent = _dest_of(str(_hd.get("target_table") or ""))
                 if _child and _parent and _child != _parent:
                     _parents_of_dest.setdefault(_child, set()).add(_parent)
+
+            # What the detector cannot be relied on to notice. Hierarchy detection reads the
+            # FILE, so it finds what the file happens to make obvious; these are facts about
+            # plenum_cafm that hold whatever the file looks like. Without them the write order
+            # stayed as the sheets happened to be arranged, and a child was loaded before its
+            # parent existed: work_orders before vendors, ppm_visits before vendor_contracts.
+            # Every one of those references resolved to null, and the pages showed "Unassigned".
+            _CORE_PARENTS: dict[str, tuple[str, ...]] = {
+                "building_sections": ("buildings",),
+                "assets": ("buildings", "building_sections"),
+                "energy_meters": ("buildings", "building_sections"),
+                "meter_readings": ("energy_meters",),
+                "asset_readings": ("assets",),
+                "vendor_contracts": ("vendors",),
+                "work_orders": ("buildings", "assets", "vendors"),
+                "ppm_visits": ("assets", "vendors", "vendor_contracts"),
+                "maintenance_plans": ("assets", "buildings"),
+                "inspections": ("assets",),
+                "spare_parts": ("vendors",),
+                "work_order_parts": ("work_orders", "spare_parts"),
+            }
+            for _c, _ps in _CORE_PARENTS.items():
+                _parents_of_dest.setdefault(_c, set()).update(_ps)
 
             def _ordered_source_tables() -> list[str]:
                 _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
