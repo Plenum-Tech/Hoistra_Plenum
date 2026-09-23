@@ -1062,6 +1062,19 @@ def _to_safe_identifier(raw: str) -> str | None:
     return normalized
 
 
+#: Consecutive per-row failures of the same kind before a table is abandoned.
+#:
+#: The per-row fallback exists to make ONE bad row cost its own row. It is not a way to discover
+#: that every row is bad. When the fault is structural — a required column the run could not
+#: resolve — every row fails identically, and retrying is just a slow way to reach the answer
+#: the first row already gave. Measured on 23 Sep 2026: 35,040 meter readings with a null
+#: meter_id, each one inserted, rejected and rolled back at about fifteen a second, holding a
+#: transaction open for forty minutes to insert nothing.
+#:
+#: Generous enough that a genuinely dirty file still gets its rows in: a hundred consecutive
+#: failures of the SAME error is not dirt, it is the shape of the data being wrong.
+_MAX_CONSECUTIVE_ROW_FAILURES = 100
+
 #: How many rows go to the database in one statement.
 #:
 #: Row at a time is three round trips each and this path routinely carries a year of
@@ -1113,6 +1126,12 @@ async def _insert_rows(
     skipped = 0
     errors: list[str] = []
     orphans: dict[str, int] = {}
+    #: The run of identical failures seen so far, and what it was. Reset by any success.
+    _streak = 0
+    _streak_sig: str | None = None
+    #: Set when the streak breaks the table off, so the caller can say so rather than report a
+    #: quietly short insert.
+    abandoned: str | None = None
 
     by_stmt: dict[str, list[tuple[dict, dict]]] = {}
     for filtered, dml_sql, params in pending:
@@ -1137,6 +1156,8 @@ async def _insert_rows(
                 async with session.begin_nested():
                     res = await session.execute(text(dml_sql), params)
                 inserted += int(getattr(res, "rowcount", 0) or 0)
+                # A row that went in ends the streak: the file is dirty, not misshapen.
+                _streak, _streak_sig = 0, None
                 continue
             except Exception as row_exc:
                 if _is_connection_lost(row_exc):
@@ -1158,6 +1179,7 @@ async def _insert_rows(
                         inserted += int(getattr(_res2, "rowcount", 0) or 0)
                         for _c in _nullable_fk:
                             orphans[_c] = orphans.get(_c, 0) + 1
+                        _streak, _streak_sig = 0, None
                         continue
                     except Exception as retry_exc:
                         if _is_connection_lost(retry_exc):
@@ -1166,7 +1188,23 @@ async def _insert_rows(
                 if len(errors) < 20:
                     errors.append(f"{table_name}: {str(row_exc)[:220]}")
 
-    return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans}
+                # Same failure, over and over, is one fault rather than many rows.
+                _sig = f"{type(row_exc).__name__}:{str(row_exc)[:120]}"
+                _streak = _streak + 1 if _sig == _streak_sig else 1
+                _streak_sig = _sig
+                if _streak >= _MAX_CONSECUTIVE_ROW_FAILURES:
+                    _left = sum(len(g) for g in by_stmt.values()) - inserted - skipped
+                    abandoned = (
+                        f"{table_name}: stopped after {_streak} consecutive identical failures "
+                        f"— every row is failing the same way, so the remaining {max(_left, 0)} "
+                        f"were not attempted. Fix the cause and re-run: {str(row_exc)[:200]}"
+                    )
+                    logger.error(f"[Node 9] {abandoned}")
+                    return {"inserted": inserted, "skipped": skipped + max(_left, 0),
+                            "errors": errors, "orphans": orphans, "abandoned": abandoned}
+
+    return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans,
+            "abandoned": abandoned}
 
 
 def _build_dml_for_row(
@@ -1410,6 +1448,14 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
 # table and the row wins. A table absent here is simply not deduped, which is the old
 # behaviour — never a guess at what "the same row" means.
 _NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    # A building is its code. Without this entry a Buildings sheet inserted a SECOND row for a
+    # building already on file every run — ON CONFLICT DO NOTHING cannot catch it, because `id`
+    # is a fresh uuid4() and never collides. The duplicate is not the worst of it: every
+    # building lookup afterwards found two rows for "B-101" and BuildingResolver refuses an
+    # ambiguous match, so nothing could be placed on that building for the rest of the run.
+    # On 23 Sep 2026 that cost all 35,040 meter readings in one ingest — no building meant no
+    # meter could be created, and meter_readings.meter_id is NOT NULL, so every row was rejected.
+    "buildings": (("building_code",),),
     "vendors": (("vendor_code",), ("vendor_name",)),
     "ppm_visits": (("ppm_ref",),),
     "resources": (("engineer_id",), ("resource_code",)),
@@ -2039,6 +2085,26 @@ async def _apply_records_with_schema_alignment(
                     logger.info(
                         f"[Node 9] Added missing column {schema_name}.{safe_table}.{col_name} "
                         f"({col_type})"
+                    )
+                if missing_columns:
+                    # Commit the DDL on its own, before a single row is loaded.
+                    #
+                    # ADD COLUMN takes ACCESS EXCLUSIVE on the table and holds it until the
+                    # transaction ends. This write used to be one transaction for the DDL and
+                    # every row of every table, so an ALTER on `buildings` kept that lock for the
+                    # length of the load — and every reader of `buildings` is every page in the
+                    # product. Measured on 23 Sep 2026: one column added to `buildings`, then
+                    # 35,040 readings loaded behind it, and the whole application queued for
+                    # eight minutes until the connection pool gave up with
+                    # "QueuePool limit of size 5 overflow 10 reached".
+                    #
+                    # The lock itself is brief — ADD COLUMN with no default rewrites nothing. It
+                    # is holding it across the data load that does the damage, so the DDL ends
+                    # its transaction here and the rows go in under their own.
+                    await session.commit()
+                    logger.info(
+                        f"[Node 9] {safe_table}: DDL committed before loading rows, so its "
+                        f"ACCESS EXCLUSIVE lock is not held across the load"
                     )
                 if missing_columns:
                     # keep local set in sync for filtering inserts below
