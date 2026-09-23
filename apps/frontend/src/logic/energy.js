@@ -99,17 +99,32 @@ export const energyMethods = {
     const bs = sc.isAll ? allBuildings : allBuildings.filter((b) => sc.sel.indexOf(b.cc) > -1);
     const hasEui = (b) => typeof b.euiN === "number" && typeof b.benchN === "number";
     const m2 = (b) => (typeof b.areaM2 === "number" ? b.areaM2 : 0);
+    // The building's own contracted rate where the API carries one, the market pack only as a
+    // fallback. Pricing every building at one constant is what made the card and the stored
+    // snapshot disagree about what the same excess kWh costs.
+    const rate = (b) => (typeof b.tariffN === "number" && b.tariffN > 0
+      ? b.tariffN : (ENC[b.cc] || ENC.UK).tariff);
     const measured = bs.filter(hasEui);
     const area = measured.reduce((q, b) => q + m2(b), 0);
     const eui = area ? measured.reduce((q, b) => q + b.euiN * m2(b), 0) / area : null;
     const bench = area ? measured.reduce((q, b) => q + b.benchN * m2(b), 0) / area : null;
-    const excess = measured.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * (ENC[b.cc] || ENC.UK).tariff, 0);
+    const excess = measured.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * rate(b), 0);
 
     const allAnoms = this.enAnomalies();
     const anomCc = (a) => a.cc;
     const anoms = sc.isAll ? allAnoms : allAnoms.filter((a) => sc.sel.indexOf(anomCc(a)) > -1);
     const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);
     const cc0 = sc.sel[0];
+    // Say the rate that was actually charged. Where the buildings in scope carry their own
+    // contracted rates and those differ, one number would be a fiction, so the range is named.
+    const rates = measured.filter((b) => typeof b.tariffN === "number" && b.tariffN > 0).map((b) => b.tariffN);
+    const pence = (v) => (v * 100).toFixed(1) + "p";
+    const tariffLabel = rates.length === 0
+      ? (ENC[cc0] || ENC.UK).tariffLabel
+      : (Math.min.apply(null, rates) === Math.max.apply(null, rates)
+          ? pence(rates[0]) + "/kWh contracted"
+          : pence(Math.min.apply(null, rates)) + "–" + pence(Math.max.apply(null, rates)) + "/kWh contracted")
+        + (rates.length < measured.length ? " on " + rates.length + " of " + measured.length + " buildings" : "");
     const P = PACKS[cc0] || PACKS.UK;
     const E = ENC[cc0] || ENC.UK;
     const money = moneyGBP;
@@ -148,7 +163,7 @@ export const energyMethods = {
         ? (cc0 === "AE"
             ? "No operational standard — scored against a rolling portfolio benchmark of 228 kWh/m²/yr. "
             : "Benchmarked against " + P.std + " (" + P.note + "). ")
-          + "Data arrives by " + E.routes.join(" and ") + " — " + E.grain + ". Tariff " + E.tariffLabel + "."
+          + "Data arrives by " + E.routes.join(" and ") + " — " + E.grain + ". Tariff " + tariffLabel + "."
         : sc.sel.length + " markets in scope with " + sc.sel.map((cc) => (ENC[cc] || ENC.UK).routes.length).reduce((a, b) => a + b, 0) + " different data routes and " + sc.sel.length + " different benchmark bases. Only metrics that survive the difference are shown; the rest are named below rather than approximated.")
         + (unattributed ? " " + unattributed + " of " + allBuildings.length + " buildings on record have no country attributed yet, so the per-market figures above undercount the portfolio." : ""),
 
@@ -186,7 +201,7 @@ export const energyMethods = {
       }),
       enSideTitle: sc.single ? (cc0 === "AE" ? "EUI vs rolling portfolio benchmark" : "EUI vs " + P.std) : "EUI vs each building's own pack",
       enSideFoot: sc.single
-        ? "Bar length is EUI against " + (cc0 === "AE" ? "the 228 kWh/m²/yr rolling portfolio benchmark" : "the " + P.std + " reference") + ". Over-benchmark buildings carry the " + money(excess) + " gap at " + E.tariffLabel + "."
+        ? "Bar length is EUI against " + (cc0 === "AE" ? "the 228 kWh/m²/yr rolling portfolio benchmark" : "the " + P.std + " reference") + ". Over-benchmark buildings carry the " + money(excess) + " gap at " + tariffLabel + "."
         : "Bar length is EUI against each building's own country pack. The " + money(excess) + " gap is summed at local tariffs and converted to GBP; the bars are not comparable across markets.",
       enAsks: (sc.single ? ({
         UK: ["Which UK buildings sit over their EUI benchmark?", "Which buildings miss EPC B by 2031?", "Rank UK buildings by cost per m²"],
@@ -346,7 +361,7 @@ export const energyMethods = {
         .map((b) => {
         const hasEui = typeof b.euiN === "number" && typeof b.benchN === "number";
         const m2 = typeof b.areaM2 === "number" ? b.areaM2 : 0;
-        const excess = hasEui ? Math.max(0, b.euiN - b.benchN) * m2 * (ENC[cc] || ENC.UK).tariff : 0;
+        const excess = hasEui ? Math.max(0, b.euiN - b.benchN) * m2 * (typeof b.tariffN === "number" && b.tariffN > 0 ? b.tariffN : (ENC[cc] || ENC.UK).tariff) : 0;
         const all = allAnoms.filter((a) => a.buildingUuid && a.buildingUuid === b.uuid);
         const anoms = all.filter(anomHit);
         const anomSum = anoms.reduce((q, a) => q + impactNum(a), 0);

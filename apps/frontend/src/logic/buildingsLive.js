@@ -129,6 +129,10 @@ export function shapeLiveBuilding(r, i) {
     euiN: typeof r.eui_kwh_per_m2 === "number" ? r.eui_kwh_per_m2 : null,
     euiPeriod: r.eui_period_end ? (r.eui_period_start || "") + " → " + r.eui_period_end + (r.eui_meter_type ? " · " + r.eui_meter_type : "") : "",
     benchN: typeof r.benchmark_kwh_per_m2 === "number" ? r.benchmark_kwh_per_m2 : null,
+    // The rate the benchmark pass priced this building's gap at, from its own meters. Used
+    // in place of the market constant so the card and the stored snapshot cost the same kWh
+    // the same way; null falls back to the country pack.
+    tariffN: typeof r.tariff_gbp_per_kwh === "number" ? r.tariff_gbp_per_kwh : null,
     benchSource: r.benchmark_source || null,
     benchComparables: r.benchmark_comparables || null,
     deviation: typeof r.deviation_pct === "number" ? r.deviation_pct : null,

@@ -43,6 +43,11 @@ KWH_TO_KBTU = 3.412
 M2_TO_FT2 = 10.7639
 THERM_KBTU = 100.0
 MIN_MONTHS_TO_SHOW = 3
+
+#: Mean Gregorian month. A window is measured in metered minutes and converted here,
+#: so a 364-day year reads as 11.96 months rather than the thirteen calendar months it
+#: happens to touch.
+MINUTES_PER_MONTH = 365.2425 / 12.0 * 24.0 * 60.0
 ACTUAL_MONTHS = 12
 
 # ── ENERGY STAR ────────────────────────────────────────────────────────────────────
@@ -274,10 +279,15 @@ def ll97_position(
 @dataclass
 class ConsumptionWindow:
     kwh_by_fuel: dict[str, float]
+    #: Whole months, for thresholds and for the months_of_data column. Rounded from
+    #: coverage_months, which is the figure to annualise with.
     months: int
     period_start: date
     period_end: date
     meters: int
+    #: Metered time in months, to two decimals. This is what annualisation divides by:
+    #: rounding it first is what made a 364-day year read as thirteen months.
+    coverage_months: float = 0.0
 
 
 async def consumption_for_building(
@@ -288,8 +298,11 @@ async def consumption_for_building(
     Meters are found two ways because there are two registries: energy_meters keyed on the
     building (energy tables key on building_id), and
     plenum_cafm.meters keyed on building_id whose mpan_mprn matches an energy meter.
-    The months counted are months that actually have readings, so a window with a two-month
-    hole is scored on ten, not twelve.
+    The window is measured in metered time, not in calendar months touched: every reading
+    states the period it covers, so the covered minutes are summed per meter and the
+    longest-covered meter is the building's window. A two-month hole is therefore still
+    absent from the total — the property the old calendar-month count existed to keep —
+    while a year that starts on the 22nd is a year rather than thirteen months.
     """
     end = end or date.today()
     start = (end.replace(day=1) - timedelta(days=1)).replace(day=1)
@@ -310,25 +323,38 @@ async def consumption_for_building(
                 ON em.active AND (em.mpan = m.mpan_mprn OR em.mprn = m.mpan_mprn)
              WHERE m.building_id = CAST(:b AS uuid)
         )
-        SELECT ms.meter_type, date_trunc('month', r.reading_at)::date AS month,
-               sum(r.consumption_kwh) AS kwh, count(DISTINCT ms.id) AS meters
+        SELECT ms.id AS meter, ms.meter_type,
+               date_trunc('month', r.reading_at)::date AS month,
+               sum(r.consumption_kwh) AS kwh, count(DISTINCT ms.id) AS meters,
+               sum(coalesce(r.period_minutes, 30))::float AS covered_minutes
           FROM ms JOIN plenum_cafm.meter_readings r ON r.meter_id = ms.id
          WHERE r.reading_at >= CAST(:s AS date) AND r.reading_at < CAST(:e AS date) + 1
-         GROUP BY 1, 2
+         GROUP BY 1, 2, 3
     """), {"b": str(building_id), "s": start, "e": end})).mappings().all()
     if not rows:
         return None
     by_fuel: dict[str, float] = {}
     months_seen: set[date] = set()
+    minutes_by_meter: dict[Any, float] = {}
     meters = 0
     for r in rows:
         fuel = {"electric": "electricity", "elec": "electricity"}.get(
             (r["meter_type"] or "electricity").lower(), (r["meter_type"] or "electricity").lower())
         by_fuel[fuel] = by_fuel.get(fuel, 0.0) + float(r["kwh"] or 0)
         months_seen.add(r["month"])
+        minutes_by_meter[r["meter"]] = (minutes_by_meter.get(r["meter"], 0.0)
+                                        + float(r["covered_minutes"] or 0.0))
         meters = max(meters, int(r["meters"] or 0))
-    return ConsumptionWindow(kwh_by_fuel=by_fuel, months=len(months_seen),
-                             period_start=min(months_seen), period_end=end, meters=meters)
+    # The longest-covered meter is the building's window: two meters reading the same
+    # year cover one year between them, not two.
+    coverage = (max(minutes_by_meter.values()) / MINUTES_PER_MONTH) if minutes_by_meter else 0.0
+    # A reading with no usable period leaves nothing to measure. Fall back to the old
+    # calendar-month count rather than annualise by zero.
+    if coverage <= 0:
+        coverage = float(len(months_seen))
+    return ConsumptionWindow(kwh_by_fuel=by_fuel, months=max(1, round(coverage)),
+                             period_start=min(months_seen), period_end=end, meters=meters,
+                             coverage_months=round(coverage, 2))
 
 
 async def _building_facts(session: AsyncSession, building_id: UUID) -> dict[str, Any] | None:

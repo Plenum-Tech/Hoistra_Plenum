@@ -404,6 +404,10 @@ def shape_building_row(
         "eui_period_start": (snapshot or {}).get("period_start"),
         "eui_period_end": (snapshot or {}).get("period_end"),
         "eui_meter_type": (snapshot or {}).get("meter_type"),
+        # What the building is contracted at, as the benchmark pass priced it. A page that
+        # prices the gap itself must use this and not a market constant, or the same kWh
+        # carries two costs depending on which surface you read.
+        "tariff_gbp_per_kwh": (snapshot or {}).get("tariff_used"),
         "benchmark_standard": pack["standard"],
         "benchmark_standing": pack["standing"],
         "benchmark_standing_note": pack["standing_note"],
@@ -1158,6 +1162,9 @@ async def _energy_by_site(
                     "period_start": s.period_start.isoformat() if s.period_start else None,
                     "period_end": s.period_end.isoformat() if s.period_end else None,
                     "meter_type": s.meter_type,
+                    # The rate this gap was priced at, carried through so the page costs it
+                    # the same way the snapshot did rather than at a constant of its own.
+                    "tariff_used": float(s.tariff_used) if s.tariff_used is not None else None,
                 }
     except Exception as exc:  # noqa: BLE001
         log.warning("energy.buildings.snapshots_read_failed", error=str(exc)[:200])

@@ -93,21 +93,86 @@ def _tariff(cc: str | None) -> tuple[float | None, float | None, str]:
             (float(hi) if hi is not None else None), currency)
 
 
-def annualise(total_kwh: float, months: int) -> float:
-    """kWh over ``months`` months of data, scaled to a year. Months with no readings are not
-    counted as zero use — they are not counted at all, and the result is provisional."""
-    months = max(1, int(months))
+async def contracted_tariffs(
+    session: AsyncSession, building_ids: list[UUID]
+) -> dict[str, dict[str, float]]:
+    """building_id -> fuel -> the rate its own meters are contracted at.
+
+    Averaged across the meters on a fuel, because a building with two electricity supplies on
+    different contracts pays both. Only active meters, and only a positive rate: a zero in a
+    NOT NULL column is an unfilled row, not a free supply.
+    """
+    if not building_ids:
+        return {}
+    rows = (await session.execute(text("""
+        SELECT em.building_id::text AS building_id,
+               lower(coalesce(em.meter_type, 'electricity')) AS fuel,
+               avg(em.tariff_gbp_per_kwh)::float AS rate
+          FROM plenum_cafm.energy_meters em
+         WHERE em.active
+           AND em.tariff_gbp_per_kwh > 0
+           AND em.building_id = ANY(CAST(:ids AS uuid[]))
+         GROUP BY 1, 2
+    """), {"ids": [str(b) for b in building_ids]})).mappings().all()
+    out: dict[str, dict[str, float]] = {}
+    for r in rows:
+        fuel = {"electric": "electricity", "elec": "electricity"}.get(r["fuel"], r["fuel"])
+        out.setdefault(r["building_id"], {})[fuel] = float(r["rate"])
+    return out
+
+
+def blended_tariff(rates: dict[str, float] | None,
+                   kwh_by_fuel: dict[str, float] | None) -> dict[str, Any]:
+    """One GBP/kWh for a whole-building gap, weighted by what the building actually burns.
+
+    A benchmark gap is whole-building kWh with no fuel of its own, so pricing it at the
+    electricity rate overstates any building with gas in the mix - here by a factor of three.
+    Fuels the building consumes but has no contracted rate for are left out of the weighting
+    rather than priced at zero, and the coverage is reported so a partly-priced blend can be
+    told from a complete one.
+    """
+    if not rates:
+        return {"value": None, "basis": None, "covered_pct": 0.0}
+    mix = {f: v for f, v in (kwh_by_fuel or {}).items() if v and v > 0}
+    if not mix:
+        # No consumption split to weight by: the plain mean of the contracted rates.
+        value = sum(rates.values()) / len(rates)
+        return {"value": round(value, 6), "basis": "contracted_mean", "covered_pct": 0.0,
+                "fuels": sorted(rates)}
+    priced = {f: kwh for f, kwh in mix.items() if rates.get(f)}
+    if not priced:
+        return {"value": None, "basis": None, "covered_pct": 0.0}
+    total = sum(priced.values())
+    value = sum(rates[f] * kwh for f, kwh in priced.items()) / total
+    return {
+        "value": round(value, 6),
+        "basis": "contracted_blended" if len(priced) > 1 else "contracted",
+        "covered_pct": round(100.0 * total / sum(mix.values()), 1),
+        "fuels": sorted(priced),
+    }
+
+
+def annualise(total_kwh: float, months: float) -> float:
+    """kWh over ``months`` months of data, scaled to a year. Time with no readings is not
+    counted as zero use — it is not counted at all, and the result is provisional.
+
+    ``months`` is fractional on purpose. Rounding it to a whole number first is what made
+    a 364-day year annualise as thirteen calendar months and every EUI read 7.7% low.
+    """
+    months = max(0.01, float(months))
     return total_kwh * (12.0 / months)
 
 
-def derive_eui(*, total_kwh: float, months: int, gfa_m2: float | None) -> dict[str, Any] | None:
+def derive_eui(*, total_kwh: float, months: float, gfa_m2: float | None) -> dict[str, Any] | None:
     if not gfa_m2 or gfa_m2 <= 0 or total_kwh <= 0 or months <= 0:
         return None
     annual = annualise(total_kwh, months)
     return {
         "eui_kwh_per_m2": round(annual / gfa_m2, 2),
         "annual_kwh": round(annual, 0),
-        "months_of_data": int(months),
+        # Reported as whole months; annualised with the fraction.
+        "months_of_data": max(1, round(months)),
+        "months_measured": round(float(months), 2),
         "provisional": months < PROVISIONAL_BELOW_MONTHS,
     }
 
@@ -146,7 +211,7 @@ def benchmark_for(*, cc: str | None, use: str | None, recorded: float | None,
 
 
 def price_excess(*, eui: float | None, bench: float | None, gfa_m2: float | None,
-                 cc: str | None) -> dict[str, Any]:
+                 cc: str | None, contracted: dict[str, Any] | None = None) -> dict[str, Any]:
     if eui is None or bench is None or not gfa_m2:
         return {"deviation_pct": None, "excess_kwh": None, "cost": None, "cost_low": None,
                 "cost_high": None, "currency": currency_for(cc), "priced": False}
@@ -155,15 +220,31 @@ def price_excess(*, eui: float | None, bench: float | None, gfa_m2: float | None
     excess = round(max(0.0, eui - bench) * gfa_m2, 0)
     cost_low = round(excess * lo, 0) if lo is not None else None
     cost_high = round(excess * hi, 0) if hi is not None else None
+
+    # The headline is the rate this building is contracted at, where its meters carry one. A
+    # market band is a survey of everyone; a contract is what this building pays, and the two
+    # disagreeing is what let the stored snapshot and the card show different money for the
+    # same kWh. The band stays beside it as the range and as the fallback.
+    rate = (contracted or {}).get("value")
+    if rate:
+        cost = round(excess * float(rate), 0)
+        basis = "contracted rate on the building's own meters"
+        tariff, tariff_source = float(rate), (contracted or {}).get("basis") or "contracted"
+    else:
+        # No contracted rate on record. The low end of the band, not a midpoint: a single
+        # figure has to be one or the other, and the conservative end cannot overstate what a
+        # building is costing.
+        cost = cost_low
+        basis = "low end of the market tariff band" if lo != hi else "flat market rate"
+        tariff, tariff_source = lo, "market_band_low"
     return {
         "deviation_pct": deviation, "excess_kwh": excess,
-        # `cost` is the low end of the band, not a midpoint. A single headline figure has to
-        # be one or the other, and the conservative end is the one that cannot overstate what
-        # a building is costing. cost_high sits beside it for the top of the range.
-        "cost": cost_low, "cost_low": cost_low, "cost_high": cost_high,
-        "cost_basis": ("low end of the market tariff band" if lo != hi else "flat market rate"),
-        "currency": currency, "tariff": lo, "tariff_low": lo, "tariff_high": hi,
-        "priced": cost_low is not None,
+        "cost": cost, "cost_low": cost_low, "cost_high": cost_high,
+        "cost_basis": basis,
+        "currency": currency, "tariff": tariff, "tariff_source": tariff_source,
+        "tariff_low": lo, "tariff_high": hi,
+        "tariff_covers_pct": (contracted or {}).get("covered_pct"),
+        "priced": cost is not None,
     }
 
 
@@ -237,6 +318,19 @@ async def _latest_snapshot_end(session: AsyncSession, building_id: UUID, *, fuel
     )).scalar_one_or_none()
 
 
+async def _snapshot_for_window(
+    session: AsyncSession, building_id: UUID, *, fuel: str, period_end: date
+) -> EuiSnapshot | None:
+    """The snapshot already written for exactly this window, if there is one."""
+    return (await session.execute(
+        select(EuiSnapshot).where(
+            EuiSnapshot.building_id == building_id,
+            EuiSnapshot.meter_type == fuel,
+            EuiSnapshot.period_end == period_end,
+        ).order_by(EuiSnapshot.created_at.desc()).limit(1)
+    )).scalars().first()
+
+
 async def _epc_buildings(session: AsyncSession, organization_id: UUID | None, ids: list[UUID]) -> set[str]:
     if not ids:
         return set()
@@ -291,7 +385,9 @@ async def validate(
             log.warning("benchmarks.consumption_failed", building_id=str(bid), error=str(exc)[:200])
         f["window"] = window
         total = sum(window.kwh_by_fuel.values()) if window else 0.0
-        derived = derive_eui(total_kwh=total, months=window.months if window else 0, gfa_m2=f["gfa_m2"]) if window else None
+        # coverage_months, not months: the rounded figure is for display and thresholds.
+        derived = derive_eui(total_kwh=total, months=(window.coverage_months or window.months) if window else 0,
+                             gfa_m2=f["gfa_m2"]) if window else None
         if derived:
             f.update(derived, eui_source="derived", total_kwh=round(total, 0),
                      period_start=window.period_start, period_end=window.period_end,
@@ -302,6 +398,7 @@ async def validate(
             f.update(eui_kwh_per_m2=None, eui_source=None, months_of_data=window.months if window else 0, provisional=False)
 
     # Pass 2: benchmarks — the rolling rule needs every other EUI in the market first.
+    rates = await contracted_tariffs(session, [UUID(f["building_id"]) for f in facts])
     by_cc: dict[str, list[dict[str, Any]]] = {}
     for f in facts:
         by_cc.setdefault(f["cc"] or "??", []).append(f)
@@ -311,8 +408,10 @@ async def validate(
             # A recorded EUI names no fuel and covers all of them; a derived one is the fuel measured.
             f["benchmark"] = benchmark_for(cc=f["cc"], use=f["use"], recorded=f["recorded_benchmark"], peers=peers,
                                            fuel=f.get("fuel") or "combined")
+            f["contracted"] = blended_tariff(rates.get(f["building_id"]),
+                                             f["window"].kwh_by_fuel if f.get("window") else None)
             f["money"] = price_excess(eui=f.get("eui_kwh_per_m2"), bench=f["benchmark"]["value"],
-                                      gfa_m2=f["gfa_m2"], cc=f["cc"])
+                                      gfa_m2=f["gfa_m2"], cc=f["cc"], contracted=f["contracted"])
 
     # Pass 3: US positions in their own units, where there is enough consumption.
     us_positions: dict[str, dict[str, Any]] = {}
@@ -335,14 +434,10 @@ async def validate(
             if f.get("eui_source") != "derived":
                 continue
             bid = UUID(f["building_id"])
-            if await _latest_snapshot_end(session, bid, fuel=f.get("fuel") or "combined") == f["period_end"]:
-                continue
+            fuel = f.get("fuel") or "combined"
             money = f["money"]
-            session.add(EuiSnapshot(
-                id=uuid4(),
-                organization_id=as_uuid(f.get("organization_id")) or org,
-                building_id=bid, period_start=f["period_start"], period_end=f["period_end"],
-                meter_type=f.get("fuel") or "combined",
+            values = dict(
+                period_start=f["period_start"],
                 total_kwh=Decimal(str(f["total_kwh"])), gia_m2=Decimal(str(round(f["gfa_m2"], 2))),
                 eui_kwh_per_m2=Decimal(str(f["eui_kwh_per_m2"])),
                 benchmark_kwh_per_m2=Decimal(str(f["benchmark"]["value"])) if f["benchmark"]["value"] is not None else None,
@@ -350,7 +445,24 @@ async def validate(
                 excess_kwh=Decimal(str(money["excess_kwh"])) if money["excess_kwh"] is not None else None,
                 financial_gbp=Decimal(str(money["cost"])) if money["cost"] is not None else None,
                 tariff_used=Decimal(str(money["tariff"])) if money.get("tariff") is not None else None,
-            ))
+            )
+            # A window already written is UPDATED, not skipped. Skipping is what kept a
+            # corrected figure off the page: the annualisation and tariff fixes both recomputed
+            # today's window, found a row already stamped with today's end, and left the wrong
+            # number in place. A snapshot is the current answer for its window, not the first
+            # answer anyone happened to compute for it.
+            existing = await _snapshot_for_window(session, bid, fuel=fuel, period_end=f["period_end"])
+            if existing is not None:
+                if all(getattr(existing, k) == v for k, v in values.items()):
+                    continue                      # nothing changed; do not churn the row
+                for k, v in values.items():
+                    setattr(existing, k, v)
+            else:
+                session.add(EuiSnapshot(
+                    id=uuid4(),
+                    organization_id=as_uuid(f.get("organization_id")) or org,
+                    building_id=bid, period_end=f["period_end"], meter_type=fuel, **values,
+                ))
             written += 1
         if written:
             await session.commit()
