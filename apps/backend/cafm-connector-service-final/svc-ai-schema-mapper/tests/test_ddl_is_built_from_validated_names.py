@@ -130,3 +130,36 @@ class TestWhatReachesTheStatement:
     def test_a_good_column_survives_a_bad_one_beside_it(self):
         sql = _sql([_cfg(custom_column_name="!!!"), _cfg(custom_column_name="keeper")])
         assert "keeper" in sql
+
+
+class TestANewTableThatIsNotNew:
+    """"New table" is a claim, and a reviewer typing a name can be wrong about it.
+
+    CREATE TABLE IF NOT EXISTS on a table that already exists succeeds and does nothing, so the
+    column never arrives and the decision is lost silently. existing_canonical_tables has always
+    been passed to the builder and was never consulted; it decides this now.
+    """
+
+    def test_a_table_already_on_the_schema_is_altered_not_recreated(self):
+        ddl = _build_ddl_statements(
+            [_cfg(is_new_table=True, target_table="assets", custom_column_name="vendor_ref")],
+            [], {"assets"})
+        sql = "\n".join(d["sql"] for d in ddl)
+        assert "CREATE TABLE" not in sql.upper()
+        assert "ALTER TABLE plenum_cafm.assets ADD COLUMN IF NOT EXISTS vendor_ref" in sql
+
+    def test_the_check_uses_the_normalised_name(self):
+        """"Assets" and "assets" are one table; the claim must not survive a capital letter."""
+        ddl = _build_ddl_statements(
+            [_cfg(is_new_table=True, target_table="Assets", custom_column_name="vendor_ref")],
+            [], {"assets"})
+        sql = "\n".join(d["sql"] for d in ddl)
+        assert "CREATE TABLE" not in sql.upper()
+
+    def test_a_genuinely_new_table_is_still_created(self):
+        sql = "\n".join(d["sql"] for d in _build_ddl_statements(
+            [_cfg(is_new_table=True, target_table="vendor_extras",
+                  custom_column_name="ref_code", data_type="TEXT")], [], {"assets"}))
+        assert "CREATE TABLE IF NOT EXISTS plenum_cafm.vendor_extras" in sql
+        assert "ref_code TEXT" in sql
+        assert "id UUID PRIMARY KEY DEFAULT gen_random_uuid()" in sql

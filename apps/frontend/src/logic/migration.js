@@ -228,10 +228,19 @@ export function defaultGateBody(gateType, payload, dec) {
           // for it, so a field whose real home was a new column had to be rejected or forced
           // into a column that meant something else.
           if (v === NEWCOL) {
+            // The table the column lands on. Blank means the routed destination, which is what
+            // an override has always meant; a name here sends the field somewhere of its own,
+            // and is_new_table says whether that place has to be made. The writer checks the
+            // claim — a table that already exists is altered rather than created again.
+            const tbl = safeColumn(d[k + '#table'] || '');
+            const known = (p.canonical_columns_by_table || {});
             return {
               action: 'override', source_field: it.source_field,
               target_field: safeColumn(d[k + '#name'] || it.source_field),
               is_new_column: true,
+              target_table: tbl || null,
+              is_new_table: !!tbl && !Object.prototype.hasOwnProperty.call(known, tbl),
+              new_table_pk: 'id',
               data_type: d[k + '#type'] || 'VARCHAR(255)',
               nullable: true, rationale: 'New column created at the review gate'
             };
@@ -728,11 +737,20 @@ export const migrationMethods = {
             // What will be created, which is not always what was typed.
             newNameSafe: safeColumn(dec[k + '#name'] == null ? it.source_field : dec[k + '#name']),
             newType: dec[k + '#type'] || 'VARCHAR(255)',
+            // Blank keeps the routed destination. Typing a name that is not already a table
+            // creates it; typing one that is adds the column to it.
+            newTable: dec[k + '#table'] == null ? '' : dec[k + '#table'],
+            newTableSafe: safeColumn(dec[k + '#table'] || ''),
+            newTableIsNew: !!safeColumn(dec[k + '#table'] || '')
+              && !Object.prototype.hasOwnProperty.call(canon, safeColumn(dec[k + '#table'] || '')),
+            setNewTable: (e) => this.mgDecide(k + '#table', e.target.value),
+            // Shown as the placeholder, so the box says where the field goes if left blank.
+            routedTable: (routing[table] || table),
             newTypes: ['VARCHAR(255)', 'TEXT', 'INTEGER', 'BIGINT', 'NUMERIC(12,2)',
                        'BOOLEAN', 'DATE', 'TIMESTAMPTZ', 'UUID', 'JSONB'],
             setNewName: (e) => this.mgDecide(k + '#name', e.target.value),
             setNewType: (e) => this.mgDecide(k + '#type', e.target.value),
-            newTarget: (routing[table] || table)
+            newTarget: safeColumn(dec[k + '#table'] || '') || (routing[table] || table)
           };
         })
       }));

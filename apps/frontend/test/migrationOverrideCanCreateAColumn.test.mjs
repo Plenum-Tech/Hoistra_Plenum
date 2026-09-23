@@ -62,8 +62,9 @@ test('the row tells the reviewer the name that will actually be created', () => 
   // Typing "Asset Ref" creates asset_ref. Showing the typed text would show a name that is
   // not the one made, and the reviewer approves a column they will not find afterwards.
   assert.ok(src.includes('newNameSafe: safeColumn('));
-  assert.ok(src.includes('newTarget: (routing[table] || table)'),
-    'and which table it lands on, which is the routed destination, not the sheet name');
+  // Which table it lands on is stated too. That follows the typed table where there is one and
+  // falls back to the routed destination, so the line always names the table actually written.
+  assert.ok(src.includes('newTarget: safeColumn('));
 });
 
 test('the offered types are all types the service will accept', () => {
@@ -74,4 +75,34 @@ test('the offered types are all types the service will accept', () => {
   const allowed = /^(VARCHAR\(\d+\)|TEXT|INTEGER|BIGINT|NUMERIC\(\d+,\d+\)|BOOLEAN|DATE|TIMESTAMPTZ|UUID|JSONB)$/;
   offered.forEach((t) => assert.ok(allowed.test(t), t + ' is not a type the writer accepts'));
   assert.ok(offered.length >= 8);
+});
+
+// ── Override can also send the field to a table of its own ────────────────────────
+
+test('the decision can name its own table', () => {
+  assert.ok(src.includes('target_table: tbl || null'),
+    'blank must mean the routed destination, which is what an override always meant');
+  assert.ok(src.includes('is_new_table:'), 'and say whether that table has to be created');
+  assert.ok(src.includes("new_table_pk: 'id'"));
+});
+
+test('a table already on the schema is added to, not created', () => {
+  // canonical_columns_by_table is the set of tables that exist. Claiming "new" for one of them
+  // would emit CREATE TABLE IF NOT EXISTS, which succeeds and does nothing — and the column
+  // would never arrive.
+  assert.ok(src.includes("hasOwnProperty.call(known, tbl)"),
+    'is_new_table must be decided against the tables that exist, not asserted');
+});
+
+test('the table name is normalised the same way as the column', () => {
+  assert.equal(safeColumn('Vendor Extras'), 'vendor_extras');
+  assert.equal(safeColumn('9bad'), '', 'a table cannot start with a digit either');
+});
+
+test('the row says whether it will create a table or add to one', () => {
+  assert.ok(src.includes('newTableIsNew:'));
+  assert.ok(src.includes("newTarget: safeColumn(dec[k + '#table'] || '') || (routing[table] || table)"),
+    'the stated destination must follow the typed table, not the routed one');
+  assert.ok(src.includes('routedTable: (routing[table] || table)'),
+    'and the box must say where a blank sends it');
 });

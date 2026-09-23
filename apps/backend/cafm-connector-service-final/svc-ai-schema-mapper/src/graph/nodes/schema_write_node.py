@@ -131,7 +131,18 @@ def _build_ddl_statements(
         if not target_table:
             continue
 
-        if entry.get("is_new_table", False):
+        # "New table" is a claim about the destination, and a reviewer typing a name can be
+        # wrong about it. CREATE TABLE IF NOT EXISTS on a table that already exists succeeds
+        # and does nothing, and the column then never arrives — the decision and the data are
+        # silently lost. existing_canonical_tables has always been passed here and never
+        # consulted; a name already on the schema takes the ALTER path whatever the flag says.
+        _is_new = entry.get("is_new_table", False)
+        if _is_new and (_safe_identifier(target_table) or target_table) in existing_canonical_tables:
+            logger.info("[DDL] %s already exists — adding the column to it rather than "
+                        "creating it again", target_table)
+            _is_new = False
+
+        if _is_new:
             new_tables.setdefault(target_table, []).append(entry)
         else:
             existing_table_cols.setdefault(target_table, []).append(entry)

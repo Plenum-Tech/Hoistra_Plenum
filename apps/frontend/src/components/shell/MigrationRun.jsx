@@ -249,10 +249,19 @@ function FieldMappingGate({ vals }) {
                       <select className="input" value={r.newType} onChange={r.setNewType} style={{ ...SELECT, width: "140px" }}>
                         {r.newTypes.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
+                      <input
+                        className="input"
+                        value={r.newTable}
+                        onChange={r.setNewTable}
+                        placeholder={"table (" + r.routedTable + ")"}
+                        aria-label={"Target table for " + r.field}
+                        style={{ ...SELECT, width: "150px", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                      />
                       <div style={{ fontSize: "10.5px", color: r.newNameSafe ? "var(--color-neutral-500)" : "var(--st-risk)" }}>
-                        {r.newNameSafe
-                          ? "creates " + r.newTarget + "." + r.newNameSafe
-                          : "not a usable column name"}
+                        {!r.newNameSafe
+                          ? "not a usable column name"
+                          : (r.newTableIsNew ? "creates table " : "adds to ")
+                            + r.newTarget + "." + r.newNameSafe}
                       </div>
                     </div>
                   )}
