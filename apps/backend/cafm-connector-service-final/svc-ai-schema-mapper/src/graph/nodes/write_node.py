@@ -1580,6 +1580,8 @@ async def _apply_records_with_schema_alignment(
             rows_merged = 0
             buildings_linked = 0
             meters_linked = 0
+            meters_matched = 0   # meter sheet rows that named a meter already on record
+
 
             async def _existing_asset_id(_code: str) -> str:
                 if _code not in _asset_ids:
@@ -1826,6 +1828,16 @@ async def _apply_records_with_schema_alignment(
                             safe_row.pop("section_id", None)
 
                     if safe_table == "energy_meters":
+                        # A meter already on record under this supply number is THE meter, not
+                        # a second one. Nothing in the schema makes an MPAN unique, so without
+                        # this a re-ingest of the same export doubles the register — and a
+                        # building with two rows for one supply counts its consumption twice.
+                        if not looks_like_uuid(safe_row.get("id")):
+                            _mh = meter_hint(row)
+                            _known = await _meters.find(_mh) if _mh else None
+                            if _known:
+                                safe_row["id"] = _known
+                                meters_matched += 1
                         if safe_row.get("is_sub_meter") in (None, ""):
                             safe_row["is_sub_meter"] = is_sub_meter_for(row)
                         if not safe_row.get("meter_type"):
@@ -2171,7 +2183,8 @@ async def _apply_records_with_schema_alignment(
                 f"{buildings_linked} building link(s) resolved, "
                 f"{meters_linked} reading(s) placed on a meter "
                 f"({_meters.created} meter(s) created), "
-                f"{_refs.resolved} reference(s) resolved"
+                f"{_refs.resolved} reference(s) resolved, "
+                f"{meters_matched} meter(s) matched to one already on record"
                 + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
             if _buildings.ambiguous and len(row_errors) < 20:
@@ -2203,7 +2216,8 @@ async def _apply_records_with_schema_alignment(
         "rows_merged": rows_merged,
         "buildings_linked": buildings_linked,
         "meters_linked": meters_linked,
-        "meters_created": _meters.created,
+        "meters_created": _meters.created,
+        "meters_matched": meters_matched,
         "meters_unlinked": sorted(set(_meters.unlinked)),
         "references": _refs.report(),
         "row_errors": row_errors,

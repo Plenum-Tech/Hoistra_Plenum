@@ -431,3 +431,53 @@ class TestAMeterPerFloor:
         assert 'if safe_table == "energy_meters":' in src
         assert "_section_for(" in src
         assert "is_sub_meter_for(row)" in src
+
+
+class TestIngestingTheSameMeterTwice:
+    """A meter sheet listing a meter already on record must update it, not add a second row.
+
+    Proved on hoistra_test on 23 Sep 2026. A per-building workbook was ingested that carried an
+    Energy_Meters sheet, and Ashgrove Court came out with four meters where it has two:
+    NB-B-102-E0 and NB-B-102-G1 each twice, the second copy carrying no readings. Nothing in
+    the schema stops that — energy_meters has no unique index on mpan or mprn, so two rows for
+    one supply insert as cleanly as one.
+
+    The damage is not cosmetic. The building rollup sums per meter, so a supply with two rows
+    is counted twice the moment the duplicate carries readings, and the EUI it produces is the
+    number every card on the Energy page is derived from: the benchmark comparison, the excess,
+    and the cost above benchmark.
+
+    The resolver already knew how to find a meter by its supply number — it did so for every
+    reading row. It was simply never asked on a meter row.
+    """
+
+    def test_a_supply_number_already_on_record_finds_its_meter(self):
+        db = FakeDb([(ELEC, "NB-B-102-E0", None)])
+        found = run(resolver(db).find("NB-B-102-E0"))
+        assert found == ELEC
+        assert db.creates == [], "looking a meter up must never create one"
+
+    def test_a_supply_number_not_on_record_finds_nothing_and_still_creates_nothing(self):
+        db = FakeDb([(ELEC, "NB-B-102-E0", None)])
+        assert run(resolver(db).find("NB-B-101-E0")) is None
+        assert db.creates == [], "an unknown meter is created by the writer, with its building"
+
+    def test_a_blank_reference_is_not_a_lookup(self):
+        db = FakeDb([(ELEC, "NB-B-102-E0", None)])
+        for blank in (None, "", "   "):
+            assert run(resolver(db).find(blank)) is None
+        assert db.reads == 0
+
+    def test_asking_twice_asks_the_database_once(self):
+        db = FakeDb([(GAS, None, "NB-B-102-G1")])
+        r = resolver(db)
+        assert run(r.find("NB-B-102-G1")) == GAS
+        assert run(r.find("nb-b-102-g1")) == GAS
+        assert db.reads == 1
+
+    def test_the_writer_asks_before_inserting_a_meter_row(self):
+        """The whole fix. Without this call the branch inserts blind and duplicates."""
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        branch = src.split('if safe_table == "energy_meters":', 1)[1].split("\n\n", 1)[0]
+        assert "_meters.find(" in branch, "a meter row must be matched against the register"
+        assert 'safe_row["id"] = ' in branch, "a match must be reused as the row's own id"

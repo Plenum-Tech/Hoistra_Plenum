@@ -305,6 +305,26 @@ class MeterResolver:
         self._cache[key] = found
         return found
 
+    async def find(self, hint: str | None) -> str | None:
+        """The meter this reference already names, or None. Never creates one.
+
+        A meter SHEET needs this rather than resolve(): re-ingesting a file that lists a meter
+        already on record must update that row, not add a second one beside it. Nothing about
+        an MPAN is unique in the schema, so without this a second ingest of the same export
+        silently doubles the register — and a building with two rows for one supply counts its
+        consumption once per row.
+        """
+        if not hint:
+            return None
+        key = str(hint).strip().lower()
+        if not key:
+            return None
+        if key in self._cache:
+            return self._cache[key]
+        found, _ambiguous = await self._existing(key)
+        self._cache[key] = found
+        return found
+
     async def _existing(self, key: str) -> tuple[str | None, bool]:
         """(the meter, whether the reference was ambiguous). The two are different answers:
         nothing found may be created, more than one found may not."""
