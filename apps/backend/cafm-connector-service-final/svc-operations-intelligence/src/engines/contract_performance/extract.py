@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
 from ...core.logging import get_logger
-from .parameters import ingest_contract_parameters, merge_extraction_with_defaults
+from .parameters import ingest_contract_parameters, merge_extraction_with_defaults, _read_any_terms
 from .invoice import verify_invoice
 
 log = get_logger(__name__)
@@ -479,6 +479,29 @@ async def extract_contract_parameters(
             "table, then confirm (POST /contracts/{id}/confirm)."
         ),
     }
+
+    # A contract row states what a vendor agreed to. When the document stated nothing, every
+    # value in it is the platform's own — and writing that row makes a phantom contract that
+    # outranks the vendor's real one on the Vendors page. The confirm step already refuses
+    # such a row ("Confirming would make them binding on the vendor"); refuse it a step
+    # earlier, where it costs nothing, instead of leaving it to be found.
+    if auto_ingest and not _read_any_terms(field_sources):
+        response["ingest"] = {
+            "ok": False,
+            "reason": "no_contract_terms_found",
+            "error": (
+                "No contract terms were read from this document — every value would be a "
+                "platform default, so no contract was recorded. If this is a contract, "
+                "check the file; if it is an invoice or a certificate, this is expected."
+            ),
+        }
+        response["requires_pm_confirmation"] = False
+        log.warning(
+            "contract.ingest_refused_no_terms",
+            document_id=str(document_id) if document_id else None,
+            vendor_id=str(vendor_id) if vendor_id else None,
+        )
+        return response
 
     if auto_ingest:
         # Prefer caller-supplied signed_date; fall back to extracted value.

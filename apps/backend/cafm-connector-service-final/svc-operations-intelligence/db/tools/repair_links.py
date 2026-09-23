@@ -22,6 +22,8 @@ Fixes, in dependency order:
   7. work_orders.building_id                                         → via site, else location, else asset
   8. eui_snapshots / building_energy_profiles keyed on a site that is not a building, not a
      site and has no meter                                            → deleted (derived / dead)
+  9. plenum_cafm.documents rows that no file was ever uploaded under and that nothing
+     references                                                       → removed (orphaned graph mints)
 The audit log is append-only by trigger and is reported, never touched.
 """
 from __future__ import annotations
@@ -185,6 +187,68 @@ STEPS = [
            AND NOT EXISTS (SELECT 1 FROM plenum_cafm.energy_meters m WHERE m.site_id = p.site_id)"""),
 ]
 
+# ── Orphaned document rows ───────────────────────────────────────────────────
+# A row in plenum_cafm.documents exists so a certificate, contract or invoice can reach a
+# building through it. Engines minted one whenever they had no id to reuse, and an engine
+# that ran twice — an invoice re-verified, a certificate re-filed — minted another. The
+# mint is fixed at each site now; these are the rows the old behaviour left behind.
+#
+# A row qualifies only when BOTH of these hold, and both are facts rather than heuristics:
+#   * no ingestion_documents row carries its id, so GET /api/documents/{id}/download
+#     answers 404 for it and always will — there is no stored file and no extracted text;
+#   * nothing points at it, including the graph_document_id a certificate keeps inside its
+#     raw_metadata, which is a reference the schema does not declare as a column.
+# Such a row can serve nothing and is reachable from nothing. All it does is count as a
+# file on a building's Documents panel — seven of them for one invoice, on Harbour Point.
+#
+# The referencing columns are read from information_schema rather than listed blind, so a
+# database missing one of them narrows the rule instead of skipping the step or, far worse,
+# clearing rows that column still points at.
+_DOCUMENT_REFERENCES: tuple[tuple[str, str], ...] = (
+    ("compliance_certificates", "document_id"),
+    ("compliance_certificates", "source_document_id"),
+    ("compliance_vector_membership_audit", "document_id"),
+    ("contract_documents", "document_id"),
+    ("contract_sla_parameters", "document_id"),
+    ("invoice_verifications", "document_id"),
+    ("ppm_visits", "source_document_id"),
+)
+
+
+async def orphan_document_step(conn) -> tuple[str, str, str] | None:
+    """Step 9, built against this database's own columns. None where documents is absent."""
+    rows = await conn.fetch(
+        """SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema = 'plenum_cafm'"""
+    )
+    have = {(str(r["table_name"]), str(r["column_name"])) for r in rows}
+    if ("documents", "document_id") not in have:
+        return None
+    where = [
+        "NOT EXISTS (SELECT 1 FROM plenum_cafm.ingestion_documents i"
+        " WHERE i.id = d.document_id)"
+    ]
+    for table, column in _DOCUMENT_REFERENCES:
+        if (table, column) in have:
+            where.append(
+                f"NOT EXISTS (SELECT 1 FROM plenum_cafm.{table} r"
+                f" WHERE r.{column} = d.document_id)"
+            )
+    if ("compliance_certificates", "raw_metadata") in have:
+        # Not a column, so no column check finds it: the certificate engine records the
+        # graph row it reused under this key. A row named here is in use.
+        where.append(
+            "NOT EXISTS (SELECT 1 FROM plenum_cafm.compliance_certificates c"
+            " WHERE c.raw_metadata->>'graph_document_id' = d.document_id::text)"
+        )
+    clause = "\n           AND ".join(where)
+    return (
+        "9 plenum_cafm.documents rows with no uploaded file and no reference (orphaned mints)",
+        f"SELECT count(*) FROM plenum_cafm.documents d WHERE {clause}",
+        f"DELETE FROM plenum_cafm.documents d WHERE {clause}",
+    )
+
+
 # ── Synthetic placement ──────────────────────────────────────────────────────
 # The rows below carry nothing that names a building or a vendor — no site, no location, no
 # placed asset — and the owner has confirmed the whole dataset is synthetic. They are placed by
@@ -318,6 +382,12 @@ async def main() -> None:
     args = ap.parse_args()
     steps = STEPS + (SYNTHETIC_STEPS if args.synthetic else [])
     conn = await asyncpg.connect(dsn_for(args.db), database=args.db, timeout=30)
+    # Built from information_schema, so it can only be appended once the connection exists.
+    # Placed ahead of the synthetic steps: those put rows on buildings, this removes rows no
+    # building, engine or download route can reach.
+    orphans = await orphan_document_step(conn)
+    if orphans:
+        steps = steps[: len(STEPS)] + [orphans] + steps[len(STEPS):]
     print(f"== {args.db} — {'APPLY' if args.apply else 'dry run'}")
     total = 0
     tx = conn.transaction()

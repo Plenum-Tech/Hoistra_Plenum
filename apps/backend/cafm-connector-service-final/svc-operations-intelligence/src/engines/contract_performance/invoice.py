@@ -411,6 +411,11 @@ async def verify_invoice(
                         "invoice_ref": invoice_ref,
                         "line": result,
                         "adversary": result["adversary"],
+                        # The Vendors page builds its Invoices tab from this queue and hands
+                        # each row to the vendor it names. Without a vendor the row is
+                        # counted in the portfolio header and belongs to nobody, so the
+                        # vendor whose invoice was flagged shows "Invoices 0".
+                        "vendor_id": str(vendor_id) if vendor_id else None,
                     },
                     organization_id=organization_id,
                     related_entity_type="invoice",
@@ -432,8 +437,16 @@ async def verify_invoice(
                     f"Invoice {invoice_ref or ''} line flagged £{result.get('delta_gbp', 0):.2f}"
                 ),
                 severity="medium",
-                payload={"invoice_ref": invoice_ref, "line": result},
+                payload={
+                    "invoice_ref": invoice_ref,
+                    "line": result,
+                    # See the note on the adversary branch above: the row is useless to the
+                    # Vendors page without the vendor it belongs to.
+                    "vendor_id": str(vendor_id) if vendor_id else None,
+                },
                 organization_id=organization_id,
+                related_entity_type="invoice",
+                related_entity_id=vendor_id,
             )
             result["approvals_queue_id"] = str(item.id)
 
@@ -443,11 +456,6 @@ async def verify_invoice(
     matched_count = insights["matched_count"]
     flagged_count = insights["flagged_count"]
     ratio = insights["matched_flagged_ratio"]
-
-    # The invoices view reaches a building through plenum_cafm.documents, joined on this
-    # column. A verification with no document_id can never join, so one is minted here when
-    # the caller has none rather than leaving the row permanently unplaceable.
-    document_id = document_id or uuid4()
 
     # The same invoice, uploaded again, is one invoice. Two uploads of one PDF produced two
     # verifications and two rows in the invoices view — same vendor, same total, same lines
@@ -475,7 +483,13 @@ async def verify_invoice(
             log.info("invoice.reverified_existing", invoice_ref=invoice_ref,
                      verification_id=str(existing.id))
             existing.vendor_id = vendor_id or existing.vendor_id
-            existing.document_id = document_id or existing.document_id
+            # An invoice has one document. The id used to be minted above, before there
+            # was anything to compare it against, so every re-verification took a fresh
+            # uuid4(), recorded a second documents row for the same invoice, and repointed
+            # the verification at it — leaving the earlier row on the building with nothing
+            # referring to it. Seven readings of one invoice put seven files on Harbour
+            # Point. The reading this replaces already knows which document it was.
+            document_id = document_id or existing.document_id
             existing.status = "completed"
             existing.matched_count = matched_count
             existing.flagged_count = flagged_count
@@ -492,6 +506,14 @@ async def verify_invoice(
                     InvoiceLine.invoice_verification_id == existing.id
                 )
             )
+
+    # The invoices view reaches a building through plenum_cafm.documents, joined on this
+    # column. A verification with no document_id can never join, so one is minted here —
+    # but only once nothing better is available: not the caller's uploaded file, and not
+    # the document an earlier reading of this same invoice already has.
+    document_id = document_id or uuid4()
+    if row is not None:
+        row.document_id = document_id
 
     if row is None:
         row = InvoiceVerification(

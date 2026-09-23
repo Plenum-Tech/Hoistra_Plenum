@@ -185,6 +185,17 @@ ASSET_LOOKUP_SQL = (
     "AND (asset_code = :code OR id::text = :code) LIMIT 1"
 )
 
+# A source row names its contractor — "Meridian Mechanical Ltd" — and every table that
+# points at a vendor does so by uuid (work_orders.assigned_vendor, resources.vendor_id,
+# spare_parts.supplier_id). Nothing resolved the one into the other, so a migrated work
+# order kept the NAME in its text column and left the FK null. The vendor scorecard joins
+# on that FK, found nothing, and reported "0 work orders" against every SLA clause while
+# 16 jobs sat in the table. Matched case-insensitively on the trimmed name.
+VENDOR_LOOKUP_SQL = (
+    "SELECT id::text FROM {schema}.vendors WHERE organization_id::text = :org "
+    "AND lower(btrim(vendor_name)) = lower(btrim(:name)) ORDER BY created_at LIMIT 1"
+)
+
 ASSET_BUILDING_SQL = (
     "SELECT building_id::text FROM {schema}.assets WHERE organization_id::text = :org "
     "AND (id::text = :ref OR asset_code = :ref) AND building_id IS NOT NULL LIMIT 1"

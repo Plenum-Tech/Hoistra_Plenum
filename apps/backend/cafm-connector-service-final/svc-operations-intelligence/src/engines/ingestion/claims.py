@@ -57,6 +57,39 @@ _COMPANY_SUFFIX = re.compile(
     r"\b([A-Z][A-Za-z0-9&'\-. ]{2,48}?\s(?:Ltd|Limited|LLP|PLC|Plc|LLC|Inc\.?|GmbH|Pte\.? Ltd|"
     r"Services|Group|Engineering|Maintenance|Facilities|Solutions|Contracts?)\.?)\b")
 _ASSET_RE = re.compile(r"\b([A-Z]{1,5}-[A-Z0-9]{1,8}-[A-Z0-9]{1,8}(?:-[A-Z0-9]{1,6})?)\b")
+
+# _ASSET_RE matches a SHAPE, not a meaning: letters, dash, alphanumerics. An invoice's own
+# number, the work orders it bills and the parts it lists all fit it. On 23 Sep 2026 that made
+# the asset check announce "None of the asset references in the document (MERI-2026-09-0051,
+# WO-B-101-35, PRT-BOILER-SVC, WO-B-101-38) are on this building" — of four references, none
+# of which is an asset, and two of which were work orders that WERE on that building. The
+# reader had to override a conflict that did not exist.
+#
+# These prefixes are the conventional ones for the things an FM document lists BESIDE its
+# plant: work orders, parts, purchase orders, invoices, credit notes.
+_NOT_AN_ASSET_PREFIX = re.compile(
+    r"^(?:WO|WKO|JOB|TASK|PRT|PART|SP|SPARE|INV|PO|CN|CR|QTE|QUO)[-_]", re.I
+)
+# A plant item is not dated. A document reference usually is — MERI-2026-09-0051,
+# PO-2026-0044 — so a calendar year inside the code says "document", not "asset".
+_DOCUMENT_YEAR = re.compile(r"[-_](?:19|20)\d{2}[-_]")
+
+
+def _looks_like_an_asset_code(code: str) -> bool:
+    """Is this hyphenated code plausibly a plant item, rather than a document reference?
+
+    Conservative on purpose: it only rejects what is recognisably something else. Anything
+    it cannot place stays an asset claim, because a missed asset reference weakens a check
+    while a wrong one makes the platform state something untrue to the reader.
+    """
+    c = (code or "").strip()
+    if not c:
+        return False
+    if _NOT_AN_ASSET_PREFIX.match(c):
+        return False
+    if _DOCUMENT_YEAR.search(c):
+        return False
+    return True
 _CONTRACT_RE = re.compile(
     r"(?:contract|agreement|po|purchase order)\s*(?:ref|reference|no\.?|number|id)\s*[:\-–]\s*"
     r"([A-Z0-9][A-Z0-9\-/_]{2,24})", re.IGNORECASE)
@@ -207,6 +240,10 @@ def from_document(
     if c.meters:
         _known = {normalise(m) for m in c.meters}
         c.assets = [a for a in c.assets if normalise(a) not in _known]
+
+    # Same reasoning, one step further: drop the codes that are recognisably a work order, a
+    # part, or a document reference rather than plant. See _looks_like_an_asset_code.
+    c.assets = [a for a in c.assets if _looks_like_an_asset_code(a)]
 
     return c
 

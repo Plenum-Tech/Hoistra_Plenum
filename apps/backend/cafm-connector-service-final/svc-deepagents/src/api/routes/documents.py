@@ -5,9 +5,18 @@ Document access router — open / download the documents referenced in answers.
 resolves that to `GET /api/documents/<id>/download`. This guarantees a working
 link even when the original binary was never stored:
 
-  - blob_url present  → redirect to the stored original file.
-  - blob_url missing  → stream the extracted text (from document_chunks) as a
-                        .txt so the content is always accessible.
+  - ingestion_documents.blob_url  → redirect to the stored original file.
+  - document_chunks               → stream the extracted text as a .txt, so the
+                                    content is accessible with no original kept.
+  - plenum_cafm.documents.blob_url → redirect; the graph's own table, which is
+                                    where a file lands when doc-rag never indexed
+                                    it and where the test portfolio keeps all of
+                                    them. Asked last because the ingestion row
+                                    carries the filename the uploader used.
+
+All three, because building_tree._openable reads all three when it decides whether
+to render an open control — and a route that answered a narrower question put a
+live-looking link on rows that replied "Document not found".
 """
 import io
 from uuid import UUID
@@ -52,11 +61,8 @@ async def download_document(document_id: str):
             log.error("documents.download.lookup_error", error=str(exc)[:200])
             raise HTTPException(status_code=500, detail="Document lookup failed")
 
-        if not row:
-            raise HTTPException(status_code=404, detail="Document not found")
-
-        filename = (row.get("file_name") or f"document-{document_id}").strip()
-        blob_url = (row.get("blob_url") or "").strip()
+        filename = ((row or {}).get("file_name") or f"document-{document_id}").strip()
+        blob_url = ((row or {}).get("blob_url") or "").strip()
 
         # Original file in blob storage → hand the browser straight to it.
         if blob_url:
@@ -80,6 +86,37 @@ async def download_document(document_id: str):
 
         body = "\n\n".join(c for c in chunks if c)
         if not body:
+            # The graph's own table, asked last and only when nothing above answered.
+            #
+            # A document has two homes. doc-rag writes ingestion_documents for what it
+            # indexed; the graph writes plenum_cafm.documents for what a certificate, a
+            # contract or an invoice reaches a building through — and the test portfolio
+            # keeps its files there and nowhere else. This route read only the first, so a
+            # row with a perfectly good blob_url in the second answered "Document not
+            # found". building_tree._openable reads BOTH when it decides whether to show an
+            # open control, and says in its docstring that it mirrors this route, so every
+            # such row rendered a live link straight onto a 404.
+            #
+            # Asked last because the ingestion row is the richer record: it carries the
+            # filename the uploader actually used, where the graph row may carry none.
+            try:
+                graph = (
+                    await session.execute(
+                        text(
+                            "SELECT file_name, blob_url FROM plenum_cafm.documents "
+                            "WHERE document_id::text = :id"
+                        ),
+                        {"id": str(doc_uuid)},
+                    )
+                ).mappings().first()
+            except Exception as exc:  # pragma: no cover - defensive
+                log.error("documents.download.graph_lookup_error", error=str(exc)[:200])
+                graph = None
+            graph_url = ((graph or {}).get("blob_url") or "").strip()
+            if graph_url:
+                return RedirectResponse(url=graph_url, status_code=307)
+            if not row and not graph:
+                raise HTTPException(status_code=404, detail="Document not found")
             raise HTTPException(
                 status_code=404,
                 detail="No downloadable content for this document (no stored file or extracted text).",

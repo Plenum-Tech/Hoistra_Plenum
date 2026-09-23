@@ -241,7 +241,9 @@ function invoiceLine(item, now) {
     line: (line.wo_code || "unmatched work order") + (line.line_id !== undefined && line.line_id !== null ? " · line " + line.line_id : ""),
     charged: noWo ? (delta !== null ? gbp(delta) : "—") : (rate !== null ? rateH(rate) : (delta !== null ? gbp(delta) : "—")),
     should: noWo ? "no work order" : (contracted !== null ? rateH(contracted) : "—"),
-    delta: delta !== null ? (delta >= 0 ? "+" : "−") + gbp(Math.abs(delta)) : "—",
+    // Exact, not rounded. This is the sum a credit note is raised for and someone
+    // reconciles against an invoice — £27.55 shown as £28 is a figure that will not tie out.
+    delta: delta !== null ? (delta >= 0 ? "+" : "−") + gbpExact(Math.abs(delta)) : "—",
     deltaValue: delta,
     flag: line.discrepancy || item.summary || "",
     status: status,
@@ -723,5 +725,38 @@ export const vendorsLiveMethods = {
     }
     this._vpRefresh = setTimeout(() => this.vpLoad(), REFRESH_MS);
   },
-  vpRetryNow() { this._vpAttempts = 0; return this.vpLoad({ announce: true }); }
+  vpRetryNow() { this._vpAttempts = 0; return this.vpLoad({ announce: true }); },
+
+  // "Rebuild scorecards" — the button that used to ask the chat a question.
+  //
+  // runAction() looked for an action spec matching "rebuild scorecards", found none, and
+  // fell through to orch(), which sent the words to the orchestrator. The scoring endpoints
+  // were never called from the UI at all: on 23 Sep 2026 vendor_wo_scores and
+  // vendor_monthly_scorecards were both empty while 16 migrated work orders sat scoreable in
+  // the table, and Meridian Mechanical read "not scored" against a confirmed contract.
+  //
+  // Scoring a portfolio is a write and it is slow, so the page says it is working and reloads
+  // from the service afterwards rather than guessing the outcome.
+  async vpRebuildNow() {
+    if (this.state.vpRebuilding) return;
+    this.setState({ vpRebuilding: true, vpError: null });
+    try {
+      const r = await opsApi.rebuildScorecards();
+      // Only buckets whose vendor has a CONFIRMED contract are scored; the rest come back
+      // ok:false. Say how many actually scored rather than reporting a flat success.
+      const results = (r && r.results) || [];
+      const scored = results.filter((x) => x && x.ok).length;
+      const skipped = results.length - scored;
+      this.setState({
+        vpRebuilding: false,
+        vpRebuildNote: scored
+          ? scored + " of " + results.length + " vendor-months scored"
+            + (skipped ? " · " + skipped + " skipped, no confirmed contract" : "")
+          : "Nothing scored — no vendor has a confirmed contract to measure against."
+      });
+    } catch (e) {
+      this.setState({ vpRebuilding: false, vpError: (e && e.message) || "rebuild failed" });
+    }
+    return this.vpLoad({ announce: true });
+  }
 };

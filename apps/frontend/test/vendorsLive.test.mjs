@@ -276,7 +276,11 @@ test('invoice lines held are the flagged lines in the approvals queue, matched t
   assert.equal(l2.status, 'Held');
   assert.equal(l2.charged, '£62.00/h');
   assert.equal(l2.should, '£43.75/h');
-  assert.equal(l2.delta, '+£55');
+  // To the penny. This asserted '+£55' while the value was 55.12, which is what the UI
+  // showed: a credit note is raised for this figure and reconciled against the invoice line
+  // it came from, so a rounded one does not tie out. £27.55 rendering as £28 on 23 Sep 2026
+  // is what prompted the change.
+  assert.equal(l2.delta, '+£55.12');
   assert.equal(l2.period, 'Sep 2023');
   assert.match(l2.flag, /exceeds contracted/);
   const l21 = R.invoices.find((i) => /9001/.test(i.line));

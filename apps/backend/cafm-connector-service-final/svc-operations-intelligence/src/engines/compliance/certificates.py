@@ -1410,6 +1410,9 @@ async def upsert_certificate(
             cert_id = existing.id
 
     cert = existing or ComplianceCertificate(id=cert_id)
+    # Read before the replace below overwrites them — see _keep_vendor_id / _keep_vendor_meta.
+    _prior_vendor_id = existing.vendor_id if existing is not None else None
+    _prior_meta = dict(existing.raw_metadata or {}) if existing is not None else {}
 
     cert.organization_id = org_id
     cert.org_id = org_id
@@ -1420,7 +1423,7 @@ async def upsert_certificate(
     cert.cert_scope = scope
     cert.asset_id = _parse_uuid(data.get("asset_id"))
     cert.site_id = _parse_uuid(data.get("site_id"))
-    cert.vendor_id = _parse_uuid(data.get("vendor_id"))
+    cert.vendor_id = _keep_vendor_id(_parse_uuid(data.get("vendor_id")), _prior_vendor_id)
     # Vendor scope: resolve FK from company name when not provided (A3 ingest)
     if scope == "Vendor" and cert.vendor_id is None:
         from .contractors import resolve_or_create_vendor
@@ -1460,6 +1463,19 @@ async def upsert_certificate(
         )
         if resolved:
             cert.vendor_id = resolved
+            # The registration check ran in svc-deepagents BEFORE this function resolved the
+            # vendor — and resolve_or_create_vendor may have just created it. Its
+            # "not found on-platform" verdict then describes a state that ended a moment ago,
+            # and carrying it onto the record is not harmless: the Compliance console counts
+            # ANY authenticity_warning as "Authenticity failed · forensics flagged the
+            # document". On 22 Sep 2026 that reported three Northbridge accreditations as
+            # authenticity failures whose forensics had passed clean at risk 0.
+            # The vendor exists and is linked, so that clause is dropped and the warning
+            # rebuilt from what is still true — forensics, and the soft register note.
+            if (vendor_registration or {}).get("platform_compliance") == "unknown_vendor":
+                warning = merge_authenticity_warnings(
+                    soft_warning, forensics_payload, None
+                )
         elif company:
             # A vendor-scope certificate whose vendor could not be resolved is not a
             # neutral outcome: nothing will block, and the vendor KPIs will not count it.
@@ -1525,7 +1541,7 @@ async def upsert_certificate(
     cert.insurance_risk_flag = life.insurance_risk_flag if confirmed_by_pm else False
     cert.authenticity_warning = warning
     cert.issuer = data.get("issuer") or pack.issuing_body
-    meta = dict(data.get("raw_metadata") or {})
+    meta = _keep_vendor_meta(data.get("raw_metadata"), _prior_meta)
     meta["field_confidence"] = data.get("field_confidence") or meta.get("field_confidence") or {}
     # Persist the CERTIFIED company as vendor_name so ccc_verify matches the register on the
     # accredited firm — not on cert.issuer, which for many vendor certs is the assessing/issuing
@@ -3908,3 +3924,40 @@ def _parse_uuid(val: Any) -> UUID | None:
     if isinstance(val, UUID):
         return val
     return UUID(str(val))
+
+
+# ── vendor identity survives a partial re-upsert ────────────────────────────────────────
+# upsert_certificate is a full replace: every column is reassigned from `data`. That is
+# right for a first ingest, where `data` IS the whole document. It is wrong for the second
+# write of the same certificate, which the compliance sub-agent makes through the
+# `upsert_compliance_certificate` tool carrying only the fields the model chose to repeat.
+#
+# On 22 Sep 2026 that cost three Northbridge accreditations their vendor: the single-door
+# pass resolved and set vendor_id, the sub-agent re-upserted seconds later without it, and
+# the link was reset to NULL. Nothing warned, because the unresolved-vendor warning below
+# only fires when a company name WAS supplied — a payload carrying none fails silently.
+#
+# So identity is carried forward rather than replaced by absence. An explicit value still
+# wins, which keeps re-assignment working; clearing a vendor is what /certificates/{id}/link
+# is for, and it goes through its own path.
+
+
+def _keep_vendor_id(incoming: UUID | None, prior: UUID | None) -> UUID | None:
+    """The vendor on the record, unless this write names a different one."""
+    return incoming or prior
+
+
+def _keep_vendor_meta(
+    incoming: dict[str, Any] | None, prior: dict[str, Any] | None
+) -> dict[str, Any]:
+    """`incoming`, with vendor identity carried forward when it omits it.
+
+    Only the identity keys are carried. The rest of the old metadata is deliberately NOT
+    merged: a stale forensics verdict from an earlier run must not outlive the write that
+    replaced it.
+    """
+    out = dict(incoming or {})
+    for key in ("vendor_name", "company_name"):
+        if not out.get(key) and (prior or {}).get(key):
+            out[key] = (prior or {})[key]
+    return out

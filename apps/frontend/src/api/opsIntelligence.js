@@ -57,6 +57,22 @@ export const opsApi = {
     apiFetch(B, '/api/contract-performance/contracts/' + encodeURIComponent(parametersId), {
       method: 'PATCH', body: { updates: updates, actor: actor || null }, timeoutMs: T_WRITE
     }),
+  // Cut the scorecards from the work orders already migrated into plenum_cafm. This is what
+  // the Vendors page's "Rebuild scorecards" button does — it used to hand the WORDS to the
+  // chat orchestrator through runAction(), which matched no action spec, so the button asked
+  // a question and nothing was ever scored. vendor_wo_scores and vendor_monthly_scorecards
+  // both sat empty while the jobs to score were in the table.
+  //
+  // all_buckets scores every vendor x month present, not just last month, so a portfolio
+  // migrated in one go is scored in one go. A vendor with no CONFIRMED contract comes back
+  // ok:false and is skipped — scoring against platform defaults would hold a vendor to terms
+  // they never agreed to.
+  rebuildScorecards: (body) =>
+    apiFetch(B, '/api/contract-performance/score/from-udr', {
+      method: 'POST',
+      body: Object.assign({ all_buckets: true, generate_scorecard: true, limit: 500 }, withOrg(body || {})),
+      timeoutMs: T_WRITE
+    }),
   // The scoring weights in force (SLA response / completion / first fix / recall /
   // accreditation percentages, the blocked-score cap, the invoice adversary threshold).
   weights: () =>

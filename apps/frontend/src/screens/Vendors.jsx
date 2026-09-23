@@ -59,9 +59,12 @@ export default function Vendors({ vals }) {
                 <span>{vals.vpSourceLabel}</span>
                 <span className="hv11" onClick={vals.vpRetry} style={{ color: "var(--color-accent)", cursor: "pointer", display: vals.vpRetryShow }}>{"Retry"}</span>
               </div>
-              <div className="btn btn-primary" onClick={vals.vpRebuild} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer" }}>
-                {"Rebuild scorecards"}
+              <div className="btn btn-primary" onClick={vals.vpRebuilding ? undefined : vals.vpRebuild} style={{ fontSize: "12px", padding: "7px 14px", cursor: vals.vpRebuilding ? "default" : "pointer", opacity: vals.vpRebuilding ? 0.6 : 1 }}>
+                {vals.vpRebuildLabel}
               </div>
+              <span title={"What the last rebuild scored. A vendor with no confirmed contract is skipped rather than scored against platform defaults."} style={{ fontSize: "11px", color: "var(--color-neutral-400)", display: vals.vpRebuildNote ? "inline" : "none" }}>
+                {vals.vpRebuildNote}
+              </span>
               <div className="hv4" onClick={vals.vpWeights} style={{ fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {"Scoring weights"}
               </div>

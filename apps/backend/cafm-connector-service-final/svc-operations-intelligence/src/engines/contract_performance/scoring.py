@@ -1269,6 +1269,24 @@ def _coalesce(cols: dict[str, str], *candidates: str, cast: str = "") -> str | N
     return "COALESCE(" + ", ".join(f"wo.{c}{suffix}" for c in present) + ")"
 
 
+
+def _row_limit(limit: Any, default: int = 500) -> int:
+    """How many work orders to pull, when the caller may not have said.
+
+    Every signature down this path declares `limit: int = 500`, but the route hands over
+    `body.limit` whatever it holds — and an omitted limit arrives as None, which overrides
+    the default rather than falling back to it. `int(None)` then raised TypeError and took
+    down the entire scoring run before a single work order was read.
+    """
+    if limit is None:
+        return default
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
 async def _build_udr_wo_query(
     session: AsyncSession,
     *,
@@ -1291,7 +1309,7 @@ async def _build_udr_wo_query(
     (a str where `CAST(:start_d AS date)` promised a date, for instance).
     """
     cols = await _work_order_columns(session)
-    params: dict[str, Any] = {"lim": int(limit)}
+    params: dict[str, Any] = {"lim": _row_limit(limit)}
 
     def expr(alias: str, *candidates: str, cast: str = "", default: str = "NULL") -> str:
         found = _coalesce(cols, *candidates, cast=cast)

@@ -677,6 +677,51 @@ async def classify_compliance_certificate_hybrid(
     return result
 
 
+def _extract_building_fields(
+    extracted: dict[str, Any], text: str
+) -> tuple[str | None, str | None]:
+    """The building this certificate is about: its name, and the reference the portfolio
+    knows it by.
+
+    ops-intelligence already knows what to do with these two — `_pick_field` finds them,
+    `resolve_site_link` links the site FK and `attach_to_graph` places the certificate on the
+    building (engines/compliance/certificates.py). It simply never received them: this door
+    posted certificate_number, the dates, the inspector and the result, and nothing else off
+    the page. So every INGESTED building certificate landed under "No building on
+    certificate", while one added by hand through the same API could carry its building.
+
+    The UK pack's key_fields_schema names no building field for CP17 or EICR, so `extracted`
+    often holds none — hence the text fallback, which reads the same labelled rows a person
+    reading the certificate would. The reference pattern deliberately requires the word
+    "building" so a certificate number can never be mistaken for one.
+    """
+    name: str | None = None
+    ref: str | None = None
+    for key in ("Building name", "building_name", "Premises name", "Property name", "Site name"):
+        val = extracted.get(key)
+        if val and str(val).strip():
+            name = str(val).strip()
+            break
+    for key in ("Building reference", "building_reference", "Building ref", "Site reference"):
+        val = extracted.get(key)
+        if val and str(val).strip():
+            ref = str(val).strip()
+            break
+    if not name:
+        m = re.search(r"building\s*name\s*[:|]?\s*([A-Z][^\n|]{1,80})", text or "", re.I)
+        if m:
+            name = m.group(1).strip()
+    if not ref:
+        m = re.search(
+            r"building\s*(?:reference|ref)\s*(?:no\.?|number)?\s*[:|]?\s*([A-Za-z0-9][^\n|]{0,40})",
+            text or "",
+            re.I,
+        )
+        if m:
+            ref = m.group(1).strip()
+    return (name[:255] if name else None, ref[:120] if ref else None)
+
+
 def _extract_company_name(extracted: dict[str, Any], text: str, filename: str) -> str | None:
     for key in ("Company name", "company_name", "vendor_name", "Contractor", "Business name"):
         val = extracted.get(key)
@@ -1034,6 +1079,16 @@ async def route_compliance_certificate_upload(
             }
             if company:
                 upsert_payload["vendor_name"] = company
+            # A building certificate has to arrive naming its building. ops-intelligence
+            # resolves the site FK and the graph edge from these two columns; without them
+            # the certificate is stored but belongs to nothing, and the console groups it
+            # under "No building on certificate".
+            if scope != "Vendor":
+                _b_name, _b_ref = _extract_building_fields(extracted, text or "")
+                if _b_name:
+                    upsert_payload["building_name"] = _b_name
+                if _b_ref:
+                    upsert_payload["building_reference"] = _b_ref
             try:
                 up = await _request(
                     "POST",

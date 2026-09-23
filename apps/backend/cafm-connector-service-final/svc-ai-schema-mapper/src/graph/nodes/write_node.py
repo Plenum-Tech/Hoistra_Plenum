@@ -1238,6 +1238,7 @@ def _foreign_key_columns_from_error(exc: object) -> list[str]:
 # so it is surfaced to the user for re-mapping — instead of asyncpg rejecting the WHOLE
 # row and silently losing every column of it.
 _COERCE_TYPE_MISMATCH = object()
+_NO_SYSTEM_DEFAULT = object()
 
 
 def _coerce_value_for_db_type(value: object, db_type: str) -> object:
@@ -1371,10 +1372,99 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
 
     # ── uuid: accept the string form ────────────────────────────────────────────────────
     if t == "uuid":
+        # Validate, like every other branch above. This used to return any string untouched,
+        # so a code that reached a uuid column got as far as asyncpg and raised DataError
+        # while BINDING the parameter. That happens before Postgres sees a statement, so the
+        # orphan-FK recovery in the writer (which reads a constraint name out of the error)
+        # could never match it, and the whole row was skipped. On 22 Sep 2026 that silently
+        # cost 160 of 195 rows in a migration the UI reported as complete.
+        #
+        # reference_link now resolves asset_id, vendor_id, contract_id and part_id before
+        # this runs, and drops the column when nothing matches — so those four can no longer
+        # arrive here as a code. This is the floor under every OTHER uuid column, which has
+        # no resolver of its own and would still lose its whole row to one bad field.
+        #
+        # Reported as a type mismatch instead: the caller drops this one field, keeps the
+        # rest of the row, and surfaces the column at the mapping gate so it can be re-mapped.
+        try:
+            uuid.UUID(str(value))
+        except (ValueError, AttributeError, TypeError):
+            return _COERCE_TYPE_MISMATCH
         return value if isinstance(value, str) else str(value)
 
     # Unknown destination type — hand it over untouched.
     return value
+
+
+# What identifies a row as "the same row" on a re-run, when the database has no unique index
+# to say so.
+#
+# _build_dml_for_row falls back to a bare ON CONFLICT DO NOTHING wherever no unique index
+# exists — but the writer mints a fresh uuid4() for `id` on every row, so there is never a PK
+# collision and the clause never fires. Assets escaped this because they have an explicit
+# merge-by-code path; nothing else did. Re-running the same workbook on 23 Sep 2026 therefore
+# left 23 assets and 16 work orders correct while duplicating vendors, inspections and
+# resources, and the Vendors list showed six entries for three firms.
+#
+# Candidate groups are tried in order; the first whose columns are ALL present in both the
+# table and the row wins. A table absent here is simply not deduped, which is the old
+# behaviour — never a guess at what "the same row" means.
+_NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "vendors": (("vendor_code",), ("vendor_name",)),
+    "ppm_visits": (("ppm_ref",),),
+    "resources": (("engineer_id",), ("resource_code",)),
+    "spare_parts": (("part_code",),),
+    "sites": (("site_id",),),
+    "work_orders": (("wo_code",),),
+    # No reference column of its own, so a finding is identified by what it is a finding ABOUT.
+    "inspections": (("asset_code", "inspection_date", "finding_type"),),
+}
+
+
+def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[str, ...], list]]:
+    """EVERY key that could identify this row as one already written.
+
+    All of them, not the first: the candidates are alternative names for the same row, and a
+    row already on file may have been created by another route that filled a different one.
+    Returning only the first got this wrong on 23 Sep 2026 — the certificate ingest had
+    created vendors with vendor_code NULL, the workbook carried vendor_code, so the lookup
+    asked for a code no existing row had, found nothing, and inserted a twin of a vendor it
+    was holding the name of.
+    """
+    out: list[tuple[tuple[str, ...], list]] = []
+    for group in _NATURAL_KEYS.get(table, ()):
+        if all(c in db_cols and str(row.get(c) or "").strip() for c in group):
+            out.append((group, [row[c] for c in group]))
+    return out
+
+
+def _system_default_for_db_type(col: str, db_type: str, org_id: str | None) -> object:
+    """A value for a NOT NULL column the source cannot possibly supply.
+
+    Only ever called for columns that are NOT NULL, have no DDL default, and were not
+    present in the row. These are system/provenance fields — `conflict_flag`, `source`,
+    `raw_metadata`, `org_id` — never business data, because business data the source DOES
+    carry arrives in the row and never reaches here.
+
+    Returns _NO_SYSTEM_DEFAULT when there is no honest value to invent (a date, a name),
+    and the row is then skipped as before rather than filled with a fiction.
+    """
+    t = (db_type or "").lower()
+    c = (col or "").lower()
+    if c in {"org_id", "organization_id"} and org_id:
+        return org_id
+    if "bool" in t:
+        return False
+    if "json" in t:
+        return "{}"
+    if c in {"source", "origin", "created_by", "source_system"}:
+        # True, and useful: it says where the row came from.
+        return "migration"
+    if "int" in t or "numeric" in t or "double" in t or "real" in t:
+        return 0
+    if "char" in t or "text" in t:
+        return ""
+    return _NO_SYSTEM_DEFAULT
 
 
 def _collect_approved_new_columns(state) -> dict[str, set[str]]:
@@ -1557,6 +1647,27 @@ async def _apply_records_with_schema_alignment(
             # appears at all.
             _refs = ReferenceResolver(_fetch, effective_org_id, schema_name)
 
+            # Has this row been written by an earlier run? See _NATURAL_KEYS: the bare
+            # ON CONFLICT DO NOTHING in _build_dml_for_row cannot answer it, because `id` is
+            # a fresh uuid4() every time and so never collides. Cached per key, including
+            # the misses, so re-running a workbook costs one read per distinct row, not one
+            # per row.
+            _nk_seen: dict[tuple, bool] = {}
+
+            async def _already_written(_table: str, _cols: tuple, _vals: list, _has_org: bool) -> bool:
+                _ck = (_table, _cols, tuple(str(v) for v in _vals))
+                if _ck not in _nk_seen:
+                    _where = " AND ".join(f"{c} = :v{i}" for i, c in enumerate(_cols))
+                    _prm = {f"v{i}": v for i, v in enumerate(_vals)}
+                    if _has_org:
+                        _where += " AND organization_id::text = :org"
+                        _prm["org"] = effective_org_id
+                    _hit = await _fetch(
+                        f"SELECT 1 FROM {schema_name}.{_table} WHERE {_where} LIMIT 1", _prm
+                    )
+                    _nk_seen[_ck] = bool(_hit)
+                return _nk_seen[_ck]
+
             # The uploader's selection, checked once. A building_id that names no building of
             # this organisation is dropped rather than written, because a row pointing at
             # somebody else's building is worse than a row pointing at none.
@@ -1677,7 +1788,7 @@ async def _apply_records_with_schema_alignment(
                 cols_rs = await session.execute(
                     text(
                         """
-                        SELECT column_name, data_type, is_nullable
+                        SELECT column_name, data_type, is_nullable, column_default
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name AND table_name = :table_name
                         """
@@ -1690,6 +1801,17 @@ async def _apply_records_with_schema_alignment(
                 # isn't present (orphan reference): null the FK so the row still lands, instead of
                 # dropping it. NOT NULL FKs can't be nulled, so those rows are skipped.
                 db_nullable_cols = {str(r[0]) for r in _col_rows if str(r[2]).upper() == "YES"}
+                # Required by the database, defaulted by nobody. This writer builds raw INSERT
+                # statements, so a Python-side ORM default never runs — and the source file
+                # cannot supply a system column it has never heard of. work_orders.conflict_flag
+                # is a boolean flag the platform sets; ppm_visits.source records where the row
+                # came from. Both are NOT NULL with no DDL default, so every row arrived with
+                # NULL and Postgres rejected it: 16/16 work orders and 132/132 PPM visits lost
+                # on 22 Sep 2026, reported only as "Skipping bad row".
+                db_required_undefaulted = {
+                    str(r[0]) for r in _col_rows
+                    if str(r[2]).upper() == "NO" and r[3] is None
+                }
                 db_cols = set(db_col_type_map.keys())
                 if db_cols:
                     logger.info(f"[Node 9]   {safe_table}: {len(db_cols)} DB columns found")
@@ -1999,6 +2121,10 @@ async def _apply_records_with_schema_alignment(
                 type_mismatch_by_col: dict[str, tuple[int, str, str]] = {}
                 # Per-column orphan-FK tally: {fk_column: rows nulled because the parent was absent}.
                 orphan_fk_by_col: dict[str, int] = {}
+                # {column: rows} filled with a system default because the source had none.
+                _sys_filled: dict[str, int] = {}
+                # {table: rows} already present from an earlier run, skipped instead of duplicated.
+                _dupes_skipped: dict[str, int] = {}
                 #: Rows waiting to go in one statement. Flushed every _WRITE_CHUNK and
                 #: again at the end of the table.
                 _pending_rows: list[tuple[dict, str, dict]] = []
@@ -2053,6 +2179,33 @@ async def _apply_records_with_schema_alignment(
                                     f"[Node 9] assets: merge into existing {_existing} for code "
                                     f"{_code!r} failed ({str(_merge_exc)[:120]}); inserting instead"
                                 )
+
+                    # Fill the columns the database requires, has no default for, and the
+                    # source could not have known about. Done last, so anything the file DID
+                    # supply always wins.
+                    for _rc in db_required_undefaulted:
+                        if _rc in filtered or _rc not in db_cols:
+                            continue
+                        _sv = _system_default_for_db_type(
+                            _rc, db_col_type_map.get(_rc, ""), str(effective_org_id or "") or None
+                        )
+                        if _sv is not _NO_SYSTEM_DEFAULT:
+                            filtered[_rc] = _sv
+                            _sys_filled[_rc] = _sys_filled.get(_rc, 0) + 1
+
+                    # Already written by an earlier run? Skip rather than insert a twin.
+                    # The bare ON CONFLICT DO NOTHING below cannot catch this: `id` is a fresh
+                    # uuid4() every time, so there is never a primary-key collision to catch.
+                    _dupe = False
+                    for _cols, _vals in _natural_keys_for(safe_table, filtered, db_cols):
+                        if await _already_written(
+                            safe_table, _cols, _vals, "organization_id" in db_cols
+                        ):
+                            _dupe = True
+                            break
+                    if _dupe:
+                        _dupes_skipped[safe_table] = _dupes_skipped.get(safe_table, 0) + 1
+                        continue
 
                     try:
                         dml_sql, params = _build_dml_for_row(
@@ -2176,6 +2329,21 @@ async def _apply_records_with_schema_alignment(
                         f"[Node 9]   {safe_table}: 0 rows to insert ({_tbl_elapsed:.1f}s)"
                     )
 
+                # Outside the branches above on purpose: a table whose every row was already
+                # on file inserts nothing, and "0 inserted" on its own reads as a failure.
+                # The reason it inserted nothing is the thing worth saying.
+                if _dupes_skipped.get(safe_table):
+                    logger.info(
+                        f"[Node 9]   {safe_table}: {_dupes_skipped[safe_table]} row(s) already "
+                        f"present from an earlier run — skipped, not duplicated"
+                    )
+                if _sys_filled:
+                    logger.info(
+                        f"[Node 9]   {safe_table}: filled required column(s) the source does "
+                        f"not carry — "
+                        + ", ".join(f"{c} x{n}" for c, n in sorted(_sys_filled.items()))
+                    )
+
             logger.info(
                 f"[Node 9] Schema-aligned write done — "
                 f"{rows_inserted} row(s) across {tables_written} table(s), "
@@ -2183,7 +2351,7 @@ async def _apply_records_with_schema_alignment(
                 f"{buildings_linked} building link(s) resolved, "
                 f"{meters_linked} reading(s) placed on a meter "
                 f"({_meters.created} meter(s) created), "
-                f"{_refs.resolved} reference(s) resolved, "
+                f"{_refs.resolved} reference(s) resolved, "
                 f"{meters_matched} meter(s) matched to one already on record"
                 + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
@@ -2216,7 +2384,7 @@ async def _apply_records_with_schema_alignment(
         "rows_merged": rows_merged,
         "buildings_linked": buildings_linked,
         "meters_linked": meters_linked,
-        "meters_created": _meters.created,
+        "meters_created": _meters.created,
         "meters_matched": meters_matched,
         "meters_unlinked": sorted(set(_meters.unlinked)),
         "references": _refs.report(),

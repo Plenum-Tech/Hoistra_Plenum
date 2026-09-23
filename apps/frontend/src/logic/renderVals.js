@@ -812,7 +812,13 @@ export const renderValsMethods = {
       })(),
 
       isVP: s.signedIn && s.view === "vp",
-      vpRebuild: () => this.runAction("Rebuild scorecards", "Vendors"),
+      // Calls the scoring endpoints directly. It used to go through runAction(), which
+      // matched no action spec and handed the words to the chat — the button asked a
+      // question and nothing was ever scored.
+      vpRebuild: () => this.vpRebuildNow(),
+      vpRebuilding: !!s.vpRebuilding,
+      vpRebuildLabel: s.vpRebuilding ? "Scoring…" : "Rebuild scorecards",
+      vpRebuildNote: s.vpRebuildNote || "",
       // Where the page's figures came from, said on the page itself. The same pill the
       // compliance console carries: nothing here is seed data, so when the service has not
       // answered the page says so rather than filling itself in.
@@ -1019,8 +1025,11 @@ export const renderValsMethods = {
         const tag = (k) => TAGS[k] || TAGS["Not on record"];
         const CRIT = { L1: ["var(--st-risk-bg)", "var(--st-risk)"], L2: ["var(--st-warn-bg)", "var(--st-warn)"], L3: ["var(--color-neutral-900)", "var(--color-neutral-400)"] };
         const credit = R.breaches.reduce((q, b) => q + parseInt(b.cost.replace(/[^0-9]/g, ""), 10), 0);
+        // Summed to the penny, not per-line rounded: this figure goes on a credit note.
+        // Math.round() per line turned £27.55 into £28, and a claim that does not tie back
+        // to the invoice line it came from is a claim the vendor gets to argue about.
         const invTotal = R.invoices.filter((i) => i.status === "Held" || i.status === "Disputed")
-          .reduce((q, i) => q + (typeof i.deltaValue === "number" ? Math.round(Math.abs(i.deltaValue)) : parseInt((i.delta || "0").replace(/[^0-9]/g, "") || "0", 10)), 0);
+          .reduce((q, i) => q + (typeof i.deltaValue === "number" ? Math.abs(i.deltaValue) : (parseFloat(String(i.delta || "0").replace(/[^0-9.]/g, "")) || 0)), 0);
         const mandatoryMissing = missing.filter((c) => c.req === "Mandatory");
         const capNames = mandatoryMissing.length ? mandatoryMissing.map((c) => c.name).join(" and ")
           : (v.blockedType || "a mandatory accreditation");
@@ -1185,7 +1194,8 @@ export const renderValsMethods = {
           // held — not that every line was checked and matched.
           invEmptyShow: R.invoices.length ? "none" : "block",
           invEmpty: "No invoice line for this vendor is held. Only lines the rate check flags reach this queue, so matched lines are not listed here and no total is stated for them.",
-          invTotal: R.invoices.some((i) => i.status === "Held" || i.status === "Disputed") ? "£" + invTotal.toLocaleString() : "—",
+          invTotal: R.invoices.some((i) => i.status === "Held" || i.status === "Disputed")
+            ? "£" + invTotal.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—",
           invActionsShow: R.invoices.length ? "flex" : "none",
           challenge: () => this.runAction("Raise credit note", v.name),
           approveInv: () => this.runAction("Approve as charged", v.name)

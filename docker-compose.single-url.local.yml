@@ -130,6 +130,36 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # The migration pipeline's background worker. Every gate the reader answers is enqueued
+  # as `resume_migration` on the arq queue in Redis; without a consumer the job sits there
+  # and the Migration page simply stops moving — no error, no timeout, nothing to read.
+  #
+  # On 22 Sep 2026 a CMMS export sat queued for 546 seconds that way, and Redis showed the
+  # worker health key had never been written: no compose file in this repo defined a worker,
+  # so migrations had never completed on any stack built from it. Same image and env as
+  # schema-mapper-app above — only the command differs.
+  schema-mapper-worker:
+    build:
+      context: ./apps/backend/cafm-connector-service-final
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      USE_SQLITE_DEV: "false"
+      PLENUM_CMMS_SCHEMA: plenum_cafm
+      DEBUG: "true"
+      ENVIRONMENT: development
+      LANGSMITH_TRACING: "false"
+      OTEL_SDK_DISABLED: "true"
+    command: ["arq", "src.worker.WorkerSettings"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   svc-udr:
     build:
       context: ./apps/backend/cafm-connector-service-final/svc-udr

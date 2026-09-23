@@ -138,7 +138,7 @@ export const complianceMethods = {
         bHint: "statutory exposure live now", vHint: "vendor barred from regulated work",
         bAct: () => this.orch("Assign contractor", "Compliance"), vAct: () => this.orch("Change contractor", "Compliance") },
       { id: "auth", value: scopeCerts.filter((c) => /suspect/.test(c.auth)).length, label: "Authenticity failed", color: "var(--st-risk)", mark: "⌾",
-        bHint: "forensics flagged the document", vHint: "vendor-supplied document in doubt",
+        bHint: "the document's own checks did not clear it", vHint: "vendor-supplied document in doubt",
         bAct: () => this.orch("Review flagged certificates", "Compliance"), vAct: () => this.orch("Request evidence from vendor", "Vendor performance") },
       { id: "d30", value: scopeCerts.filter((c) => c.days >= 0 && c.days <= 30).length, label: "High risk · < 30d", color: "var(--st-risk)", mark: "✕",
         bHint: "book before the window closes", vHint: "lapse would block work in scope",

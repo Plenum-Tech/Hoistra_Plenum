@@ -261,6 +261,16 @@ async def _has_confirmed_contract(
     return (await session.execute(q.limit(1))).scalar_one_or_none() is not None
 
 
+def _read_any_terms(field_sources: dict[str, str] | None) -> bool:
+    """Did this document state a single contract term of its own?
+
+    merge_extraction_with_defaults marks each field "contract" when it came off the page and
+    "default" when the platform supplied it. None marked "contract" means the extractor read
+    nothing, and the file is not a contract, whatever else it is.
+    """
+    return any(str(v) == "contract" for v in (field_sources or {}).values())
+
+
 async def ingest_contract_parameters(
     session: AsyncSession,
     *,
@@ -283,6 +293,32 @@ async def ingest_contract_parameters(
     editable table for PM confirmation.
     """
     merged, defaults_used, field_sources = merge_extraction_with_defaults(extracted)
+
+    # A contract row states what a vendor AGREED to. When the document stated nothing, every
+    # value in it is the platform's own, and writing the row creates a phantom contract that
+    # outranks the vendor's real one on the Vendors page.
+    #
+    # This guard first went in one caller up, in extract.py's auto_ingest branch. That was
+    # the wrong door: the orchestrator calls ingest_contract_parameters directly as a tool,
+    # so verifying an invoice still minted contracts — four of them for Meridian Mechanical
+    # on 22-23 Sep 2026, one of them named after the invoice number. The check belongs here,
+    # at the only place that writes, where every caller passes.
+    if not _read_any_terms(field_sources):
+        log.warning(
+            "contract.ingest_refused_no_terms",
+            document_id=str(document_id) if document_id else None,
+            vendor_name=_text(vendor_name) or _text((extracted or {}).get("vendor_name")),
+            contract_ref=_text(contract_ref),
+        )
+        return {
+            "ok": False,
+            "reason": "no_contract_terms_found",
+            "error": (
+                "No contract terms were read from this document — every value would be a "
+                "platform default, so no contract was recorded. If this is a contract, check "
+                "the file; if it is an invoice or a certificate, this is expected."
+            ),
+        }
 
     # A contract names its vendor; it does not carry the platform's id for them. Resolve
     # that name to an existing vendor, and register one with a fresh id when the vendor is

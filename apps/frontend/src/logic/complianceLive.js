@@ -83,10 +83,19 @@ export function relDays(days, long) {
 function authOf(r) {
   const verdict = String(r.forensics_verdict || r.forensics_ccc_verdict || "").toLowerCase();
   const score = r.forensics_risk_score;
-  if (r.authenticity_warning || /suspect|forg|fail|reject|high/.test(verdict)) {
+  const flagged = /suspect|forg|fail|reject|high/.test(verdict);
+  const cleared = /genuine|pass|verified|clear|low/.test(verdict);
+  // authenticity_warning is a MIXED field. It carries forensic findings, but also purely
+  // advisory notes — "confirm against the register via Verify now", "vendor not yet on
+  // platform". Reading its mere presence as doubt about the paper marked three Northbridge
+  // accreditations suspect on 22 Sep 2026 whose forensics had passed at risk 0, and the
+  // Compliance card then told the reader forensics had flagged them. It had not.
+  // The document's own verdict decides. An advisory note beside a clean verdict is a task
+  // still to do, not a reason to distrust the document.
+  if (flagged || (r.authenticity_warning && !cleared)) {
     return { auth: "suspect" + (score !== null && score !== undefined ? " · " + Math.round(Number(score)) : ""), authSev: "warn" };
   }
-  if (/genuine|pass|verified|clear|low/.test(verdict)) return { auth: "genuine", authSev: "ok" };
+  if (cleared) return { auth: "genuine", authSev: "ok" };
   return { auth: "not checked", authSev: "none" };
 }
 function verOf(r) {

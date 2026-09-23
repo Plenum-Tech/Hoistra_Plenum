@@ -537,6 +537,17 @@ def format_single_door_chat_preface(
     haystack = " ".join([summary_text or "", *(step_summaries or [])]).lower()
     if "compliance" in haystack or "certificate" in haystack:
         parts.append("Review drafts in [Compliance](/compliance).")
+    elif "invoice" in haystack:
+        # An invoice verification reports itself as "Contract Performance B3: verified
+        # invoice ...", so it used to fall into the branch below and tell the reader to go
+        # and confirm contract parameters. There are none to confirm: an invoice states no
+        # terms, and since the fitness gate it no longer creates a contract to hold them.
+        # What an invoice DOES produce is held lines, and they are on the vendor's own tab.
+        parts.append(
+            "Flagged lines are held on the vendor's "
+            "[Invoices tab](/vendors?space=contract_performance) — approve as charged, or "
+            "raise a credit note for the difference."
+        )
     elif "contract performance" in haystack or "feature b" in haystack:
         parts.append(
             "Review and confirm the extracted parameters in "

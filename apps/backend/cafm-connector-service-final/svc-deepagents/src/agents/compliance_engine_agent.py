@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import uuid
 from typing import Any
 
 import httpx
@@ -557,6 +558,32 @@ async def count_compliance_certificates(
         return _err(exc, "count_compliance_certificates")
 
 
+def _split_vendor_ref(
+    vendor_id: str | None, vendor_name: str | None
+) -> tuple[str | None, str | None]:
+    """Sort a vendor reference into the field that can hold it.
+
+    A certificate prints its contractor's NAME. It does not print a UUID. So a model filling
+    this tool in knows "Meridian Mechanical Ltd" and nothing else — and until vendor_name
+    existed here, the only vendor-shaped parameter on offer was `vendor_id`. It put the name
+    there, CertificateUpsertRequest types that column as a UUID, and Pydantic returned 422.
+    The write was lost and the agent reported the certificate as unstored when the
+    single-door pass had already stored it.
+
+    A name arriving in the id field is therefore read as what it is rather than refused. An
+    explicit vendor_name always wins; ops-intelligence resolves it to the vendor either way.
+    """
+    vid = (vendor_id or "").strip()
+    name = (vendor_name or "").strip() or None
+    if not vid:
+        return None, name
+    try:
+        uuid.UUID(vid)
+    except (ValueError, AttributeError, TypeError):
+        return None, name or vid
+    return vid, name
+
+
 @tool
 async def upsert_compliance_certificate(
     cert_scope: str,
@@ -568,6 +595,7 @@ async def upsert_compliance_certificate(
     asset_id: str | None = None,
     site_id: str | None = None,
     vendor_id: str | None = None,
+    vendor_name: str | None = None,
     inspector_name: str | None = None,
     inspector_accreditation_number: str | None = None,
     result: str | None = None,
@@ -578,10 +606,15 @@ async def upsert_compliance_certificate(
 ) -> dict:
     """Upsert a building or vendor certificate (A2/A3 ingest).
 
+    vendor_id must be a UUID. When you know the contractor only by the name printed on the
+    certificate — which is the usual case — pass vendor_name instead and leave vendor_id
+    unset; it is resolved to the vendor on the server.
+
     confirmed_by_pm=False still persists a draft (appears in lists / Saved Space).
     Set confirmed_by_pm=True after the PM reviews extracted fields to finalise.
     Fail/Advisory opens remedial_status only after confirm (no WO auto-created).
     """
+    vendor_id, vendor_name = _split_vendor_ref(vendor_id, vendor_name)
     try:
         resp = await _request(
             "POST",
@@ -599,6 +632,7 @@ async def upsert_compliance_certificate(
                 "asset_id": asset_id,
                 "site_id": site_id,
                 "vendor_id": vendor_id,
+                "vendor_name": vendor_name,
                 "inspector_name": inspector_name,
                 "inspector_accreditation_number": inspector_accreditation_number,
                 "result": result,
