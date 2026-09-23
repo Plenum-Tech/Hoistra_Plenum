@@ -1636,7 +1636,13 @@ async def _apply_records_with_schema_alignment(
                         _rs = await session.execute(text(_sql), _params)
                         return [tuple(r) for r in _rs.fetchall()]
                 except Exception as _lookup_exc:  # a missing column, a bad cast — never fatal
-                    logger.debug(f"[Node 9] building lookup failed: {str(_lookup_exc)[:160]}")
+                    # A lookup that RAISED and one that matched nothing both return [], and the
+                    # caller cannot tell them apart. Say which this was, or an unresolvable
+                    # reference and a broken query look identical for the rest of the run.
+                    logger.warning(
+                        f"[Node 9] lookup failed (treated as no match): "
+                        f"{type(_lookup_exc).__name__}: {str(_lookup_exc)[:200]}"
+                    )
                     return []
 
             _buildings = BuildingResolver(
@@ -1681,7 +1687,14 @@ async def _apply_records_with_schema_alignment(
                         _row = _rs.first()
                         return str(_row[0]) if _row and _row[0] else None
                 except Exception as _create_exc:     # a constraint, a bad cast — never fatal
-                    logger.debug(f"[Node 9] meter create failed: {str(_create_exc)[:160]}")
+                    # Warning, not debug. This is the only account of why a meter could not be
+                    # made, and every reading that names it fails afterwards; at debug it never
+                    # reached the container log and the run looked like it simply found nothing.
+                    logger.warning(
+                        f"[Node 9] meter create failed for mpan={mpan!r} mprn={mprn!r} "
+                        f"building={building_id!r}: {type(_create_exc).__name__}: "
+                        f"{str(_create_exc)[:200]}"
+                    )
                     return None
 
             _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
@@ -1737,6 +1750,12 @@ async def _apply_records_with_schema_alignment(
             rows_merged = 0
             buildings_linked = 0
             meters_linked = 0
+            #: Set when a table is given up on, so the run reports it rather than a
+            #: quietly short insert. One table stopping does not stop the others.
+            _table_abandoned: str | None = None
+            #: One warning per run, not one per row: 35,040 copies of the same line is not a
+            #: better diagnosis than one, and it is a worse log.
+            _unlinked_reported = False
             meters_matched = 0   # meter sheet rows that named a meter already on record
 
 
@@ -2046,6 +2065,17 @@ async def _apply_records_with_schema_alignment(
                             safe_row["meter_id"] = _mid
                             meters_linked += 1
                         else:
+                            if not _unlinked_reported:
+                                _unlinked_reported = True
+                                logger.warning(
+                                    f"[Node 9] {safe_table}: no meter for this row, so meter_id "
+                                    f"is null and the row cannot be written — "
+                                    f"meter reference {_mh!r}, building hint {_hint!r}, "
+                                    f"resolved building {_mbid!r}. "
+                                    f"{'No reference in the row' if not _mh else ''}"
+                                    f"{'No building, so a meter cannot be created' if _mh and not _mbid else ''}"
+                                    f"{'Lookup and create both returned nothing' if _mh and _mbid else ''}"
+                                )
                             # Left absent rather than guessed. meter_id is NOT NULL, so the row
                             # is skipped and reported, which is the honest outcome: a reading on
                             # the wrong meter is a year of consumption on the wrong building.
@@ -2293,6 +2323,12 @@ async def _apply_records_with_schema_alignment(
                             for _e in _batch["errors"]:
                                 if len(row_errors) < 20:
                                     row_errors.append(_e)
+                            if _batch.get("abandoned"):
+                                # The whole table is wrong, not this chunk of it. Carrying on
+                                # hands the next five hundred rows to the same failure and
+                                # repeats the message once per chunk.
+                                _table_abandoned = _batch["abandoned"]
+                                break
                         continue
                     except ConnectionLost:
                         raise
