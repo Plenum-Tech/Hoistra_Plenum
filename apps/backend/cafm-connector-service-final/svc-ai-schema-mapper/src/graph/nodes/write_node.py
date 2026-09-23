@@ -38,6 +38,7 @@ from .meter_link import (
     CREATE_METER_SQL, SECTION_LOOKUP_SQL, MeterResolver, is_sub_meter_for, meter_hint,
     meter_type_for, section_hint, supply_numbers,
 )
+from .reference_link import REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 
@@ -1549,6 +1550,13 @@ async def _apply_records_with_schema_alignment(
 
             _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
 
+            # Codes and names in the file, resolved to the ids the database keys on. A CSV
+            # cannot carry a uuid anybody would type; it carries asset_code, vendor_name,
+            # contract_name. Without this every one of those columns was written as null,
+            # which for ppm_visits means the row is dropped by an inner join and never
+            # appears at all.
+            _refs = ReferenceResolver(_fetch, effective_org_id, schema_name)
+
             # The uploader's selection, checked once. A building_id that names no building of
             # this organisation is dropped rather than written, because a row pointing at
             # somebody else's building is worse than a row pointing at none.
@@ -1819,6 +1827,21 @@ async def _apply_records_with_schema_alignment(
                             safe_row["is_sub_meter"] = is_sub_meter_for(row)
                         if not safe_row.get("meter_type"):
                             safe_row["meter_type"] = meter_type_for(row)
+
+                    # Codes and names to ids, for whichever of these columns this table has.
+                    for _ref_col in REFERENCES:
+                        if _ref_col not in db_cols:
+                            continue
+                        if looks_like_uuid(safe_row.get(_ref_col)):
+                            continue
+                        _rh = hint_for(_ref_col, row)
+                        _rid = await _refs.resolve(_ref_col, _rh) if _rh else None
+                        if _rid:
+                            safe_row[_ref_col] = _rid
+                        else:
+                            # Absent rather than guessed. A name written into a uuid column
+                            # fails the row; a wrong id is worse, because it succeeds.
+                            safe_row.pop(_ref_col, None)
 
                     # The meter link. A reading carries no building of its own; it reaches one
                     # through its meter, so resolving the meter is what places the reading.
@@ -2144,7 +2167,8 @@ async def _apply_records_with_schema_alignment(
                 f"{rows_skipped} skipped, {rows_merged} merged into existing assets, "
                 f"{buildings_linked} building link(s) resolved, "
                 f"{meters_linked} reading(s) placed on a meter "
-                f"({_meters.created} meter(s) created)"
+                f"({_meters.created} meter(s) created), "
+                f"{_refs.resolved} reference(s) resolved"
                 + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
             if _buildings.ambiguous and len(row_errors) < 20:
@@ -2178,6 +2202,7 @@ async def _apply_records_with_schema_alignment(
         "meters_linked": meters_linked,
         "meters_created": _meters.created,
         "meters_unlinked": sorted(set(_meters.unlinked)),
+        "references": _refs.report(),
         "row_errors": row_errors,
     }
 
