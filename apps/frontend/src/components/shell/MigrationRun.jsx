@@ -236,6 +236,26 @@ function FieldMappingGate({ vals }) {
                       {r.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
+                  {r.isNew && (
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", marginTop: "6px" }}>
+                      <input
+                        className="input"
+                        value={r.newName}
+                        onChange={r.setNewName}
+                        placeholder="column name"
+                        aria-label={"New column name for " + r.field}
+                        style={{ ...SELECT, width: "170px", fontFamily: "var(--font-mono)", fontSize: "12px" }}
+                      />
+                      <select className="input" value={r.newType} onChange={r.setNewType} style={{ ...SELECT, width: "140px" }}>
+                        {r.newTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <div style={{ fontSize: "10.5px", color: r.newNameSafe ? "var(--color-neutral-500)" : "var(--st-risk)" }}>
+                        {r.newNameSafe
+                          ? "creates " + r.newTarget + "." + r.newNameSafe
+                          : "not a usable column name"}
+                      </div>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

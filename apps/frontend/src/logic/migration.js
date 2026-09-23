@@ -89,6 +89,15 @@ export function progressKey(doc) {
 export const STALL_AFTER_MS = 3 * 60 * 1000;
 
 export const cmmsName = (v) => (String(v == null ? '' : v).trim() || 'Custom');
+// The column name the migration service will actually create. schema_write_node normalises
+// and then validates the same way before it will build any DDL from it, so showing the typed
+// text would show a name that is not the one made. Kept in step with _safe_identifier there.
+export function safeColumn(raw) {
+  const norm = String(raw == null ? '' : raw).trim().toLowerCase()
+    .replace(/[ -]/g, '_').replace(/[^a-z0-9_]/g, '');
+  return /^[a-z_][a-z0-9_]{0,62}$/.test(norm) ? norm : '';
+}
+
 const pct = (x) => (x === null || x === undefined || isNaN(x)) ? '—' : Math.round(Number(x) * 100) + '%';
 
 // "3 min ago" for the recent-runs list; absolute past a day, since the list spans weeks.
@@ -205,12 +214,28 @@ export function defaultGateBody(gateType, payload, dec) {
       return { overrides: overrides };
     }
     case 'field_mapping': {
+      // The value the "New column…" option stores. A sentinel, not a column name, so it can
+      // never collide with a real target and be mistaken for one.
+      const NEWCOL = '__new__';
       const flagged = {};
       Object.entries(p.review_items_by_table || {}).forEach(([table, items]) => {
         flagged[table] = (items || []).map((it) => {
           const k = 'f:' + table + '.' + it.source_field;
           const v = d[k];
           if (v === 'reject') return { action: 'reject', source_field: it.source_field, target_field: null, rationale: null };
+          // Override to a column that does not exist yet. The gate already understands this —
+          // human_review_node turns is_new_column into an ALTER TABLE — but nothing could ask
+          // for it, so a field whose real home was a new column had to be rejected or forced
+          // into a column that meant something else.
+          if (v === NEWCOL) {
+            return {
+              action: 'override', source_field: it.source_field,
+              target_field: safeColumn(d[k + '#name'] || it.source_field),
+              is_new_column: true,
+              data_type: d[k + '#type'] || 'VARCHAR(255)',
+              nullable: true, rationale: 'New column created at the review gate'
+            };
+          }
           if (v && v !== 'accept' && v !== it.suggested_target) return { action: 'override', source_field: it.source_field, target_field: v, rationale: null };
           return { action: 'accept', source_field: it.source_field, target_field: it.suggested_target || null, rationale: null };
         });
@@ -693,8 +718,21 @@ export const migrationMethods = {
             field: it.source_field, suggested: it.suggested_target || '—', confidence: pct(it.confidence), rationale: it.rationale || '',
             samples: (it.sample_values || []).slice(0, 3).join(', '), mode: mode, target: mode === 'override' ? v : (it.suggested_target || ''),
             seg: seg([{ value: 'accept', label: 'Accept' }, { value: 'reject', label: 'Reject', tone: 'var(--st-risk)' }], mode === 'override' ? 'override' : mode, k),
-            options: [{ value: '', label: 'Override with…' }].concat(alts.concat(cols.filter((c) => alts.indexOf(c) < 0)).map((c) => ({ value: c, label: c }))),
-            pickTarget: (e) => this.mgDecide(k, e.target.value || undefined)
+            options: [{ value: '', label: 'Override with…' }]
+              .concat(alts.concat(cols.filter((c) => alts.indexOf(c) < 0)).map((c) => ({ value: c, label: c })))
+              .concat([{ value: '__new__', label: 'New column…' }]),
+            pickTarget: (e) => this.mgDecide(k, e.target.value || undefined),
+            // Set when "New column…" is chosen: the row then asks for a name and a type.
+            isNew: v === '__new__',
+            newName: dec[k + '#name'] == null ? it.source_field : dec[k + '#name'],
+            // What will be created, which is not always what was typed.
+            newNameSafe: safeColumn(dec[k + '#name'] == null ? it.source_field : dec[k + '#name']),
+            newType: dec[k + '#type'] || 'VARCHAR(255)',
+            newTypes: ['VARCHAR(255)', 'TEXT', 'INTEGER', 'BIGINT', 'NUMERIC(12,2)',
+                       'BOOLEAN', 'DATE', 'TIMESTAMPTZ', 'UUID', 'JSONB'],
+            setNewName: (e) => this.mgDecide(k + '#name', e.target.value),
+            setNewType: (e) => this.mgDecide(k + '#type', e.target.value),
+            newTarget: (routing[table] || table)
           };
         })
       }));
