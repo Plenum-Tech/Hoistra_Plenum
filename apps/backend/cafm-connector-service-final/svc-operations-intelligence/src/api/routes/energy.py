@@ -46,6 +46,7 @@ from ...engines.energy import ratings_position as position_svc
 from ...engines.energy import us_ratings as us_svc
 from .auth import scope
 from ..schemas.energy import (
+
     BmsTrendsRequest,
     ChillerDesignRequest,
     ChillerReadingsRequest,
@@ -66,6 +67,9 @@ from ..schemas.energy import (
     QueueDecisionRequest,
     ReadingsIngestRequest,
 )
+from ...core.logging import get_logger
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/api/energy", tags=["energy-intelligence"],
                    # Every route here needs a signed-in caller, and a company named in
@@ -989,12 +993,44 @@ async def scan_all_anomalies(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
+    """Scan for anomalies, then re-derive the EUI the whole page is built on.
+
+    Two passes, one button, because the page reads them as one answer. The anomaly rules find
+    what deviates from a building's OWN baseline; the benchmark pass derives its EUI from the
+    same readings and compares it against its market's reference. Only the first ran here, so
+    after any ingest the Energy page showed anomalies priced to the penny beside "no EUI reading
+    on record for any building in scope" — the readings were there, nothing had asked them the
+    second question. The benchmark pass otherwise runs on a daily schedule, so the page was
+    correct by the next morning and looked broken until then.
+
+    The benchmark pass is not allowed to fail the scan. It writes the EUI snapshots and prices
+    the gap; the anomalies are already found and committed by then, and reporting the whole run
+    as failed because the second half did would lose that.
+    """
     organization_id = access.organization_for(s, organization_id)
     if history_days:
-        return await anom_svc.backfill_all_active_meters(
+        out = await anom_svc.backfill_all_active_meters(
             session, organization_id=organization_id, history_days=history_days
         )
-    return await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+    else:
+        out = await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+
+    try:
+        ids = await position_svc.building_ids_for(session, s, None)
+        bench = await bench_svc.validate(
+            session, building_ids=ids, organization_id=organization_id, persist=True
+        )
+        out["benchmarks"] = {
+            "ok": True,
+            "buildings": len(bench.get("buildings") or []),
+            "eui_derived": sum(1 for b in (bench.get("buildings") or [])
+                               if b.get("eui_kwh_per_m2") is not None),
+            "snapshots_written": bench.get("snapshots_written") or bench.get("written") or 0,
+        }
+    except Exception as exc:  # noqa: BLE001 — the anomalies are found and must still be reported
+        log.warning("energy.scan_all.benchmarks_failed", error=str(exc)[:200])
+        out["benchmarks"] = {"ok": False, "error": str(exc)[:200]}
+    return out
 
 
 @router.get("/sections")
