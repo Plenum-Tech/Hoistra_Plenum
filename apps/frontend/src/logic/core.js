@@ -206,6 +206,29 @@ export const coreMethods = {
     // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
     const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now(), owner: this.state.account && this.state.account.email, viewOrgId: this.state.viewOrgId || null });
     const record = !(opts && opts.record === false);
+    // A new task is a new conversation, so the dock opens empty.
+    //
+    // This made a session record and opened the dock, and left ccChat exactly as it was.
+    // Pressing "Approve booking" on a certificate therefore logged a fresh session in the
+    // sidebar and then showed the PREVIOUS one's transcript underneath it — a migration
+    // result and an unrelated question about an electricity meter, sitting above an
+    // approval the reader had just asked for. Two sessions listed, one body, and no way to
+    // tell which reply belonged to which.
+    //
+    // It also drops sessionId, so the next message starts a new orchestrator thread rather
+    // than inheriting the last one's context and answering in it.
+    //
+    // A TASK opening a CLOSED dock starts a new conversation; nothing else resets. The
+    // failure this fixes was a closed dock opening onto the last conversation's transcript.
+    // A dock that is open is a conversation the reader is in, and an action beside it (a
+    // refinement chip, a cron action, "Request evidence") joins it rather than deleting it
+    // and killing a reply still streaming. A QUESTION (record:false — ccAsk) never resets:
+    // closing the dock does not end a conversation (closeOrch keeps ccChat and sessionId),
+    // so a follow-up typed after pressing × reopens it with its history. And on the chat
+    // page the conversation IS the page — dockAnswers() is false there — so no action
+    // wipes it. The question itself is appended after this call, either way.
+    const dockPage = typeof this.dockAnswers !== "function" || this.dockAnswers();
+    if (record && !this.state.orchOpen && dockPage) this.ccChatReset();
     clearInterval(this._orchTick);
     this.setState((p) => Object.assign({
       orchOpen: true, orchTask: entry, orchDone: 0,
