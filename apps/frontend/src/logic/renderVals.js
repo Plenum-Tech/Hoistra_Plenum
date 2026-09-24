@@ -823,6 +823,26 @@ export const renderValsMethods = {
       vpRebuilding: !!s.vpRebuilding,
       vpRebuildLabel: s.vpRebuilding ? "Scoring…" : "Rebuild scorecards",
       vpRebuildNote: s.vpRebuildNote || "",
+      // Work orders scoring is holding back. The flag is sticky and the scoring fetch skips
+      // flagged rows, so without a control here the only way to release one was a hand-written
+      // UPDATE — which is what a reader had to do on 24 Sep when a comparison bug flagged the
+      // only two work orders the one confirmed vendor had.
+      vpConflicts: (vm.conflicts || []).map((cf) => ({
+        woCode: cf.woCode,
+        fields: cf.fields,
+        summary: cf.summary,
+        // Both readings, side by side. The choice is between two records, so the page shows
+        // the records rather than asking for a verdict on a code.
+        sides: cf.sides,
+        busy: s.vpResolving === cf.woCode,
+        acceptStored: () => this.vpResolveConflict(cf.woCode, "stored"),
+        acceptIncoming: () => this.vpResolveConflict(cf.woCode, "incoming")
+      })),
+      vpConflictsShow: (vm.conflicts || []).length ? "block" : "none",
+      vpConflictsTitle: (vm.conflicts || []).length === 1
+        ? "1 work order held out of scoring"
+        : (vm.conflicts || []).length + " work orders held out of scoring",
+      vpResolveNote: s.vpResolveNote || "",
       // Where the page's figures came from, said on the page itself. The same pill the
       // compliance console carries: nothing here is seed data, so when the service has not
       // answered the page says so rather than filling itself in.

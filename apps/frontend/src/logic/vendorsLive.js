@@ -253,6 +253,33 @@ function invoiceLine(item, now) {
   };
 }
 
+// A flagged work order, as a row someone can resolve.
+//
+// The flag means the stored row and a re-ingestion disagree about a cost or a timestamp.
+// Scoring excludes the work order until that is settled, and the exclusion is permanent
+// until someone chooses a side — so the row names both sides rather than offering a
+// dismiss. On 24 Sep 2026 two work orders sat flagged by a comparison bug and the only
+// vendor with a confirmed contract had nothing left to score; the resolver existed on the
+// server the whole time and no control called it.
+function conflictRow(item) {
+  const p = item.payload || {};
+  const details = p.conflict_details || {};
+  const fields = Object.keys(details);
+  return {
+    woCode: String(p.wo_code || item.related_entity_id || item.summary || "").trim(),
+    // Named, not counted: "actual_cost, completed_at" tells the reader what to go and check.
+    fields: fields.join(", "),
+    // Each side as the queue recorded it, so the choice is made on the values themselves.
+    sides: fields.map((f) => ({
+      field: f,
+      stored: details[f] && details[f].stored !== undefined ? String(details[f].stored) : "—",
+      incoming: details[f] && details[f].incoming !== undefined ? String(details[f].incoming) : "—"
+    })),
+    summary: item.summary || "",
+    itemId: item.id
+  };
+}
+
 // ── the shaping ─────────────────────────────────────────────────────────
 // input: the reads, each null / missing when that request failed
 //   summary       GET /api/contract-performance/saved-space/summary
@@ -372,6 +399,13 @@ export function shapeLiveVendors(input, now) {
 
   // Flagged invoice lines, once, then handed to the vendor they belong to.
   const flagged = (approvals || []).filter((it) => /^invoice_flag/.test(String(it.item_type || ""))).map((it) => invoiceLine(it, at));
+  // Work orders held out of scoring until someone picks a side. Exact match on the item
+  // type, not a prefix: `invoice_flag` and `work_order_conflict` are different decisions
+  // with different controls, and an item shown under the wrong one is worse than hidden.
+  const conflicts = (approvals || [])
+    .filter((it) => String(it.item_type || "") === "work_order_conflict")
+    .map(conflictRow)
+    .filter((r) => r.woCode);
 
   ids.forEach((id) => {
     const card = latest[id] || null;
@@ -634,7 +668,10 @@ export function shapeLiveVendors(input, now) {
   return {
     live: true, month: month, lastRebuild: lastRebuild, vendors: vendors, V: V, weights: weights, weightsText: weightsText,
     tiles: tiles, counts: counts, pkgOf: (id) => pkgById[id] || "Unclassified",
-    pendingCount: tiles.pending, kpis: (summary && summary.kpis) || null
+    pendingCount: tiles.pending, kpis: (summary && summary.kpis) || null,
+    // Always an array. A page that has to test for null before counting is a page that
+    // will print "undefined" the first time a read fails.
+    conflicts: conflicts
   };
 }
 
@@ -726,6 +763,31 @@ export const vendorsLiveMethods = {
     this._vpRefresh = setTimeout(() => this.vpLoad(), REFRESH_MS);
   },
   vpRetryNow() { this._vpAttempts = 0; return this.vpLoad({ announce: true }); },
+  // Release a work order that scoring is holding back, by saying which record is right.
+  //
+  // `accept` is 'stored' or 'incoming' and nothing else. Validated here rather than left to
+  // the server, because a typo that reaches the API would clear the flag while discarding
+  // the choice — the resolver only copies the incoming values across when it is told to, and
+  // silently keeps the stored ones otherwise. A wrong word would look like a decision and be
+  // a coin toss.
+  async vpResolveConflict(woCode, accept, note) {
+    if (accept !== "stored" && accept !== "incoming") {
+      this.setState({ vpError: "Choose the stored or the incoming values." });
+      return;
+    }
+    if (!woCode || this.state.vpResolving) return;
+    this.setState({ vpResolving: woCode, vpError: null });
+    try {
+      await opsApi.resolveWoConflict(woCode, accept, note);
+    } catch (e) {
+      // Never reload on failure: the row vanishing is how this page says "done", and a
+      // failed write that looks done is the defect this whole area already has a history of.
+      this.setState({ vpResolving: null, vpError: (e && e.message) || "could not resolve " + woCode });
+      return;
+    }
+    this.setState({ vpResolving: null, vpResolveNote: woCode + " released — rebuild to score it" });
+    return this.vpLoad({ announce: true });
+  },
 
   // "Rebuild scorecards" — the button that used to ask the chat a question.
   //

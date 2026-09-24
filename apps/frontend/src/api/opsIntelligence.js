@@ -81,6 +81,19 @@ export const opsApi = {
   // reviews, overlapping-contract ties. `status` defaults to pending on the server.
   contractApprovals: (query) =>
     apiFetch(B, '/api/contract-performance/approvals', { query: withOrg(query) }),
+  // FR-039: a work order whose re-ingested values disagree with the stored row is flagged
+  // and excluded from scoring, and the flag is sticky — the scoring fetch filters on
+  // `conflict_flag IS NOT TRUE`. The resolver has existed on the server since the flag did;
+  // nothing here ever called it, so the only way to release a work order was a hand-written
+  // UPDATE. `accept` is 'stored' or 'incoming': the two records genuinely differ and someone
+  // has to say which is true, because scoring measures money against those numbers.
+  resolveWoConflict: (woCode, accept, note) =>
+    apiFetch(B, '/api/contract-performance/work-orders/' + encodeURIComponent(woCode) + '/resolve-conflict', {
+      method: 'POST',
+      body: { accept: accept, note: note || null },
+      query: withOrg(),
+      timeoutMs: T_WRITE
+    }),
   // Asset criticality register (L1 / L2 / L3), approved or proposed.
   assetCriticalities: (query) =>
     apiFetch(B, '/api/contract-performance/asset-criticality', { query: withOrg(Object.assign({ limit: 500 }, query || {})) }),

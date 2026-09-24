@@ -78,6 +78,45 @@ export default function Vendors({ vals }) {
               </div>
             </div>
           </div>
+
+          {/* Work orders scoring is holding back. Each names what disagrees and both
+              readings of it, because the choice is between two records — a dismiss button
+              here would discard a decision about money. */}
+          <div style={{ display: vals.vpConflictsShow, border: "1px solid var(--st-warn)", borderRadius: "10px", padding: "14px 16px", marginTop: "14px", background: "var(--color-surface)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+              <span style={{ fontSize: "13px", fontWeight: "600" }}>{vals.vpConflictsTitle}</span>
+              <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>
+                {"A re-ingestion disagreed with the stored record. Scoring skips these until someone says which is right."}
+              </span>
+            </div>
+            {vals.vpConflicts.map((cf) => (
+              <div key={cf.woCode} style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--color-divider)" }}>
+                <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                  <span style={{ fontSize: "12.5px", fontWeight: "600", fontVariantNumeric: "tabular-nums" }}>{cf.woCode}</span>
+                  <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>{cf.fields}</span>
+                  <span style={{ flex: "1" }}></span>
+                  <div className="hv4" onClick={cf.busy ? undefined : cf.acceptStored}
+                    style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: cf.busy ? "default" : "pointer", opacity: cf.busy ? "0.5" : "1" }}>
+                    {"Keep stored"}
+                  </div>
+                  <div className="hv4" onClick={cf.busy ? undefined : cf.acceptIncoming}
+                    style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "8px", border: "1px solid var(--color-divider)", cursor: cf.busy ? "default" : "pointer", opacity: cf.busy ? "0.5" : "1" }}>
+                    {"Take incoming"}
+                  </div>
+                </div>
+                {cf.sides.map((sd) => (
+                  <div key={sd.field} style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginTop: "6px", fontSize: "11.5px", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ color: "var(--color-neutral-500)", minWidth: "120px" }}>{sd.field}</span>
+                    <span>{"stored " + sd.stored}</span>
+                    <span>{"incoming " + sd.incoming}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "10px" }}>
+              {vals.vpResolveNote}
+            </div>
+          </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: "10px", marginTop: "22px" }}>
             <span style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
               {"Insights and actions"}
