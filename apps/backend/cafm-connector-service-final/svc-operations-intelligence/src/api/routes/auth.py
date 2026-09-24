@@ -300,6 +300,10 @@ async def me(
     # the current selection and narrows its own views to it; the server already has.
     user["selected_building_id"] = (
         str(principal.selected_building_id) if principal.selected_building_id else None)
+    # Which buildings to name. `building_ids is None` is unrestricted — every building in the
+    # organisation — and `()` is allocated to nothing; they are different facts and both used to
+    # come back as []. The client picks the building an ingest is filed against out of this list,
+    # so an admin was shown an empty picker over a full database.
     if principal.building_ids:
         named = (await session.execute(
             text("""SELECT building_id::text AS id, name, building_code
@@ -308,7 +312,23 @@ async def me(
             {"b": [str(b) for b in principal.building_ids]},
         )).mappings().all()
         user["buildings"] = [dict(r) for r in named]
+    elif principal.building_ids is None:
+        # Scoped to the organisation the caller is acting for. A superadmin viewing as a company
+        # gets that company's buildings; one acting for nobody gets the estate, which is what
+        # "unrestricted" means for them. buildings.organization_id is not backfilled on every
+        # deployment (see building_ids_for in ratings_position.py), so an account whose own
+        # organization_id is not a uuid matches nothing by CAST and is given the estate rather
+        # than an empty list — the failure this fixes, one level down.
+        org = principal.organization_id
+        where = "WHERE organization_id = CAST(:o AS uuid)" if org else ""
+        rows = (await session.execute(
+            text(f"""SELECT building_id::text AS id, name, building_code
+                       FROM plenum_cafm.buildings {where} ORDER BY name"""),
+            {"o": str(org)} if org else {},
+        )).mappings().all()
+        user["buildings"] = [dict(r) for r in rows]
     else:
+        # Allocated to nothing, and that is the honest answer.
         user["buildings"] = []
     return {"ok": True, "user": user,
             "session_id": str(principal.session_id) if principal.session_id else None}
