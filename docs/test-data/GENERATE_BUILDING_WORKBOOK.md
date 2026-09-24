@@ -204,7 +204,7 @@ meter (the way the Assets page reads building → section → asset). Built by
 | Sheet | Columns | Rows |
 |-------|---------|------|
 | `Building_Sections` | `building_code, name, section_type, floor_name, gross_area_m2, reference_eui_kwh_m2, reference_source` | one per floor; `name` **and** `floor_name` are the floor's name exactly as `plenum_cafm.floors` has it (`Basement`, `Ground`, `Level 1` …) |
-| `Energy_Meters` | `meter_ref, building_code, site_ref, meter_type, mpan, mprn, is_sub_meter, section_name, floor_name, tariff_gbp_per_kwh, carbon_kg_per_kwh, active, description` | two per floor: `<CO>-<code>-E-L03` electricity, `<CO>-<code>-G-L03` gas (`B`, `G` for basement and ground); `is_sub_meter` true; `section_name` = the floor |
+| `Energy_Meters` | `meter_ref, building_code, site_ref, meter_type, mpan, mprn, is_sub_meter, section_name, asset_code, tariff_gbp_per_kwh, carbon_kg_per_kwh, active, description` | two per floor: `<CO>-<code>-E-L03` electricity, `<CO>-<code>-G-L03` gas (`B`, `G` for basement and ground), `is_sub_meter` true, `section_name` = the floor, `asset_code` blank; then one per significant asset: `<CO>-<code>-A-CHILLER-01`, `asset_code` set, `section_name` blank (chillers 12 %/3 %, AHUs 5 %, pumps 2 %, lifts 1.5 % of electricity; boilers share 65 % of gas) |
 | `Meter_Readings` | same as §3.11 | every half-hour of a trailing window (90 days by default) per sub-meter, `source` = `bms` |
 
 Rules the engines enforce:
@@ -220,6 +220,13 @@ Rules the engines enforce:
   `GET /api/energy/meters/by-floor` group them.
 - One tenant floor (the highest) carries a night-time electricity drift of +25 % over the last
   five weeks so the scan raises a floor-level `baseline_drift`.
+- Asset sub-meters carry `asset_code` and **no section**: a chiller's electricity is also the
+  basement's, and counting it on the floor would double it. They are what puts kWh against
+  plant: `/api/energy/consumption/by-asset`, the `asset_spike` detector, and anomalies that
+  name the asset. The first chiller carries a 3-day +40 % excursion.
+- Never let two columns be identical row-for-row unless both are destination columns: the
+  merge step collapses them. `is_sub_meter`/`active` and `name`/`floor_name` are safe only
+  because `column_merge.PLATFORM_TABLES` names them.
 
 ## 4. Cross-sheet integrity — run these before saving
 
@@ -291,8 +298,8 @@ SELECT b.building_code, count(*) FILTER (WHERE a.asset_code IS NOT NULL) assets,
 ```
 Expected per building: 11–12 assets, 35,040 readings, ~10 anomalies, an `EPC:C`-style entry.
 
-After the sub-meter companion (§3.18): Energy → open the building → **Sub-meters by floor**
-lists every floor, basement first, with each meter's kWh, share of supply and cost, and the
+After the sub-meter companion (§3.18): Energy → open the building → **Sub-meters by floor and
+asset** lists every floor, basement first, then each metered asset, with each meter's kWh, share of supply and cost, and the
 header says what the floors account for of the incoming supply. The building's EUI and cost
 above benchmark must read exactly as before the companion was ingested.
 Compliance → Energy ratings should then read `MEES enforceable now 0 · 1 with an EPC on file`,

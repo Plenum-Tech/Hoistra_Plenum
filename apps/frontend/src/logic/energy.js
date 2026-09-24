@@ -422,6 +422,24 @@ export const energyMethods = {
           stBg: anoms ? t("warn").bg : t("ok").bg,
         };
       });
+      // Plant with its own meter, listed by the asset. Not on a floor: a chiller's electricity
+      // is also the basement's, and counting it there would make the basement look like the
+      // whole building. Share is still of the incoming supply, so it reads beside the floors.
+      (fb.assets || []).forEach((m) => rows.push({
+        name: m.asset_name || m.asset_code || "Asset",
+        meta: ["asset sub-meter", m.asset_code || null].filter(Boolean).join(" · "),
+        meters: [{ label: (m.fuel === "gas" ? "Gas" : "Electricity") + (m.supply ? " · " + m.supply : ""),
+                   color: FUEL_FG[m.fuel] || "var(--color-neutral-400)", kwh: kwhFmt(m.kwh),
+                   share: typeof m.share_pct === "number" ? " · " + m.share_pct + "% of supply" : "",
+                   barPct: (typeof m.share_pct === "number" ? Math.min(100, Math.max(0, m.share_pct)) : 0) + "%",
+                   sub: (m.readings ? m.readings.toLocaleString("en-GB") + " readings" : "no readings in the window")
+                     + (m.open_anomalies ? " · " + m.open_anomalies + (m.open_anomalies === 1 ? " open anomaly" : " open anomalies") : "")
+                     + (typeof m.rate_used === "number" ? " · " + (m.rate_used * 100).toFixed(1) + "p/kWh" : "") }],
+        cost: typeof m.cost === "number" ? money(m.cost) : "—",
+        state: m.open_anomalies ? m.open_anomalies + (m.open_anomalies === 1 ? " anomaly" : " anomalies") : "in control",
+        stColor: m.open_anomalies ? t("warn").color : t("ok").color,
+        stBg: m.open_anomalies ? t("warn").bg : t("ok").bg,
+      }));
       (fb.unplaced || []).forEach((m) => rows.push({
         name: "Not placed on a floor",
         meta: "sub-meter " + (m.supply || "") + " names no section with a floor",
@@ -434,7 +452,7 @@ export const energyMethods = {
         state: "unplaced", stColor: "var(--color-neutral-500)", stBg: "var(--color-bg)",
       }));
       return {
-        floorsTitle: "Sub-meters by floor · " + fb.summary,
+        floorsTitle: "Sub-meters by floor and asset · " + fb.summary,
         floors: rows, floorsEmpty: "none", floorsEmptyText: "",
       };
     };

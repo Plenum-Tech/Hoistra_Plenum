@@ -22,11 +22,13 @@ NOW = datetime(2026, 9, 24, tzinfo=timezone.utc)
 
 
 def _row(meter_id, fuel, kwh, *, sub=False, floor=None, level=None, tariff=None,
-         area=None, anomalies=0, supply=None):
+         area=None, anomalies=0, supply=None, asset=None):
     return {
         "meter_id": meter_id, "building_id": B, "building": "Harbour Point",
         "building_code": "B-101", "fuel": fuel, "supply": supply or meter_id,
         "is_sub_meter": sub, "tariff": tariff, "description": None,
+        "asset_id": f"asset-{asset}" if asset else None, "asset_name": asset,
+        "asset_code": f"B-101-{asset}" if asset else None,
         "section_id": f"sec-{floor}" if floor else None, "section": floor,
         "section_type": "office" if floor else None, "area_m2": area,
         "floor": floor, "level": level, "kwh": kwh, "readings": 1440,
@@ -72,7 +74,15 @@ class TestSubMetersByFloor:
              anomalies=1),
         _row("G-B", "gas", 3_000.0, sub=True, floor="Basement", level=-1, tariff=0.062),
         _row("E-X", "electricity", 100.0, sub=True),        # a sub-meter on no section
+        _row("A-CH1", "electricity", 1_200.0, sub=True, asset="CHILLER-01", anomalies=1),
     ]
+
+    def test_an_asset_sub_meter_is_listed_by_its_asset_not_on_a_floor(self):
+        b = floor_meters.group_by_floor(self.ROWS, days=30)[0]
+        assert [m["asset_name"] for m in b["assets"]] == ["CHILLER-01"]
+        assert b["assets"][0]["share_pct"] == 12.0 and b["assets"][0]["cost"] == 252.0
+        assert all(m["asset_id"] is None for f in b["floors"] for m in f["meters"])
+        assert "1 asset" in b["summary"]
 
     def test_one_entry_per_building_floors_basement_first(self):
         out = floor_meters.group_by_floor(self.ROWS, days=30)
@@ -82,7 +92,7 @@ class TestSubMetersByFloor:
     def test_a_sub_meter_with_no_floor_is_unplaced_not_dropped(self):
         b = floor_meters.group_by_floor(self.ROWS, days=30)[0]
         assert [m["supply"] for m in b["unplaced"]] == ["E-X"]
-        assert b["sub_meters"] == 4
+        assert b["sub_meters"] == 5
 
     def test_share_is_of_the_main_meter_on_the_same_fuel(self):
         b = floor_meters.group_by_floor(self.ROWS, days=30)[0]

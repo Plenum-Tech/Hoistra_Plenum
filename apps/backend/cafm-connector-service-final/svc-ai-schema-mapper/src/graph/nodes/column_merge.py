@@ -29,8 +29,35 @@ except Exception:  # noqa: BLE001
 #: Every column name that exists on some plenum_cafm table. A source column whose name is one of
 #: these is a destination fact in its own right, and two such names are two facts — whatever the
 #: values in one particular file happen to do.
+#: Tables the generated catalogue does not carry: plenum_cafm.csv predates the energy graph, so
+#: energy_meters, building_sections, meter_readings and floors are not in TABLES at all, and
+#: none of their columns counted as a destination. A sub-meter sheet says is_sub_meter=true and
+#: active=true on every row, and a section per floor is named as the floor — so is_sub_meter
+#: was merged into active and floor_name into name, two facts read as one column. These are
+#: the live columns of those tables (information_schema, hoistra_test, 24 Sep 2026).
+PLATFORM_TABLES: dict[str, list[str]] = {
+    "energy_meters": [
+        "id", "organization_id", "building_id", "asset_id", "meter_type", "mpan", "mprn",
+        "dcc_device_id", "tariff_gbp_per_kwh", "carbon_kg_per_kwh", "is_sub_meter",
+        "asset_type_benchmark_kwh", "active", "raw_metadata", "section_id", "description",
+        "site_ref", "site_id", "building_code", "meter_ref",
+    ],
+    "building_sections": [
+        "section_id", "organization_id", "building_id", "floor_id", "name", "section_type",
+        "gross_area_m2", "reference_eui_kwh_m2", "reference_source", "floor_name",
+        "building_code",
+    ],
+    "meter_readings": [
+        "id", "organization_id", "meter_id", "asset_id", "reading_at", "period_minutes",
+        "consumption_kwh", "source", "quality_flag", "building_code", "meter_type", "meter_ref",
+    ],
+    "floors": ["floor_id", "building_id", "level", "name", "gross_area_sqft"],
+}
+
 KNOWN_DESTINATION_COLUMNS: frozenset[str] = frozenset(
-    str(c).lower() for cols in _PLENUM_TABLES.values() for c in (cols or [])
+    str(c).lower()
+    for cols in list(_PLENUM_TABLES.values()) + list(PLATFORM_TABLES.values())
+    for c in (cols or [])
 )
 
 

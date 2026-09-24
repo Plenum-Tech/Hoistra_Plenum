@@ -11,7 +11,9 @@ Three sheets, in the order the writer needs them:
   Building_Sections   one section per floor, named as the floor is ("Basement", "Ground",
                       "Level 1" …), carrying floor_name so the writer links floors.floor_id
   Energy_Meters       two sub-meters per floor (electricity, gas), is_sub_meter true,
-                      section_name = the floor, tariff and carbon factor as the main meter's
+                      section_name = the floor, tariff and carbon factor as the main meter's;
+                      then one sub-meter per significant asset (chillers, AHUs, pumps, lifts
+                      on electricity; boilers on gas) carrying asset_code and no section
   Meter_Readings      every half-hour of the trailing window for every sub-meter
 
 The readings are derived from the main meters' readings in the building workbook, half-hour
@@ -22,6 +24,12 @@ and common parts that a landlord does not sub-meter, and the Energy page reports
 coverage rather than pretending the floors are the building. One tenant floor carries a
 deliberate night-time drift over the last five weeks so the anomaly scan has a floor-level
 finding to make.
+
+The asset meters are a second decomposition of the same supply — a chiller's electricity is
+also Basement electricity — so they carry no section and the Energy page lists them by asset,
+not on a floor. They are what puts a kWh figure against a piece of plant: the by-asset
+consumption read, the asset-spike detector, and an anomaly that names the asset rather than
+the building. One chiller carries a three-day excursion so that detector has a finding to make.
 
 The window is 90 days by default (--days). A year per floor meter is 17,520 rows; twelve floors
 and two fuels make that 420,000 rows in one sheet, which ingests slowly and says nothing more
@@ -48,7 +56,7 @@ SUFFIX = "-floorlevel_submeter"
 SECTIONS_HEADER = ["building_code", "name", "section_type", "floor_name", "gross_area_m2",
                    "reference_eui_kwh_m2", "reference_source"]
 METERS_HEADER = ["meter_ref", "building_code", "site_ref", "meter_type", "mpan", "mprn",
-                 "is_sub_meter", "section_name", "floor_name", "tariff_gbp_per_kwh",
+                 "is_sub_meter", "section_name", "asset_code", "tariff_gbp_per_kwh",
                  "carbon_kg_per_kwh", "active", "description"]
 READINGS_HEADER = ["meter_ref", "building_code", "meter_type", "reading_at", "consumption_kwh",
                    "period_minutes", "source"]
@@ -69,6 +77,45 @@ NOISE = 0.05
 #: scan has something to find at floor level. Applied to the highest tenant floor.
 DRIFT_WEEKS = 5
 DRIFT_NIGHT_UPLIFT = 0.25
+
+#: Share of the incoming supply each kind of plant draws, by the type token in its asset code.
+#: (first of that kind, each further one). Anything not listed — a distribution board, a fire
+#: panel — is not metered: a board IS the supply, and a panel draws nothing worth a meter.
+ASSET_SHARE = {
+    "electricity": {
+        "CHILLER": (0.12, 0.03), "AHU": (0.05, 0.05), "PUMP": (0.02, 0.02),
+        "LIFT": (0.015, 0.015), "EXTRACT": (0.03, 0.03), "EML": (0.005, 0.005),
+    },
+    "gas": {"BOILER": (0.65, 0.0)},   # boilers share 65% of gas between them, see below
+}
+#: A three-day excursion on the first chiller (or the first metered asset when there is none).
+SPIKE_DAYS = 3
+SPIKE_UPLIFT = 0.40
+SPIKE_ENDS_DAYS_BEFORE_LATEST = 10
+
+
+def asset_kind(asset_code: str) -> str | None:
+    """CHILLER from B-101-CHILLER-01: the token between the building code and the number."""
+    parts = asset_code.split("-")
+    return parts[2] if len(parts) >= 4 else None
+
+
+def asset_shares(codes: list[str]) -> list[tuple[str, str, float]]:
+    """(asset_code, fuel, share) for every asset worth a meter, in sheet order."""
+    out, seen = [], {}
+    boilers = [c for c in codes if asset_kind(c) == "BOILER"]
+    for code in codes:
+        kind = asset_kind(code)
+        if kind == "BOILER":
+            out.append((code, "gas", ASSET_SHARE["gas"]["BOILER"][0] / len(boilers)))
+            continue
+        spec = ASSET_SHARE["electricity"].get(kind or "")
+        if not spec:
+            continue
+        n = seen.get(kind, 0)
+        out.append((code, "electricity", spec[0] if n == 0 else spec[1]))
+        seen[kind] = n + 1
+    return out
 
 
 def floor_names(n: int) -> list[str]:
@@ -181,7 +228,7 @@ def build(path: str, *, days: int, seed: int) -> str:
             meters.append([
                 ref, code, site_ref, fuel,
                 ref if fuel == "electricity" else None, ref if fuel == "gas" else None,
-                "true", fname, fname,
+                "true", fname, None,
                 main.get("tariff_gbp_per_kwh"), main.get("carbon_kg_per_kwh"), "true",
                 f"{name} {fname} {fuel} sub-meter",
             ])
@@ -193,6 +240,39 @@ def build(path: str, *, days: int, seed: int) -> str:
                     v *= 1.0 + DRIFT_NIGHT_UPLIFT
                 readings.append([ref, code, fuel, at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                                  round(v, 3), minutes, "bms"])
+
+    # Asset sub-meters: the plant, by asset, off the same supply.
+    ah, arows = read_sheet(wb, "Assets")
+    ai = {h: i for i, h in enumerate(ah)}
+    codes = [str(r[ai["asset_code"]]) for r in arows if r[ai["asset_code"]]]
+    asset_names = {str(r[ai["asset_code"]]): str(r[ai["asset_name"]]) for r in arows}
+    metered = asset_shares(codes)
+    spike_asset = next((c for c, f, _ in metered if asset_kind(c) == "CHILLER"),
+                       next((c for c, f, _ in metered if f == "electricity"), None))
+    spike_end = latest - dt.timedelta(days=SPIKE_ENDS_DAYS_BEFORE_LATEST)
+    spike_start = spike_end - dt.timedelta(days=SPIKE_DAYS)
+    n_asset_meters = 0
+    for acode, fuel, w in metered:
+        main = mains.get(fuel)
+        if not main or fuel not in by_fuel:
+            continue
+        main_ref = str(main.get("meter_ref") or main.get("mpan") or main.get("mprn"))
+        prefix = main_ref.rsplit("-", 1)[0]
+        ref = f"{prefix}-A-{acode[len(code) + 1:]}"          # NB-B-101-A-CHILLER-01
+        meters.append([
+            ref, code, site_ref, fuel,
+            ref if fuel == "electricity" else None, ref if fuel == "gas" else None,
+            "true", None, acode,
+            main.get("tariff_gbp_per_kwh"), main.get("carbon_kg_per_kwh"), "true",
+            f"{asset_names.get(acode, acode)} {fuel} sub-meter",
+        ])
+        n_asset_meters += 1
+        for at, kwh, minutes in by_fuel[fuel]:
+            v = kwh * w * (1.0 + rng.uniform(-NOISE, NOISE))
+            if acode == spike_asset and spike_start <= at < spike_end:
+                v *= 1.0 + SPIKE_UPLIFT
+            readings.append([ref, code, fuel, at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             round(v, 3), minutes, "bms"])
 
     out_path = os.path.splitext(path)[0] + SUFFIX + ".xlsx"
     try:
@@ -212,8 +292,12 @@ def build(path: str, *, days: int, seed: int) -> str:
             ws.append(r)
     out.save(out_path)
 
-    print(f"  {name} ({code}): {len(names)} floors, {len(meters)} sub-meters, "
-          f"{len(readings):,} readings over {days} days ({window_start.date()} to {latest.date()})")
+    print(f"  {name} ({code}): {len(names)} floors, {len(meters)} sub-meters "
+          f"({n_asset_meters} on assets), {len(readings):,} readings over {days} days "
+          f"({window_start.date()} to {latest.date()})")
+    print(f"     asset meters: {', '.join(c for c, _, _ in metered)}; "
+          f"3-day +{int(SPIKE_UPLIFT*100)}% excursion on {spike_asset} "
+          f"{spike_start.date()} to {spike_end.date()}")
     print(f"     floors account for {int(COVERAGE['electricity']*100)}% of electricity, "
           f"{int(COVERAGE['gas']*100)}% of gas; night drift on {drift_floor} electricity "
           f"from {drift_start.date()}")

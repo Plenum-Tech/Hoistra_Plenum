@@ -34,6 +34,9 @@ _SQL = """
            m.is_sub_meter                  AS is_sub_meter,
            m.tariff_gbp_per_kwh::float     AS tariff,
            m.description                   AS description,
+           m.asset_id::text                AS asset_id,
+           a.asset_name                    AS asset_name,
+           a.asset_code                    AS asset_code,
            s.section_id::text              AS section_id,
            s.name                          AS section,
            s.section_type                  AS section_type,
@@ -52,6 +55,7 @@ _SQL = """
              WHERE a.meter_id = m.id AND a.status = 'open')                     AS open_anomalies
       FROM plenum_cafm.energy_meters m
       JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
+      LEFT JOIN plenum_cafm.assets a ON a.id::text = m.asset_id::text
       LEFT JOIN plenum_cafm.building_sections s ON s.section_id = m.section_id
       LEFT JOIN plenum_cafm.floors f ON f.floor_id = s.floor_id
      WHERE m.active
@@ -68,9 +72,12 @@ def _fuel(v: str | None) -> str:
 def group_by_floor(rows: Iterable[dict[str, Any]], *, days: int) -> list[dict[str, Any]]:
     """Pure: the rows of _SQL (or anything shaped like them) as one entry per building.
 
-    Floors are ordered by level, basement first; a sub-meter whose section names no floor is
-    listed under "unplaced" rather than dropped, because a meter that was ingested and cannot
-    be placed is a fact about the ingest the reader needs.
+    Floors are ordered by level, basement first. A sub-meter that sits on an asset — a chiller,
+    a boiler, a lift — is listed under "assets" with the asset's name, and not on a floor: it
+    reads a share of the same supply the floor meters do, and a plant room's meters counted
+    into the basement's total would make the basement look like the whole building. A
+    sub-meter that sits on neither is listed under "unplaced" rather than dropped, because a
+    meter that was ingested and cannot be placed is a fact about the ingest the reader needs.
     """
     by_b: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -80,7 +87,7 @@ def group_by_floor(rows: Iterable[dict[str, Any]], *, days: int) -> list[dict[st
             b = by_b[bid] = {
                 "building_id": bid, "building": r.get("building"),
                 "building_code": r.get("building_code"), "days": days,
-                "mains": [], "floors": {}, "unplaced": [],
+                "mains": [], "floors": {}, "assets": [], "unplaced": [],
             }
         fuel = _fuel(r.get("fuel"))
         kwh = float(r.get("kwh") or 0.0)
@@ -95,9 +102,14 @@ def group_by_floor(rows: Iterable[dict[str, Any]], *, days: int) -> list[dict[st
             "section_id": r.get("section_id"), "section": r.get("section"),
             "section_type": r.get("section_type"),
             "area_m2": float(r["area_m2"]) if r.get("area_m2") else None,
+            "asset_id": r.get("asset_id"), "asset_name": r.get("asset_name"),
+            "asset_code": r.get("asset_code"),
         }
         if not r.get("is_sub_meter"):
             b["mains"].append(meter)
+            continue
+        if r.get("asset_id"):
+            b["assets"].append(meter)
             continue
         floor = r.get("floor")
         if not floor:
@@ -154,34 +166,38 @@ def group_by_floor(rows: Iterable[dict[str, Any]], *, days: int) -> list[dict[st
             fuel: (round(metered.get(fuel, 0.0) / kwh * 100, 1) if kwh else None)
             for fuel, kwh in main_kwh.items()
         }
-        for m in b["unplaced"]:
+        for m in b["assets"] + b["unplaced"]:
             rate = m["tariff"] or main_rate.get(m["fuel"]) or 0.0
             m["cost"] = round(m["kwh"] * rate, 2)
             m["rate_used"] = rate or None
             m["share_pct"] = (round(m["kwh"] / main_kwh[m["fuel"]] * 100, 1)
                               if main_kwh.get(m["fuel"]) else None)
-        sub_count = sum(len(f["meters"]) for f in floors) + len(b["unplaced"])
+        b["assets"].sort(key=lambda m: -m["kwh"])
+        sub_count = sum(len(f["meters"]) for f in floors) + len(b["assets"]) + len(b["unplaced"])
         out.append({
             "building_id": b["building_id"], "building": b["building"],
             "building_code": b["building_code"], "days": days,
             "mains": b["mains"],
             "main_kwh_by_fuel": {k: round(v, 1) for k, v in main_kwh.items()},
             "floors": floors,
+            "assets": b["assets"],
             "unplaced": b["unplaced"],
             "sub_meters": sub_count,
             "floors_metered": len(floors),
             # What the floor meters account for of the incoming supply, per fuel. The rest is
             # the building's own load — plant, lifts, common parts — or unmetered.
             "coverage_pct_by_fuel": coverage,
-            "summary": _summary(len(floors), sub_count, coverage, days),
+            "summary": _summary(len(floors), sub_count, coverage, days, assets=len(b["assets"])),
         })
     return out
 
 
-def _summary(floors: int, subs: int, coverage: dict[str, float | None], days: int) -> str:
+def _summary(floors: int, subs: int, coverage: dict[str, float | None], days: int,
+             *, assets: int = 0) -> str:
     if not subs:
         return "No sub-meters on record — the building is read at its incoming supply only."
-    parts = [f"{subs} sub-meter{'s' if subs != 1 else ''} on {floors} floor{'s' if floors != 1 else ''}"]
+    parts = [f"{subs} sub-meter{'s' if subs != 1 else ''}: {floors} floor{'s' if floors != 1 else ''}"
+             + (f", {assets} asset{'s' if assets != 1 else ''}" if assets else "")]
     for fuel in ("electricity", "gas"):
         c = coverage.get(fuel)
         if c is not None:

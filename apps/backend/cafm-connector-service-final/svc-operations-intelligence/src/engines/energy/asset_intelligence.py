@@ -73,9 +73,12 @@ async def sections(
 ) -> dict[str, Any]:
     """Every section in scope with its measured intensity against its own reference.
 
-    The measured figure comes from the sub-meter attached to the section over the last 365
-    days, divided by the section's area. A section with no meter or no area returns a null
-    intensity rather than a zero: not measured and measured-at-zero are different facts.
+    The measured figure comes from the sub-meters attached to the section, summed across them
+    — a floor with an electricity and a gas sub-meter is one floor, not two rows — and
+    annualised over the time the meters actually cover, the way the building's EUI is: 90
+    days of readings on a floor are a quarter of a year, not a quarter of the intensity. A
+    section with no meter, no area or under a month of coverage returns a null intensity
+    rather than a zero: not measured and measured-at-zero are different facts.
     """
     clause, params = _scope(building_ids, "s.building_id")
     params["lim"] = int(limit)
@@ -88,17 +91,22 @@ async def sections(
                s.gross_area_m2           AS area_m2,
                s.reference_eui_kwh_m2    AS reference_eui,
                s.reference_source        AS reference_source,
+               f.name                    AS floor,
                m.id::text                AS meter_id,
-               m.meter_type              AS fuel,
+               lower(coalesce(m.meter_type, 'electricity')) AS fuel,
                (SELECT sum(r.consumption_kwh) FROM plenum_cafm.meter_readings r
                  WHERE r.meter_id = m.id
-                   AND r.reading_at >= now() - interval '365 days') AS kwh_year
+                   AND r.reading_at >= now() - interval '365 days') AS kwh_year,
+               (SELECT sum(coalesce(r.period_minutes, 30)) FROM plenum_cafm.meter_readings r
+                 WHERE r.meter_id = m.id
+                   AND r.reading_at >= now() - interval '365 days') AS covered_minutes
           FROM plenum_cafm.building_sections s
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = s.building_id
+          LEFT JOIN plenum_cafm.floors f ON f.floor_id = s.floor_id
           LEFT JOIN plenum_cafm.energy_meters m
                  ON m.section_id = s.section_id AND m.active
          WHERE s.building_id IS NOT NULL{clause}
-         ORDER BY b.name, s.name
+         ORDER BY b.name, s.name, m.meter_type
          LIMIT :lim"""
     try:
         async with session.begin_nested():
@@ -107,25 +115,65 @@ async def sections(
         log.warning("asset_intel.sections_failed", error=str(exc)[:300])
         return {"ok": False, "sections": [], "error": str(exc)[:200]}
 
-    out = []
+    return {"ok": True, **summarise_sections([dict(r) for r in rows])}
+
+
+#: Metered minutes in a month, the same figure the EUI window annualises by.
+_MINUTES_PER_MONTH = 365.25 * 24 * 60 / 12
+
+
+def summarise_sections(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure: one meter-row per (section, meter) → one entry per section.
+
+    kWh add across the section's meters; coverage is the longest-covered meter's, because two
+    meters reading the same quarter cover one quarter between them. Intensity is annualised
+    from that coverage and is None below a month of it.
+    """
+    by_section: dict[str, dict[str, Any]] = {}
     for r in rows:
-        area, kwh, ref = _num(r["area_m2"]), _num(r["kwh_year"]), _num(r["reference_eui"])
-        eui = round(kwh / area, 1) if kwh and area else None
+        sid = r["section_id"]
+        sec = by_section.get(sid)
+        if sec is None:
+            sec = by_section[sid] = {
+                "section_id": sid, "building_id": r["building_id"], "building": r["building"],
+                "name": r["name"], "section_type": r["section_type"], "floor": r.get("floor"),
+                "area_m2": _num(r["area_m2"]), "reference_eui_kwh_m2": _num(r["reference_eui"]),
+                "reference_source": r["reference_source"],
+                "meter_id": None, "meters": 0, "fuels": [], "kwh_measured": 0.0,
+                "_minutes": 0.0,
+            }
+        if not r.get("meter_id"):
+            continue
+        sec["meters"] += 1
+        sec["meter_id"] = sec["meter_id"] or r["meter_id"]
+        fuel = r.get("fuel") or "electricity"
+        if fuel not in sec["fuels"]:
+            sec["fuels"].append(fuel)
+        sec["kwh_measured"] += _num(r.get("kwh_year")) or 0.0
+        sec["_minutes"] = max(sec["_minutes"], _num(r.get("covered_minutes")) or 0.0)
+
+    out = []
+    for sec in by_section.values():
+        months = sec.pop("_minutes") / _MINUTES_PER_MONTH
+        area, ref = sec["area_m2"], sec["reference_eui_kwh_m2"]
+        kwh = sec["kwh_measured"]
+        annual = kwh * 12.0 / months if kwh and months >= 1.0 else None
+        eui = round(annual / area, 1) if annual is not None and area else None
         dev = round((eui - ref) / ref * 100, 1) if eui is not None and ref else None
-        out.append({
-            "section_id": r["section_id"], "building_id": r["building_id"],
-            "building": r["building"], "name": r["name"], "section_type": r["section_type"],
-            "area_m2": area, "meter_id": r["meter_id"], "fuel": r["fuel"],
-            "eui_kwh_per_m2": eui, "reference_eui_kwh_m2": ref,
-            "reference_source": r["reference_source"],
+        sec.update({
+            "fuel": sec["fuels"][0] if sec["fuels"] else None,
+            "months_measured": round(months, 1) if months else 0.0,
+            "kwh_measured": round(kwh, 1),
+            "kwh_annualised": round(annual, 1) if annual is not None else None,
+            "eui_kwh_per_m2": eui,
             "deviation_pct": dev,
             "over_reference": bool(dev is not None and dev > 0),
             # Said out loud rather than implied by a zero.
             "measured": eui is not None,
         })
+        out.append(sec)
     over = [s for s in out if s["over_reference"]]
     return {
-        "ok": True,
         "count": len(out),
         "summary": {
             "sections": len(out),
