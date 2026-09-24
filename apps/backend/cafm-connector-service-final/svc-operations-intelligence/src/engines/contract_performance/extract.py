@@ -113,6 +113,48 @@ def _heuristic_contract_extract(text: str) -> dict[str, Any]:
             out[key] = float(m.group(1))
             conf[key] = "medium"
 
+    # Both patterns above need the column word within reach of the priority code, which a
+    # TABLE never provides: it names its columns once, in a header above the rows, so after
+    # "P1" comes the priority's definition and then two bare durations. The Meridian contract
+    # for Harbour Point states all eight of its SLA times that way and ingested with all eight
+    # null, and the row was then confirmed against eight platform defaults — P1 completion
+    # recorded as 4 hours where the contract says 8, P4 as 168 where it says 336.
+    #
+    # Positionally, inside one priority's block, the first duration is the response and the
+    # second is the completion. That is the column order of every SLA table in this pack, and
+    # of the prose form too ("P1 response within 1 hour and completion within 4 hours" — which
+    # the completion pattern above also misses, because the digit in "1 hour" stops its \D
+    # run from reaching the word "completion").
+    #
+    # Only fills what the word-anchored patterns left empty, so where a document does name its
+    # columns next to the value, that more precise reading still wins and keeps its confidence.
+    _priority_mark = re.compile(r"\bp([1-4])\b|\bpriority\s*([1-4])\b")
+    _duration = re.compile(r"(\d+(?:\.\d+)?)\s*(?:h\b|hr\b|hours?\b)")
+    marks = [
+        (mk.start(), int(mk.group(1) or mk.group(2)))
+        for mk in _priority_mark.finditer(lower)
+    ]
+    # A table row is short: the priority code, its definition, then the durations. Reading
+    # further than that is reading a different clause. Without this bound the UKRI FM contract
+    # (214k characters, priorities in one schedule and durations pages later) paired P4's
+    # response with an unrelated 48 hours and its completion with a 24 that came after it —
+    # a completion shorter than its own response. A wrong number is worse than a null here,
+    # because the null is visibly a gap and the PM fills it.
+    _ROW_REACH = 160
+    for idx, (start, pri_n) in enumerate(marks):
+        end = marks[idx + 1][0] if idx + 1 < len(marks) else len(lower)
+        end = min(end, start + _ROW_REACH)
+        durations = [float(d) for d in _duration.findall(lower[start:end])]
+        for key, value in zip(
+            (f"sla_response_p{pri_n}_hours", f"sla_completion_p{pri_n}_hours"),
+            durations,
+        ):
+            if out.get(key) is None:
+                out[key] = value
+                # Lower than the word-anchored reading: position is a weaker claim than a
+                # column the document actually labelled, and the PM confirms either way.
+                conf[key] = "low"
+
     # An hourly rate is read first and kept as one. Folding it into labour_day_rate would
     # make the invoice check divide it by eight and compare a £62/h contract against £7.75/h.
     m = re.search(
@@ -220,6 +262,34 @@ def _relevant_excerpt(text: str, budget: int = _TEXT_BUDGET_TEXT_ONLY) -> tuple[
     return out, len(text) - len(out)
 
 
+def _fill_gaps_from_text(
+    extracted: dict[str, Any], source_text: str | None
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Read from the text what the model left unset. Never overwrites what it did read.
+
+    `_extract_contract_fields` picks ONE reader — Claude when an API key is set, the regex only
+    when there is none — so on every real ingest the regex never ran. The Meridian contract for
+    Harbour Point ingested with four fields read and its eight SLA times null, while the regex
+    that can read that exact table sat unused behind an `elif`. One reader's blind spot became
+    the whole extraction's blind spot.
+
+    The model stays authoritative: a value it returned is kept even where the regex disagrees,
+    because it read the document and the regex only pattern-matched a string. This fills holes,
+    it does not arbitrate. Everything it adds is marked low confidence and a PM confirms it.
+    """
+    if not source_text:
+        return dict(extracted), {}
+    guessed = _heuristic_contract_extract(source_text)
+    added: dict[str, str] = {}
+    out = dict(extracted)
+    for key, value in (guessed.get("extracted") or {}).items():
+        if value is None or out.get(key) is not None:
+            continue
+        out[key] = value
+        added[key] = "low"
+    return out, added
+
+
 async def _claude_contract_extract(
     source_text: str, pdf_base64: str | None = None
 ) -> dict[str, Any]:
@@ -252,9 +322,16 @@ async def _claude_contract_extract(
         "\"lines\": [{\"trade\": \"HVAC\", \"straight\": 51.40, \"overtime\": 77.10}]}. "
         "Read every row of a charge-rate schedule, not just the first. Give the currency the "
         "document uses — do not convert. Null when the contract states no rates.\n"
+        "SLA hours are usually a TABLE with one row per priority, headed something like "
+        "'Service levels', 'SLA parameters', 'Response and completion times' or 'Priority "
+        "matrix', with columns for response and completion. Read every row of it. A row "
+        "reading 'P1 | Life safety | 2 hours | 8 hours' is sla_response_p1_hours 2 and "
+        "sla_completion_p1_hours 8 — the column headers are stated once, above the rows, not "
+        "beside each value.\n"
         "Use null where the contract does not STATE a value — never guess. A contract often "
         "references 'specified priority timescales' without stating the hours; that is still "
-        "null. Look hardest at schedules titled Charges and Key Performance Indicators.\n"
+        "null. Look hardest at schedules titled Service Levels, Charges and Key Performance "
+        "Indicators.\n"
         "vendor_name is the SERVICE PROVIDER / SUPPLIER / CONTRACTOR — the party being "
         "engaged to perform the work. It is NOT the client, customer, authority or buyer who "
         "is awarding the contract. In an award letter reading 'we are pleased to award this "
@@ -450,6 +527,18 @@ async def extract_contract_parameters(
             result = {"extracted": {}, "field_confidence": {}}
         extracted = {k: v for k, v in (result.get("extracted") or {}).items() if v is not None}
         field_confidence = result.get("field_confidence") or {}
+        # The two readers are complementary, not alternatives. Whichever ran, let the other
+        # fill what it left empty: a model that cannot see a table and a regex that cannot see
+        # a PDF miss different things, and running only one made its blind spot the whole
+        # extraction's. Additions never overwrite, and arrive at low confidence.
+        extracted, _added = _fill_gaps_from_text(extracted, source_text)
+        if _added:
+            field_confidence = {**_added, **field_confidence}
+            log.info(
+                "contract_performance.gaps_filled_from_text",
+                fields=sorted(_added),
+                count=len(_added),
+            )
 
     # A contract is with somebody. Ingesting the parameters against no vendor leaves them
     # unreachable: scoring loads a vendor's confirmed contract, so an unlinked contract can
