@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import shutil
 import datetime as dt
 
@@ -41,10 +42,10 @@ READINGS_HEADER = [
 
 
 def dsn() -> str:
-    raw = os.environ.get("HOISTRA_TEST_DSN")
-    if not raw:
-        raise SystemExit("HOISTRA_TEST_DSN is not set; source the repo .env first")
-    return raw.replace("+asyncpg", "")
+    """The test DSN. Reads the repo .env when the environment does not carry it."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _env import hoistra_test_dsn
+    return hoistra_test_dsn()
 
 
 async def buildings(c) -> list[list]:
