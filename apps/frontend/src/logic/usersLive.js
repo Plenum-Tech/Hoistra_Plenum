@@ -28,6 +28,7 @@
 // shapeLiveUser() is a pure function; the methods below are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { adminApi } from '../api/admin.js';
+import { AX_USERS } from '../data/hoistra-access.js';
 
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
@@ -159,7 +160,22 @@ export const usersLiveMethods = {
     const msg = (err && err.message) || "no rows in the reply";
     this._usLiveAttempts = (this._usLiveAttempts || 0) + 1;
     patch.usLiveError = msg;
-    this.setState(patch);
+    // The sample people appear HERE and nowhere else — when the backend could not be read
+    // and the table would otherwise be blank. usersVals pairs this state with an
+    // "Unreachable" pill, so the invented names are never on screen without it. They used
+    // to be mounted before any read was attempted, which put five fabricated staff records
+    // in front of an administrator on a perfectly healthy login.
+    //
+    // Only into a table that has never been read. A company read once — even to an empty
+    // list — is the truth and keeps it; a later refresh failure is reported, not papered
+    // over with invented people.
+    this.setState((p) => Object.assign(
+      {},
+      patch,
+      p.usLiveLoadedAt
+        ? {}
+        : { users: AX_USERS.map((u) => ({ ...u, buildings: u.buildings.slice() })) }
+    ));
     if (patch.axBldsLive && typeof this.auLiveReshape === "function") this.auLiveReshape();
     // A 403 is the caller's role, not the backend's health — retrying cannot change it.
     if (!(err && err.status === 403) && this._usLiveAttempts < RETRY_MAX) this._usLiveRetry = setTimeout(() => this.usLiveLoad(), RETRY_MS);

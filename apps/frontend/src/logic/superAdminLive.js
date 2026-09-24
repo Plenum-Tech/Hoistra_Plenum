@@ -27,6 +27,7 @@
 // shapeLiveCompany() and the formatters are pure; the methods below are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { superAdminApi } from '../api/superAdmin.js';
+import { SA_COMPANIES } from '../data/hoistra-access.js';
 import { lastActiveLabel } from './usersLive.js';
 
 export { lastActiveLabel };
@@ -160,7 +161,21 @@ export const superAdminLiveMethods = {
     const err = companies.status === "rejected" ? companies.reason : null;
     const msg = (err && err.message) || "no companies in the reply";
     this._saLiveAttempts = (this._saLiveAttempts || 0) + 1;
-    this.setState({ saLiveLoading: false, saLiveError: msg });
+    // The sample rows appear HERE and nowhere else — when the platform could not be read
+    // and the console would otherwise be blank. saVals pairs this state with "Showing
+    // sample data", so the four invented companies are never on screen without that
+    // sentence beside them. They used to be mounted before any read was attempted, which
+    // put fabricated credit figures in front of an operator on a perfectly healthy login.
+    //
+    // Only into a console that has never been read. A platform read once — even to an
+    // empty list — is the truth and keeps it; a later refresh failure is reported, not
+    // papered over with samples the banner in that state would not even name.
+    this.setState((p) => Object.assign(
+      { saLiveLoading: false, saLiveError: msg },
+      p.saLiveLoadedAt
+        ? {}
+        : { saCompanies: SA_COMPANIES.map((c) => ({ ...c })), saSel: SA_COMPANIES[0].id }
+    ));
     // A 403 is the caller's role, not the backend's health — a timer will not change it;
     // saLiveRetryNow still works should the account be promoted mid-session.
     if (!(err && err.status === 403) && this._saLiveAttempts < RETRY_MAX) this._saLiveRetry = setTimeout(() => this.saLiveLoad(), RETRY_MS);

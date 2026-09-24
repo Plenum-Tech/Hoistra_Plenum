@@ -186,9 +186,12 @@ test('a forbidden users read keeps the seed, records the error and does not arm 
     'GET /backend/ops-intelligence/api/admin/buildings': () => reply(200, BLDS_RES)
   };
   const c = new HoistraLogic();
-  const seed = c.state.users;
+  assert.equal(c.state.users.length, 0, 'the table mounted holding sample people');
   await c.usLiveLoad();
-  assert.equal(c.state.users, seed, 'the seed rows are untouched');
+  // A refusal must never leave a blank table — that was always the point. The sample rows
+  // now arrive HERE, in the one state that also shows "Unreachable … showing sample data",
+  // rather than at mount where five invented staff records read as the company's own.
+  assert.ok(c.state.users.length > 0, 'a forbidden read blanked the table');
   assert.match(c.state.usLiveError, /Admin role required/);
   assert.equal(c.state.usLiveLoadedAt, null, 'never loaded — the integrated default');
   assert.equal(c._usLiveRetry, undefined, 'a 403 is not retried on a timer');
@@ -305,12 +308,22 @@ test('rapid allocation clicks are latest-wins and serialised: full id lists in c
   clearTimeout(c._tt);
 });
 
-test('without a live load the screen stays the offline demo: local invite, local toggles, seed chips', async () => {
+test('once the read has failed the screen is the offline demo: local invite, local toggles, seed chips', async () => {
   routes = {}; // any network call would throw 'unexpected'
   const c = new HoistraLogic();
+  // The demo now starts at the failure rather than at mount. With no backend that is the
+  // same moment in practice — the page loads, the read is attempted, it fails at once and
+  // the samples fill — but it is no longer possible to sit looking at invented people
+  // while the read is still in flight and nothing has gone wrong.
+  assert.equal(c.state.users.length, 0, 'nothing invented before the attempt');
+  await c.usLiveLoad();
+  // The failure arms a retry; left running it holds the process open after the test ends.
+  clearTimeout(c._usLiveRetry);
   const v = c.usersVals(c.state);
+  assert.ok(c.state.users.length > 0, 'the fallback fills a blank table');
   assert.deepEqual(v.usFormBlds.map((b) => b.name).slice(0, 2), ['Bishopsgate Tower', 'Riverside Court'], 'AX_BUILDINGS still feeds the chips');
-  assert.equal(v.usLiveSourceLabel, 'Sample data — backend not read yet');
+  assert.match(v.usLiveSourceLabel, /showing sample data/,
+    'sample people on screen with nothing saying they are samples');
   const before = c.state.users.length;
   c.setState({ usName: 'Demo', usEmail: 'demo@co.com', usBlds: ['Town Hall'] });
   c.usersVals(c.state).usSend();

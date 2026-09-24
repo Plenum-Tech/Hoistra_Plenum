@@ -24,7 +24,13 @@ const NO_CO = { id: null, name: "No companies yet", cc: "—", status: "—", bu
 
 export const superAdminMethods = {
   saVals(s) {
-    const co = s.saCompanies.find((c) => c.id === s.saSel) || s.saCompanies[0] || NO_CO;
+    // "No companies yet" is a finding about the platform, and it is not true while the
+    // read that would say so is still in flight. An empty list before the answer is an
+    // unanswered question, so the header says that instead of asserting an empty platform.
+    const EMPTY = s.saLiveLoading || !s.saLiveLoadedAt
+      ? { ...NO_CO, name: "Reading the platform…" }
+      : NO_CO;
+    const co = s.saCompanies.find((c) => c.id === s.saSel) || s.saCompanies[0] || EMPTY;
     const maxCr = Math.max(...s.saCompanies.map((c) => c.credits || 0), 0);
     // A live row's tile numbers ride on the usage card; null = the card has not landed.
     const nn = (v) => (v === null || v === undefined ? "…" : String(v));

@@ -75,6 +75,9 @@ export const auditMethods = {
     const live = !!s.auLiveLoadedAt && !s.auLiveError;
     const now = s.auNow ? new Date(s.auNow) : new Date();
     const rows = s.audit || [];
+    // The read has not answered and nothing is held. Distinct from a live-but-empty
+    // register, which is a real finding and already handled above.
+    const unread = !live && !s.auLiveError && !rows.length;
     const range = s.auRange || "Today";
     const reach = (AU_RANGES.find((r) => r[0] === range) || AU_RANGES[3])[1];
     const q = String(s.auQuery || "").trim().toLowerCase();
@@ -175,8 +178,14 @@ export const auditMethods = {
       // link only when something needs retrying. The rows below keep rendering either way —
       // the seed until auLiveLoad() answers, live rows after.
       auLiveSourceLabel: s.auLiveLoading ? "Reading the ingestion audit…"
-        : s.auLiveError ? "Unreachable — " + s.auLiveError
+        // Samples fill only a trail that was never read; after a successful read the rows
+        // are the record itself, and the label says only that the refresh failed.
+        : s.auLiveError ? "Unreachable — " + s.auLiveError + (s.auLiveLoadedAt ? "" : " · showing sample data")
         : live ? "Live · svc-operations-intelligence"
+        // Nothing read and nothing held. Not "Sample data", which would be a claim about
+        // rows that are not there, and not an empty trail either — the register has simply
+        // not answered yet.
+        : unread ? "Not read yet"
         : "Sample data",
       auLiveSourceDot: s.auLiveError ? "var(--st-risk)" : live ? "var(--st-ok)" : "var(--color-neutral-600)",
       auLiveRetryShow: !s.auLiveLoading && (!live || !!s.auLiveError) ? "inline" : "none",

@@ -48,19 +48,28 @@ export const usersMethods = {
     // DELETE both 400 on self) — matched here so the control never fires a doomed request
     // and reads as broken; it is simply not offered on your own row.
     const meEmail = ((s.account && s.account.email) || "").toLowerCase();
+    // Nothing read yet and nothing to show: the table is empty because the answer has not
+    // arrived, not because the company has no people.
+    const unread = !live && !s.usLiveError && !s.users.length;
 
     return {
       isUsers: s.signedIn && s.view === "users",
+      // "0 users" is a finding, and it is not one anybody has established while the read
+      // that would establish it is still running. An unread table counts nothing, so the
+      // tiles say so rather than reporting a company with no staff on it.
       usTiles: [
-        { value: String(total), label: "Users", hint: "no seat limit", color: "var(--color-accent)" },
-        { value: String(withIngest), label: "Can ingest data", hint: "granted per user", color: "var(--st-ok)" },
-        { value: String(pend), label: "Pending invites", hint: "awaiting activation", color: "var(--st-warn)" },
+        { value: unread ? "…" : String(total), label: "Users", hint: "no seat limit", color: "var(--color-accent)" },
+        { value: unread ? "…" : String(withIngest), label: "Can ingest data", hint: "granted per user", color: "var(--st-ok)" },
+        { value: unread ? "…" : String(pend), label: "Pending invites", hint: "awaiting activation", color: "var(--st-warn)" },
         { value: "Building", label: "Access boundary", hint: "every query filtered by it", color: "var(--color-neutral-300)" }
       ],
       // The live/seed source pill next to the table, with the loader's manual retry.
       usLiveSourceLabel: s.usLiveLoading ? "Reading /api/admin/users…"
-        : s.usLiveError ? "Unreachable — " + s.usLiveError
+        // Samples fill only a table that was never read; after a successful read the rows
+        // on screen are the company's own, and the label says only that the refresh failed.
+        : s.usLiveError ? "Unreachable — " + s.usLiveError + (s.usLiveLoadedAt ? "" : " · showing sample data")
         : live ? "Live · svc-operations-intelligence"
+        : unread ? "Not read yet"
         : "Sample data — backend not read yet",
       usLiveSourceDot: s.usLiveError ? "var(--st-risk)" : live ? "var(--st-ok)" : "var(--color-neutral-600)",
       usLiveRetryShow: !s.usLiveLoading && (!live || !!s.usLiveError) && typeof this.usLiveRetryNow === "function" ? "inline" : "none",

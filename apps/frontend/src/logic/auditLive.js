@@ -23,6 +23,7 @@
 // shapeLiveAudit() and the formatters are pure; the methods below are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { adminApi } from '../api/admin.js';
+import { AU_SEED } from '../data/hoistra-access.js';
 import { humanise } from './homeLive.js';
 import { isStaleScope } from '../api/client.js';
 
@@ -219,7 +220,20 @@ export const auditLiveMethods = {
       if (isStaleScope(e)) return;
       const msg = (e && e.message) || String(e);
       this._auLiveAttempts = (this._auLiveAttempts || 0) + 1;
-      this.setState({ auLiveLoading: false, auLiveError: msg });
+      // The sample entries appear HERE and nowhere else — when the register could not be
+      // read and the table would otherwise be blank. auLiveError is on screen beside them
+      // in that state, which is the only thing that makes them honest. They used to be
+      // mounted before any read was attempted, so an audit trail — the account of record —
+      // opened showing overrides and reassignments that never happened, attributed to
+      // named people.
+      //
+      // Only into a register that has never been read. A trail read once — even to an
+      // empty one — is the account of record and keeps it; a later refresh failure is
+      // reported, not papered over with sample history.
+      this.setState((p) => Object.assign(
+        { auLiveLoading: false, auLiveError: msg },
+        p.auLiveLoadedAt ? {} : { audit: AU_SEED.slice() }
+      ));
       // A 403 is the caller's role, not the backend's health — a timer will not change it;
       // auLiveRetryNow still works should the account be promoted mid-session.
       if (this._auLiveAttempts < RETRY_MAX && !(e && e.status === 403)) {

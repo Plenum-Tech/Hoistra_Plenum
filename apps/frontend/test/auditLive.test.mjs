@@ -234,8 +234,11 @@ test('auLiveLoad replaces the seed in place, newest first, and sends no organiza
     return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify(PAYLOAD) };
   };
   const c = new HoistraLogic();
-  const seedLen = c.state.audit.length;
-  assert.ok(seedLen > 0, 'the seed renders before the read answers');
+  // Nothing is held before the read. The register used to mount holding AU_SEED and show
+  // it until this call answered, which put invented overrides — attributed to named people
+  // — on the account of record during a perfectly healthy login. The samples now belong to
+  // the failure path alone; see the two tests below.
+  assert.equal(c.state.audit.length, 0, 'the register mounted holding sample entries');
   await c.auLiveLoad();
   assert.match(seen, /\/api\/admin\/ingestion-audit\?/);
   assert.match(seen, /limit=200/);
@@ -270,12 +273,15 @@ test('auLiveLoad replaces the seed in place, newest first, and sends no organiza
   clearTimeout(c._auLiveRetry);
 });
 
-test('a failed read keeps the seed, surfaces the error quietly and arms a retry', async () => {
+test('a failed read falls back to the seed, surfaces the error quietly and arms a retry', async () => {
   globalThis.fetch = () => Promise.reject(new TypeError('fetch failed'));
   const c = new HoistraLogic();
-  const seed = c.state.audit;
   await c.auLiveLoad();
-  assert.equal(c.state.audit, seed, 'the seed is never eaten by a failure');
+  // A failure must never leave a blank register — that was always the point of this test.
+  // What changed is when the samples arrive: they fill HERE, in the one state that also
+  // puts "Unreachable … showing sample data" on the screen beside them, rather than at
+  // mount where nothing said what they were.
+  assert.ok(c.state.audit.length > 0, 'a failure blanked the register');
   assert.match(c.state.auLiveError, /fetch failed/);
   assert.equal(c.state.auLiveLoading, false);
   assert.ok(c._auLiveRetry, 'a retry timer is armed');
@@ -286,12 +292,16 @@ test('a failed read keeps the seed, surfaces the error quietly and arms a retry'
   assert.equal(v.auLiveSourceDot, 'var(--st-risk)');
 });
 
-test('an empty-200 body is a malformed answer, not an empty trail — the seed stays', async () => {
+test('an empty-200 body is a malformed answer, not an empty trail', async () => {
   globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => '' });
   const c = new HoistraLogic();
-  const seedLen = c.state.audit.length;
   await c.auLiveLoad();
-  assert.equal(c.state.audit.length, seedLen);
+  // The distinction under test is unchanged: a malformed answer is an error, never an
+  // "this organisation has no audit history" finding. It takes the failure path, so the
+  // samples fill and the error is set — what must NOT happen is a silent empty register
+  // reading as the truth.
+  assert.ok(c.state.audit.length > 0);
+  assert.equal(c.state.auLiveLoadedAt, null, 'a malformed body never counts as a read');
   assert.match(c.state.auLiveError, /empty response/);
   clearTimeout(c._auLiveRetry);
 });

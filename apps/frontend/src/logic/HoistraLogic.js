@@ -40,7 +40,6 @@ import { auditLiveMethods } from './auditLive.js';
 import { ingestionLiveMethods } from './ingestionLive.js';
 import { migrationMethods } from './migration.js';
 import { superAdminLiveMethods } from './superAdminLive.js';
-import { AX_USERS, SA_COMPANIES, AU_SEED } from '../data/hoistra-access.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -172,7 +171,13 @@ export class HoistraLogic extends Controller {
     chatLink: "idle", chatTools: null, chatLinkError: "",
     // Users & access (logic/users.js) — every user is invited and allocated to buildings
     // in local state; the building is the access boundary for viewing and ingestion alike.
-    users: AX_USERS.map((u) => ({ ...u, buildings: u.buildings.slice() })), usOpen: null, usInviteOpen: false,
+    // Empty, not seeded — see saCompanies above for the whole reasoning. Five invented
+    // people were on screen until the read answered: Amara Osei, Daniel Reyes and three
+    // more, with @plenum-tech.com addresses, job titles, building allocations and query
+    // counts. A pill beside the table did say "Sample data", but a table of named people
+    // with email addresses is read as a staff list whatever the pill says.
+    // usersLive fills the seed on a failed read, where the pill is the whole story.
+    users: [], usOpen: null, usInviteOpen: false,
     usName: "", usEmail: "", usBlds: [], usIngest: false, usArmed: null,
     // The live read behind them (logic/usersLive.js): the /api/admin/users summary object
     // (drives the header tiles) and the company's canonical live buildings list
@@ -181,7 +186,13 @@ export class HoistraLogic extends Controller {
     usSummary: null, axBldsLive: null, usLiveLoading: false, usLiveError: "", usLiveLoadedAt: null,
     // Ingestion audit trail (logic/auditTrail.js) — every flagged ingestion, clarification,
     // override and approval. The ingestion validation agent (logic/ingestion.js) prepends to it.
-    audit: AU_SEED.slice(), auFilter: "All", auOpen: null,
+    // Empty, not seeded. This is the record of what actually happened, and it opened
+    // showing things that had not: "Marcus Hale · Overridden · NovaClean FM is not an
+    // approved vendor for Town Hall", "Amara Osei · Reassigned", each with a named person,
+    // a document, a decision and an assessment. Of every screen in the product this is the
+    // one a fabricated row does most damage on, because its entire purpose is to be
+    // trusted as the account of record. auditLive fills the seed on a failed read.
+    audit: [], auFilter: "All", auOpen: null,
     // The audit trail's filter bar. `auRange` opens on Today — the trail is read to answer
     // "what happened today", and All is one click away. auTotal is the server's own count,
     // filled by auLiveLoad; auNow exists so a test can pin the clock the ranges read.
@@ -209,8 +220,18 @@ export class HoistraLogic extends Controller {
     ingOffline: false, ingLiveErr: "", ingLiveRetriable: false,
     // Super Admin console (logic/superAdmin.js) — platform-operator overlay, deliberately
     // separate from any single company's own admin app: onboards companies, does not operate them.
-    saOn: false, saSel: "c1", saNew: false, saName: "", saCc: "UK", saEmail: "",
-    saCompanies: SA_COMPANIES.map((c) => ({ ...c })),
+    // Empty, not seeded. The console used to mount holding four invented companies —
+    // "Plenum Technologies · 8,420 cr", "Meridian REIT · 3,180 cr" — and show them for as
+    // long as the companies read took to answer. Nothing on the screen said they were
+    // samples: the "Showing sample data" note only appears once the read has FAILED, so
+    // during a normal, successful login a platform operator was reading fabricated credit
+    // consumption presented exactly as the real thing, then watching it change.
+    //
+    // The seed still exists and is still used, but only where it is true: superAdminLive
+    // falls back to it when the backend is unreachable, and the banner says so. Until the
+    // read answers, the list is empty and the console says it is loading.
+    saOn: false, saSel: null, saNew: false, saName: "", saCc: "UK", saEmail: "",
+    saCompanies: [],
     // Set only while a superadmin is viewing/acting as a company other than their own
     // (superAdmin.js's viewAsCompany/exitViewAsCompany) — null the rest of the time,
     // including for every non-superadmin account.
