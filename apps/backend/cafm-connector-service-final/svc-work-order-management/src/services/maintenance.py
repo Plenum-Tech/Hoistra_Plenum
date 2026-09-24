@@ -107,8 +107,65 @@ async def shape(session: AsyncSession) -> dict[str, set[str]]:
 
 
 def _pick(cols: set[str], *candidates: str) -> str | None:
-    """The first spelling this database actually has."""
+    """The first spelling this database actually has.
+
+    Right for choosing which column to ORDER BY or JOIN on, and wrong for reading a value out
+    of: a table carrying two spellings of one fact usually has the other one empty. Use
+    _coalesce for values.
+    """
     return next((c for c in candidates if c in cols), None)
+
+
+def _coalesce(cols: set[str], *candidates: str, cast: str = "") -> str | None:
+    """SQL reading the first of these spellings that THIS ROW has a value in.
+
+    work_orders carries vendor_name and vendor, cost_estimated and estimated_cost; which one an
+    ingest fills depends on the route the row came in by, so the choice cannot be made per
+    table. None when the table has none of them, so the caller can select NULL and say so.
+    """
+    have = [c for c in candidates if c in cols]
+    if not have:
+        return None
+    if len(have) == 1:
+        return f"w.{have[0]}{cast}"
+    return "coalesce(" + ", ".join(f"w.{c}{cast}" for c in have) + ")"
+
+
+#: A number this row states, whichever column states it. A varchar money column is cast only
+#: when it looks like a number: `cost_estimated` is free text on this schema, and one row
+#: reading "TBC" would abort the whole statement rather than showing a dash for itself.
+_NUMERIC_TEXT = r"^\s*-?[0-9]+(\.[0-9]+)?\s*$"
+
+
+def _money(cols: set[str], numeric: tuple[str, ...], text: tuple[str, ...]) -> str:
+    parts = [f"w.{c}" for c in numeric if c in cols]
+    parts += [f"CASE WHEN w.{c} ~ '{_NUMERIC_TEXT}' THEN w.{c}::numeric END"
+              for c in text if c in cols]
+    if not parts:
+        return "NULL"
+    return parts[0] if len(parts) == 1 else "coalesce(" + ", ".join(parts) + ")"
+
+
+def _vendor_sql(wo: set[str], vendors: set[str]) -> tuple[str, str, str]:
+    """(name expression, join clause, id expression) for the vendor a work order names.
+
+    The uuid that joins to `vendors` and the name to print are different columns, and either
+    can be the one this row filled. The join gives the vendor's own name where the row points
+    at a vendor record; the row's own text columns answer where it does not.
+    """
+    id_col = _pick(wo, "vendor_id", "assigned_vendor", "vendor")
+    name_col = "vendor_name" if "vendor_name" in vendors else "name"
+    names = []
+    if id_col and vendors:
+        names.append(f"ven.{name_col}")
+    # Text columns only: a uuid printed as a name is not a name.
+    names += [f"w.{c}" for c in ("vendor_name", "vendor") if c in wo]
+    join = (f"LEFT JOIN plenum_cafm.vendors ven ON ven.id::text = w.{id_col}::text"
+            if id_col and vendors else "")
+    if not names:
+        return "NULL", join, (f"w.{id_col}::text" if id_col else "NULL")
+    expr = names[0] if len(names) == 1 else "coalesce(" + ", ".join(names) + ")"
+    return expr, join, (f"w.{id_col}::text" if id_col else "NULL")
 
 
 def _ids(building_ids: list[UUID] | None) -> list[str] | None:
@@ -163,9 +220,8 @@ async def decisions(
     have = [c for c in ("wo_code", "work_order_id", "workorder_ref", "wo_uuid") if c in wo]
     code = ("coalesce(" + ", ".join("w." + c + "::text" for c in have) + ")") if have else None
     if code:
-        vendor_col = _pick(wo, "assigned_vendor", "vendor")
         asset = _pick(wo, "asset", "asset_id")
-        cost = _pick(wo, "estimated_cost", "cost_vendor_aed")
+        cost = _money(wo, ("estimated_cost", "cost_vendor_aed"), ("cost_estimated",))
         due = _pick(wo, "sla_due_at", "scheduled_date")
         title = _pick(wo, "title", "issue_description", "description")
         clause, params = _scope_sql(building_ids, "w.building_id")
@@ -187,16 +243,10 @@ async def decisions(
         params.update({"blocked": list(BLOCKED), "awaiting": list(AWAITING),
                        "live": list(LIVE), "lim": fetch})
 
-        # A vendor is recorded as a name on one database and as a uuid on the other. Show a
-        # name either way, rather than an id the reader cannot act on.
-        name_col = "vendor_name" if "vendor_name" in sh.get("vendors", set()) else "name"
-        if vendor_col and "vendors" in sh:
-            vendor_expr = "coalesce(ven.{n}, w.{v}::text)".format(n=name_col, v=vendor_col)
-            vendor_join = "LEFT JOIN plenum_cafm.vendors ven ON ven.id::text = w.{v}::text".format(v=vendor_col)
-        elif vendor_col:
-            vendor_expr, vendor_join = "w.{v}::text".format(v=vendor_col), ""
-        else:
-            vendor_expr, vendor_join = "NULL", ""
+        # A vendor is recorded as a name on one database and as a uuid on the other, and on
+        # this one as both in columns that disagree about which is filled. Show a name either
+        # way, rather than an id the reader cannot act on — or the dash that was there.
+        vendor_expr, vendor_join, vendor_id_expr = _vendor_sql(wo, sh.get("vendors", set()))
 
         sql = """
             SELECT {code}              AS code,
@@ -222,8 +272,8 @@ async def decisions(
             code=code, state=state_case, vendor=vendor_expr, vjoin=vendor_join, clause=clause,
             asset=("w." + asset + "::text") if asset else "NULL",
             asset_id=("w.asset_id::text" if "asset_id" in wo else "NULL"),
-            vendor_id=(("w." + vendor_col + "::text") if vendor_col else "NULL"),
-            cost=("w." + cost) if cost else "NULL",
+            vendor_id=vendor_id_expr,
+            cost=cost,
             due=("w." + due + "::text") if due else "NULL",
             title=("w." + title) if title else "NULL",
         )
@@ -559,14 +609,7 @@ async def ppm_health(
     kind = _pick(wo, "wo_type", "maintenance_type", "request_type")
     if not kind:
         return {"ok": True, "contracts": [], "note": "work orders do not record a type here"}
-    vendor_col = _pick(wo, "assigned_vendor", "vendor")
-    name_col = "vendor_name" if "vendor_name" in sh.get("vendors", set()) else "name"
-    if vendor_col and "vendors" in sh:
-        vendor = "coalesce(ven.{n}, w.{v}::text)".format(n=name_col, v=vendor_col)
-        vendor_join = "LEFT JOIN plenum_cafm.vendors ven ON ven.id::text = w.{v}::text".format(v=vendor_col)
-    else:
-        vendor = ("w." + vendor_col + "::text") if vendor_col else "NULL"
-        vendor_join = ""
+    vendor, vendor_join, _vendor_id = _vendor_sql(wo, sh.get("vendors", set()))
     due = _pick(wo, "sla_due_at", "scheduled_date")
     finished = _pick(wo, "closed_at", "completed_at")
     clause, params = _scope_sql(building_ids, "w.building_id")
