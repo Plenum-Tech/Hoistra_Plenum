@@ -9,6 +9,7 @@
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { deepAgentsApi } from '../api/deepAgents.js';
+import { isTerminal } from './migration.js';
 
 // Which engine answered, read off the tools behind the reply. The orchestrator names its
 // tools by domain (compliance_*, *_energy_*, vendor scorecards, work orders, documents),
@@ -61,10 +62,15 @@ export const chatMethods = {
     this.setState({ view: "chat", orchOpen: false, queueOpen: false, paletteOpen: false, detail: null });
     if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
     this.chatConnect();
-    // A run restored from the session has an id and no document until something reads it.
-    // Arriving here is that something — mgOpen does its own read, so this only fires for a
-    // run that was already open and has never been fetched.
-    if (this.state.mgId && !this.state.mgStatus) this.mgPoll(true);
+    // A run restored from the session has an id and no document until something reads it,
+    // and a run that was being followed has a document that stopped being read the moment
+    // the person left: polling is scheduled by the previous poll and only while this is the
+    // view. Both are out of date, so both are read again — anything short of a terminal
+    // status is by definition not the last word. Testing for a missing document instead is
+    // what left the panel reporting "Running · Node 8 of 9" over a run that had finished.
+    if (this.state.mgId && !isTerminal(this.state.mgStatus && this.state.mgStatus.status)) {
+      this.mgPoll(true);
+    }
   },
 
   // "Connected · N tools" — one read of the tool catalogue, retried on request.

@@ -1516,6 +1516,64 @@ def create_app() -> FastAPI:
             ),
         )
 
+    #: An output bigger than this is summarised in the progress poll rather than sent. Chosen
+    #: so every node's real result still travels — the largest that is not a bulk dump is Gate
+    #: 2's 5.9 KB — while the three that are (Pre-Semantic's mapping table at 715 KB, UDR's
+    #: report at 678 KB, File Ingestion's parse at 57 KB) do not.
+    _MAX_POLLED_OUTPUT_BYTES = 16_384
+
+    def _lighten_record(value, include_output: bool, what: str):
+        """A record field as the poll should carry it: a note of its size, not its contents.
+
+        The UDR report is the same kind of thing as a node's output — the pipeline's record of
+        what it found, not where the run is — and it is the larger half of it: 651 KB of
+        per-column intelligence over 174 columns, sent every three seconds to a page that does
+        not read it. GET /api/migration/{id} still returns all of it, which is the route that
+        exists to.
+        """
+        if include_output or value in (None, {}, []):
+            return value
+        try:
+            size = len(json.dumps(value, default=str))
+        except (TypeError, ValueError):
+            return value
+        if size <= _MAX_POLLED_OUTPUT_BYTES:
+            return value
+        return {"_omitted": True, "_bytes": size,
+                "_hint": f"{what} is not sent with the progress poll — "
+                         f"GET /api/migration/{{id}} returns it, or add ?include_output=true"}
+
+    def _lighten_node_outputs(nodes: list[dict], include_output: bool) -> list[dict]:
+        """The nodes as the poll should carry them: progress, logs, and small outputs.
+
+        A poll is asked "where is this run", every few seconds, and answered with the pipeline's
+        entire record. Returning the record is right for a caller that asks for it and wrong for
+        one counting nodes — the difference is a megabyte a second, and it timed the page out
+        while the migration underneath had already finished.
+        """
+        if include_output:
+            return nodes
+        out = []
+        for n in nodes:
+            if not isinstance(n, dict) or n.get("output") in (None, {}, []):
+                out.append(n)
+                continue
+            try:
+                size = len(json.dumps(n["output"], default=str))
+            except (TypeError, ValueError):
+                size = _MAX_POLLED_OUTPUT_BYTES + 1
+            if size <= _MAX_POLLED_OUTPUT_BYTES:
+                out.append(n)
+                continue
+            # Said, not dropped: a reader who wants it is told it exists and how to ask.
+            out.append({**n, "output": {
+                "_omitted": True,
+                "_bytes": size,
+                "_hint": "large node output is not sent with the progress poll — "
+                         "add ?include_output=true to this request for the full record",
+            }})
+        return out
+
     @app.get(
         "/api/migration/{migration_id}/status",
         response_model=MigrationStatusResponse,
@@ -1524,6 +1582,11 @@ def create_app() -> FastAPI:
     )
     async def get_migration_status(
         migration_id: str = Path(..., description="Migration UUID"),
+        include_output: bool = Query(
+            False,
+            description="Send every node's full output. Off by default: the progress poll runs "
+                        "every few seconds and the outputs run to a megabyte.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStatusResponse:
         """Get current status, progress, and statistics for a migration."""
@@ -1850,11 +1913,17 @@ def create_app() -> FastAPI:
                 pending_gate_payload=migration_job.pending_gate_payload,
                 field_mapping_draft=getattr(migration_job, "field_mapping_draft", None),
                 udr_test_results=_udr_test_results_from_job(migration_job),
-                udr_relationship_report=_udr_relationship_report_from_job(migration_job),
-                udr_table_resolution=_udr_table_resolution_from_job(migration_job),
-                udr_column_intelligence=_udr_column_intelligence_from_job(migration_job),
+                udr_relationship_report=_lighten_record(
+                    _udr_relationship_report_from_job(migration_job), include_output,
+                    "the UDR relationship report"),
+                udr_table_resolution=_lighten_record(
+                    _udr_table_resolution_from_job(migration_job), include_output,
+                    "the UDR table resolution"),
+                udr_column_intelligence=_lighten_record(
+                    _udr_column_intelligence_from_job(migration_job), include_output,
+                    "the UDR column intelligence"),
                 error_message=migration_job.error_message,
-                nodes=migration_nodes,
+                nodes=_lighten_node_outputs(migration_nodes, include_output),
             )
 
         except HTTPException:
@@ -7320,6 +7389,9 @@ def create_app() -> FastAPI:
     )
     async def get_schema_mapping_status(
         schema_mapping_id: str = Path(..., description="Schema Mapping UUID"),
+        include_output: bool = Query(
+            False, description="Send every node's full output (see the migration poll)."
+        ),
         session: AsyncSession = Depends(get_db_session),
     ):
         """Get current status and progress of a schema mapping session."""
@@ -7588,7 +7660,7 @@ def create_app() -> FastAPI:
                 job_total_tables=int(job.total_tables or 0),
                 job_total_fields=int(job.total_fields or 0),
                 final_summary=job.final_summary if isinstance(job.final_summary, dict) else None,
-                nodes=schema_nodes,
+                nodes=_lighten_node_outputs(schema_nodes, include_output),
                 pending_gate_payload=_gate_payload if isinstance(_gate_payload, dict) else None,
                 external_cmms_name=str(job.external_cmms_name or "Fiix"),
             )
