@@ -197,8 +197,12 @@ def is_sub_meter_for(row: dict | None) -> bool:
 
 #: A section of THIS building, by its own name, its type, or the floor it sits on. Scoped to
 #: the building so "Level 3" means this building's third floor and not another tower's.
+#: The second column says whether the section is named exactly as the hint. A building with a
+#: section per floor AND a plant room on one of those floors answers "Level 2" twice — the
+#: floor's own section and the plant room that sits on it — and the one that IS called Level 2
+#: is the one meant. Without that preference the meter resolved to neither.
 SECTION_LOOKUP_SQL = """
-SELECT s.section_id::text
+SELECT s.section_id::text, (lower(s.name) = :k) AS by_name
   FROM {schema}.building_sections s
   LEFT JOIN {schema}.floors f ON f.floor_id = s.floor_id
  WHERE s.building_id = CAST(:b AS uuid)
@@ -206,8 +210,47 @@ SELECT s.section_id::text
      OR lower(coalesce(s.section_type, '')) = :k
      OR lower(coalesce(f.name, '')) = :k
      OR coalesce(f.level::text, '') = :k)
+ LIMIT 8
+"""
+
+
+def pick_section(hits) -> str | None:
+    """One section id from lookup rows, or None. Exactly one hit is it; several hits narrow to
+    the ones named as the hint, and only a single survivor is trusted."""
+    rows = [(str(r[0]), bool(r[1]) if len(r) > 1 else False) for r in (hits or []) if r and r[0]]
+    ids = sorted({r[0] for r in rows})
+    if len(ids) == 1:
+        return ids[0]
+    named = sorted({r[0] for r in rows if r[1]})
+    return named[0] if len(named) == 1 else None
+
+
+#: A floor of THIS building, by the name the sheet gives it or its level. building_sections
+#: carries floor_name as text and floor_id as the real link; the floors exist before any
+#: section is written, so the text resolves to the link at write time. "Level 3" on Harbour
+#: Point is Harbour Point's third floor, not another tower's.
+FLOOR_LOOKUP_SQL = """
+SELECT f.floor_id::text
+  FROM {schema}.floors f
+ WHERE f.building_id = CAST(:b AS uuid)
+   AND (lower(f.name) = :k OR f.level::text = :k)
  LIMIT 2
 """
+
+#: Columns on a section sheet that name the floor it sits on.
+_FLOOR_KEYS = ("floor_name", "floor", "level", "storey", "story")
+
+
+def floor_hint(row: dict | None) -> str | None:
+    """The floor a section row says it is on, as the sheet names it."""
+    if not isinstance(row, dict):
+        return None
+    lower = _keys(row)
+    for key in _FLOOR_KEYS:
+        v = _clean(lower.get(key))
+        if v and not looks_like_uuid(v):
+            return v
+    return None
 
 
 def meter_type_for(row: dict | None) -> str:

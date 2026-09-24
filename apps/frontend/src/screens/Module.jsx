@@ -565,6 +565,57 @@ export default function Module({ vals }) {
                               <div style={{ display: b.emptyShow, padding: "11px 14px 11px 42px", fontSize: "11.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                                 {b.emptyText}
                               </div>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "8px 14px 6px 42px", fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", textWrap: "pretty" }}>
+                                <span>
+                                  {b.floorsTitle}
+                                </span>
+                              </div>
+                              {(b.floors || []).map((fl, $index) => (
+                                <React.Fragment key={$index}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "10px 18px", flexWrap: "wrap", padding: "9px 14px 9px 42px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)" }}>
+                                    <div style={{ flex: "1 1 150px", minWidth: "0" }}>
+                                      <div style={{ fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {fl.name}
+                                      </div>
+                                      <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", textWrap: "pretty" }}>
+                                        {fl.meta}
+                                      </div>
+                                    </div>
+                                    {(fl.meters || []).map((m, $j) => (
+                                      <div key={$j} style={{ flex: "1 1 210px", minWidth: "170px" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px", fontSize: "11px", fontFamily: "ui-monospace,monospace" }}>
+                                          <span style={{ color: m.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                            {m.label}
+                                          </span>
+                                          <span style={{ color: "var(--color-neutral-300)", whiteSpace: "nowrap" }}>
+                                            {m.kwh}
+                                            <span style={{ color: "var(--color-neutral-500)" }}>
+                                              {m.share}
+                                            </span>
+                                          </span>
+                                        </div>
+                                        <div style={{ height: "5px", borderRadius: "3px", background: "var(--color-neutral-900)", overflow: "hidden", marginTop: "4px" }}>
+                                          <div style={{ height: "100%", borderRadius: "3px", width: m.barPct, background: m.color }}></div>
+                                        </div>
+                                        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                          {m.sub}
+                                        </div>
+                                      </div>
+                                    ))}
+                                    <div style={{ flex: "0 0 auto", textAlign: "right" }}>
+                                      <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "11.5px", color: "var(--color-text)", whiteSpace: "nowrap" }}>
+                                        {fl.cost}
+                                      </div>
+                                      <span style={{ display: "inline-block", fontSize: "10.5px", padding: "2px 8px", borderRadius: "5px", marginTop: "3px", whiteSpace: "nowrap", color: fl.stColor, background: fl.stBg }}>
+                                        {fl.state}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </React.Fragment>
+                              ))}
+                              <div style={{ display: b.floorsEmpty, padding: "10px 14px 11px 42px", fontSize: "11.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
+                                {b.floorsEmptyText}
+                              </div>
                             </div>
                           </div>
                         </React.Fragment>

@@ -377,6 +377,67 @@ export const energyMethods = {
         + " · largest " + head + gap;
     };
     const anomHit = (a) => f === "New" ? a.status === "New" : f === "Above £20k" ? impactNum(a) > 20000 : true;
+
+    // Where in the building the energy goes: the sub-meters on each floor, from
+    // GET /api/energy/meters/by-floor. The Assets page reads a building as building →
+    // section → asset; this reads it as building → floor → meter, and for the same reason —
+    // a plant room over its reference disappears into the floors around it when only the
+    // whole building is read. Share is of the incoming supply on that fuel, so the floors of
+    // one building add up, and what they do not add up to is plant, lifts and common parts.
+    const kwhFmt = (n) => (typeof n === "number" ? Math.round(n).toLocaleString("en-GB") + " kWh" : "—");
+    const FUEL_FG = { electricity: "var(--color-accent)", gas: "var(--st-warn)" };
+    const floorsOf = (b) => {
+      const live = s.enFloorsLive;
+      const fb = live ? (live[String(b.buildingId)] || live[String(b.uuid)] || null) : null;
+      if (!fb || !fb.sub_meters) {
+        return {
+          floorsTitle: "Sub-meters by floor",
+          floors: [], floorsEmpty: "block",
+          floorsEmptyText: !live
+            ? "The meters-by-floor read did not return, so the floor view cannot be shown."
+            : "No sub-meters on record for this building — it is read at its incoming supply only. Ingest a floor-level sub-meter workbook to see where the energy goes.",
+        };
+      }
+      const rows = (fb.floors || []).map((fl) => {
+        const anoms = fl.open_anomalies || 0;
+        return {
+          name: fl.floor,
+          meta: [fl.section_type || null,
+                 typeof fl.area_m2 === "number" ? Math.round(fl.area_m2).toLocaleString("en-GB") + " m²" : null,
+                 typeof fl.kwh_per_m2_year === "number" ? fl.kwh_per_m2_year + " kWh/m²/yr annualised" : null]
+            .filter(Boolean).join(" · "),
+          meters: (fl.meters || []).map((m) => ({
+            label: (m.fuel === "gas" ? "Gas" : "Electricity") + (m.supply ? " · " + m.supply : ""),
+            color: FUEL_FG[m.fuel] || "var(--color-neutral-400)",
+            kwh: kwhFmt(m.kwh),
+            share: typeof m.share_pct === "number" ? " · " + m.share_pct + "% of supply" : "",
+            barPct: (typeof m.share_pct === "number" ? Math.min(100, Math.max(0, m.share_pct)) : 0) + "%",
+            sub: (m.readings ? m.readings.toLocaleString("en-GB") + " readings" : "no readings in the window")
+              + (m.open_anomalies ? " · " + m.open_anomalies + (m.open_anomalies === 1 ? " open anomaly" : " open anomalies") : "")
+              + (typeof m.rate_used === "number" ? " · " + (m.rate_used * 100).toFixed(1) + "p/kWh" : ""),
+          })),
+          cost: typeof fl.cost === "number" ? money(fl.cost) : "—",
+          state: anoms ? anoms + (anoms === 1 ? " anomaly" : " anomalies") : "in control",
+          stColor: anoms ? t("warn").color : t("ok").color,
+          stBg: anoms ? t("warn").bg : t("ok").bg,
+        };
+      });
+      (fb.unplaced || []).forEach((m) => rows.push({
+        name: "Not placed on a floor",
+        meta: "sub-meter " + (m.supply || "") + " names no section with a floor",
+        meters: [{ label: (m.fuel === "gas" ? "Gas" : "Electricity") + (m.supply ? " · " + m.supply : ""),
+                   color: FUEL_FG[m.fuel] || "var(--color-neutral-400)", kwh: kwhFmt(m.kwh),
+                   share: typeof m.share_pct === "number" ? " · " + m.share_pct + "% of supply" : "",
+                   barPct: (typeof m.share_pct === "number" ? Math.min(100, m.share_pct) : 0) + "%",
+                   sub: (m.readings || 0).toLocaleString("en-GB") + " readings" }],
+        cost: typeof m.cost === "number" ? money(m.cost) : "—",
+        state: "unplaced", stColor: "var(--color-neutral-500)", stBg: "var(--color-bg)",
+      }));
+      return {
+        floorsTitle: "Sub-meters by floor · " + fb.summary,
+        floors: rows, floorsEmpty: "none", floorsEmptyText: "",
+      };
+    };
     const allBuildings = this.bldData();
     const allAnoms = this.enAnomalies();
     const total = allBuildings.length;
@@ -440,6 +501,7 @@ export const energyMethods = {
             emptyText: x.all.length ? "No anomalies match the current filter."
               : (hasEui ? "No open anomalies. Any gap above reference here is structural — investigate the building to size the capex case."
                 : "No open anomalies, and no EUI reading on record yet to say whether this building is over reference."),
+            ...floorsOf(b),
             anomalies: x.anoms.map((a) => ({
               asset: a.asset, type: a.type, impact: a.impact, status: a.status,
               simulatedShow: a.simulated ? "inline-block" : "none",

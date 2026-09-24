@@ -35,6 +35,7 @@ from ...engines.auth import access
 from ...engines.energy import chiller as chiller_svc
 from ...engines.energy import market_profiles as profile_svc
 from ...engines.energy import benchmarks as bench_svc
+from ...engines.energy import floor_meters as floor_svc
 from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ask as ask_svc
 from ...engines.energy import investigate as inv_svc
@@ -1047,6 +1048,25 @@ async def list_sections(
     """
     ids = await position_svc.building_ids_for(session, s, building_id)
     return await ai_svc.sections(session, building_ids=ids)
+
+
+@router.get("/meters/by-floor")
+async def meters_by_floor(
+    building_id: UUID | None = None,
+    days: int = Query(30, ge=1, le=365),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Every building's sub-meters, placed on the floor their section sits on.
+
+    Per floor: each meter's kWh over the trailing window, its cost at the contracted rate, its
+    share of the building's incoming supply on that fuel, and the open anomalies on it. Per
+    building: how much of the main meter the floor meters account for between them — the
+    rest is plant, lifts and common parts, or unmetered. A sub-meter whose section names no
+    floor is listed as unplaced rather than dropped.
+    """
+    ids = await position_svc.building_ids_for(session, s, building_id)
+    return await floor_svc.by_floor(session, building_ids=ids, days=days)
 
 
 @router.get("/assets/value-at-risk")

@@ -353,5 +353,10 @@ def test_the_consumption_window_binds_exactly_its_three_parameters():
     from src.engines.energy import us_ratings as U
 
     src = inspect.getsource(U.consumption_for_building)
-    sql = src[src.index('text("""') + 8: src.index('"""), {')]
+    # The statement is an f-string since the meter-scope predicate was spliced in; the
+    # predicate itself carries no bind parameters, so the three are still the whole set.
+    start = src.index('text(f"""') + 9 if 'text(f"""' in src else src.index('text("""') + 8
+    sql = src[start: src.index('"""), {')]
     assert set(sa_text(sql)._bindparams) == {"b", "s", "e"}, sorted(sa_text(sql)._bindparams)
+    from src.engines.energy.meter_scope import counted_meters
+    assert not sa_text(counted_meters("em"))._bindparams

@@ -89,6 +89,11 @@ export const energyApi = {
   // Active meters: the route/type/tariff a site's reading is billed and priced at.
   meters: (query) =>
     apiFetch(B, '/api/energy/meters', { query: withOrg(Object.assign({ limit: 500 }, query || {})) }),
+  // Sub-meters placed on the floor their section sits on: each meter's kWh over a trailing
+  // window, its cost at the contracted rate, its share of the incoming supply, and how much
+  // of the main meter the floors account for between them (engines/energy/floor_meters.py).
+  metersByFloor: (query) =>
+    apiFetch(B, '/api/energy/meters/by-floor', { query: withOrg(Object.assign({ days: 30 }, query || {})), timeoutMs: 30000 }),
 
   // The ratings-and-duties tiles for one market, assembled server-side from real records —
   // an EPC's energy_rating, a filing row, a chiller reading, months of consumption.

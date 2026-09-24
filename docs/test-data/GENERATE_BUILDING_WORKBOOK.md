@@ -194,6 +194,33 @@ Rules the compliance engine actually enforces:
   one certificate expiring inside 12 months (drives the "expiring" tile) and none already
   expired unless you want the risk tile red.
 
+### 3.18 The floor-level sub-meter companion — `<workbook>-floorlevel_submeter.xlsx`
+
+A second, optional file per building, ingested after the main workbook. It puts a sub-meter on
+every floor for both fuels so the Energy page can read the building as building → floor →
+meter (the way the Assets page reads building → section → asset). Built by
+`db/tools/build_floor_submeters.py` from the main workbook; three sheets, in this order:
+
+| Sheet | Columns | Rows |
+|-------|---------|------|
+| `Building_Sections` | `building_code, name, section_type, floor_name, gross_area_m2, reference_eui_kwh_m2, reference_source` | one per floor; `name` **and** `floor_name` are the floor's name exactly as `plenum_cafm.floors` has it (`Basement`, `Ground`, `Level 1` …) |
+| `Energy_Meters` | `meter_ref, building_code, site_ref, meter_type, mpan, mprn, is_sub_meter, section_name, floor_name, tariff_gbp_per_kwh, carbon_kg_per_kwh, active, description` | two per floor: `<CO>-<code>-E-L03` electricity, `<CO>-<code>-G-L03` gas (`B`, `G` for basement and ground); `is_sub_meter` true; `section_name` = the floor |
+| `Meter_Readings` | same as §3.11 | every half-hour of a trailing window (90 days by default) per sub-meter, `source` = `bms` |
+
+Rules the engines enforce:
+- **Sub-meter readings are shares of the main meter's, half-hour by half-hour.** Basement takes
+  14 % of electricity and 62 % of gas (plant), Ground 10 % / 8 %, tenant floors split the rest
+  evenly; the floors together account for ~93 % of electricity and ~95 % of gas. The remainder
+  is lifts, risers and common parts, and the page reports it as coverage, not loss.
+- **The EUI still comes from the main meters.** `engines/energy/meter_scope.counted_meters`
+  excludes sub-meters from every kWh sum wherever a main meter exists on the fuel, so adding
+  this file must leave the building's EUI, benchmark gap and cost card unchanged. Check it.
+- The writer links `floor_id` from `floor_name` and places each meter on the section named
+  exactly as its `section_name`; a section per floor named as the floor is what makes
+  `GET /api/energy/meters/by-floor` group them.
+- One tenant floor (the highest) carries a night-time electricity drift of +25 % over the last
+  five weeks so the scan raises a floor-level `baseline_drift`.
+
 ## 4. Cross-sheet integrity — run these before saving
 
 ```
@@ -263,6 +290,11 @@ SELECT b.building_code, count(*) FILTER (WHERE a.asset_code IS NOT NULL) assets,
  GROUP BY b.building_id, b.building_code ORDER BY 1;
 ```
 Expected per building: 11–12 assets, 35,040 readings, ~10 anomalies, an `EPC:C`-style entry.
+
+After the sub-meter companion (§3.18): Energy → open the building → **Sub-meters by floor**
+lists every floor, basement first, with each meter's kWh, share of supply and cost, and the
+header says what the floors account for of the incoming supply. The building's EUI and cost
+above benchmark must read exactly as before the companion was ingested.
 Compliance → Energy ratings should then read `MEES enforceable now 0 · 1 with an EPC on file`,
 `MEES proposed 2030 1` (a C is below B and the building is over 1,000 m²), `EPCs on file 1 / 1`.
 

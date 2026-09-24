@@ -134,7 +134,7 @@ export const coreMethods = {
       homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
       vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null,
       bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
-      enAnomLive: null, enMetersLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
+      enAnomLive: null, enMetersLive: null, enFloorsLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
       asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
       asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,

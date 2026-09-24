@@ -34,6 +34,7 @@ from ..compliance.site_links import as_uuid
 from . import market_profiles, us_ratings
 from .buildings import _ROLLING_MIN_COMPARABLES, BENCHMARK_PACKS, country_code_for, tm46_type_for
 from .detectors import currency_for
+from .meter_scope import counted_meters
 from .eui import tm46_benchmark
 from .ratings_position import BCA_OFFICE_REFERENCE_KWH_M2
 
@@ -104,7 +105,10 @@ async def contracted_tariffs(
     """
     if not building_ids:
         return {}
-    rows = (await session.execute(text("""
+    # The same meters the consumption is summed from (meter_scope): a sub-meter created by a
+    # migration keeps the column's default tariff, and averaging a dozen defaults in with the
+    # one contracted rate would price the building at a number nobody agreed to.
+    rows = (await session.execute(text(f"""
         SELECT em.building_id::text AS building_id,
                lower(coalesce(em.meter_type, 'electricity')) AS fuel,
                avg(em.tariff_gbp_per_kwh)::float AS rate
@@ -112,6 +116,7 @@ async def contracted_tariffs(
          WHERE em.active
            AND em.tariff_gbp_per_kwh > 0
            AND em.building_id = ANY(CAST(:ids AS uuid[]))
+           AND {counted_meters("em")}
          GROUP BY 1, 2
     """), {"ids": [str(b) for b in building_ids]})).mappings().all()
     out: dict[str, dict[str, float]] = {}

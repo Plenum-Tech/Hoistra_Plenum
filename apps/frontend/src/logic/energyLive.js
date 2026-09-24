@@ -146,12 +146,15 @@ export const energyLiveMethods = {
       // The market-profile table rides along: it is small, it is scoped the same way, and
       // a page that shows live anomalies against a hardcoded benchmark table is telling two
       // different stories. It is optional — a failure here must not take the anomalies down.
-      const [anomRes, meterRes, profRes, rollRes] = await Promise.all([
+      const [anomRes, meterRes, profRes, rollRes, floorRes] = await Promise.all([
         energyApi.anomalies(), energyApi.meters(),
         energyApi.marketProfiles().catch(() => null),
         // The per-meter rollup. Optional: without it the page falls back to its own
         // arithmetic, which adds findings that overlap — so the fallback is marked.
-        energyApi.anomalyRollup().catch(() => null)
+        energyApi.anomalyRollup().catch(() => null),
+        // Sub-meters by floor, for the floor view under an open building. Optional too: a
+        // building read at its incoming supply only has nothing here, and says so.
+        energyApi.metersByFloor().catch(() => null)
       ]);
       const anomalies = (anomRes && anomRes.anomalies) || [];
       const meters = (meterRes && meterRes.meters) || [];
@@ -168,6 +171,9 @@ export const energyLiveMethods = {
         // Keyed by building so the row can read its own headline without scanning.
         enRollup: rollRes && rollRes.ok && Array.isArray(rollRes.buildings)
           ? rollRes.buildings.reduce((m, b) => { if (b.building_id) m[String(b.building_id)] = b; return m; }, {})
+          : null,
+        enFloorsLive: floorRes && floorRes.ok && Array.isArray(floorRes.buildings)
+          ? floorRes.buildings.reduce((m, b) => { if (b.building_id) m[String(b.building_id)] = b; return m; }, {})
           : null,
         enLoading: false, enError: "", enLoadedAt: new Date().toISOString()
       });

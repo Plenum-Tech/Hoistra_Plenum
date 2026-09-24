@@ -35,7 +35,8 @@ from .building_link import (
     build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
 )
 from .meter_link import (
-    CREATE_METER_SQL, SECTION_LOOKUP_SQL, MeterResolver, is_sub_meter_for, meter_hint,
+    CREATE_METER_SQL, FLOOR_LOOKUP_SQL, SECTION_LOOKUP_SQL, MeterResolver, floor_hint,
+    is_sub_meter_for, meter_hint, pick_section,
     meter_type_for, section_hint, supply_numbers,
 )
 from .reference_link import REFERENCES, ReferenceResolver, hint_for
@@ -1674,9 +1675,29 @@ async def _apply_records_with_schema_alignment(
                     return _section_cache[key]
                 _hit = await _fetch(SECTION_LOOKUP_SQL.format(schema=schema_name),
                                     {"b": key[0], "k": key[1]})
-                _ids = sorted({str(r[0]) for r in _hit if r and r[0]})
-                _section_cache[key] = _ids[0] if len(_ids) == 1 else None
+                _section_cache[key] = pick_section(_hit)
                 return _section_cache[key]
+
+            _floor_cache: dict[tuple[str, str], str | None] = {}
+
+            async def _floor_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's floor by the name the sheet gives it, or its level.
+
+                A section arrives saying "Level 3" in floor_name; the floors table already
+                holds Level 3 for this building. Without the link a meter on that section
+                cannot be placed on the floor, and the Energy page's floor view has nothing
+                to stand a sub-meter on. Two floors answering to one name resolve to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _floor_cache:
+                    return _floor_cache[key]
+                _hit = await _fetch(FLOOR_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _ids = sorted({str(r[0]) for r in _hit if r and r[0]})
+                _floor_cache[key] = _ids[0] if len(_ids) == 1 else None
+                return _floor_cache[key]
 
             async def _create_meter(*, mpan, mprn, meter_type, building_id,
                                     section_id=None, is_sub_meter=False) -> str | None:
@@ -2041,6 +2062,17 @@ async def _apply_records_with_schema_alignment(
                             safe_row["section_id"] = _sid
                         else:
                             safe_row.pop("section_id", None)
+
+                    # A section sheet names the floor it sits on in words; floors.floor_id is
+                    # the link. Resolved here so the floor view can stand a sub-meter on the
+                    # floor its section is on.
+                    if (safe_table == "building_sections" and "floor_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("floor_id"))):
+                        _fid = await _floor_for(safe_row.get("building_id"), floor_hint(row))
+                        if _fid:
+                            safe_row["floor_id"] = _fid
+                        else:
+                            safe_row.pop("floor_id", None)
 
                     if safe_table == "energy_meters":
                         # A meter already on record under this supply number is THE meter, not

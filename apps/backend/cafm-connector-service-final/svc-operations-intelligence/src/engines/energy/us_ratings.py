@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models.energy import EnergyMeter, EnergyRating, MeterReading
+from .meter_scope import counted_meters
 
 log = get_logger(__name__)
 
@@ -293,7 +294,12 @@ class ConsumptionWindow:
 async def consumption_for_building(
     session: AsyncSession, *, building_id: UUID, months: int = 12, end: date | None = None
 ) -> ConsumptionWindow | None:
-    """Site kWh by fuel over the trailing window, from every active meter on the building.
+    """Site kWh by fuel over the trailing window, from the meters the building is counted by.
+
+    Main meters where the building has one on the fuel; sub-meters only where it does not. A
+    floor's sub-meter reads energy that has already passed through the incoming supply, so a
+    building with a meter per floor summed over every meter reads nearly twice what it used
+    — see meter_scope.
 
     Meters are found two ways because there are two registries: energy_meters keyed on the
     building (energy tables key on building_id), and
@@ -311,17 +317,19 @@ async def consumption_for_building(
     # start and end are bound as dates, not ISO strings: the driver binds a CAST(... AS date)
     # parameter as a date and rejects a str with "no attribute 'toordinal'". And nothing that
     # looks like a bind parameter may appear in the SQL below — including inside a comment.
-    rows = (await session.execute(text("""
+    rows = (await session.execute(text(f"""
         WITH ms AS (
             SELECT em.id, em.meter_type
               FROM plenum_cafm.energy_meters em
              WHERE em.active AND em.building_id = CAST(:b AS uuid)
+               AND {counted_meters("em")}
             UNION
             SELECT em.id, em.meter_type
               FROM plenum_cafm.meters m
               JOIN plenum_cafm.energy_meters em
                 ON em.active AND (em.mpan = m.mpan_mprn OR em.mprn = m.mpan_mprn)
              WHERE m.building_id = CAST(:b AS uuid)
+               AND {counted_meters("em")}
         )
         SELECT ms.id AS meter, ms.meter_type,
                date_trunc('month', r.reading_at)::date AS month,
