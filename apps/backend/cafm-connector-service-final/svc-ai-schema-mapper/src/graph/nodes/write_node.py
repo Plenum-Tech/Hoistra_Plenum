@@ -1675,8 +1675,13 @@ async def _apply_records_with_schema_alignment(
                     return _section_cache[key]
                 _hit = await _fetch(SECTION_LOOKUP_SQL.format(schema=schema_name),
                                     {"b": key[0], "k": key[1]})
-                _section_cache[key] = pick_section(_hit)
-                return _section_cache[key]
+                _sid = pick_section(_hit)
+                # Hits only. A section this run is about to write is not there when the first
+                # row names it; a cached miss would then place nothing on it for the rest of
+                # the run. Same lesson as the meter resolver.
+                if _sid:
+                    _section_cache[key] = _sid
+                return _sid
 
             _floor_cache: dict[tuple[str, str], str | None] = {}
 
@@ -2056,7 +2061,13 @@ async def _apply_records_with_schema_alignment(
                     # Anything that sits in a section names it the same way, so the lookup is
                     # not the meter's alone. An asset carries one too, and without it the
                     # Assets page cannot group it under the part of the building it is in.
-                    if "section_id" in db_cols and not looks_like_uuid(safe_row.get("section_id")):
+                    # Not for the sections table itself: there section_id is the row's own
+                    # primary key, and resolving it from the floor the row names either found
+                    # nothing (and cached the miss for every meter that came after) or found
+                    # another section on that floor and stamped its id on the new row - which
+                    # then conflicted and was silently never written.
+                    if (safe_table != "building_sections" and "section_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("section_id"))):
                         _sid = await _section_for(safe_row.get("building_id"), section_hint(row))
                         if _sid:
                             safe_row["section_id"] = _sid

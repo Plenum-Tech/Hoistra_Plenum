@@ -63,3 +63,16 @@ class TestTheWriterUsesBoth:
         assert 'safe_table == "building_sections" and "floor_id" in db_cols' in src
         assert "_floor_for(" in src and "floor_hint(row)" in src
         assert "pick_section(_hit)" in src
+
+    def test_a_section_row_is_not_placed_in_a_section(self):
+        """section_id on building_sections is the row's own key. Resolving it from the floor the
+        row names stamped another section's id on a new row (dropped as a conflict) or cached a
+        miss that every meter after it then read: 11 of 12 floor sections, 2 of 24 meters placed."""
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        assert 'safe_table != "building_sections" and "section_id" in db_cols' in src
+
+    def test_a_section_lookup_caches_hits_only(self):
+        src = open(os.path.join(_NODES, "write_node.py"), encoding="utf-8").read()
+        block = src[src.index("async def _section_for"):src.index("async def _floor_for")]
+        assert "if _sid:" in block and "_section_cache[key] = _sid" in block
+        assert "_section_cache[key] = pick_section" not in block

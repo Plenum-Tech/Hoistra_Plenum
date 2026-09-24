@@ -188,6 +188,12 @@ export default function Assets({ vals }) {
                                           {r.anomText}
                                         </div>
                                         <div style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "8px" }}>
+                                          {"Metered consumption"}
+                                        </div>
+                                        <div style={{ fontSize: "11.5px", marginTop: "3px", color: r.meterColor, lineHeight: "1.45", textWrap: "pretty" }}>
+                                          {r.meterText}
+                                        </div>
+                                        <div style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "8px" }}>
                                           {"Vendor"}
                                         </div>
                                         <div style={{ fontSize: "11.5px", marginTop: "3px" }}>

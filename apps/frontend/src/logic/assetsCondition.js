@@ -252,13 +252,19 @@ export const assetsConditionMethods = {
       return { __err: (e && e.message) || String(e) };
     });
     try {
-      const [locs, anoms, sections, var_, cond, csum] = await Promise.all([
+      const [locs, anoms, sections, var_, cond, csum, floors] = await Promise.all([
         soft(workOrderApi.locations({ limit: 500 })),
         soft(energyApi.anomalies({ limit: 500 })),
         soft(energyApi.sections()),
         soft(energyApi.assetValueAtRisk()),
         soft(energyApi.conditionAssets()),
-        soft(energyApi.conditionSummary())
+        soft(energyApi.conditionSummary()),
+        // The sub-meters that sit on an asset, with their 30-day kWh and share of the
+        // incoming supply. A section's intensity comes from the section's meter; an asset's
+        // consumption comes from its own, and until this read the page never showed it — ten
+        // metered chillers, boilers and lifts sat under "not metered" sections and looked
+        // unmetered themselves.
+        soft(energyApi.metersByFloor())
       ]);
       if (stale) throw stale;
       const list = (v, ...keys) => Array.isArray(v) ? v
@@ -275,7 +281,17 @@ export const assetsConditionMethods = {
         asPct: typeof rule.section_over_reference_pct === 'number' ? rule.section_over_reference_pct : this.state.asPct,
         asWeeks: typeof rule.anomaly_persistent_weeks === 'number' ? rule.anomaly_persistent_weeks : this.state.asWeeks
       } : {};
+      // Keyed by asset id: every sub-meter that names the asset (an asset can carry one per
+      // fuel). Built here so row() below is a lookup, not a scan.
+      const assetMeters = {};
+      if (floors && !floors.__err && Array.isArray(floors.buildings)) {
+        floors.buildings.forEach((b) => (b.assets || []).forEach((m) => {
+          if (m.asset_id) (assetMeters[String(m.asset_id)] = assetMeters[String(m.asset_id)] || []).push(m);
+        }));
+      }
       this.setState(Object.assign(seed, {
+        asAssetMeters: assetMeters, asAssetMetersDays: floors && !floors.__err ? (floors.days || 30) : null,
+        asAssetMetersError: floors && floors.__err ? floors.__err : '',
         asLocations: list(locs, 'locations'), asLocationsError: locs && locs.__err ? locs.__err : '',
         asAnoms: list(anoms, 'anomalies'), asAnomsError: anoms && anoms.__err ? anoms.__err : '',
         asSections: list(sections, 'sections'), asSectionsSummary: (sections && sections.summary) || null,
@@ -645,10 +661,33 @@ export const assetsConditionMethods = {
       return bits.join(' ');
     };
 
+    // What the asset's own sub-meter read over the trailing window. kWh with its share of the
+    // building's incoming supply on that fuel, so a chiller's 12% reads beside a lift's 1.5%.
+    const meterLine = (a) => {
+      const ms = (s.asAssetMeters || {})[String(a.asset_id)] || [];
+      if (!ms.length) {
+        return { text: s.asAssetMetersError ? 'Sub-meter read unreachable — ' + s.asAssetMetersError
+                        : 'No sub-meter on this asset — its energy is inside the section figure',
+                 color: 'var(--color-neutral-500)', metered: false };
+      }
+      const days = s.asAssetMetersDays || 30;
+      const parts = ms.map((m) => (m.fuel === 'gas' ? 'Gas ' : 'Electricity ')
+        + (typeof m.kwh === 'number' ? Math.round(m.kwh).toLocaleString('en-GB') + ' kWh' : '—')
+        + (typeof m.share_pct === 'number' ? ' · ' + m.share_pct + '% of supply' : '')
+        + (typeof m.cost === 'number' ? ' · £' + Math.round(m.cost).toLocaleString('en-GB') : ''));
+      const anoms = ms.reduce((n, m) => n + (m.open_anomalies || 0), 0);
+      return {
+        text: parts.join(' · ') + ' · last ' + days + ' days' + (anoms ? ' · ' + anoms + (anoms === 1 ? ' open anomaly on the meter' : ' open anomalies on the meter') : ''),
+        color: anoms ? t('warn').color : 'var(--color-text)', metered: true,
+      };
+    };
+
     const row = (x) => {
       const a = x.a, tone = t(TONE_OF[x.cond]);
       const loc = a.location_id ? locById[String(a.location_id)] : null;
       const nWo = woCount(a);
+      const mt = meterLine(a);
+      x.meterText = mt.text;
       return {
         id: a.asset_id, name: a.asset_name,
         cls: a.category_name || (a.category_id ? 'Category name not on file' : 'No category set'),
@@ -668,6 +707,7 @@ export const assetsConditionMethods = {
             + (x.anomalyDays === null ? '' : ' · open ' + (x.anomalyDays / 7).toFixed(1) + ' wks')
           : 'No anomaly attributed',
         anomColor: x.anomaly ? 'var(--color-text)' : 'var(--color-neutral-500)',
+        meterText: mt.text, meterColor: mt.color, metered: mt.metered,
         why: why(x),
         // Straight-line value against a wear-adjusted line; the gap between them today is
         // the loss the deviation is causing. Only assets carrying a replacement value, a
@@ -733,6 +773,10 @@ export const assetsConditionMethods = {
         .sort((p, q) => rank[p.cond] - rank[q.cond]);
       const measured = sc.measured !== false && typeof sc.eui_kwh_per_m2 === 'number';
       const ref = typeof sc.reference_eui_kwh_m2 === 'number' ? sc.reference_eui_kwh_m2 : null;
+      // Assets in this section that carry a sub-meter of their own. A plant room with no
+      // meter on the room but a meter on every chiller is metered in a different sense, and
+      // the header should not read "no sub-meter" over six metered machines.
+      const assetMetered = mine.filter((x) => ((s.asAssetMeters || {})[String(x.a.asset_id)] || []).length).length;
       const d = measured && typeof sc.deviation_pct === 'number' ? Math.round(sc.deviation_pct) : null;
       const over = d !== null && d > thrPct;
       const sk = bk + '|sec|' + sc.section_id;
@@ -741,10 +785,11 @@ export const assetsConditionMethods = {
         name: sc.name + (sc.section_type ? ' · ' + sc.section_type : ''),
         eui: measured && ref !== null ? sc.eui_kwh_per_m2 + ' vs ' + ref + ' kWh/m²/yr' : 'Not metered',
         delta: d === null ? '—' : (d > 0 ? '+' : '') + d + '%',
-        meter: measured
+        meter: (measured
           ? (sc.meters ? sc.meters + (sc.meters === 1 ? ' sub-meter' : ' sub-meters') : 'no sub-meter')
             + (sc.reference_source ? ' · ' + sc.reference_source : '')
-          : NOT_METERED,
+          : NOT_METERED)
+          + (assetMetered ? ' · ' + assetMetered + ' of ' + mine.length + ' assets sub-metered' : ''),
         d: d === null ? -1e9 : d,
         open: sOpen, caret: sOpen ? 'ph-caret-down' : 'ph-caret-right',
         toggle: () => this.setState((p) => ({ asOpenS: (p.asOpenS || []).indexOf(sk) > -1 ? (p.asOpenS || []).filter((y) => y !== sk) : (p.asOpenS || []).concat([sk]) })),
@@ -1055,6 +1100,7 @@ export const assetsConditionMethods = {
         chain: [
           { a: 'building', t: x.b ? x.b.name : 'Unlinked' },
           { a: 'section', t: ia.section || (i.loading ? 'Reading…' : NO_SECTION_LINK) },
+          { a: 'metered', t: (x.meterText || (this.asVals ? '' : '')) || 'No sub-meter on this asset' },
           { a: 'vendor', t: ia.vendor || (i.loading ? 'Reading…' : i.error ? 'Unreachable — ' + i.error : 'None on the asset record') },
           { a: 'health', t: x.score === null ? 'Not scored' : Math.round(x.score) + '/100' },
           // An undated score reads as current when it may be years old.
