@@ -23,7 +23,7 @@ log = get_logger(__name__)
 # An anomaly in one of these has been dealt with; a fresh detection of the same conditions
 # is a NEW event and should be raised again. Every other status means the event is still
 # live and re-detecting it must not create a second row.
-_SETTLED_STATUSES = ("resolved", "closed", "dismissed")
+_SETTLED_STATUSES = ("resolved", "closed", "dismissed", "superseded")
 
 WEEKEND_SPIKE_PCT = 130.0
 BASELINE_DRIFT_PCT = 110.0
@@ -505,6 +505,22 @@ async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime
     return [(r[0], r[1], float(r[2]), float(r[3])) for r in rows]
 
 
+def _supersede(duplicate, kept) -> None:
+    """Close one finding as the same fault as another, keeping the trail between them.
+
+    Not a deletion and not a resolution: nobody fixed anything. The row says which finding it
+    turned out to be part of, so a figure quoted from it before the collapse can still be
+    traced. Its window is folded into the survivor by the caller's `_observe_again`.
+    """
+    duplicate.status = "superseded"
+    detail = dict(duplicate.detail_json or {})
+    detail["superseded_by"] = str(kept.id)
+    detail["superseded_reason"] = (
+        "the same rule on the same meter over an overlapping window - one fault, one finding"
+    )
+    duplicate.detail_json = detail
+
+
 def _observe_again(existing, hit: dict[str, Any], *, window_end: datetime,
                    window_start: datetime, tariff: float, currency: str) -> None:
     """Fold a fresh sighting into the finding it continues.
@@ -577,8 +593,13 @@ async def scan_meter_anomalies(
     tariff = float(meter.tariff_gbp_per_kwh or 0.28)
     currency = await currency_for_building(session, meter.building_id)
     readings = await _load_readings(session, meter_id, as_of=as_of)
+    # A single-asset spike needs a meter that isolates a single asset, which is a meter that
+    # names one. `is_sub_meter` used to mean that, back when the only sub-meters were the ones
+    # on plant; a floor sub-meter is a sub-meter and isolates a floor, so gating on it reported
+    # a single-asset spike on each of ten office floors.
+    _isolates_one_asset = meter.asset_id is not None
     detectors = [detect_weekend_spike, detect_baseline_drift]
-    if meter.is_sub_meter:
+    if _isolates_one_asset:
         detectors.append(detect_asset_spike)
 
     # The ten rules from the card. Each is bound to its inputs here so the loop below can
@@ -586,10 +607,14 @@ async def scan_meter_anomalies(
     # listed under "skipped" rather than run on nothing.
     meta = meter.raw_metadata or {}
     skipped: dict[str, str] = {}
-    if not meter.is_sub_meter:
+    if not _isolates_one_asset:
         # Thirteen rules exist; a rule that cannot run on this meter says so rather than
         # disappearing, so "rules_run" plus "skipped" always accounts for all of them.
-        skipped["asset_spike"] = "this meter is not a sub-meter, so no single asset is isolated"
+        skipped["asset_spike"] = (
+            "this sub-meter names no asset - it reads a floor or a zone, not one machine"
+            if meter.is_sub_meter
+            else "this meter is the building's incoming supply, so no single asset is isolated"
+        )
 
     if readings:
         latest = _aware(max(t for t, _ in readings))
@@ -690,7 +715,14 @@ async def scan_meter_anomalies(
         # and so slipped through anyway. Overlap decides identity; the percentage then says how
         # the issue stands now, which is why it is updated below rather than matched on.
         _new_window_start = _window_end - timedelta(days=35)
-        existing = (
+        # EVERY overlapping open finding, not the newest one. Folding into a single row left
+        # any others standing: the sweep runs a window a week across a year, and once two rows
+        # for one fault existed nothing ever collapsed them, so the main gas meter carried nine
+        # open schedule_mismatch rows whose windows all overlap - one fault shown as nine,
+        # "active" from 2 days to 332. The oldest is the finding: it holds the first detection
+        # and the approval raised against it. The rest are the same fault seen again and are
+        # closed as superseded, so the register keeps the history without reporting it twice.
+        overlapping = list((
             await session.execute(
                 select(EnergyAnomaly)
                 .where(
@@ -703,18 +735,21 @@ async def scan_meter_anomalies(
                     func.coalesce(EnergyAnomaly.window_end,
                                   EnergyAnomaly.detected_at) >= _new_window_start,
                 )
-                .order_by(EnergyAnomaly.detected_at.desc())
-                .limit(1)
+                .order_by(EnergyAnomaly.detected_at.asc())
             )
-        ).scalars().first()
-        if existing is not None:
+        ).scalars().all())
+        if overlapping:
+            existing = overlapping[0]
             _observe_again(existing, hit, window_end=_window_end,
                            window_start=_new_window_start, tariff=tariff, currency=currency)
+            for _dup in overlapping[1:]:
+                _supersede(_dup, existing)
             log.info(
                 "energy.anomaly.already_open",
                 meter_id=str(meter_id),
                 anomaly_type=hit["anomaly_type"],
                 anomaly_id=str(existing.id),
+                superseded=len(overlapping) - 1,
             )
             continue
 

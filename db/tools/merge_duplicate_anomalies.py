@@ -59,7 +59,11 @@ EVENT_KEY = ("meter_id", "anomaly_type", "metric_pct", "financial_gbp")
 #: meter, same type, same metric, same amount — and deleting it would throw away the fact
 #: that the problem came back. hoistra_test has two of those and production has none, which
 #: is precisely the pair of cases that would have made this look correct until it was not.
-SETTLED_STATUSES = ("resolved", "closed", "dismissed")
+#:
+#: "superseded" joined them on 24 Sep 2026: a finding the scan folded into another one is dealt
+#: with in the same sense — it must not be picked up as the survivor of a later sighting, and a
+#: row detected after it is a fresh occurrence rather than a duplicate of something withdrawn.
+SETTLED_STATUSES = ("resolved", "closed", "dismissed", "superseded")
 
 #: Queue statuses that still put an item in front of a person.
 LIVE_QUEUE = ("pending", "open")
