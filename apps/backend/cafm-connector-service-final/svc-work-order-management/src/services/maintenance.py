@@ -75,6 +75,11 @@ SOURCE_OF = {
     "invoice": "Vendors",
 }
 
+#: Every module that can raise one, including the fallback SOURCE_OF applies to an unmapped
+#: kind. The filter row is built from this rather than from what today's rows happen to
+#: contain, so the same five chips are on the screen whatever the data holds.
+SOURCE_LABELS: tuple[str, ...] = tuple(sorted(set(SOURCE_OF.values()) | {"Maintenance"}))
+
 
 async def shape(session: AsyncSession) -> dict[str, set[str]]:
     """Which columns each table this module reads actually has, cached per process."""
@@ -288,9 +293,23 @@ async def decisions(
         "filtered": state is not None or source is not None,
         "by_state": by_state,
         "by_source": by_source,
+        # Every state and every module, whether or not today's rows reach them.
+        #
+        # This listed only what had rows, so the filter row changed shape with the data: a
+        # portfolio mid-ingest showed four chips where a populated one showed eight, and the
+        # same screen in two environments read as a missing feature rather than an empty
+        # category. A chip at 0 is a fact about the queue — "nothing is deviating" is worth
+        # knowing, and it is not the same as "deviation is not a thing here".
+        #
+        # by_state / by_source still carry counts only for what exists, so the client reads a
+        # missing key as 0. That is safe precisely because this list is now exhaustive: the
+        # read answered, and the category it did not mention is empty rather than unknown.
+        #
+        # The union with by_source keeps a kind SOURCE_OF has not been taught yet visible
+        # instead of dropping its rows out of the filter row entirely.
         "available": {
-            "state": [k for k in STATE_ORDER if by_state.get(k)],
-            "source": sorted(by_source),
+            "state": list(STATE_ORDER),
+            "source": sorted(set(SOURCE_LABELS) | set(by_source)),
             "group_by": list(GROUP_KEYS),
         },
         "group_by": group_by,

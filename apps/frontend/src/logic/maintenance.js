@@ -114,9 +114,18 @@ export const maintenanceMethods = {
       pick: () => this.mxSetGroup(label)
     });
 
-    // The filter row, from what the backend says it actually holds. "All" plus the states
-    // with rows, plus the modules that raised any — never a chip that can only come back
-    // empty. Each carries its count, so the row doubles as the shape of the queue.
+    // The filter row: "All", every state, every module. Each carries its count, so the row
+    // doubles as the shape of the queue.
+    //
+    // It used to draw only the states and modules that had rows, on the reasoning that a
+    // chip returning nothing is a dead control. What that actually produced was a filter row
+    // whose shape moved with the data — eight chips on a populated portfolio, four on one
+    // mid-ingest — and the same screen in two environments read as a missing feature rather
+    // than an empty category. "Deviation 0" says nothing is deviating, which is a fact worth
+    // having; no chip at all says deviation is not a thing on this platform.
+    //
+    // `available` is exhaustive now (services/maintenance.py), so a state the counts do not
+    // mention is empty rather than unknown, and 0 is the honest number for it.
     const cur = s.filter || "All";
     const fOpt = (label, n) => ({
       label: label, n: n === null || n === undefined ? "" : String(n),
@@ -127,8 +136,8 @@ export const maintenanceMethods = {
     });
     const avail = m.available || { state: [], source: [] };
     const mxFilterOpts = [fOpt("All", m.total)]
-      .concat((avail.state || []).map((k) => fOpt(k, m.byState[k])))
-      .concat((avail.source || []).map((k) => fOpt(k, m.bySource[k])));
+      .concat((avail.state || []).map((k) => fOpt(k, m.byState[k] || 0)))
+      .concat((avail.source || []).map((k) => fOpt(k, m.bySource[k] || 0)));
 
     // ── inspection intelligence ──
     const insights = m.intelligence.map((c) => ({

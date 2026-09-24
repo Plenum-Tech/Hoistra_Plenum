@@ -44,7 +44,14 @@ function decisionsFor(state, source, groupBy) {
     ok: true, count: kept.length, total: ROWS.length, filtered: !!(state || source),
     by_state: { Blocked: 2, Deviation: 1, 'To raise': 1 },
     by_source: { Vendors: 2, Compliance: 1, Energy: 1 },
-    available: { state: ['Blocked', 'To raise', 'Deviation'], source: ['Compliance', 'Energy', 'Vendors'] },
+    // Exhaustive, as services/maintenance.py now sends it: every state and every module,
+    // whether or not these rows reach them. by_state/by_source still count only what
+    // exists, so "Awaiting approval" and "Assets" are absent from the tallies and the
+    // client reads them as 0.
+    available: {
+      state: ['Blocked', 'Deviation', 'Awaiting approval', 'To raise'],
+      source: ['Assets', 'Compliance', 'Energy', 'Maintenance', 'Vendors'],
+    },
     group_by: groupBy || null,
     groups: Object.keys(buckets).map((k) => ({
       key: k, count: buckets[k].length,
@@ -122,14 +129,23 @@ test('a source chip goes as source=, not as a state', async () => {
   cleanup();
 });
 
-test('only the states and sources the backend says it holds are offered', async () => {
+test('every state and every module is offered, and an empty one reads 0', async () => {
+  // This used to assert the opposite — that a category with no rows was left off — and the
+  // filter row's shape therefore moved with the data: eight chips on a populated portfolio,
+  // four on one mid-ingest, which read as a missing feature rather than an empty category.
+  // "Awaiting approval 0" says nothing is waiting, which is worth knowing; no chip at all
+  // says the category does not exist here.
   await c.mxLiveLoad();
   await settle();
-  const labels = c.renderVals().modFilters.map((f) => f.label);
-  assert.deepEqual(labels, ['All', 'Blocked', 'To raise', 'Deviation', 'Compliance', 'Energy', 'Vendors']);
-  // "Awaiting approval" is a real state but this scope holds none, so it is not a chip that
-  // could only ever come back empty.
-  assert.ok(labels.indexOf('Awaiting approval') < 0);
+  const chips = c.renderVals().modFilters;
+  assert.deepEqual(chips.map((f) => f.label), [
+    'All', 'Blocked', 'Deviation', 'Awaiting approval', 'To raise',
+    'Assets', 'Compliance', 'Energy', 'Maintenance', 'Vendors',
+  ]);
+  const n = (label) => chips.find((f) => f.label === label).n;
+  assert.equal(n('Blocked'), '2', 'a populated state carries its count');
+  assert.equal(n('Awaiting approval'), '0', 'a state with no rows is 0, not blank');
+  assert.equal(n('Assets'), '0', 'a module that raised nothing is 0, not blank');
   cleanup();
 });
 

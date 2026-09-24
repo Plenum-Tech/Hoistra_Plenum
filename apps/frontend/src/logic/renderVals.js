@@ -2928,10 +2928,10 @@ export const renderValsMethods = {
       if (modKey === "assets") Object.assign(vals, this.asVals(s), this.iotVals(s));
       if (modKey === "ops") {
         Object.assign(vals, this.mxVals(s), this.mxLiveVals(s));
-        // The filter row is the backend's: only the states and sources it says it holds are
-        // offered, because a chip for a state with no rows is a chip that can only ever
-        // return an empty list. Picking one re-reads with state=/source= rather than
-        // narrowing rows on the client while the counts above still describe the whole queue.
+        // The filter row is the backend's, and it is exhaustive: every state and every
+        // module, each with its count, 0 included. Picking one re-reads with state=/source=
+        // rather than narrowing rows on the client while the counts above still describe
+        // the whole queue.
         vals.modFilters = vals.mxFilterOpts;
       }
       vals.mod = {
