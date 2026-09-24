@@ -578,6 +578,14 @@ def _validate_inferred_fk_dicts(
             continue
         if source_column not in source_records[0] or target_column not in target_records[0]:
             continue
+        # A column cannot reference itself. Its values always appear among its own, so the
+        # match below would read 100% and every row would become its own parent: no roots,
+        # and a tree that loops. Energy_Meters.meter_ref -> Energy_Meters.meter_ref was
+        # accepted exactly this way and stopped a migration at the review page.
+        if source_table == target_table and source_column == target_column:
+            log(f"Claude proposed {source_table}.{source_column} as its own parent - a column "
+                f"cannot reference itself; discarded")
+            continue
         source_values = {
             str(record.get(source_column)).lower().strip()
             for record in source_records
