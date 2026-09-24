@@ -1270,6 +1270,58 @@ def _coalesce(cols: dict[str, str], *candidates: str, cast: str = "") -> str | N
 
 
 
+def _udr_select_parts(cols: dict[str, str]) -> list[str]:
+    """The SELECT list for the UDR work-order fetch, for whatever columns a tenant has.
+
+    Pure so it can be tested against a real `information_schema` shape without a database —
+    a COALESCE over two columns of different types is rejected by Postgres at parse time, so
+    the whole statement fails and the fetch returns nothing. That failure is caught and logged
+    as a warning upstream, which makes it indistinguishable from a vendor with no work orders.
+    """
+
+    def expr(alias: str, *candidates: str, cast: str = "", default: str = "NULL") -> str:
+        found = _coalesce(cols, *candidates, cast=cast)
+        if found is None:
+            return f"{default} AS {alias}"
+        # A literal default still applies when the columns exist but are null.
+        if not default.startswith("NULL"):
+            found = f"COALESCE({found}, {default})"
+        return f"{found} AS {alias}"
+
+    # Prefer the stable wo_uuid handle so Feature B rows reference a real work order
+    # even where work_orders.id is an integer serial.
+    return [
+        expr("id", "wo_uuid", "id", cast="text"),
+        expr("wo_code", "wo_code", "workorder_ref", "work_order_id", "id", cast="text"),
+        expr("status", "status", "wo_status", default="'Completed'"),
+        expr("priority", "priority", "wo_priority", default="'P3'"),
+        expr(
+            "reported_at",
+            "reported_at", "raised_date", "created_at", "created_date",
+            cast="timestamptz",
+        ),
+        expr("attended_at", "attended_at", "responded_at", "response_at", cast="timestamptz"),
+        expr("completed_at", "completed_at", cast="timestamptz"),
+        expr("first_fix", "first_fix", default="NULL::boolean"),
+        expr("recall", "recall", "return_visit", default="NULL::boolean"),
+        # Cast both branches. These pairs are the same figure under two names, and a tenant
+        # can hold one as numeric and the other as varchar — which hoistra_test does, because
+        # the workbook migration wrote the costs into `cost_actual`/`cost_estimated` and left
+        # the numeric columns null. Uncast, Postgres rejects the COALESCE at parse time and
+        # the whole fetch returns nothing, silently.
+        expr("actual_cost", "actual_cost", "cost_actual", cast="numeric",
+             default="NULL::numeric"),
+        expr("estimated_cost", "estimated_cost", "cost_estimated", cast="numeric",
+             default="NULL::numeric"),
+        expr("asset_id", "asset_id", cast="text"),
+        expr("vendor_id", "vendor_id", "assigned_vendor", cast="text"),
+        expr("organization_id", "organization_id", cast="text"),
+        expr("part_code", "part_code", cast="text"),
+        expr("parts_cost", "parts_cost", default="NULL::numeric"),
+        expr("labour_hours", "labour_hours", "actual_hours", default="NULL::numeric"),
+    ]
+
+
 def _row_limit(limit: Any, default: int = 500) -> int:
     """How many work orders to pull, when the caller may not have said.
 
@@ -1311,40 +1363,7 @@ async def _build_udr_wo_query(
     cols = await _work_order_columns(session)
     params: dict[str, Any] = {"lim": _row_limit(limit)}
 
-    def expr(alias: str, *candidates: str, cast: str = "", default: str = "NULL") -> str:
-        found = _coalesce(cols, *candidates, cast=cast)
-        if found is None:
-            return f"{default} AS {alias}"
-        # A literal default still applies when the columns exist but are null.
-        if not default.startswith("NULL"):
-            found = f"COALESCE({found}, {default})"
-        return f"{found} AS {alias}"
-
-    # Prefer the stable wo_uuid handle so Feature B rows reference a real work order
-    # even where work_orders.id is an integer serial.
-    select_parts = [
-        expr("id", "wo_uuid", "id", cast="text"),
-        expr("wo_code", "wo_code", "workorder_ref", "work_order_id", "id", cast="text"),
-        expr("status", "status", "wo_status", default="'Completed'"),
-        expr("priority", "priority", "wo_priority", default="'P3'"),
-        expr(
-            "reported_at",
-            "reported_at", "raised_date", "created_at", "created_date",
-            cast="timestamptz",
-        ),
-        expr("attended_at", "attended_at", "responded_at", "response_at", cast="timestamptz"),
-        expr("completed_at", "completed_at", cast="timestamptz"),
-        expr("first_fix", "first_fix", default="NULL::boolean"),
-        expr("recall", "recall", "return_visit", default="NULL::boolean"),
-        expr("actual_cost", "actual_cost", "cost_actual", default="NULL::numeric"),
-        expr("estimated_cost", "estimated_cost", "cost_estimated", default="NULL::numeric"),
-        expr("asset_id", "asset_id", cast="text"),
-        expr("vendor_id", "vendor_id", "assigned_vendor", cast="text"),
-        expr("organization_id", "organization_id", cast="text"),
-        expr("part_code", "part_code", cast="text"),
-        expr("parts_cost", "parts_cost", default="NULL::numeric"),
-        expr("labour_hours", "labour_hours", "actual_hours", default="NULL::numeric"),
-    ]
+    select_parts = _udr_select_parts(cols)
 
     status_expr = _coalesce(cols, "status", "wo_status") or "'completed'"
     where = [
