@@ -298,8 +298,31 @@ def test_the_claim_takes_one_due_live_card_and_skips_locked_rows():
     assert "SET status = 'running'" in sql
 
 
-def test_the_scheduler_is_on_by_default_and_points_at_the_local_orchestrator():
-    from src.config import settings
-    assert settings.report_scheduler_enabled is True
-    assert settings.deep_agents_base_url.startswith("http://127.0.0.1:8008")
-    assert settings.report_scheduler_tick_seconds >= 5
+def test_the_scheduler_is_on_by_default_and_points_at_the_local_orchestrator(monkeypatch):
+    """The DEFAULT, not whatever this host is set to.
+
+    This read the live `settings` singleton, so it asserted the CONFIGURED value and failed
+    on any deployment that had turned the scheduler off — which docker-compose.azure-safe.yml
+    does deliberately, and for a good reason: the scheduler is a writer that UPDATEs
+    report_cards every 30 seconds for as long as the container is up, and against the
+    production database from a developer's machine that is a continuous background write
+    nobody asked for.
+
+    So the test was red on every correctly-configured local stack, and green only where the
+    safety had been removed. Constructed with the variable absent, what is under test is the
+    default in the Field — which is what the name claims and the only part worth pinning.
+
+    The same shape as TestQ1EmailHandoff's delivery-mode test next door; both were written
+    against the singleton and both failed for the same reason.
+    """
+    from src.config import Settings
+    # Every one of the three, because every one of them is set by the compose file: the
+    # base URL is the service name on the container network, not the loopback default.
+    for var in ("REPORT_SCHEDULER_ENABLED", "DEEP_AGENTS_BASE_URL",
+                "REPORT_SCHEDULER_TICK_SECONDS"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    s = Settings(_env_file=None)
+    assert s.report_scheduler_enabled is True
+    assert s.deep_agents_base_url.startswith("http://127.0.0.1:8008")
+    assert s.report_scheduler_tick_seconds >= 5

@@ -412,8 +412,11 @@ export default function OrchestratorDock({ vals }) {
                     {vals.em.packSize}
                   </span>
                 </div>
-                <div className="hv7" onClick={vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
-                  {"Approve & send"}
+                {/* The send is a real outbound call now, so the control says it is working
+                    and stops accepting clicks while it does. A second click on a slow send
+                    is a second email to the same vendor. */}
+                <div className="hv7" onClick={vals.em.sendBusy ? undefined : vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.em.sendBusy ? "default" : "pointer", opacity: vals.em.sendBusy ? 0.6 : 1 }}>
+                  {vals.em.sendBusy ? "Sending…" : "Approve & send"}
                 </div>
                 <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
                   {"Cancel"}

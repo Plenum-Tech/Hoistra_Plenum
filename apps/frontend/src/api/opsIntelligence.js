@@ -17,6 +17,10 @@ const T_WRITE = 30000;
 // currentOrgId() is ORG_ID (the build's default tenant) unless a superadmin is viewing
 // as another company, in which case that company's id takes over for every read here.
 const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ organization_id: o }, q || {}) : (q || {}); };
+// An outbound mail waits on Microsoft Graph's token call and then its send — both remote,
+// and neither bounded by anything this app controls. The client's 20s default expires
+// mid-send, which reads as a failure on a message that is already on its way.
+const T_MAIL = 60000;
 
 export const opsApi = {
   // ── Approvals ───────────────────────────────────────────────────────────
@@ -24,6 +28,24 @@ export const opsApi = {
   // server too; `source_feature` (A|B|C) narrows to one engine. Server caps limit at 500.
   approvals: (query) =>
     apiFetch(B, '/api/approvals', { query: withOrg(Object.assign({ status: 'pending', limit: 500 }, query || {})) }),
+
+  // Send a drafted email. This is the one call in the app that reaches a person outside it.
+  //
+  // It goes straight to send_platform_email (Microsoft Graph, else SMTP) rather than through
+  // the queue's decide path, because the drafts this sends are composed and approved in the
+  // dock in one motion — there is no queue item to decide on.
+  //
+  // The reply is NOT a boolean. `ok` is true for a dry run as well as a real send, so the
+  // caller must read `status`: "sent" left the platform, "dry_run" did not. Reporting on
+  // `ok` alone is how the dock came to tell a PM that a vendor had been emailed when the
+  // button made no request at all.
+  sendEmail: (body) =>
+    apiFetch(B, '/api/approvals/send-email', {
+      method: 'POST',
+      // The tenant scope goes in the payload for a POST — withOrg() builds it the same way.
+      body: withOrg(body),
+      timeoutMs: T_MAIL,
+    }),
 
   // ── Contract performance ────────────────────────────────────────────────
   // Contract parameter sets read out of contract documents: SLA hours, rates, KPI clauses.

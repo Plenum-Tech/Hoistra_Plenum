@@ -1,5 +1,9 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
+
+#: The two the dispatcher in shared/approvals.py actually implements. Anything else is a
+#: typo that would read as "do not send" — see _known_delivery_mode below.
+_DELIVERY_MODES = {"handoff", "platform_send"}
 
 
 class Settings(BaseSettings):
@@ -20,6 +24,38 @@ class Settings(BaseSettings):
         "handoff",
         validation_alias=AliasChoices("EMAIL_DELIVERY_MODE", "email_delivery_mode"),
     )
+
+    @field_validator("email_delivery_mode")
+    @classmethod
+    def _known_delivery_mode(cls, v: str) -> str:
+        """Refuse a mode the dispatcher does not implement, rather than drifting into handoff.
+
+        approvals.py asks `if mode == "platform_send"` and treats everything else as handoff,
+        so any value that is not exactly one of the two silently means "do not send". That has
+        now happened twice on the same setting: it was "platform" once — the comment above
+        records it — and "smtp" after that, which is a real transport name and reads like it
+        would send. Nothing failed either time. Mail simply stopped leaving, and the console
+        went on reporting that it had.
+
+        A typo here is not a preference, it is an outage nobody is told about, so it stops the
+        service instead.
+        """
+        mode = (v or "").strip().lower()
+        if not mode:
+            # An empty variable — `EMAIL_DELIVERY_MODE=` in an env file, `${VAR:-}` in a
+            # compose file — is a choice not made, and pydantic-settings hands it over
+            # rather than dropping it. An unmade choice is the default, not a typo, and
+            # stopping the service over it would be the outage this validator exists to
+            # prevent.
+            return "handoff"
+        if mode not in _DELIVERY_MODES:
+            raise ValueError(
+                f"EMAIL_DELIVERY_MODE={v!r} is not a delivery mode. Use one of: "
+                + ", ".join(sorted(_DELIVERY_MODES))
+                + '. "platform_send" has the platform send it; "handoff" builds a mailto: '
+                "for the reader to send from their own client."
+            )
+        return mode
     smtp_host: str = Field("", validation_alias=AliasChoices("SMTP_HOST", "smtp_host"))
     smtp_port: int = Field(587, validation_alias=AliasChoices("SMTP_PORT", "smtp_port"))
     smtp_user: str = Field("", validation_alias=AliasChoices("SMTP_USER", "smtp_user"))

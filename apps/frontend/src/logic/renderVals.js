@@ -10,6 +10,7 @@ import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { documentUrl } from '../api/docRag.js';
+import { opsApi } from '../api/opsIntelligence.js';
 import { isSpreadsheet } from './migration.js';
 import { accountCanIngest } from './auth.js';
 
@@ -2174,24 +2175,96 @@ export const renderValsMethods = {
         packName: (this._ccPack && this._ccPack.name) || "",
         packSize: this._ccPack ? this._ccPack.kb + " KB" : "",
         openPack: () => { if (this._ccPack) window.open(this._ccPack.url, "_blank"); },
-        send: () => this.setState((prev) => ({
-          // An approved evidence request is remembered against the certificate so its
-          // row stops offering the same request again.
-          ccRequested: s.emKind === "evidence" && s.emCertId
-            ? Object.assign({}, prev.ccRequested || {}, { [s.emCertId]: true })
-            : prev.ccRequested,
-          flow: s.emKind === "investigate" && s.inv ? "investigate" : null,
-          inv: s.emKind === "investigate" && s.inv ? Object.assign({}, s.inv, { replies: (s.inv.replies || []).concat([{ you: "Send the email", bot: "Sent to " + (s.emTo || "the FM lead") + ". The reply lands on this case; a document attached to it is ingested and bound to the asset record automatically." }]) }) : s.inv,
-          flowDone: s.emKind === "investigate" ? "" : spec0 && spec0.done && spec0.k === s.emKind ? spec0.done(s.fiVals, s.fLabel, s.fSubject) : s.emKind === "renewal"
-            ? "Renewal email queued for " + (s.emTo || "the vendor") + ". It sits on the approvals card until it is sent — nothing has left the platform."
-            : s.emKind === "evidence"
-            ? "Evidence request queued for " + (s.emTo || "the vendor") + " with the compliance pack attached. Nothing has left the platform — approving it here records the request; sending it needs the mail step wiring on."
-            : s.emKind === "quote"
-            ? "Quote request sent to " + (s.emTo || "the contractor") + ". The reply is watched and a scorecard opens on award."
-            : s.emKind === "booking"
-              ? "Booking instruction sent to " + (s.emTo || "the vendor") + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
-              : "Extension request sent to " + (s.emTo || "the authority") + ". The obligation is marked as contested pending their reply."
-        }))
+        // The one control in this app that reaches a person outside it, so it reports what
+        // actually happened and nothing more.
+        //
+        // It used to be a bare setState: no request was made, and the transcript then said
+        // "Evidence request sent to <address>. Affected invoice lines are held pending the
+        // reply." A PM reading that would wait for a reply from a contractor who had never
+        // been written to, and treat an invoice hold as something the vendor had been told
+        // about. The truthful wording for exactly this case already existed one branch
+        // away — "Nothing has left the platform" — but the spec's own `done` string matched
+        // first and claimed the send.
+        //
+        // Now it posts the draft and reads the reply's `status`, not its `ok`: the sender
+        // answers ok=true for a dry run as well as a real send, so "sent" and "queued but
+        // not delivered" are only distinguishable there.
+        sendBusy: !!s.emSending,
+        send: async () => {
+          if (s.emSending) return;
+          const to = (s.emTo || "").trim();
+          if (!to) return this.flash("An address is needed before this can be sent.");
+          const kind = s.emKind;
+          const subject = s.emSubject || "";
+          this.setState({ emSending: true });
+          let res = null, err = null;
+          try {
+            res = await opsApi.sendEmail({ to, subject, body: s.emBody || "" });
+          } catch (e) {
+            err = e;
+          }
+          const status = String((res && res.status) || "").toLowerCase();
+          // The backend answers HTTP 200 for a refused draft ({ok:false, error}: no subject,
+          // an address without "@") and for a transport that threw ({status:"failed"});
+          // neither is a thrown error here. Only "sent", "dry_run" and "handoff" are
+          // outcomes. Everything else is a problem, and a problem keeps the draft on screen
+          // so it can be corrected and the same message tried again.
+          const failed = !err && !!res && (res.ok === false || status === "failed");
+          const sent = !err && !failed && status === "sent";
+          const dry = !err && !failed && status === "dry_run";
+          const handoff = !err && !failed && status === "handoff";
+          const unconfirmed = !err && !failed && !sent && !dry && !handoff;
+          const problem = err
+            ? ((err && err.message) || "the mail service did not answer")
+            : failed ? ((res && res.error) || "the mail service reported a failure")
+            : null;
+          // A handoff keeps the draft too: a mailto is a URL, mail clients cut long ones
+          // short, and nothing has been confirmed sent until the reader presses send there.
+          const keepDraft = !!problem || unconfirmed || handoff;
+          const outcome = problem
+            ? "Not sent — " + problem + ". The draft is unchanged; correct it or retry."
+            : unconfirmed
+              ? "Not confirmed — the mail service reported \"" + (status || "no status")
+                + "\" rather than delivery. The draft is unchanged; retry, or check ops_email_log."
+              : dry
+                ? "Recorded for " + to + " but NOT delivered: the platform is in dry-run "
+                  + "(EMAIL_DRY_RUN). It is in ops_email_log with everything it would have sent."
+                : handoff
+                  ? "Opened in your mail client, addressed to " + to + " — the platform is in "
+                    + "handoff mode (EMAIL_DELIVERY_MODE=handoff) and sends nothing itself. "
+                    + "Press send there. The draft stays here in case your client cut the body short."
+                  : null;   // sent: the spec's own wording is accurate once the mail has really gone
+          // Handoff: the backend built the mailto; the reader's own client takes it from here.
+          if (handoff && res.handoff && res.handoff.mailto_uri && typeof window !== "undefined") {
+            window.location.href = res.handoff.mailto_uri;
+          }
+          this.setState((prev) => ({
+            emSending: false,
+            // An approved evidence request is remembered against the certificate so its row
+            // stops offering the same request again — but only once it has genuinely gone.
+            ccRequested: sent && kind === "evidence" && s.emCertId
+              ? Object.assign({}, prev.ccRequested || {}, { [s.emCertId]: true })
+              : prev.ccRequested,
+            // A problem or a handoff leaves the composer open; a confirmed outcome closes it.
+            flow: keepDraft ? prev.flow : (kind === "investigate" && s.inv ? "investigate" : null),
+            inv: kind === "investigate" && s.inv
+              ? Object.assign({}, s.inv, {
+                  replies: (s.inv.replies || []).concat([{
+                    you: "Send the email",
+                    bot: outcome || ("Sent to " + to + ". The reply lands on this case; a "
+                      + "document attached to it is ingested and bound to the asset record "
+                      + "automatically.")
+                  }])
+                })
+              : s.inv,
+            flowDone: kind === "investigate" ? "" : (outcome || (
+              spec0 && spec0.done && spec0.k === kind ? spec0.done(s.fiVals, s.fLabel, s.fSubject)
+              : kind === "renewal" ? "Renewal email sent to " + to + "."
+              : kind === "quote" ? "Quote request sent to " + to + ". The reply is watched and a scorecard opens on award."
+              : kind === "booking" ? "Booking instruction sent to " + to + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
+              : "Extension request sent to " + to + ". The obligation is marked as contested pending their reply."))
+          }));
+        }
       },
 
       // Recent tasks. De-duplicated by label (asking the same thing three times used to

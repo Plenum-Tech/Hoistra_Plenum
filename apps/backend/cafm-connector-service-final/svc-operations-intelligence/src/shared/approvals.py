@@ -807,9 +807,70 @@ async def send_approval_email_draft(
             draft["to"] = to_addr
             if cc_address:
                 draft["cc_senior"] = cc_address
-            draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
             item.email_draft = draft
             item.updated_at = datetime.now(timezone.utc)
+
+    mode = (settings.email_delivery_mode or "handoff").lower()
+    if mode != "platform_send":
+        # PRD Q1: the platform drafts, the PM sends from their own client. decide_queue_item()
+        # has honoured that since Phase 2; this path — what the dock's "Approve & send" posts
+        # to — went straight to the platform sender whatever the mode said, so a deployment
+        # that had chosen handoff still sent vendor mail from the shared mailbox the moment
+        # someone pressed the button. The handoff is on the record exactly as a send would
+        # be: one ops_email_log row, one audit row, then the mailto for the reader's client.
+        handoff = build_email_handoff({
+            "to": to_addr,
+            "subject": subject.strip(),
+            "body": body,
+            "cc": (cc_address or "").strip() or None,
+        })
+        if item is not None:
+            # Not last_sent_at: queue_item_to_dict() reads that as email_sent_at, and the
+            # Approvals rail would show a sent timestamp for mail that never left here.
+            draft = dict(item.email_draft or {})
+            draft["last_handoff_at"] = datetime.now(timezone.utc).isoformat()
+            item.email_draft = draft
+        session.add(
+            OpsEmailLog(
+                id=uuid4(),
+                organization_id=org_id,
+                queue_item_id=queue_item_id,
+                to_address=to_addr,
+                subject=subject.strip(),
+                body=body,
+                status="handoff",
+                sent_at=datetime.now(timezone.utc),
+            )
+        )
+        await write_audit(
+            session,
+            actor="user:pm",
+            action_type="approvals_queue.email_handoff",
+            source_feature=item.source_feature if item else "A",
+            organization_id=org_id,
+            output_payload={
+                "queue_item_id": str(queue_item_id) if queue_item_id else None,
+                "to": to_addr,
+                "cc": cc_address,
+                "status": "handoff",
+            },
+            detail={"subject": subject[:200]},
+        )
+        await session.commit()
+        return {
+            "ok": True,
+            "status": "handoff",
+            "handoff": handoff,
+            "pm_action_status": None,
+            "email_sent_to": None,
+        }
+
+    if item is not None:
+        # Stamped on the road that sends, and only there: this is what the Approvals rail
+        # shows as the sent time.
+        draft = dict(item.email_draft or {})
+        draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
+        item.email_draft = draft
 
     result = await send_platform_email(
         session,
