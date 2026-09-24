@@ -14,20 +14,20 @@ const compliance = {
   risk_dashboard: { vendors_blocked: 6, high_risk_lt_30: 1, medium_risk_lt_90: 2 }
 };
 
-const meters = {
-  ok: true, count: 5,
-  meters: [
-    { id: 'm1', site_id: null, meter_type: 'gas', mprn: '9130847302', active: true },
-    { id: 'm2', site_id: null, meter_type: 'electricity', mpan: '1200023306013', active: true },
-    { id: 'm3', site_id: 'site-a', meter_type: 'electricity', mpan: '1200023305687', active: true },
-    { id: 'm4', site_id: 'site-a', meter_type: 'gas', mprn: '9130847265', active: true },
-    { id: 'm5', site_id: 'site-a', meter_type: 'electricity', mpan: '1200023305688', active: true }
-  ]
-};
-
-const contracts = {
-  ok: true, count: 1,
-  parameters: [{ id: 'p1', vendor_id: 'v-apex', contract_ref: 'UKRI-2938', status: 'draft' }]
+// GET /api/energy/hoist-score — two buildings hoisted; Ashgrove Court has no contract and no
+// certificate yet, neither has a work order.
+const AC = { building_id: 'b-102', name: 'Ashgrove Court', building_code: 'B-102' };
+const HP = { building_id: 'b-101', name: 'Harbour Point', building_code: 'B-101' };
+const coverage = {
+  ok: true, root: 'buildings', buildings: 2, score: 60,
+  domains: [
+    { key: 'assets', covered: 2, of: 2, pct: 100, missing_buildings: [], note: null },
+    { key: 'compliance', covered: 1, of: 2, pct: 50, missing_buildings: [AC], note: null },
+    { key: 'contracts', covered: 1, of: 2, pct: 50, missing_buildings: [AC], note: null },
+    { key: 'energy', covered: 2, of: 2, pct: 100, missing_buildings: [], note: null },
+    { key: 'maintenance', covered: 0, of: 2, pct: 0, missing_buildings: [HP, AC], note: null }
+  ],
+  rows: []
 };
 
 // The compliance console's live register (shapeLiveCompliance output), reused for the hero.
@@ -71,7 +71,7 @@ const anomalies = {
   ]
 };
 
-const full = () => shapeLiveHome({ raw: { compliance, meters, contracts, approvals, anomalies }, register }, NOW);
+const full = () => shapeLiveHome({ raw: { compliance, coverage, approvals, anomalies }, register }, NOW);
 
 test('with nothing loaded, nothing is asserted', () => {
   const h = shapeLiveHome({ raw: null, register: null }, NOW);
@@ -84,56 +84,85 @@ test('with nothing loaded, nothing is asserted', () => {
   assert.equal(h.pending, null);
 });
 
-test('certificates bar is certificates on record over what the packs expect', () => {
-  const bar = full().score.bars.find((b) => b.key === 'certificates');
-  // 8 + 18 on record; 22 + 19 types not on record → 26 of 67.
-  assert.equal(bar.pct, 39);
-  assert.equal(bar.val, '39%');
-  assert.match(bar.note, /26 of 67/);
-  assert.equal(bar.tone, 'risk');
+test('each bar is hoisted buildings with that record over hoisted buildings', () => {
+  const bars = full().score.bars;
+  const by = (k) => bars.find((b) => b.key === k);
+  assert.equal(by('assets').pct, 100);
+  assert.equal(by('assets').val, '100%');
+  assert.match(by('assets').note, /2 of 2 hoisted buildings with an asset register on record/);
+  assert.equal(by('assets').tone, 'ok');
+  assert.equal(by('contracts').pct, 50);
+  assert.match(by('contracts').note, /1 of 2 hoisted buildings with a contract on record/);
+  assert.equal(by('contracts').tone, 'risk');
+  assert.equal(by('meters').pct, 100);
+  assert.match(by('meters').note, /with a meter on record/);
+  assert.equal(by('certificates').pct, 50);
+  assert.match(by('certificates').note, /with a certificate on record/);
 });
 
-test('meter bar is active meters linked to a site', () => {
-  const bar = full().score.bars.find((b) => b.key === 'meters');
-  assert.equal(bar.pct, 60);
-  assert.match(bar.note, /3 of 5/);
-  assert.equal(bar.tone, 'warn');
-});
-
-test('contracts bar is vendors with contract terms on record over vendors in the register', () => {
-  const bar = full().score.bars.find((b) => b.key === 'contracts');
-  assert.equal(bar.pct, 9);
-  assert.match(bar.note, /1 of 11/);
-});
-
-test('contracts bar falls back to confirmed parameter sets when there is no register', () => {
-  const h = shapeLiveHome({ raw: { contracts }, register: null }, NOW);
-  const bar = h.score.bars.find((b) => b.key === 'contracts');
-  assert.equal(bar.pct, 0);
-  assert.match(bar.note, /0 of 1 confirmed/);
-});
-
-test('assets bar has no source yet and says so', () => {
-  const bar = full().score.bars.find((b) => b.key === 'assets');
-  assert.equal(bar.pct, null);
-  assert.equal(bar.val, '—');
-  assert.equal(bar.tone, 'none');
-  assert.match(bar.note, /connector/i);
-});
-
-test('score is the mean of the sourced bars, with the band and the gap named', () => {
+test('score is the mean of the four bars, with the band and the gap naming the building', () => {
   const s = full().score;
-  assert.equal(s.value, 36); // (39 + 9 + 60) / 3
-  assert.equal(s.band, 'Ingestion in progress');
-  assert.equal(s.sourced, 3);
+  assert.equal(s.value, 75); // (50 + 100 + 100 + 50) / 4
+  assert.equal(s.band, 'Supervised autonomy');
+  assert.equal(s.sourced, 4);
   assert.equal(s.total, 4);
-  assert.match(s.gap, /Contracts lowest at 9%/);
-  assert.match(s.note, /3 of 4 sources/);
+  assert.match(s.gap, /^Contracts lowest at 50% — Ashgrove Court has none on record$/);
+  assert.match(s.note, /Live · 4 of 4 sources · 2 buildings hoisted/);
+});
+
+test('the gap line lists up to three buildings and counts the rest', () => {
+  const many = Array.from({ length: 5 }, (_, i) => ({ building_id: 'b' + i, name: 'Building ' + i, building_code: null }));
+  const cov = { ok: true, root: 'buildings', buildings: 6, domains: [
+    { key: 'assets', covered: 6, of: 6, pct: 100, missing_buildings: [] },
+    { key: 'compliance', covered: 6, of: 6, pct: 100, missing_buildings: [] },
+    { key: 'contracts', covered: 1, of: 6, pct: 17, missing_buildings: many, missing_count: 30 },
+    { key: 'energy', covered: 6, of: 6, pct: 100, missing_buildings: [] },
+    { key: 'maintenance', covered: 0, of: 6, pct: 0, missing_buildings: [] }
+  ] };
+  const s = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score;
+  // The backend caps the names it sends and says how many there really are.
+  assert.equal(s.gap, 'Contracts lowest at 17% — Building 0, Building 1, Building 2 and 27 more have none on record');
+});
+
+test('a coverage read rooted on sites leaves every bar unsourced and says why', () => {
+  const cov = { ok: true, root: 'sites', buildings: 3, domains: ['assets', 'compliance', 'contracts', 'energy', 'maintenance'].map((k) => (
+    { key: k, covered: null, of: 3, pct: null, missing_buildings: [], note: 'the building graph has no rows yet, so nothing is counted against a building' }
+  )) };
+  const s = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score;
+  assert.equal(s.value, null);
+  assert.equal(s.answered, true);
+  assert.equal(s.band, 'Not counted');
+  assert.ok(s.bars.every((b) => b.pct === null && /building graph has no rows/.test(b.note)));
+  // The tile's own line says what the bars say, not that nothing answered.
+  assert.equal(s.note, 'The building graph has no rows yet, so nothing is counted against a building');
+});
+
+test('no buildings hoisted is said in words, not as 0%', () => {
+  const cov = { ok: true, root: 'buildings', buildings: 0, domains: ['assets', 'compliance', 'contracts', 'energy', 'maintenance'].map((k) => (
+    { key: k, covered: null, of: 0, pct: null, missing_buildings: [], note: 'no buildings hoisted yet' }
+  )) };
+  const s = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score;
+  assert.equal(s.value, null);
+  assert.equal(s.answered, true);
+  assert.equal(s.band, 'Nothing hoisted');
+  assert.equal(s.bars[0].val, '—');
+  assert.equal(s.note, 'No buildings hoisted yet — hoist one and ingest against it');
+});
+
+test('when the coverage read fails the bars say so and the other tiles still render', () => {
+  const h = shapeLiveHome({ raw: { compliance, approvals, anomalies, coverage: null }, register }, NOW);
+  assert.equal(h.live, true);
+  assert.equal(h.score.value, null);
+  assert.equal(h.score.answered, false);
+  assert.ok(h.score.bars.every((b) => b.pct === null && b.note === 'coverage read did not answer'));
+  assert.ok(h.crons.length > 0);
 });
 
 test('score bands: delegated at 85, supervised at 60', () => {
   const at = (pct) => shapeLiveHome({
-    raw: { meters: { meters: Array.from({ length: 100 }, (_, i) => ({ id: String(i), active: true, site_id: i < pct ? 's' : null })) } },
+    raw: { coverage: { ok: true, root: 'buildings', buildings: 100, domains: ['assets', 'compliance', 'contracts', 'energy', 'maintenance'].map((k) => (
+      { key: k, covered: pct, of: 100, pct: pct, missing_buildings: [] }
+    )) } },
     register: null
   }, NOW).score;
   assert.equal(at(85).band, 'Delegated autonomy');
@@ -192,4 +221,39 @@ test('hero counts hoisted buildings, certificates and countries from the live re
 test('pending is the size of the approvals queue', () => {
   assert.equal(full().pending, 4);
   assert.equal(full().live, true);
+});
+
+test('a coverage read that omits the building count does not print "undefined"', () => {
+  const cov = { ok: true, root: 'buildings', domains: ['assets', 'compliance', 'contracts', 'energy', 'maintenance'].map((k) => (
+    { key: k, covered: 1, of: 2, pct: 50, missing_buildings: [] }
+  )) };
+  const s = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score;
+  assert.equal(s.value, 50);
+  assert.doesNotMatch(s.note, /undefined/);
+  assert.match(s.note, /Live · 4 of 4 sources$/);
+});
+
+test('a restricted user with no allocation is told that, not told to hoist a building', () => {
+  const cov = { ok: true, root: 'buildings', buildings: 0, domains: ['assets', 'compliance', 'contracts', 'energy', 'maintenance'].map((k) => (
+    { key: k, covered: null, of: 0, pct: null, missing_buildings: [], note: 'no buildings allocated to you' }
+  )) };
+  const s = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score;
+  assert.equal(s.value, null);
+  assert.equal(s.band, 'None allocated');
+  assert.equal(s.note, 'No buildings allocated to you. Ask an admin to allocate one.');
+});
+
+test('the percentage shown is the one the backend computed', () => {
+  // One derivation, on the server, shared with the Buildings column. The client recomputes
+  // only when a domain arrives without a pct.
+  const cov = { ok: true, root: 'buildings', buildings: 3, domains: [
+    { key: 'assets', covered: 1, of: 3, pct: 34, missing_buildings: [] },
+    { key: 'compliance', covered: 1, of: 3, missing_buildings: [] },
+    { key: 'contracts', covered: 3, of: 3, pct: 100, missing_buildings: [] },
+    { key: 'energy', covered: 3, of: 3, pct: 100, missing_buildings: [] },
+    { key: 'maintenance', covered: 0, of: 3, pct: 0, missing_buildings: [] }
+  ] };
+  const bars = shapeLiveHome({ raw: { coverage: cov }, register: null }, NOW).score.bars;
+  assert.equal(bars.find((b) => b.key === 'assets').pct, 34);
+  assert.equal(bars.find((b) => b.key === 'certificates').pct, 33);
 });

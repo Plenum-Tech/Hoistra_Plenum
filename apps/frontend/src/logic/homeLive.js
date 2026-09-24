@@ -6,17 +6,19 @@
 // saved-space panels — the compliance summary, contract parameters, energy meters and
 // anomalies, and the unified approvals queue — is what the Home page reads here.
 //
-//   Hoist Score   ingestion coverage per source, the mean of the sources that answered
+//   Hoist Score   per hoisted building, which kinds of record have reached it — one read,
+//                 GET /api/energy/hoist-score; the tile is the mean of its four bars
 //   Hoist Crons   what the engines did, newest first: approvals raised, anomalies detected
 //   Hero line     buildings, certificates and countries from the live register
 //
-// Not sourced yet, and disclosed as such on the page: asset registers (the connector service
-// is not part of this stack) and the budget-vs-actual P&L (no ledger in any backend).
+// Not sourced yet, and disclosed as such on the page: the budget-vs-actual P&L (no ledger in
+// any backend).
 //
 // shapeLiveHome() is a pure function; the methods below are mixed into HoistraLogic.prototype
 // and `this` is the controller.
 import { opsApi } from '../api/opsIntelligence.js';
 import { complianceApi } from '../api/compliance.js';
+import { energyApi } from '../api/energy.js';
 import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
@@ -30,12 +32,14 @@ const pctOf = (n, d) => (d > 0 ? Math.round((100 * n) / d) : null);
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
 
-// The four sources the Hoist Score reads. Order is the order the bars are drawn in.
+// The four bars the tile draws, in drawing order. `domain` is the key the backend's
+// per-building score uses for the same thing; `what` finishes "n of N hoisted buildings
+// with … on record". The fifth domain the read returns, maintenance, is not drawn here.
 const BARS = [
-  { key: "contracts", label: "Contracts and framework agreements", short: "Contracts" },
-  { key: "assets", label: "Asset registers", short: "Assets" },
-  { key: "meters", label: "Meter consent — MPAN / MPRN", short: "Meter consent" },
-  { key: "certificates", label: "Certificates and evidence", short: "Certificates" }
+  { key: "contracts", domain: "contracts", label: "Contracts and framework agreements", short: "Contracts", what: "a contract" },
+  { key: "assets", domain: "assets", label: "Asset registers", short: "Assets", what: "an asset register" },
+  { key: "meters", domain: "energy", label: "Meter consent — MPAN / MPRN", short: "Meter consent", what: "a meter" },
+  { key: "certificates", domain: "compliance", label: "Certificates and evidence", short: "Certificates", what: "a certificate" }
 ];
 
 // At 85 the agents move from supervised to delegated dispatch; below 60 the graph is still
@@ -58,6 +62,17 @@ export function severityTone(sev) {
 }
 export function humanise(code) {
   return String(code || "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+// "A", "A and B", "A, B and C", "A, B, C and 2 more" — the buildings a bar is missing.
+// `total` is how many there really are when `names` is a capped list.
+export function listNames(names, max, total) {
+  const cap = max || 3;
+  const shown = names.slice(0, cap);
+  const rest = (typeof total === "number" ? total : names.length) - shown.length;
+  if (rest > 0) return shown.join(", ") + " and " + rest + " more";
+  if (shown.length <= 1) return shown.join("");
+  return shown.slice(0, -1).join(", ") + " and " + shown[shown.length - 1];
 }
 
 // "Today", "Yesterday", else "DD Mon" — relative to `now`, in local time.
@@ -85,9 +100,8 @@ export const COUNTRY_SHORT = { UK: "UK", US: "US", SG: "Singapore", AE: "UAE" };
 
 // ── the shaping ─────────────────────────────────────────────────────────
 // input.raw       the reads, each null when that request failed:
-//                   compliance  GET /api/compliance/saved-space/summary
-//                   contracts   GET /api/contract-performance/contracts
-//                   meters      GET /api/energy/meters
+//                   coverage    GET /api/energy/hoist-score   (the bars)
+//                   compliance  GET /api/compliance/saved-space/summary  (kept for the Spaces panel)
 //                   anomalies   GET /api/energy/anomalies
 //                   approvals   GET /api/approvals
 // input.register  the compliance console's live register (shapeLiveCompliance), or null
@@ -101,56 +115,63 @@ export function shapeLiveHome(input, now) {
   const bar = (k) => bars.find((b) => b.key === k);
   const set = (k, pct, note) => { const x = bar(k); x.pct = pct; x.val = pct === null ? "—" : pct + "%"; x.tone = barTone(pct); x.note = note; };
 
-  if (raw.compliance) {
-    const b = raw.compliance.building_certificates || {}, v = raw.compliance.vendor_certificates || {};
-    const on = (b.total || 0) + (v.total || 0);
-    const missing = (b.not_on_record || 0) + (v.not_on_record || 0);
-    set("certificates", pctOf(on, on + missing), on + " of " + (on + missing) + " expected certificate types on record");
-  } else {
-    set("certificates", null, "compliance engine did not answer");
-  }
-
-  if (raw.meters) {
-    const ms = raw.meters.meters || [];
-    const linked = ms.filter((m) => m.active !== false && m.site_id).length;
-    set("meters", pctOf(linked, ms.length), ms.length ? linked + " of " + ms.length + " meters linked to a building" : "no meters on record");
-  } else {
-    set("meters", null, "energy engine did not answer");
-  }
-
-  if (raw.contracts) {
-    const ps = raw.contracts.parameters || [];
-    const vendorsInRegister = reg && reg.vendors ? reg.vendors.length : 0;
-    if (vendorsInRegister) {
-      const withTerms = ps.reduce((acc, p) => { if (p.vendor_id && acc.indexOf(p.vendor_id) < 0) acc.push(p.vendor_id); return acc; }, []).length;
-      set("contracts", pctOf(withTerms, vendorsInRegister), withTerms + " of " + vendorsInRegister + " vendors with contract terms on record");
-    } else if (ps.length) {
-      const confirmed = ps.filter((p) => String(p.status || "").toLowerCase() === "confirmed").length;
-      set("contracts", pctOf(confirmed, ps.length), confirmed + " of " + ps.length + " confirmed contract parameter sets");
-    } else {
-      set("contracts", null, "no contracts ingested yet");
-    }
-  } else {
-    set("contracts", null, "contract engine did not answer");
-  }
-
-  // The asset register lives in the connector service, which this stack does not run yet.
-  set("assets", null, "asset registers: the connector service is not connected yet");
+  // One read answers all four: for each kind of record, how many hoisted buildings it has
+  // reached. The bar's note is the fraction in words; a bar the backend could not count
+  // (no building graph, no buildings) draws empty and carries the backend's reason.
+  const cov = raw.coverage || null;
+  const domainOf = (b) => (cov && (cov.domains || []).find((d) => d.key === b.domain)) || null;
+  BARS.forEach((b) => {
+    const d = domainOf(b);
+    if (!cov) return set(b.key, null, "coverage read did not answer");
+    if (!d) return set(b.key, null, "the coverage read did not name this domain");
+    if (typeof d.covered !== "number" || !d.of) return set(b.key, null, d.note || "not counted");
+    // One derivation, on the server, shared with the Buildings column; recomputed here only
+    // when a domain arrives without its pct.
+    const pct = typeof d.pct === "number" ? d.pct : pctOf(d.covered, d.of);
+    set(b.key, pct, d.covered + " of " + d.of + " hoisted buildings with " + b.what + " on record");
+  });
 
   const sourced = bars.filter((b) => b.pct !== null);
   const value = sourced.length ? Math.round(sourced.reduce((a, b) => a + b.pct, 0) / sourced.length) : null;
   const lowest = sourced.slice().sort((a, b) => a.pct - b.pct)[0] || null;
   const unsourced = bars.filter((b) => b.pct === null).map((b) => b.short);
+  // Who is missing the lowest bar, by name — a number nobody can act on is half an answer.
+  const gapWho = (low) => {
+    const d = domainOf(BARS.find((b) => b.key === low.key));
+    const names = ((d && d.missing_buildings) || []).map((m) => m.name || m.building_code || m.building_id).filter(Boolean);
+    // The backend caps the names it sends; missing_count is the true number.
+    const total = d && typeof d.missing_count === "number" ? d.missing_count : names.length;
+    if (!names.length) return " — the gap to delegated autonomy";
+    return " — " + listNames(names, 3, total) + (total === 1 ? " has" : " have") + " none on record";
+  };
+  // The read answered but counted nothing: no building graph, or no buildings hoisted. Said
+  // in the backend's words, capitalised — not "no source has answered", because one did.
+  const answered = !!cov;
+  const nb = cov && typeof cov.buildings === "number" ? cov.buildings : null;
+  const reason = answered ? ((cov.domains || []).map((d) => d && d.note).find(Boolean) || "Nothing counted yet") : "";
+  const capitalise = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  // A building-restricted reader whose allocation is empty: the backend says so, and the
+  // portfolio may well be full of buildings they cannot see — telling them to hoist one
+  // would be wrong twice over.
+  const unallocated = answered && nb === 0 && /allocated to you/.test(reason);
   const score = {
     value: value,
-    band: bandOf(value),
+    answered: answered,
+    band: value !== null || !answered ? bandOf(value) : unallocated ? "None allocated" : nb === 0 ? "Nothing hoisted" : "Not counted",
     bars: bars,
     sourced: sourced.length,
     total: bars.length,
-    gap: lowest ? lowest.short + " lowest at " + lowest.pct + "% — the gap to delegated autonomy" : "No source has answered yet.",
+    gap: lowest
+      ? lowest.short + " lowest at " + lowest.pct + "%" + gapWho(lowest)
+      : "No source has answered yet.",
     note: value === null
-      ? "No source has answered yet"
-      : "Live · " + sourced.length + " of " + bars.length + " sources" + (unsourced.length ? " · " + unsourced.join(", ") + " unsourced" : "")
+      ? (!answered ? "No source has answered yet"
+        : unallocated ? capitalise(reason) + ". Ask an admin to allocate one."
+        : nb === 0 ? "No buildings hoisted yet — hoist one and ingest against it"
+        : capitalise(reason))
+      : "Live · " + sourced.length + " of " + bars.length + " sources"
+        + (nb === null ? "" : " · " + nb + " building" + (nb === 1 ? "" : "s") + " hoisted")
+        + (unsourced.length ? " · " + unsourced.join(", ") + " unsourced" : "")
   };
 
   // ── Hoist Crons: what the engines did, newest first ──
@@ -208,7 +229,7 @@ export function shapeLiveHome(input, now) {
     ? (typeof raw.approvals.count === "number" ? raw.approvals.count : (raw.approvals.items || []).length)
     : null;
 
-  const live = ["compliance", "contracts", "meters", "anomalies", "approvals"].some((k) => !!raw[k]);
+  const live = ["coverage", "compliance", "anomalies", "approvals"].some((k) => !!raw[k]);
   return { live: live, score: score, crons: crons, hero: hero, pending: pending };
 }
 
@@ -236,10 +257,11 @@ export const homeLiveMethods = {
     this.setState({ homeLoading: true });
     const reads = {
       approvals: () => opsApi.approvals(),
+      // Kept although the bars no longer read it: spacesLive.js shapes the Compliance saved
+      // space from homeRaw.compliance.
       compliance: () => complianceApi.savedSpaceSummary(),
-      contracts: () => opsApi.contracts(),
-      meters: () => opsApi.meters(),
-      anomalies: () => opsApi.anomalies()
+      anomalies: () => opsApi.anomalies(),
+      coverage: () => energyApi.hoistScore()
     };
     const keys = Object.keys(reads);
     const settled = await Promise.allSettled(keys.map((k) => reads[k]()));

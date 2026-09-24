@@ -19,6 +19,12 @@ export const energyApi = {
   // the backend; buildingsLive.js / energyLive.js each have their own live-or-seed fallback.
   listBuildings: (query) => apiFetch(B, '/api/energy/buildings', { query: withOrg(Object.assign({ limit: 5000 }, query || {})), timeoutMs: 30000 }),
 
+  // The portfolio Hoist Score: of the buildings the caller may see, how many has each kind
+  // of record reached — asset register, certificate, contract, meter, work order — with the
+  // buildings still missing each one named. The Home tile's one read (logic/homeLive.js);
+  // engines/energy/hoist_score.py says what a bar means.
+  hoistScore: () => apiFetch(B, '/api/energy/hoist-score', { query: withOrg(), timeoutMs: 30000 }),
+
   // One building by sites.site_id / site_uuid / building_code.
   getBuilding: (siteId) => apiFetch(B, '/api/energy/buildings/' + enc(siteId), { query: withOrg() }),
 

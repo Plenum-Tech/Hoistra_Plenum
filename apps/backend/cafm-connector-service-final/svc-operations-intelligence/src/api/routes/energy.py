@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Response,
@@ -15,6 +16,7 @@ from ...db import get_session
 from ...engines.energy import anomalies as anom_svc
 from ...engines.energy import anomaly_rollup as rollup_svc
 from ...engines.energy import buildings as bld_svc
+from ...engines.energy import hoist_score as hoist_svc
 from ...engines.energy import building_backfill as bld_backfill
 from ...engines.energy import sites_uuid_migration as sites_uuid
 from ...engines.energy import building_resolver as bld_resolver
@@ -294,6 +296,23 @@ async def building_profile(
     )
 
 
+def _narrow_to_scope(out: dict[str, Any], s: access.Scope) -> dict[str, Any]:
+    """A building-restricted caller sees only their allocated buildings.
+
+    The engine returns the table under "buildings". The filter first looked for "rows",
+    found nothing, and let a one-building user read the whole portfolio — so the key is
+    checked, not assumed. Shared by GET /buildings and GET /hoist-score so the two cannot
+    drift: a score over buildings the caller cannot see would be a number about somebody
+    else's portfolio.
+    """
+    if not (s.restricted and isinstance(out, dict)):
+        return out
+    key = "buildings" if isinstance(out.get("buildings"), list) else "rows"
+    rows = [r for r in (out.get(key) or [])
+            if s.allows_building(r.get("building_id") or r.get("id"))]
+    return dict(out, **{key: rows}, count=len(rows), scoped_to_buildings=len(rows))
+
+
 @router.get("/buildings")
 async def list_buildings(
     organization_id: UUID | None = Query(None),
@@ -312,13 +331,36 @@ async def list_buildings(
     organization_for() both replaced."""
     org_id = access.organization_for(s, organization_id)
     out = await bld_svc.list_buildings(session, organization_id=org_id, limit=limit)
-    if s.restricted and isinstance(out, dict):
-        # The engine returns the table under "buildings". The filter first looked for
-        # "rows", found nothing, and let a one-building user read the whole portfolio.
-        key = "buildings" if isinstance(out.get("buildings"), list) else "rows"
-        rows = [r for r in (out.get(key) or [])
-                if s.allows_building(r.get("building_id") or r.get("id"))]
-        out = dict(out, **{key: rows}, count=len(rows), scoped_to_buildings=len(rows))
+    return _narrow_to_scope(out, s)
+
+
+@router.get("/hoist-score")
+async def hoist_score(
+    organization_id: UUID | None = Query(None),
+    # The per-building breakdown, on request. The Home tile reads domains only, and a
+    # 600-building portfolio does not need 600 stubs in every Home load.
+    include_rows: bool = False,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The portfolio Hoist Score: of the buildings this caller may see, how many has each
+    kind of record reached — asset register, certificate, contract, meter, work order.
+
+    One bar per kind, each "covered of hoisted" with the buildings still missing it named,
+    plus the mean of the per-building scores. Read by the Home tile. Same company and
+    building narrowing as GET /buildings; engines/energy/hoist_score.py says what a bar
+    means and what it deliberately is not."""
+    org_id = access.organization_for(s, organization_id)
+    table = _narrow_to_scope(
+        await bld_svc.list_buildings(session, organization_id=org_id, limit=5000), s
+    )
+    out = hoist_svc.portfolio_hoist_score(
+        table.get("buildings") or [],
+        root=str(table.get("root") or "sites"),
+        restricted=bool(s.restricted),
+    )
+    if not include_rows:
+        out.pop("rows", None)
     return out
 
 

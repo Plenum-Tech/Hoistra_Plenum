@@ -44,6 +44,10 @@ _KEYS: dict[str, tuple[str, ...]] = {
     "documents": ("document_id", "id"),
     "compliance_certificates": ("certificate_id", "id"),
     "contracts": ("contract_id", "id"),
+    # The tables the contract ingest and the readings upload actually write. Neither is a
+    # graph table, and both reach a building on a road child_counts() has to draw itself.
+    "contract_sla_parameters": ("id",),
+    "energy_meters": ("id",),
     "invoices": ("invoice_id", "id"),
 }
 
@@ -260,6 +264,91 @@ def invoices_count_sql(shape: dict[str, Any]) -> str | None:
     return None
 
 
+def contracts_count_sql(shape: dict[str, Any]) -> str | None:
+    """Count the graph's own contracts relation per building — plenum_cafm.contracts, which
+    is normally a VIEW over contract_sla_parameters joined to documents
+    (udr_building_graph.sql) and may be a real base table on a deployment that has one.
+    This is the number the Buildings card prints and the rows its Contracts drawer opens,
+    so it counts exactly that relation and nothing beside it.
+
+    Pure string-building over introspected column names, so it is tested without a database.
+    """
+    if (shape.get("contracts") or {}).get("exists"):
+        return "SELECT building_id::text, count(*) FROM plenum_cafm.contracts GROUP BY 1"
+    return None
+
+
+def contract_parameters_count_sql(shape: dict[str, Any]) -> str | None:
+    """Count ingested contracts per building where the graph's view cannot: through the
+    document each contract_sla_parameters row was extracted from — the same join
+    parameters.list_contract_parameters() makes to say which building a contract covers.
+
+    Only where the contracts view is missing, which it was on every database built from
+    scratch until its swallowed-error bug was fixed. Where the view exists it already makes
+    this join, and counting the parameters beside it counted every contract twice — the
+    graph's Contracts branch drew "2" for one contract. document_id on the contracts
+    relation is the view's signature: it surfaces that parameters column, and the graph's
+    own base table never carried one. Counted under its own name, so the card's contracts
+    figure stays what its drawer can open; the Hoist Score's domain table reads both.
+    """
+    contracts = shape.get("contracts") or {}
+    if "document_id" in (contracts.get("columns") or set()):
+        return None
+    csp = shape.get("contract_sla_parameters") or {}
+    docs = shape.get("documents") or {}
+    if (
+        csp.get("exists")
+        and "document_id" in (csp.get("columns") or set())
+        and docs.get("exists")
+        and "building_id" in (docs.get("columns") or set())
+    ):
+        dkey = docs["key"]
+        return (
+            "SELECT d.building_id::text, count(*)\n"
+            "  FROM plenum_cafm.contract_sla_parameters p\n"
+            f"  JOIN plenum_cafm.documents d ON d.{dkey}::text = p.document_id::text\n"
+            " GROUP BY 1"
+        )
+    return None
+
+
+def meters_count_sql(shape: dict[str, Any]) -> str | None:
+    """Count the graph's own meters relation per building — plenum_cafm.meters, reached
+    directly or through the asset it is fitted to. This is what the Buildings card prints
+    and what its Meters drawer opens, so it counts that table alone."""
+    m = shape.get("meters") or {}
+    a = shape.get("assets") or {}
+    mcols = m.get("columns") or set()
+    if not m.get("exists"):
+        return None
+    if a.get("exists") and "asset_id" in mcols:
+        akey = a["key"]
+        return (
+            "SELECT COALESCE(m.building_id::text, a.building_id::text), count(*)\n"
+            "  FROM plenum_cafm.meters m\n"
+            f"  LEFT JOIN plenum_cafm.assets a ON a.{akey}::text = m.asset_id::text\n"
+            " GROUP BY 1"
+        )
+    if "building_id" in mcols:
+        return "SELECT building_id::text, count(*) FROM plenum_cafm.meters GROUP BY 1"
+    return None
+
+
+def energy_meters_count_sql(shape: dict[str, Any]) -> str | None:
+    """Count the meters the half-hourly readings upload creates from an MPAN / MPRN —
+    plenum_cafm.energy_meters, which carries the building itself. A building whose only
+    meter arrived by upload read as having no energy at all until an EUI was computed for
+    it, because only the graph's table was counted. Under its own name: the two tables can
+    hold the same physical meter, and summing them made the card say "2 meters" over a
+    drawer listing one. The Hoist Score's energy domain is met by either."""
+    em = shape.get("energy_meters") or {}
+    ecols = em.get("columns") or set()
+    if em.get("exists") and "building_id" in ecols:
+        where = " WHERE active IS NOT FALSE" if "active" in ecols else ""
+        return f"SELECT building_id::text, count(*) FROM plenum_cafm.energy_meters{where} GROUP BY 1"
+    return None
+
+
 async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
     """Every relation in the graph, counted per building.
 
@@ -292,19 +381,15 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
                     JOIN plenum_cafm.assets a ON a.{akey}::text = e.asset_id::text
                     GROUP BY 1""",
             ))
-        if shape["meters"]["exists"] and "asset_id" in shape["meters"]["columns"]:
-            add("meters", await _scalar_counts(
-                session,
-                f"""SELECT COALESCE(m.building_id::text, a.building_id::text), count(*)
-                    FROM plenum_cafm.meters m
-                    LEFT JOIN plenum_cafm.assets a ON a.{akey}::text = m.asset_id::text
-                    GROUP BY 1""",
-            ))
     if shape["work_orders"]["exists"]:
         add("work_orders", await _scalar_counts(
             session,
             "SELECT building_id::text, count(*) FROM plenum_cafm.work_orders GROUP BY 1",
         ))
+    for relation, sql in (("meters", meters_count_sql(shape)),
+                          ("energy_meters", energy_meters_count_sql(shape))):
+        if sql:
+            add(relation, await _scalar_counts(session, sql))
     if shape["documents"]["exists"]:
         add("documents", await _scalar_counts(
             session,
@@ -351,11 +436,10 @@ async def child_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
                                                           c.source_document_id::text)
                      GROUP BY 1""",
             ))
-    if shape["contracts"]["exists"]:
-        add("contracts", await _scalar_counts(
-            session,
-            "SELECT building_id::text, count(*) FROM plenum_cafm.contracts GROUP BY 1",
-        ))
+    for relation, sql in (("contracts", contracts_count_sql(shape)),
+                          ("contract_parameters", contract_parameters_count_sql(shape))):
+        if sql:
+            add(relation, await _scalar_counts(session, sql))
     inv_sql = invoices_count_sql(shape)
     if inv_sql:
         add("invoices", await _scalar_counts(session, inv_sql))

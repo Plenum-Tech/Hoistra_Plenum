@@ -558,10 +558,15 @@ def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
 HOIST_SCORE_DOMAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("assets", ("assets",)),
     ("compliance", ("certificates",)),
-    ("contracts", ("contracts",)),
-    # A meter is how energy arrives. Readings and an EUI follow from it, and are counted
-    # by the caller when it has them, so the domain is met by either.
-    ("energy", ("meters",)),
+    # The graph's own contracts relation, or — where the contracts view is missing — the
+    # ingested parameters reached through their document. Two names, counted apart in
+    # building_rollup.child_counts() so the Buildings card still prints exactly what its
+    # drawer opens; the domain is met by either.
+    ("contracts", ("contracts", "contract_parameters")),
+    # A meter is how energy arrives, by either table: the graph's meters, or energy_meters
+    # from a readings upload. Readings and an EUI follow from it, and are counted by the
+    # caller when it has them, so the domain is met by any of the three.
+    ("energy", ("meters", "energy_meters")),
     ("maintenance", ("work_orders",)),
 )
 

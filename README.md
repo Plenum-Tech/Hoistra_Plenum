@@ -81,10 +81,14 @@ says so (status pill next to "Run compliance scan", with Retry).
 ## Home — live data
 
 The Home page reads `svc-operations-intelligence` the same way (`apps/frontend/src/logic/homeLive.js`,
-wrappers in `src/api/opsIntelligence.js`):
+wrappers in `src/api/opsIntelligence.js` and `src/api/energy.js`):
 
-- `GET /api/compliance/saved-space/summary`, `/api/contract-performance/contracts`, `/api/energy/meters` —
-  the Hoist Score (ingestion coverage per source; asset registers stay unsourced until the connector runs)
+- `GET /api/energy/hoist-score` — the Hoist Score: for each kind of record (asset register,
+  contract, meter, certificate) how many hoisted buildings it has reached, and which are still
+  missing it. Derived from the same per-building graph counts the Buildings table scores on
+  (`svc-operations-intelligence/src/engines/energy/hoist_score.py`). Assets arrive by CMMS
+  migration; contracts, meters and certificates by their file ingests.
+- `GET /api/compliance/saved-space/summary` — no longer a bar; still read for the Compliance saved space
 - `GET /api/approvals`, `/api/energy/anomalies` — the Hoist Crons feed, newest first; rows open read-only
 - the compliance register already loaded for the console — buildings, certificates and countries in the hero line
 - the ask bar opens the conversation page (`apps/frontend/src/screens/Chat.jsx`, view `chat`): the question and

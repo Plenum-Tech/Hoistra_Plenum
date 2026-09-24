@@ -265,6 +265,10 @@ export const renderValsMethods = {
     // Home tiles from svc-operations-intelligence; hm.live is false until something answers.
     const hm = this.homeModel();
     const hmLive = hm.live;
+    // The tile renders live when the score has a value OR the coverage read answered and
+    // could count nothing (no building graph, no buildings hoisted). Gating on the value
+    // alone sent both of those deliberate nulls to the seed 78%.
+    const hmScore = hmLive && (hm.score.value !== null || hm.score.answered);
     const heroLive = hm.hero.buildings !== null;
 
     // Documents section — search + pagination over the same portfolio, independent of the
@@ -487,10 +491,10 @@ export const renderValsMethods = {
       cronCount: String(CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length),
       // Hoist Score: ingestion coverage per source, live when at least one source answered.
       // A bar with no source draws empty and says why in its tooltip.
-      hoistScore: hmLive && hm.score.value !== null
-        ? { value: String(hm.score.value), band: hm.score.band, gap: hm.score.gap, note: "Ingestion coverage across the Hoist Graph, read from the operations backend. At 85 the agents move from supervised to delegated dispatch on L3 assets." }
+      hoistScore: hmScore
+        ? { value: hm.score.value === null ? "—" : String(hm.score.value), band: hm.score.band, gap: hm.score.gap, note: "Ingestion coverage across the Hoist Graph, read from the operations backend. At 85 the agents move from supervised to delegated dispatch on L3 assets." }
         : { value: "78", band: "Supervised autonomy", gap: "Meter consent lowest at 71% — the gap to delegated autonomy", note: "Ingestion coverage across the Hoist Graph. At 85 the agents move from supervised to delegated dispatch on L3 assets." },
-      hoistBars: hmLive && hm.score.value !== null
+      hoistBars: hmScore
         ? hm.score.bars.map((b) => ({
             label: b.label, short: b.short, val: b.val, note: b.note,
             pct: (b.pct === null ? 0 : b.pct) + "%",
@@ -502,7 +506,7 @@ export const renderValsMethods = {
             { label: "Meter consent — MPAN / MPRN", short: "Meter consent", val: "71%", pct: "71%", color: "var(--st-warn)", note: "seed" },
             { label: "Certificates and evidence", short: "Certificates", val: "65%", pct: "65%", color: "var(--st-warn)", note: "seed" }
           ],
-      hoistScoreNote: hmLive && hm.score.value !== null
+      hoistScoreNote: hmScore
         ? hm.score.note
         : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · " + (s.homeError ? "backend unreachable — " + s.homeError : "the operations backend has not answered yet")),
 
