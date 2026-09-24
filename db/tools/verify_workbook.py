@@ -119,8 +119,20 @@ def run(path: str, db: dict | None) -> int:
     c.refs([m for m in meters if m.get("asset_code")], "asset_code", acodes,
            "every asset sub-meter names an asset")
 
-    c.refs(g("Asset_Readings", []), "reading_type", col(g("Asset_Reading_Bands", []), "reading_type"),
+    areads = g("Asset_Readings", [])
+    c.refs(areads, "reading_type", col(g("Asset_Reading_Bands", []), "reading_type"),
            "every asset reading has a band to be judged against")
+    # Identical rows are removed as duplicates before the write. Twelve readings a day all
+    # stamped at midnight lose every repeated value that way (232 of 1,056 on 24 Sep 2026);
+    # spread_asset_readings.py gives them back their time of day.
+    seen: dict[tuple, int] = {}
+    for r in areads:
+        k = (r.get("asset_code"), r.get("reading_type"), str(r.get("recorded_at")))
+        seen[k] = seen.get(k, 0) + 1
+    clash = {k: n for k, n in seen.items() if n > 1}
+    c(not clash, "no two readings of one asset and type share a timestamp",
+      f"{sum(clash.values()):,} rows on {len(clash)} shared timestamp(s) - "
+      "run spread_asset_readings.py")
 
     certs = g("Compliance_Certificates", [])
     c.refs([x for x in certs if x.get("vendor_code")], "vendor_code", col(vendors, "vendor_code"),

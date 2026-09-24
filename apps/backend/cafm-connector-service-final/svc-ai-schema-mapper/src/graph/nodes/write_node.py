@@ -84,6 +84,10 @@ _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
 # The fallback write path must NEVER ALTER TABLE these — only filter to
 # their existing columns.
+#: Columns the writer fills itself rather than reading from the file. A type mismatch on one of
+#: these is the target's shape, not bad source data, so it is never "fixed" by retyping the column.
+_SYSTEM_SUPPLIED_COLUMNS = frozenset({"organization_id", "org_id"})
+
 _KNOWN_CORE_TABLES = frozenset({
     "assets", "work_orders", "spare_parts", "locations", "organizations",
     "users", "technicians", "vendors", "asset_categories", "maintenance_plans",
@@ -2251,6 +2255,7 @@ async def _apply_records_with_schema_alignment(
                 # (int → text), never narrows. Scans a sample for a fast early-exit.
                 _num_types = ("int", "bigint", "smallint", "numeric", "decimal", "double", "real", "serial")
                 _SCAN_CAP = 5000
+                _widened = False
                 for _col, _dbt in list(db_col_type_map.items()):
                     if (_col == "id" and _id_is_serial) or not any(t in _dbt.lower() for t in _num_types):
                         continue
@@ -2268,21 +2273,49 @@ async def _apply_records_with_schema_alignment(
                             break
                     if not _needs_text:
                         continue
+                    if _col in _SYSTEM_SUPPLIED_COLUMNS:
+                        # The value is this run's organisation uuid, put there by
+                        # _normalize_row_for_table, not a fact from the file. A numeric column
+                        # cannot hold it (sites.organization_id is INTEGER on hoistra_test), and
+                        # rewriting a key column's type to fit it would break every join on it.
+                        # Leave it unset; the row still goes in.
+                        db_cols.discard(_col)
+                        logger.info(
+                            f"[Node 9]   {safe_table}.{_col} is {_dbt}; the run's organisation id "
+                            "does not fit it, so it is left unset rather than retyped"
+                        )
+                        continue
                     try:
                         async with session.begin_nested():
+                            # ALTER TYPE takes ACCESS EXCLUSIVE. Behind any open reader of this
+                            # table it would queue — and every query after it would queue behind
+                            # it. On 24 Sep 2026 this ALTER on `sites` waited 45 s behind two idle
+                            # transactions, died, and took the connection with it: every table
+                            # after `sites` failed with PendingRollbackError. Wait briefly or not
+                            # at all; the rows that do not fit are dropped and reported below.
+                            await session.execute(text("SET LOCAL lock_timeout = '5s'"))
                             await session.execute(text(
                                 f'ALTER TABLE {schema_name}.{safe_table} '
                                 f'ALTER COLUMN "{_col}" TYPE TEXT USING "{_col}"::text'
                             ))
+                            await session.execute(text("SET LOCAL lock_timeout = DEFAULT"))
                         db_col_type_map[_col] = "text"
+                        _widened = True
                         logger.warning(
                             f"[Node 9] Widened {safe_table}.{_col} ({_dbt} → TEXT) — source data is "
                             "non-numeric (e.g. code values); rows kept instead of skipped"
                         )
                     except Exception as _alter_exc:
+                        if _is_connection_lost(_alter_exc):
+                            raise ConnectionLost(str(_alter_exc)) from _alter_exc
                         logger.warning(
-                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: {_alter_exc}"
+                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: "
+                            f"{type(_alter_exc).__name__}: {_alter_exc}"
                         )
+                if _widened:
+                    # Same rule as ADD COLUMN above: the exclusive lock ends with its
+                    # transaction, so end it before the load rather than after.
+                    await session.commit()
 
                 tbl_rows_skipped = 0
                 table_rows = 0

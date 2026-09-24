@@ -102,6 +102,9 @@ from .graph.nodes.ingest_node import (
 from .api.mappings import router as mappings_router
 from .runtime_logs import bind_runtime_log_context, get_runtime_logs, install_runtime_log_capture
 
+from .migration_runs import await_migration_run as _await_migration_run
+from .migration_runs import track_migration_run as _track_migration_run
+
 logger = get_logger(__name__)
 
 
@@ -1165,7 +1168,7 @@ def create_app() -> FastAPI:
             except Exception as _arq_err:
                 logger.warning(f"[start-with-upload] ARQ enqueue failed ({_arq_err}); running inline")
         if not _enqueued:
-            asyncio.create_task(_run_inline())
+            _track_migration_run(mid_str, _run_inline())
 
         logger.info(f"[start-with-upload] Migration {migration_id} started, file={filename}")
 
@@ -1499,7 +1502,7 @@ def create_app() -> FastAPI:
                 logger.exception(f"[start-with-upload-multi] Prepare failed for {mid_str}: {exc}")
                 await _fail_job(exc)
 
-        asyncio.create_task(_prepare_and_run_multi())
+        _track_migration_run(mid_str, _prepare_and_run_multi())
 
         logger.info(
             f"[start-with-upload-multi] Migration {migration_id} accepted — "
@@ -2428,7 +2431,7 @@ def create_app() -> FastAPI:
                     except Exception:
                         pass
 
-            asyncio.create_task(_inline_resume())
+            _track_migration_run(migration_id, _inline_resume())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3349,6 +3352,33 @@ def create_app() -> FastAPI:
             )
 
         step_key = migration_job.pending_gate_type or "unknown_step"
+
+        # The pause may belong to a run that has not finished yet (migration_runs.py). Let it
+        # finish first, with no transaction held open while waiting, then decide on what the
+        # database says once it has.
+        await session.rollback()
+        if not await _await_migration_run(migration_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step '{step_key}' is still finishing; advance again in a moment.",
+            )
+        _now = (
+            await session.execute(
+                select(MigrationJob.status, MigrationJob.pending_gate_type)
+                .where(MigrationJob.id == migration_id_uuid)
+            )
+        ).one()
+        if _now.status != "step_paused":
+            return MigrationApprovalResponse(
+                migration_id=migration_id_uuid,
+                status=_now.status,
+                message=(
+                    f"The run moved on from '{step_key}' while it finished; now "
+                    f"{_now.status}{' at ' + _now.pending_gate_type if _now.pending_gate_type else ''}."
+                ),
+                decisions_processed=0,
+            )
+        step_key = _now.pending_gate_type or step_key
         logger.info(f"[{migration_id}] Advancing past step '{step_key}'")
 
         # Clear step pause and flip status back to running — as an ATOMIC compare-and-swap
@@ -3451,7 +3481,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_advance())
+        _track_migration_run(migration_id, _inline_advance())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3591,7 +3621,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_rerun())
+        _track_migration_run(migration_id, _inline_rerun())
 
         logger.info(f"[{migration_id}] Re-running from node {node_num} ({target_node})")
         return MigrationApprovalResponse(
@@ -3697,7 +3727,7 @@ def create_app() -> FastAPI:
                 try:
                     import asyncio
                     from .worker import resume_migration
-                    asyncio.create_task(
+                    _track_migration_run(migration_id,
                         resume_migration(
                             {},
                             migration_id=migration_id,

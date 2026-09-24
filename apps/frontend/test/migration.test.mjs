@@ -9,7 +9,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  defaultGateBody, pollDelay, isTerminal, runKind, shapeNodes, isSpreadsheet, whenLabel, NODES
+  defaultGateBody, pollDelay, isTerminal, runKind, shapeNodes, isSpreadsheet, whenLabel, NODES, currentNode
 } from '../src/logic/migration.js';
 import { gatePath } from '../src/api/schemaMapper.js';
 
@@ -243,14 +243,37 @@ test('runKind names the four states the screen switches on', () => {
   assert.equal(runKind(null), 'running');
 });
 
-test('the tracker shows nine nodes: the service\'s own where it reported one, the current one marked by the run\'s state', () => {
-  const rows = shapeNodes(doc({ current_step: 2, status: 'awaiting_review' }));
+test('the tracker shows every node in order: the service\'s own where it reported one, the current one marked by the run\'s state', () => {
+  const rows = shapeNodes(doc({ current_step: 1, status: 'awaiting_review' }));
   assert.equal(rows.length, NODES.length);
   assert.equal(rows[0].status, 'complete');
   assert.equal(rows[0].outcome, 'Ingested 5 tables, 50 rows');
-  assert.equal(rows[1].status, 'awaiting_review');
-  assert.equal(rows[2].status, 'pending');
+  assert.equal(rows[1].status, 'pending');
+  assert.deepEqual(NODES.map((n) => n.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'ids are the service\'s node ids, write last');
   assert.ok(shapeNodes(doc({ status: 'complete' })).every((n) => n.status === 'complete'));
+});
+
+test('the highlighted node is the one the run is on, not the node whose id equals current_step', () => {
+  // The service's current_step skips semantic mapping and Gate 1, so from preprocessing on it
+  // reads one below the node id. What run 117b1beb (24 Sep 2026) reported, step by step:
+  const ticked = (...ids) => ids.map((id) => ({ node_id: id, node_name: 'n' + id, status: 'complete' }));
+  const at = (over) => currentNode(doc(Object.assign({ pending_gate_payload: {} }, over)));
+  assert.equal(at({ status: 'awaiting_review', current_step: 1, pending_gate_type: 'pk_approval', nodes: [] }), 1);
+  assert.equal(at({ status: 'awaiting_review', current_step: 2, pending_gate_type: 'column_mapping_approval', nodes: ticked(1, 2) }), 3);
+  assert.equal(at({ status: 'step_paused', current_step: 5, pending_gate_type: 'step_5_preprocess', nodes: ticked(1, 2, 3) }), 6);
+  assert.equal(at({ status: 'running', current_step: 5, pending_gate_type: null, nodes: ticked(1, 2, 3, 6) }), 7);
+  assert.equal(at({ status: 'awaiting_review', current_step: 6, pending_gate_type: 'hierarchy', nodes: ticked(1, 2, 3, 6, 7) }), 8);
+  assert.equal(at({ status: 'step_paused', current_step: 8, pending_gate_type: 'step_8_output_generation', nodes: ticked(1, 2, 3, 6, 7, 8) }), 9);
+  assert.equal(at({ status: 'awaiting_review', current_step: 8, pending_gate_type: 'write', nodes: ticked(1, 2, 3, 6, 7, 8, 9) }), 10);
+  // The screenshot: the write under way after its gate, every node above it ticked. It used to
+  // highlight "Verify hierarchy".
+  const writing = doc({ status: 'running', current_step: 8, pending_gate_type: null, pending_gate_payload: {}, nodes: ticked(1, 2, 3, 6, 7, 8, 9) });
+  assert.equal(currentNode(writing), 10);
+  const rows = shapeNodes(writing);
+  assert.equal(rows[9].name, 'Write to database');
+  assert.equal(rows[9].status, 'running');
+  assert.equal(rows[7].status, 'complete');
+  assert.equal(rows[3].status, 'pending', 'a skipped semantic node stays unticked, in its place');
 });
 
 test('only CSV and Excel names are spreadsheets, whatever the browser says the MIME type is', () => {

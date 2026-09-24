@@ -28,8 +28,9 @@ import { currentOrgId, isStaleScope } from '../api/client.js';
 export const TERMINAL = new Set(['complete', 'failed', 'ddl_failed', 'cancelled']);
 export const isTerminal = (status) => TERMINAL.has(String(status || '').toLowerCase());
 
-// The nine nodes, for the tracker before the service has reported any, and for the label
-// a status document's `current_step` maps to.
+// The pipeline's nodes, numbered as the service numbers them in `nodes[].node_id`, plus the
+// write, which the service reports no row for. Semantic mapping and Gate 1 are skipped when
+// every field is rule-matched; they stay in the list, unticked, so the order reads true.
 export const NODES = [
   { id: 1, name: 'File ingestion', blurb: 'Parse the file, detect tables and columns, confirm primary keys and unique tables' },
   { id: 2, name: 'Deterministic mapping', blurb: 'Exact, alias and pattern matches; column groups and destination columns' },
@@ -37,10 +38,43 @@ export const NODES = [
   { id: 4, name: 'Semantic mapping', blurb: 'Embedding matches for what the rules left; flagged fields gated' },
   { id: 5, name: 'Field mapping review', blurb: 'Accept, reject or override each flagged field; decide unmapped ones' },
   { id: 6, name: 'Data preprocessing', blurb: 'Dedup, null handling, type coercion, validation' },
-  { id: 7, name: 'Hierarchy', blurb: 'Foreign keys and containment between the tables, confirmed by you' },
-  { id: 8, name: 'Output generation', blurb: 'JSON, CSV, SQL and the report, uploaded to blob storage' },
-  { id: 9, name: 'Write to database', blurb: 'The confirmed rows land in plenum_cafm' }
+  { id: 7, name: 'Hierarchy detection', blurb: 'Foreign keys and containment between the tables' },
+  { id: 8, name: 'Verify hierarchy', blurb: 'The relationships, confirmed by you' },
+  { id: 9, name: 'Output generation', blurb: 'JSON, CSV, SQL and the report, uploaded to blob storage' },
+  { id: 10, name: 'Write to database', blurb: 'The confirmed rows land in plenum_cafm' }
 ];
+
+// The node an open gate or step pause belongs to. The name says it exactly, where the
+// number does not.
+const NODE_BY_PAUSE = {
+  step_1_ingest: 1, pk_approval: 1, unique_table_approval: 1,
+  step_2_deterministic_mapping: 2,
+  pre_semantic: 3, classification_approval: 3, column_mapping_approval: 3,
+  step_3_semantic_mapping: 4, field_mapping: 5,
+  step_5_preprocess: 6, step_7_hierarchy: 7, hierarchy: 8,
+  step_8_output_generation: 9, write: 10, final_confirmation: 10
+};
+
+// `current_step` counts the pipeline's own steps, which skip the two semantic nodes: step 5 is
+// preprocessing (node 6), step 8 output generation (node 9), step 9 the write. Read literally
+// against node ids it lands one node early - on 24 Sep 2026 a write in progress highlighted
+// "Verify hierarchy" with every node above it ticked.
+const NODE_BY_STEP = { 0: 1, 1: 1, 2: 2, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 10 };
+
+// Which tracker row the run is on now.
+export function currentNode(doc) {
+  if (!doc) return 0;
+  const gate = String(doc.pending_gate_type || '').toLowerCase();
+  if (NODE_BY_PAUSE[gate]) return NODE_BY_PAUSE[gate];
+  const step = Number(doc.current_step || 0);
+  let n = NODE_BY_STEP[step] || Math.min(Math.max(step, 1), NODES.length);
+  // Running past a node the service has already ticked means the next one is under way -
+  // after the write gate is confirmed the step still reads 8, and node 9 is complete.
+  const done = new Set((Array.isArray(doc.nodes) ? doc.nodes : [])
+    .filter((x) => String(x.status || '').toLowerCase() === 'complete').map((x) => x.node_id));
+  while (done.has(n) && n < NODES.length) n += 1;
+  return n;
+}
 
 // How long to wait before the next status read. A running node moves quickly; a human gate
 // only changes when THIS page answers it (or another tab does), so it is read slowly.
@@ -295,12 +329,14 @@ export function shapeNodes(doc) {
   const live = Array.isArray(doc && doc.nodes) ? doc.nodes : [];
   const byId = {};
   live.forEach((n) => { byId[n.node_id] = n; });
-  const current = doc ? Number(doc.current_step || 0) : 0;
+  const current = currentNode(doc);
   const kind = runKind(doc);
   return NODES.map((n) => {
     const l = byId[n.id];
     let status = l ? String(l.status || '').toLowerCase() : 'pending';
-    if (!l && current === n.id && kind !== 'done') status = kind === 'gate' ? 'awaiting_review' : kind === 'step' ? 'paused' : 'running';
+    if (current === n.id && kind !== 'done' && kind !== 'failed' && status !== 'complete') {
+      status = kind === 'gate' ? 'awaiting_review' : kind === 'step' ? 'paused' : 'running';
+    }
     if (kind === 'done') status = 'complete';
     if (kind === 'failed' && current === n.id && status !== 'complete') status = 'failed';
     return {
@@ -536,6 +572,9 @@ export const migrationMethods = {
       this.setState({ mgBusy: '' });
     } catch (e) {
       if (isStaleScope(e)) { this.setState({ mgBusy: '' }); return; }
+      // Refused (409: the run that paused is still finishing) - forget this pause so the next
+      // read continues it, instead of waiting on a pause the page believes it already advanced.
+      this._mgAdvanced = null;
       this.setState({ mgBusy: '', mgError: 'The step did not continue: ' + ((e && e.message) || String(e)) });
     }
     this.mgPoll(true);
@@ -855,7 +894,7 @@ export const migrationMethods = {
       mgPill: pill,
       mgKind: kind,
       mgProgress: progress,
-      mgStepLabel: doc ? ('Node ' + (doc.current_step || 0) + ' of ' + NODES.length) : '',
+      mgStepLabel: doc ? ('Node ' + currentNode(doc) + ' of ' + NODES.length) : '',
       mgCoverage: doc ? [
         { label: 'Rule-matched', value: doc.t1_mapped_count || 0 }, { label: 'Semantic', value: doc.t2_auto_count || 0 },
         { label: 'Human', value: doc.t2_human_count || 0 }, { label: 'Unmapped', value: doc.unmapped_count || 0 }, { label: 'Total', value: doc.total_fields || 0 }
@@ -866,7 +905,7 @@ export const migrationMethods = {
         icon: n.status === 'complete' ? 'ph-check-circle' : n.status === 'failed' ? 'ph-x-circle' : n.status === 'awaiting_review' ? 'ph-hand-palm' : n.status === 'running' || n.status === 'paused' ? 'ph-circle-notch' : 'ph-circle',
         tone: n.status === 'complete' ? 'var(--st-ok)' : n.status === 'failed' ? 'var(--st-risk)' : n.status === 'awaiting_review' || n.status === 'running' || n.status === 'paused' ? 'var(--color-accent)' : 'var(--color-neutral-700)',
         spin: n.status === 'running',
-        current: doc ? Number(doc.current_step) === n.id && kind !== 'done' : false,
+        current: doc ? currentNode(doc) === n.id && kind !== 'done' : false,
         logs: n.logs, logsOpen: !!(s.mgOpenNodes || {})[n.id], hasLogs: n.logs.length > 0,
         toggle: () => this.mgToggleNode(n.id)
       })),
