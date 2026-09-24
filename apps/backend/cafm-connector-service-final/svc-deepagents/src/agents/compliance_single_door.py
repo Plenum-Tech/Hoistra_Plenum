@@ -722,6 +722,71 @@ def _extract_building_fields(
     return (name[:255] if name else None, ref[:120] if ref else None)
 
 
+_BAND_KEYS = (
+    "energy_rating", "epc_rating", "epc_band", "asset_rating", "current_energy_rating",
+    "Asset rating (A-G) and score", "Asset rating", "Energy rating",
+)
+_SCORE_KEYS = ("energy_score", "epc_score", "asset_rating_score")
+# "C (74)", "C 74", "Band C", "c". The band is one letter A-G standing alone, so "Band" is
+# not read as a B; the score, when it follows, is one to three digits.
+_BAND_VALUE_RE = re.compile(r"(?:band\s*)?\b([A-Ga-g])\b(?!\w)\s*[:|(\-–]?\s*(\d{1,3})?")
+_BAND_TEXT_RE = re.compile(
+    r"(?:asset|energy|epc)\s+rating(?:\s*\(a[-–]g\)(?:\s*and\s+score)?)?\s*[:|\-–]?\s*"
+    r"(?:band\s*)?\b([A-G])\b(?!\w)\s*[:|(\-–]?\s*(\d{1,3})?",
+    re.I,
+)
+
+
+def _extract_energy_rating(
+    extracted: dict[str, Any], text: str
+) -> tuple[str | None, int | None]:
+    """The EPC asset rating this certificate states: its band A-G and the score behind it.
+
+    ops-intelligence stores both (energy_rating, energy_score) and the MEES tiles are computed
+    from the band alone: below E now, below B by 2030. Its extractor already read them from
+    the page — /api/compliance/extract returned energy_rating "C" and energy_score 74 for the
+    Harbour Point EPC — and this door then posted certificate_number, the dates, the inspector
+    and the result, exactly as it once did with the building name. Both EPC rows for Harbour
+    Point landed with energy_rating NULL, and "MEES — proposed 2030" read 0 over a certificate
+    that said C.
+
+    The extracted keys are read first, under the snake_case names and the labels the pack
+    schema uses; the document text is the fallback, for a scanned copy whose extraction
+    captured the number and dates but not the rating row.
+    """
+    band: str | None = None
+    score: int | None = None
+    for key in _BAND_KEYS:
+        val = extracted.get(key)
+        if val is None or not str(val).strip():
+            continue
+        m = _BAND_VALUE_RE.search(str(val))
+        if m:
+            band = m.group(1).upper()
+            if m.group(2):
+                score = int(m.group(2))
+            break
+    for key in _SCORE_KEYS:
+        val = extracted.get(key)
+        if score is None and val not in (None, ""):
+            try:
+                score = int(str(val).strip().rstrip("+"))
+            except ValueError:
+                pass
+    if band is None:
+        # Every rating row, not the first: "Energy rating  Band C" carries no score, and the
+        # score sits on the "Asset rating (A-G) and score  C (74)" row below it.
+        for m in _BAND_TEXT_RE.finditer(text or ""):
+            b = m.group(1).upper()
+            if band is None:
+                band = b
+            if score is None and m.group(2) and b == band:
+                score = int(m.group(2))
+            if score is not None:
+                break
+    return band, score
+
+
 def _extract_company_name(extracted: dict[str, Any], text: str, filename: str) -> str | None:
     for key in ("Company name", "company_name", "vendor_name", "Contractor", "Business name"):
         val = extracted.get(key)
@@ -1089,6 +1154,13 @@ async def route_compliance_certificate_upload(
                     upsert_payload["building_name"] = _b_name
                 if _b_ref:
                     upsert_payload["building_reference"] = _b_ref
+                # An EPC's asset rating is the fact MEES is judged on. Sent for every
+                # building certificate: ops-intelligence keeps it only on EPC-type rows.
+                _band, _score = _extract_energy_rating(extracted, text or "")
+                if _band:
+                    upsert_payload["energy_rating"] = _band
+                if _score is not None:
+                    upsert_payload["energy_score"] = _score
             try:
                 up = await _request(
                     "POST",
