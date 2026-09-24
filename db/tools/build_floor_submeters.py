@@ -15,6 +15,9 @@ Three sheets, in the order the writer needs them:
                       then one sub-meter per significant asset (chillers, AHUs, pumps, lifts
                       on electricity; boilers on gas) carrying asset_code and no section
   Meter_Readings      every half-hour of the trailing window for every sub-meter
+  Work_Orders         one order per metered asset the main workbook left without one, so the
+                      Assets drawer has work history and post_works_regression has an input;
+                      the spike asset's order is dated to its excursion
 
 The readings are derived from the main meters' readings in the building workbook, half-hour
 by half-hour, so the floors reconcile with the incoming supply: each floor takes a fixed share
@@ -60,6 +63,31 @@ METERS_HEADER = ["meter_ref", "building_code", "site_ref", "meter_type", "mpan",
                  "carbon_kg_per_kwh", "active", "description"]
 READINGS_HEADER = ["meter_ref", "building_code", "meter_type", "reading_at", "consumption_kwh",
                    "period_minutes", "source"]
+#: The destination columns, not the export's own spelling: a header work_orders does not have is
+#: added as a new column by the writer rather than refused, and the API then reads the empty
+#: original. `vendor` and `estimated_cost`/`actual_cost` are what models/work_order.py declares.
+WO_HEADER = ["wo_code", "vendor", "asset_code", "asset_name", "fault_description",
+             "priority", "status", "reported_at", "attended_at", "completed_at", "first_fix",
+             "recall", "labour_hours", "parts_cost", "estimated_cost", "actual_cost",
+             "building_code", "wo_type", "sla_due_at", "title"]
+
+#: What a planned attendance on each kind of plant is called and costs. Keyed by the type token
+#: in the asset code, the same token ASSET_SHARE uses.
+WO_BY_KIND = {
+    "CHILLER": ("Compressor running hours above profile - refrigerant charge and head pressure "
+                "checked, condenser coils cleaned", "P2", 4.5, 340),
+    "AHU":     ("Supply fan current high against the schedule - filters replaced and belt "
+                "tension reset", "P3", 3.0, 180),
+    "PUMP":    ("Chilled water pump cycling short - strainer cleared and expansion vessel "
+                "recharged", "P3", 2.5, 120),
+    "LIFT":    ("Six-monthly service attendance - door operator adjusted, drive current logged",
+                "Planned", 3.0, 0),
+    "BOILER":  ("Combustion efficiency below target - burner serviced and flue gas analysed",
+                "P2", 4.0, 260),
+    "EXTRACT": ("Car park extract running outside the occupancy schedule - CO sensor "
+                "recalibrated", "P3", 2.0, 95),
+    "EML":     ("Monthly emergency lighting drop test", "Planned", 1.5, 0),
+}
 
 #: CIBSE TM46-style references per section type, kWh/m²/yr (electricity + fossil).
 REFERENCE_EUI = {"plant": 180, "common": 205, "office": 180, "residential": 120}
@@ -274,6 +302,49 @@ def build(path: str, *, days: int, seed: int) -> str:
             readings.append([ref, code, fuel, at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                              round(v, 3), minutes, "bms"])
 
+    # Work orders for the metered plant the main workbook left without one. A metered asset
+    # with no maintenance record reads as plant nobody attends, and it is the one case where
+    # the energy page can price a fault that the maintenance page cannot account for.
+    wh, wrows = read_sheet(wb, "Work_Orders")
+    wi = {h: i for i, h in enumerate(wh)}
+    have_wo = {str(r[wi["asset_code"]]) for r in wrows if r[wi["asset_code"]]}
+    next_n = 1 + max((int(str(r[wi["wo_code"]]).rsplit("-", 1)[-1])
+                      for r in wrows if r[wi["wo_code"]]), default=0)
+    vendor_of = {str(r[ai["asset_code"]]): r[ai["maintained_by"]] for r in arows}
+
+    work_orders = []
+    for acode, fuel, _w in metered:
+        if acode in have_wo:
+            continue
+        kind = asset_kind(acode)
+        spec = WO_BY_KIND.get(kind or "")
+        if not spec:
+            continue
+        fault, priority, hours, parts = spec
+        # The spike asset's order is the excursion: reported the day after it starts, attended
+        # the same day, completed the day it ends. Everything else is a routine attendance
+        # inside the last fortnight, which is what post_works_regression reads.
+        if acode == spike_asset:
+            reported = spike_start + dt.timedelta(days=1)
+            completed = spike_end
+            priority = "P1"
+            fault = ("Sustained overconsumption on the asset sub-meter - " + fault.lower())
+        else:
+            reported = latest - dt.timedelta(days=12 + (next_n % 5))
+            completed = reported + dt.timedelta(days=1)
+        work_orders.append([
+            f"WO-{code}-{next_n}", vendor_of.get(acode), acode, asset_names.get(acode, acode),
+            fault, priority, "Completed",
+            reported.strftime("%Y-%m-%dT%H:%M"),
+            (reported + dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M"),
+            completed.strftime("%Y-%m-%dT%H:%M"),
+            "true", "false", hours, parts, round(hours * 68 + parts), round(hours * 68 + parts),
+            code, "reactive" if priority != "Planned" else "planned",
+            (reported + dt.timedelta(days=2)).strftime("%Y-%m-%d"),
+            fault[:120],
+        ])
+        next_n += 1
+
     out_path = os.path.splitext(path)[0] + SUFFIX + ".xlsx"
     try:
         with open(out_path, "ab"):
@@ -285,7 +356,8 @@ def build(path: str, *, days: int, seed: int) -> str:
     out = openpyxl.Workbook(write_only=True)
     for title, header, rows in (("Building_Sections", SECTIONS_HEADER, sections),
                                 ("Energy_Meters", METERS_HEADER, meters),
-                                ("Meter_Readings", READINGS_HEADER, readings)):
+                                ("Meter_Readings", READINGS_HEADER, readings),
+                                ("Work_Orders", WO_HEADER, work_orders)):
         ws = out.create_sheet(title)
         ws.append(header)
         for r in rows:
@@ -295,6 +367,8 @@ def build(path: str, *, days: int, seed: int) -> str:
     print(f"  {name} ({code}): {len(names)} floors, {len(meters)} sub-meters "
           f"({n_asset_meters} on assets), {len(readings):,} readings over {days} days "
           f"({window_start.date()} to {latest.date()})")
+    print(f"     work orders added for {len(work_orders)} metered asset(s) with none: "
+          f"{', '.join(w[2] for w in work_orders)}")
     print(f"     asset meters: {', '.join(c for c, _, _ in metered)}; "
           f"3-day +{int(SPIKE_UPLIFT*100)}% excursion on {spike_asset} "
           f"{spike_start.date()} to {spike_end.date()}")

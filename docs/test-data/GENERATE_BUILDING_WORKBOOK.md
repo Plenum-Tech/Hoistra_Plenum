@@ -206,6 +206,7 @@ meter (the way the Assets page reads building → section → asset). Built by
 | `Building_Sections` | `building_code, name, section_type, floor_name, gross_area_m2, reference_eui_kwh_m2, reference_source` | one per floor; `name` **and** `floor_name` are the floor's name exactly as `plenum_cafm.floors` has it (`Basement`, `Ground`, `Level 1` …) |
 | `Energy_Meters` | `meter_ref, building_code, site_ref, meter_type, mpan, mprn, is_sub_meter, section_name, asset_code, tariff_gbp_per_kwh, carbon_kg_per_kwh, active, description` | two per floor: `<CO>-<code>-E-L03` electricity, `<CO>-<code>-G-L03` gas (`B`, `G` for basement and ground), `is_sub_meter` true, `section_name` = the floor, `asset_code` blank; then one per significant asset: `<CO>-<code>-A-CHILLER-01`, `asset_code` set, `section_name` blank (chillers 12 %/3 %, AHUs 5 %, pumps 2 %, lifts 1.5 % of electricity; boilers share 65 % of gas) |
 | `Meter_Readings` | same as §3.11 | every half-hour of a trailing window (90 days by default) per sub-meter, `source` = `bms` |
+| `Work_Orders` | same as §3.4 | one per metered asset the main workbook left without one, so the Assets drawer has work history and `post_works_regression` has an input; the spike asset's order is dated to its excursion (reported the day after it starts, completed the day it ends) |
 
 Rules the engines enforce:
 - **Sub-meter readings are shares of the main meter's, half-hour by half-hour.** Basement takes
@@ -224,9 +225,40 @@ Rules the engines enforce:
   basement's, and counting it on the floor would double it. They are what puts kWh against
   plant: `/api/energy/consumption/by-asset`, the `asset_spike` detector, and anomalies that
   name the asset. The first chiller carries a 3-day +40 % excursion.
+- **Clear before re-ingesting.** `work_orders` (wo_code), `building_sections` (building +
+  name), `vendors`, `sites` and `ppm_visits` have natural keys and will not duplicate, but
+  `meter_readings` has none — a second ingest of the same file doubles every floor's kWh.
+  Run `python db/tools/clear_asset_energy_maintenance.py --apply` first.
 - Never let two columns be identical row-for-row unless both are destination columns: the
   merge step collapses them. `is_sub_meter`/`active` and `name`/`floor_name` are safe only
   because `column_merge.PLATFORM_TABLES` names them.
+
+### 3.19 One file per building — `<workbook>-complete.xlsx`
+
+`db/tools/build_complete_workbook.py` merges the building workbook and its §3.18 companion into
+a single 17-sheet file: the building's rows first, the floor and asset rows after, columns
+unioned where the two differ (`Energy_Meters` gains `section_name` and `asset_code`). One ingest
+per building, no ordering to get wrong. This is what to hand to someone testing end to end.
+
+### 3.20 A header is a destination column, not a description
+
+The writer does not reject a header the destination table lacks — it runs `ALTER TABLE … ADD
+COLUMN` and creates it. So a near-miss silently splits one fact across two columns, the ingest
+fills the new one, and every API reading the canonical one sees NULL. This is how the Maintenance
+page came to show `VENDOR —  ESTIMATE —` over twelve work orders that carried both.
+
+Check a header against the destination table before inventing it. The four that were wrong:
+
+| sheet | was | is | why |
+|---|---|---|---|
+| `Work_Orders` | `cost_estimated` | `estimated_cost` | numeric, `models/work_order.py:55` |
+| `Work_Orders` | `cost_actual` | `actual_cost` | numeric |
+| `Work_Orders` | `vendor_name` | `vendor` | varchar, `models/work_order.py:65` |
+| `Assets` | `maintained_by` | `vendor_name` | `maintained_by` is not a hint `reference_link` resolves `vendor_id` from, so every asset arrived with no vendor |
+
+`build_complete_workbook.CANONICAL_HEADERS` applies these as the file is merged, so both sources
+normalise to one spelling before their columns are unioned. To find more: ingest, then ask the
+database which page-read columns came out 100% NULL.
 
 ## 4. Cross-sheet integrity — run these before saving
 
@@ -247,7 +279,9 @@ EPC rows: energy_rating in A–G, energy_score int, result == energy_rating, RRN
 sum(Building_Sections.gross_area_m2)  ≈ Buildings.gross_internal_area_m2
 ```
 
-Print the checklist result. A failed line is a failed build, not a warning.
+`db/tools/verify_workbook.py <file>` runs all of it and exits non-zero on a failure, so a
+build script can stop. `--offline` skips the three checks that need the database (a technician's
+login, a section's floor, the building itself). A failed line is a failed build, not a warning.
 
 ## 5. Shaping the readings so the scan finds something
 

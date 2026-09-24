@@ -1467,6 +1467,12 @@ _NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
     "spare_parts": (("part_code",),),
     "sites": (("site_id",),),
     "work_orders": (("wo_code",),),
+    # A section is its building and its name. Without this a second ingest of the same floor
+    # sheet wrote twelve more sections called "Level 1", "Level 2" … and the duplicates are
+    # worse than the clutter: pick_section refuses an ambiguous name, so every floor meter
+    # afterwards resolved to no section and the floor view emptied itself. building_id is
+    # resolved before this runs, so the pair is available by the time the key is read.
+    "building_sections": (("building_id", "name"), ("building_code", "name")),
     # No reference column of its own, so a finding is identified by what it is a finding ABOUT.
     "inspections": (("asset_code", "inspection_date", "finding_type"),),
 }
