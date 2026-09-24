@@ -933,6 +933,13 @@ export default function Buildings({ vals }) {
                                       <div style={{ display: "flex", gap: "8px", flexShrink: "0" }}>
                                         <i className={d.viewIcon} onClick={d.view} title={d.viewTitle} style={{ fontSize: "14px", color: d.viewColor, cursor: d.viewCursor }}></i>
                                         <i className="ph ph-download-simple hv6" onClick={d.download} title="Download" style={{ display: d.dlShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                                        {/* A certificate is read out of a document, so this
+                                            opens the same dialog the Documents column does,
+                                            on that document — it counts what would go before
+                                            anything does. Hidden where the certificate names
+                                            no document, because then there is none to
+                                            delete. */}
+                                        <i className="ph ph-trash hv6" onClick={d.del} title="Delete the document this certificate came from" style={{ display: d.delShow, fontSize: "14px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
                                       </div>
                                     </div>
                                   </React.Fragment>

@@ -40,6 +40,19 @@ const TRACE_ICON = {
 // is nothing BUT ids, the original is kept rather than rendering an empty cell.
 const _FILE_ID_PREFIX =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})_/i;
+// The ids "Download all" opens: every held document, then the document behind every
+// certificate that has a file — each once. The tree nests certificates under the documents
+// they were read from, so the two lists overlap on exactly the files people most want; a
+// plain concatenation opened one PDF twice and reported two files.
+export function downloadIds(files, certRows) {
+  const ids = [];
+  const seen = new Set();
+  const add = (id) => { if (id && !seen.has(id)) { seen.add(id); ids.push(id); } };
+  (files || []).forEach((f) => { if (f.held) add(f.docId); });
+  (certRows || []).forEach((r) => { if (r.has_file === true && r.document_id) add(r.document_id); });
+  return ids;
+}
+
 export function tidyFileName(name) {
   let out = String(name == null ? "" : name);
   while (_FILE_ID_PREFIX.test(out)) out = out.replace(_FILE_ID_PREFIX, "");
@@ -1381,6 +1394,9 @@ export const renderValsMethods = {
             // than living only in a tooltip.
             meta: "document_id " + String(r.id).slice(0, 8) + a.note,
             by: "graph",
+            // The id the download route is keyed on, kept beside the row so "Download all"
+            // can reach it without re-deriving which of the two columns holds it.
+            docId: r.document_id || r.id,
             // The flash carries the stored name in full — the trim above is for the row,
             // not a claim about what the file is called.
             view: open || (() => this.flash(r.label + " — plenum_cafm.documents row " + r.id
@@ -1460,7 +1476,21 @@ export const renderValsMethods = {
               sim: "",
               meta: "certificate" + a.note,
               view: open,
-              download: open
+              download: open,
+              // A certificate is read OUT of a document, and deleting the document is what
+              // removes it — DELETE /documents/{id} cascades to the certificate, the
+              // contract terms, the invoice lines and the chunks, because no foreign key
+              // does it for us. So this is the same dialog the Documents column opens, on
+              // the document this certificate came from, and it counts what would go before
+              // anything does.
+              //
+              // Hidden where the certificate names no document (the EPC is one): there is
+              // no document to delete, and a trash icon that removes a row this panel
+              // cannot show would be a different action wearing the same icon.
+              delShow: (canRemoveDocs && r.document_id) ? "inline" : "none",
+              del: () => this.dcAskDelete(
+                { id: r.document_id, file: tidyFileName(r.label) }, b
+              )
             };
           }),
           loading: !!state.loading,
@@ -1494,17 +1524,39 @@ export const renderValsMethods = {
           // Counted over the rows loaded, and only those with a file behind them: a
           // building with eight document rows and no blob_url between them has nothing to
           // prepare, and "preparing eight" was the same untruth the icons were telling.
+          // Every file on this card, documents and certificates alike, actually fetched.
+          //
+          // This used to flash "Preparing N documents … each fetched from its blob_url" and
+          // then do nothing at all. The sentence was the whole implementation, and it named
+          // a mechanism that was never invoked — which is worse than no button, because a
+          // reader who clicks it and sees that text has been told the download started.
+          //
+          // Staggered, because a browser blocks a burst of same-tick window.opens and would
+          // silently deliver one file out of eight. The count reported is what was actually
+          // dispatched, and rows with nothing stored are named rather than quietly skipped.
           downloadAll: () => {
-            const held = files.filter((f) => f.held).length;
-            return this.flash(
-              held
-                ? "Preparing " + held + (held === 1 ? " document" : " documents")
-                  + " filed against " + b.name + ", each fetched from its blob_url."
-                : typeof nDocs === "number" && nDocs
+            const ids = downloadIds(files, (certBranch && certBranch.rows) || []);
+            // One file needs no stagger and no popup allowance — the common case stays a
+            // single, ordinary click-to-open.
+            if (ids.length === 1) {
+              window.open(documentUrl(ids[0]), "_blank", "noopener");
+              return this.flash("Downloading 1 file from " + b.name + ".");
+            }
+            if (!ids.length) {
+              return this.flash(
+                typeof nDocs === "number" && nDocs
                   ? nDocs + (nDocs === 1 ? " document is" : " documents are") + " recorded "
                     + "against " + b.name + ", none with a file behind it — there is nothing "
-                    + "to download."
+                    + "to download. A row is downloadable once its original is in blob "
+                    + "storage or its text has been extracted."
                   : "Nothing filed against " + b.name + " to download.");
+            }
+            ids.forEach((id, i) => setTimeout(
+              () => window.open(documentUrl(id), "_blank", "noopener"), i * 350
+            ));
+            return this.flash(
+              "Downloading " + ids.length + " files from " + b.name
+              + ". If the browser blocks some, allow pop-ups for this site and retry.");
           },
           // Opens the same ingest panel the page header does, with this building already
           // chosen — the card is the answer to the question the panel would otherwise ask.
