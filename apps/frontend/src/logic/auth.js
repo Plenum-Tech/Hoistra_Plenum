@@ -6,7 +6,7 @@
 // The access token lives in state only; the refresh token is the persisted credential.
 import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
-import { configureAuth, setActingOrg } from '../api/client.js';
+import { ApiError, configureAuth, setActingOrg } from '../api/client.js';
 import { loadSharedSession, SESSION_KEY } from './session.js';
 
 export const ADMIN_ROLES = new Set(['admin', 'superadmin']);
@@ -163,7 +163,29 @@ export const authMethods = {
     const shared = loadSharedSession();
     const sameAccount = shared.account && this.state.account && shared.account.id === this.state.account.id;
     const token = (sameAccount && shared.refreshToken) || this.state.refreshToken;
-    if (!token) return Promise.reject(new Error('no refresh token'));
+    if (!token) {
+      // No refresh token and a signed-in shell is a session that cannot be repaired: there
+      // is nothing to refresh with, so every read will 401 for as long as the tab is open.
+      //
+      // This rejected with a plain Error, which carries no `status`, so the catch below —
+      // which signs out only on a 401 — never fired. The shell stayed "signed in" holding
+      // no usable credential, every panel rendered "Unreachable — 401", and each read went
+      // on retrying on its own timer: 117 requests in ten minutes against a session that
+      // had been dead for five hours, with no sign-in gate ever offered.
+      //
+      // Easiest to reach by opening a second origin — the Vite dev server on :5174 and the
+      // gateway on :3000 keep separate storage — but any half-written session does it.
+      //
+      // Signing out is the honest end: it is the same conclusion the 401 branch reaches,
+      // for a credential that is just as finished. authBoot never comes through here (it
+      // checks for the token first and shows the gate), so this only ever fires mid-session.
+      this.authSignedOut('Your session has ended. Sign in again.');
+      // Shaped like the 401 the server would have sent, so apiFetch's interceptor treats it
+      // as terminal rather than retrying a refresh that can never succeed.
+      return Promise.reject(new ApiError('no refresh token', 401, {
+        detail: { ok: false, error: 'Your session has ended. Sign in again.', reason: 'invalid' }
+      }));
+    }
     this._refreshing = authApi.refresh(token)
       .then((resp) => { this.authEnter(resp, { keepView: true }); return resp.tokens.access_token; })
       .catch((e) => {
