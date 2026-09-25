@@ -279,6 +279,11 @@ export const renderValsMethods = {
     // alone sent both of those deliberate nulls to the seed 78%.
     const hmScore = hmLive && (hm.score.value !== null || hm.score.answered);
     const heroLive = hm.hero.buildings !== null;
+    // The money cards render live the moment the value read answers — even a portfolio
+    // with nothing priced yet, because "£0 detected so far" and "the seed's £800k" are
+    // different claims and only one of them is true.
+    const hmValue = hmLive && hm.value && hm.value.answered;
+    const hmPnl = hmLive && hm.pnl && hm.pnl.answered;
 
     // Documents section — search + pagination over the same portfolio, independent of the
     // buildings table's own (docQuery/docPage) so paging one list never moves the other.
@@ -488,15 +493,47 @@ export const renderValsMethods = {
         };
       }),
 
-      // Portfolio P&L. No backend holds a budget ledger, so this tile is the seed and says so.
-      pnlSaved: "£390k",
-      pvTotal: "£800k",
-      pvRows: VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected, saved: r.saved, color: t(r.tone).color })),
-      pvOpen: () => this.orchWith("Platform value ledger · 2026", "All modules", "value", {}),
+      // Portfolio P&L + Platform value: live from GET /api/value/summary the moment it
+      // answers, the seed otherwise — and both cards say which they are showing. The
+      // server derived every live figure from the store; a module or head it could not
+      // price arrives as "—" with its reason, never as an invented number.
+      pnlSaved: hmPnl ? hm.pnl.saved : "£390k",
+      pvTotal: hmValue ? hm.value.total : "£800k",
+      pvTitle: "Platform value · " + (hmValue ? hm.value.year : "2026"),
+      pvNote: hmValue
+        ? "Live · " + hm.value.note
+        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · the value read has not answered yet"),
+      pvRows: hmValue
+        ? hm.value.rows.map((r) => ({
+            head: r.head, detected: r.detected, saved: r.saved,
+            color: r.counted ? t("ok").color : "var(--color-neutral-600)"
+          }))
+        : VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected, saved: r.saved, color: t(r.tone).color })),
+      pvOpen: () => this.orchWith("Platform value ledger · " + (hmValue ? hm.value.year : "2026"), "All modules", "value", {}),
       fValue: s.flow === "value",
-      pvLedger: VALUE_LEDGER.map((r) => ({ mod: r.mod, saved: r.saved, detected: r.detected, items: r.items.map((i) => Object.assign({}, i, { est: /estimated/.test(i.basis) ? "est." : "", estShow: /estimated/.test(i.basis) ? "inline" : "none" })) })),
-      pnlTop: D.pnl.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: TONE[r.tone] ? TONE[r.tone].color : "var(--color-neutral-400)" })),
-      pnlNote: "Seed figures · no budget ledger is connected yet",
+      pvLedger: hmValue
+        ? hm.value.rows.map((r) => ({
+            mod: r.head, saved: r.saved, detected: r.detected,
+            items: (r.items.length ? r.items : [{
+              // A module with no line to show still explains itself in the ledger.
+              what: r.counted ? "Nothing priced this year" : "No figure claimed",
+              action: r.counted ? "The engines recorded no priced row" : "Not counted",
+              detected: r.detected, saved: "", basis: r.note, est: false
+            }]).map((i) => ({
+              what: i.what, action: i.action, detected: i.detected, saved: i.saved,
+              basis: i.basis, est: i.est ? "est." : "", estShow: i.est ? "inline" : "none"
+            }))
+          }))
+        : VALUE_LEDGER.map((r) => ({ mod: r.mod, saved: r.saved, detected: r.detected, items: r.items.map((i) => Object.assign({}, i, { est: /estimated/.test(i.basis) ? "est." : "", estShow: /estimated/.test(i.basis) ? "inline" : "none" })) })),
+      pnlTop: hmPnl
+        // No budget yet, so no head carries an over/under tone — a colour would be a
+        // judgement against a number that does not exist.
+        ? hm.pnl.rows.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: "var(--color-neutral-400)" }))
+        : D.pnl.map((r) => ({ head: r.head, budget: r.budget, actual: r.actual, color: TONE[r.tone] ? TONE[r.tone].color : "var(--color-neutral-400)" })),
+      pnlNote: hmPnl
+        ? "Live actuals · no budget ledger is connected yet"
+        : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · no budget ledger is connected yet"),
+      pnlNoteShow: "block",
       cronCount: String(CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length),
       // Hoist Score: ingestion coverage per source, live when at least one source answered.
       // A bar with no source draws empty and says why in its tooltip.

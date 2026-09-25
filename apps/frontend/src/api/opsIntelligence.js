@@ -127,10 +127,21 @@ export const opsApi = {
   // Meters on record with their MPAN / MPRN and the site they are linked to.
   meters: (query) =>
     apiFetch(B, '/api/energy/meters', { query: withOrg(Object.assign({ limit: 500 }, query || {})) }),
-  // Detected anomalies. `status` defaults to open on the server.
+  // Detected anomalies. `status` defaults to open on the server. The limit matches the
+  // server's cap — at 100 the sidebar badge read "100" against 162 real open anomalies,
+  // an undercount dressed as a count.
   anomalies: (query) =>
-    apiFetch(B, '/api/energy/anomalies', { query: withOrg(Object.assign({ status: 'open', limit: 100 }, query || {})) }),
+    apiFetch(B, '/api/energy/anomalies', { query: withOrg(Object.assign({ status: 'open', limit: 500 }, query || {})) }),
   // The Energy saved-space summary: KPIs, monthly reports with their EUI trend, open anomalies.
   energySummary: () =>
-    apiFetch(B, '/api/energy/saved-space/summary', { query: withOrg() })
+    apiFetch(B, '/api/energy/saved-space/summary', { query: withOrg() }),
+
+  // ── Value ───────────────────────────────────────────────────────────────
+  // The Home page's two money cards in one read: the Platform value ledger (detected vs
+  // saved per module, with the lines behind each figure) and the P&L actuals. Derived on
+  // the server from the store — anomalies, invoice lines, variance alerts,
+  // recommendations, meter readings — never from a constant. Budgets are null until a
+  // budget ledger exists, and the payload says so.
+  valueSummary: (query) =>
+    apiFetch(B, '/api/value/summary', { query: withOrg(query) })
 };

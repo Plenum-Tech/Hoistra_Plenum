@@ -7,6 +7,7 @@ from .energy import router as energy_router
 from .ingestion import router as ingestion_router
 from .reports import router as reports_router
 from .superadmin import router as superadmin_router
+from .value import router as value_router
 
 __all__ = [
     "admin_router",
@@ -18,4 +19,5 @@ __all__ = [
     "ingestion_router",
     "reports_router",
     "superadmin_router",
+    "value_router",
 ]

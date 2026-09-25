@@ -22,6 +22,7 @@ from .api.routes import (
     ingestion_router,
     reports_router,
     superadmin_router,
+    value_router,
 )
 from .config import settings
 from .engines.auth import keys as auth_keys
@@ -190,3 +191,4 @@ app.include_router(contract_performance_router)
 app.include_router(energy_router)
 app.include_router(ingestion_router)
 app.include_router(reports_router)
+app.include_router(value_router)

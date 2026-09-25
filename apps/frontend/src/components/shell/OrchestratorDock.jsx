@@ -585,7 +585,7 @@ export default function OrchestratorDock({ vals }) {
           <>
             <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
               <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
-                {"Platform value · 2026 ledger"}
+                {vals.pvTitle + " ledger"}
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: "6px", marginTop: "8px" }}>
                 <span style={{ fontSize: "22px", lineHeight: "1", color: "var(--st-ok)" }}>

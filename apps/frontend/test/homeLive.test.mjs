@@ -257,3 +257,16 @@ test('the percentage shown is the one the backend computed', () => {
   assert.equal(bars.find((b) => b.key === 'assets').pct, 34);
   assert.equal(bars.find((b) => b.key === 'certificates').pct, 33);
 });
+
+test('the headline counts every hoisted building, not only the ones with a certificate', () => {
+  // Harbour Point has certificates; Ashgrove Court was hoisted with none yet. The register
+  // alone sees one building — the coverage read counts the buildings table and sees two.
+  const h = shapeLiveHome({
+    raw: { coverage: { buildings: 2, domains: [] } },
+    register: { buildings: [{ name: 'Harbour Point', cc: 'UK' }], certs: [{ cc: 'UK' }], vendors: [] }
+  });
+  assert.equal(h.hero.buildings, 2);
+  // Without the coverage read the register's count is still used.
+  const r = shapeLiveHome({ raw: {}, register: { buildings: [{ name: 'Harbour Point', cc: 'UK' }], certs: [], vendors: [] } });
+  assert.equal(r.hero.buildings, 1);
+});

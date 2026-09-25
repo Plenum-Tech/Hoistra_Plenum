@@ -133,7 +133,7 @@ export default function Home({ vals }) {
             <div className="hv19" onClick={vals.pvOpen} style={{ padding: "14px 22px 15px", borderLeft: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: "0", cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                  {"Platform value · 2026"}
+                  {vals.pvTitle}
                 </span>
                 <i className="ph ph-arrow-up-right" style={{ fontSize: "11px", color: "var(--color-accent)" }}></i>
               </div>
@@ -172,6 +172,9 @@ export default function Home({ vals }) {
                     </div>
                   </React.Fragment>
                 ))}
+              </div>
+              <div title={vals.pvNote} style={{ fontSize: "9px", color: "var(--color-neutral-500)", marginTop: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {vals.pvNote}
               </div>
             </div>
           </div>

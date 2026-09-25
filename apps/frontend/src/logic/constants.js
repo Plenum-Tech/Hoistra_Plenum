@@ -589,9 +589,11 @@ const MODULES = {
   }
 };
 
-/* Platform value ledger, 2026 YTD. A line exists only where a cost was detected,
-   an action was approved, and the cost afterwards is measured or contractually
-   fixed. Estimated lines are marked; nothing is claimed for detection alone. */
+/* Platform value ledger, 2026 YTD — the SEED, shown only until GET /api/value/summary
+   answers (logic/homeLive.js shapes the live one, renderVals gates on it, and the card
+   note says which is showing). A line exists only where a cost was detected, an action
+   was approved, and the cost afterwards is measured or contractually fixed. Estimated
+   lines are marked; nothing is claimed for detection alone. */
 const VALUE_LEDGER = [
   { mod: "Energy", detected: "£312k", saved: "£286k", tone: "ok", items: [
     { what: "Car park lighting · Building 5 · non-occupancy spike", action: "Schedule reset, Feb", detected: "£4.1k/yr", saved: "£4.1k/yr", basis: "measured · 4 weeks of readings" },

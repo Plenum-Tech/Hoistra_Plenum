@@ -10,9 +10,10 @@
 //                 GET /api/energy/hoist-score; the tile is the mean of its four bars
 //   Hoist Crons   what the engines did, newest first: approvals raised, anomalies detected
 //   Hero line     buildings, certificates and countries from the live register
-//
-// Not sourced yet, and disclosed as such on the page: the budget-vs-actual P&L (no ledger in
-// any backend).
+//   Money cards   Platform value ledger + P&L actuals — one read, GET /api/value/summary;
+//                 the server derives every figure from the store and a module it cannot
+//                 price says so. Budgets stay null (and the card keeps saying why) until
+//                 a budget ledger exists to read.
 //
 // shapeLiveHome() is a pure function; the methods below are mixed into HoistraLogic.prototype
 // and `this` is the controller.
@@ -31,6 +32,17 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const pctOf = (n, d) => (d > 0 ? Math.round((100 * n) / d) : null);
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
+// The money cards' shorthand: £840 · £4.1k · £31k · £3.05m. Null is "—", never £0 — a
+// figure nobody derived and a derived zero must not read alike.
+export function money(v) {
+  const n = num(v);
+  if (n === null) return "—";
+  const a = Math.abs(n), sign = n < 0 ? "-" : "";
+  if (a >= 1e6) return sign + "£" + (a / 1e6).toFixed(2) + "m";
+  if (a >= 10000) return sign + "£" + Math.round(a / 1000) + "k";
+  if (a >= 1000) return sign + "£" + (a / 1000).toFixed(1) + "k";
+  return sign + "£" + Math.round(a);
+}
 
 // The four bars the tile draws, in drawing order. `domain` is the key the backend's
 // per-building score uses for the same thing; `what` finishes "n of N hoisted buildings
@@ -214,6 +226,10 @@ export function shapeLiveHome(input, now) {
   // ── Hero line ──
   const hero = { buildings: null, certificates: null, vendors: null, countries: [] };
   if (reg) {
+    // Counted from the compliance register this is "buildings with a certificate", not
+    // "buildings hoisted": Ashgrove Court, hoisted with no certificate yet, was left out, and
+    // the headline said 1 while the Hoist Score beside it said 2. The coverage read counts
+    // the buildings table itself, so it wins whenever it answered.
     hero.buildings = (reg.buildings || []).filter(isBuilding).length;
     hero.certificates = (reg.certs || []).length;
     hero.vendors = (reg.vendors || []).length;
@@ -225,12 +241,62 @@ export function shapeLiveHome(input, now) {
     });
   }
 
+  // Only alongside the register: without it the certificate half of the line is unknown.
+  if (reg && nb !== null) hero.buildings = nb;
+
   const pending = raw.approvals
     ? (typeof raw.approvals.count === "number" ? raw.approvals.count : (raw.approvals.items || []).length)
     : null;
 
-  const live = ["coverage", "compliance", "anomalies", "approvals"].some((k) => !!raw[k]);
-  return { live: live, score: score, crons: crons, hero: hero, pending: pending };
+  // ── The money cards: Platform value ledger + P&L, GET /api/value/summary ──
+  // The server already applied the card's rule (a figure only where the store holds a
+  // priced row, "saved" only where a decision is recorded on it); here the figures are
+  // only formatted. A module the server could not count keeps "—" and carries its reason.
+  const vs = raw.value || null;
+  const valueCard = vs && vs.ledger
+    ? {
+        answered: true,
+        year: vs.year,
+        total: money(vs.ledger.total_saved),
+        totalDetected: money(vs.ledger.total_detected),
+        note: (vs.ledger.counted_modules || 0) + " of " + (vs.ledger.modules || []).length
+          + " modules priced from the store",
+        rows: (vs.ledger.modules || []).map((m) => ({
+          key: m.key, head: m.name, counted: !!m.counted,
+          detected: m.counted ? money(m.detected) : "—",
+          saved: m.counted ? money(m.saved) : "—",
+          note: m.note || "",
+          items: (m.items || []).map((i) => ({
+            what: i.what,
+            action: i.action,
+            detected: money(i.detected),
+            saved: i.saved === null || i.saved === undefined ? "—" : money(i.saved),
+            basis: i.basis || "",
+            est: /estimated/i.test(i.basis || "")
+          }))
+        }))
+      }
+    : { answered: false };
+  const pnl = vs && vs.pnl
+    ? {
+        answered: true,
+        // Saved-against-budget needs a budget; until a ledger is connected the server
+        // sends null and the card shows the dash rather than a number nobody derived.
+        saved: vs.pnl.saved === null || vs.pnl.saved === undefined ? "—" : money(vs.pnl.saved),
+        budgetConnected: !!vs.pnl.budget_connected,
+        note: vs.pnl.note || "",
+        rows: (vs.pnl.heads || []).map((h) => ({
+          head: h.name,
+          budget: h.budget === null || h.budget === undefined ? "—" : money(h.budget),
+          actual: h.actual === null || h.actual === undefined ? "—" : money(h.actual),
+          basis: h.basis || ""
+        }))
+      }
+    : { answered: false };
+
+  const live = ["coverage", "compliance", "anomalies", "approvals", "value"].some((k) => !!raw[k]);
+  return { live: live, score: score, crons: crons, hero: hero, pending: pending,
+           value: valueCard, pnl: pnl };
 }
 
 // ── controller methods ──────────────────────────────────────────────────
@@ -261,7 +327,9 @@ export const homeLiveMethods = {
       // space from homeRaw.compliance.
       compliance: () => complianceApi.savedSpaceSummary(),
       anomalies: () => opsApi.anomalies(),
-      coverage: () => energyApi.hoistScore()
+      coverage: () => energyApi.hoistScore(),
+      // Both money cards in one read — the value ledger and the P&L actuals.
+      value: () => opsApi.valueSummary()
     };
     const keys = Object.keys(reads);
     const settled = await Promise.allSettled(keys.map((k) => reads[k]()));
