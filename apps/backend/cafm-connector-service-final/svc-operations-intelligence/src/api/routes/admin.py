@@ -9,6 +9,9 @@
     GET    /api/admin/buildings                  the company's buildings, for the allocation chips
     GET    /api/admin/usage                      per-building and per-user usage
     GET    /api/admin/ingestion-audit            the audit trail, filterable by outcome
+    GET    /api/admin/data-reset                 what a reset would delete, table by table
+    POST   /api/admin/data-reset                 delete the company's page data: compliance, contracts,
+                                                 assets, energy, maintenance - any of them (confirm by name)
 
 The building is the access boundary. A user sees and ingests only within the buildings
 assigned here; whether they can ingest at all is a per-user setting made here. A superadmin
@@ -32,7 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...db import get_session
-from ...engines.admin import org_export
+from ...config import settings
+from ...engines.admin import org_data_reset, org_export
 from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.auth import invitations as invite_engine
@@ -691,3 +695,124 @@ async def export_organization(
             "X-Export-Rows-Planned": str(manifest["row_total"]),
         },
     )
+
+
+# ── data reset ──────────────────────────────────────────────────────────────────────
+
+
+class DataReset(BaseModel):
+    #: The company's name, exactly as it is on record. A reset cannot be undone, so it is
+    #: not enough to click: the person has to say which company they mean.
+    confirm: str = Field(min_length=1, max_length=255)
+    #: Which pages' data to clear: any of compliance, contracts, assets, energy, maintenance.
+    #: Empty or absent means all five.
+    areas: list[str] | None = None
+
+
+async def _reset_allowed(session: AsyncSession) -> None:
+    enabled = settings.org_data_reset_enabled
+    if enabled is None:
+        db = (await session.execute(text("SELECT current_database()"))).scalar()
+        await session.rollback()
+        enabled = db == "hoistra_test"
+    if not enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "ok": False, "reason": "reset_disabled",
+            "error": "Data reset is switched off on this deployment (ORG_DATA_RESET_ENABLED)."})
+
+
+async def _org_name(session: AsyncSession, org: UUID) -> str:
+    name = (await session.execute(
+        text("SELECT name FROM plenum_cafm.organizations WHERE id = :o"), {"o": org})).scalar()
+    await session.rollback()
+    if not name:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "organization_not_found"})
+    return str(name)
+
+
+def _areas(raw: list[str] | None) -> list[str]:
+    try:
+        return org_data_reset.parse_areas(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={
+            "ok": False, "reason": "bad_area", "error": str(exc),
+            "areas": list(org_data_reset.AREAS)}) from exc
+
+
+async def _run(session: AsyncSession, org: UUID, areas: list[str], apply: bool) -> dict:
+    try:
+        return await org_data_reset.run_reset(session, str(org), areas=areas, apply=apply)
+    except org_data_reset.ResetBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "ok": False, "reason": "reset_blocked", "blocked": exc.blocked,
+            "error": "Rows on a page you are keeping depend on rows this reset would delete. "
+                     "Clear those areas too, or keep this one.",
+            "note": "Nothing was changed."}) from exc
+    except org_data_reset.ResetFailed as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "ok": False, "reason": "reset_refused", "table": exc.table, "error": exc.error,
+            "note": "Nothing was changed - the reset is one transaction and it was rolled back."}) from exc
+
+
+@router.get("/data-reset", summary="What a data reset would delete for this company")
+async def preview_data_reset(
+    areas: str | None = Query(
+        None, description="Comma-separated: compliance,contracts,assets,energy,maintenance. Default all."),
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """The rows a reset of these areas would delete, per page and per table, for the caller's
+    company only; the links on kept pages it would clear; and any kept rows that would stop it
+    (``blocked`` - a real reset refuses while that list is not empty).
+
+    Counted inside a transaction that is rolled back, so these are the figures a reset would
+    act on now."""
+    chosen = _areas([a for a in (areas or "").split(",") if a.strip()])
+    await _reset_allowed(session)
+    name = await _org_name(session, scope.organization_id)
+    out = await _run(session, scope.organization_id, chosen, apply=False)
+    return {"ok": True, "organization_name": name, "confirm_with": name, **out}
+
+
+@router.post("/data-reset", summary="Delete this company's page data: compliance, contracts, assets, energy, maintenance")
+async def apply_data_reset(
+    body: DataReset,
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+    principal: token_engine.Principal = Depends(current_principal),
+):
+    """Delete the caller's company's data behind the chosen pages, so the next ingest starts
+    from nothing. Admin and superadmin only, own company only (a superadmin may name another
+    with ?organization_id=, as elsewhere here).
+
+    Only page data goes. Users, buildings, sites, floors, uploaded documents and approval items
+    raised by anything else are kept. One transaction: if anything refuses, nothing changes.
+    Audited."""
+    chosen = _areas(body.areas)
+    await _reset_allowed(session)
+    name = await _org_name(session, scope.organization_id)
+    if body.confirm.strip() != name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
+            "ok": False, "reason": "confirm_mismatch",
+            "error": "Type the company name exactly to confirm the reset.",
+            "confirm_with": name})
+    out = await _run(session, scope.organization_id, chosen, apply=True)
+    try:
+        async with session.begin():
+            await write_audit(
+                session,
+                actor=str(getattr(principal, "user_id", None) or "hoistra-ui"),
+                action_type="organization.data_reset",
+                source_feature=PLATFORM_FEATURE,
+                organization_id=scope.organization_id,
+                input_payload={"organization_id": str(scope.organization_id), "areas": chosen},
+                output_payload={"row_total": out["row_total"]},
+                detail={"areas": chosen,
+                        "deleted": {t["table"]: t["rows"] for a in out["areas"] for t in a["tables"]},
+                        "links_cleared": out["links_cleared"], "buildings": out["buildings"]},
+            )
+    except Exception as exc:  # noqa: BLE001 - the delete is done; a lost audit row is logged
+        log.error("org_data_reset.audit_failed", error=str(exc)[:200])
+    log.info("org_data_reset.done", organization_id=str(scope.organization_id),
+             areas=chosen, rows=out["row_total"])
+    return {"ok": True, "organization_name": name, **out}

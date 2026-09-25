@@ -68,7 +68,19 @@ export const adminApi = {
   // before anyone waits for one — and so "is everything really in there" has an answer
   // that is checkable rather than claimed.
   exportPreview: () =>
-    apiFetch(B, '/api/admin/export', { query: Object.assign({ preview: true }, orgQuery()), timeoutMs: 120000 })
+    apiFetch(B, '/api/admin/export', { query: Object.assign({ preview: true }, orgQuery()), timeoutMs: 120000 }),
+
+  // What clearing these pages' data would delete — counted in a transaction the service rolls
+  // back. areas: any of compliance, contracts, assets, energy, maintenance. → {row_total,
+  // areas[{area,label,rows,tables}], links_cleared[], blocked[], confirm_with, …}.
+  dataResetPreview: (areas) =>
+    apiFetch(B, '/api/admin/data-reset', { query: Object.assign({ areas: (areas || []).join(',') }, orgQuery()), timeoutMs: 120000 }),
+
+  // IRREVERSIBLE. Deletes this company's rows behind those pages. `confirm` must be the
+  // company name exactly (the preview's confirm_with). 409 reset_blocked carries
+  // detail.blocked when kept rows depend on the ones going; nothing is changed then.
+  dataReset: (areas, confirm) =>
+    apiFetch(B, '/api/admin/data-reset', { method: 'POST', query: orgQuery(), body: { areas: areas, confirm: confirm }, timeoutMs: 600000 })
 };
 
 // The export itself. It cannot go through apiFetch: that parses every response as JSON and

@@ -1730,6 +1730,7 @@ export const renderValsMethods = {
       ...this.bcVals(),
       ...this.dcVals(),
       ...this.oxVals(),
+      ...this.drVals(),
       ...this.bgVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",

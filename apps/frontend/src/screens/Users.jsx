@@ -142,6 +142,100 @@ export default function Users({ vals }) {
             </React.Fragment>
           ))}
         </div>
+        {vals.drShow ? (
+          <div data-panel="data-reset" style={{ marginTop: "28px", padding: "18px 20px 20px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", borderLeft: "3px solid var(--st-risk)", display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+              <i className="ph ph-trash" style={{ fontSize: "18px", color: "var(--st-risk)", marginTop: "2px" }}></i>
+              <div style={{ minWidth: "0" }}>
+                <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--st-risk)" }}>{"Administration · data"}</div>
+                <h3 style={{ fontSize: "18px", margin: "5px 0 0" }}>{"Reset page data"}</h3>
+                <p style={{ fontSize: "12.5px", color: "var(--color-neutral-400)", margin: "6px 0 0", maxWidth: "92ch", lineHeight: "1.55" }}>
+                  {"Delete this company's data behind the pages you tick, so the next ingest starts from nothing. Only this company's rows are touched, and it cannot be undone. Tick a page to see exactly what would go."}
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: "9px" }}>
+              {(vals.drAreas || []).map((ar) => (
+                <div key={ar.key} role="checkbox" aria-checked={ar.on} data-area={ar.key} onClick={ar.pick} style={{ display: "flex", gap: "10px", alignItems: "flex-start", padding: "11px 12px", borderRadius: "9px", border: `1px solid ${ar.edge}`, background: ar.bg, color: ar.fg, cursor: "pointer" }}>
+                  <i className={`ph ${ar.tick}`} style={{ fontSize: "16px", marginTop: "1px" }}></i>
+                  <div style={{ minWidth: "0", flex: "1" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "13px", color: "var(--color-text)" }}>
+                      <i className={`ph ${ar.icon}`} style={{ fontSize: "13px" }}></i>
+                      <span>{ar.label}</span>
+                      {ar.count ? <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--st-risk)" }}>{ar.count}</span> : null}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "3px", lineHeight: "1.4" }}>{ar.what}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {vals.drDisabled ? (
+              <div style={{ fontSize: "12px", color: "var(--color-neutral-400)", padding: "10px 12px", borderRadius: "8px", background: "var(--color-bg)" }}>{vals.drDisabled}</div>
+            ) : null}
+            {vals.drLoading ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Counting what would be deleted…"}</div> : null}
+            {vals.drError ? <div data-dr="error" style={{ fontSize: "12px", color: "var(--st-risk)" }}>{vals.drError}</div> : null}
+            {vals.drDone ? <div data-dr="done" style={{ fontSize: "12px", color: "var(--st-ok)" }}>{vals.drDone}</div> : null}
+            {vals.drHasPlan && !vals.drLoading ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div data-dr="summary" style={{ fontSize: "13px", color: "var(--color-text)" }}>
+                  {vals.drSummary}
+                  <span style={{ color: "var(--color-neutral-500)", fontSize: "11.5px" }}>{"  · "}{vals.drBuildings}</span>
+                </div>
+                <div style={{ borderRadius: "9px", border: "1px solid var(--color-divider)", overflow: "hidden" }}>
+                  {(vals.drAreaRows || []).map((r, i) => (
+                    <div key={i} style={{ borderTop: i ? "1px solid var(--color-divider)" : "none" }}>
+                      <div onClick={r.toggle} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "9px 12px", cursor: "pointer", fontSize: "12.5px" }}>
+                        <i className={`ph ${r.open ? "ph-caret-down" : "ph-caret-right"}`} style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}></i>
+                        <span>{r.label}</span>
+                        <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,monospace" }}>{r.rows}</span>
+                      </div>
+                      {r.open ? (
+                        <div style={{ padding: "2px 12px 10px 31px", display: "grid", gridTemplateColumns: "1fr auto", gap: "3px 16px", fontSize: "11.5px", color: "var(--color-neutral-400)" }}>
+                          {r.tables.map((t) => (
+                            <React.Fragment key={t.table}>
+                              <span style={{ fontFamily: "ui-monospace,monospace" }}>{t.table}</span>
+                              <span style={{ fontFamily: "ui-monospace,monospace", textAlign: "right" }}>{t.rows}</span>
+                            </React.Fragment>
+                          ))}
+                          {!r.tables.length ? <span>{"Nothing to delete."}</span> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                {(vals.drBlocked || []).length ? (
+                  <div data-dr="blocked" style={{ padding: "11px 13px", borderRadius: "9px", background: "var(--st-risk-bg)", display: "flex", flexDirection: "column", gap: "7px" }}>
+                    <div style={{ fontSize: "12.5px", color: "var(--st-risk)" }}>{"This reset is blocked: a page you are keeping needs rows it would delete."}</div>
+                    {vals.drBlocked.map((b, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", fontSize: "12px", color: "var(--color-text)" }}>
+                        <span>{b.what}{" — "}{b.why}</span>
+                        {b.add ? (
+                          <span className="hv2" data-dr="add-area" onClick={b.add} style={{ fontSize: "11.5px", padding: "3px 9px", borderRadius: "6px", border: "1px solid var(--st-risk)", color: "var(--st-risk)", cursor: "pointer" }}>{"Also clear "}{b.needs}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {(vals.drLinks || []).length ? (
+                  <div style={{ fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.6" }}>
+                    <div style={{ color: "var(--color-neutral-300)", marginBottom: "3px" }}>{"Kept, but unlinked from what is deleted:"}</div>
+                    {vals.drLinks.map((l, i) => (
+                      <div key={i}>
+                        <span style={{ fontFamily: "ui-monospace,monospace" }}>{l.what}</span>{" · "}{l.rows}{" rows — "}{l.why}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>{vals.drKept}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "12px", color: "var(--color-neutral-400)" }}>{"Type "}<b style={{ color: "var(--color-text)" }}>{vals.drConfirmName}</b>{" to confirm"}</span>
+                  <input className="input" data-dr="confirm" value={vals.drConfirm} onChange={vals.drSetConfirm} placeholder={vals.drConfirmName} style={{ fontSize: "12.5px", padding: "7px 10px", borderRadius: "7px", border: `1px solid ${vals.drNameOk ? "var(--st-risk)" : "var(--color-divider)"}`, background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", minWidth: "240px" }} />
+                  <button type="button" data-dr="apply" disabled={!vals.drCanApply} onClick={vals.drApply} style={{ font: "inherit", fontSize: "12px", padding: "8px 15px", borderRadius: "8px", border: "none", background: vals.drCanApply ? "var(--st-risk)" : "var(--color-neutral-800)", color: vals.drCanApply ? "#fff" : "var(--color-neutral-500)", cursor: vals.drCanApply ? "pointer" : "not-allowed" }}>{vals.drApplyLabel}</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

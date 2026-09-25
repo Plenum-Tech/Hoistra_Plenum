@@ -29,6 +29,7 @@ import { loadHidden } from './reportCards.js';
 import { buildingsCrudMethods } from './buildingsCrud.js';
 import { DC_DEFAULTS, documentsCrudMethods } from './documentsCrud.js';
 import { OX_DEFAULTS, orgExportMethods } from './orgExport.js';
+import { DR_DEFAULTS, dataResetMethods } from './dataReset.js';
 import { buildingsGraphMethods } from './buildingsGraph.js';
 import { AUTH_DEFAULTS, authMethods, canAdmin } from './auth.js';
 import { usersMethods } from './users.js';
@@ -46,6 +47,7 @@ export class HoistraLogic extends Controller {
     ...AUTH_DEFAULTS,
     ...DC_DEFAULTS,
     ...OX_DEFAULTS,
+    ...DR_DEFAULTS,
     view: "home", module: null, answerKey: null, askedQuery: "",
     query: "", queueOpen: false, paletteOpen: false, detail: null,
     chainOpen: true, toast: "", filter: "All", navOpen: false,
@@ -302,4 +304,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);

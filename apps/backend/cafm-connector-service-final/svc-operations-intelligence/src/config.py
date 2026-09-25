@@ -353,6 +353,14 @@ class Settings(BaseSettings):
         "",
         validation_alias=AliasChoices("AUTH_DEFAULT_ORGANIZATION_ID", "auth_default_organization_id"),
     )
+    # POST /api/admin/data-reset empties a company's operational data (its own rows only).
+    # Unset means "only on a database named hoistra_test": a deployment pointed anywhere else,
+    # production included, has to switch it on deliberately.
+    org_data_reset_enabled: bool | None = Field(
+        None,
+        validation_alias=AliasChoices("ORG_DATA_RESET_ENABLED", "org_data_reset_enabled"),
+    )
+
     # Open sign-up. Off means an account can only be created by an existing operator.
     auth_allow_self_registration: bool = Field(
         True,
