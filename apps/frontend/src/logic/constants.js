@@ -620,4 +620,9 @@ const VALUE_LEDGER = [
   ] }
 ];
 
-export { KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER };
+// What a staged document means when the ask bar is empty. Matches the wording the
+// ingestion panel already uses, so the same instruction reaches the orchestrator from
+// either route — the Home bar and the chat composer both send it.
+const INGEST_ASK = "Validate and ingest this document.";
+
+export { INGEST_ASK, KL, USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, AREA, NUM, SUB_OF, SHARED, REGIONS, PACKS, CC_OF, ENC, EN_ATTRS, EN_PROFILE, EN_RATINGS, ratingState, ENC_MIXED_AVAIL, ENC_MIXED_HELD, ORG, ACTION_SPECS, CC, VP, PKG, TAG, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER };

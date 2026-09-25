@@ -211,7 +211,7 @@ export default function Home({ vals }) {
                 {"Run"}
               </div>
             </div>
-            <div style={{ display: vals.orchAttachShow || "none", flexWrap: "wrap", gap: "6px", marginTop: "9px" }}>
+            <div style={{ display: vals.orchTrayShow || "none", flexWrap: "wrap", gap: "6px", marginTop: "9px" }}>
               {(vals.orchFiles || []).map((f) => (
                 <React.Fragment key={f.key}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", fontSize: "11.5px", maxWidth: "260px" }}>

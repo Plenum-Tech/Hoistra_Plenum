@@ -7,7 +7,7 @@
 // nothing is asserted without disclosure.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { MODULES } from './constants.js';
+import { MODULES, INGEST_ASK } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
 import { isSpreadsheet, mgIsListRequest, cmmsName } from './migration.js';
@@ -1487,11 +1487,17 @@ export const complianceLiveMethods = {
   // Composer submit, shared by the send button and the Enter key. While a turn is running
   // the draft stays in the box: the button is Stop, and Enter says so.
   orchSubmitNow() {
-    const q = String(this.state.orchQuery || "").trim();
+    const staged = this.state.ccFiles || [];
     // Nothing typed, but a spreadsheet staged: send starts its migration. A CMMS export is
     // not a question waiting for a sentence to go with it — the gates are the conversation.
+    const typed = String(this.state.orchQuery || "").trim();
+    if (!typed && staged.some(isSpreadsheet)) return this.mgStartFromChat();
+    // Nothing typed, but a document staged: the attachment is the instruction, exactly as
+    // on the Home bar. Without this an empty send with a PDF or photo did nothing, so every
+    // document after the first sat in the tray with a send button that did not send.
     // An empty send with nothing staged is still nothing.
-    if (!q) return (this.state.ccFiles || []).some(isSpreadsheet) ? this.mgStartFromChat() : undefined;
+    const q = typed || (staged.length ? INGEST_ASK : "");
+    if (!q) return;
     if (this.state.ccBusy) return this.flash("Still answering — stop it first, or wait for it to finish.");
     this.setState({ orchQuery: "" });
     this.askScoped(q);

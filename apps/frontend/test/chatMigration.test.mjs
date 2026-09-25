@@ -125,12 +125,17 @@ test('a TIMEOUT is never retried — a second upload would be a second migration
   assert.equal(c.state.mgId, null);
 });
 
-test('a PDF staged alone with nothing typed is still not a question — nothing is sent', async () => {
+// A PDF staged alone is an ingest, as it is on the Home bar — it goes as the ingest
+// instruction, never to the migration route. (It used to wait for a typed question, which
+// left every document after the first sitting in the tray with a send that did nothing.)
+test('a PDF staged alone with nothing typed is ingested, not migrated', async () => {
+  handlers[RUN_FILES] = { session_id: 's1', answer: 'Filed.', tool_calls: [], success: true };
   c.ccAddFiles([new File(['x'], 'eicr.pdf')]);
   await c.orchSubmitNow();
   await settle();
-  assert.deepEqual(calls, [], 'an empty send with no spreadsheet does nothing at all');
-  assert.equal(c.state.ccFiles.length, 1, 'the PDF is still staged for the question that will come');
+  assert.ok(!calls.some((x) => x.key === START), 'no migration was started');
+  assert.ok(calls.some((x) => x.key === RUN_FILES), 'the document went up as an ingest');
+  assert.equal(c.state.ccFiles.length, 0, 'the tray is cleared once sent');
 });
 
 test('a mixed tray goes as one turn — the spreadsheet migrates, the document is indexed beside it', async () => {

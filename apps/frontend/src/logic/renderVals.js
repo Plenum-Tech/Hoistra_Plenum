@@ -1,7 +1,7 @@
 import { docLabel } from './chatCases.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER } from './constants.js';
+import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER, INGEST_ASK } from './constants.js';
 import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
@@ -13,11 +13,6 @@ import { documentUrl } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
 import { isSpreadsheet } from './migration.js';
 import { accountCanIngest } from './auth.js';
-
-// What a staged document means when the ask bar is empty. Matches the wording the
-// ingestion panel already uses, so the same instruction reaches the orchestrator from
-// either route.
-const INGEST_ASK = "Validate and ingest this document.";
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -2013,6 +2008,10 @@ export const renderValsMethods = {
         drop: () => this.ccDropFile(i)
       })),
       orchFileCount: (s.ccFiles || []).length,
+      // The tray itself, shown whenever something is staged. Not orchAttachShow: that asks
+      // "is this the chat view", and Home with the chat closed is not — so a file staged
+      // from the Home bar got its building card but never its name.
+      orchTrayShow: (s.ccFiles || []).length ? "flex" : "none",
       // A staged spreadsheet is a migration. Sending it with nothing typed starts the run
       // here and opens its first gate in the transcript; this is the same thing with a
       // button on it, for a reader who has typed a question and wants the file migrated
