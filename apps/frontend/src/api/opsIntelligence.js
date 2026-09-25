@@ -55,6 +55,10 @@ export const opsApi = {
   // Monthly vendor scorecards, newest first.
   scorecards: (query) =>
     apiFetch(B, '/api/contract-performance/scorecards', { query: withOrg(query) }),
+  // The scored work orders behind the scorecards (vendor_wo_scores), each with the work
+  // order's hours and the confirmed contract's targets — the Evidence tab. Read-only.
+  woScores: (query) =>
+    apiFetch(B, '/api/contract-performance/wo-scores', { query: withOrg(query) }),
   // The Vendors saved-space summary: the newest 200 scorecards, the weights, the pending
   // Feature B approvals and unapproved asset criticalities, one read.
   contractSummary: () =>

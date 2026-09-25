@@ -100,12 +100,12 @@ test('the tabs behind a live vendor count their own rows, and an empty tab offer
   c.setState({ vpRaw: raw(), vpVendor: A1 });
   const v = c.renderVals();
   assert.equal(v.vpTabs[0].n, '5');                     // five components on the card
-  assert.equal(v.vpTabs[2].n, '0');                     // evidence: no read lists the work orders
+  assert.equal(v.vpTabs[2].n, '0');                     // evidence: the wo-scores read is absent here
   assert.equal(v.vp.creditTotal, '—');                  // so there is no recoverable total
   assert.equal(v.vp.claimShow, 'none');                 // and nothing to claim
   assert.equal(v.vp.invTotal, '—');
   assert.equal(v.vp.invActionsShow, 'none');
-  assert.match(v.vp.breachEmpty, /no read endpoint lists them/);
+  assert.match(v.vp.breachEmpty, /could not be read/);  // absent read, said as such
   cleanup();
 });
 
@@ -120,5 +120,29 @@ test('a vendor with a contract and no card shows dashes down the scorecard, not 
     assert.equal(m.measured, '—', m.label + ' was never measured');
   });
   assert.match(v.vp.covNote, /No mandatory accreditation is on record/);
+  cleanup();
+});
+
+test('the Evidence tab shows the scored work orders from GET /wo-scores, misses in red, met in green', () => {
+  const r = raw();
+  const month = r.summary.scorecards.find((x) => x.vendor_id === A1).score_month;
+  r.woScores = { ok: true, wo_scores: [{
+    id: 's1', vendor_id: A1, wo_code: 'WO-B101-0007', score_month: month, priority: 'P1',
+    asset_name: 'AHU-01', building_name: 'Harbour Point', criticality: 'L1',
+    sla_response_met: false, sla_completion_met: true, response_hours: 6.5, response_target_hours: 4,
+    completion_hours: 20, completion_target_hours: 24, first_fix: true, recall: false, contract_parameters_id: 'cp'
+  }] };
+  c.setState({ vpRaw: r, vpVendor: A1, vpTab: 2 });
+  const v = c.renderVals();
+  assert.equal(v.vpTabs[2].n, '2');
+  const [miss, met] = v.vp.breaches;
+  assert.deepEqual([miss.wo, miss.asset, miss.building, miss.metric, miss.target, miss.actual, miss.mult],
+    ['WO-B101-0007', 'AHU-01', 'Harbour Point', 'Response', '4h', '6.5h', '3×']);
+  assert.equal(miss.actualFg, 'var(--st-risk)');
+  assert.equal(met.actualFg, 'var(--st-ok)');
+  assert.equal(v.vp.breachEmptyShow, 'none');
+  assert.equal(v.vp.creditTotal, '—');                  // nothing priced, so no total and no claim
+  assert.equal(v.vp.claimShow, 'none');
+  assert.equal(v.vpTiles.find((t) => t.label === 'L1 breaches').value, '1');
   cleanup();
 });

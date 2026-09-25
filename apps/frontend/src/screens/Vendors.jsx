@@ -557,7 +557,7 @@ export default function Vendors({ vals }) {
                                   {b.target}
                                 </span>
                                 {" → "}
-                                <span style={{ color: "var(--st-risk)" }}>
+                                <span style={{ color: b.actualFg }}>
                                   {b.actual}
                                 </span>
                               </span>

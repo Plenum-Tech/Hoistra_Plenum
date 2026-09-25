@@ -1094,7 +1094,10 @@ export const renderValsMethods = {
         };
         const tag = (k) => TAGS[k] || TAGS["Not on record"];
         const CRIT = { L1: ["var(--st-risk-bg)", "var(--st-risk)"], L2: ["var(--st-warn-bg)", "var(--st-warn)"], L3: ["var(--color-neutral-900)", "var(--color-neutral-400)"] };
-        const credit = R.breaches.reduce((q, b) => q + parseInt(b.cost.replace(/[^0-9]/g, ""), 10), 0);
+        // Only rows the engine priced count. It has no credit schedule yet, so every row carries
+        // creditValue null and there is no total — "£0" would say the clause was worked out.
+        const priced = R.breaches.filter((b) => typeof b.creditValue === "number");
+        const credit = priced.reduce((q, b) => q + b.creditValue, 0);
         // Summed to the penny, not per-line rounded: this figure goes on a credit note.
         // Math.round() per line turned £27.55 into £28, and a claim that does not tie back
         // to the invoice line it came from is a claim the vendor gets to argue about.
@@ -1136,8 +1139,9 @@ export const renderValsMethods = {
           finalScore: N(score),
           critSplit: [
             { label: "L1 · critical", n: R.crit ? String(R.crit.L1) : "—", note: "misses weigh 3×", color: "var(--st-risk)" },
-            { label: "L2 · medium", n: R.crit ? String(R.crit.L2) : "—", note: "misses weigh 1×", color: "var(--st-warn)" },
-            { label: "L3 · low", n: R.crit ? String(R.crit.L3) : "—", note: "misses weigh 0.5×", color: "var(--color-neutral-400)" }
+            // The engine's multipliers (scoring._sla_component_with_criticality): L2 1.5×, L3 1×.
+            { label: "L2 · medium", n: R.crit ? String(R.crit.L2) : "—", note: "misses weigh 1.5×", color: "var(--st-warn)" },
+            { label: "L3 · low", n: R.crit ? String(R.crit.L3) : "—", note: "misses weigh 1×", color: "var(--color-neutral-400)" }
           ],
           critNote: R.critNote || "Criticality is set per asset and approved by a person, not inferred. Unapproved assets default to L2 until someone confirms otherwise, so a mis-set L1 cannot quietly triple a vendor's penalty.",
           // "0 of 16 terms were read — 0% source coverage" is accurate and reads as a contract
@@ -1233,15 +1237,25 @@ export const renderValsMethods = {
           breaches: R.breaches.map((b) => ({
             wo: b.wo, asset: b.asset, building: b.building, crit: b.crit, metric: b.metric,
             target: b.target, actual: b.actual, mult: b.mult, cost: b.cost,
-            critBg: CRIT[b.crit][0], critFg: CRIT[b.crit][1],
-            click: () => this.flash(b.wo + " — " + b.asset + " at " + b.building + ". " + b.metric + " target " + b.target + ", actual " + b.actual + ". " + b.crit + " asset, so the miss is weighted " + b.mult + " and carries " + b.cost + " in service credits.")
+            critBg: (CRIT[b.crit] || CRIT.L2)[0], critFg: (CRIT[b.crit] || CRIT.L2)[1],
+            actualFg: b.met === false ? "var(--st-risk)" : b.met === true ? "var(--st-ok)" : "var(--color-neutral-400)",
+            click: () => this.flash(b.wo + " — " + b.asset + " at " + b.building + ". " + b.metric + " target " + b.target + ", actual " + b.actual + ". " +
+              (b.met === false
+                ? b.crit + " asset" + (b.mult !== "—" ? ", so the miss is weighted " + b.mult : "") + ". No service credit is priced for it: the engine has no credit schedule."
+                : b.met === true ? "Met." : "Not measured — a timestamp or the contract target is missing."))
           })),
           // With no breach rows there is no recoverable total — "£0" would say the clause
           // was worked and came to nothing, and there is nothing to claim against it.
-          creditTotal: R.breaches.length ? "£" + credit.toLocaleString() : "—",
-          claimShow: R.breaches.length ? "block" : "none",
+          creditTotal: priced.length ? "£" + credit.toLocaleString() : "—",
+          claimShow: priced.length ? "block" : "none",
           breachEmptyShow: R.breaches.length ? "none" : "block",
-          breachEmpty: "No work-order evidence is on this page: the engine holds the jobs behind each component, and no read endpoint lists them yet. The score above is the card it published, not a total recomputed from rows shown here.",
+          breachEmpty: !R.evidenceRead
+            ? "The scored work orders could not be read (GET /api/contract-performance/wo-scores did not answer), so there is no evidence to show. The score above is the card the engine published."
+            : v.score === null
+              ? "No work order has been scored for this vendor yet. Rebuild scorecards scores the completed work orders once the vendor has a confirmed contract; each one then appears here with its hours against the contract."
+              : R.evidenceTruncated
+                ? "This vendor's work orders were not in this read — it reached its limit of scored rows. Narrow the scope to one vendor to see them."
+                : "The engine published this card but returned no scored work orders for its month.",
           claim: () => this.runAction("Claim service credits", v.name),
           evidence: () => this.runAction("Request evidence", v.name),
           covNote: req.length

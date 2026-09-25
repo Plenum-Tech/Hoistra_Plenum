@@ -4,7 +4,7 @@
 // and the compliance register's vendor certificates and per-vendor coverage.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shapeLiveVendors, trendOf } from '../src/logic/vendorsLive.js';
+import { shapeLiveVendors, trendOf, evidenceRows } from '../src/logic/vendorsLive.js';
 
 const NOW = new Date(2026, 8, 7, 14, 0, 0);
 
@@ -578,4 +578,62 @@ test('without a rate card nothing about the panel changes', () => {
 test('a card with no lines is treated as no card', () => {
   const R = shape(withCard({ currency: 'USD', lines: [] }));
   assert.equal(R.terms.find((t) => t.label === 'Labour rates'), undefined);
+});
+
+// GET /wo-scores — the scored work orders behind a card (Evidence tab, L1/L2/L3 split).
+const wo = (vendor_id, month, code, extra) => Object.assign({
+  id: code, vendor_id, wo_code: code, score_month: month, priority: 'P1', asset_name: 'AHU-01',
+  building_name: 'Harbour Point', criticality: 'L1', sla_response_met: false, sla_completion_met: true,
+  response_hours: 6.5, response_target_hours: 4, completion_hours: 20, completion_target_hours: 24,
+  first_fix: true, recall: false, contract_parameters_id: 'cp-1'
+}, extra || {});
+const woScores = { ok: true, wo_scores: [
+  wo(A1, '2026-08-01', 'WO-7'),
+  wo(A1, '2026-08-01', 'WO-8', { criticality: 'L3', sla_response_met: true, response_hours: 2, first_fix: false }),
+  wo(A1, '2026-07-01', 'WO-OLD'),                                   // a different month: not this card
+  wo(A3, '2026-08-01', 'WO-9', { criticality: 'L2', recall: true, sla_completion_met: null, completion_hours: null })
+] };
+const withWo = () => shapeLiveVendors({ summary, contracts, weights: { ok: true, weights: summary.weights }, approvals, certificates, coverage, packs, woScores }, NOW);
+
+test('evidence: each scored work order gives response and completion rows, misses first, no invented credit', () => {
+  const rows = evidenceRows([wo(A1, '2026-08-01', 'WO-7')]);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    [rows[0].metric, rows[0].target, rows[0].actual, rows[0].met, rows[0].mult, rows[0].crit],
+    ['Response', '4h', '6.5h', false, '3×', 'L1']);
+  assert.deepEqual([rows[1].metric, rows[1].met, rows[1].mult], ['Completion', true, '—']);
+  assert.equal(rows[0].cost, '—');
+  assert.equal(rows[0].creditValue, null);
+});
+
+test('evidence: a failed first fix and a recall are rows; a missing timestamp is "not measured", not a pass', () => {
+  const rows = evidenceRows([wo(A3, '2026-08-01', 'WO-9', { criticality: 'L2', recall: true, first_fix: false, sla_completion_met: null, completion_hours: null })]);
+  assert.ok(rows.some((r) => r.metric === 'Recall' && r.met === false));
+  assert.ok(rows.some((r) => r.metric === 'First fix' && r.met === false));
+  const comp = rows.find((r) => r.metric === 'Completion');
+  assert.equal(comp.met, null);
+  assert.equal(comp.actual, 'not measured');
+});
+
+test('evidence: without a confirmed contract the target says so rather than showing a default', () => {
+  const [r] = evidenceRows([wo(A1, '2026-08-01', 'X', { response_target_hours: null, contract_parameters_id: null })]);
+  assert.equal(r.target, 'no confirmed target');
+});
+
+test('evidence rows reach the vendor for the month of its card only, and the L1 tile counts L1 SLA misses', () => {
+  const m = withWo();
+  const codes = m.V[A1].breaches.map((b) => b.wo);
+  assert.ok(codes.includes('WO-7') && codes.includes('WO-8'));
+  assert.ok(!codes.includes('WO-OLD'));
+  assert.deepEqual(m.V[A1].crit, { L1: 1, L2: 0, L3: 1 });
+  assert.equal(m.V[A1].evidenceRead, true);
+  assert.equal(m.tiles.L1, 1);                                       // WO-7 response miss on an L1 asset
+});
+
+test('evidence: a failed wo-scores read leaves the split and the L1 tile unsourced, not zero', () => {
+  const m = full();
+  assert.equal(m.V[A1].crit, null);
+  assert.deepEqual(m.V[A1].breaches, []);
+  assert.equal(m.V[A1].evidenceRead, false);
+  assert.equal(m.tiles.L1, null);
 });

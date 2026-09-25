@@ -1,6 +1,7 @@
 """Contract Performance API — Features B1–B3."""
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...engines.contract_performance import conflicts as conflicts_svc
+from ...engines.contract_performance import evidence as evidence_svc
 from ...engines.contract_performance import extract as extract_svc
 from ...engines.contract_performance import insights as insights_svc
 from ...engines.contract_performance import invoice as invoice_svc
@@ -361,6 +363,33 @@ async def list_scorecards(
         building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "scorecards": rows}
+
+
+@router.get("/wo-scores")
+async def list_wo_scores(
+    vendor_id: UUID | None = None,
+    score_month: date | None = Query(None, description="First of the month, e.g. 2026-09-01."),
+    organization_id: UUID | None = None,
+    latest: bool = Query(False, description="Only each vendor's newest scored month."),
+    limit: int = Query(200, le=1000),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The scored work orders behind the scorecards — the Vendors page Evidence tab. Read-only.
+
+    Each row is one vendor_wo_scores verdict with the work order's hours and the confirmed
+    contract's targets beside it. These rows were written on every scoring run and never
+    listed, so the tab could only say the evidence existed somewhere.
+    """
+    organization_id = access.organization_for(s, organization_id)
+    rows = await evidence_svc.list_wo_evidence(
+        session, vendor_id=vendor_id, score_month=score_month,
+        organization_id=organization_id, limit=limit, building_ids=s.building_ids,
+        latest_only=latest,
+    )
+    # `truncated` says the limit cut the list, so an absent row reads as "not in this read"
+    # rather than "the engine scored nothing".
+    return {"ok": True, "count": len(rows), "limit": limit, "truncated": len(rows) >= limit, "wo_scores": rows}
 
 
 @router.get("/saved-space/summary")

@@ -14,10 +14,11 @@
 //   Coverage                GET /api/compliance/certificates?cert_scope=vendor
 //                           GET /api/compliance/coverage/vendors?country_code=…  (block state, gaps)
 //                           GET /api/compliance/country-pack?country_code=…      (names for gap codes)
+//   Evidence + L1/L2/L3     GET /api/contract-performance/wo-scores  (the scored work orders behind
+//                           each card, with the hours and the confirmed contract's targets)
 //
 // Not sourced — no read endpoint exists — and therefore null here and "—" on the screen:
-// the per-work-order breach list behind a score (Evidence tab), the vendor's L1/L2/L3 job
-// split, annual spend, contract expiry and page counts, invoice lines that matched (only
+// a service-credit amount per breach (the engine has no credit schedule), annual spend, contract expiry and page counts, invoice lines that matched (only
 // flagged lines reach the approvals queue), open work orders, and when the scorecards were
 // last cut (`lastRebuild` reads `created_at` if the list response ever carries it).
 //
@@ -280,6 +281,41 @@ function conflictRow(item) {
   };
 }
 
+// The Evidence tab, from GET /wo-scores. Each scored work order gives a Response and a
+// Completion row — met or missed, against the confirmed contract's hours — plus a row for a
+// failed first fix or a recall. Misses lead. The multiplier is the engine's own
+// (_sla_component_with_criticality: L1 3×, L2 1.5×, L3 1×) and applies to an SLA miss only.
+// No credit is priced: the engine has no service-credit schedule, so `cost` is "—" and
+// `creditValue` null rather than a figure nobody computed.
+const SLA_MULT = { L1: "3×", L2: "1.5×", L3: "1×" };
+const hrs = (v) => (num(v) === null ? null : round1(num(v)) + "h");
+export function evidenceRows(scores) {
+  const out = [];
+  (scores || []).forEach((s) => {
+    const crit = SLA_MULT[s.criticality] ? s.criticality : "L2";
+    const base = {
+      wo: s.wo_code || "—",
+      asset: s.asset_name || (s.asset_id ? "Asset " + String(s.asset_id).slice(0, 8) : "No asset on record"),
+      building: s.building_name || "—",
+      crit: crit, cost: "—", creditValue: null
+    };
+    [["Response", s.sla_response_met, s.response_target_hours, s.response_hours],
+     ["Completion", s.sla_completion_met, s.completion_target_hours, s.completion_hours]].forEach(([metric, met, target, actual]) => {
+      out.push(Object.assign({}, base, {
+        metric: metric,
+        target: hrs(target) || (s.contract_parameters_id ? "no target for " + (s.priority || "priority") : "no confirmed target"),
+        actual: hrs(actual) || "not measured",
+        met: met === true ? true : met === false ? false : null,
+        mult: met === false ? SLA_MULT[crit] : "—"
+      }));
+    });
+    if (s.first_fix === false) out.push(Object.assign({}, base, { metric: "First fix", target: "fixed first visit", actual: "return visit", met: false, mult: "—" }));
+    if (s.recall === true) out.push(Object.assign({}, base, { metric: "Recall", target: "no recall", actual: "recalled", met: false, mult: "—" }));
+  });
+  const rank = (r) => (r.met === false ? 0 : r.met === null ? 1 : 2);
+  return out.sort((a, b) => rank(a) - rank(b) || String(a.wo).localeCompare(String(b.wo)));
+}
+
 // ── the shaping ─────────────────────────────────────────────────────────
 // input: the reads, each null / missing when that request failed
 //   summary       GET /api/contract-performance/saved-space/summary
@@ -290,6 +326,7 @@ function conflictRow(item) {
 //   certificates  rows of GET /api/compliance/certificates?cert_scope=vendor
 //   coverage      { [cc]: vendors[] }  from GET /api/compliance/coverage/vendors
 //   packs         { [cc]: types[] }    from GET /api/compliance/country-pack
+//   woScores      GET /api/contract-performance/wo-scores            (Evidence rows, L1/L2/L3 split)
 export function shapeLiveVendors(input, now) {
   const raw = input || {};
   const at = now || new Date();
@@ -301,6 +338,12 @@ export function shapeLiveVendors(input, now) {
   const certificates = Array.isArray(raw.certificates) ? raw.certificates : null;
   const coverage = raw.coverage || {};
   const packs = raw.packs || {};
+  // null when the read failed — "not read" — as opposed to [] "read, nothing scored".
+  const woScores = raw.woScores && Array.isArray(raw.woScores.wo_scores) ? raw.woScores.wo_scores : null;
+  // The read hit its limit: a vendor with no rows may simply be past the cut.
+  const woTruncated = !!(raw.woScores && raw.woScores.truncated);
+  const woByVendor = {};
+  (woScores || []).forEach((w) => { const k = String(w.vendor_id || ""); if (k) (woByVendor[k] = woByVendor[k] || []).push(w); });
 
   const live = !!(cards || params || weights || approvals || certificates);
   const empty = {
@@ -395,7 +438,7 @@ export function shapeLiveVendors(input, now) {
   const vendors = [];
   const V = {};
   const pkgById = {};
-  let termsRead = 0, termsDefault = 0, contractsN = 0, heldLines = 0;
+  let termsRead = 0, termsDefault = 0, contractsN = 0, heldLines = 0, l1Misses = 0;
 
   // Flagged invoice lines, once, then handed to the vendor they belong to.
   const flagged = (approvals || []).filter((it) => /^invoice_flag/.test(String(it.item_type || ""))).map((it) => invoiceLine(it, at));
@@ -597,8 +640,7 @@ export function shapeLiveVendors(input, now) {
     const critNote = "Criticality is set per asset and approved by a person, not inferred. Unapproved assets default to L2 until someone confirms otherwise, so a mis-set L1 cannot quietly triple a vendor's penalty." +
       (card && invoiceSignal !== null && Math.round(rawTotal) !== score
         ? " The published score is 0.85 × this weighted total + 0.15 × the invoice match signal (" + Math.round(invoiceSignal) + "%), which is why it differs from the total above."
-        : "") +
-      " The work orders behind each component are held by the scoring engine and are not exposed by a read endpoint yet, so the Evidence tab has no rows to show.";
+        : "");
 
     // The directory's coverage column is the compliance engine's CountryPack figure when it
     // has one for this vendor (types on record over types its trade requires).
@@ -616,12 +658,17 @@ export function shapeLiveVendors(input, now) {
       pkg: pkg,
       blockedType: blockedType
     });
+    // The jobs behind the card on screen: its month when there is a card, else every month.
+    const mine = woScores ? (woByVendor[id] || []).filter((w) => !card || w.score_month === card.score_month) : null;
+    const breaches = mine ? evidenceRows(mine) : [];
+    const crit = mine ? mine.reduce((t, w) => { const k = SLA_MULT[w.criticality] ? w.criticality : "L2"; t[k] += 1; return t; }, { L1: 0, L2: 0, L3: 0 }) : null;
+    if (mine) l1Misses += breaches.filter((b) => b.crit === "L1" && b.met === false && b.mult !== "—").length;
     V[id] = {
       // An unscored vendor stays unscored. Zero is a score, and a vendor with a contract
       // but no card has not earned one — it would sit in "below 70" and drag the average
       // down with a number no engine ever published.
       contract: contract, terms: terms, rows: rowsRaw, raw: rawTotal, score: score,
-      capApplied: capApplied, cap: cap, samples: samples, crit: null, breaches: [], certs: certRows, invoices: invoices,
+      capApplied: capApplied, cap: cap, samples: samples, crit: crit, breaches: breaches, evidenceRead: !!woScores, evidenceTruncated: woTruncated, certs: certRows, invoices: invoices,
       critNote: critNote, sourceNote: sourceNote, woCount: woCount,
       month: card ? monthLabel(card.score_month) : null, ppm: card ? num(card.ppm_compliance_pct) : null,
       invoiceSignal: invoiceSignal, parameterSource: bd.parameter_source || null
@@ -642,7 +689,7 @@ export function shapeLiveVendors(input, now) {
     pending: summary && typeof summary.pending_approvals === "number" ? summary.pending_approvals
       : (raw.approvals && typeof raw.approvals.count === "number" ? raw.approvals.count : (pendingItems ? pendingItems.length : null)),
     critical: pendingItems ? pendingItems.filter((it) => /high|critical/i.test(String(it.severity || ""))).length : null,
-    L1: null,
+    L1: woScores ? l1Misses : null,
     held: pendingItems ? flagged.length : null,
     defaults: params ? termsDefault : null
   };
@@ -701,7 +748,10 @@ export const vendorsLiveMethods = {
       contracts: () => opsApi.contracts(),
       weights: () => opsApi.weights(),
       approvals: () => opsApi.contractApprovals(),
-      certificates: () => complianceApi.listCertificates({ cert_scope: "vendor" })
+      certificates: () => complianceApi.listCertificates({ cert_scope: "vendor" }),
+      // Each vendor's newest scored month only — what the cards beside it show. A
+      // portfolio-wide read under one limit let one vendor's history crowd out another's.
+      woScores: () => opsApi.woScores({ limit: 1000, latest: true })
     };
     const keys = Object.keys(reads);
     const settled = await Promise.allSettled(keys.map((k) => reads[k]()));
