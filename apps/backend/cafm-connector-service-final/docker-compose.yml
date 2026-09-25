@@ -212,6 +212,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
       AZURE_BLOB_CONTAINER_NAME: plenum-agentic-ai-attachments
+      # Where the building graph lives, for linking ingested assets to a building.
+      # Not a dependency: if it is unreachable the assets still ingest, unlinked, and
+      # the ingest reports which rows need the link and why.
+      OPERATIONS_INTELLIGENCE_BASE_URL: ${OPERATIONS_INTELLIGENCE_BASE_URL:-http://svc-operations-intelligence:8009}
     ports:
       - "8001:8001"
     depends_on:
@@ -377,7 +381,11 @@ services:
       context: ./svc-operations-intelligence
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      # Same database svc-ingestion writes to. A building_id resolved out of one
+      # database and stored against an asset in another is a key that points at
+      # nothing. The Azure DSN stays as the fallback so an unset DB_URL behaves as
+      # it did before.
+      DATABASE_URL: ${DB_URL:-postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent}
       REDIS_URL: redis://redis:6379/0
       EMAIL_DRY_RUN: "true"
       AUTO_SEED_UK_PACK: "true"
@@ -406,7 +414,11 @@ services:
       context: ./svc-operations-intelligence
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent
+      # Same database svc-ingestion writes to. A building_id resolved out of one
+      # database and stored against an asset in another is a key that points at
+      # nothing. The Azure DSN stays as the fallback so an unset DB_URL behaves as
+      # it did before.
+      DATABASE_URL: ${DB_URL:-postgresql+asyncpg://azure_pg_agentic_ai:CHANGE_ME@plenum-agentic-ai.postgres.database.azure.com:5432/plenum_agent}
       REDIS_URL: redis://redis:6379/0
       EMAIL_DRY_RUN: "true"
       AUTO_SEED_UK_PACK: "false"

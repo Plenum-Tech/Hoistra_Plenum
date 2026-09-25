@@ -95,7 +95,7 @@ def compute_eui(
 async def upsert_building_profile(
     session: AsyncSession,
     *,
-    site_id: UUID,
+    building_id: UUID,
     gia_m2: float,
     building_type: str = "office",
     organization_id: UUID | None = None,
@@ -103,13 +103,13 @@ async def upsert_building_profile(
     bt = (building_type or "office").lower()
     elec = tm46_benchmark(bt, "electricity")
     gas = tm46_benchmark(bt, "gas")
-    q = select(BuildingEnergyProfile).where(BuildingEnergyProfile.site_id == site_id)
+    q = select(BuildingEnergyProfile).where(BuildingEnergyProfile.building_id == building_id)
     row = (await session.execute(q)).scalar_one_or_none()
     if row is None:
         row = BuildingEnergyProfile(
             id=uuid4(),
             organization_id=organization_id,
-            site_id=site_id,
+            building_id=building_id,
             building_type=bt,
             gia_m2=Decimal(str(gia_m2)),
             tm46_electricity_benchmark=Decimal(str(elec)) if elec else None,
@@ -127,7 +127,9 @@ async def upsert_building_profile(
         "ok": True,
         "profile": {
             "id": str(row.id),
-            "site_id": str(site_id),
+            "building_id": str(building_id),
+            # Deprecated alias — this was called site_id until Sep 2026.
+            "site_id": str(building_id),
             "building_type": bt,
             "gia_m2": float(row.gia_m2),
             "tm46_electricity_benchmark": elec,
@@ -139,7 +141,7 @@ async def upsert_building_profile(
 async def compute_site_eui(
     session: AsyncSession,
     *,
-    site_id: UUID,
+    building_id: UUID,
     period_start: date,
     period_end: date,
     meter_type: str = "electricity",
@@ -147,14 +149,14 @@ async def compute_site_eui(
 ) -> dict[str, Any]:
     profile = (
         await session.execute(
-            select(BuildingEnergyProfile).where(BuildingEnergyProfile.site_id == site_id)
+            select(BuildingEnergyProfile).where(BuildingEnergyProfile.building_id == building_id)
         )
     ).scalar_one_or_none()
     if not profile:
         return {"ok": False, "error": "building_energy_profile_required"}
 
     meters_q = select(EnergyMeter).where(
-        EnergyMeter.site_id == site_id,
+        EnergyMeter.building_id == building_id,
         EnergyMeter.active.is_(True),
     )
     if meter_type != "combined":
@@ -209,7 +211,7 @@ async def compute_site_eui(
     snap = EuiSnapshot(
         id=uuid4(),
         organization_id=organization_id or profile.organization_id,
-        site_id=site_id,
+        building_id=building_id,
         period_start=period_start,
         period_end=period_end,
         meter_type=meter_type,
@@ -229,11 +231,12 @@ async def compute_site_eui(
         action_type="energy.eui.compute",
         source_feature="C",
         organization_id=organization_id or profile.organization_id,
-        output_payload={"site_id": str(site_id), "eui": result.get("eui_kwh_per_m2_annualised")},
+        output_payload={"building_id": str(building_id), "eui": result.get("eui_kwh_per_m2_annualised")},
     )
     await session.commit()
     result["snapshot_id"] = str(snap.id)
-    result["site_id"] = str(site_id)
+    result["building_id"] = str(building_id)
+    result["site_id"] = str(building_id)  # deprecated alias
     result["building_type"] = profile.building_type
     result["meter_type"] = meter_type
     return result

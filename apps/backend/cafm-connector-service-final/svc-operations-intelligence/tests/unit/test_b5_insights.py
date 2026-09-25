@@ -120,3 +120,50 @@ class TestFR028Insights:
         # Only WO-1 contributes; 200/200 variance = 0%
         assert result["cost_variance_pct"] == 0.0
         assert result["contributing_wo_ids"] == ["WO-1"]
+
+
+class TestAFigureThatCannotBeComputedSaysWhy:
+    """A null variance and a zero variance are not the same thing, and neither is a null
+    because nothing was scored and a null because what was scored recorded no costs.
+
+    Production has 2,113 scored work orders for one vendor and not one of them carries a
+    cost, so every headline figure came back null with `message: null` beside it — which
+    reads as a broken panel rather than the data gap it is.
+    """
+
+    def test_scored_work_orders_with_no_costs_say_so(self):
+        rows = [_make_wo_score("WO-1", cost_actual=None, cost_estimated=None),
+                _make_wo_score("WO-2", cost_actual=None, cost_estimated=None)]
+        result = _run_compute_insights(rows)
+        assert result["cost_variance_pct"] is None
+        assert result["work_orders_considered"] == 2
+        assert "2 scored work orders" in result["unavailable"]["cost_variance_pct"]
+
+    def test_labour_hours_missing_is_named_separately_from_costs(self):
+        rows = [_make_wo_score("WO-1", cost_actual=110.0, cost_estimated=100.0)]
+        result = _run_compute_insights(rows)
+        assert result["cost_variance_pct"] == 10.0
+        assert "cost_variance_pct" not in result["unavailable"]
+        assert "labour hours" in result["unavailable"]["labour_variance_pct"]
+
+    def test_a_computed_figure_carries_no_reason(self):
+        rows = [_make_wo_score("WO-1", cost_actual=110.0, cost_estimated=100.0)]
+        rows[0].component_scores = {"labour_hours_invoiced": 10, "labour_hours_attended": 8}
+        result = _run_compute_insights(rows, iv_ratios=[0.9])
+        assert result["labour_variance_pct"] == 25.0
+        assert result["unavailable"] == {}
+        assert result["message"] is None
+
+    def test_no_scores_at_all_still_answers_every_figure(self):
+        result = _run_compute_insights([])
+        assert result["work_orders_considered"] == 0
+        assert set(result["unavailable"]) == {
+            "cost_variance_pct", "labour_variance_pct", "matched_flagged_trend"}
+
+    def test_the_response_model_carries_the_reasons(self):
+        """A key the response model does not declare is dropped on the way out."""
+        from src.api.schemas.contract_performance import InsightsResponse
+
+        out = InsightsResponse(**_run_compute_insights([])).model_dump()
+        assert out["unavailable"]["cost_variance_pct"]
+        assert out["work_orders_considered"] == 0

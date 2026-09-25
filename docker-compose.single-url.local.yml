@@ -38,6 +38,13 @@ services:
       ENVIRONMENT: development
       DEBUG: "true"
       SEED_DEFAULT_PLENUM_ORG: "true"
+      # Where this container validates a caller's token. security.py resolves the principal
+      # against OPS /api/auth/me and defaults to 127.0.0.1:8009 — correct only for the
+      # all-in-one image, where both run under one supervisord. Here ops-intelligence is a
+      # separate container, so the default points at this container's own port 8009, where
+      # nothing listens (it serves 8000), and every principal lookup fails. Same trap as
+      # backend-app's OPERATIONS_INTELLIGENCE_BASE_URL and svc-deepagents' DEEP_AGENTS_BASE_URL.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       # No Tempo/OTLP collector in this local stack — skip trace export so the
       # logs aren't flooded with "Failed to export traces to localhost:4317".
       OTEL_SDK_DISABLED: "true"
@@ -69,6 +76,15 @@ services:
       APPROVAL_EMAIL_POLL_ENABLED: "false"
       APPROVAL_EMAIL_POLL_INTERVAL_SECONDS: "3600"
       SEED_APPROVAL_DEMO: "true"
+      # Where this container validates a caller's token. services/principal.py calls
+      # OPS /api/auth/me on every authenticated request, and defaults to 127.0.0.1:8009 —
+      # right only for the all-in-one image, where both run under one supervisord. Here
+      # ops-intelligence is a separate container, so the default resolves to this container's
+      # own port 8009 (nothing listens there; it serves 8007) and every token check fails
+      # with "Connection refused". The route then answers 503, so a perfectly valid session
+      # reads on the page as the asset register being unreachable. Same trap as
+      # svc-deepagents' OPERATIONS_INTELLIGENCE_BASE_URL below.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
     command:
       - bash
       - -c
@@ -111,6 +127,36 @@ services:
       - /backend/schema-mapper
     depends_on:
       postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The migration pipeline's background worker. Every gate the reader answers is enqueued
+  # as `resume_migration` on the arq queue in Redis; without a consumer the job sits there
+  # and the Migration page simply stops moving — no error, no timeout, nothing to read.
+  #
+  # On 22 Sep 2026 a CMMS export sat queued for 546 seconds that way, and Redis showed the
+  # worker health key had never been written: no compose file in this repo defined a worker,
+  # so migrations had never completed on any stack built from it. Same image and env as
+  # schema-mapper-app above — only the command differs.
+  schema-mapper-worker:
+    build:
+      context: ./apps/backend/cafm-connector-service-final
+      dockerfile: svc-ai-schema-mapper/Dockerfile
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      USE_SQLITE_DEV: "false"
+      PLENUM_CMMS_SCHEMA: plenum_cafm
+      DEBUG: "true"
+      ENVIRONMENT: development
+      LANGSMITH_TRACING: "false"
+      OTEL_SDK_DISABLED: "true"
+    command: ["arq", "src.worker.WorkerSettings"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -212,6 +258,14 @@ services:
       AUTO_SEED_UK_PACK: "true"
       AUTO_MIGRATE_ON_STARTUP: "true"
       DOC_RAG_BASE_URL: http://schema-mapper-app:8003
+      # The orchestrator, as THIS container reaches it. config.py defaults this to
+      # 127.0.0.1:8008, which is right only for the all-in-one image (deploy/allinone runs
+      # deep-agents under the same supervisord); here it is a separate container and the
+      # default resolves to nothing, so every server-side call fails with "All connection
+      # attempts failed". Nothing needed it until report cards landed — the browser used to
+      # be the only caller of deep-agents, through the gateway — and now the report
+      # scheduler refreshes a card by asking the orchestrator itself.
+      DEEP_AGENTS_BASE_URL: http://svc-deepagents:8008
       PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
       FRONTEND_PUBLIC_URL: http://localhost:3000
       OTEL_SDK_DISABLED: "true"
@@ -258,6 +312,52 @@ services:
       - svc-operations-intelligence
     restart: unless-stopped
 
+  # Vite dev server with hot reload — the loop apps/frontend/README.md calls "the frontend
+  # dev loop", now a container instead of a bare `npm run dev` in a background shell.
+  #
+  # The bare-process version kept dying silently: nohup/disown protects a process from its
+  # spawning shell exiting, not from the whole session that shell belonged to going away, and
+  # this Mac alone logged 43 sleep/wakes in one day. A container has no such dependency — it
+  # is supervised by dockerd the same way the other 10 services already are, none of which
+  # have ever needed restarting themselves this whole time. restart: unless-stopped is enough
+  # to bring it back with `docker compose up -d` after Docker Desktop itself restarts, exactly
+  # like every other service here — this is not magic survival through a full host reboot.
+  #
+  # gateway-app:8080 is the CONTAINER port (the internal address the docker network resolves,
+  # not 3000 — that is only the host-side mapping nginx's own port line publishes below).
+  # host: true in vite.config.js is required for this to be reachable at all: a container's
+  # own localhost is not what the 5174:5174 mapping forwards to, and Vite defaults to binding
+  # only that — the failure mode is a silent "connection refused" with nothing in the Vite log.
+  frontend-dev:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/frontend:/app
+      # A named volume, not the bind mount above, for node_modules — the host's own copy
+      # (macOS, if `npm install` has ever run there) carries native builds (esbuild,
+      # @rollup/rollup-*, fsevents) for the wrong OS entirely; this keeps the container's
+      # own linux install of them intact across restarts instead of being shadowed by
+      # whatever the bind mount above is hiding underneath it.
+      - frontend_dev_node_modules:/app/node_modules
+    environment:
+      PORT: "5174"
+      VITE_DEV_PROXY_TARGET: http://gateway-app:8080
+      # macOS's Docker Desktop bind-mount backend (virtiofs/gRPC-FUSE) does not forward
+      # native inotify events into the container — chokidar (Vite's watcher) sees the byte
+      # content change (confirmed: `docker exec cat` shows a host edit immediately) but
+      # never fires on it, silently: no error, no HMR update, edits just stop applying.
+      # Both are chokidar's own documented env vars, read automatically — no vite.config.js
+      # change needed, and unset (so still native-events, still fast) for every host-run
+      # `npm run dev`, since this bind-mount limitation is specific to the container.
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    ports:
+      - "5174:5174"
+    depends_on:
+      - gateway-app
+    restart: unless-stopped
+
   gateway-app:
     build:
       context: ./apps/frontend/infra/single-url
@@ -273,3 +373,6 @@ services:
       - svc-deepagents
       - svc-operations-intelligence
     restart: unless-stopped
+
+volumes:
+  frontend_dev_node_modules:

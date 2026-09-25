@@ -7,6 +7,7 @@ vendor is registered on-platform and currently compliant (or blocked/lapsed).
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 from urllib.parse import urlencode
@@ -94,6 +95,58 @@ def resolve_verification_register(
     return None
 
 
+async def persist_register_link(
+    session: AsyncSession,
+    certificate_id: Any,
+    link: dict[str, Any],
+) -> bool:
+    """Write the register link onto the certificate it was built for.
+
+    Two things this is careful about, both of which would be silent if got wrong.
+
+    It **merges**. ``raw_metadata.verification`` already holds the outcome of an actual
+    check — verified, status, checked_at — written by the CCC path. Replacing that block
+    with a link would erase the evidence that the vendor was verified at all, and the
+    register line would still render, so nobody would notice.
+
+    It **never touches `verified` or `status`**. A link to a register is not a check against
+    one. Storing the URL says where to look; it does not say anyone looked, and a
+    certificate that has only ever had a link built must not read as accredited.
+    """
+    from ...models.compliance import ComplianceCertificate
+
+    try:
+        cert = await session.get(ComplianceCertificate, certificate_id)
+    except Exception as exc:  # noqa: BLE001 — a stored link must never fail a verify
+        log.warning("verification.persist_link_failed", error=str(exc)[:200])
+        return False
+    if not cert:
+        return False
+
+    meta = dict(cert.raw_metadata or {})
+    ver = dict(meta.get("verification") or {})
+    ver.update({
+        "register_url": link.get("register_url"),
+        "verification_url": link.get("verification_url"),
+        "issuing_body": link.get("issuing_body"),
+        "register_prefilled": bool(link.get("prefills_number")),
+        "link_built_at": datetime.now(timezone.utc).isoformat(),
+    })
+    meta["verification"] = ver
+    cert.raw_metadata = meta
+    cert.updated_at = datetime.now(timezone.utc)
+    try:
+        # Committed, not just flushed. verify-now is otherwise a read-only endpoint whose
+        # session nobody commits, so a flush alone reported success and wrote nothing —
+        # the link came back marked stored and was gone on the next request.
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("verification.persist_link_commit_failed", error=str(exc)[:200])
+        await session.rollback()
+        return False
+    return True
+
+
 async def build_verify_now_link(
     session: AsyncSession,
     *,
@@ -101,12 +154,49 @@ async def build_verify_now_link(
     accreditation_number: str | None = None,
     country_code: str = "UK",
     vendor_name: str | None = None,
+    certificate_id: Any = None,
+    certificate_number: str | None = None,
+) -> dict[str, Any]:
+    """Build the register link, and write it onto the certificate when one is named.
+
+    Wrapping rather than threading the write through four return paths: a link that is
+    persisted on three of them and not the fourth is the kind of gap nobody finds until a
+    particular register is used.
+    """
+    link = await _build_verify_now_link(
+        session,
+        certificate_type_code=certificate_type_code,
+        accreditation_number=accreditation_number,
+        country_code=country_code,
+        vendor_name=vendor_name,
+        certificate_number=certificate_number,
+    )
+    if certificate_id and (link.get("verification_url") or link.get("register_url")):
+        link["stored_on_certificate"] = await persist_register_link(
+            session, certificate_id, link
+        )
+    return link
+
+
+async def _build_verify_now_link(
+    session: AsyncSession,
+    *,
+    certificate_type_code: str,
+    accreditation_number: str | None = None,
+    country_code: str = "UK",
+    vendor_name: str | None = None,
+    certificate_number: str | None = None,
 ) -> dict[str, Any]:
     """
     Opens the relevant register in a new tab.
     Pre-fills accreditation number only when the register supports it
     (see verification_registers.prefills_number in the UK pack).
     Navigation action only — no scraping or automation.
+
+    ``certificate_number`` is separate from ``accreditation_number`` because on the GOV.UK
+    energy register the certificate has its own public page, addressed by the certificate's
+    own lodgement reference — not by anything about the assessor. Handed both, that register
+    is the one place where the link can open the document itself rather than a search form.
     """
     pack = await get_pack_type(
         session, certificate_type_code, country_code=country_code
@@ -129,6 +219,7 @@ async def build_verify_now_link(
             accreditation_number=accreditation_number,
             vendor_name=vendor_name,
             prefills_number=prefills,
+            certificate_number=certificate_number,
         )
         return {
             "ok": True,
@@ -172,6 +263,7 @@ async def build_verify_now_link(
         accreditation_number=accreditation_number,
         vendor_name=vendor_name,
         prefills_number=prefills,
+        certificate_number=certificate_number,
     )
 
     return {
@@ -202,15 +294,54 @@ async def build_verify_now_link(
     }
 
 
+#: A GOV.UK energy-certificate lodgement reference: five groups of four digits.
+_RRN_RE = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{4}-\d{4}$")
+
+#: The GOV.UK energy register, where a lodged certificate has its own public page.
+_GOVUK_ENERGY_HOST = "https://find-energy-certificate.service.gov.uk"
+
+
+def govuk_energy_certificate_url(reference: str | None) -> str | None:
+    """The public page for one lodged energy certificate, or None.
+
+    The register addresses a certificate by its own lodgement reference, so this is the one
+    link in the platform that opens the document a person is holding rather than a search
+    form they still have to fill in. None when the reference is not a lodgement reference:
+    a made-up number would build a URL that renders an error page, which reads as a broken
+    link rather than as "this certificate is not on the register".
+    """
+    ref = (reference or "").strip()
+    digits = re.sub(r"[\s-]", "", ref)
+    if not _RRN_RE.match(ref) and re.fullmatch(r"\d{20}", digits):
+        # The same reference written without its dashes, as some PDFs print it.
+        ref = "-".join(digits[i:i + 4] for i in range(0, 20, 4))
+    return f"{_GOVUK_ENERGY_HOST}/energy-certificate/{ref}" if _RRN_RE.match(ref) else None
+
+
 def _append_register_search_params(
     base_url: str,
     *,
     accreditation_number: str | None,
     vendor_name: str | None,
     prefills_number: bool,
+    certificate_number: str | None = None,
 ) -> str:
     """Append register-specific search params when prefill is supported."""
     url = base_url
+
+    # GOV.UK energy register: open the certificate itself when its reference is known. Its
+    # search form takes `reference_number`, so that is the fallback - never the generic `q`
+    # below, which this service ignores and which would land a person on an empty form.
+    if _GOVUK_ENERGY_HOST in url.lower():
+        direct = govuk_energy_certificate_url(
+            certificate_number
+        ) or govuk_energy_certificate_url(accreditation_number)
+        # Anything else opens the empty search form. The form validates the field as a
+        # 20-digit number, so pre-filling "EPC-SYN-FA96128A" landed the person on
+        # "Enter a 20-digit certificate number" — an error page that reads as a broken link
+        # rather than as "this number is not a lodgement reference".
+        return direct or url
+
     if not prefills_number:
         return url
     number = (accreditation_number or "").strip()
@@ -270,6 +401,7 @@ async def check_vendor_registration_compliance(
     cert_scope: str | None = "Vendor",
     country_code: str = "UK",
     organization_id: UUID | None = None,
+    certificate_number: str | None = None,
 ) -> dict[str, Any]:
     """
     Search whether the vendor is registered on-platform and currently compliant
@@ -307,6 +439,7 @@ async def check_vendor_registration_compliance(
         accreditation_number=accreditation_number,
         country_code=country_code,
         vendor_name=name or None,
+        certificate_number=certificate_number,
     )
 
     vendor_row: dict[str, Any] | None = None

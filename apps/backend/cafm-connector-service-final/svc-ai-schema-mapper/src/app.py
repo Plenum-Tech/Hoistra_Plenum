@@ -102,6 +102,9 @@ from .graph.nodes.ingest_node import (
 from .api.mappings import router as mappings_router
 from .runtime_logs import bind_runtime_log_context, get_runtime_logs, install_runtime_log_capture
 
+from .migration_runs import await_migration_run as _await_migration_run
+from .migration_runs import track_migration_run as _track_migration_run
+
 logger = get_logger(__name__)
 
 
@@ -983,6 +986,11 @@ def create_app() -> FastAPI:
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
         ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
         """
@@ -1087,6 +1095,7 @@ def create_app() -> FastAPI:
             initial_state: dict = {
                 "migration_id": mid_str,
                 "organization_id": organization_id,
+                "building_id": building_id,
                 "cmms_name": cmms_name,
                 "source_filename": filename,
                 "source_system": cmms_name,
@@ -1159,7 +1168,7 @@ def create_app() -> FastAPI:
             except Exception as _arq_err:
                 logger.warning(f"[start-with-upload] ARQ enqueue failed ({_arq_err}); running inline")
         if not _enqueued:
-            asyncio.create_task(_run_inline())
+            _track_migration_run(mid_str, _run_inline())
 
         logger.info(f"[start-with-upload] Migration {migration_id} started, file={filename}")
 
@@ -1183,6 +1192,11 @@ def create_app() -> FastAPI:
         organization_id: str = Form(
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
+        ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
         ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
@@ -1429,6 +1443,7 @@ def create_app() -> FastAPI:
                 initial_state: dict = {
                     "migration_id": mid_str,
                     "organization_id": organization_id,
+                    "building_id": building_id,
                     "cmms_name": cmms_name,
                     "source_filename": combined_filename,
                     "source_system": cmms_name,
@@ -1487,7 +1502,7 @@ def create_app() -> FastAPI:
                 logger.exception(f"[start-with-upload-multi] Prepare failed for {mid_str}: {exc}")
                 await _fail_job(exc)
 
-        asyncio.create_task(_prepare_and_run_multi())
+        _track_migration_run(mid_str, _prepare_and_run_multi())
 
         logger.info(
             f"[start-with-upload-multi] Migration {migration_id} accepted — "
@@ -1504,6 +1519,64 @@ def create_app() -> FastAPI:
             ),
         )
 
+    #: An output bigger than this is summarised in the progress poll rather than sent. Chosen
+    #: so every node's real result still travels — the largest that is not a bulk dump is Gate
+    #: 2's 5.9 KB — while the three that are (Pre-Semantic's mapping table at 715 KB, UDR's
+    #: report at 678 KB, File Ingestion's parse at 57 KB) do not.
+    _MAX_POLLED_OUTPUT_BYTES = 16_384
+
+    def _lighten_record(value, include_output: bool, what: str):
+        """A record field as the poll should carry it: a note of its size, not its contents.
+
+        The UDR report is the same kind of thing as a node's output — the pipeline's record of
+        what it found, not where the run is — and it is the larger half of it: 651 KB of
+        per-column intelligence over 174 columns, sent every three seconds to a page that does
+        not read it. GET /api/migration/{id} still returns all of it, which is the route that
+        exists to.
+        """
+        if include_output or value in (None, {}, []):
+            return value
+        try:
+            size = len(json.dumps(value, default=str))
+        except (TypeError, ValueError):
+            return value
+        if size <= _MAX_POLLED_OUTPUT_BYTES:
+            return value
+        return {"_omitted": True, "_bytes": size,
+                "_hint": f"{what} is not sent with the progress poll — "
+                         f"GET /api/migration/{{id}} returns it, or add ?include_output=true"}
+
+    def _lighten_node_outputs(nodes: list[dict], include_output: bool) -> list[dict]:
+        """The nodes as the poll should carry them: progress, logs, and small outputs.
+
+        A poll is asked "where is this run", every few seconds, and answered with the pipeline's
+        entire record. Returning the record is right for a caller that asks for it and wrong for
+        one counting nodes — the difference is a megabyte a second, and it timed the page out
+        while the migration underneath had already finished.
+        """
+        if include_output:
+            return nodes
+        out = []
+        for n in nodes:
+            if not isinstance(n, dict) or n.get("output") in (None, {}, []):
+                out.append(n)
+                continue
+            try:
+                size = len(json.dumps(n["output"], default=str))
+            except (TypeError, ValueError):
+                size = _MAX_POLLED_OUTPUT_BYTES + 1
+            if size <= _MAX_POLLED_OUTPUT_BYTES:
+                out.append(n)
+                continue
+            # Said, not dropped: a reader who wants it is told it exists and how to ask.
+            out.append({**n, "output": {
+                "_omitted": True,
+                "_bytes": size,
+                "_hint": "large node output is not sent with the progress poll — "
+                         "add ?include_output=true to this request for the full record",
+            }})
+        return out
+
     @app.get(
         "/api/migration/{migration_id}/status",
         response_model=MigrationStatusResponse,
@@ -1512,6 +1585,11 @@ def create_app() -> FastAPI:
     )
     async def get_migration_status(
         migration_id: str = Path(..., description="Migration UUID"),
+        include_output: bool = Query(
+            False,
+            description="Send every node's full output. Off by default: the progress poll runs "
+                        "every few seconds and the outputs run to a megabyte.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStatusResponse:
         """Get current status, progress, and statistics for a migration."""
@@ -1838,11 +1916,17 @@ def create_app() -> FastAPI:
                 pending_gate_payload=migration_job.pending_gate_payload,
                 field_mapping_draft=getattr(migration_job, "field_mapping_draft", None),
                 udr_test_results=_udr_test_results_from_job(migration_job),
-                udr_relationship_report=_udr_relationship_report_from_job(migration_job),
-                udr_table_resolution=_udr_table_resolution_from_job(migration_job),
-                udr_column_intelligence=_udr_column_intelligence_from_job(migration_job),
+                udr_relationship_report=_lighten_record(
+                    _udr_relationship_report_from_job(migration_job), include_output,
+                    "the UDR relationship report"),
+                udr_table_resolution=_lighten_record(
+                    _udr_table_resolution_from_job(migration_job), include_output,
+                    "the UDR table resolution"),
+                udr_column_intelligence=_lighten_record(
+                    _udr_column_intelligence_from_job(migration_job), include_output,
+                    "the UDR column intelligence"),
                 error_message=migration_job.error_message,
-                nodes=migration_nodes,
+                nodes=_lighten_node_outputs(migration_nodes, include_output),
             )
 
         except HTTPException:
@@ -2347,7 +2431,7 @@ def create_app() -> FastAPI:
                     except Exception:
                         pass
 
-            asyncio.create_task(_inline_resume())
+            _track_migration_run(migration_id, _inline_resume())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3268,6 +3352,33 @@ def create_app() -> FastAPI:
             )
 
         step_key = migration_job.pending_gate_type or "unknown_step"
+
+        # The pause may belong to a run that has not finished yet (migration_runs.py). Let it
+        # finish first, with no transaction held open while waiting, then decide on what the
+        # database says once it has.
+        await session.rollback()
+        if not await _await_migration_run(migration_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step '{step_key}' is still finishing; advance again in a moment.",
+            )
+        _now = (
+            await session.execute(
+                select(MigrationJob.status, MigrationJob.pending_gate_type)
+                .where(MigrationJob.id == migration_id_uuid)
+            )
+        ).one()
+        if _now.status != "step_paused":
+            return MigrationApprovalResponse(
+                migration_id=migration_id_uuid,
+                status=_now.status,
+                message=(
+                    f"The run moved on from '{step_key}' while it finished; now "
+                    f"{_now.status}{' at ' + _now.pending_gate_type if _now.pending_gate_type else ''}."
+                ),
+                decisions_processed=0,
+            )
+        step_key = _now.pending_gate_type or step_key
         logger.info(f"[{migration_id}] Advancing past step '{step_key}'")
 
         # Clear step pause and flip status back to running — as an ATOMIC compare-and-swap
@@ -3370,7 +3481,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_advance())
+        _track_migration_run(migration_id, _inline_advance())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3510,7 +3621,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_rerun())
+        _track_migration_run(migration_id, _inline_rerun())
 
         logger.info(f"[{migration_id}] Re-running from node {node_num} ({target_node})")
         return MigrationApprovalResponse(
@@ -3616,7 +3727,7 @@ def create_app() -> FastAPI:
                 try:
                     import asyncio
                     from .worker import resume_migration
-                    asyncio.create_task(
+                    _track_migration_run(migration_id,
                         resume_migration(
                             {},
                             migration_id=migration_id,
@@ -4652,8 +4763,28 @@ def create_app() -> FastAPI:
                 except (ValueError, TypeError):
                     raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
 
-            # Build query
-            query = select(MigrationJob).where(MigrationJob.organization_id == org_id)
+            # NINE COLUMNS, NOT THE WHOLE ROW.
+            #
+            # MigrationJob carries pending_gate_payload, field_mapping_draft and node_logs,
+            # all JSONB — a single gate payload runs to hundreds of kilobytes and node_logs
+            # is append-only, so a row is megabytes. select(MigrationJob) fetched every one
+            # of them to render nine small fields per run: listing 12 took ~3.6s against a
+            # 829-row organization and limit=50 did not return at all.
+            #
+            # MigrationListItem needs exactly these, so exactly these are read. The
+            # response is unchanged; only the bytes crossing the wire are.
+            cols = (
+                MigrationJob.id,
+                MigrationJob.cmms_name,
+                MigrationJob.status,
+                MigrationJob.progress_pct,
+                MigrationJob.t1_mapped_count,
+                MigrationJob.t2_auto_count,
+                MigrationJob.t2_human_count,
+                MigrationJob.started_at,
+                MigrationJob.completed_at,
+            )
+            query = select(*cols).where(MigrationJob.organization_id == org_id)
 
             if status:
                 query = query.where(MigrationJob.status == status)
@@ -4669,7 +4800,7 @@ def create_app() -> FastAPI:
             # Fetch paginated results
             query = query.order_by(MigrationJob.started_at.desc()).limit(limit).offset(offset)
             result = await session.execute(query)
-            jobs = result.scalars().all()
+            jobs = result.all()
 
             items = [
                 MigrationListItem(
@@ -4678,7 +4809,9 @@ def create_app() -> FastAPI:
                     status=j.status,
                     progress_pct=j.progress_pct,
                     t1_count=j.t1_mapped_count,
-                    t2_count=j.t2_auto_count + j.t2_human_count,
+                    # A count column is nullable on a run that has not mapped anything yet,
+                    # and None + None raises rather than reading as nothing mapped.
+                    t2_count=(j.t2_auto_count or 0) + (j.t2_human_count or 0),
                     started_at=j.started_at,
                     completed_at=j.completed_at,
                 )
@@ -7286,6 +7419,9 @@ def create_app() -> FastAPI:
     )
     async def get_schema_mapping_status(
         schema_mapping_id: str = Path(..., description="Schema Mapping UUID"),
+        include_output: bool = Query(
+            False, description="Send every node's full output (see the migration poll)."
+        ),
         session: AsyncSession = Depends(get_db_session),
     ):
         """Get current status and progress of a schema mapping session."""
@@ -7554,7 +7690,7 @@ def create_app() -> FastAPI:
                 job_total_tables=int(job.total_tables or 0),
                 job_total_fields=int(job.total_fields or 0),
                 final_summary=job.final_summary if isinstance(job.final_summary, dict) else None,
-                nodes=schema_nodes,
+                nodes=_lighten_node_outputs(schema_nodes, include_output),
                 pending_gate_payload=_gate_payload if isinstance(_gate_payload, dict) else None,
                 external_cmms_name=str(job.external_cmms_name or "Fiix"),
             )

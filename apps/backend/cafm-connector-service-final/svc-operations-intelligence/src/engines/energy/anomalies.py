@@ -1,4 +1,7 @@
-"""Feature C — anomaly detection (weekend spike, baseline drift, asset spike)."""
+"""Feature C — anomaly detection: the thirteen rules on the energy page's card.
+
+Three live here (weekend spike, baseline drift, asset spike); the other ten are in
+detectors.py and are bound to their inputs in scan_meter_anomalies."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -7,19 +10,20 @@ from statistics import median
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import Text as SAText, cast as sa_cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models.energy import EnergyAnomaly, EnergyMeter, MeterReading
 from ...shared.approvals import enqueue_approval, write_audit
+from . import detectors as D
 
 log = get_logger(__name__)
 
 # An anomaly in one of these has been dealt with; a fresh detection of the same conditions
 # is a NEW event and should be raised again. Every other status means the event is still
 # live and re-detecting it must not create a second row.
-_SETTLED_STATUSES = ("resolved", "closed", "dismissed")
+_SETTLED_STATUSES = ("resolved", "closed", "dismissed", "superseded")
 
 WEEKEND_SPIKE_PCT = 130.0
 BASELINE_DRIFT_PCT = 110.0
@@ -75,20 +79,78 @@ def is_weekend(dt: datetime) -> bool:
     return _aware(dt).weekday() >= 5
 
 
+#: The annualised figure at or above which an anomaly is raised as high severity, per
+#: currency. One number cannot serve four: £500 and AED 500 are not the same amount of
+#: money, and comparing a dirham figure against a sterling threshold made every AE anomaly
+#: read three times more urgent than the identical UK one. Roughly equivalent sums, not
+#: exchange rates — the point is that "worth escalating" means the same thing everywhere.
+HIGH_SEVERITY_AT: dict[str, float] = {"GBP": 500.0, "USD": 650.0, "AED": 2400.0, "SGD": 850.0}
+
+
+def severity_for(amount: float | None, currency: str | None) -> str:
+    """high / medium, against the threshold for the currency the figure is in.
+
+    An unpriced anomaly is not automatically minor: the figure is unknown, not small. It
+    takes the default rather than being sorted to the bottom of the queue by a zero it
+    never had.
+    """
+    if amount is None:
+        return "medium"
+    return "high" if amount >= HIGH_SEVERITY_AT.get(
+        str(currency or D.DEFAULT_CURRENCY).upper(), HIGH_SEVERITY_AT["GBP"]) else "medium"
+
+
+def money_phrase(amount: float | None, currency: str | None, impact: dict[str, Any] | None) -> str:
+    """How a figure reads in a queue summary — money where there is money, the rule's own
+    measure where there is not. Never "£0.00" for something nobody has priced."""
+    if amount is not None:
+        return f"est {str(currency or D.DEFAULT_CURRENCY).upper()} {amount}/yr excess"
+    if impact and impact.get("value") is not None:
+        return f"{impact['value']} {impact.get('unit') or ''}".strip() + " (not priceable yet)"
+    return "impact not quantified"
+
+
+async def currency_for_building(session: AsyncSession, building_id: UUID | None) -> str:
+    """The currency this building's tariff is quoted in, from the country it sits in."""
+    if not building_id:
+        return D.DEFAULT_CURRENCY
+    try:
+        async with session.begin_nested():
+            # Off the site, not the building: a building inherits its address from the site
+            # it stands on, and plenum_cafm.buildings has no country column here at all.
+            country = (await session.execute(text("""
+                SELECT s.country_code
+                  FROM plenum_cafm.buildings b
+                  LEFT JOIN plenum_cafm.sites s
+                    ON s.site_id = b.site_id OR s.id = b.site_id
+                 WHERE b.building_id = CAST(:b AS uuid)
+                 LIMIT 1
+            """), {"b": str(building_id)})).scalar()
+    except Exception as exc:  # noqa: BLE001 — a missing column must not stop a scan
+        log.warning("energy.anomaly.currency_lookup_failed", error=str(exc)[:200])
+        return D.DEFAULT_CURRENCY
+    return D.currency_for(country)
+
+
+def _dec(value: Any) -> Decimal | None:
+    """A number for the database, or NULL where the rule had no number to give."""
+    return None if value is None else Decimal(str(value))
+
+
 def financial_translation(
     *,
-    excess_kwh: float,
+    excess_kwh: float | None,
     annualised_frequency: float,
     tariff: float,
-) -> dict[str, float]:
-    """excess kWh × annualised frequency × current tariff."""
-    annualised = excess_kwh * annualised_frequency
-    return {
-        "excess_kwh": round(excess_kwh, 4),
-        "annualised_excess_kwh": round(annualised, 4),
-        "financial_gbp": round(annualised * tariff, 2),
-        "tariff_gbp_per_kwh": tariff,
-    }
+    currency: str | None = None,
+) -> dict[str, Any]:
+    """excess kWh × annualised frequency × current tariff.
+
+    Delegates to the shared implementation so the three rules that live in this file and the
+    ten in detectors.py cannot drift apart on what "no figure" means or what currency a
+    figure is in. ``excess_kwh=None`` yields no money at all rather than zero.
+    """
+    return D._finance(excess_kwh, annualised_frequency, tariff, currency)
 
 
 def detect_weekend_spike(
@@ -298,31 +360,212 @@ async def _load_readings(
     meter_id: UUID,
     *,
     days: int = 35,
+    as_of: datetime | None = None,
 ) -> list[tuple[datetime, float]]:
     """Load the most recent `days` of readings that actually exist.
 
     Windowing from *now* made historical CSV imports (e.g. Dec–Jan loaded in
     August) look empty to the detectors, so Scan reported complete with nothing.
     """
-    latest = (
-        await session.execute(
-            select(func.max(MeterReading.reading_at)).where(MeterReading.meter_id == meter_id)
-        )
-    ).scalar_one_or_none()
+    q = select(func.max(MeterReading.reading_at)).where(MeterReading.meter_id == meter_id)
+    if as_of is not None:
+        q = q.where(MeterReading.reading_at <= as_of)
+    latest = (await session.execute(q)).scalar_one_or_none()
     if latest is None:
         return []
     start = _aware(latest) - timedelta(days=days)
+    where = [MeterReading.meter_id == meter_id, MeterReading.reading_at >= start]
+    if as_of is not None:
+        where.append(MeterReading.reading_at <= as_of)
     rows = list(
         (
             await session.execute(
-                select(MeterReading.reading_at, MeterReading.consumption_kwh).where(
-                    MeterReading.meter_id == meter_id,
-                    MeterReading.reading_at >= start,
-                )
+                select(MeterReading.reading_at, MeterReading.consumption_kwh).where(*where)
             )
         ).all()
     )
     return [(r[0], float(r[1])) for r in rows]
+
+
+def _occupancy_from(meta: dict[str, Any] | None) -> D.OccupancyHours:
+    """The meter's occupancy calendar from raw_metadata.occupancy_hours, else the default."""
+    oh = (meta or {}).get("occupancy_hours") or {}
+    try:
+        return D.OccupancyHours(
+            start_hour=int(oh.get("start_hour", D.DEFAULT_OCCUPANCY.start_hour)),
+            end_hour=int(oh.get("end_hour", D.DEFAULT_OCCUPANCY.end_hour)),
+            weekdays_only=bool(oh.get("weekdays_only", True)),
+        )
+    except (TypeError, ValueError):
+        return D.DEFAULT_OCCUPANCY
+
+
+def _bands_from(meta: dict[str, Any] | None) -> tuple[list[D.TariffBand], float | None]:
+    """Tariff bands from raw_metadata.tariff_bands [{name,start_hour,end_hour,weekdays_only,rate}]
+    and raw_metadata.offpeak_rate; the UK red band when the meter has none."""
+    raw = (meta or {}).get("tariff_bands")
+    bands: list[D.TariffBand] = []
+    for b in raw or []:
+        try:
+            bands.append(D.TariffBand(str(b.get("name") or "peak"), int(b["start_hour"]), int(b["end_hour"]),
+                                      bool(b.get("weekdays_only", True)),
+                                      float(b["rate"]) if b.get("rate") is not None else None))
+        except (KeyError, TypeError, ValueError):
+            continue
+    off = (meta or {}).get("offpeak_rate")
+    return (bands or list(D.DEFAULT_PEAK_BANDS)), (float(off) if off is not None else None)
+
+
+async def _prior_year_max_kw(session: AsyncSession, meter_id: UUID, latest: datetime) -> float | None:
+    """The highest interval demand in the year before the current window — the peak rule's
+    fallback limit when no agreed capacity is on the meter."""
+    row = (await session.execute(
+        select(func.max(MeterReading.consumption_kwh), func.min(MeterReading.period_minutes)).where(
+            MeterReading.meter_id == meter_id,
+            MeterReading.reading_at < latest - timedelta(days=7),
+            MeterReading.reading_at >= latest - timedelta(days=372),
+        )
+    )).first()
+    if not row or row[0] is None:
+        return None
+    minutes = int(row[1] or 30)
+    return float(row[0]) * 60.0 / max(1, minutes)
+
+
+async def _quality_flags(session: AsyncSession, meter_id: UUID, since: datetime) -> list[tuple[datetime, str | None]]:
+    rows = (await session.execute(
+        select(MeterReading.reading_at, MeterReading.quality_flag).where(
+            MeterReading.meter_id == meter_id, MeterReading.reading_at >= since))).all()
+    return [(r[0], r[1]) for r in rows]
+
+
+async def _closed_work_orders(session: AsyncSession, meter: EnergyMeter, since: datetime) -> list[tuple[datetime, str]]:
+    """Work orders closed on the meter's asset (a sub-meter) or building in the horizon."""
+    from sqlalchemy import text as _text
+    where = []
+    params: dict[str, Any] = {"since": since}
+    if meter.asset_id:
+        where.append("asset_id = CAST(:a AS uuid)"); params["a"] = str(meter.asset_id)
+    if meter.building_id:
+        where.append("building_id = CAST(:b AS uuid)"); params["b"] = str(meter.building_id)
+    if not where:
+        return []
+    try:
+        # In a savepoint: on the deployment where completed_at is a plain timestamp and
+        # closed_at a timestamptz, the bare coalesce raised — and because the error was
+        # caught here, the session was left aborted and every later query in the scan
+        # (weather, BMS trends, the write itself) failed with "transaction is aborted".
+        # The savepoint releases cleanly either way; the casts make both columns one type.
+        async with session.begin_nested():
+            rows = (await session.execute(_text(f"""
+                SELECT coalesce(closed_at, completed_at::timestamptz) AS closed,
+                       coalesce(wo_code, workorder_ref, id::text)
+                  FROM plenum_cafm.work_orders
+                 WHERE ({' OR '.join(where)}) AND coalesce(closed_at, completed_at::timestamptz) >= :since
+                 ORDER BY 1 DESC LIMIT 20"""), params)).all()
+    except Exception as exc:  # noqa: BLE001 — a missing column must not stop the scan
+        log.warning("energy.anomaly.work_orders_unavailable", error=str(exc)[:160])
+        return []
+    return [(r[0], str(r[1])) for r in rows if r[0] is not None]
+
+
+async def _monthly_and_degree_days(session: AsyncSession, meter: EnergyMeter):
+    """Monthly kWh for the meter and the building's degree days, for the weather rule."""
+    if not meter.building_id:
+        return [], []
+    from sqlalchemy import text as _text
+    months = (await session.execute(_text("""
+        SELECT date_trunc('month', reading_at)::date AS m, sum(consumption_kwh)
+          FROM plenum_cafm.meter_readings WHERE meter_id = CAST(:m AS uuid)
+         GROUP BY 1 ORDER BY 1"""), {"m": str(meter.id)})).all()
+    try:
+        dd = (await session.execute(_text("""
+            SELECT month, hdd, cdd FROM plenum_cafm.weather_degree_days
+             WHERE building_id = CAST(:b AS uuid) ORDER BY month"""), {"b": str(meter.building_id)})).all()
+    except Exception:  # noqa: BLE001 — table absent on an old database
+        dd = []
+    # a partial current month would read as a drop; only complete months are compared
+    if months:
+        months = months[:-1]
+    return ([(r[0], float(r[1])) for r in months], [(r[0], float(r[1]), float(r[2])) for r in dd])
+
+
+async def _bms_trends(session: AsyncSession, meter: EnergyMeter, since: datetime):
+    if not meter.building_id:
+        return []
+    from sqlalchemy import text as _text
+    try:
+        rows = (await session.execute(_text("""
+            SELECT recorded_at, zone, coalesce(heating_pct, 0), coalesce(cooling_pct, 0)
+              FROM plenum_cafm.bms_trends
+             WHERE building_id = CAST(:b AS uuid) AND recorded_at >= :since
+             ORDER BY zone, recorded_at"""), {"b": str(meter.building_id), "since": since})).all()
+    except Exception:  # noqa: BLE001
+        return []
+    return [(r[0], r[1], float(r[2]), float(r[3])) for r in rows]
+
+
+def _supersede(duplicate, kept) -> None:
+    """Close one finding as the same fault as another, keeping the trail between them.
+
+    Not a deletion and not a resolution: nobody fixed anything. The row says which finding it
+    turned out to be part of, so a figure quoted from it before the collapse can still be
+    traced. Its window is folded into the survivor by the caller's `_observe_again`.
+    """
+    duplicate.status = "superseded"
+    detail = dict(duplicate.detail_json or {})
+    detail["superseded_by"] = str(kept.id)
+    detail["superseded_reason"] = (
+        "the same rule on the same meter over an overlapping window - one fault, one finding"
+    )
+    duplicate.detail_json = detail
+
+
+def _observe_again(existing, hit: dict[str, Any], *, window_end: datetime,
+                   window_start: datetime, tariff: float, currency: str) -> None:
+    """Fold a fresh sighting into the finding it continues.
+
+    The finding keeps its identity — when it was first detected, and its approval — and takes
+    the newest measurement of how it stands. The money is a rate, kWh per year at the observed
+    deviation, so the current estimate is the newest one rather than the largest or the sum;
+    summing rates over overlapping windows is what produced a building whose anomalies cost
+    more than its entire energy bill.
+
+    Nothing is lost: the peak and the number of sightings are kept on detail_json, so a fault
+    that was worse in February than it is today still says so.
+    """
+    seen = dict(existing.detail_json or {})
+    history = dict(seen.get("recurrence") or {})
+    prior_peak = history.get("peak_financial_gbp")
+    amount = hit.get("financial_gbp")
+    peak = max([v for v in (prior_peak, float(existing.financial_gbp or 0) or None, amount)
+                if v is not None], default=None)
+    history.update({
+        "observations": int(history.get("observations") or 1) + 1,
+        "first_window_end": history.get("first_window_end")
+                            or (existing.window_end.isoformat() if existing.window_end else None),
+        "latest_window_end": window_end.isoformat(),
+        "peak_financial_gbp": peak,
+        "peak_metric_pct": max([v for v in (history.get("peak_metric_pct"),
+                                            float(existing.metric_pct or 0),
+                                            float(hit["metric_pct"]))
+                                if v is not None], default=None),
+    })
+    seen["recurrence"] = history
+    seen.update({k: v for k, v in (hit.get("detail") or {}).items()})
+    seen["impact"] = hit.get("impact")
+
+    # The window grows to cover everything this finding has been seen across.
+    if existing.window_start is None or window_start < _aware(existing.window_start):
+        existing.window_start = window_start
+    existing.window_end = window_end
+    existing.metric_pct = Decimal(str(hit["metric_pct"]))
+    existing.excess_kwh = _dec(hit.get("excess_kwh"))
+    existing.annualised_excess_kwh = _dec(hit.get("annualised_excess_kwh"))
+    existing.financial_gbp = _dec(amount)
+    existing.currency = hit.get("currency") or currency
+    existing.tariff_used = Decimal(str(tariff))
+    existing.detail_json = seen
 
 
 async def scan_meter_anomalies(
@@ -330,81 +573,209 @@ async def scan_meter_anomalies(
     *,
     meter_id: UUID,
     organization_id: UUID | None = None,
+    persist: bool = True,
+    as_of: datetime | None = None,
 ) -> dict[str, Any]:
+    """Run every rule this meter's data can arm.
+
+    ``as_of`` runs them as they would have run on that date: the window ends there, the
+    occupancy check covers that fortnight rather than this one, and what is written is
+    stamped with the window examined instead of with now. A finding from last November
+    belongs in November. See backfill_meter_anomalies, which walks a year this way.
+
+    ``persist=False`` is the same run with nothing written: the hits come back in
+    ``anomalies`` (marked ``dry_run``) and nothing is opened, re-stamped or queued — what the
+    detection-coverage report uses to say which rules fire where, without side effects.
+    """
     meter = await session.get(EnergyMeter, meter_id)
     if not meter:
         return {"ok": False, "error": "meter_not_found"}
     tariff = float(meter.tariff_gbp_per_kwh or 0.28)
-    readings = await _load_readings(session, meter_id)
+    currency = await currency_for_building(session, meter.building_id)
+    readings = await _load_readings(session, meter_id, as_of=as_of)
+    # A single-asset spike needs a meter that isolates a single asset, which is a meter that
+    # names one. `is_sub_meter` used to mean that, back when the only sub-meters were the ones
+    # on plant; a floor sub-meter is a sub-meter and isolates a floor, so gating on it reported
+    # a single-asset spike on each of ten office floors.
+    _isolates_one_asset = meter.asset_id is not None
     detectors = [detect_weekend_spike, detect_baseline_drift]
-    if meter.is_sub_meter:
+    if _isolates_one_asset:
         detectors.append(detect_asset_spike)
+
+    # The ten rules from the card. Each is bound to its inputs here so the loop below can
+    # call every detector the same way; a rule whose input this meter does not have is
+    # listed under "skipped" rather than run on nothing.
+    meta = meter.raw_metadata or {}
+    skipped: dict[str, str] = {}
+    if not _isolates_one_asset:
+        # Thirteen rules exist; a rule that cannot run on this meter says so rather than
+        # disappearing, so "rules_run" plus "skipped" always accounts for all of them.
+        skipped["asset_spike"] = (
+            "this sub-meter names no asset - it reads a floor or a zone, not one machine"
+            if meter.is_sub_meter
+            else "this meter is the building's incoming supply, so no single asset is isolated"
+        )
+
+    if readings:
+        latest = _aware(max(t for t, _ in readings))
+        occupancy = _occupancy_from(meta)
+        bands, offpeak = _bands_from(meta)
+        capacity = meta.get("capacity_kw") or meta.get("agreed_capacity_kva")
+        prior_max = None if capacity else await _prior_year_max_kw(session, meter_id, latest)
+        flags = await _quality_flags(session, meter_id, latest - timedelta(days=35))
+        work_orders = await _closed_work_orders(session, meter, latest - timedelta(days=D.REGRESS_HORIZON_DAYS + 7))
+        monthly, degree_days = await _monthly_and_degree_days(session, meter)
+        trends = await _bms_trends(session, meter, latest - timedelta(days=7))
+
+        detectors += [
+            lambda r, *, tariff: D.detect_nonocc_spike(r, tariff=tariff, occupancy=occupancy),
+            lambda r, *, tariff: D.detect_schedule_mismatch(r, tariff=tariff, occupancy=occupancy),
+            lambda r, *, tariff: D.detect_baseload_creep(r, tariff=tariff),
+            lambda r, *, tariff: D.detect_data_quality(r, tariff=tariff, flags=flags),
+            lambda r, *, tariff: D.detect_tou_misalignment(r, tariff=tariff, bands=bands,
+                                                            offpeak_rate=offpeak, occupancy=occupancy),
+        ]
+        if capacity or prior_max:
+            detectors.append(lambda r, *, tariff: D.detect_peak_excursion(
+                r, tariff=tariff, capacity_kw=float(capacity) if capacity else None, prior_year_max_kw=prior_max))
+        else:
+            skipped["peak_excursion"] = "no capacity_kw on the meter and no prior-year readings"
+        if work_orders:
+            detectors.append(lambda r, *, tariff: D.detect_post_works_regression(
+                r, tariff=tariff, closed_work_orders=work_orders))
+        else:
+            skipped["post_works_regression"] = "no work order closed on this asset or building in the last 37 days"
+        if degree_days and len(monthly) >= D.WEATHER_MIN_MONTHS:
+            detectors.append(lambda r, *, tariff: D.detect_weather_residual(monthly, degree_days, tariff=tariff))
+        else:
+            skipped["weather_residual"] = ("no degree days for the building" if not degree_days
+                                           else f"{len(monthly)} complete months; needs {D.WEATHER_MIN_MONTHS}")
+        if trends:
+            zone_kw = meta.get("zone_kw")
+            detectors.append(lambda r, *, tariff: D.detect_simultaneous_heating_cooling(
+                trends, tariff=tariff, zone_kw=float(zone_kw) if zone_kw else None))
+        else:
+            skipped["simultaneous_heating_cooling"] = "no BMS trends for the building in the last 7 days"
+        skipped["chiller_efficiency"] = "runs per chiller asset: POST /api/energy/chillers/scan"
 
     # PRD: baseline drift only when no logged occupancy change in the window
     from .occupancy import has_occupancy_change
 
-    end_now = datetime.now(timezone.utc)
+    end_now = _aware(as_of) if as_of is not None else datetime.now(timezone.utc)
     occupancy_changed = await has_occupancy_change(
         session,
-        site_id=meter.site_id,
+        building_id=meter.building_id,
         window_start=end_now - timedelta(days=14),
         window_end=end_now,
     )
 
+    _window_end = _aware(as_of) if as_of is not None else datetime.now(timezone.utc)
     created: list[dict[str, Any]] = []
     for det in detectors:
         if det is detect_baseline_drift and occupancy_changed:
             log.info(
                 "energy.anomaly.baseline_suppressed_occupancy",
                 meter_id=str(meter_id),
-                site_id=str(meter.site_id) if meter.site_id else None,
+                building_id=str(meter.building_id) if meter.building_id else None,
             )
             continue
         hit = det(readings, tariff=tariff)
         if not hit:
             continue
 
-        # A spike stays in the readings, so every later scan detects it again. Without this
+        # A rule is a pure function over readings and does not know where the building is;
+        # the currency is a property of the building, so it is stamped here rather than
+        # threaded through thirteen signatures. Without it every figure was labelled GBP,
+        # including the ones a Dubai meter priced in dirhams.
+        hit["currency"] = hit.get("currency") or currency
+        # And every row leads with a named measure. Most rules mean annualised cost by that;
+        # one that could not be priced says what it did measure instead of showing a blank.
+        hit.setdefault("impact", D.money_impact(hit))
+
+        if not persist:
+            created.append({"anomaly_type": hit["anomaly_type"], "metric_pct": hit["metric_pct"],
+                            "financial_gbp": hit.get("financial_gbp"), "currency": hit["currency"],
+                            "impact": hit.get("impact"), "dry_run": True})
+            continue
+
+        # A fault stays in the readings, so every later scan detects it again. Without this
         # guard each run wrote another anomaly AND another approval for the same event: one
         # weekend appeared five times, and the August report priced it five times over.
-        # Re-detecting a live event is not news — note that we saw it again and move on.
-        existing = (
+        #
+        # What makes two detections the same finding is that they looked at overlapping time.
+        # The sweep steps a 35-day window forward 7 days, so consecutive windows share 28 days
+        # of readings and a standing fault is seen in every one of them — Harbour Point held 48
+        # rows for a single schedule fault, each annualised in full, summing to GBP576k for
+        # something costing about GBP20k a year. Overlap also says the thing the old guard
+        # wanted and could not express: the same rule firing in March and again in July looked
+        # at disjoint months, so it stays two events.
+        #
+        # metric_pct is deliberately NOT part of the key. It was meant to tell two different
+        # firings apart, but a drift that deepens weekly reports a new percentage every window
+        # and so slipped through anyway. Overlap decides identity; the percentage then says how
+        # the issue stands now, which is why it is updated below rather than matched on.
+        _new_window_start = _window_end - timedelta(days=35)
+        # EVERY overlapping open finding, not the newest one. Folding into a single row left
+        # any others standing: the sweep runs a window a week across a year, and once two rows
+        # for one fault existed nothing ever collapsed them, so the main gas meter carried nine
+        # open schedule_mismatch rows whose windows all overlap - one fault shown as nine,
+        # "active" from 2 days to 332. The oldest is the finding: it holds the first detection
+        # and the approval raised against it. The rest are the same fault seen again and are
+        # closed as superseded, so the register keeps the history without reporting it twice.
+        overlapping = list((
             await session.execute(
                 select(EnergyAnomaly)
                 .where(
                     EnergyAnomaly.meter_id == meter.id,
                     EnergyAnomaly.anomaly_type == hit["anomaly_type"],
-                    EnergyAnomaly.metric_pct == Decimal(str(hit["metric_pct"])),
                     EnergyAnomaly.status.notin_(_SETTLED_STATUSES),
+                    # Overlap. window_start is NULL on rows written before it was recorded,
+                    # so the test is on window_end alone: a finding whose window ended after
+                    # this one began was looking at some of the same readings.
+                    func.coalesce(EnergyAnomaly.window_end,
+                                  EnergyAnomaly.detected_at) >= _new_window_start,
                 )
-                .order_by(EnergyAnomaly.detected_at.desc())
-                .limit(1)
+                .order_by(EnergyAnomaly.detected_at.asc())
             )
-        ).scalars().first()
-        if existing is not None:
-            existing.window_end = datetime.now(timezone.utc)
+        ).scalars().all())
+        if overlapping:
+            existing = overlapping[0]
+            _observe_again(existing, hit, window_end=_window_end,
+                           window_start=_new_window_start, tariff=tariff, currency=currency)
+            for _dup in overlapping[1:]:
+                _supersede(_dup, existing)
             log.info(
                 "energy.anomaly.already_open",
                 meter_id=str(meter_id),
                 anomaly_type=hit["anomaly_type"],
                 anomaly_id=str(existing.id),
+                superseded=len(overlapping) - 1,
             )
             continue
 
         row = EnergyAnomaly(
             id=uuid4(),
             organization_id=organization_id or meter.organization_id,
-            site_id=meter.site_id,
+            building_id=meter.building_id,
             meter_id=meter.id,
             asset_id=meter.asset_id,
             anomaly_type=hit["anomaly_type"],
-            window_end=datetime.now(timezone.utc),
+            # The window examined, not the moment of the run. Stamping "now" on a finding
+            # from last November puts every historical firing in today's register, in the
+            # order they were computed rather than the order they happened.
+            window_start=_window_end - timedelta(days=35),
+            window_end=_window_end,
+            detected_at=_window_end,
             metric_pct=Decimal(str(hit["metric_pct"])),
-            excess_kwh=Decimal(str(hit["excess_kwh"])),
-            annualised_excess_kwh=Decimal(str(hit["annualised_excess_kwh"])),
-            financial_gbp=Decimal(str(hit["financial_gbp"])),
+            # NULL where the rule could not price the firing. The column is nullable and
+            # NULL is the honest answer; 0 would say "this costs nothing", which is a
+            # different claim and the one the data-quality rule alone gets to make.
+            excess_kwh=_dec(hit.get("excess_kwh")),
+            annualised_excess_kwh=_dec(hit.get("annualised_excess_kwh")),
+            financial_gbp=_dec(hit.get("financial_gbp")),
+            currency=hit.get("currency") or currency,
             tariff_used=Decimal(str(tariff)),
-            detail_json=hit.get("detail") or {},
+            detail_json={**(hit.get("detail") or {}), "impact": hit.get("impact")},
             status="open",
         )
         session.add(row)
@@ -415,14 +786,17 @@ async def scan_meter_anomalies(
             item_type=f"energy_anomaly_{hit['anomaly_type']}",
             summary=(
                 f"Energy anomaly {hit['anomaly_type']} on meter {meter_id}: "
-                f"{hit['metric_pct']}% · est £{hit['financial_gbp']}/yr excess. "
+                f"{hit['metric_pct']}% · "
+                f"{money_phrase(hit.get('financial_gbp'), hit.get('currency'), hit.get('impact'))}. "
                 f"Actions: Acknowledge / Monitor / Mark expected. No WO created."
             ),
-            severity="medium" if hit["financial_gbp"] < 500 else "high",
+            severity=severity_for(hit.get("financial_gbp"), hit.get("currency")),
             payload={
                 "anomaly_id": str(row.id),
                 "anomaly_type": hit["anomaly_type"],
-                "financial_gbp": hit["financial_gbp"],
+                "financial_gbp": hit.get("financial_gbp"),
+                "currency": hit.get("currency"),
+                "impact": hit.get("impact"),
                 "actions": ["acknowledge", "monitor", "mark_expected"],
                 "creates_work_order": False,
                 "status_for_future_wo_engine": "open",
@@ -437,7 +811,9 @@ async def scan_meter_anomalies(
                 "id": str(row.id),
                 "anomaly_type": hit["anomaly_type"],
                 "metric_pct": hit["metric_pct"],
-                "financial_gbp": hit["financial_gbp"],
+                "financial_gbp": hit.get("financial_gbp"),
+                "currency": hit.get("currency"),
+                "impact": hit.get("impact"),
                 "queue_item_id": str(item.id),
             }
         )
@@ -450,8 +826,10 @@ async def scan_meter_anomalies(
         organization_id=organization_id or meter.organization_id,
         detail={"meter_id": str(meter_id), "created": len(created)},
     )
-    await session.commit()
-    return {"ok": True, "meter_id": str(meter_id), "anomalies": created}
+    if persist:
+        await session.commit()
+    return {"ok": True, "meter_id": str(meter_id), "anomalies": created,
+            "rules_run": len(detectors), "skipped": skipped if readings else {"all": "no readings"}}
 
 
 async def act_on_anomaly(
@@ -503,6 +881,112 @@ async def act_on_anomaly(
     }
 
 
+#: How far apart two sweep windows sit. Every rule here reads a fortnight or a month of
+#: readings, so a weekly step gives each firing a fresh comparison without walking the same
+#: evidence four times over.
+SWEEP_STEP_DAYS = 7
+
+
+async def backfill_meter_anomalies(
+    session: AsyncSession,
+    *,
+    meter_id: UUID,
+    organization_id: UUID | None = None,
+    history_days: int = 365,
+    step_days: int = SWEEP_STEP_DAYS,
+) -> dict[str, Any]:
+    """Run the rules across history, not just over the newest readings.
+
+    A scan answers "what is wrong now": every rule reads the last 35 days, because that is
+    what they are defined over - a weekend against the other three in the month, this week
+    against last. Ingest a year and a single scan still reports on its final month, which
+    reads as "the year was quiet" when in fact nobody has looked at it.
+
+    So the same rules are asked the same question at weekly intervals across the data that
+    exists, each with the window that week would have had. Nothing new is computed and no
+    threshold is relaxed; the only difference is where the window ends. A firing in November
+    is stamped and dated November, so the register reads as a history rather than as a pile
+    of findings that all arrived today.
+
+    Idempotent by window: re-sweeping the same year re-detects the same events and writes
+    nothing, because a finding is identified by its rule, its size and the window it was
+    found in.
+    """
+    bounds = (
+        await session.execute(
+            select(func.min(MeterReading.reading_at), func.max(MeterReading.reading_at))
+            .where(MeterReading.meter_id == meter_id)
+        )
+    ).first()
+    if not bounds or bounds[0] is None:
+        return {"ok": True, "meter_id": str(meter_id), "windows": 0, "created": 0,
+                "reason": "no readings on this meter"}
+
+    earliest, latest = _aware(bounds[0]), _aware(bounds[1])
+    horizon = max(earliest, latest - timedelta(days=history_days))
+    # The first window needs a full 35 days behind it, or the rules compare against a
+    # fortnight that is not there - and an empty comparison is not a quiet week.
+    first_end = min(horizon + timedelta(days=35), latest)
+
+    created: list[dict[str, Any]] = []
+    windows = 0
+    end = first_end
+    while True:
+        windows += 1
+        try:
+            out = await scan_meter_anomalies(
+                session, meter_id=meter_id, organization_id=organization_id, as_of=end
+            )
+            created.extend(out.get("anomalies") or [])
+        except Exception as exc:  # noqa: BLE001 - one bad window must not end the sweep
+            log.warning("energy.anomaly.sweep_window_failed",
+                        meter_id=str(meter_id), as_of=end.isoformat(), error=str(exc)[:200])
+        if end >= latest:
+            break
+        end = min(end + timedelta(days=step_days), latest)
+
+    log.info("energy.anomaly.sweep_complete", meter_id=str(meter_id),
+             windows=windows, created=len(created))
+    return {
+        "ok": True,
+        "meter_id": str(meter_id),
+        "windows": windows,
+        "created": len(created),
+        "window_from": first_end.isoformat(),
+        "window_to": latest.isoformat(),
+        "anomalies": created,
+    }
+
+
+async def backfill_all_active_meters(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    history_days: int = 365,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """The sweep above, for every active meter. What a first ingest of a year should run."""
+    q = select(EnergyMeter).where(EnergyMeter.active.is_(True)).limit(limit)
+    if organization_id:
+        q = q.where(EnergyMeter.organization_id == organization_id)
+    meters = list((await session.execute(q)).scalars().all())
+    results, total = [], 0
+    for m in meters:
+        try:
+            r = await backfill_meter_anomalies(
+                session, meter_id=m.id,
+                organization_id=organization_id or m.organization_id,
+                history_days=history_days,
+            )
+            total += int(r.get("created") or 0)
+            results.append({"meter_id": str(m.id), "ok": r.get("ok"),
+                            "windows": r.get("windows"), "created": r.get("created")})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("energy.anomaly.sweep_meter_failed", meter_id=str(m.id), error=str(exc)[:200])
+            results.append({"meter_id": str(m.id), "ok": False, "error": str(exc)[:200]})
+    return {"ok": True, "meters_swept": len(meters), "created": total, "results": results}
+
+
 async def scan_all_active_meters(
     session: AsyncSession,
     *,
@@ -534,27 +1018,443 @@ async def list_anomalies(
     status: str | None = "open",
     organization_id: UUID | None = None,
     limit: int = 100,
+    building_id: UUID | str | None = None,
+    asset_id: UUID | str | None = None,
+    meter_id: UUID | str | None = None,
+    anomaly_type: str | None = None,
+    min_cost: float | None = None,
+    min_days_active: int | None = None,
+    order_by: str = "detected_at",
 ) -> list[dict[str, Any]]:
-    q = select(EnergyAnomaly).order_by(EnergyAnomaly.detected_at.desc()).limit(limit)
+    """Anomalies, narrowed by any of the dimensions the activity log shows.
+
+    The list used to filter on status alone, so "baseline drift on Town Hall over £5k, active
+    more than ten days" could only be answered by pulling every row and discarding most of them
+    in the caller — which silently caps at `limit` and reports a subset as if it were the
+    answer. Each of these is a column on the row, and belongs in the WHERE clause.
+
+    ``min_days_active`` counts from `window_start` — how long the deviation has persisted, not
+    how long anyone has known about it. An anomaly acknowledged on day one is still active on
+    day twelve.
+
+    ``order_by`` accepts `detected_at` (newest first) or `financial` (dearest first). Money is
+    usually the right order: a 300% spike on a 2 kW circuit sorts above a 20% drift on a chiller
+    by percentage, and below it by anything that matters.
+    """
+    q = select(EnergyAnomaly)
     if status:
         q = q.where(EnergyAnomaly.status == status)
     if organization_id:
         q = q.where(EnergyAnomaly.organization_id == organization_id)
+    # Compared as text on both sides: these keys are uuid in one deployment's schema and
+    # character varying in the other, and an uncast comparison raises rather than returning
+    # nothing — the same mismatch that took /api/assets down.
+    if building_id:
+        # Resolved, not trusted. A name here used to match no row and return an empty list,
+        # which reads as "this building is clean" — said of a building with nine open findings.
+        q = q.where(sa_cast(EnergyAnomaly.building_id, SAText)
+                    == await resolve_building(session, building_id))
+    if asset_id:
+        q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText)
+                    == await resolve_asset(session, asset_id))
+    if meter_id:
+        q = q.where(sa_cast(EnergyAnomaly.meter_id, SAText)
+                    == await resolve_meter(session, meter_id))
+    if anomaly_type:
+        # Matched case-insensitively and on the underscored form, so "Baseline drift" as the
+        # UI prints it finds `baseline_drift` as the column holds it.
+        wanted = anomaly_type.strip().lower().replace(" ", "_")
+        q = q.where(func.lower(EnergyAnomaly.anomaly_type) == wanted)
+    if min_cost is not None:
+        q = q.where(EnergyAnomaly.financial_gbp >= min_cost)
+    if min_days_active is not None:
+        # COALESCE, because window_start is NULL on every row in this deployment — only
+        # window_end and detected_at are written. Filtering on window_start alone matched
+        # nothing at any threshold, including one day, while 154 anomalies sat in the table:
+        # an empty list that reads as "none are that old" rather than as "that column is not
+        # populated here". detected_at is when the scan first saw it, which is the honest
+        # answer to "how long has this been active" when the window's start was never stored.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(min_days_active))
+        q = q.where(func.coalesce(EnergyAnomaly.window_start,
+                                  EnergyAnomaly.detected_at) <= cutoff)
+    order = (EnergyAnomaly.financial_gbp.desc().nullslast()
+             if str(order_by).lower().startswith("financ")
+             else EnergyAnomaly.detected_at.desc())
+    q = q.order_by(order).limit(limit)
     rows = list((await session.execute(q)).scalars().all())
+
+    # Which of these were detected on a simulated feed. An anomaly reads as a finding about
+    # a building; one raised on invented readings is a finding about the simulator, and the
+    # money figure beside it is invented too. Asked once for the whole page rather than per
+    # row, and never allowed to fail the list — a missing marker is worse than no list only
+    # if the list is the thing that breaks.
+    simulated: set[str] = set()
+    meter_ids = [r.meter_id for r in rows if r.meter_id]
+    if meter_ids:
+        try:
+            async with session.begin_nested():
+                found = (await session.execute(text("""
+                    SELECT DISTINCT a.id::text
+                      FROM plenum_cafm.energy_anomalies a
+                      JOIN plenum_cafm.meter_readings r ON r.meter_id = a.meter_id
+                     WHERE a.id = ANY(CAST(:ids AS uuid[]))
+                       AND r.source = 'simulator'
+                       AND r.reading_at <= a.detected_at
+                       AND r.reading_at > a.detected_at - interval '30 days'
+                       -- What the detector could actually see. A reading stamped inside the
+                       -- window but WRITTEN afterwards was not available when the anomaly
+                       -- was raised, and marking the anomaly simulated because of it would
+                       -- discredit a finding that came off real data.
+                       AND r.created_at <= a.detected_at
+                """), {"ids": [str(r.id) for r in rows]})).all()
+            simulated = {x[0] for x in found}
+        except Exception as exc:  # noqa: BLE001
+            log.warning("energy.anomaly.simulated_lookup_failed", error=str(exc)[:200])
+
+    # The labels a person reads. Rows carried asset_id, meter_id and building_id as raw uuids
+    # and nothing else, so an answer could only say
+    # "the asset identifier is 158335d4-1d74-5793-8e97-0e4af8688f7f; its name is not available
+    # through the permitted energy tools" — while the dashboard beside it rendered the same
+    # rows as SYN-SUB-FDCC31 on Building 5, because the UI resolves labels the agent could not.
+    #
+    # Batched, like the simulated lookup above: three statements for the page rather than three
+    # per row, and never allowed to fail the list — a row without a label is still a finding,
+    # and losing the list to gain a name is the wrong trade.
+    labels: dict[str, dict[str, str]] = {"asset": {}, "meter": {}, "building": {}}
+    try:
+        async with session.begin_nested():
+            a_ids = [str(r.asset_id) for r in rows if r.asset_id]
+            if a_ids:
+                for x in (await session.execute(text(
+                    "SELECT id::text, asset_code FROM plenum_cafm.assets "
+                    "WHERE id::text = ANY(:ids) AND asset_code IS NOT NULL"),
+                        {"ids": a_ids})).all():
+                    labels["asset"][x[0]] = x[1]
+            m_ids = [str(r.meter_id) for r in rows if r.meter_id]
+            if m_ids:
+                for x in (await session.execute(text(
+                    "SELECT id::text, COALESCE(mpan, mprn, dcc_device_id) "
+                    "FROM plenum_cafm.energy_meters WHERE id::text = ANY(:ids)"),
+                        {"ids": m_ids})).all():
+                    if x[1]:
+                        labels["meter"][x[0]] = x[1]
+            b_ids = [str(r.building_id) for r in rows if r.building_id]
+            if b_ids:
+                for x in (await session.execute(text(
+                    "SELECT building_id::text, name FROM plenum_cafm.buildings "
+                    "WHERE building_id::text = ANY(:ids)"), {"ids": b_ids})).all():
+                    labels["building"][x[0]] = x[1]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("energy.anomaly.label_lookup_failed", error=str(exc)[:200])
+
     return [
         {
             "id": str(r.id),
             "anomaly_type": r.anomaly_type,
+            # None means unlabelled, which for an asset means building-level metering: the
+            # finding is real and the circuit is unknown. It does NOT mean the name is
+            # unavailable to look up.
+            "asset_code": labels["asset"].get(str(r.asset_id)) if r.asset_id else None,
+            "meter_ref": labels["meter"].get(str(r.meter_id)) if r.meter_id else None,
+            "building_name": labels["building"].get(str(r.building_id)) if r.building_id else None,
+            # True means the window this was detected in contains simulated readings.
+            "simulated": str(r.id) in simulated,
             "status": r.status,
             "metric_pct": float(r.metric_pct) if r.metric_pct is not None else None,
+            # financial_gbp keeps its name for callers that already read it; the column has
+            # always held the site's own currency, and `currency` is what says which.
             "financial_gbp": float(r.financial_gbp) if r.financial_gbp is not None else None,
+            "financial_amount": float(r.financial_gbp) if r.financial_gbp is not None else None,
+            "currency": r.currency or D.DEFAULT_CURRENCY,
+            "impact": (r.detail_json or {}).get("impact"),
             "annualised_excess_kwh": float(r.annualised_excess_kwh) if r.annualised_excess_kwh is not None else None,
             "meter_id": str(r.meter_id) if r.meter_id else None,
             "asset_id": str(r.asset_id) if r.asset_id else None,
-            "site_id": str(r.site_id) if r.site_id else None,
+            "building_id": str(r.building_id) if r.building_id else None,
+            # Deprecated alias: the column was called site_id until Sep 2026 and the
+            # shell still joins on it. Remove once the frontend reads building_id.
+            "site_id": str(r.building_id) if r.building_id else None,
             "detected_at": r.detected_at.isoformat() if r.detected_at else None,
             "pm_action": r.pm_action,
             "pm_reason": r.pm_reason,
         }
         for r in rows
     ]
+
+
+#: What an anomaly summary may be grouped by. An allow-list, not an f-string of whatever
+#: arrived: this becomes a column name in SQL.
+class UnknownBuilding(ValueError):
+    """A building identifier that matched no building. Raised rather than returning nothing.
+
+    The whole point: a filter that silently matches nothing produces a confident "no anomalies
+    were found for Building 5" when Building 5 has ten of them, nine open. An empty result is
+    indistinguishable from a clean building, and the person reading it has no way to tell.
+    """
+
+
+class UnknownAsset(ValueError):
+    """An asset identifier that matched no asset. Same failure, same reason it must raise.
+
+    People say "ACS-DL-07" and "FCU-301" — the asset CODE — not a uuid. ACS-DL-07 carries five
+    anomalies and `asset_id::text = 'ACS-DL-07'` matches none of them.
+    """
+
+
+class UnknownMeter(ValueError):
+    """A meter identifier that matched no meter. People say an MPAN, not a uuid."""
+
+
+async def _resolve(
+    session: AsyncSession,
+    value: UUID | str | None,
+    *,
+    table: str,
+    id_column: str,
+    name_columns: tuple[str, ...],
+    error: type[ValueError],
+    what: str,
+) -> str | None:
+    """A uuid from a uuid, or from the thing a person would actually say.
+
+    One implementation for buildings, assets and meters, because the failure is one failure:
+    an identifier that does not resolve must never quietly become "no rows". Every filter here
+    compares as text, so an unresolved name matches nothing and the caller reports a clean
+    building, a healthy asset or a silent meter.
+
+    A uuid is returned without touching the database — the common path stays one comparison.
+    """
+    if value in (None, ""):
+        return None
+    raw = str(value).strip()
+    try:
+        return str(UUID(raw))
+    except (ValueError, AttributeError, TypeError):
+        pass
+    where = " OR ".join(f"lower(btrim({c}::text)) = lower(btrim(:n))" for c in name_columns)
+    found = (
+        await session.execute(
+            text(f"SELECT {id_column}::text FROM plenum_cafm.{table} WHERE {where} LIMIT 1"),
+            {"n": raw},
+        )
+    ).scalar()
+    if found:
+        return str(found)
+    raise error(
+        f"No {what} matches {raw!r}. It is neither an id nor a name this caller can see, so "
+        f"no result can be produced for it."
+    )
+
+
+async def resolve_building(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """A building id from a uuid or the NAME a person would say ("Building 5")."""
+    return await _resolve(session, value, table="buildings", id_column="building_id",
+                          name_columns=("name",), error=UnknownBuilding, what="building")
+
+
+async def resolve_asset(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """An asset id from a uuid or the CODE a person would say ("ACS-DL-07", "FCU-301")."""
+    return await _resolve(session, value, table="assets", id_column="id",
+                          name_columns=("asset_code",), error=UnknownAsset, what="asset")
+
+
+async def resolve_meter(session: AsyncSession, value: UUID | str | None) -> str | None:
+    """A meter id from a uuid, or from the MPAN or MPRN printed on the meter."""
+    return await _resolve(session, value, table="energy_meters", id_column="id",
+                          name_columns=("mpan", "mprn", "dcc_device_id"),
+                          error=UnknownMeter, what="meter")
+
+
+SUMMARY_GROUPS: dict[str, str] = {
+    "building": "b.name",
+    "type": "a.anomaly_type",
+    "status": "a.status",
+    # The asset CODE, falling back to the id only where a code was never recorded. Grouping on
+    # the bare uuid put rows like "f66d102f-3c1d-57e1-a213-188f757f715e" in front of a person
+    # deciding which plant to investigate — four of the five assets in that table had codes
+    # (ACS-DL-04, ACS-DL-06, ACS-DL-07, ACS-DL-03) and none of them were shown.
+    "asset": "COALESCE(ast.asset_code, a.asset_id::text)",
+}
+
+
+async def summarise_anomalies(
+    session: AsyncSession,
+    *,
+    group_by: str = "building",
+    organization_id: UUID | None = None,
+    building_ids: list[str] | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Counts and totals per building, type, status or asset — in one query.
+
+    "Which building has the most anomalies", "which type dominates", "what is waiting on an
+    action" are questions about the WHOLE table. Answering them by listing rows and counting
+    them in the caller silently truncates at the page size and reports a subset as the answer.
+
+    Three figures per group, and the difference between them matters:
+
+      count    how many findings
+      worst    the largest single finding — the honest headline, same basis as the rollup
+      naive_sum   every finding added together. Detectors overlap, so this DOUBLE COUNTS.
+                  It is returned because leaving it out invites the caller to compute it,
+                  and named so it cannot be mistaken for a total anyone should quote.
+
+    Grouped by currency as well as by the requested dimension, because the estate spans four
+    of them. The two dearest buildings here are in AED and the next in GBP; adding those
+    produces a number in no currency at all.
+    """
+    column = SUMMARY_GROUPS.get(str(group_by).lower())
+    if column is None:
+        raise ValueError(
+            f"group_by must be one of {sorted(SUMMARY_GROUPS)}; got {group_by!r}")
+
+    where = ["1=1"]
+    params: dict[str, Any] = {"lim": limit}
+    if organization_id:
+        where.append("a.organization_id = CAST(:org AS uuid)")
+        params["org"] = str(organization_id)
+    if status:
+        where.append("a.status = :st")
+        params["st"] = status
+    if building_ids is not None:
+        if not building_ids:
+            where.append("FALSE")
+        else:
+            where.append("a.building_id::text = ANY(:blds)")
+            params["blds"] = [str(b) for b in building_ids]
+
+    sql = f"""
+        SELECT COALESCE({column}::text, '(unattributed)') AS label,
+               COALESCE(a.currency, 'GBP')                AS currency,
+               bool_or(a.asset_id IS NOT NULL AND ast.id IS NULL) AS orphan_asset,
+               count(*)                                   AS count,
+               max(a.financial_gbp)                       AS worst,
+               sum(a.financial_gbp)                       AS naive_sum,
+               count(*) FILTER (WHERE a.financial_gbp IS NULL) AS unpriced
+          FROM plenum_cafm.energy_anomalies a
+          LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
+          LEFT JOIN plenum_cafm.assets ast ON ast.id::text = a.asset_id::text
+         WHERE {' AND '.join(where)}
+         GROUP BY 1, 2
+         ORDER BY max(a.financial_gbp) DESC NULLS LAST
+         LIMIT :lim
+    """
+    rows = (await session.execute(text(sql), params)).mappings().all()
+    return {
+        "group_by": str(group_by).lower(),
+        "groups": [
+            {
+                "label": r["label"],
+                "currency": r["currency"],
+                "count": int(r["count"]),
+                "worst": float(r["worst"]) if r["worst"] is not None else None,
+                "naive_sum": float(r["naive_sum"]) if r["naive_sum"] is not None else None,
+                "unpriced": int(r["unpriced"]),
+                # True when the anomaly names an asset_id that is not in the asset register at
+                # all. Measured: 19 of the 26 assets carrying anomalies are dangling
+                # references, so the uuid shown is not an unnamed asset — it is a pointer to
+                # nothing, and offering it as "the asset to investigate" sends somebody
+                # looking for plant that was never recorded.
+                "asset_in_register": not bool(r["orphan_asset"]),
+            }
+            for r in rows
+        ],
+        "note": (
+            "worst is the largest single finding and is the figure to quote. naive_sum adds "
+            "overlapping detectors and double counts; it is not a total. Currencies are not "
+            "combined. A group with asset_in_register false names an asset_id that is not in "
+            "the asset register — the uuid is a dangling reference, not an unnamed asset, and "
+            "must not be offered as plant to investigate."
+        ),
+    }
+
+
+async def consumption_by_asset(
+    session: AsyncSession,
+    *,
+    organization_id: UUID | None = None,
+    building_ids: list[str] | None = None,
+    category: str | None = None,
+    days: int = 90,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Consumption ranked by asset, for "which chiller uses the most power".
+
+    The question could not be answered at all before: the agent had readings by BUILDING and
+    efficiency by chiller, and nothing that put kWh against an asset. Asked which chiller used
+    most, it read the building list, found no chiller column, and said it could not tell —
+    while CH-01 sat there with a sub-meter and 2,880 readings against it.
+
+    Only sub-metered assets can appear, and that is the honest limit: 34 of 67 meters carry an
+    asset_id, so the rest of the estate's consumption belongs to a building and cannot be
+    attributed to plant. An asset absent from this list is not a quiet asset — it is an
+    unmetered one, and the caller must be told which.
+
+    ``simulated_pct`` rides with every row for the same reason it rides with operating hours.
+    Every sub-metered asset in this deployment returns an identical 867,240 kWh, which is not a
+    remarkable coincidence — it is the simulator, and a ranking of identical numbers is a
+    ranking of nothing.
+    """
+    where = ["m.asset_id IS NOT NULL", f"r.reading_at > now() - interval '{int(days)} days'"]
+    params: dict[str, Any] = {"lim": limit}
+    if organization_id:
+        where.append("m.organization_id = CAST(:org AS uuid)")
+        params["org"] = str(organization_id)
+    if building_ids is not None:
+        if not building_ids:
+            where.append("FALSE")
+        else:
+            where.append("m.building_id::text = ANY(:blds)")
+            params["blds"] = [str(b) for b in building_ids]
+    if category:
+        where.append("lower(btrim(ast.category)) = lower(btrim(:cat))")
+        params["cat"] = category
+
+    rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT COALESCE(ast.asset_code, m.asset_id::text)     AS asset,
+                       ast.category                                   AS category,
+                       b.name                                         AS building,
+                       round(sum(r.consumption_kwh)::numeric, 0)      AS kwh,
+                       count(r.id)                                    AS readings,
+                       count(*) FILTER (WHERE r.source = 'simulator')  AS simulated
+                  FROM plenum_cafm.energy_meters m
+                  JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
+                  LEFT JOIN plenum_cafm.assets ast ON ast.id::text = m.asset_id::text
+                  LEFT JOIN plenum_cafm.buildings b ON b.building_id = m.building_id
+                 WHERE {' AND '.join(where)}
+                 GROUP BY 1, 2, 3
+                 ORDER BY sum(r.consumption_kwh) DESC NULLS LAST
+                 LIMIT :lim
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
+
+    out = []
+    for r in rows:
+        readings = int(r["readings"] or 0)
+        sim = int(r["simulated"] or 0)
+        out.append({
+            "asset": r["asset"],
+            "category": r["category"],
+            "building": r["building"],
+            "kwh": float(r["kwh"]) if r["kwh"] is not None else None,
+            "readings": readings,
+            "simulated_pct": round(100.0 * sim / readings, 1) if readings else 0.0,
+        })
+    return {
+        "days": days,
+        "category": category,
+        "assets": out,
+        "note": (
+            "Sub-metered assets only. 34 of 67 meters carry an asset_id; consumption on the "
+            "rest belongs to a building and cannot be attributed to plant, so an asset missing "
+            "from this list is unmetered rather than idle. Check simulated_pct before ranking: "
+            "identical totals across assets mean the simulator, not a tie."
+        ),
+    }

@@ -30,6 +30,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..state import ExtraFieldConfig, MigrationState
 from ..event_enrich import append_event
+from .building_link import (
+    ASSET_BUILDING_SQL, ASSET_LOOKUP_SQL, BuildingResolver, asset_match_code,
+    build_asset_merge_update, building_hint, looks_like_uuid, site_names_from_run,
+)
+from .meter_link import (
+    CREATE_METER_SQL, FLOOR_LOOKUP_SQL, SECTION_LOOKUP_SQL, MeterResolver, floor_hint,
+    is_sub_meter_for, meter_hint, pick_section,
+    meter_type_for, section_hint, supply_numbers,
+)
+from .reference_link import REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 
@@ -38,11 +48,46 @@ logger = get_logger(__name__)
 
 # plenum_cafm schema prefix used in all DDL
 _SCHEMA = "plenum_cafm"
+
+#: Tables whose rows carry a building_id that can be resolved from a site reference.
+#:
+#: energy_meters joined this list on 22 Sep 2026. It went through the same writer and came out
+#: unlinked, and unlike a missing asset link that failure is silent: energy_meters.building_id
+#: is a plain uuid with no constraint behind it, so the row inserts, the anomaly scan sweeps
+#: the meter, and every finding it raises is written with a null building. Those findings are
+#: invisible on a building-scoped page and no EUI snapshot is produced at all, so the scan
+#: reports success over an empty screen.
+_BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections",
+                           "compliance_certificates")
+
+#: Tables whose rows are READ for a building reference. meter_readings does not carry a
+#: building column of its own, but a reading sheet often names the site, and that is what
+#: decides whether a meter can be created for it.
+_BUILDING_HINT_TABLES = ("assets", "work_orders", "energy_meters", "meter_readings",
+                         "building_sections", "compliance_certificates")
+
+#: Tables that can take their building from the asset they name, when they name no site.
+_BUILDING_VIA_ASSET_TABLES = ("work_orders", "energy_meters")
+
+#: Tables whose rows carry references that only the schema-aligned path can resolve: a
+#: building from a site name, a meter from a supply number.
+#:
+#: The primary write path applies a generated SQL artifact of literal values with no
+#: resolution of any kind, and the aligned path was only ever reached by that one throwing
+#: first. For these tables that is the difference between rows that link and rows that do
+#: not, so the choice is made deliberately rather than left to whether an INSERT happens
+#: to fail.
+_NEEDS_RESOLUTION = frozenset({"assets", "work_orders", "energy_meters", "meter_readings",
+                               "building_sections", "compliance_certificates"})
 _SAFE_SQL_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 # Core plenum_cafm tables whose schema is managed by ORM migrations.
 # The fallback write path must NEVER ALTER TABLE these — only filter to
 # their existing columns.
+#: Columns the writer fills itself rather than reading from the file. A type mismatch on one of
+#: these is the target's shape, not bad source data, so it is never "fixed" by retyping the column.
+_SYSTEM_SUPPLIED_COLUMNS = frozenset({"organization_id", "org_id"})
+
 _KNOWN_CORE_TABLES = frozenset({
     "assets", "work_orders", "spare_parts", "locations", "organizations",
     "users", "technicians", "vendors", "asset_categories", "maintenance_plans",
@@ -511,7 +556,75 @@ async def write_node(state: MigrationState) -> MigrationState:
 
         # ── Primary write path: apply generated SQL artifact directly ─────────
         sql_script = (state.get("output_sql_script") or "").strip()
-        if sql_script:
+        _routed = {str(v).lower() for v in (state.get("table_routing") or {}).values()}
+        _needs = _routed & _NEEDS_RESOLUTION
+        # The schema-aligned path is the ONLY one that resolves a building from a site name or
+        # a meter from a supply number, so for these tables it is chosen rather than reached.
+        #
+        # It used to be reachable only from the SQL artifact's exception handler. Emptying the
+        # artifact to force it therefore did the opposite: control fell past both writes to
+        # the svc-ingestion POST below, a service this deployment does not run, and a
+        # migration that had passed every gate died with "Cannot connect to host
+        # svc-ingestion:8001" having written nothing.
+        _use_aligned = bool(_needs) and isinstance(state.get("cleaned_tables"), dict)
+        if _needs and not _use_aligned:
+            logger.warning(
+                "[Node 9] %s need reference resolution but no cleaned tables are on the state; "
+                "falling back to the SQL artifact, which writes literals",
+                ", ".join(sorted(_needs)),
+            )
+
+        if _use_aligned:
+            logger.info(
+                "[Node 9] %s need reference resolution - applying schema-aligned inserts",
+                ", ".join(sorted(_needs)),
+            )
+            try:
+                aligned_result = await _apply_records_with_schema_alignment(
+                    cleaned_tables=state.get("cleaned_tables", {}),
+                    organization_id=str(state.get("organization_id") or ""),
+                    table_routing=state.get("table_routing", {}) or {},
+                    approved_new_columns=_collect_approved_new_columns(state),
+                    confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                    default_building_id=state.get("building_id") or None,
+                )
+                state["handoff_status"] = "applied_sql_aligned"
+                state["svc_ingestion_response"] = {
+                    "status": "applied_sql_aligned",
+                    **aligned_result,
+                }
+                logger.info(
+                    "[Node 9] Schema-aligned inserts applied: "
+                    f"{aligned_result.get('rows_inserted', 0)} row(s) across "
+                    f"{aligned_result.get('tables_written', 0)} table(s), "
+                    f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                    f"{aligned_result.get('buildings_linked', 0)} building link(s), "
+                    f"{aligned_result.get('meters_linked', 0)} reading(s) placed on a meter"
+                )
+            except Exception as aligned_exc:
+                # A lost connection reaches here two ways. _insert_rows raises ConnectionLost
+                # when it is the insert that died; but the first statement of the NEXT table is
+                # a read of information_schema, and if the connection went during the previous
+                # table that read is what fails, with PendingRollbackError, outside any handler
+                # that knows what it means. Both are the same event and both must say so.
+                if isinstance(aligned_exc, ConnectionLost) or _is_connection_lost(aligned_exc):
+                    logger.error(
+                        f"[Node 9] The database connection closed mid-write: {aligned_exc}"
+                    )
+                    state["error_message"] = (
+                        "The database connection closed part way through the write, so the run "
+                        "stopped. Nothing partial was kept. This is the connection, not the "
+                        f"file — try the same upload again. ({str(aligned_exc)[:160]})"
+                    )
+                    state["error_node"] = 9
+                    state["el_m9_passed"] = False
+                    return state
+                logger.exception(f"[Node 9] Schema-aligned inserts failed: {aligned_exc}")
+                state["error_message"] = f"Schema-aligned write failed: {str(aligned_exc)[:300]}"
+                state["error_node"] = 9
+                state["el_m9_passed"] = False
+                return state
+        elif sql_script:
             logger.info("[Node 9] Applying output SQL artifact directly to target DB")
             try:
                 sql_apply_result = await _apply_sql_artifact(sql_script)
@@ -540,6 +653,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                             table_routing=state.get("table_routing", {}) or {},
                             approved_new_columns=_collect_approved_new_columns(state),
                             confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
+                            default_building_id=state.get("building_id") or None,
                         )
                         state["handoff_status"] = "applied_sql_aligned"
                         state["svc_ingestion_response"] = {
@@ -550,7 +664,9 @@ async def write_node(state: MigrationState) -> MigrationState:
                             "[Node 9] ✓ Schema-aligned inserts applied: "
                             f"{aligned_result.get('rows_inserted', 0)} row(s) across "
                             f"{aligned_result.get('tables_written', 0)} table(s), "
-                            f"{aligned_result.get('rows_skipped', 0)} skipped"
+                            f"{aligned_result.get('rows_skipped', 0)} skipped, "
+                            f"{aligned_result.get('rows_merged', 0)} merged, "
+                            f"{aligned_result.get('buildings_linked', 0)} building link(s)"
                         )
                     except Exception as aligned_exc:
                         logger.exception(
@@ -834,8 +950,10 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             else:
                 normalized.pop("asset_type")
 
-        # FK columns that require UUID resolution — cannot be filled from a text
-        # value at write time, so drop them rather than creating phantom columns.
+        # FK columns that need UUID resolution are not written as text. The site / building
+        # reference is NOT lost, though: _apply_records_with_schema_alignment reads it off the
+        # raw row (building_link.building_hint) and resolves it to buildings.building_id before
+        # the insert — the ten building-less assets of 21 Sep 2026 came from dropping it here.
         for _fk_col in ("site_id", "location", "location_code", "category"):
             normalized.pop(_fk_col, None)
 
@@ -870,6 +988,41 @@ def _normalize_row_for_table(table_name: str, row: dict, organization_id: str) -
             normalized["type"] = normalized.get("site_type")
         if not normalized.get("type"):
             normalized["type"] = "site"
+    elif t == "energy_meters":
+        # meter_type is NOT NULL with no default, so a meter sheet that does not carry one
+        # fails every row before it ever reaches the building link. Read the fuel the sheet
+        # states, or infer it from which supply number is present — the same rule the chat
+        # upload path uses, so the two agree about what a row is.
+        _mpan, _mprn = supply_numbers(row)
+        if _mpan and not normalized.get("mpan"):
+            normalized["mpan"] = _mpan
+        if _mprn and not normalized.get("mprn"):
+            normalized["mprn"] = _mprn
+        if not normalized.get("meter_type"):
+            normalized["meter_type"] = meter_type_for(row)
+        # Source spellings that have now been read into a real column. Left in place they
+        # would be proposed as new columns on the table.
+        for _k in ("fuel", "fuel_type", "supply_type", "utility", "commodity", "energy_type",
+                   "mpan_mprn", "meter_ref", "meter_reference", "supply_number",
+                   "meter_number", "msn"):
+            normalized.pop(_k, None)
+    elif t == "meter_readings":
+        # The meter itself is resolved in the writer, which has the session. Only the column
+        # names are canonicalised here.
+        for _src, _dst in (("timestamp", "reading_at"), ("read_at", "reading_at"),
+                           ("datetime", "reading_at"), ("reading_date", "reading_at"),
+                           ("kwh", "consumption_kwh"), ("consumption", "consumption_kwh"),
+                           ("usage", "consumption_kwh"), ("value", "consumption_kwh")):
+            if _src not in normalized:
+                continue
+            if not normalized.get(_dst):
+                normalized[_dst] = normalized.pop(_src)
+            else:
+                normalized.pop(_src, None)
+        # The reference the meter was named by; it is resolved to meter_id, not stored.
+        for _k in ("mpan", "mprn", "mpan_mprn", "meter_ref", "meter_reference",
+                   "supply_number", "meter_number", "msn", "meter"):
+            normalized.pop(_k, None)
     elif t == "work_orders":
         # work_order_id is NOT NULL in the actual DB schema — map from any available code.
         if not normalized.get("work_order_id"):
@@ -915,6 +1068,151 @@ def _to_safe_identifier(raw: str) -> str | None:
     if not _SAFE_SQL_IDENT.match(normalized):
         return None
     return normalized
+
+
+#: Consecutive per-row failures of the same kind before a table is abandoned.
+#:
+#: The per-row fallback exists to make ONE bad row cost its own row. It is not a way to discover
+#: that every row is bad. When the fault is structural — a required column the run could not
+#: resolve — every row fails identically, and retrying is just a slow way to reach the answer
+#: the first row already gave. Measured on 23 Sep 2026: 35,040 meter readings with a null
+#: meter_id, each one inserted, rejected and rolled back at about fifteen a second, holding a
+#: transaction open for forty minutes to insert nothing.
+#:
+#: Generous enough that a genuinely dirty file still gets its rows in: a hundred consecutive
+#: failures of the SAME error is not dirt, it is the shape of the data being wrong.
+_MAX_CONSECUTIVE_ROW_FAILURES = 100
+
+#: How many rows go to the database in one statement.
+#:
+#: Row at a time is three round trips each and this path routinely carries a year of
+#: half-hourly readings. Batching is not a speed nicety here: the connection was being held
+#: open long enough for the server to close it mid-write.
+_WRITE_CHUNK = 500
+
+#: What a dead connection or a poisoned transaction looks like, whatever raised it.
+_CONNECTION_LOST_SIGNS = (
+    "connection was closed",
+    "connection is closed",
+    "server closed the connection",
+    "terminating connection",
+    "invalid transaction is rolled back",
+    "connection does not exist",
+    "cannot perform operation: another operation is in progress",
+)
+
+
+class ConnectionLost(RuntimeError):
+    """The database went away. Not a bad row, and not something to retry per row."""
+
+
+def _is_connection_lost(exc: BaseException) -> bool:
+    text_ = str(exc).lower()
+    return any(sign in text_ for sign in _CONNECTION_LOST_SIGNS)
+
+
+async def _insert_rows(
+    session: AsyncSession,
+    *,
+    schema_name: str,
+    table_name: str,
+    pending: list[tuple[dict, str, dict]],
+    unique_sets: set[frozenset] | None,
+    nullable_cols: set[str],
+) -> dict:
+    """Insert a batch in as few round trips as the data allows.
+
+    Rows that share a column set share a statement, so they go in one executemany. A batch
+    that fails is retried a row at a time, so one bad row costs its own row rather than the
+    other four hundred and ninety-nine — and only then is the orphan-foreign-key retry worth
+    doing, because it needs to know which row it was.
+
+    Raises ConnectionLost rather than reporting skipped rows when the database has gone. The
+    two are not the same thing and a run that confuses them tells the reader nothing.
+    """
+    inserted = 0
+    skipped = 0
+    errors: list[str] = []
+    orphans: dict[str, int] = {}
+    #: The run of identical failures seen so far, and what it was. Reset by any success.
+    _streak = 0
+    _streak_sig: str | None = None
+    #: Set when the streak breaks the table off, so the caller can say so rather than report a
+    #: quietly short insert.
+    abandoned: str | None = None
+
+    by_stmt: dict[str, list[tuple[dict, dict]]] = {}
+    for filtered, dml_sql, params in pending:
+        by_stmt.setdefault(dml_sql, []).append((filtered, params))
+
+    for dml_sql, group in by_stmt.items():
+        try:
+            async with session.begin_nested():
+                result = await session.execute(text(dml_sql), [p for _f, p in group])
+            _n = int(getattr(result, "rowcount", 0) or 0)
+            # executemany reports -1 on some drivers; the batch went in either way.
+            inserted += _n if _n >= 0 else len(group)
+            continue
+        except Exception as batch_exc:
+            if _is_connection_lost(batch_exc):
+                raise ConnectionLost(str(batch_exc)) from batch_exc
+            # Something in this batch is bad. Find out which, one row at a time.
+            pass
+
+        for filtered, params in group:
+            try:
+                async with session.begin_nested():
+                    res = await session.execute(text(dml_sql), params)
+                inserted += int(getattr(res, "rowcount", 0) or 0)
+                # A row that went in ends the streak: the file is dirty, not misshapen.
+                _streak, _streak_sig = 0, None
+                continue
+            except Exception as row_exc:
+                if _is_connection_lost(row_exc):
+                    raise ConnectionLost(str(row_exc)) from row_exc
+                # Orphan foreign key: the row points at a parent that is not there. Null the
+                # offending column IF it is nullable and retry once, so the row lands without
+                # the broken link rather than not at all. A NOT NULL foreign key cannot be
+                # nulled, so that row is skipped as before.
+                _fk_cols = _foreign_key_columns_from_error(row_exc)
+                _nullable_fk = [c for c in _fk_cols if c in nullable_cols and c in filtered]
+                if _nullable_fk:
+                    try:
+                        _retry = {k: v for k, v in filtered.items() if k not in _nullable_fk}
+                        _dml2, _p2 = _build_dml_for_row(
+                            schema_name, table_name, _retry, unique_sets
+                        )
+                        async with session.begin_nested():
+                            _res2 = await session.execute(text(_dml2), _p2)
+                        inserted += int(getattr(_res2, "rowcount", 0) or 0)
+                        for _c in _nullable_fk:
+                            orphans[_c] = orphans.get(_c, 0) + 1
+                        _streak, _streak_sig = 0, None
+                        continue
+                    except Exception as retry_exc:
+                        if _is_connection_lost(retry_exc):
+                            raise ConnectionLost(str(retry_exc)) from retry_exc
+                skipped += 1
+                if len(errors) < 20:
+                    errors.append(f"{table_name}: {str(row_exc)[:220]}")
+
+                # Same failure, over and over, is one fault rather than many rows.
+                _sig = f"{type(row_exc).__name__}:{str(row_exc)[:120]}"
+                _streak = _streak + 1 if _sig == _streak_sig else 1
+                _streak_sig = _sig
+                if _streak >= _MAX_CONSECUTIVE_ROW_FAILURES:
+                    _left = sum(len(g) for g in by_stmt.values()) - inserted - skipped
+                    abandoned = (
+                        f"{table_name}: stopped after {_streak} consecutive identical failures "
+                        f"— every row is failing the same way, so the remaining {max(_left, 0)} "
+                        f"were not attempted. Fix the cause and re-run: {str(row_exc)[:200]}"
+                    )
+                    logger.error(f"[Node 9] {abandoned}")
+                    return {"inserted": inserted, "skipped": skipped + max(_left, 0),
+                            "errors": errors, "orphans": orphans, "abandoned": abandoned}
+
+    return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans,
+            "abandoned": abandoned}
 
 
 def _build_dml_for_row(
@@ -986,6 +1284,7 @@ def _foreign_key_columns_from_error(exc: object) -> list[str]:
 # so it is surfaced to the user for re-mapping — instead of asyncpg rejecting the WHOLE
 # row and silently losing every column of it.
 _COERCE_TYPE_MISMATCH = object()
+_NO_SYSTEM_DEFAULT = object()
 
 
 def _coerce_value_for_db_type(value: object, db_type: str) -> object:
@@ -1119,10 +1418,114 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
 
     # ── uuid: accept the string form ────────────────────────────────────────────────────
     if t == "uuid":
+        # Validate, like every other branch above. This used to return any string untouched,
+        # so a code that reached a uuid column got as far as asyncpg and raised DataError
+        # while BINDING the parameter. That happens before Postgres sees a statement, so the
+        # orphan-FK recovery in the writer (which reads a constraint name out of the error)
+        # could never match it, and the whole row was skipped. On 22 Sep 2026 that silently
+        # cost 160 of 195 rows in a migration the UI reported as complete.
+        #
+        # reference_link now resolves asset_id, vendor_id, contract_id and part_id before
+        # this runs, and drops the column when nothing matches — so those four can no longer
+        # arrive here as a code. This is the floor under every OTHER uuid column, which has
+        # no resolver of its own and would still lose its whole row to one bad field.
+        #
+        # Reported as a type mismatch instead: the caller drops this one field, keeps the
+        # rest of the row, and surfaces the column at the mapping gate so it can be re-mapped.
+        try:
+            uuid.UUID(str(value))
+        except (ValueError, AttributeError, TypeError):
+            return _COERCE_TYPE_MISMATCH
         return value if isinstance(value, str) else str(value)
 
     # Unknown destination type — hand it over untouched.
     return value
+
+
+# What identifies a row as "the same row" on a re-run, when the database has no unique index
+# to say so.
+#
+# _build_dml_for_row falls back to a bare ON CONFLICT DO NOTHING wherever no unique index
+# exists — but the writer mints a fresh uuid4() for `id` on every row, so there is never a PK
+# collision and the clause never fires. Assets escaped this because they have an explicit
+# merge-by-code path; nothing else did. Re-running the same workbook on 23 Sep 2026 therefore
+# left 23 assets and 16 work orders correct while duplicating vendors, inspections and
+# resources, and the Vendors list showed six entries for three firms.
+#
+# Candidate groups are tried in order; the first whose columns are ALL present in both the
+# table and the row wins. A table absent here is simply not deduped, which is the old
+# behaviour — never a guess at what "the same row" means.
+_NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    # A building is its code. Without this entry a Buildings sheet inserted a SECOND row for a
+    # building already on file every run — ON CONFLICT DO NOTHING cannot catch it, because `id`
+    # is a fresh uuid4() and never collides. The duplicate is not the worst of it: every
+    # building lookup afterwards found two rows for "B-101" and BuildingResolver refuses an
+    # ambiguous match, so nothing could be placed on that building for the rest of the run.
+    # On 23 Sep 2026 that cost all 35,040 meter readings in one ingest — no building meant no
+    # meter could be created, and meter_readings.meter_id is NOT NULL, so every row was rejected.
+    "buildings": (("building_code",),),
+    "compliance_certificates": (("certificate_number",),),
+    "vendors": (("vendor_code",), ("vendor_name",)),
+    "ppm_visits": (("ppm_ref",),),
+    "resources": (("engineer_id",), ("resource_code",)),
+    "spare_parts": (("part_code",),),
+    "sites": (("site_id",),),
+    "work_orders": (("wo_code",),),
+    # A section is its building and its name. Without this a second ingest of the same floor
+    # sheet wrote twelve more sections called "Level 1", "Level 2" … and the duplicates are
+    # worse than the clutter: pick_section refuses an ambiguous name, so every floor meter
+    # afterwards resolved to no section and the floor view emptied itself. building_id is
+    # resolved before this runs, so the pair is available by the time the key is read.
+    "building_sections": (("building_id", "name"), ("building_code", "name")),
+    # No reference column of its own, so a finding is identified by what it is a finding ABOUT.
+    "inspections": (("asset_code", "inspection_date", "finding_type"),),
+}
+
+
+def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[str, ...], list]]:
+    """EVERY key that could identify this row as one already written.
+
+    All of them, not the first: the candidates are alternative names for the same row, and a
+    row already on file may have been created by another route that filled a different one.
+    Returning only the first got this wrong on 23 Sep 2026 — the certificate ingest had
+    created vendors with vendor_code NULL, the workbook carried vendor_code, so the lookup
+    asked for a code no existing row had, found nothing, and inserted a twin of a vendor it
+    was holding the name of.
+    """
+    out: list[tuple[tuple[str, ...], list]] = []
+    for group in _NATURAL_KEYS.get(table, ()):
+        if all(c in db_cols and str(row.get(c) or "").strip() for c in group):
+            out.append((group, [row[c] for c in group]))
+    return out
+
+
+def _system_default_for_db_type(col: str, db_type: str, org_id: str | None) -> object:
+    """A value for a NOT NULL column the source cannot possibly supply.
+
+    Only ever called for columns that are NOT NULL, have no DDL default, and were not
+    present in the row. These are system/provenance fields — `conflict_flag`, `source`,
+    `raw_metadata`, `org_id` — never business data, because business data the source DOES
+    carry arrives in the row and never reaches here.
+
+    Returns _NO_SYSTEM_DEFAULT when there is no honest value to invent (a date, a name),
+    and the row is then skipped as before rather than filled with a fiction.
+    """
+    t = (db_type or "").lower()
+    c = (col or "").lower()
+    if c in {"org_id", "organization_id"} and org_id:
+        return org_id
+    if "bool" in t:
+        return False
+    if "json" in t:
+        return "{}"
+    if c in {"source", "origin", "created_by", "source_system"}:
+        # True, and useful: it says where the row came from.
+        return "migration"
+    if "int" in t or "numeric" in t or "double" in t or "real" in t:
+        return 0
+    if "char" in t or "text" in t:
+        return ""
+    return _NO_SYSTEM_DEFAULT
 
 
 def _collect_approved_new_columns(state) -> dict[str, set[str]]:
@@ -1202,6 +1605,7 @@ async def _apply_records_with_schema_alignment(
     table_routing: dict | None = None,
     approved_new_columns: dict[str, set[str]] | None = None,
     confirmed_hierarchies: list | None = None,
+    default_building_id: str | None = None,
 ) -> dict:
     """
     Insert cleaned records while filtering to real DB columns.
@@ -1235,6 +1639,182 @@ async def _apply_records_with_schema_alignment(
                 requested_org_id=organization_id,
                 schema_name=schema_name,
             )
+            # ── Building links ──────────────────────────────────────────────────────────────────
+            # A source row names its building by a site reference, a name or a code; the target
+            # needs buildings.building_id. Resolved here (building_link.py), once per distinct
+            # hint, inside a savepoint so a lookup that fails cannot poison the write. Assets that
+            # already exist under the same code are MERGED into their row instead of duplicated,
+            # and a work order with no building inherits its asset's.
+            async def _fetch(_sql: str, _params: dict) -> list:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(text(_sql), _params)
+                        return [tuple(r) for r in _rs.fetchall()]
+                except Exception as _lookup_exc:  # a missing column, a bad cast — never fatal
+                    # A lookup that RAISED and one that matched nothing both return [], and the
+                    # caller cannot tell them apart. Say which this was, or an unresolvable
+                    # reference and a broken query look identical for the rest of the run.
+                    logger.warning(
+                        f"[Node 9] lookup failed (treated as no match): "
+                        f"{type(_lookup_exc).__name__}: {str(_lookup_exc)[:200]}"
+                    )
+                    return []
+
+            _buildings = BuildingResolver(
+                _fetch, effective_org_id, schema_name,
+                site_names_from_run(cleaned_tables, table_routing),
+            )
+            # ── Meter links ─────────────────────────────────────────────────────────────
+            # A reading names its meter by a supply number, and meter_readings.meter_id is NOT
+            # NULL behind a real foreign key, so before this every reading row was rejected and
+            # counted as skipped. A meter that does not exist yet is created — but only when the
+            # row also names a building that resolves. See meter_link for why that refusal
+            # matters more than it looks.
+            _section_cache: dict[tuple[str, str], str | None] = {}
+
+            async def _section_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's section by name, type, or the floor it sits on.
+
+                Scoped to the building, so "Level 3" means this building's third floor and not
+                another tower's. A hint that matches two sections resolves to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _section_cache:
+                    return _section_cache[key]
+                _hit = await _fetch(SECTION_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _sid = pick_section(_hit)
+                # Hits only. A section this run is about to write is not there when the first
+                # row names it; a cached miss would then place nothing on it for the rest of
+                # the run. Same lesson as the meter resolver.
+                if _sid:
+                    _section_cache[key] = _sid
+                return _sid
+
+            _floor_cache: dict[tuple[str, str], str | None] = {}
+
+            async def _floor_for(_bid: str | None, _hint: str | None) -> str | None:
+                """This building's floor by the name the sheet gives it, or its level.
+
+                A section arrives saying "Level 3" in floor_name; the floors table already
+                holds Level 3 for this building. Without the link a meter on that section
+                cannot be placed on the floor, and the Energy page's floor view has nothing
+                to stand a sub-meter on. Two floors answering to one name resolve to neither.
+                """
+                if not _bid or not _hint:
+                    return None
+                key = (str(_bid), str(_hint).strip().lower())
+                if key in _floor_cache:
+                    return _floor_cache[key]
+                _hit = await _fetch(FLOOR_LOOKUP_SQL.format(schema=schema_name),
+                                    {"b": key[0], "k": key[1]})
+                _ids = sorted({str(r[0]) for r in _hit if r and r[0]})
+                _floor_cache[key] = _ids[0] if len(_ids) == 1 else None
+                return _floor_cache[key]
+
+            async def _create_meter(*, mpan, mprn, meter_type, building_id,
+                                    section_id=None, is_sub_meter=False) -> str | None:
+                try:
+                    async with session.begin_nested():
+                        _rs = await session.execute(
+                            text(CREATE_METER_SQL.format(schema=schema_name)),
+                            {"org": effective_org_id, "bid": building_id,
+                             "mtype": meter_type, "mpan": mpan, "mprn": mprn,
+                             "sid": section_id, "is_sub": bool(is_sub_meter)},
+                        )
+                        _row = _rs.first()
+                        return str(_row[0]) if _row and _row[0] else None
+                except Exception as _create_exc:     # a constraint, a bad cast — never fatal
+                    # Warning, not debug. This is the only account of why a meter could not be
+                    # made, and every reading that names it fails afterwards; at debug it never
+                    # reached the container log and the run looked like it simply found nothing.
+                    logger.warning(
+                        f"[Node 9] meter create failed for mpan={mpan!r} mprn={mprn!r} "
+                        f"building={building_id!r}: {type(_create_exc).__name__}: "
+                        f"{str(_create_exc)[:200]}"
+                    )
+                    return None
+
+            _meters = MeterResolver(_fetch, effective_org_id, schema_name, create=_create_meter)
+
+            # Codes and names in the file, resolved to the ids the database keys on. A CSV
+            # cannot carry a uuid anybody would type; it carries asset_code, vendor_name,
+            # contract_name. Without this every one of those columns was written as null,
+            # which for ppm_visits means the row is dropped by an inner join and never
+            # appears at all.
+            _refs = ReferenceResolver(_fetch, effective_org_id, schema_name)
+
+            # Has this row been written by an earlier run? See _NATURAL_KEYS: the bare
+            # ON CONFLICT DO NOTHING in _build_dml_for_row cannot answer it, because `id` is
+            # a fresh uuid4() every time and so never collides. Cached per key, including
+            # the misses, so re-running a workbook costs one read per distinct row, not one
+            # per row.
+            _nk_seen: dict[tuple, bool] = {}
+
+            async def _already_written(_table: str, _cols: tuple, _vals: list, _has_org: bool) -> bool:
+                _ck = (_table, _cols, tuple(str(v) for v in _vals))
+                if _ck not in _nk_seen:
+                    _where = " AND ".join(f"{c} = :v{i}" for i, c in enumerate(_cols))
+                    _prm = {f"v{i}": v for i, v in enumerate(_vals)}
+                    if _has_org:
+                        _where += " AND organization_id::text = :org"
+                        _prm["org"] = effective_org_id
+                    _hit = await _fetch(
+                        f"SELECT 1 FROM {schema_name}.{_table} WHERE {_where} LIMIT 1", _prm
+                    )
+                    _nk_seen[_ck] = bool(_hit)
+                return _nk_seen[_ck]
+
+            # The uploader's selection, checked once. A building_id that names no building of
+            # this organisation is dropped rather than written, because a row pointing at
+            # somebody else's building is worse than a row pointing at none.
+            _default_building: str | None = None
+            if default_building_id:
+                _hit = await _fetch(
+                    f"SELECT building_id::text FROM {schema_name}.buildings "
+                    f"WHERE building_id::text = :b AND organization_id::text = :org",
+                    {"b": str(default_building_id), "org": effective_org_id},
+                )
+                _default_building = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else None
+                if _default_building:
+                    logger.info("[Node 9] rows naming no site will be filed against building %s",
+                                _default_building)
+                else:
+                    logger.warning("[Node 9] selected building %s is not a building of org %s "
+                                   "- ignored", default_building_id, effective_org_id)
+
+            _asset_ids: dict[str, str] = {}          # asset code → existing assets.id ("" = none)
+            _asset_building_cache: dict[str, str] = {}  # asset ref → building_id ("" = none)
+            rows_merged = 0
+            buildings_linked = 0
+            meters_linked = 0
+            #: Set when a table is given up on, so the run reports it rather than a
+            #: quietly short insert. One table stopping does not stop the others.
+            _table_abandoned: str | None = None
+            #: One warning per run, not one per row: 35,040 copies of the same line is not a
+            #: better diagnosis than one, and it is a worse log.
+            _unlinked_reported = False
+            meters_matched = 0   # meter sheet rows that named a meter already on record
+
+
+            async def _existing_asset_id(_code: str) -> str:
+                if _code not in _asset_ids:
+                    _hit = await _fetch(ASSET_LOOKUP_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "code": _code})
+                    _asset_ids[_code] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_ids[_code]
+
+            async def _asset_building(_ref: str) -> str:
+                if not _ref:
+                    return ""
+                if _ref not in _asset_building_cache:
+                    _hit = await _fetch(ASSET_BUILDING_SQL.format(schema=schema_name),
+                                        {"org": effective_org_id, "ref": _ref})
+                    _asset_building_cache[_ref] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
+                return _asset_building_cache[_ref]
+
             # ── Parent-before-child write order ─────────────────────────────────────────────────
             # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
             # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
@@ -1256,6 +1836,30 @@ async def _apply_records_with_schema_alignment(
                 _parent = _dest_of(str(_hd.get("target_table") or ""))
                 if _child and _parent and _child != _parent:
                     _parents_of_dest.setdefault(_child, set()).add(_parent)
+
+            # What the detector cannot be relied on to notice. Hierarchy detection reads the
+            # FILE, so it finds what the file happens to make obvious; these are facts about
+            # plenum_cafm that hold whatever the file looks like. Without them the write order
+            # stayed as the sheets happened to be arranged, and a child was loaded before its
+            # parent existed: work_orders before vendors, ppm_visits before vendor_contracts.
+            # Every one of those references resolved to null, and the pages showed "Unassigned".
+            _CORE_PARENTS: dict[str, tuple[str, ...]] = {
+                "building_sections": ("buildings",),
+                "assets": ("buildings", "building_sections"),
+                "energy_meters": ("buildings", "building_sections"),
+                "meter_readings": ("energy_meters",),
+                "asset_readings": ("assets",),
+                "vendor_contracts": ("vendors",),
+                "work_orders": ("buildings", "assets", "vendors"),
+                "ppm_visits": ("assets", "vendors", "vendor_contracts"),
+                "maintenance_plans": ("assets", "buildings"),
+                "inspections": ("assets",),
+                "spare_parts": ("vendors",),
+                "compliance_certificates": ("buildings", "assets", "vendors"),
+                "work_order_parts": ("work_orders", "spare_parts"),
+            }
+            for _c, _ps in _CORE_PARENTS.items():
+                _parents_of_dest.setdefault(_c, set()).update(_ps)
 
             def _ordered_source_tables() -> list[str]:
                 _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
@@ -1313,7 +1917,7 @@ async def _apply_records_with_schema_alignment(
                 cols_rs = await session.execute(
                     text(
                         """
-                        SELECT column_name, data_type, is_nullable
+                        SELECT column_name, data_type, is_nullable, column_default
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name AND table_name = :table_name
                         """
@@ -1326,6 +1930,17 @@ async def _apply_records_with_schema_alignment(
                 # isn't present (orphan reference): null the FK so the row still lands, instead of
                 # dropping it. NOT NULL FKs can't be nulled, so those rows are skipped.
                 db_nullable_cols = {str(r[0]) for r in _col_rows if str(r[2]).upper() == "YES"}
+                # Required by the database, defaulted by nobody. This writer builds raw INSERT
+                # statements, so a Python-side ORM default never runs — and the source file
+                # cannot supply a system column it has never heard of. work_orders.conflict_flag
+                # is a boolean flag the platform sets; ppm_visits.source records where the row
+                # came from. Both are NOT NULL with no DDL default, so every row arrived with
+                # NULL and Postgres rejected it: 16/16 work orders and 132/132 PPM visits lost
+                # on 22 Sep 2026, reported only as "Skipping bad row".
+                db_required_undefaulted = {
+                    str(r[0]) for r in _col_rows
+                    if str(r[2]).upper() == "NO" and r[3] is None
+                }
                 db_cols = set(db_col_type_map.keys())
                 if db_cols:
                     logger.info(f"[Node 9]   {safe_table}: {len(db_cols)} DB columns found")
@@ -1416,6 +2031,7 @@ async def _apply_records_with_schema_alignment(
                 for row in records:
                     if not isinstance(row, dict):
                         continue
+                    _hint = building_hint(row) if safe_table in _BUILDING_HINT_TABLES else None
                     normalized = _normalize_row_for_table(
                         safe_table, row, effective_org_id
                     )
@@ -1428,6 +2044,123 @@ async def _apply_records_with_schema_alignment(
                         if safe_k not in db_cols and safe_k not in missing_columns:
                             if raw_v is not None and str(raw_v) != "":
                                 missing_columns[safe_k] = _infer_sql_type_for_value(raw_v)
+                    # The building link. A hint that resolves becomes building_id; one that does
+                    # not is removed rather than written into a UUID column as text. A work order
+                    # with no hint of its own takes its asset's building.
+                    if safe_table in _BUILDING_LINKED_TABLES and "building_id" in db_cols \
+                            and not looks_like_uuid(safe_row.get("building_id")):
+                        _bid = await _buildings.resolve(_hint) if _hint else None
+                        if not _bid and safe_table in _BUILDING_VIA_ASSET_TABLES:
+                            _bid = await _asset_building(str(safe_row.get("asset_id") or "").strip()) or None
+                        # Last: the building the uploader had selected. A half-hourly export
+                        # names an MPAN and nothing else, so this is the only thing that can
+                        # place its meter. A site named in the file always wins over it,
+                        # because the file is evidence and the selection is context.
+                        if not _bid and _default_building:
+                            _bid = _default_building
+                        if _bid:
+                            safe_row["building_id"] = _bid
+                            buildings_linked += 1
+                        else:
+                            safe_row.pop("building_id", None)
+
+                    # A meter sheet places each meter where it sits. A tower with a meter per
+                    # floor produces rows identical but for that, and without it every one of
+                    # them is created as the building's main meter — so the building's
+                    # consumption is counted once per floor.
+                    # Anything that sits in a section names it the same way, so the lookup is
+                    # not the meter's alone. An asset carries one too, and without it the
+                    # Assets page cannot group it under the part of the building it is in.
+                    # Not for the sections table itself: there section_id is the row's own
+                    # primary key, and resolving it from the floor the row names either found
+                    # nothing (and cached the miss for every meter that came after) or found
+                    # another section on that floor and stamped its id on the new row - which
+                    # then conflicted and was silently never written.
+                    if (safe_table != "building_sections" and "section_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("section_id"))):
+                        _sid = await _section_for(safe_row.get("building_id"), section_hint(row))
+                        if _sid:
+                            safe_row["section_id"] = _sid
+                        else:
+                            safe_row.pop("section_id", None)
+
+                    # A section sheet names the floor it sits on in words; floors.floor_id is
+                    # the link. Resolved here so the floor view can stand a sub-meter on the
+                    # floor its section is on.
+                    if (safe_table == "building_sections" and "floor_id" in db_cols
+                            and not looks_like_uuid(safe_row.get("floor_id"))):
+                        _fid = await _floor_for(safe_row.get("building_id"), floor_hint(row))
+                        if _fid:
+                            safe_row["floor_id"] = _fid
+                        else:
+                            safe_row.pop("floor_id", None)
+
+                    if safe_table == "energy_meters":
+                        # A meter already on record under this supply number is THE meter, not
+                        # a second one. Nothing in the schema makes an MPAN unique, so without
+                        # this a re-ingest of the same export doubles the register — and a
+                        # building with two rows for one supply counts its consumption twice.
+                        if not looks_like_uuid(safe_row.get("id")):
+                            _mh = meter_hint(row)
+                            _known = await _meters.find(_mh) if _mh else None
+                            if _known:
+                                safe_row["id"] = _known
+                                meters_matched += 1
+                        if safe_row.get("is_sub_meter") in (None, ""):
+                            safe_row["is_sub_meter"] = is_sub_meter_for(row)
+                        if not safe_row.get("meter_type"):
+                            safe_row["meter_type"] = meter_type_for(row)
+
+                    # Codes and names to ids, for whichever of these columns this table has.
+                    for _ref_col in REFERENCES:
+                        if _ref_col not in db_cols:
+                            continue
+                        if looks_like_uuid(safe_row.get(_ref_col)):
+                            continue
+                        _rh = hint_for(_ref_col, row)
+                        _rid = await _refs.resolve(_ref_col, _rh) if _rh else None
+                        if _rid:
+                            safe_row[_ref_col] = _rid
+                        else:
+                            # Absent rather than guessed. A name written into a uuid column
+                            # fails the row; a wrong id is worse, because it succeeds.
+                            safe_row.pop(_ref_col, None)
+
+                    # The meter link. A reading carries no building of its own; it reaches one
+                    # through its meter, so resolving the meter is what places the reading.
+                    if safe_table == "meter_readings" \
+                            and not looks_like_uuid(safe_row.get("meter_id")):
+                        _mh = meter_hint(row)
+                        _mid = None
+                        if _mh:
+                            _mpan, _mprn = supply_numbers(row)
+                            _mbid = ((await _buildings.resolve(_hint)) if _hint else None)                                 or _default_building
+                            _mid = await _meters.resolve(
+                                _mh,
+                                building_id=_mbid,
+                                meter_type=meter_type_for(row), mpan=_mpan, mprn=_mprn,
+                                section_id=await _section_for(_mbid, section_hint(row)),
+                                is_sub_meter=is_sub_meter_for(row),
+                            )
+                        if _mid:
+                            safe_row["meter_id"] = _mid
+                            meters_linked += 1
+                        else:
+                            if not _unlinked_reported:
+                                _unlinked_reported = True
+                                logger.warning(
+                                    f"[Node 9] {safe_table}: no meter for this row, so meter_id "
+                                    f"is null and the row cannot be written — "
+                                    f"meter reference {_mh!r}, building hint {_hint!r}, "
+                                    f"resolved building {_mbid!r}. "
+                                    f"{'No reference in the row' if not _mh else ''}"
+                                    f"{'No building, so a meter cannot be created' if _mh and not _mbid else ''}"
+                                    f"{'Lookup and create both returned nothing' if _mh and _mbid else ''}"
+                                )
+                            # Left absent rather than guessed. meter_id is NOT NULL, so the row
+                            # is skipped and reported, which is the honest outcome: a reading on
+                            # the wrong meter is a year of consumption on the wrong building.
+                            safe_row.pop("meter_id", None)
                     normalized_records.append(safe_row)
 
                 if missing_columns and safe_table in _KNOWN_CORE_TABLES:
@@ -1463,6 +2196,26 @@ async def _apply_records_with_schema_alignment(
                     logger.info(
                         f"[Node 9] Added missing column {schema_name}.{safe_table}.{col_name} "
                         f"({col_type})"
+                    )
+                if missing_columns:
+                    # Commit the DDL on its own, before a single row is loaded.
+                    #
+                    # ADD COLUMN takes ACCESS EXCLUSIVE on the table and holds it until the
+                    # transaction ends. This write used to be one transaction for the DDL and
+                    # every row of every table, so an ALTER on `buildings` kept that lock for the
+                    # length of the load — and every reader of `buildings` is every page in the
+                    # product. Measured on 23 Sep 2026: one column added to `buildings`, then
+                    # 35,040 readings loaded behind it, and the whole application queued for
+                    # eight minutes until the connection pool gave up with
+                    # "QueuePool limit of size 5 overflow 10 reached".
+                    #
+                    # The lock itself is brief — ADD COLUMN with no default rewrites nothing. It
+                    # is holding it across the data load that does the damage, so the DDL ends
+                    # its transaction here and the rows go in under their own.
+                    await session.commit()
+                    logger.info(
+                        f"[Node 9] {safe_table}: DDL committed before loading rows, so its "
+                        f"ACCESS EXCLUSIVE lock is not held across the load"
                     )
                 if missing_columns:
                     # keep local set in sync for filtering inserts below
@@ -1502,6 +2255,7 @@ async def _apply_records_with_schema_alignment(
                 # (int → text), never narrows. Scans a sample for a fast early-exit.
                 _num_types = ("int", "bigint", "smallint", "numeric", "decimal", "double", "real", "serial")
                 _SCAN_CAP = 5000
+                _widened = False
                 for _col, _dbt in list(db_col_type_map.items()):
                     if (_col == "id" and _id_is_serial) or not any(t in _dbt.lower() for t in _num_types):
                         continue
@@ -1519,21 +2273,49 @@ async def _apply_records_with_schema_alignment(
                             break
                     if not _needs_text:
                         continue
+                    if _col in _SYSTEM_SUPPLIED_COLUMNS:
+                        # The value is this run's organisation uuid, put there by
+                        # _normalize_row_for_table, not a fact from the file. A numeric column
+                        # cannot hold it (sites.organization_id is INTEGER on hoistra_test), and
+                        # rewriting a key column's type to fit it would break every join on it.
+                        # Leave it unset; the row still goes in.
+                        db_cols.discard(_col)
+                        logger.info(
+                            f"[Node 9]   {safe_table}.{_col} is {_dbt}; the run's organisation id "
+                            "does not fit it, so it is left unset rather than retyped"
+                        )
+                        continue
                     try:
                         async with session.begin_nested():
+                            # ALTER TYPE takes ACCESS EXCLUSIVE. Behind any open reader of this
+                            # table it would queue — and every query after it would queue behind
+                            # it. On 24 Sep 2026 this ALTER on `sites` waited 45 s behind two idle
+                            # transactions, died, and took the connection with it: every table
+                            # after `sites` failed with PendingRollbackError. Wait briefly or not
+                            # at all; the rows that do not fit are dropped and reported below.
+                            await session.execute(text("SET LOCAL lock_timeout = '5s'"))
                             await session.execute(text(
                                 f'ALTER TABLE {schema_name}.{safe_table} '
                                 f'ALTER COLUMN "{_col}" TYPE TEXT USING "{_col}"::text'
                             ))
+                            await session.execute(text("SET LOCAL lock_timeout = DEFAULT"))
                         db_col_type_map[_col] = "text"
+                        _widened = True
                         logger.warning(
                             f"[Node 9] Widened {safe_table}.{_col} ({_dbt} → TEXT) — source data is "
                             "non-numeric (e.g. code values); rows kept instead of skipped"
                         )
                     except Exception as _alter_exc:
+                        if _is_connection_lost(_alter_exc):
+                            raise ConnectionLost(str(_alter_exc)) from _alter_exc
                         logger.warning(
-                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: {_alter_exc}"
+                            f"[Node 9] Could not widen {safe_table}.{_col} to TEXT: "
+                            f"{type(_alter_exc).__name__}: {_alter_exc}"
                         )
+                if _widened:
+                    # Same rule as ADD COLUMN above: the exclusive lock ends with its
+                    # transaction, so end it before the load rather than after.
+                    await session.commit()
 
                 tbl_rows_skipped = 0
                 table_rows = 0
@@ -1545,6 +2327,13 @@ async def _apply_records_with_schema_alignment(
                 type_mismatch_by_col: dict[str, tuple[int, str, str]] = {}
                 # Per-column orphan-FK tally: {fk_column: rows nulled because the parent was absent}.
                 orphan_fk_by_col: dict[str, int] = {}
+                # {column: rows} filled with a system default because the source had none.
+                _sys_filled: dict[str, int] = {}
+                # {table: rows} already present from an earlier run, skipped instead of duplicated.
+                _dupes_skipped: dict[str, int] = {}
+                #: Rows waiting to go in one statement. Flushed every _WRITE_CHUNK and
+                #: again at the end of the table.
+                _pending_rows: list[tuple[dict, str, dict]] = []
                 for normalized in normalized_records:
                     filtered = {
                         k: v for k, v in normalized.items()
@@ -1576,18 +2365,83 @@ async def _apply_records_with_schema_alignment(
                     if not filtered:
                         continue
 
+                    # An asset re-imported under a code the organisation already has is the SAME
+                    # asset: merge into that row (building kept, code filled in) rather than insert
+                    # a twin with a fresh id and no building. The June 2026 import stored the code
+                    # in `id` with no asset_code, so the lookup matches on either.
+                    if safe_table == "assets":
+                        _code = asset_match_code(filtered)
+                        _existing = await _existing_asset_id(_code) if _code else ""
+                        if _existing:
+                            _usql, _uparams = build_asset_merge_update(schema_name, filtered, _existing)
+                            try:
+                                async with session.begin_nested():
+                                    _ures = await session.execute(text(_usql), _uparams)
+                                    table_rows += int(getattr(_ures, "rowcount", 0) or 0)
+                                rows_merged += 1
+                                continue
+                            except Exception as _merge_exc:
+                                logger.warning(
+                                    f"[Node 9] assets: merge into existing {_existing} for code "
+                                    f"{_code!r} failed ({str(_merge_exc)[:120]}); inserting instead"
+                                )
+
+                    # Fill the columns the database requires, has no default for, and the
+                    # source could not have known about. Done last, so anything the file DID
+                    # supply always wins.
+                    for _rc in db_required_undefaulted:
+                        if _rc in filtered or _rc not in db_cols:
+                            continue
+                        _sv = _system_default_for_db_type(
+                            _rc, db_col_type_map.get(_rc, ""), str(effective_org_id or "") or None
+                        )
+                        if _sv is not _NO_SYSTEM_DEFAULT:
+                            filtered[_rc] = _sv
+                            _sys_filled[_rc] = _sys_filled.get(_rc, 0) + 1
+
+                    # Already written by an earlier run? Skip rather than insert a twin.
+                    # The bare ON CONFLICT DO NOTHING below cannot catch this: `id` is a fresh
+                    # uuid4() every time, so there is never a primary-key collision to catch.
+                    _dupe = False
+                    for _cols, _vals in _natural_keys_for(safe_table, filtered, db_cols):
+                        if await _already_written(
+                            safe_table, _cols, _vals, "organization_id" in db_cols
+                        ):
+                            _dupe = True
+                            break
+                    if _dupe:
+                        _dupes_skipped[safe_table] = _dupes_skipped.get(safe_table, 0) + 1
+                        continue
+
                     try:
                         dml_sql, params = _build_dml_for_row(
                             schema_name, safe_table, filtered, unique_sets
                         )
-                        # SAVEPOINT per row: a failed INSERT must not abort the
-                        # outer transaction, which would poison every subsequent
-                        # session.execute() call (InFailedSQLTransactionError).
-                        _row_count = 0
-                        async with session.begin_nested():
-                            result = await session.execute(text(dml_sql), params)
-                            _row_count = int(getattr(result, "rowcount", 0) or 0)
-                        table_rows += _row_count
+                        _pending_rows.append((dict(filtered), dml_sql, params))
+                        if len(_pending_rows) >= _WRITE_CHUNK:
+                            _batch = await _insert_rows(
+                                session, schema_name=schema_name, table_name=safe_table,
+                                pending=_pending_rows, unique_sets=unique_sets,
+                                nullable_cols=db_nullable_cols,
+                            )
+                            _pending_rows = []
+                            table_rows += _batch["inserted"]
+                            rows_skipped += _batch["skipped"]
+                            tbl_rows_skipped += _batch["skipped"]
+                            for _c, _n in _batch["orphans"].items():
+                                orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                            for _e in _batch["errors"]:
+                                if len(row_errors) < 20:
+                                    row_errors.append(_e)
+                            if _batch.get("abandoned"):
+                                # The whole table is wrong, not this chunk of it. Carrying on
+                                # hands the next five hundred rows to the same failure and
+                                # repeats the message once per chunk.
+                                _table_abandoned = _batch["abandoned"]
+                                break
+                        continue
+                    except ConnectionLost:
+                        raise
                     except Exception as row_exc:
                         # Orphan foreign key: the row references a parent that isn't present (e.g.
                         # work_orders.asset_id = 'A0050145' with no such asset). Rather than drop the
@@ -1622,6 +2476,28 @@ async def _apply_records_with_schema_alignment(
                             f"[Node 9] Skipping bad row in {safe_table}: {row_exc}"
                         )
                         continue
+
+                # Whatever is left over from the last partial batch.
+                if _pending_rows:
+                    _batch = await _insert_rows(
+                        session, schema_name=schema_name, table_name=safe_table,
+                        pending=_pending_rows, unique_sets=unique_sets,
+                        nullable_cols=db_nullable_cols,
+                    )
+                    _pending_rows = []
+                    table_rows += _batch["inserted"]
+                    rows_skipped += _batch["skipped"]
+                    tbl_rows_skipped += _batch["skipped"]
+                    for _c, _n in _batch["orphans"].items():
+                        orphan_fk_by_col[_c] = orphan_fk_by_col.get(_c, 0) + _n
+                    for _e in _batch["errors"]:
+                        if len(row_errors) < 20:
+                            row_errors.append(_e)
+                    if _batch["skipped"]:
+                        logger.warning(
+                            f"[Node 9] {safe_table}: {_batch['skipped']} row(s) skipped; "
+                            f"first: {(_batch['errors'] or ['-'])[0]}"
+                        )
 
                 # Surface any type mismatches: a column whose source values don't fit the
                 # destination column's type. These were dropped (row still inserted) — the user
@@ -1665,11 +2541,49 @@ async def _apply_records_with_schema_alignment(
                         f"[Node 9]   {safe_table}: 0 rows to insert ({_tbl_elapsed:.1f}s)"
                     )
 
+                # Outside the branches above on purpose: a table whose every row was already
+                # on file inserts nothing, and "0 inserted" on its own reads as a failure.
+                # The reason it inserted nothing is the thing worth saying.
+                if _dupes_skipped.get(safe_table):
+                    logger.info(
+                        f"[Node 9]   {safe_table}: {_dupes_skipped[safe_table]} row(s) already "
+                        f"present from an earlier run — skipped, not duplicated"
+                    )
+                if _sys_filled:
+                    logger.info(
+                        f"[Node 9]   {safe_table}: filled required column(s) the source does "
+                        f"not carry — "
+                        + ", ".join(f"{c} x{n}" for c, n in sorted(_sys_filled.items()))
+                    )
+
             logger.info(
                 f"[Node 9] Schema-aligned write done — "
                 f"{rows_inserted} row(s) across {tables_written} table(s), "
-                f"{rows_skipped} skipped"
+                f"{rows_skipped} skipped, {rows_merged} merged into existing assets, "
+                f"{buildings_linked} building link(s) resolved, "
+                f"{meters_linked} reading(s) placed on a meter "
+                f"({_meters.created} meter(s) created), "
+                f"{_refs.resolved} reference(s) resolved, "
+                f"{meters_matched} meter(s) matched to one already on record"
+                + (f"; ambiguous building hints: {_buildings.ambiguous[:5]!r}" if _buildings.ambiguous else "")
             )
+            if _buildings.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "building: " + ", ".join(sorted(set(_buildings.ambiguous))[:5])
+                    + " matched more than one building — the rows were written without a building link"
+                )
+            if _meters.unlinked and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.unlinked))[:5])
+                    + " named no meter already on record, and the rows named no building to "
+                      "create one against — those readings were skipped rather than written "
+                      "to a meter that belongs to no building"
+                )
+            if _meters.ambiguous and len(row_errors) < 20:
+                row_errors.append(
+                    "meter: " + ", ".join(sorted(set(_meters.ambiguous))[:5])
+                    + " matched more than one meter — those readings were skipped"
+                )
             await session.commit()
         except Exception:
             await session.rollback()
@@ -1679,6 +2593,13 @@ async def _apply_records_with_schema_alignment(
         "rows_inserted": rows_inserted,
         "tables_written": tables_written,
         "rows_skipped": rows_skipped,
+        "rows_merged": rows_merged,
+        "buildings_linked": buildings_linked,
+        "meters_linked": meters_linked,
+        "meters_created": _meters.created,
+        "meters_matched": meters_matched,
+        "meters_unlinked": sorted(set(_meters.unlinked)),
+        "references": _refs.report(),
         "row_errors": row_errors,
     }
 

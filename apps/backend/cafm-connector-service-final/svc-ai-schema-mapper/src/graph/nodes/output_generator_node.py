@@ -476,10 +476,10 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
             pdf_bytes = generate_pdf_report(
                 migration_id=str(migration_id),
                 cmms_name=cmms_name,
-                t1_count=len(tier1_mappings),
-                t2_auto_count=len(tier2_auto_mappings),
-                t2_human_count=len(tier2_human_decisions),
-                t2_unmappable=tier2_unmappable,
+                tier1_count=len(tier1_mappings),
+                tier2_auto_count=len(tier2_auto_mappings),
+                tier2_human_count=len(tier2_human_decisions),
+                tier2_unmappable=tier2_unmappable,
                 overall_confidence=overall_confidence,
                 data_quality_warnings=data_quality_warnings,
                 tier1_mappings=tier1_mappings,
@@ -487,7 +487,6 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
                 tier2_human_decisions=tier2_human_decisions,
                 confirmed_hierarchies=confirmed_hierarchies,
                 hierarchy_cycles=hierarchy_cycles,
-                orphaned_records=orphaned_records,
             )
             log(f"✅ PDF report generated: {len(pdf_bytes):,} bytes")
         except Exception as e:

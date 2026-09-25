@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import uuid
 from typing import Any
 
 import httpx
@@ -557,6 +558,32 @@ async def count_compliance_certificates(
         return _err(exc, "count_compliance_certificates")
 
 
+def _split_vendor_ref(
+    vendor_id: str | None, vendor_name: str | None
+) -> tuple[str | None, str | None]:
+    """Sort a vendor reference into the field that can hold it.
+
+    A certificate prints its contractor's NAME. It does not print a UUID. So a model filling
+    this tool in knows "Meridian Mechanical Ltd" and nothing else — and until vendor_name
+    existed here, the only vendor-shaped parameter on offer was `vendor_id`. It put the name
+    there, CertificateUpsertRequest types that column as a UUID, and Pydantic returned 422.
+    The write was lost and the agent reported the certificate as unstored when the
+    single-door pass had already stored it.
+
+    A name arriving in the id field is therefore read as what it is rather than refused. An
+    explicit vendor_name always wins; ops-intelligence resolves it to the vendor either way.
+    """
+    vid = (vendor_id or "").strip()
+    name = (vendor_name or "").strip() or None
+    if not vid:
+        return None, name
+    try:
+        uuid.UUID(vid)
+    except (ValueError, AttributeError, TypeError):
+        return None, name or vid
+    return vid, name
+
+
 @tool
 async def upsert_compliance_certificate(
     cert_scope: str,
@@ -568,6 +595,7 @@ async def upsert_compliance_certificate(
     asset_id: str | None = None,
     site_id: str | None = None,
     vendor_id: str | None = None,
+    vendor_name: str | None = None,
     inspector_name: str | None = None,
     inspector_accreditation_number: str | None = None,
     result: str | None = None,
@@ -578,10 +606,15 @@ async def upsert_compliance_certificate(
 ) -> dict:
     """Upsert a building or vendor certificate (A2/A3 ingest).
 
+    vendor_id must be a UUID. When you know the contractor only by the name printed on the
+    certificate — which is the usual case — pass vendor_name instead and leave vendor_id
+    unset; it is resolved to the vendor on the server.
+
     confirmed_by_pm=False still persists a draft (appears in lists / Saved Space).
     Set confirmed_by_pm=True after the PM reviews extracted fields to finalise.
     Fail/Advisory opens remedial_status only after confirm (no WO auto-created).
     """
+    vendor_id, vendor_name = _split_vendor_ref(vendor_id, vendor_name)
     try:
         resp = await _request(
             "POST",
@@ -599,6 +632,7 @@ async def upsert_compliance_certificate(
                 "asset_id": asset_id,
                 "site_id": site_id,
                 "vendor_id": vendor_id,
+                "vendor_name": vendor_name,
                 "inspector_name": inspector_name,
                 "inspector_accreditation_number": inspector_accreditation_number,
                 "result": result,
@@ -1192,7 +1226,69 @@ async def get_pack_facts(country_code: str = "UK") -> dict:
         return _err(exc, "get_pack_facts")
 
 
+@tool
+async def get_mees_summary(building_id: str | None = None) -> dict:
+    """A — MEES from the EPC register: per building the EPC band (A–G) and score, how many sit
+    below E (unlettable now) and below B over 1,000 m² (proposed 2030), EPCs current / expiring
+    within 12 months. UK only; an unknown band is reported as unknown, never as compliant."""
+    try:
+        params = {"building_id": building_id} if building_id else {}
+        resp = await _request("GET", _base(), "/api/compliance/mees", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_mees_summary")
+
+
+@tool
+async def record_regulatory_filing(
+    building_id: str,
+    scheme: str,
+    period_year: int,
+    status: str = "filed",
+    filed_at: str | None = None,
+    reference: str | None = None,
+    certification_level: str | None = None,
+    valid_until: str | None = None,
+    submitted_by: str | None = None,
+) -> dict:
+    """A — Record that a filing was made for a building and compliance year. scheme: LL84 (NYC
+    benchmarking, due 1 May of the following year), BCA_BENCHMARKING (Singapore annual return),
+    GREEN_MARK (certification: level Certified | Gold | GoldPlus | Platinum, valid 3 years).
+    Idempotent on (building, scheme, year)."""
+    try:
+        resp = await _request("POST", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              json={"building_id": building_id, "scheme": scheme, "period_year": period_year,
+                                    "status": status, "filed_at": filed_at, "reference": reference,
+                                    "certification_level": certification_level, "valid_until": valid_until,
+                                    "submitted_by": submitted_by})
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "record_regulatory_filing")
+
+
+@tool
+async def list_regulatory_filings(building_id: str | None = None, scheme: str | None = None,
+                                  country_code: str | None = None) -> dict:
+    """A — Filings on record (LL84 / BCA / Green Mark) for the caller's buildings; with
+    country_code (US | SG) also the position per scheme: filed / due / overdue, certified / lapsed."""
+    try:
+        params = {k: v for k, v in {"building_id": building_id, "scheme": scheme}.items() if v}
+        out = (await _request("GET", _base(), "/api/compliance/filings", service=_SERVICE, timeout=_TIMEOUT,
+                              params=params)).json()
+        if country_code:
+            pos = await _request("GET", _base(), "/api/compliance/filings/position", service=_SERVICE,
+                                 timeout=_TIMEOUT, params={**params, "country_code": country_code})
+            out["position"] = pos.json()
+        return out
+    except Exception as exc:
+        return _err(exc, "list_regulatory_filings")
+
+
 COMPLIANCE_ENGINE_TOOLS = [
+    get_mees_summary,
+    record_regulatory_filing,
+    list_regulatory_filings,
     run_compliance_scan,
     get_pack_facts,
     manage_vector_membership,

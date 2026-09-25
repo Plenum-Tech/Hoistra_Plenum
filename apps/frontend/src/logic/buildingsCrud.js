@@ -1,0 +1,658 @@
+// buildingsCrud — hoisting a building, editing one field by field, and removing one.
+//
+// One form serves create (POST) and edit (PATCH): opening it for a row prefills every field
+// from the table and switches the submit to send only what changed. Three rules govern both,
+// none obvious from a text box:
+//
+//   Floor area is SQUARE METRES. The database column is square feet and the service
+//   converts on write, so a number typed in square feet is accepted, stored, and quietly
+//   wrong in every place area is used — including as the denominator of EUI. The input says
+//   m² in the label, in the placeholder and in the hint, because this is the one field where
+//   being wrong looks exactly like being right.
+//
+//   On edit, an omitted field is left alone; an emptied optional field is a deliberate clear.
+//   So the diff against the prefilled original decides what to send, and a field blanked back
+//   to nothing is sent as "" rather than dropped. `expected_updated_at` (read off the row) goes
+//   with it, so an edit started against a stale row is refused instead of overwriting someone.
+//
+//   Deleting a building never deletes what it held. A certificate or an invoice is the
+//   record of something that actually happened. The confirmation calls DELETE without
+//   `confirm` first — which changes nothing and reports what is attached — and shows that
+//   count, so the decision is "1 asset and 1 document will be unlinked and kept" rather
+//   than "are you sure?".
+//
+// Errors come back keyed by field on both routes, so each one renders against its own input
+// instead of a banner the reader has to match back to a box by guessing.
+import { energyApi } from '../api/energy.js';
+import { udrApi } from '../api/udr.js';
+import { adminApi } from '../api/admin.js';
+import { currentOrgId } from '../api/client.js';
+import { accountCanIngest } from './auth.js';
+
+// What the form offers. `Mall` is deliberately here: a facilities manager calls it a mall,
+// and the service maps it to the Retail enum member and says so in the response. `Laboratory`
+// is a real member of the database enum the form had been missing.
+export const USE_TYPES = [
+  'Commercial', 'Retail', 'Mall', 'Residential', 'Mixed',
+  'Hospital', 'Hotel', 'Industrial', 'Logistics', 'Education', 'Laboratory', 'Leisure', 'Other'
+];
+
+export const COUNTRIES = [
+  { code: 'UK', name: 'United Kingdom', standard: 'CIBSE TM46', standing: 'guidance' },
+  { code: 'US', name: 'United States', standard: 'Energy Star · ASHRAE 100', standing: 'enacted' },
+  { code: 'AE', name: 'United Arab Emirates', standard: 'Rolling portfolio benchmark', standing: 'no operational standard' },
+  { code: 'SG', name: 'Singapore', standard: 'BCA Benchmarking Report', standing: 'submission mandatory' }
+];
+
+export const GRANULARITIES = [
+  { value: 'none', label: 'No meter', hint: 'No reading arrives for this building yet.' },
+  { value: 'building-level', label: 'Building-level', hint: 'Attribution to a plant item is inferred, not measured.' },
+  { value: 'sub-metered', label: 'Sub-metered', hint: 'Consumption is measured per circuit or plant item.' }
+];
+
+// Who may change the register: admin and superadmin only. Adding a building to the
+// portfolio, or removing one entered by mistake, is a company-wide action, not something a
+// building-restricted user does from their own scoped view.
+//
+// This is an affordance, not a permission. The service does not authorise these routes, so
+// hiding the button never stopped anyone who could reach the API; what the gate decides is
+// whose screen is uncluttered. When a real role model arrives, this set is the one line to
+// change — and the check belongs on the service at the same time.
+export const HOIST_ROLES = new Set(['superadmin', 'admin']);
+
+// Saying it opens the form. Matched on the WHOLE normalised message, never a substring:
+// "which building has the worst hoist score?" contains both words and is a question, and
+// "hoist a building in Dubai with 24 floors" carries values no field was told about — the
+// orchestrator can ask about those, this form cannot. Same discipline as chatCases.js's
+// CC_YES, for the same reason.
+const BC_HOIST = new Set([
+  'hoist a building', 'hoist building', 'hoist a new building',
+  'add a building', 'add building', 'new building'
+]);
+export const bcIsHoistRequest = (text) =>
+  BC_HOIST.has(String(text || '').trim().toLowerCase().replace(/[.!?\s]+$/, ''));
+
+
+// auth.js's Admin/User view toggle only ever relabels s.role for an account that is really
+// an admin (canAdmin gates the toggle itself) — it previews the restricted reports layout,
+// it does not actually demote the session. So the gate here reads the account's real role
+// first and only falls back to s.role when there is no live account to ask (seed/demo data,
+// and the test harness, which drives this off role directly) — otherwise an admin who opens
+// "User view" to see what a user's screen looks like would lose their own Hoist button along
+// with it, rather than just previewing what a user cannot do.
+const realBuildingsRole = (s) => (s.account && s.account.role) || s.role;
+
+// Which company's sites the "Site it belongs to" picker offers. currentOrgId() is only
+// ever set while a superadmin is viewing as another company (superAdmin.js) — for every
+// other sign-in it is empty, and the account's own organization_id (from login/me, never
+// guessed client-side) is the real scope. Empty only for an account with no company on
+// record, in which case the query below runs unfiltered rather than showing nothing.
+const sitesOrgId = (s) => currentOrgId() || (s.account && s.account.organization_id) || '';
+
+const BLANK = {
+  site_name: '', country_code: 'UK', state: '', city: '', postcode: '',
+  use_type: 'Commercial', floors: '', gfa_sqm: '',
+  metering_granularity: 'building-level', metering_route: '',
+  building_code: '', site_id: ''
+};
+const BLANK_MIX = [{ use: 'office', pct: 100 }];
+// The three steps of a hoist, as the card labels them.
+const STEP_NAMES = ['building record', 'schema written', 'documents'];
+// Fields PATCH will actually touch — the same set PatchBuildingRequest declares. Anything
+// else is never sent, so a stray key from the form can't come back "Not editable here."
+const PATCHABLE_KEYS = [
+  'site_name', 'country_code', 'state', 'city', 'postcode',
+  'use_type', 'use_mix', 'floors', 'gfa_sqm',
+  'metering_granularity', 'metering_route', 'building_code', 'site_id'
+];
+
+const num = (v) => { const n = Number(String(v).replace(/,/g, '').trim()); return Number.isFinite(n) ? n : null; };
+const trim = (v) => String(v === undefined || v === null ? '' : v).trim();
+
+// A row from buildingsLive.js → the form's fields, so opening Edit shows the building as the
+// table already has it rather than a blank sheet.
+function formFromRow(row) {
+  const r = row || {};
+  return {
+    site_name: r.name && r.name !== 'Unnamed site' ? r.name : '',
+    country_code: r.cc && r.cc !== '—' ? r.cc : 'UK',
+    state: r.state && r.state !== '—' ? r.state : '',
+    city: r.city || '',
+    postcode: r.postcode || '',
+    use_type: r.siteTypeRaw || r.use || 'Commercial',
+    floors: typeof r.floors === 'number' ? String(r.floors) : '',
+    gfa_sqm: typeof r.areaM2 === 'number' ? String(Math.round(r.areaM2)) : '',
+    metering_granularity: r.gran || 'building-level',
+    metering_route: r.route && !/^No meter|route not stated/.test(r.route) ? r.route : '',
+    building_code: r.code || '',
+    site_id: r.siteId || ''
+  };
+}
+function mixFromRow(row) {
+  const raw = row && row.useMixRaw;
+  if (Array.isArray(raw) && raw.length) return raw.map((m) => ({ use: m.use, pct: m.pct }));
+  return BLANK_MIX.map((m) => Object.assign({}, m));
+}
+
+export const buildingsCrudMethods = {
+
+  // ── the hoist form ─────────────────────────────────────────────────────────
+  //
+  // The form is a card in the orchestrator dock, not a modal: hoisting is an instruction to
+  // the platform, so it opens the dock, records the task as a session and plays the chain like
+  // every other action. Create runs as three steps — the record (the one write), the schema it
+  // landed in, then documents — and the card shows while `flow` is 'declare', so closing the
+  // dock or starting another flow puts it away with everything else.
+
+  bcOpenForm() {
+    clearTimeout(this._bcCodeTimer);
+    const patch = {
+      bcMode: 'create', bcTarget: null, bcStep: 0, bcResult: null,
+      bcOpen: true, bcForm: Object.assign({}, BLANK), bcMix: BLANK_MIX.map((m) => Object.assign({}, m)),
+      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: '',
+      // A fresh create starts un-touched — BLANK already carries country_code/use_type
+      // defaults (region is the one field nobody has typed yet), so the preview below
+      // shows the flat-scheme fallback immediately rather than an empty box.
+      bcCodeTouched: false
+    };
+    // On the Orchestrator the conversation IS the surface: the form renders in the
+    // transcript under the sentence that asked for it, and the dock stays shut — laying a
+    // dock over the conversation that asked would hide the request behind its own answer.
+    // Everywhere else the dock opens exactly as before: a new task, a fresh panel, with
+    // whatever conversation was in the dock cleared rather than left under the form.
+    if (this.state.view === 'chat') {
+      this.setState(Object.assign({ flow: 'declare', flowDone: '' }, patch));
+    } else {
+      this.ccChatReset();
+      this.orchWith('Hoist building', this.ctxLabel(), 'declare', patch);
+    }
+    this.bcSitesLoad();
+    this.bcCodePreview();
+  },
+
+  // Opening Edit on a row. `bcTarget` carries the building_id the PATCH addresses and the
+  // row's updated_at, read off the row so it can be sent back as expected_updated_at.
+  bcOpenEdit(row) {
+    if (!row || !row.buildingId) return this.flash('This row has no building_id — it predates the building graph and cannot be edited here yet.');
+    // Kept outside state: they are the diff baseline, not something the form or a re-render
+    // needs to read, and they must survive exactly as read even if `row` is later replaced.
+    this._bcOriginal = formFromRow(row);
+    this._bcOriginalRow = row;
+    this.ccChatReset();
+    // One step, not three: an edit is a single PATCH and the record already has its schema.
+    this.orchWith('Edit building', row.name || this.ctxLabel(), 'declare', {
+      bcMode: 'edit', bcTarget: { buildingId: row.buildingId, updatedAt: row.updatedAt || null, name: row.name },
+      bcStep: 0, bcResult: null,
+      bcOpen: true, bcForm: Object.assign({}, this._bcOriginal), bcMix: mixFromRow(row),
+      bcErrors: {}, bcWarnings: [], bcSaving: false, bcTopError: '', bcSiteOpen: false, bcSiteQuery: ''
+    });
+    this.bcSitesLoad();
+  },
+
+  bcCloseForm() { this.setState({ bcOpen: false, flow: null, bcErrors: {}, bcTopError: '' }); },
+
+  // The "Site it belongs to" picker's options — every plenum_cafm.sites row for this
+  // account's own company, so it only ever offers sites the signed-in person could
+  // actually mean. Loaded once per dock-open rather than kept globally: the company in
+  // scope can change between opens (a superadmin switching "view as company").
+  async bcSitesLoad() {
+    const org = sitesOrgId(this.state);
+    if (this._bcSitesOrg === org && this.state.bcSites) return;
+    this._bcSitesOrg = org;
+    this.setState({ bcSitesLoading: true });
+    try {
+      const res = org
+        ? await udrApi.select('SELECT site_id, site_name FROM plenum_cafm.sites WHERE organization_id = :org ORDER BY site_name', { org: org })
+        : await udrApi.select('SELECT site_id, site_name FROM plenum_cafm.sites ORDER BY site_name', {});
+      // Only apply it if this is still the scope in question — a slow response from a
+      // superadmin's previous company should never land after they have switched away.
+      if (this._bcSitesOrg === org) this.setState({ bcSites: (res && res.rows) || [], bcSitesLoading: false });
+    } catch (e) {
+      if (this._bcSitesOrg === org) this.setState({ bcSites: this.state.bcSites || [], bcSitesLoading: false });
+    }
+  },
+
+  // Search-and-pick, the same interaction the building-scope switcher in TopBar already
+  // uses (auth.js's bldToggle/bldQuery/bldRows) — a trigger row that opens a small panel
+  // with a filter box, rather than one native <select> holding 600+ options.
+  bcSiteToggle() { this.setState((p) => ({ bcSiteOpen: !p.bcSiteOpen, bcSiteQuery: '' })); },
+  bcSiteClose() { this.setState({ bcSiteOpen: false, bcSiteQuery: '' }); },
+  bcSiteSetQuery(e) { this.setState({ bcSiteQuery: e && e.target ? e.target.value : e }); },
+  bcSitePick(id) {
+    this.bcSet('site_id', id || '');
+    this.setState({ bcSiteOpen: false, bcSiteQuery: '' });
+  },
+
+  // Step 2 → 3. The record is already written by now, so there is no way back from here.
+  // The user picker on step 3 needs the company's people, fetched lazily right as it is
+  // about to be shown rather than on every form open (most opens never reach step 3).
+  bcNext() { this.setState({ bcStep: 2 }); this.bcUsersLoad(); },
+
+  // Step 3's two exits. Ingest hands the new building to the dock's ingest flow; later leaves
+  // the keyed-as line in the dock so the outcome is still on screen after the card goes.
+  bcIngestNow() {
+    const r = this.state.bcResult || {};
+    this.setState({ flow: 'ingest', flowDone: '', declFor: r.name || 'the new building', bcOpen: false });
+  },
+
+  bcLater() {
+    const r = this.state.bcResult || {};
+    this.setState({
+      flow: null, bcOpen: false,
+      // "Run Ingest documents whenever you are ready" is only true for an account that may:
+      // with Can ingest off, this is now the card's only exit and pointing at a control
+      // that is no longer on screen would be the wrong instruction.
+      flowDone: (r.name || 'The building') + ' is hoisted and keyed as ' + (r.code || '—')
+        + '. No documents ingested — its Hoist Score stays at 0% until they arrive. '
+        + (accountCanIngest(this.state)
+           ? 'Run Ingest documents whenever you are ready.'
+           : 'Your account is not set up to add them — an administrator can turn on Can ingest under Users & access.')
+    });
+  },
+
+  // ── assign the new building to a user (step 3, optional) ───────────────────
+  //
+  // Entirely skippable: nothing on step 3 requires touching this, and both its exits
+  // (Ingest now / Do it later) work exactly as before whether or not an assignment was
+  // made. adminApi already scopes /api/admin/users to the caller's own company server
+  // side, so — unlike the raw UDR site read — there is no client-side org filter to get
+  // right here.
+  async bcUsersLoad() {
+    if (this.state.bcUsers || this.state.bcUsersLoading) return;
+    this.setState({ bcUsersLoading: true });
+    try {
+      const res = await adminApi.listUsers();
+      this.setState({ bcUsers: (res && res.users) || [], bcUsersLoading: false });
+    } catch (e) {
+      this.setState({ bcUsers: [], bcUsersLoading: false });
+    }
+  },
+
+  bcSetAssignUser(e) {
+    this.setState({ bcAssignUserId: e && e.target ? e.target.value : e, bcAssignedTo: '' });
+  },
+
+  // building_ids is a full replacement (adminApi.patchUser), so this reads the picked
+  // user's current allocation and sends it back with the new building appended — never
+  // just [newBuildingId], which would silently strip every building they already held.
+  async bcAssignSubmit() {
+    const s = this.state;
+    if (s.bcAssigning) return;
+    const userId = s.bcAssignUserId;
+    const r = s.bcResult || {};
+    if (!userId || !r.buildingId) return;
+    const u = (s.bcUsers || []).find((x) => String(x.id) === String(userId));
+    const label = (u && (u.full_name || u.email)) || 'that user';
+    const existing = ((u && u.buildings) || []).map((b) => b.id);
+    const ids = existing.includes(r.buildingId) ? existing : existing.concat([r.buildingId]);
+    this.setState({ bcAssigning: true });
+    try {
+      await adminApi.patchUser(userId, { building_ids: ids });
+      this.setState({ bcAssigning: false, bcAssignedTo: label });
+      this.flash((r.name || 'The building') + ' is now assigned to ' + label + '.');
+    } catch (e) {
+      this.setState({ bcAssigning: false });
+      this.flash('Could not assign ' + (r.name || 'the building') + ' to ' + label + ' — ' + ((e && e.message) || String(e)));
+    }
+  },
+
+  bcSet(field, value) {
+    this.setState((p) => ({
+      bcForm: Object.assign({}, p.bcForm, { [field]: value }),
+      // Clearing the error as they type is the whole point of keying errors by field.
+      bcErrors: Object.assign({}, p.bcErrors, { [field]: undefined }),
+      // Typing into the code field directly is the one thing that stops
+      // bcCodePreview() from overwriting it — every other field keeps auto-filling.
+      bcCodeTouched: field === 'building_code' ? true : p.bcCodeTouched
+    }));
+    // Any of the three fields the code is built from changing previews the new code.
+    // bcCodePreview() itself is what actually decides whether a preview belongs here —
+    // this call site does not have to be the one place that gets the gating right.
+    if (field === 'country_code' || field === 'state' || field === 'use_type') this.bcCodePreview();
+  },
+
+  // Debounced, and guarded the same way bcSitesLoad() already is: a token taken before the
+  // request and checked after, so a slow response can never land and overwrite either a
+  // newer preview or a code the person has since typed over themselves. Every guard lives
+  // here rather than split across call sites — bcOpenForm() calls this directly too.
+  bcCodePreview() {
+    clearTimeout(this._bcCodeTimer);
+    // Never on edit — an existing building's stored code is not silently rewritten by
+    // reopening its country/region/use — and never once the field has been typed into
+    // directly. Checked here, not just before scheduling: both can turn true again during
+    // the debounce wait below (edit is never entered from a create form already open, but
+    // bcCodeTouched very much can, by exactly the field this delay exists for).
+    if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+    this._bcCodeTimer = setTimeout(() => {
+      if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+      const f = this.state.bcForm || {};
+      const token = (this._bcCodeToken = (this._bcCodeToken || 0) + 1);
+      energyApi.previewBuildingCode({
+        organization_id: sitesOrgId(this.state) || undefined,
+        country_code: f.country_code, region: f.state, use_type: f.use_type
+      }).then((res) => {
+        if (this._bcCodeToken !== token) return; // superseded by a newer preview
+        if (this.state.bcMode !== 'create' || this.state.bcCodeTouched) return;
+        const code = res && res.building_code;
+        if (code) this.setState((p) => ({ bcForm: Object.assign({}, p.bcForm, { building_code: code }) }));
+      }).catch(() => {}); // a failed preview leaves the field as it was — never an error banner
+    }, 300);
+  },
+
+  bcMixSet(i, key, value) {
+    this.setState((p) => {
+      const mix = (p.bcMix || []).map((m, j) => (j === i ? Object.assign({}, m, { [key]: value }) : m));
+      return { bcMix: mix, bcErrors: Object.assign({}, p.bcErrors, { use_mix: undefined }) };
+    });
+  },
+
+  bcMixAdd() {
+    this.setState((p) => ({ bcMix: (p.bcMix || []).concat([{ use: '', pct: '' }]) }));
+  },
+
+  bcMixRemove(i) {
+    this.setState((p) => {
+      const mix = (p.bcMix || []).filter((_, j) => j !== i);
+      return { bcMix: mix.length ? mix : BLANK_MIX.map((m) => Object.assign({}, m)) };
+    });
+  },
+
+  bcMixTotal() {
+    return (this.state.bcMix || []).reduce((t, m) => t + (num(m.pct) || 0), 0);
+  },
+
+  // The create body: every field the form offers, in the shape POST expects.
+  bcCreateBody() {
+    const f = this.state.bcForm || {};
+    const body = {
+      site_name: f.site_name, country_code: f.country_code, state: f.state,
+      use_type: f.use_type,
+      use_mix: (this.state.bcMix || []).map((m) => ({ use: m.use, pct: num(m.pct) })),
+      floors: num(f.floors),
+      metering_granularity: f.metering_granularity,
+      source: 'hoistra-ui'
+    };
+    // Square METRES. The service converts; sending feet here is the one mistake that is
+    // accepted and then wrong everywhere.
+    if (String(f.gfa_sqm).trim()) body.gfa_sqm = num(f.gfa_sqm);
+    ['city', 'postcode', 'metering_route', 'building_code', 'site_id'].forEach((k) => {
+      if (String(f[k] || '').trim()) body[k] = String(f[k]).trim();
+    });
+    // The company being VIEWED, which every read on this page already sends. Without it the
+    // service falls back to the caller's own company, so a superadmin viewing as another
+    // one filed the building under themselves — and the page they created it on, scoped to
+    // the company they were looking at, then did not show it. The building was not lost; it
+    // was in a company they were not looking at, which is worse than an error.
+    //
+    // Safe for everyone else: naming your own company is a no-op, and naming another is
+    // refused with 403 wrong_organization rather than honoured (access.organization_for).
+    const org = currentOrgId();
+    if (org) body.organization_id = org;
+    return body;
+  },
+
+  // The edit body: only what changed from the prefilled original, in PATCH's vocabulary. An
+  // optional field blanked back to nothing is sent as "" (a clear); one that was already
+  // empty and stays empty is omitted (nothing changed). use_mix travels with use_type
+  // whenever either moved, since a mix belongs to the use it splits.
+  bcPatchBody(original) {
+    const f = this.state.bcForm || {};
+    const o = original || {};
+    const body = {};
+    ['site_name', 'state', 'city', 'postcode', 'metering_route', 'building_code', 'site_id'].forEach((k) => {
+      const now = trim(f[k]), was = trim(o[k]);
+      if (now !== was) body[k] = now;
+    });
+    if (f.country_code !== o.country_code) body.country_code = f.country_code;
+    if (num(f.floors) !== num(o.floors)) body.floors = num(f.floors);
+    if (f.metering_granularity !== o.metering_granularity) body.metering_granularity = f.metering_granularity;
+    const gfaNow = String(f.gfa_sqm || '').trim() ? num(f.gfa_sqm) : '';
+    const gfaWas = String(o.gfa_sqm || '').trim() ? num(o.gfa_sqm) : '';
+    if (gfaNow !== gfaWas) body.gfa_sqm = gfaNow;
+    const mixNow = (this.state.bcMix || []).map((m) => ({ use: m.use, pct: num(m.pct) }));
+    const mixWas = mixFromRow(this._bcOriginalRow).map((m) => ({ use: m.use, pct: num(m.pct) }));
+    if (f.use_type !== o.use_type || JSON.stringify(mixNow) !== JSON.stringify(mixWas)) {
+      body.use_type = f.use_type;
+      body.use_mix = mixNow;
+    }
+    return body;
+  },
+
+  // Resolves true once the write has succeeded, false whenever nothing was sent or the
+  // service refused it — a caller (and a test) can tell "saved" from "still open" without
+  // reading state back out.
+  async bcSubmit() {
+    if (this.state.bcSaving) return false;
+    const edit = this.state.bcMode === 'edit' && this.state.bcTarget;
+    const f = this.state.bcForm || {};
+    const name = f.site_name || (edit && edit.name) || 'building';
+    const body = edit ? this.bcPatchBody(this._bcOriginal) : this.bcCreateBody();
+    if (edit && !Object.keys(body).length) {
+      this.setState({ bcTopError: 'Nothing to change — every field is as it was.' });
+      return false;
+    }
+    if (edit && this.state.bcTarget.updatedAt) body.expected_updated_at = this.state.bcTarget.updatedAt;
+
+    this.setState({ bcSaving: true, bcErrors: {}, bcTopError: '', bcWarnings: [] });
+    try {
+      const res = edit
+        ? await energyApi.patchBuilding(this.state.bcTarget.buildingId, body)
+        : await energyApi.createBuilding(body);
+      // An edit is done here. A create is a third of the way: the card moves on to show the
+      // schema the record landed in, with the code the service allocated, then to documents.
+      this.setState(edit
+        ? { bcSaving: false, bcOpen: false, flow: null, bcWarnings: res.warnings || [] }
+        : { bcSaving: false, bcStep: 1, bcWarnings: res.warnings || [],
+            bcResult: { name: name, code: res.building_code || '—', buildingId: res.building_id || null, storedAs: res.stored_as || null, warnings: res.warnings || [] } });
+      this.flash(edit
+        ? 'Saved ' + name + ((res.changed || []).length ? ' — ' + res.changed.join(', ') + ' changed' : '') + (res.relocated ? ' · relocated to its new market’s regulation pack' : '')
+        : 'Hoisted ' + name + ' as ' + (res.building_code || '—'));
+      await this.bldLoad();
+      // Warnings are not failures — "stored as Retail", "no regulation pack for this
+      // market". They belong after the success, not instead of it.
+      if ((res.warnings || []).length) this.flash(res.warnings[0]);
+      return true;
+    } catch (e) {
+      const errBody = (e && e.body) || {};
+      const errs = errBody.errors || {};
+      const patch = { bcSaving: false, bcErrors: errs };
+      if (edit && e && e.status === 409 && errBody.current_updated_at) {
+        patch.bcTarget = Object.assign({}, this.state.bcTarget, { updatedAt: errBody.current_updated_at });
+        patch.bcTopError = 'This building changed since you opened it. Reload and re-apply your edit — the row has been re-read.';
+        this.bldLoad();
+      } else {
+        patch.bcTopError = Object.keys(errs).length ? '' : ((e && e.message) || String(e));
+        if (e && e.status === 409 && !edit) this.flash('That building code is already in use — nothing was overwritten.');
+      }
+      this.setState(patch);
+      return false;
+    }
+  },
+
+  // ── removing one ───────────────────────────────────────────────────────────
+
+  // Step one is a DELETE with no `confirm`. It changes nothing and reports what the
+  // building holds, which is what the dialog needs in order to say something useful.
+  async bcAskDelete(row) {
+    const id = (row && (row.buildingId || row.id)) || '';
+    if (!id) return;
+    this.setState({ bcDel: { id: id, name: (row && row.name) || id, loading: true }, bcDelError: '' });
+    try {
+      const plan = await energyApi.deleteBuilding(id, { confirm: false });
+      this.setState({ bcDel: { id: id, name: plan.name || (row && row.name) || id, code: plan.building_code, attached: plan.attached || {}, total: plan.attached_total || 0, loading: false } });
+    } catch (e) {
+      this.setState({ bcDel: null, bcDelError: (e && e.message) || String(e) });
+      this.flash('Could not check what that building holds — ' + ((e && e.message) || e));
+    }
+  },
+
+  bcCancelDelete() { this.setState({ bcDel: null, bcDelError: '' }); },
+
+  async bcConfirmDelete() {
+    const d = this.state.bcDel;
+    if (!d || d.loading || d.working) return;
+    this.setState({ bcDel: Object.assign({}, d, { working: true }) });
+    try {
+      const res = await energyApi.deleteBuilding(d.id, { confirm: true, detach: true });
+      this.setState({ bcDel: null });
+      this.flash(res.message || ('Deleted ' + d.name));
+      await this.bldLoad();
+    } catch (e) {
+      this.setState({ bcDel: Object.assign({}, d, { working: false }) });
+      this.flash('Delete failed — ' + ((e && e.message) || e));
+    }
+  },
+
+  // ── view model ─────────────────────────────────────────────────────────────
+
+  bcVals() {
+    const s = this.state;
+    const f = s.bcForm || BLANK;
+    const mix = s.bcMix || [];
+    const total = this.bcMixTotal();
+    const country = COUNTRIES.find((c) => c.code === f.country_code) || COUNTRIES[0];
+    const gran = GRANULARITIES.find((g) => g.value === f.metering_granularity) || GRANULARITIES[1];
+    const err = s.bcErrors || {};
+    const d = s.bcDel;
+
+    // "Site it belongs to" — filtered once here so the picker's row list and its
+    // "nothing matches" state (below) never disagree with each other.
+    const siteQ = String(s.bcSiteQuery || '').trim().toLowerCase();
+    const siteAll = s.bcSites || [];
+    const siteMatches = siteQ
+      ? siteAll.filter((x) =>
+          String(x.site_name || '').toLowerCase().includes(siteQ)
+          || String(x.site_id || '').toLowerCase().includes(siteQ))
+      : siteAll;
+
+    const attachedText = d && d.total
+      ? Object.entries(d.attached || {})
+          .map(([t, n]) => n + ' ' + (n === 1 ? t.replace(/s$/, '') : t).replace(/_/g, ' '))
+          .join(' and ')
+      : '';
+
+    const edit = s.bcMode === 'edit';
+    const step = s.bcStep || 0;
+    const r = s.bcResult || {};
+    return {
+      bcCanHoist: !!s.signedIn && HOIST_ROLES.has(realBuildingsRole(s)),
+      bcCanRemove: !!s.signedIn && HOIST_ROLES.has(realBuildingsRole(s)),
+      // The card is a dock flow: it shows while the dock is on it, and goes with the dock.
+      bcOpen: !!s.bcOpen && s.flow === 'declare',
+      bcMode: s.bcMode || 'create',
+      bcTitle: edit ? 'Edit building' : 'Hoist a building',
+      bcStep: step,
+      bcStep1: step === 0, bcStep2: step === 1, bcStep3: step === 2,
+      bcStepLabel: edit ? 'Only what you change is sent' : 'Step ' + (step + 1) + ' of 3 · ' + STEP_NAMES[step],
+      bcIntro: edit
+        ? 'Only the fields you change are sent. Leaving one alone leaves it alone; clearing an optional one clears it on the record.'
+        : 'This record becomes the primary key. Every document ingested afterwards is stamped with it, so nothing sits in the graph unattached to an asset.',
+      bcForm: f,
+      bcErr: (k) => err[k] || '',
+      bcErrShow: (k) => (err[k] ? 'block' : 'none'),
+      bcTopError: s.bcTopError || '',
+      bcTopErrorShow: s.bcTopError ? 'block' : 'none',
+      bcSaving: !!s.bcSaving,
+      bcSubmitLabel: edit ? (s.bcSaving ? 'Saving…' : 'Save changes') : (s.bcSaving ? 'Writing…' : 'Write the record'),
+      bcSet: (k) => (e) => this.bcSet(k, e && e.target ? e.target.value : e),
+      bcClose: () => this.bcCloseForm(),
+      bcSubmit: () => this.bcSubmit(),
+      bcOpenEdit: (row) => this.bcOpenEdit(row),
+
+      // Steps 2 and 3 — what the write produced, and where to go from it.
+      bcResultName: r.name || '',
+      bcResultCode: r.code || '',
+      bcResultWarnings: r.warnings || [],
+      bcNext: () => this.bcNext(),
+      bcIngestNow: () => this.bcIngestNow(),
+      bcLater: () => this.bcLater(),
+
+      // Step 3's optional third card: assign the just-hoisted building to one person on
+      // the team. An unrestricted admin/superadmin already sees every building, so
+      // offering them here would be a picker entry that does nothing — left out.
+      bcUsersLoading: !!s.bcUsersLoading,
+      bcAssignUserId: s.bcAssignUserId || '',
+      bcAssigning: !!s.bcAssigning,
+      bcAssignedTo: s.bcAssignedTo || '',
+      bcAssignOptions: (s.bcUsers || [])
+        .filter((u) => !u.all_buildings)
+        .map((u) => ({ value: String(u.id), label: (u.full_name || u.email || String(u.id)) + (u.full_name && u.email ? '  ·  ' + u.email : '') })),
+      bcAssignReady: !!(s.bcAssignUserId && r.buildingId && !s.bcAssigning),
+      bcSetAssignUser: (e) => this.bcSetAssignUser(e),
+      bcAssignSubmit: () => this.bcAssignSubmit(),
+
+      bcUseTypes: USE_TYPES,
+      bcCountries: COUNTRIES,
+      bcGranularities: GRANULARITIES,
+
+      // "Site it belongs to" — a search-and-pick trigger + panel, the same pattern the
+      // TopBar building switcher already uses (auth.js's bldToggle/bldQuery/bldRows), so
+      // 600+ sites are a type-to-narrow list rather than one very long native <select>.
+      bcSitesLoading: !!s.bcSitesLoading,
+      bcSiteOpen: !!s.bcSiteOpen,
+      bcSiteQuery: s.bcSiteQuery || '',
+      bcSiteSetQuery: (e) => this.bcSiteSetQuery(e),
+      bcSiteToggle: () => this.bcSiteToggle(),
+      bcSiteClose: () => this.bcSiteClose(),
+      bcSitePlaceholder: siteAll.length ? 'Search ' + siteAll.length + ' sites' : 'Search sites',
+      // The trigger's own label: the matched site's name when one is known, the raw id
+      // when it isn't (an edit prefilled from a row outside the current company scope),
+      // or the empty-state placeholder.
+      bcSiteLabel: !f.site_id ? 'No site' : ((siteAll.find((x) => x.site_id === f.site_id) || {}).site_name || f.site_id),
+      bcSiteNoneRow: {
+        tickShow: !f.site_id ? 'inline' : 'none',
+        fg: !f.site_id ? 'var(--color-accent)' : 'var(--color-text)',
+        click: () => this.bcSitePick('')
+      },
+      bcSiteRows: siteMatches.slice(0, 60).map((x) => ({
+        key: x.site_id,
+        label: x.site_name,
+        code: x.site_id,
+        fg: f.site_id === x.site_id ? 'var(--color-accent)' : 'var(--color-text)',
+        tickShow: f.site_id === x.site_id ? 'inline' : 'none',
+        click: () => this.bcSitePick(x.site_id)
+      })),
+      bcSiteMore: Math.max(0, siteMatches.length - 60),
+      bcSiteNoMatch: !!siteQ && !siteMatches.length,
+
+      // The standard the building will be read against, shown while they pick the market —
+      // it is a consequence of the country and nobody would guess it from a dropdown.
+      bcStandardNote: country.standard + ' · ' + country.standing,
+      bcGranularityNote: gran.hint,
+      // Mall is a real answer that stores as something else. Saying so before they submit
+      // is better than a warning after.
+      bcUseNote: f.use_type === 'Mall' ? 'Stored as Retail — the register has no Mall category.' : '',
+      bcUseNoteShow: f.use_type === 'Mall' ? 'block' : 'none',
+
+      bcMix: mix.map((m, i) => ({
+        key: 'mix' + i, use: m.use, pct: m.pct,
+        setUse: (e) => this.bcMixSet(i, 'use', e.target.value),
+        setPct: (e) => this.bcMixSet(i, 'pct', e.target.value),
+        remove: () => this.bcMixRemove(i),
+        removeShow: mix.length > 1 ? 'inline' : 'none'
+      })),
+      bcMixAdd: () => this.bcMixAdd(),
+      bcMixTotal: Math.round(total * 100) / 100,
+      bcMixTotalOk: Math.abs(total - 100) <= 0.5,
+      bcMixTotalColor: Math.abs(total - 100) <= 0.5 ? 'var(--st-ok)' : 'var(--st-warn)',
+      bcMixTotalLabel: (Math.round(total * 100) / 100) + '% of 100',
+
+      // ── delete ──
+      bcDelShow: d ? 'flex' : 'none',
+      bcDelName: d ? d.name : '',
+      bcDelCode: d && d.code ? d.code : '',
+      bcDelLoading: !!(d && d.loading),
+      bcDelWorking: !!(d && d.working),
+      bcDelBusyLabel: d && d.working ? 'Deleting…' : 'Delete building',
+      // The whole reason for the dry run: name what happens to what it holds.
+      bcDelAttachedShow: d && d.total ? 'block' : 'none',
+      bcDelAttachedText: attachedText
+        ? attachedText + ' will be unlinked and kept — nothing attached to this building is deleted.'
+        : '',
+      bcDelEmptyShow: d && !d.loading && !d.total ? 'block' : 'none',
+      bcDelCancel: () => this.bcCancelDelete(),
+      bcDelConfirm: () => this.bcConfirmDelete(),
+      bcAskDelete: (row) => this.bcAskDelete(row)
+    };
+  }
+};

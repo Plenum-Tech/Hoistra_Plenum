@@ -15,6 +15,7 @@ files and memory are namespaced per session.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -47,6 +48,45 @@ COMPLIANCE_SUBAGENT_PROMPT = prompt_doc("compliance", "tool-routing")
 """skills/compliance/tool-routing.md - which tool answers which question, and what a
 status word means. Loaded between the shared query-builder discipline and the compliance
 skill, where it keeps precedence on tool choice while the skill supplies the data layer."""
+
+
+#: skills/contract-performance/*.md, in the order the model reads them.
+#:
+#: Compliance splits its documents across the pipeline stages that use them — the analyst gets
+#: `answering`, the reviewer gets `review` and `scope-eval`. The vendor agent has neither stage:
+#: it chooses its own tools AND writes the final answer, so the whole discipline has to reach
+#: the sub-agent itself or it reaches nobody.
+#:
+#: Named rather than globbed. A document added to the directory should be a deliberate decision
+#: to put it in front of the model, not something that happens because a file appeared; and
+#: prompt_doc raises on a missing or empty file, so a renamed document breaks startup instead of
+#: quietly dropping the rule it carried. skills.py only globs `*/SKILL.md`, which is why these
+#: siblings sat unread until they were named here.
+#:
+#: NOTE the hyphen: the agent id is `contract_performance`, the directory is
+#: `contract-performance`, and prompt_doc takes the directory. Compliance hides that difference
+#: because both of its names are the same word.
+CONTRACT_SUBAGENT_DOCS = (
+    "vocabulary",
+    "tables",
+    "tool-selection",
+    "scoring",
+    "contract-terms",
+    "domain_contract_knowledge",
+    "answering",
+    "recipes",
+    "cross-domain",
+    "review",
+    "never",
+)
+
+CONTRACT_SUBAGENT_PROMPT = "\n\n---\n\n".join(
+    prompt_doc("contract-performance", _name) for _name in CONTRACT_SUBAGENT_DOCS
+)
+"""The vendor agent's discipline: vocabulary, the data layer and what it cannot read, tool
+choice and the name-to-id problem, how a score is built, how to rank, how to write the answer,
+how to check it, and the hard prohibitions. Loaded between the shared query-builder discipline
+and skills/contract-performance/SKILL.md."""
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Session context — set by orchestrator before each ainvoke call so that temp
@@ -144,6 +184,33 @@ def _tool_calls_from_messages(messages: list) -> list[dict]:
     return calls
 
 
+def answer_delta_event(payload: Any, agent: str) -> dict[str, Any] | None:
+    """One `answer_delta` event from a LangGraph `messages`-mode item, or None.
+
+    The item is ``(message_chunk, metadata)``. Only an AI chunk with text counts: a chunk
+    that is part of a tool call is the model deciding what to fetch, not what to say, and a
+    tool's own message is data the panel already shows. Content arrives as a string from
+    OpenAI and as a list of parts from Anthropic; both are read.
+    """
+    try:
+        chunk = payload[0] if isinstance(payload, (tuple, list)) else payload
+    except Exception:  # noqa: BLE001
+        return None
+    if chunk is None or getattr(chunk, "type", "") not in ("AIMessageChunk", "ai"):
+        return None
+    if getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None):
+        return None
+    content = getattr(chunk, "content", None)
+    if isinstance(content, list):
+        content = "".join(
+            str(p.get("text", "")) if isinstance(p, dict) else str(getattr(p, "text", "") or "")
+            for p in content
+        )
+    if not isinstance(content, str) or not content:
+        return None
+    return {"type": "answer_delta", "text": content, "domain": agent}
+
+
 async def run_phase2_engine_verbose(
     agent: str, prompt: str, on_event: Any = None
 ) -> tuple[str, list[dict]]:
@@ -157,9 +224,12 @@ async def run_phase2_engine_verbose(
             json.dumps({"error": "Task runner not initialised. Call init_meta_tools() at startup."}),
             [],
         )
-    if agent not in ("compliance", "contract_performance", "energy_intelligence"):
+    if agent not in ("compliance", "contract_performance", "energy_intelligence", "wo_engine"):
         return json.dumps({"error": f"Not a Phase 2 engine '{agent}'."}), []
-    return await _task_runner.run_verbose(agent, prompt, on_event=on_event)
+    # The Maintenance page's engine is the wo_engine sub-agent with its write tools removed.
+    # Same skill, same prompt, no interrupts — see WO_ENGINE_SUBAGENT_TOOLS for why.
+    runner_key = "maintenance" if agent == "wo_engine" else agent
+    return await _task_runner.run_verbose(runner_key, prompt, on_event=on_event)
 
 
 class _TaskRunner:
@@ -178,7 +248,7 @@ class _TaskRunner:
         from .compliance_agent import check_requirements, generate_compliance_report
         from .compliance_engine_agent import COMPLIANCE_ENGINE_TOOLS
         from .contract_performance_agent import CONTRACT_PERFORMANCE_TOOLS
-        from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS
+        from .energy_intelligence_agent import ENERGY_INTELLIGENCE_TOOLS, list_building_documents
         from .doc_rag_agent import (
             delete_document,
             extract_text,
@@ -208,8 +278,11 @@ class _TaskRunner:
             start_fiix_schema_mapping,
             test_fiix_connection,
         )
+        from .wo_engine_agent import MAINTENANCE_READ_TOOLS, WO_ENGINE_SUBAGENT_TOOLS
         from .schema_mapper_agent import continue_schema_mapping_gate
         from .udr_agent import (
+            find_tables,
+            table_card,
             find_asset,
             find_location,
             get_asset_documents,
@@ -276,20 +349,25 @@ class _TaskRunner:
             "doc_rag": create_react_agent(llm, tools=[
                 index_document, query_docs, semantic_search,
                 extract_text, get_document_metadata, delete_document,
+                # The structured answer to "which documents are linked to this building".
+                # select_skill routes document questions here, and without this the only
+                # tools in reach were semantic ones — so this sub-agent answered, correctly
+                # and uselessly, "I can't access the building graph/linkage tools in this
+                # session". Whether the question got a real answer then depended on the main
+                # agent happening to call the tool itself, which it did about half the time.
+                list_building_documents,
             ], prompt=agent_system_prompt("doc_rag")),
-            "wo_engine": create_react_agent(llm, tools=[
-                suggest_approval_chain, request_approval_chain, send_approval_request_email,
-                get_approval_chain,
-                customize_approval_chain, respond_to_approval_step,
-                prepare_intelligent_work_order, confirm_intelligent_work_order_creation,
-                create_intelligent_work_order,
-                trigger_ppm_work_order, process_email_work_order,
-                create_work_order, get_work_order, update_work_order, list_work_orders,
-                transition_work_order, approve_work_order, close_work_order,
-                get_work_order_history, get_work_order_status_track,
-                search_assets, get_asset_details,
-                search_locations, find_ppm_schedules, get_dashboard_stats,
-            ], prompt=agent_system_prompt("wo_engine")),
+            # One list, owned by wo_engine_agent, so a tool added there reaches this sub-agent.
+            # The four Maintenance-page tools sat in ALL_TOOLS for a week and not here, and
+            # every question the router sent to wo_engine landed on an agent without them.
+            "wo_engine": create_react_agent(
+                llm, tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=agent_system_prompt("wo_engine")
+            ),
+            # The same agent with its write tools removed: what run_phase2_engine_verbose runs
+            # when the router hands a Maintenance-page QUESTION straight to the engine.
+            "maintenance": create_react_agent(
+                llm, tools=list(MAINTENANCE_READ_TOOLS), prompt=agent_system_prompt("wo_engine")
+            ),
             "compliance": create_react_agent(
                 llm,
                 tools=[
@@ -304,7 +382,9 @@ class _TaskRunner:
             "contract_performance": create_react_agent(
                 llm,
                 tools=[*CONTRACT_PERFORMANCE_TOOLS],
-                prompt=agent_system_prompt("contract_performance"),
+                prompt=agent_system_prompt(
+                    "contract_performance", extra=CONTRACT_SUBAGENT_PROMPT
+                ),
             ),
             "energy_intelligence": create_react_agent(
                 llm,
@@ -317,6 +397,7 @@ class _TaskRunner:
             "udr": create_react_agent(
                 llm,
                 tools=[
+                    find_tables, table_card,
                     get_schema, udr_list_tables, udr_describe_table,
                     find_asset, find_location, get_asset_documents,
                     query_table, udr_read_records, udr_get_record, udr_search_records,
@@ -333,6 +414,21 @@ class _TaskRunner:
         return answer
 
     async def run_verbose(
+        self, agent: str, prompt: str, on_event: Any = None
+    ) -> tuple[str, list[dict]]:
+        """Run the sub-agent with `active_subagent` naming it for the life of the run.
+
+        The catalogue gate reads that name: on a turn the router gave to page engines plus
+        udr, svc-udr answers inside task("udr") and refuses the general loop.
+        """
+        from ..http_client import active_subagent
+        token = active_subagent.set(agent)
+        try:
+            return await self._run_verbose(agent, prompt, on_event=on_event)
+        finally:
+            active_subagent.reset(token)
+
+    async def _run_verbose(
         self, agent: str, prompt: str, on_event: Any = None
     ) -> tuple[str, list[dict]]:
         """Run the sub-agent and return (final answer, inner tool calls with outputs).
@@ -377,8 +473,10 @@ class _TaskRunner:
                 ),
                 [],
             )
+        # Outside the try, so the cancellation handler can always report how long the
+        # sub-agent had been running — the number that makes a silent death diagnosable.
+        _t0 = time.perf_counter()
         try:
-            _t0 = time.perf_counter()
             if on_event is None:
                 result = await runner.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
@@ -391,11 +489,24 @@ class _TaskRunner:
                 result = {}
                 seen = 0
                 names: dict[str, str] = {}
-                async for state in runner.astream(
+                # Two stream modes at once: `values` for the tool starts and finishes the panel
+                # draws, `messages` for the model's text as it is written. Compliance streamed
+                # its analyst's zones token by token from the start; every other engine's
+                # answer arrived whole at the end of a silent minute. The deltas ride the same
+                # event channel the tool events do, typed `answer_delta`, and the interface
+                # shows them as a draft that the final answer replaces — a draft, because the
+                # vendor composer and the compliance analyst rewrite what the sub-agent wrote.
+                async for mode, payload in runner.astream(
                     {"messages": [HumanMessage(content=prompt)]},
                     config={"recursion_limit": 45},
-                    stream_mode="values",
+                    stream_mode=["values", "messages"],
                 ):
+                    if mode == "messages":
+                        delta = answer_delta_event(payload, agent)
+                        if delta is not None:
+                            await on_event(delta)
+                        continue
+                    state = payload
                     result = state
                     msgs = state.get("messages", [])
                     for msg in msgs[seen:]:
@@ -448,6 +559,22 @@ class _TaskRunner:
                     answer = msg.content
                     break
             return answer, tool_calls
+        except asyncio.CancelledError:
+            # Not an Exception — CancelledError derives from BaseException, so the handler
+            # below never saw it. That is why this agent produced `output: null` with no
+            # error logged and no llm.call: it was cancelled between the two, and the tool
+            # returned None into the evidence as though nothing had been asked.
+            #
+            # Logged and re-raised. Swallowing a cancellation would leave the task pretending
+            # to have completed and break the shutdown it belongs to; what was missing was
+            # never the handling, only the record that it happened.
+            log.warning(
+                "meta.task.cancelled",
+                agent=agent,
+                elapsed_ms=round((time.perf_counter() - _t0) * 1000),
+                prompt_len=len(prompt),
+            )
+            raise
         except Exception as exc:
             name = type(exc).__name__
             msg = str(exc)
@@ -522,7 +649,22 @@ async def task(agent: str, prompt: str) -> str:
             "error": "Task runner not initialised. Call init_meta_tools() at startup."
         })
     log.info("meta.task", agent=agent, prompt_len=len(prompt))
-    return await _task_runner.run(agent, prompt)
+    answer = await _task_runner.run(agent, prompt)
+    # Never None, and never blank. The signature says str and the caller is a model: a null
+    # in the evidence is indistinguishable to it from a tool that was never called, so a
+    # sub-agent that produced nothing said nothing about having failed. This says it.
+    if answer is None or not str(answer).strip():
+        log.warning("meta.task.empty_answer", agent=agent, prompt_len=len(prompt))
+        return json.dumps({
+            "error": f"The {agent} sub-agent returned no answer.",
+            "agent": agent,
+            "guidance": (
+                "Treat this as missing evidence, not as an absence of data. Do not report "
+                "that nothing was found on the strength of it — say this source did not "
+                "respond, and answer from the other sources if there are any."
+            ),
+        })
+    return answer
 
 
 @tool

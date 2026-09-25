@@ -21,6 +21,7 @@ from .session_workspace import (
     set_ingestion_mode_structured,
 )
 from ..config import settings
+from ..http_client import request as _request
 from .doc_rag_agent import (
     get_document_metadata,
     index_document,
@@ -90,6 +91,21 @@ def document_type_hint(file_path: str) -> str:
     if ext in IMAGE_EXTS:
         return "image"
     return "auto"
+
+
+#: Every spreadsheet goes to the migration. One door for tabular data.
+#:
+#: Until 22 Sep 2026 a CSV was sorted before anyone saw it: an invoice or contract workbook
+#: went to the contract-performance extractor, a smart-meter export to the energy ingest, and
+#: only what was left reached the migration. The sort was a guess from a filename and a header
+#: row that decided which schema the file would be mapped against, and it flipped on whether
+#: the covering message happened to contain the word "migrate" — so the same file took
+#: different routes depending on how someone phrased a sentence.
+#:
+#: The migration now resolves what those routes resolved: a building from a site column or
+#: from the uploader's own selection, and a meter from a supply number. So there is one door,
+#: one set of gates, and one place to look when something does not land.
+STRUCTURED_ALWAYS_MIGRATE = True
 
 
 @dataclass
@@ -521,6 +537,17 @@ def format_single_door_chat_preface(
     haystack = " ".join([summary_text or "", *(step_summaries or [])]).lower()
     if "compliance" in haystack or "certificate" in haystack:
         parts.append("Review drafts in [Compliance](/compliance).")
+    elif "invoice" in haystack:
+        # An invoice verification reports itself as "Contract Performance B3: verified
+        # invoice ...", so it used to fall into the branch below and tell the reader to go
+        # and confirm contract parameters. There are none to confirm: an invoice states no
+        # terms, and since the fitness gate it no longer creates a contract to hold them.
+        # What an invoice DOES produce is held lines, and they are on the vendor's own tab.
+        parts.append(
+            "Flagged lines are held on the vendor's "
+            "[Invoices tab](/vendors?space=contract_performance) — approve as charged, or "
+            "raise a credit note for the difference."
+        )
     elif "contract performance" in haystack or "feature b" in haystack:
         parts.append(
             "Review and confirm the extracted parameters in "
@@ -701,12 +728,83 @@ async def _drive_migration_gates(
     }
 
 
+async def _detect_meter_gaps(building_id: str | None, organization_id: str | None) -> dict | None:
+    """Ask the energy engine to look for holes in what the migration just wrote.
+
+    The Feature C upload flagged gaps as it ingested; the migration inserts meter_readings
+    directly and knew nothing about them, so a meter that arrived by migration reported a
+    clean series because nobody had looked. Same rule, called after the write rather than
+    during it.
+
+    Never fatal. A migration that wrote its rows and could not reach the gap check has still
+    written its rows, and saying so beats failing the run.
+    """
+    if not building_id:
+        return None
+    base = settings.operations_intelligence_base_url.rstrip("/")
+    try:
+        resp = await _request(
+            "POST",
+            base,
+            "/api/energy/gaps/detect",
+            service="operations_intelligence",
+            timeout=120.0,
+            max_attempts=2,
+            params={k: v for k, v in (("building_id", building_id),
+                                      ("organization_id", organization_id)) if v},
+        )
+        out = resp.json()
+        log.info("single_door.gaps.detected", building=building_id,
+                 meters=out.get("meters_scanned"), gaps=out.get("gaps_flagged"))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("single_door.gaps.failed", building=building_id, error=str(exc)[:200])
+        return None
+
+
+async def _meter_link_report(building_id: str | None,
+                             organization_id: str | None) -> dict | None:
+    """Whether the meters this run touched are linked, in words the chat can say.
+
+    A migration reports rows written. Rows written is not the question: nearly every link in
+    the energy chain is a plain uuid with no constraint behind it, so readings can land
+    perfectly and reach no building, and the page stays empty while the run reports success.
+    The person who just uploaded the file is the one who needs to know that, and asking them
+    to run a script to find out whether their own upload worked is not an answer.
+
+    Never fatal. A report that cannot be fetched does not undo a write that succeeded.
+    """
+    if not building_id:
+        return None
+    base = settings.operations_intelligence_base_url.rstrip("/")
+    try:
+        resp = await _request(
+            "GET",
+            base,
+            "/api/energy/meters/link-report",
+            service="operations_intelligence",
+            timeout=60.0,
+            max_attempts=2,
+            params={k: v for k, v in (("building_id", building_id),
+                                      ("organization_id", organization_id)) if v},
+        )
+        out = resp.json()
+        log.info("single_door.link_report", building=building_id,
+                 linked=out.get("linked"), unlinked=out.get("unlinked"))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("single_door.link_report_failed", building=building_id,
+                    error=str(exc)[:200])
+        return None
+
+
 async def ingest_structured_batch(
     *,
     file_paths: list[str],
     organization_id: str | None = None,
     cmms_name: str = "Custom",
     interactive_migration: bool = False,
+    building_id: str | None = None,
 ) -> dict[str, Any]:
     """TRACK 1 — start ONE migration covering ALL structured files, then drive its gates.
 
@@ -718,7 +816,8 @@ async def ingest_structured_batch(
     tool_calls: list[dict[str, Any]] = []
 
     started = await start_migration_multi.ainvoke(
-        {"file_paths": file_paths, "cmms_name": cmms_name, "organization_id": org}
+        {"file_paths": file_paths, "cmms_name": cmms_name, "organization_id": org,
+         "building_id": building_id}
     )
     tool_calls.append(
         {"tool": "start_migration_multi", "input": {"file_paths": file_paths}, "output": started}
@@ -777,12 +876,34 @@ async def ingest_structured_batch(
         migration_id=migration_id,
         interactive_migration=interactive_migration,
     )
+    # Readings written by a migration have had nobody look at them for holes.
+    _gaps = await _detect_meter_gaps(building_id, organization_id)
+    if _gaps and _gaps.get("gaps_flagged"):
+        tool_calls.append({"tool": "detect_meter_gaps",
+                           "input": {"building_id": building_id}, "output": _gaps})
+
+    # And rows written is not the same as rows that reach a building. Say which.
+    _links = await _meter_link_report(building_id, organization_id)
+    _summary = driven["summary"]
+    if _links and _links.get("meters"):
+        _summary = f"{_summary}\n\nMeter links — {_links['summary']}"
+        if _gaps is not None:
+            _flagged = int(_gaps.get("gaps_flagged") or 0)
+            _summary += (
+                f" Gap check: {_flagged} gap(s) flagged across "
+                f"{_gaps.get('meters_scanned', 0)} meter(s)."
+            )
+        tool_calls.append({"tool": "meter_link_report",
+                           "input": {"building_id": building_id}, "output": _links})
+
     return {
         "kind": "structured",
         "status": driven["status"],
         "file_names": names,
-        "summary": driven["summary"],
+        "summary": _summary,
         "migration_id": migration_id,
+        "meter_gaps": _gaps,
+        "meter_links": _links,
         "gate_type": driven.get("gate_type"),
         "error": driven.get("error"),
         "tool_calls": tool_calls + driven["tool_calls"],
@@ -799,6 +920,7 @@ async def ingest_single_file(
     skip_row_match: bool = False,
     interactive_migration: bool = False,
     preindexed: dict | None = None,
+    building_id: str | None = None,
 ) -> dict[str, Any]:
     """Process one uploaded file through migration or doc-rag. Used inline and in bulk batches.
 
@@ -883,7 +1005,7 @@ async def ingest_single_file(
                 force_migration = any(
                     k in msg_l for k in ("migrate", "migration", "cmms import", "schema map")
                 )
-                if not force_migration:
+                if not force_migration and not STRUCTURED_ALWAYS_MIGRATE:
                     return {
                         "file_name": path.name,
                         "kind": "contract_performance",
@@ -895,7 +1017,8 @@ async def ingest_single_file(
                     }
 
         started = await start_migration.ainvoke(
-            {"file_path": file_path, "cmms_name": cmms_name, "organization_id": org}
+            {"file_path": file_path, "cmms_name": cmms_name, "organization_id": org,
+             "building_id": building_id}
         )
         tool_calls.append(
             {"tool": "start_migration", "input": {"file_path": file_path}, "output": started}
@@ -1131,6 +1254,7 @@ async def run_single_door_ingestion_sequence(
     user_message: str | None = None,
     skip_row_match: bool = False,
     interactive_migration: bool = False,
+    building_id: str | None = None,
 ) -> SingleDoorResult:
     """
     Execute the "single-door" sequence for uploaded files:
@@ -1172,7 +1296,7 @@ async def run_single_door_ingestion_sequence(
         p
         for p in structured_all
         if classify_contract_performance_doc(p, user_query) and not force_migration
-    ]
+    ] if not STRUCTURED_ALWAYS_MIGRATE else []
     # Feature C — smart-meter exports. Recognised by their header (MPAN/MPRN + timestamp +
     # kWh), so a work-order CSV cannot be mistaken for one. Taken out of the migration set
     # for the same reason contracts are: mapping half-hourly readings against the asset and
@@ -1183,11 +1307,58 @@ async def run_single_door_ingestion_sequence(
         if p not in set(cp_structured_paths)
         and classify_energy_document(p, user_query)
         and not force_migration
-    ]
+    ] if not STRUCTURED_ALWAYS_MIGRATE else []
     structured_paths = [
         p for p in structured_all
         if p not in set(cp_structured_paths) and p not in set(energy_paths)
     ]
+    # A spreadsheet reaches a building through a site column or through the selection made
+    # when it was attached. A half-hourly meter export has no site column at all, and an asset
+    # export often names a site reference this database has never seen, so without a selection
+    # the rows land attached to nothing and every page ignores them. Ask first: an unanswered
+    # question costs a moment, and a silent write costs a demo.
+    if structured_paths and not building_id:
+        _names = ", ".join(Path(p).name for p in structured_paths[:4])
+        _more = f" and {len(structured_paths) - 4} more" if len(structured_paths) > 4 else ""
+        _meters_only = structured_paths and all(
+            classify_energy_document(p, user_query) for p in structured_paths
+        )
+        if _meters_only:
+            # The one upload where the answer is not in the file. A meter export names an
+            # MPAN and a consumption figure and nothing about where the meter is, so both
+            # the building and the floor have to come from whoever attached it.
+            _ask = (
+                f"Which building are these meters on?\n\n"
+                f"{_names}{_more}\n\n"
+                f"Choose the building in the composer and send them again.\n\n"
+                f"If these are floor or tenant sub-meters, name the floor or section too "
+                f"— either as a column in the file (floor, level, section or zone) or in "
+                f"your message. A meter recorded against the whole building when it only "
+                f"reads one floor counts that consumption once per meter.\n\n"
+                f"If it is the building's incoming supply, say nothing about a floor and "
+                f"it will be recorded as the main meter. Nothing has been written."
+            )
+            _note = "awaiting_building_and_floor_selection"
+        else:
+            _ask = (
+                f"Which building are these for?\n\n"
+                f"{_names}{_more}\n\n"
+                f"Choose the building in the composer and send them again. A spreadsheet "
+                f"reaches a building through a site column or through the building you "
+                f"pick; a meter export has neither until you choose one, so the readings "
+                f"would be stored and then counted towards nothing. "
+                f"Nothing has been written."
+            )
+            _note = "awaiting_building_selection"
+        return SingleDoorResult(
+            summary_text=_ask,
+            tool_calls=[],
+            context_note=_note,
+            step_summaries=[
+                f"[Held] {len(structured_paths)} spreadsheet(s) await a building selection"
+            ],
+        )
+
     schema_paths = [p for p in file_paths if _file_kind(p) == "schema"]
     document_paths = [p for p in file_paths if _file_kind(p) == "document"]
     skipped_paths = [p for p in file_paths if _file_kind(p) == "skipped"]
@@ -1232,6 +1403,7 @@ async def run_single_door_ingestion_sequence(
                 user_query=user_query,
                 run_doc_rag_pipeline=False,
                 interactive_migration=False,
+                building_id=building_id,
             )
             tool_calls.extend(result.get("tool_calls") or [])
             summary = str(result.get("summary") or "")
@@ -1274,6 +1446,7 @@ async def run_single_door_ingestion_sequence(
             file_path=_energy_path,
             organization_id=organization_id,
             user_query=user_query,
+            building_id=building_id,
         )
         if _er:
             n_energy += 1
@@ -1305,6 +1478,7 @@ async def run_single_door_ingestion_sequence(
             organization_id=organization_id,
             cmms_name=cmms_name,
             interactive_migration=interactive_migration,
+            building_id=building_id,
         )
         tool_calls.extend(batch.get("tool_calls") or [])
         n_structured = len(structured_paths)
@@ -1332,6 +1506,7 @@ async def run_single_door_ingestion_sequence(
             user_query=user_query,
             run_doc_rag_pipeline=False,
             interactive_migration=False,
+            building_id=building_id,
         )
         tool_calls.extend(result.get("tool_calls") or [])
         n_schema += 1
@@ -1494,6 +1669,7 @@ async def run_single_door_ingestion_sequence(
                 skip_row_match=skip_row_match,
                 interactive_migration=False,
                 preindexed=preindexed_by_path.get(file_path),
+                building_id=building_id,
             )
         except Exception as exc:  # noqa: BLE001 — one file must not block siblings
             log.warning("single_door.document_ingest_failed", path=file_path, error=str(exc))

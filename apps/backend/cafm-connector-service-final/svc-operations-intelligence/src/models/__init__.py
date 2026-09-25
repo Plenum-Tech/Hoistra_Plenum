@@ -20,6 +20,7 @@ from .contract_performance import (
     VendorScoreWeightConfig,
     VendorWoScore,
 )
+from .reports import Report, ReportCard, ReportCardRun
 from .energy import (
     AssetConditionScore,
     BuildingEnergyProfile,

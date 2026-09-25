@@ -22,11 +22,13 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from ..http_client import caller_authorization
 from ..agents.orchestrator import DeepAgentOrchestrator
 from ..config import settings
 from ..database import init_session_factory
 from ..limiter import limiter
 from .routes.documents import router as documents_router
+from .routes.ingestion_cases import router as ingestion_cases_router
 from .routes.health import router as health_router
 from .routes.ingest_batch import router as ingest_batch_router
 from .routes.migration import router as migration_router
@@ -91,6 +93,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await init_ingest_batch_tables()
     except Exception as exc:
         log.warning("svc-deepagents.ingest_batch_tables.failed", error=str(exc)[:300])
+
+    # Activity log table (append-only trail of agent inputs/outputs) — best effort.
+    try:
+        from ..agents import activity_log
+
+        await activity_log.ensure_table()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("svc-deepagents.activity_log.failed", error=str(exc)[:300])
 
     # Initialise HITL Postgres checkpointer (optional)
     checkpointer = None
@@ -157,6 +167,28 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def forward_caller_token(request: Request, call_next) -> Response:
+    """Carry the caller's bearer into everything this service does on their behalf.
+
+    Every call this service makes to operations-intelligence goes out as the USER, not as a
+    service — that is how the answer gets scoped to their company and buildings rather than to
+    everything. The token was picked up in three handlers by hand, and a route that forgot
+    simply called the next service with no Authorization header at all. Downstream answered
+    401 missing_token, the tool returned zero rows, and the agent reported it to the user as
+    "the compliance service could not be reached" — which reads as an outage rather than as a
+    request that was never authenticated.
+
+    /resume/{session_id} was one of those routes: it drives the same tools as /run-stateful,
+    with no token. Doing it here means a handler cannot forget, and a new route inherits it.
+
+    The header is copied verbatim, including when absent — setting None explicitly is what
+    stops one request inheriting the previous one's token from a reused context.
+    """
+    caller_authorization.set(request.headers.get("authorization"))
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def request_timing(request: Request, call_next) -> Response:
     start = time.perf_counter()
     response: Response = await call_next(request)
@@ -189,6 +221,7 @@ app.include_router(workflow_router)
 app.include_router(ingest_batch_router)
 app.include_router(migration_router)
 app.include_router(documents_router)
+app.include_router(ingestion_cases_router)
 
 
 if __name__ == "__main__":

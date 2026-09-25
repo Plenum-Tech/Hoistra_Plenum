@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...agent.orchestrator import UDROrchestrator
+from ...services.principal import Principal, require_admin
 from ...api.schemas.database import AgentQueryRequest, AgentQueryResponse
 from ...core.logging import get_logger
 
@@ -23,8 +24,9 @@ log = get_logger(__name__)
 async def agent_query(
     body: AgentQueryRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_admin),
 ) -> AgentQueryResponse:
-    orchestrator = UDROrchestrator(session)
+    orchestrator = UDROrchestrator(session, principal)
     try:
         result = await orchestrator.query(body.message)
     except Exception as exc:

@@ -1223,3 +1223,165 @@ async def get_dashboard_stats() -> dict:
         return resp.json()
     except Exception as exc:
         return _err(exc, "dashboard")
+
+
+# ── The Maintenance page, which the agent could not reach ────────────────────────────────
+#
+# svc-work-order-management serves /decisions, /inspection-intelligence, /ppm/contracts,
+# /overview and eight more under /api/maintenance, and the Maintenance page renders all of
+# them. None had a tool, so the questions printed as chips on that page — "which decisions are
+# statutory?", "which recommendations were never converted to orders?", "which PPM contracts
+# are behind plan?" — could not be answered from the chat beside them.
+
+
+@tool
+async def list_maintenance_decisions(
+    building_id: str | None = None,
+    state: str | None = None,
+    source: str | None = None,
+    group_by: str | None = None,
+    limit: int = 200,
+) -> dict:
+    """D — The decisions a property manager owes, with what each is waiting on.
+
+    Work orders here are not raised by an operative: they ARRIVE from triggers — a vendor
+    blocked, a certificate expiring, an asset flagged, an anomaly priced — and wait for a
+    decision. Use this for "what needs my decision", "what is blocked", "which decisions are
+    statutory".
+
+    `state` is one of **Blocked**, **Deviation**, **Awaiting approval**, **To raise**, and they
+    are four different situations that must not be reported as one backlog:
+
+        Blocked            cannot proceed until a vendor or certificate is fixed
+        To raise           another module says an order should exist and none does —
+                           `work_order` is NULL on these; they are not yet work orders
+        Awaiting approval  drafted, waiting on a person
+        Deviation          a live order drifting off SLA or certificate
+
+    `source` says which module triggered it: Compliance, Vendors, Assets, Energy, Maintenance.
+    That is the answer to "which decisions are statutory" — the compliance-sourced ones, and a
+    lapsed or nearly-lapsed certificate behind them.
+
+    `group_by` accepts state, source, building or vendor, each group carrying its own count and
+    cost — use it rather than counting a list yourself.
+
+    A "To raise" row has no work order yet. Never report it as an order that exists, and never
+    fold its estimate into a figure for committed spend.
+    """
+    try:
+        params: dict[str, Any] = {"limit": limit}
+        for k, v in (("building_id", building_id), ("state", state),
+                     ("source", source), ("group_by", group_by)):
+            if v:
+                params[k] = v
+        resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/decisions",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "list_maintenance_decisions")
+
+
+@tool
+async def get_inspection_intelligence(building_id: str | None = None) -> dict:
+    """D — What the inspection reports say TOGETHER, not one file at a time.
+
+    Every report attached to a completed order, read as a corpus with the warranty documents.
+    Use for "which recommendations were never converted to orders", "what is under warranty",
+    "which reports confirm the energy anomalies", "which assets are in the worst condition".
+
+    The panel answers across all of them — a recommendation an inspector wrote in June that
+    never became an order, an anomaly the energy engine detected in September that a report
+    named in July, a finding on a part still under warranty and therefore claimable.
+
+    It also returns `unanswerable`: questions the corpus cannot settle. Report those as
+    unanswerable rather than silently answering the ones that remain — "we looked and there are
+    none" and "we could not look" are different claims, and the second is the one that needs a
+    person.
+    """
+    try:
+        params = {"building_id": building_id} if building_id else None
+        resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/inspection-intelligence",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_inspection_intelligence")
+
+
+@tool
+async def get_ppm_contracts(building_id: str | None = None) -> dict:
+    """D — Planned maintenance against plan, per contract.
+
+    Visits done against visits planned, missed, late, reports on file, deferrals, the next
+    visit and a state (behind plan / watch / to plan). Use for "which PPM contracts are behind
+    plan", "which vendor files the fewest reports", "what is missed".
+
+    **A visit without a report counts as done but UNVERIFIED.** That distinction is the point of
+    the reports column: 12 of 12 visits with 10 of 12 reports is not a contract in good standing,
+    it is two visits nobody can evidence. Always give visits and reports together — a percentage
+    to plan on its own hides it.
+
+    A contract at `blocked` is blocked for a reason that lives in compliance (an accreditation
+    lapse), and its missed visits accrue while it stays that way.
+    """
+    try:
+        params = {"building_id": building_id} if building_id else None
+        resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/ppm/contracts",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_ppm_contracts")
+
+
+@tool
+async def get_maintenance_overview(building_id: str | None = None) -> dict:
+    """D — The Maintenance page tiles: decisions owed, how many are statutory, recommendations
+    never converted, and PPM to plan.
+
+    The summary to open with when a question is about the state of maintenance generally rather
+    than one order. Follow it with `list_maintenance_decisions` for what to do next.
+    """
+    try:
+        params = {"building_id": building_id} if building_id else None
+        resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/overview",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "get_maintenance_overview")
+
+
+# ── Which of these tools a sub-agent may hold ─────────────────────────────────────────────
+#
+# The Maintenance page's questions can now be answered by a direct engine (PHASE2_ENGINE_TOOLS
+# in the orchestrator) rather than through the general loop. That engine runs without a
+# checkpointer, so it must never hold a tool that interrupts for approval or writes a record:
+# a "raise me an order" reaching it would die on the first gate. READ tools only, here.
+MAINTENANCE_READ_TOOLS = [
+    get_maintenance_overview,
+    list_maintenance_decisions,
+    get_inspection_intelligence,
+    get_ppm_contracts,
+    list_work_orders,
+    get_work_order,
+    get_work_order_history,
+    get_work_order_status_track,
+    get_approval_chain,
+    find_ppm_schedules,
+    get_dashboard_stats,
+    search_assets,
+    get_asset_details,
+    search_locations,
+]
+
+#: Everything the general loop's wo_engine sub-agent holds — the reads above plus the intake,
+#: approval and transition tools that need the loop's gates. Measured 17 Sep 2026: the runner
+#: built this list by hand and the four Maintenance-page tools were never added to it, so a
+#: question routed to wo_engine reached a sub-agent that could not call list_maintenance_decisions.
+WO_ENGINE_SUBAGENT_TOOLS = [
+    *MAINTENANCE_READ_TOOLS,
+    suggest_approval_chain, request_approval_chain, send_approval_request_email,
+    customize_approval_chain, respond_to_approval_step,
+    prepare_intelligent_work_order, confirm_intelligent_work_order_creation,
+    create_intelligent_work_order, trigger_ppm_work_order, process_email_work_order,
+    create_work_order, update_work_order, transition_work_order, approve_work_order,
+    close_work_order,
+]

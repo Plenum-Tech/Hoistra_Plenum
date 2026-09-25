@@ -141,6 +141,16 @@ def merge_extraction_with_defaults(
         merged["payment_terms"] = extracted["payment_terms"]
         field_sources["payment_terms"] = "contract"
 
+    # The rate card is sourced HERE, not when it is written. field_sources is returned to
+    # the caller in the extract response, and the card used to be marked "contract" later,
+    # during ingest — so the chat counted 12 terms from a document whose stored row had 13.
+    # Two surfaces disagreeing about one ingest is the exact defect the count fix closed for
+    # vendor_name and signed_date. Not stored in `merged`: rate_card_json is not a mapped
+    # column, and ingest writes it through rate_card.write_for once the row has an id.
+    _card = extracted.get("rate_card_json")
+    if isinstance(_card, dict) and (_card.get("lines") or []):
+        field_sources["rate_card_json"] = "contract"
+
     return merged, defaults_used, field_sources
 
 
@@ -196,6 +206,12 @@ def params_to_dict(row: ContractSlaParameters) -> dict[str, Any]:
         "overrides_log": row.overrides_log or [],
         "field_sources": row.field_sources or {},
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        # WHO confirmed, not only when. Confirming turns extracted readings into the numbers
+        # every later judgement is enforced with — SLA breaches, service credits, whether an
+        # invoice line is overcharged. ops_audit_log has recorded the actor since the route
+        # was written; this dict dropped it, so a reader saw "CONFIRMED" with no way to learn
+        # whose decision it was. list_contract_parameters resolves it to a name.
+        "confirmed_by": str(row.confirmed_by) if row.confirmed_by else None,
     }
 
 
@@ -245,6 +261,16 @@ async def _has_confirmed_contract(
     return (await session.execute(q.limit(1))).scalar_one_or_none() is not None
 
 
+def _read_any_terms(field_sources: dict[str, str] | None) -> bool:
+    """Did this document state a single contract term of its own?
+
+    merge_extraction_with_defaults marks each field "contract" when it came off the page and
+    "default" when the platform supplied it. None marked "contract" means the extractor read
+    nothing, and the file is not a contract, whatever else it is.
+    """
+    return any(str(v) == "contract" for v in (field_sources or {}).values())
+
+
 async def ingest_contract_parameters(
     session: AsyncSession,
     *,
@@ -256,12 +282,43 @@ async def ingest_contract_parameters(
     document_id: UUID | None = None,
     contract_ref: str | None = None,
     signed_date: date | str | None = None,
+    building_name: str | None = None,
+    building_reference: str | None = None,
+    site_name: str | None = None,
+    site_id: str | None = None,
+    file_name: str | None = None,
 ) -> dict[str, Any]:
     """
     B1 — Relationships Agent handoff: merge extraction + defaults into draft
     editable table for PM confirmation.
     """
     merged, defaults_used, field_sources = merge_extraction_with_defaults(extracted)
+
+    # A contract row states what a vendor AGREED to. When the document stated nothing, every
+    # value in it is the platform's own, and writing the row creates a phantom contract that
+    # outranks the vendor's real one on the Vendors page.
+    #
+    # This guard first went in one caller up, in extract.py's auto_ingest branch. That was
+    # the wrong door: the orchestrator calls ingest_contract_parameters directly as a tool,
+    # so verifying an invoice still minted contracts — four of them for Meridian Mechanical
+    # on 22-23 Sep 2026, one of them named after the invoice number. The check belongs here,
+    # at the only place that writes, where every caller passes.
+    if not _read_any_terms(field_sources):
+        log.warning(
+            "contract.ingest_refused_no_terms",
+            document_id=str(document_id) if document_id else None,
+            vendor_name=_text(vendor_name) or _text((extracted or {}).get("vendor_name")),
+            contract_ref=_text(contract_ref),
+        )
+        return {
+            "ok": False,
+            "reason": "no_contract_terms_found",
+            "error": (
+                "No contract terms were read from this document — every value would be a "
+                "platform default, so no contract was recorded. If this is a contract, check "
+                "the file; if it is an invoice or a certificate, this is expected."
+            ),
+        }
 
     # A contract names its vendor; it does not carry the platform's id for them. Resolve
     # that name to an existing vendor, and register one with a fresh id when the vendor is
@@ -336,6 +393,36 @@ async def ingest_contract_parameters(
         raw_extraction=extracted or {},
     )
 
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # The contracts view reaches a building through plenum_cafm.documents, joined on
+    # document_id. With no row there the column is NULL for every contract, so the source
+    # file is recorded and placed on a building here. Best-effort: a contract that cannot
+    # be placed is still ingested, with the basis of the attempt kept beside it.
+    async def _attach_graph(target: Any, doc_id: Any) -> dict[str, Any]:
+        if doc_id is None:
+            return {}
+        try:
+            from ..energy.graph_ingest import attach_to_graph
+
+            out = await attach_to_graph(
+                session,
+                document_id=doc_id,
+                building_name=building_name,
+                building_reference=building_reference,
+                site_name=site_name,
+                site_id=site_id,
+                doc_type="service_contract",
+                title=effective_ref,
+                file_name=file_name,
+            )
+            sources = dict(target.field_sources or {})
+            sources["building_link"] = out.get("building_link_reason") or "unresolved"
+            target.field_sources = sources
+            return out
+        except Exception as exc:  # noqa: BLE001 — the graph must never fail an ingest
+            log.warning("contract_params.graph_attach_failed", error=str(exc)[:200])
+            return {}
+
     existing = await _existing_draft_for(
         session, contract_ref=effective_ref, vendor_id=vendor_id
     )
@@ -370,6 +457,7 @@ async def ingest_contract_parameters(
             d for d in defaults_used if d.split(":", 1)[0].strip() not in pm_decided
         ]
         await session.flush()
+        await _attach_graph(existing, existing.document_id)
         await write_audit(
             session,
             actor="system",
@@ -406,6 +494,20 @@ async def ingest_contract_parameters(
     )
     session.add(row)
     await session.flush()
+    row.document_id = row.document_id or uuid4()
+    await _attach_graph(row, row.document_id)
+
+    # The per-trade rate card, when the contract states one. Written separately because
+    # rate_card_json is not on every database yet: rate_card.write_for probes once and
+    # returns False when the column is absent, which leaves the contract exactly as it is
+    # ingested today. See migrations/add_contract_rate_card.sql.
+    _card_raw = (extracted or {}).get("rate_card_json")
+    if _card_raw:
+        from . import rate_card as _rc
+
+        # field_sources already records this as contract-sourced (merge_extraction_with_
+        # defaults), so the row and the extract response agree. Nothing to re-mark here.
+        await _rc.write_for(session, row.id, _card_raw)
 
     if has_confirmed:
         # A confirmed contract already governs this reference. It is not overwritten — the
@@ -539,6 +641,43 @@ async def confirm_contract_parameters(
     row = await session.get(ContractSlaParameters, parameters_id)
     if not row:
         return {"ok": False, "error": "not_found"}
+
+    # A CONFIRMATION NOBODY IS NAMED FOR IS NOT A DECISION.
+    #
+    # On 21 Sep 2026 the orchestrator created a parameter set and confirmed it one second
+    # later with confirmed_by NULL, unattended, because a skill recipe listed confirming as
+    # step four of an ingest chain. The audit row then read `actor: pm` — indistinguishable
+    # from a person having decided. Undoing that is what `reopen` is for; not doing it in
+    # the first place is what this is for.
+    if confirmed_by is None:
+        log.warning(
+            "contract_params.confirm_refused_unattributed",
+            parameters_id=str(parameters_id),
+            detail="confirming makes a vendor's numbers binding; it needs a named person",
+        )
+        return {"ok": False, "error": "confirmed_by_required"}
+
+    # A SET THAT READ NOTHING FROM ITS DOCUMENT CANNOT BE CONFIRMED.
+    #
+    # Confirming turns every value into an agreed term. Where none came from the contract,
+    # that is seventeen platform assumptions becoming the figures a vendor is judged and
+    # invoiced against — the exact case above, and the Moreland contract before it.
+    #
+    # "filename" does not count: contract_ref falls back to the uploaded file's name when
+    # the document names no reference, and a uuid-prefixed filename is not something the
+    # contract said.
+    sources = row.field_sources or {}
+    from_document = sum(1 for v in sources.values() if str(v).strip().lower() == "contract")
+    if not from_document:
+        log.warning(
+            "contract_params.confirm_refused_no_terms",
+            parameters_id=str(parameters_id),
+            fields=len(sources),
+            detail="nothing in this set came from the document; confirming would make "
+                   "platform defaults binding on the vendor",
+        )
+        return {"ok": False, "error": "no_contract_terms", "fields": len(sources)}
+
     row.status = "confirmed"
     row.confirmed_by = confirmed_by
     row.confirmed_at = datetime.now(timezone.utc)
@@ -553,6 +692,50 @@ async def confirm_contract_parameters(
     )
     await session.commit()
     return {"ok": True, "parameters": params_to_dict(row)}
+
+
+async def reopen_contract_parameters(
+    session: AsyncSession,
+    parameters_id: UUID,
+    *,
+    reopened_by: UUID | None = None,
+) -> dict[str, Any]:
+    """Undo a confirmation: the set goes back to draft and scoring refuses it again.
+
+    Confirming turns extracted readings into the numbers every later judgement is enforced
+    with, and until this existed there was no way back — `extract`, `ingest`, `patch` and
+    `confirm` were the whole router, so a set confirmed by mistake could only be replaced by
+    re-ingesting the document it came from.
+
+    That is not academic. A contract confirmed on 18 Sep 2026 had read 0 of 16 terms: the
+    document was a property management agreement, not a service contract, so all sixteen
+    values behind it are platform defaults now standing as agreed terms for that vendor.
+
+    The confirmation is CLEARED, not merely outranked by the status. A draft that still
+    names a confirmer reads as confirmed to anything checking the column rather than the
+    status, and those two disagreeing is worse than either alone.
+
+    Reopening a set that is already a draft is not an error. Two people on the same screen,
+    or a double click, should arrive at the state that was asked for.
+    """
+    row = await session.get(ContractSlaParameters, parameters_id)
+    if not row:
+        return {"ok": False, "error": "not_found"}
+    was = row.status
+    row.status = "draft"
+    row.confirmed_by = None
+    row.confirmed_at = None
+    row.updated_at = datetime.now(timezone.utc)
+    await write_audit(
+        session,
+        actor=str(reopened_by) if reopened_by else "pm",
+        action_type="contract_params.reopen",
+        source_feature="B",
+        organization_id=row.organization_id,
+        output_payload={"id": str(row.id), "was": was},
+    )
+    await session.commit()
+    return {"ok": True, "parameters": params_to_dict(row), "was": was}
 
 
 async def get_contract_parameters(
@@ -572,8 +755,24 @@ async def list_contract_parameters(
     vendor_id: UUID | None = None,
     status: str | None = None,
     limit: int = 100,
+    # The caller's buildings. A contract belongs to a building through the document it was
+    # extracted from, or through a vendor working on it (a certificate, work order or
+    # invoice there). None = every contract in the company.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(ContractSlaParameters).order_by(ContractSlaParameters.created_at.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        dsql, dparams = _access.document_predicate(building_ids, "document_id", prefix="doc")
+        vsql, vparams = _access.vendor_predicate(building_ids, "vendor_id", prefix="ven")
+        if dsql.strip() == "AND FALSE":
+            q = _access.orm_where(q, " AND FALSE", {})
+        else:
+            q = _access.orm_where(
+                q, " AND (" + dsql[len(" AND "):] + " OR " + vsql[len(" AND "):] + ")",
+                {**dparams, **vparams},
+            )
     if organization_id:
         q = q.where(ContractSlaParameters.organization_id == organization_id)
     if vendor_id:
@@ -603,6 +802,60 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001 — names are a convenience, never fail the list
             for d in out:
                 d.setdefault("vendor_name", None)
+
+    # The rate card, for the page in one query. Not a mapped column on purpose: a model
+    # attribute for a column the database lacks fails EVERY select on that table, and
+    # rate_card_json is new — anything that has not run the migration would lose its whole
+    # contract list to a feature it does not have. rate_card.column_present() probes once,
+    # and when the column is absent nothing below runs at all.
+    for d in out:
+        d.setdefault("rate_card", None)
+    if out:
+        from . import rate_card as _rc
+
+        if await _rc.column_present(session):
+            try:
+                from sqlalchemy import text as _text
+
+                res = await session.execute(
+                    _text(
+                        "SELECT id::text AS id, rate_card_json FROM "
+                        "plenum_cafm.contract_sla_parameters WHERE id::text = ANY(:ids) "
+                        "AND rate_card_json IS NOT NULL"
+                    ),
+                    {"ids": [str(d["id"]) for d in out]},
+                )
+                cards = {r["id"]: _rc.normalise(r["rate_card_json"]) for r in res.mappings().all()}
+                for d in out:
+                    d["rate_card"] = cards.get(str(d["id"]))
+            except Exception:  # noqa: BLE001 — a card is an enrichment; losing it must
+                # never cost the reader the contract list.
+                pass
+
+    # The same treatment for whoever confirmed each set. A uuid is not an answer to "who
+    # decided these numbers are binding?", and this is the only place the reader can be told.
+    # One query for the page, and only when something on it is actually confirmed.
+    for d in out:
+        d.setdefault("confirmed_by_name", None)
+    confirmer_ids = sorted({str(d.get("confirmed_by")) for d in out if d.get("confirmed_by")})
+    if confirmer_ids:
+        try:
+            from sqlalchemy import text as _text
+
+            res = await session.execute(
+                _text(
+                    "SELECT id::text AS id, full_name, email FROM plenum_cafm.users "
+                    "WHERE id::text = ANY(:ids)"
+                ),
+                {"ids": confirmer_ids},
+            )
+            # A person's name if the row carries one, otherwise the address they sign in with.
+            # Falling back to the uuid would be worse than saying nothing: it reads as data.
+            who = {r.id: ((r.full_name or "").strip() or (r.email or "").strip() or None) for r in res}
+            for d in out:
+                d["confirmed_by_name"] = who.get(str(d.get("confirmed_by") or ""))
+        except Exception:  # noqa: BLE001 — a missing name never costs the reader the list
+            pass
     # Source document filename, so the UI can show WHICH file these parameters
     # were extracted from (contract_documents is the B1 one-to-many mapping).
     doc_ids = sorted({str(d.get("document_id")) for d in out if d.get("document_id")})
@@ -640,6 +893,45 @@ async def list_contract_parameters(
         except Exception:  # noqa: BLE001
             for d in out:
                 d.setdefault("document_name", None)
+
+        # Which building this contract covers. contract_sla_parameters has no building
+        # column; the link runs through the document it was extracted from, which is the
+        # join plenum_cafm.contracts makes and the building graph draws. Without it every
+        # row reaching a caller was silent about the building, and a question about one
+        # could only be answered "no contract is linked to it".
+        try:
+            from sqlalchemy import text as _text
+
+            res3 = await session.execute(
+                _text(
+                    "SELECT d.document_id::text AS did, d.building_id::text AS bid, "
+                    "       b.name AS building_name, b.building_code "
+                    "  FROM plenum_cafm.documents d "
+                    "  JOIN plenum_cafm.buildings b ON b.building_id = d.building_id "
+                    " WHERE d.document_id::text = ANY(:ids)"
+                ),
+                {"ids": doc_ids},
+            )
+            placed = {
+                row.did: {
+                    "building_id": row.bid,
+                    "building_name": row.building_name,
+                    "building_reference": row.building_code,
+                }
+                for row in res3
+            }
+            for d in out:
+                d.update(
+                    placed.get(str(d.get("document_id") or ""))
+                    or {"building_id": None, "building_name": None,
+                        "building_reference": None}
+                )
+        except Exception:  # noqa: BLE001 — a contract that cannot be placed is still a
+            # contract; losing the listing over it would be worse.
+            for d in out:
+                d.setdefault("building_id", None)
+                d.setdefault("building_name", None)
+                d.setdefault("building_reference", None)
     return out
 
 
@@ -856,8 +1148,13 @@ async def list_asset_criticalities(
     organization_id: UUID | None = None,
     approved: bool | None = None,
     limit: int = 200,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(AssetCriticality).order_by(AssetCriticality.updated_at.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        q = _access.orm_where(q, *_access.asset_predicate(building_ids, "asset_id"))
     if organization_id:
         q = q.where(AssetCriticality.organization_id == organization_id)
     if approved is not None:

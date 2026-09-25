@@ -84,7 +84,77 @@ def normalize_vendor_name(raw: str | None) -> str:
     return out if len(out) >= 2 else ""
 
 
-async def find_vendor_id(session: AsyncSession, name: str | None) -> str | None:
+def _org_clause(organization_id: object | None, binds: dict) -> str:
+    """The tenant filter, and the bind that goes with it.
+
+    Every question here — "is this the same vendor?", "which vendor does this document
+    name?" — is asked on behalf of one company, and the register holds them all. Without
+    this clause a contract uploaded by one tenant matched, and attached itself to, another
+    tenant's supplier row. Seven compliance certificates in the live database are already
+    linked that way.
+
+    Returns "" when the caller genuinely has no tenant to scope by — a certificate that
+    arrived with no organization on it. That is a narrower hole than the one it replaces,
+    and the callers that can supply an organization now all do.
+    """
+    if not organization_id:
+        return ""
+    binds["org"] = str(organization_id)
+    return "AND organization_id = CAST(:org AS uuid)"
+
+
+async def vendor_named_in(
+    session: AsyncSession,
+    text_body: str | None,
+    *,
+    organization_id: object | None = None,
+) -> str | None:
+    """The vendor this document names, chosen from the ones we already have.
+
+    The opposite question to find_vendor_id, and a much safer one. Reading a supplier's name
+    out of free text means guessing where the name starts and stops, and a wrong guess
+    attributes an invoice to a company that does not exist. Asking instead which of the
+    register's own names appears in the text can only ever return a vendor we already know,
+    or nothing.
+
+    Longest name first, so "Halden Building Services" wins over a "Halden" that would also
+    match — the more specific name is the more likely one to be meant.
+    """
+    body = re.sub(r"\s+", " ", (text_body or "")).lower()
+    if len(body) < 3:
+        return None
+    binds: dict = {}
+    org_sql = _org_clause(organization_id, binds)
+    async with session.begin_nested():
+        rows = (
+            await session.execute(
+                text(
+                    f"""
+                    SELECT id::text AS id, vendor_name
+                      FROM plenum_cafm.vendors
+                     WHERE NULLIF(TRIM(vendor_name), '') IS NOT NULL
+                       {org_sql}
+                     ORDER BY length(vendor_name) DESC, created_at NULLS LAST, id
+                    """
+                ),
+                binds,
+            )
+        ).mappings().all()
+    for r in rows:
+        name = re.sub(r"\s+", " ", str(r["vendor_name"]).strip()).lower()
+        # Two characters is not a name; matching one would attribute a document to whichever
+        # vendor happened to be initialised.
+        if len(name) >= 3 and name in body:
+            return r["id"]
+    return None
+
+
+async def find_vendor_id(
+    session: AsyncSession,
+    name: str | None,
+    *,
+    organization_id: object | None = None,
+) -> str | None:
     """The id of the vendor this name refers to, or None if the register has no such vendor.
 
     Tried in order, most confident first:
@@ -93,24 +163,36 @@ async def find_vendor_id(session: AsyncSession, name: str | None) -> str | None:
 
     Each step is ordered by creation time then id, so a name that matches several rows
     always resolves to the earliest of them rather than an arbitrary one.
+
+    Both steps are scoped to ``organization_id`` when the caller knows it. Two companies
+    may each use a supplier of the same name, and they are not the same vendor: one has a
+    contract with them, the other does not, and answering with the wrong row hands one
+    tenant the other's terms.
+
+    The id comes back as the register stores it — which is not always a uuid. Roughly half
+    the rows carry legacy ids like "V-01". Callers that write to a uuid column must check
+    before they cast; see ``resolve_or_create_vendor``.
     """
     raw = re.sub(r"\s+", " ", (name or "").strip())
     if len(raw) < 2:
         return None
 
+    exact_binds: dict = {"name": raw}
+    exact_org = _org_clause(organization_id, exact_binds)
     async with session.begin_nested():
         row = (
             await session.execute(
                 text(
-                    """
+                    f"""
                     SELECT id::text AS id
                     FROM plenum_cafm.vendors
                     WHERE LOWER(TRIM(vendor_name)) = LOWER(TRIM(:name))
+                      {exact_org}
                     ORDER BY created_at NULLS LAST, id
                     LIMIT 1
                     """
                 ),
-                {"name": raw},
+                exact_binds,
             )
         ).mappings().first()
         if row:
@@ -124,19 +206,22 @@ async def find_vendor_id(session: AsyncSession, name: str | None) -> str | None:
         # A full scan of the register per lookup would work at today's ~2,000 rows and stop
         # working quietly as it grows.
         first = target.split()[0]
+        cand_binds: dict = {"first": f"%{first}%"}
+        cand_org = _org_clause(organization_id, cand_binds)
         candidates = (
             await session.execute(
                 text(
-                    """
+                    f"""
                     SELECT id::text AS id, vendor_name
                     FROM plenum_cafm.vendors
                     WHERE vendor_name IS NOT NULL
                       AND LOWER(vendor_name) LIKE :first
+                      {cand_org}
                     ORDER BY created_at NULLS LAST, id
                     LIMIT 200
                     """
                 ),
-                {"first": f"%{first}%"},
+                cand_binds,
             )
         ).mappings().all()
 

@@ -1,0 +1,422 @@
+// homeLive — the Home page read from svc-operations-intelligence.
+//
+// The same treatment the compliance console got (complianceLive.js): the backend reads are
+// shaped into exactly what the tiles render, the seed stays as the fallback when nothing
+// answers, and every tile says which it is showing. What the Plenum AI shell reads for its
+// saved-space panels — the compliance summary, contract parameters, energy meters and
+// anomalies, and the unified approvals queue — is what the Home page reads here.
+//
+//   Hoist Score   per hoisted building, which kinds of record have reached it — one read,
+//                 GET /api/energy/hoist-score; the tile is the mean of its four bars
+//   Hoist Crons   what the engines did, newest first: approvals raised, anomalies detected
+//   Hero line     buildings, certificates and countries from the live register
+//   Money cards   Platform value ledger + P&L actuals — one read, GET /api/value/summary;
+//                 the server derives every figure from the store and a module it cannot
+//                 price says so. Budgets stay null (and the card keeps saying why) until
+//                 a budget ledger exists to read.
+//
+// shapeLiveHome() is a pure function; the methods below are mixed into HoistraLogic.prototype
+// and `this` is the controller.
+import { opsApi } from '../api/opsIntelligence.js';
+import { complianceApi } from '../api/compliance.js';
+import { energyApi } from '../api/energy.js';
+import { isStaleScope } from '../api/client.js';
+
+const RETRY_MS = 30000;
+const RETRY_MAX = 6;
+// The engines run on cron cycles; the Plenum panels re-read on the same cadence.
+const REFRESH_MS = 15 * 60 * 1000;
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const pad2 = (n) => String(n).padStart(2, "0");
+const pctOf = (n, d) => (d > 0 ? Math.round((100 * n) / d) : null);
+const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
+// The money cards' shorthand: £840 · £4.1k · £31k · £3.05m. Null is "—", never £0 — a
+// figure nobody derived and a derived zero must not read alike.
+export function money(v) {
+  const n = num(v);
+  if (n === null) return "—";
+  const a = Math.abs(n), sign = n < 0 ? "-" : "";
+  if (a >= 1e6) return sign + "£" + (a / 1e6).toFixed(2) + "m";
+  if (a >= 10000) return sign + "£" + Math.round(a / 1000) + "k";
+  if (a >= 1000) return sign + "£" + (a / 1000).toFixed(1) + "k";
+  return sign + "£" + Math.round(a);
+}
+
+// The four bars the tile draws, in drawing order. `domain` is the key the backend's
+// per-building score uses for the same thing; `what` finishes "n of N hoisted buildings
+// with … on record". The fifth domain the read returns, maintenance, is not drawn here.
+const BARS = [
+  { key: "contracts", domain: "contracts", label: "Contracts and framework agreements", short: "Contracts", what: "a contract" },
+  { key: "assets", domain: "assets", label: "Asset registers", short: "Assets", what: "an asset register" },
+  { key: "meters", domain: "energy", label: "Meter consent — MPAN / MPRN", short: "Meter consent", what: "a meter" },
+  { key: "certificates", domain: "compliance", label: "Certificates and evidence", short: "Certificates", what: "a certificate" }
+];
+
+// At 85 the agents move from supervised to delegated dispatch; below 60 the graph is still
+// being read and the score is a progress figure, not an autonomy grade.
+export function bandOf(value) {
+  if (value === null) return "No source yet";
+  if (value >= 85) return "Delegated autonomy";
+  if (value >= 60) return "Supervised autonomy";
+  return "Ingestion in progress";
+}
+const barTone = (pct) => (pct === null ? "none" : pct >= 80 ? "ok" : pct >= 60 ? "warn" : "risk");
+
+// Approvals carry the engine that raised them as a feature letter.
+const AGENT = { A: "Compliance", B: "Vendor", C: "Energy" };
+export function severityTone(sev) {
+  const s = String(sev || "");
+  if (/critical|lapsed|blocked/i.test(s)) return "risk";
+  if (/action|medium|high|overdue/i.test(s)) return "warn";
+  return "ok";
+}
+export function humanise(code) {
+  return String(code || "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+// "A", "A and B", "A, B and C", "A, B, C and 2 more" — the buildings a bar is missing.
+// `total` is how many there really are when `names` is a capped list.
+export function listNames(names, max, total) {
+  const cap = max || 3;
+  const shown = names.slice(0, cap);
+  const rest = (typeof total === "number" ? total : names.length) - shown.length;
+  if (rest > 0) return shown.join(", ") + " and " + rest + " more";
+  if (shown.length <= 1) return shown.join("");
+  return shown.slice(0, -1).join(", ") + " and " + shown[shown.length - 1];
+}
+
+// "Today", "Yesterday", else "DD Mon" — relative to `now`, in local time.
+export function dayLabel(at, now) {
+  const d = new Date(at), n = new Date(now);
+  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (same(d, n)) return "Today";
+  const y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1);
+  if (same(d, y)) return "Yesterday";
+  return pad2(d.getDate()) + " " + MONTHS[d.getMonth()];
+}
+const clock = (at) => { const d = new Date(at); return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); };
+export function fmtDateTime(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d)) return "—";
+  return pad2(d.getDate()) + " " + MONTHS[d.getMonth()] + " " + d.getFullYear() + " " + clock(d);
+}
+
+// The register's pseudo-buildings — certificates with no building named on them — are not
+// buildings anyone hoisted.
+const isBuilding = (b) => b && b.name && !/no building on certificate/i.test(b.name);
+const COUNTRY_ORDER = ["UK", "US", "SG", "AE"];
+// How the hero line names a market — the shell's spelling, not the ISO name.
+export const COUNTRY_SHORT = { UK: "UK", US: "US", SG: "Singapore", AE: "UAE" };
+
+// ── the shaping ─────────────────────────────────────────────────────────
+// input.raw       the reads, each null when that request failed:
+//                   coverage    GET /api/energy/hoist-score   (the bars)
+//                   compliance  GET /api/compliance/saved-space/summary  (kept for the Spaces panel)
+//                   anomalies   GET /api/energy/anomalies
+//                   approvals   GET /api/approvals
+// input.register  the compliance console's live register (shapeLiveCompliance), or null
+export function shapeLiveHome(input, now) {
+  const raw = (input && input.raw) || {};
+  const reg = (input && input.register) || null;
+  const at = now || new Date();
+
+  // ── Hoist Score: ingestion coverage per source ──
+  const bars = BARS.map((b) => ({ key: b.key, label: b.label, short: b.short, pct: null, val: "—", tone: "none", note: "" }));
+  const bar = (k) => bars.find((b) => b.key === k);
+  const set = (k, pct, note) => { const x = bar(k); x.pct = pct; x.val = pct === null ? "—" : pct + "%"; x.tone = barTone(pct); x.note = note; };
+
+  // One read answers all four: for each kind of record, how many hoisted buildings it has
+  // reached. The bar's note is the fraction in words; a bar the backend could not count
+  // (no building graph, no buildings) draws empty and carries the backend's reason.
+  const cov = raw.coverage || null;
+  const domainOf = (b) => (cov && (cov.domains || []).find((d) => d.key === b.domain)) || null;
+  BARS.forEach((b) => {
+    const d = domainOf(b);
+    if (!cov) return set(b.key, null, "coverage read did not answer");
+    if (!d) return set(b.key, null, "the coverage read did not name this domain");
+    if (typeof d.covered !== "number" || !d.of) return set(b.key, null, d.note || "not counted");
+    // One derivation, on the server, shared with the Buildings column; recomputed here only
+    // when a domain arrives without its pct.
+    const pct = typeof d.pct === "number" ? d.pct : pctOf(d.covered, d.of);
+    set(b.key, pct, d.covered + " of " + d.of + " hoisted buildings with " + b.what + " on record");
+  });
+
+  const sourced = bars.filter((b) => b.pct !== null);
+  const value = sourced.length ? Math.round(sourced.reduce((a, b) => a + b.pct, 0) / sourced.length) : null;
+  const lowest = sourced.slice().sort((a, b) => a.pct - b.pct)[0] || null;
+  const unsourced = bars.filter((b) => b.pct === null).map((b) => b.short);
+  // Who is missing the lowest bar, by name — a number nobody can act on is half an answer.
+  const gapWho = (low) => {
+    const d = domainOf(BARS.find((b) => b.key === low.key));
+    const names = ((d && d.missing_buildings) || []).map((m) => m.name || m.building_code || m.building_id).filter(Boolean);
+    // The backend caps the names it sends; missing_count is the true number.
+    const total = d && typeof d.missing_count === "number" ? d.missing_count : names.length;
+    if (!names.length) return " — the gap to delegated autonomy";
+    return " — " + listNames(names, 3, total) + (total === 1 ? " has" : " have") + " none on record";
+  };
+  // The read answered but counted nothing: no building graph, or no buildings hoisted. Said
+  // in the backend's words, capitalised — not "no source has answered", because one did.
+  const answered = !!cov;
+  const nb = cov && typeof cov.buildings === "number" ? cov.buildings : null;
+  const reason = answered ? ((cov.domains || []).map((d) => d && d.note).find(Boolean) || "Nothing counted yet") : "";
+  const capitalise = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  // A building-restricted reader whose allocation is empty: the backend says so, and the
+  // portfolio may well be full of buildings they cannot see — telling them to hoist one
+  // would be wrong twice over.
+  const unallocated = answered && nb === 0 && /allocated to you/.test(reason);
+  const score = {
+    value: value,
+    answered: answered,
+    band: value !== null || !answered ? bandOf(value) : unallocated ? "None allocated" : nb === 0 ? "Nothing hoisted" : "Not counted",
+    bars: bars,
+    sourced: sourced.length,
+    total: bars.length,
+    gap: lowest
+      ? lowest.short + " lowest at " + lowest.pct + "%" + gapWho(lowest)
+      : "No source has answered yet.",
+    note: value === null
+      ? (!answered ? "No source has answered yet"
+        : unallocated ? capitalise(reason) + ". Ask an admin to allocate one."
+        : nb === 0 ? "No buildings hoisted yet — hoist one and ingest against it"
+        : capitalise(reason))
+      : "Live · " + sourced.length + " of " + bars.length + " sources"
+        + (nb === null ? "" : " · " + nb + " building" + (nb === 1 ? "" : "s") + " hoisted")
+        + (unsourced.length ? " · " + unsourced.join(", ") + " unsourced" : "")
+  };
+
+  // ── Hoist Crons: what the engines did, newest first ──
+  const crons = [];
+  if (raw.approvals) {
+    (raw.approvals.items || []).forEach((it) => {
+      const ms = Date.parse(it.created_at);
+      if (isNaN(ms)) return;
+      const tone = severityTone(it.severity);
+      crons.push({
+        id: it.id, kind: "approval", at: ms, t: clock(ms), day: dayLabel(ms, at),
+        text: it.summary || humanise(it.item_type),
+        agent: AGENT[it.source_feature] || "Orchestrator",
+        tone: tone,
+        action: tone === "ok" ? null : "Review",
+        item: it
+      });
+    });
+  }
+  if (raw.anomalies) {
+    (raw.anomalies.anomalies || []).forEach((a) => {
+      const ms = Date.parse(a.detected_at);
+      if (isNaN(ms)) return;
+      const open = String(a.status || "open").toLowerCase() === "open";
+      const pct = num(a.metric_pct), cost = num(a.financial_gbp);
+      crons.push({
+        id: a.id, kind: "anomaly", at: ms, t: clock(ms), day: dayLabel(ms, at),
+        text: humanise(a.anomaly_type) +
+          (pct !== null ? " — " + Math.round(pct) + "% above baseline" : "") +
+          (cost !== null ? " · " + gbp(cost) + "/yr" : ""),
+        agent: "Energy",
+        tone: open ? "warn" : "ok",
+        action: open ? "Review" : null,
+        item: a
+      });
+    });
+  }
+  crons.sort((a, b) => b.at - a.at);
+
+  // ── Hero line ──
+  const hero = { buildings: null, certificates: null, vendors: null, countries: [] };
+  if (reg) {
+    // Counted from the compliance register this is "buildings with a certificate", not
+    // "buildings hoisted": Ashgrove Court, hoisted with no certificate yet, was left out, and
+    // the headline said 1 while the Hoist Score beside it said 2. The coverage read counts
+    // the buildings table itself, so it wins whenever it answered.
+    hero.buildings = (reg.buildings || []).filter(isBuilding).length;
+    hero.certificates = (reg.certs || []).length;
+    hero.vendors = (reg.vendors || []).length;
+    const seen = {};
+    (reg.certs || []).concat(reg.buildings || []).forEach((x) => { if (x.cc) seen[x.cc] = true; });
+    hero.countries = Object.keys(seen).sort((a, b) => {
+      const ia = COUNTRY_ORDER.indexOf(a), ib = COUNTRY_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+    });
+  }
+
+  // Only alongside the register: without it the certificate half of the line is unknown.
+  if (reg && nb !== null) hero.buildings = nb;
+
+  const pending = raw.approvals
+    ? (typeof raw.approvals.count === "number" ? raw.approvals.count : (raw.approvals.items || []).length)
+    : null;
+
+  // ── The money cards: Platform value ledger + P&L, GET /api/value/summary ──
+  // The server already applied the card's rule (a figure only where the store holds a
+  // priced row, "saved" only where a decision is recorded on it); here the figures are
+  // only formatted. A module the server could not count keeps "—" and carries its reason.
+  const vs = raw.value || null;
+  const valueCard = vs && vs.ledger
+    ? {
+        answered: true,
+        year: vs.year,
+        total: money(vs.ledger.total_saved),
+        totalDetected: money(vs.ledger.total_detected),
+        note: (vs.ledger.counted_modules || 0) + " of " + (vs.ledger.modules || []).length
+          + " modules priced from the store",
+        rows: (vs.ledger.modules || []).map((m) => ({
+          key: m.key, head: m.name, counted: !!m.counted,
+          detected: m.counted ? money(m.detected) : "—",
+          saved: m.counted ? money(m.saved) : "—",
+          note: m.note || "",
+          items: (m.items || []).map((i) => ({
+            what: i.what,
+            action: i.action,
+            detected: money(i.detected),
+            saved: i.saved === null || i.saved === undefined ? "—" : money(i.saved),
+            basis: i.basis || "",
+            est: /estimated/i.test(i.basis || "")
+          }))
+        }))
+      }
+    : { answered: false };
+  const pnl = vs && vs.pnl
+    ? {
+        answered: true,
+        // Saved-against-budget needs a budget; until a ledger is connected the server
+        // sends null and the card shows the dash rather than a number nobody derived.
+        saved: vs.pnl.saved === null || vs.pnl.saved === undefined ? "—" : money(vs.pnl.saved),
+        budgetConnected: !!vs.pnl.budget_connected,
+        note: vs.pnl.note || "",
+        rows: (vs.pnl.heads || []).map((h) => ({
+          head: h.name,
+          budget: h.budget === null || h.budget === undefined ? "—" : money(h.budget),
+          actual: h.actual === null || h.actual === undefined ? "—" : money(h.actual),
+          basis: h.basis || ""
+        }))
+      }
+    : { answered: false };
+
+  const live = ["coverage", "compliance", "anomalies", "approvals", "value"].some((k) => !!raw[k]);
+  return { live: live, score: score, crons: crons, hero: hero, pending: pending,
+           value: valueCard, pnl: pnl };
+}
+
+// ── controller methods ──────────────────────────────────────────────────
+export const homeLiveMethods = {
+  // Shaped once per (reads, register) pair — renderVals runs on every keystroke and the
+  // approvals feed is hundreds of rows.
+  homeModel() {
+    const raw = this.state.homeRaw, reg = this.state.ccLive;
+    const m = this._homeMemo;
+    if (m && m.raw === raw && m.reg === reg) return m.model;
+    const model = shapeLiveHome({ raw: raw, register: reg });
+    this._homeMemo = { raw: raw, reg: reg, model: model };
+    return model;
+  },
+  homeIsLive() { return !!this.state.homeRaw; },
+
+  // Every read is independent: a tile goes live when its source answers, and the page
+  // only falls back to the seed wholesale when nothing answered at all.
+  async homeLoad(opts) {
+    if (this._homeLoading) return;
+    this._homeLoading = true;
+    clearTimeout(this._homeRetry);
+    clearTimeout(this._homeRefresh);
+    this.setState({ homeLoading: true });
+    const reads = {
+      approvals: () => opsApi.approvals(),
+      // Kept although the bars no longer read it: spacesLive.js shapes the Compliance saved
+      // space from homeRaw.compliance.
+      compliance: () => complianceApi.savedSpaceSummary(),
+      anomalies: () => opsApi.anomalies(),
+      coverage: () => energyApi.hoistScore(),
+      // Both money cards in one read — the value ledger and the P&L actuals.
+      value: () => opsApi.valueSummary()
+    };
+    const keys = Object.keys(reads);
+    const settled = await Promise.allSettled(keys.map((k) => reads[k]()));
+    const raw = { fetchedAt: new Date().toISOString(), errors: {} };
+    let answered = 0;
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") { raw[keys[i]] = r.value; answered += 1; }
+      else { raw[keys[i]] = null; raw.errors[keys[i]] = (r.reason && r.reason.message) || String(r.reason); }
+    });
+    // A company switch mid-load: api/client.js disowned every read that was in flight,
+    // and resetLiveData()/loadLiveData() have already started correctly-scoped ones.
+    // Counting these as unanswered would put a spurious error on the new company's
+    // register and arm a retry against a company nobody is looking at any more.
+    if (settled.some((r) => r.status === 'rejected' && isStaleScope(r.reason))) return;
+    this._homeLoading = false;
+    if (!answered) {
+      const msg = raw.errors[keys[0]] || "unreachable";
+      this._homeAttempts = (this._homeAttempts || 0) + 1;
+      this.setState({ homeLoading: false, homeError: msg });
+      if (this._homeAttempts < RETRY_MAX) this._homeRetry = setTimeout(() => this.homeLoad(), RETRY_MS);
+      if (opts && opts.announce) this.flash("Operations backend unreachable — " + msg);
+      return;
+    }
+    this._homeAttempts = 0;
+    this.setState({ homeRaw: raw, homeLoading: false, homeError: "", homeLoadedAt: raw.fetchedAt });
+    if (opts && opts.announce) this.flash("Home refreshed — " + answered + " of " + keys.length + " sources answered");
+    this._homeRefresh = setTimeout(() => this.homeLoad(), REFRESH_MS);
+  },
+  homeRetryNow() { this._homeAttempts = 0; return this.homeLoad({ announce: true }); },
+
+  // The record behind a feed row, for the detail drawer. Read-only: deciding an approval
+  // or acting on an anomaly is a write, and those stay in the console that owns them.
+  cronDetail(c) {
+    const it = c.item || {};
+    if (c.kind === "anomaly") {
+      const pct = num(it.metric_pct), cost = num(it.financial_gbp), kwh = num(it.annualised_excess_kwh);
+      return {
+        module: "Energy", icon: "ph-lightning", tone: c.tone, title: c.text,
+        meta: "Detected " + fmtDateTime(it.detected_at) + " · " + humanise(it.status || "open") + " · svc-operations-intelligence / energy",
+        body: "Detected by the energy engine against this meter's own baseline" +
+          (kwh !== null ? ", " + Math.round(kwh).toLocaleString("en-GB") + " kWh a year above it" : "") +
+          (cost !== null ? ", priced at " + gbp(cost) + " a year at the meter's tariff" : "") +
+          ". Acting on it — acknowledge, monitor, mark expected — happens in the Energy space, not here.",
+        fields: [
+          { l: "Anomaly type", v: humanise(it.anomaly_type) },
+          { l: "Deviation", v: pct !== null ? Math.round(pct) + "% above baseline" : "—" },
+          { l: "Annualised cost", v: cost !== null ? gbp(cost) + "/yr" : "—" },
+          { l: "Annualised excess", v: kwh !== null ? Math.round(kwh).toLocaleString("en-GB") + " kWh" : "—" },
+          { l: "Meter", v: it.meter_id || "—" },
+          { l: "Building", v: it.site_id || "not linked" },
+          { l: "Status", v: humanise(it.status || "open") }
+        ],
+        chain: [
+          { a: "Energy", t: "Half-hourly readings compared with the meter's weekday / weekend baseline" },
+          { a: "Energy", t: "Deviation priced at the meter's tariff and annualised" },
+          { a: "Quality", t: "Held as open until a person acknowledges it or marks it expected" }
+        ],
+        refinement: "Open the Energy space to see this meter's readings and the other anomalies on the same building.",
+        actions: ["Open energy"]
+      };
+    }
+    const draft = it.email_draft || {};
+    const icon = c.agent === "Compliance" ? "ph-shield-check" : c.agent === "Vendor" ? "ph-chart-line-up" : "ph-lightning";
+    return {
+      module: c.agent, icon: icon, tone: c.tone, title: it.summary || c.text,
+      meta: humanise(it.item_type) + " · " + (it.severity || "—") + " · raised " + fmtDateTime(it.created_at),
+      body: "Queued for a decision by the " + c.agent.toLowerCase() + " engine. " +
+        (draft.to ? "A draft email is attached; nothing has been sent. " : "") +
+        "Approving, editing or dismissing it is done where the record lives — this card only shows what was raised.",
+      fields: [
+        { l: "Source", v: "svc-operations-intelligence · approvals queue" },
+        { l: "Type", v: humanise(it.item_type) },
+        { l: "Severity", v: it.severity || "—" },
+        { l: "Status", v: humanise(it.status || "pending") },
+        { l: "Raised", v: fmtDateTime(it.created_at) },
+        { l: "Related record", v: it.related_entity_type ? humanise(it.related_entity_type) + " · " + (it.related_entity_id || "") : "—" },
+        { l: "Email to", v: draft.to || "—" },
+        { l: "Subject", v: draft.subject || "—" }
+      ],
+      chain: [
+        { a: c.agent, t: "Raised by the engine's scan and written to the unified approvals queue" },
+        { a: "Quality", t: "Nothing leaves the platform until a person decides it" }
+      ],
+      refinement: c.agent === "Compliance"
+        ? "Open the compliance console to see the certificate behind this and every other item on the same holder."
+        : "Open the " + c.agent.toLowerCase() + " space to act on this.",
+      actions: c.agent === "Compliance" ? ["Open compliance console"] : c.agent === "Energy" ? ["Open energy"] : ["Open vendor performance"]
+    };
+  }
+};

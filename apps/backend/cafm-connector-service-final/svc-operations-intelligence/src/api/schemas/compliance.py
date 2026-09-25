@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -36,6 +36,9 @@ class CertificateUpsertRequest(BaseModel):
     defects_found: str | None = None
     remedial_actions: str | None = None
     remedial_status: str | None = None
+    # EPC asset rating (B5): band A-G and the score behind it. Ignored for other types.
+    energy_rating: str | None = Field(None, max_length=4, description="EPC band A-G")
+    energy_score: int | None = Field(None, ge=0, le=999)
     document_id: UUID | None = None
     country_code: str = "UK"
     issuer: str | None = None
@@ -47,6 +50,22 @@ class CertificateUpsertRequest(BaseModel):
 
 class RemedialStatusRequest(BaseModel):
     remedial_status: str
+
+
+class HumanVerificationRequest(BaseModel):
+    """What a person found after opening the certificate's register.
+
+    ``outcome``: confirmed | not_found | mismatch. A note is required unless confirmed —
+    say what the register showed (a different company, a lapsed membership, no record)."""
+
+    # Literal, so a typo is a 422 rather than a 200 carrying {ok: false} that a caller
+    # checking only the status would read as saved.
+    outcome: Literal["confirmed", "not_found", "mismatch"]
+    note: str | None = None
+    register_url: str | None = None
+    # Ignored — the server names the checker from the signed-in account. Kept so an older
+    # client that still sends it is not rejected.
+    checked_by_label: str | None = None
 
 
 class ConfirmCertificateRequest(BaseModel):
@@ -145,8 +164,21 @@ class AdversaryRequest(BaseModel):
 class VerifyNowRequest(BaseModel):
     certificate_type_code: str
     accreditation_number: str | None = None
+    certificate_number: str | None = Field(
+        None,
+        description="The certificate's own number. On the GOV.UK energy register a lodged "
+                    "certificate has its own public page addressed by this, so supplying it "
+                    "makes Verify now open the certificate rather than a search form.",
+    )
     country_code: str = "UK"
     vendor_name: str | None = None
+    certificate_id: UUID | None = Field(
+        None,
+        description="Name the certificate and the register link is stored on it, so it "
+                    "survives a reload instead of living only in the turn that built it. "
+                    "Storing a link never marks the certificate verified — a link to a "
+                    "register says where to look, not that anyone looked.",
+    )
 
 
 class CccVerifyRequest(BaseModel):
@@ -352,3 +384,19 @@ class RegisterSearchRequest(BaseModel):
     query: str = ""  # alias for name
     mode: str = "auto"  # auto | dump | bot
     limit: int = 25
+
+
+class FilingRequest(BaseModel):
+    """Record that an obligation was discharged: LL84 | BCA_BENCHMARKING | GREEN_MARK."""
+    building_id: UUID
+    scheme: str
+    period_year: int = Field(..., ge=2000, le=2100)
+    status: str = Field("filed", description="filed | submitted | accepted | certified | due | overdue | lapsed")
+    filed_at: str | None = Field(None, description="YYYY-MM-DD")
+    reference: str | None = None
+    certification_level: str | None = Field(None, description="Green Mark: Certified | Gold | GoldPlus | Platinum")
+    valid_until: str | None = None
+    submitted_by: str | None = None
+    evidence_document_id: UUID | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+    organization_id: UUID | None = None

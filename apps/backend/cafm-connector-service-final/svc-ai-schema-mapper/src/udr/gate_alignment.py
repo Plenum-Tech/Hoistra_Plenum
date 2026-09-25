@@ -38,7 +38,12 @@ def b21_new_column_index(dest_mapping) -> dict[tuple[str, str], str]:
     return idx
 
 
-def align_mapping_to_b21(table: str, mapping: dict, index: dict[tuple[str, str], str]) -> bool:
+def align_mapping_to_b21(
+    table: str,
+    mapping: dict,
+    index: dict[tuple[str, str], str],
+    dest_columns: set[str] | None = None,
+) -> bool:
     """Retarget a tier-1-mapped column to B21's new-column canonical, in place.
 
     DEMOTE-only: acts when B21 says the column is a NEW column but the deterministic mapper
@@ -53,6 +58,13 @@ def align_mapping_to_b21(table: str, mapping: dict, index: dict[tuple[str, str],
         return False
     canon = index.get((str(table).lower(), sf))
     if not canon or _ncol(canon) == _ncol(tf):
+        return False
+    if dest_columns and _ncol(sf) == _ncol(tf) and _ncol(canon) in dest_columns:
+        # Not a demotion. The column already carries its destination's own name, and B21's
+        # canonical is ANOTHER column the table already has — B21 grouped it with a column
+        # elsewhere that happens to hold the same values (a building named after its site:
+        # Buildings.name == Sites.site_name == 'Harbour Point'). Retargeting would move the
+        # building's name into buildings.site_name and leave buildings.name empty.
         return False
     mapping["target_field"] = canon
     mapping["b21_new_column"] = True
@@ -139,20 +151,37 @@ def b21_suggestions_for_unresolved(
     return out
 
 
-def align_buckets_to_b21(dest_mapping, *mapping_buckets) -> int:
+def align_buckets_to_b21(
+    dest_mapping,
+    *mapping_buckets,
+    dest_columns_by_table: dict | None = None,
+    dest_table_by_source=None,
+) -> int:
     """Align every mapping in the given ``{table: [mapping, ...]}`` buckets to B21, in place.
 
     The FIRST bucket is treated as the authoritative tier-1 set (its change count is returned —
     that's what drives the write path); later buckets are display copies kept in sync. Returns the
     number of tier-1 mappings changed.
+
+    ``dest_columns_by_table`` (destination table -> its real columns) and ``dest_table_by_source``
+    (source table -> destination table, a callable) let a mapping keep an exact own-name match
+    when B21's canonical is another existing column — see :func:`align_mapping_to_b21`.
     """
     index = b21_new_column_index(dest_mapping)
     if not index:
         return 0
+
+    def _cols_for(table: str) -> set[str] | None:
+        if not dest_columns_by_table:
+            return None
+        dest = dest_table_by_source(table) if callable(dest_table_by_source) else table
+        cols = dest_columns_by_table.get(str(dest or table).lower())
+        return {_ncol(c) for c in cols} if cols else None
+
     changed = 0
     for pos, bucket in enumerate(mapping_buckets):
         for table, mappings in (bucket or {}).items():
             for m in (mappings or []):
-                if align_mapping_to_b21(table, m, index) and pos == 0:
+                if align_mapping_to_b21(table, m, index, _cols_for(table)) and pos == 0:
                     changed += 1
     return changed

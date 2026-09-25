@@ -21,6 +21,50 @@ from typing import Any
 
 from ...udr.primitives import redundant_column_groups
 
+try:  # the mapper's own picture of the destination; absent only in stripped-down test rigs
+    from ...matchers.plenum_cafm_schema import TABLES as _PLENUM_TABLES
+except Exception:  # noqa: BLE001
+    _PLENUM_TABLES = {}
+
+#: Every column name that exists on some plenum_cafm table. A source column whose name is one of
+#: these is a destination fact in its own right, and two such names are two facts — whatever the
+#: values in one particular file happen to do.
+#: Tables the generated catalogue does not carry: plenum_cafm.csv predates the energy graph, so
+#: energy_meters, building_sections, meter_readings and floors are not in TABLES at all, and
+#: none of their columns counted as a destination. A sub-meter sheet says is_sub_meter=true and
+#: active=true on every row, and a section per floor is named as the floor — so is_sub_meter
+#: was merged into active and floor_name into name, two facts read as one column. These are
+#: the live columns of those tables (information_schema, hoistra_test, 24 Sep 2026).
+PLATFORM_TABLES: dict[str, list[str]] = {
+    "energy_meters": [
+        "id", "organization_id", "building_id", "asset_id", "meter_type", "mpan", "mprn",
+        "dcc_device_id", "tariff_gbp_per_kwh", "carbon_kg_per_kwh", "is_sub_meter",
+        "asset_type_benchmark_kwh", "active", "raw_metadata", "section_id", "description",
+        "site_ref", "site_id", "building_code", "meter_ref",
+    ],
+    "building_sections": [
+        "section_id", "organization_id", "building_id", "floor_id", "name", "section_type",
+        "gross_area_m2", "reference_eui_kwh_m2", "reference_source", "floor_name",
+        "building_code",
+    ],
+    "meter_readings": [
+        "id", "organization_id", "meter_id", "asset_id", "reading_at", "period_minutes",
+        "consumption_kwh", "source", "quality_flag", "building_code", "meter_type", "meter_ref",
+    ],
+    "floors": ["floor_id", "building_id", "level", "name", "gross_area_sqft"],
+}
+
+KNOWN_DESTINATION_COLUMNS: frozenset[str] = frozenset(
+    str(c).lower()
+    for cols in list(_PLENUM_TABLES.values()) + list(PLATFORM_TABLES.values())
+    for c in (cols or [])
+)
+
+
+def _distinct_facts(group: list[str]) -> list[str]:
+    """The members of a duplicate group that are real destination columns."""
+    return [c for c in group if str(c).strip().lower() in KNOWN_DESTINATION_COLUMNS]
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +132,28 @@ def merge_duplicate_columns(
         drop: set[str] = set()
         entries: list[dict] = []
         for group in groups:
-            kept = _representative(group, order)
+            facts = _distinct_facts(group)
+            if len(facts) >= 2:
+                # Identical values, but two or more of these names are real columns on the
+                # destination. expiry_date and next_due_date coincide on most certificates;
+                # they are still the date a certificate lapses and the date the next
+                # inspection is owed, and dropping either loses a fact the page reads.
+                logger.info(
+                    "[Node 1] Duplicate values in %s: %s — identical in all %d row(s) but %s "
+                    "are distinct destination columns; kept all of them",
+                    table_name, " == ".join(group), len(records), ", ".join(facts),
+                )
+                entries.append({
+                    "kept": list(group), "dropped": [], "members": list(group),
+                    "match_pct": 100, "row_count": len(records),
+                    "declined": "distinct destination columns",
+                })
+                continue
+            # One member is a real destination column and the rest are spellings of it: the
+            # destination name survives, because it is the one the mapper matches exactly and
+            # the others would each cost a mapping step to arrive at the same place. Only when
+            # none of them is a known column does the longest-name rule decide.
+            kept = facts[0] if len(facts) == 1 else _representative(group, order)
             dropped = [c for c in group if c != kept]
             drop.update(dropped)
             entries.append({

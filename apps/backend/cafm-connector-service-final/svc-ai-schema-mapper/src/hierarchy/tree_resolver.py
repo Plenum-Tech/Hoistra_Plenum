@@ -58,7 +58,11 @@ def resolve_self_referencing_trees(
         roots = []
         for record in records:
             parent_id = record.get(parent_col)
-            if parent_id is None or str(parent_id).strip() == "":
+            # No parent, or a record naming itself as its parent - which is what a column
+            # wrongly taken as a self-reference produces for every row - is a root. Left as
+            # a child of itself it is nobody's root and the table has no tree at all.
+            if (parent_id is None or str(parent_id).strip() == ""
+                    or str(parent_id).lower().strip() == str(record.get(pk_col, "")).lower().strip()):
                 roots.append(record)
 
         logger.info(

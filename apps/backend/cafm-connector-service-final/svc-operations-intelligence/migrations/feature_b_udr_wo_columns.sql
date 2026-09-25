@@ -23,8 +23,8 @@ ALTER TABLE IF EXISTS plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS vendor_id
 ALTER TABLE IF EXISTS plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS asset_id UUID;
 ALTER TABLE IF EXISTS plenum_cafm.work_orders ADD COLUMN IF NOT EXISTS notes TEXT;
 
-CREATE INDEX IF NOT EXISTS ix_wo_vendor_completed
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_wo_vendor_completed
   ON plenum_cafm.work_orders (vendor_id, completed_at)
   WHERE completed_at IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS ix_wo_code ON plenum_cafm.work_orders (wo_code);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_wo_code ON plenum_cafm.work_orders (wo_code);

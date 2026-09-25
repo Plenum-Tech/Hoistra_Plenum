@@ -14,7 +14,8 @@ from sqlalchemy import text
 
 from .. import database
 from ..config import settings
-from ..http_client import request as _request
+from ..http_client import PageEngineOwnsThisTurn, catalogue_closed, request as _request
+from ..services.principal import restrict_records, table_building_clause
 
 log = structlog.get_logger(__name__)
 
@@ -43,12 +44,26 @@ async def get_schema() -> dict:
         "tables": {
           "<table_name>": ["col1 (type)", "col2 (type)", ...],
           ...
-        }
+        },
+        "relationships": [
+          {"from": "<table>.<column>", "to": "<table>.<column>"},   # declared foreign keys
+          ...
+        ]
       }
+
+    JOIN ON `relationships`, NEVER ON TABLE-NAME SIMILARITY. A table named like a parent is
+    not necessarily the parent: `meter_readings.meter_id` references `energy_meters.id`, not
+    `meters.meter_id` — `meters` is a separate register and joining through it returns zero
+    rows for a meter that has thousands of readings. If the column you want to join on is not
+    in `relationships`, say so rather than guessing a key.
 
     Result is cached for 5 minutes so repeated calls within a session are free.
     """
     global _schema_cache, _schema_cache_at
+
+    _owners = catalogue_closed()
+    if _owners:  # the same door the HTTP tools go through; this one reads the database directly
+        return _err(PageEngineOwnsThisTurn(_owners), "get_schema")
 
     now = time.monotonic()
     if _schema_cache is not None and (now - _schema_cache_at) < _SCHEMA_TTL:
@@ -82,7 +97,40 @@ async def get_schema() -> dict:
         col = f"{row['column_name']} ({row['data_type']})"
         tables.setdefault(tbl, []).append(col)
 
-    result = {"tables": tables}
+    # The declared foreign keys — how the tables actually relate, as opposed to how their
+    # names suggest they relate. Without this the model joined meter_readings to `meters`
+    # because the name fit, and reported zero readings for a building holding fifty; the
+    # real parent is energy_meters and the database has said so all along.
+    relationships: list[dict[str, str]] = []
+    async with database.AsyncSessionLocal() as session:
+        try:
+            fks = (await session.execute(
+                text("""
+                    SELECT kcu.table_name  AS from_table,
+                           kcu.column_name AS from_column,
+                           ccu.table_name  AS to_table,
+                           ccu.column_name AS to_column
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                      ON kcu.constraint_name = tc.constraint_name
+                     AND kcu.table_schema    = tc.table_schema
+                    JOIN information_schema.constraint_column_usage ccu
+                      ON ccu.constraint_name = tc.constraint_name
+                     AND ccu.table_schema    = tc.table_schema
+                    WHERE tc.constraint_type = 'FOREIGN KEY'
+                      AND tc.table_schema    = 'plenum_cafm'
+                    ORDER BY kcu.table_name, kcu.column_name
+                """),
+            )).mappings().all()
+            relationships = [
+                {"from": f"{r['from_table']}.{r['from_column']}",
+                 "to": f"{r['to_table']}.{r['to_column']}"}
+                for r in fks
+            ]
+        except Exception as exc:  # noqa: BLE001 — the column list is still worth having
+            log.warning("udr.get_schema.relationships_failed", error=str(exc)[:200])
+
+    result = {"tables": tables, "relationships": relationships}
     _schema_cache = result
     _schema_cache_at = now
     log.info("udr.get_schema.refreshed", table_count=len(tables))
@@ -165,10 +213,17 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-    sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
-
     async with database.AsyncSessionLocal() as session:
         try:
+            # The caller's buildings bound this read like every other. Decided from the
+            # table's real columns (building_id, vendor, asset, site, meter), never from the
+            # question; an admin gets no clause and a caller allocated to nothing gets none of
+            # the rows.
+            bsql, bparams = await table_building_clause(session, table_name)
+            if bsql:
+                where_clause = (where_clause + bsql) if where_clause else "WHERE " + bsql[len(" AND "):]
+                params.update(bparams)
+            sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
             result = await session.execute(text(sql), params)
             rows = result.mappings().all()
             return [dict(r) for r in rows]
@@ -440,6 +495,74 @@ async def udr_describe_table(table: str) -> dict:
         return _err(exc, "describe_table")
 
 
+
+@tool
+async def find_tables(question: str, k: int = 8, domain: str | None = None) -> dict:
+    """UDR — Which tables answer this question. Call this BEFORE naming a table.
+
+    Searches the table catalogue by meaning: every plenum_cafm table has a written purpose,
+    the questions it is the right source for, its grain (what one row is), its keys, its links
+    to other tables — declared foreign keys AND the links that exist only by column naming —
+    and sample values. Pass the user's question as asked; paraphrasing it loses the words the
+    embedding matches on.
+
+    Returns the best `k` tables, best first, each with `purpose`, `answers`, `not_for` (the
+    near-miss table for a question that sounds like this one), `links_out` / `links_in` (the
+    joins available), `primary_key`, `columns` (names) and `score`. Then `table_card` for the
+    one or two you will actually read, and `get_schema` only to confirm exact column names.
+
+    `domain` narrows to one area: org, assets, work, compliance, energy, vendors, supply, docs,
+    reference, platform.
+
+    Measured 17 Sep 2026: without this, "which assets have never been scored" was answered by
+    a LEFT JOIN against a table that does not exist. The catalogue would have said
+    `assets.health_score`, and that `asset_condition_scores` is the near-miss.
+    """
+    try:
+        params: dict[str, Any] = {"q": question, "k": k}
+        if domain:
+            params["domain"] = domain
+        resp = await _request("GET", settings.udr_base_url, "/api/catalog/search",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "find_tables")
+
+
+@tool
+async def table_card(table: str) -> dict:
+    """UDR — One table's card from the catalogue: purpose, the questions it answers, what one
+    row is, primary key, every link in and out (declared vs by-name), every column with type,
+    nullability and sample values, three redacted sample rows, and which service owns it.
+
+    Read this before writing SQL against a table you have not used in this session. The sample
+    values tell you the status spellings and the id formats; the links tell you what you can
+    join to without guessing. A table with `purpose_source: "heuristic"` had no model-written
+    purpose — treat its description as structural, not semantic.
+    """
+    try:
+        resp = await _request("GET", settings.udr_base_url, f"/api/catalog/{table}",
+                              service=_SERVICE, timeout=_TIMEOUT)
+        return resp.json()
+    except Exception as exc:
+        return _err(exc, "table_card")
+
+
+async def _scoped(table: str, payload: dict, *, key: str = "rows") -> dict:
+    """Narrow a svc-udr read to the caller's buildings before the model sees it."""
+    rows = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return payload
+    async with database.AsyncSessionLocal() as session:
+        kept, refused = await restrict_records(session, table, [r for r in rows if isinstance(r, dict)])
+    out = {**payload, key: kept, "count": len(kept)}
+    if refused:
+        out["note"] = refused
+    elif len(kept) != len(rows):
+        out["note"] = f"{len(rows) - len(kept)} row(s) outside your buildings were withheld."
+    return out
+
+
 _MAX_READ_LIMIT = 500
 
 
@@ -471,7 +594,7 @@ async def udr_read_records(
             timeout=_TIMEOUT,
             params=params,
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "read_records")
 
@@ -488,7 +611,12 @@ async def udr_get_record(table: str, record_id: str, id_column: str = "id") -> d
             timeout=_TIMEOUT,
             params={"id_column": id_column},
         )
-        return resp.json()
+        record = resp.json()
+        scoped = await _scoped(table, {"rows": [record] if isinstance(record, dict) else []})
+        if not scoped["rows"]:
+            return {"error": scoped.get("note")
+                    or f"Record {record_id!r} in {table} is not in your buildings."}
+        return scoped["rows"][0]
     except Exception as exc:
         return _err(exc, "get_record")
 
@@ -516,7 +644,7 @@ async def udr_search_records(
                 "offset": offset,
             },
         )
-        return resp.json()
+        return await _scoped(table, resp.json())
     except Exception as exc:
         return _err(exc, "search_records")
 

@@ -9,10 +9,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .human_verification import certificate_verify_link
 from ...shared.vendor_identity import find_vendor_id
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
 from ...shared.approvals import enqueue_approval, write_audit
+from . import epc_rating
 from .country_pack import effective_alert_thresholds, get_pack_type, list_pack_types
 from .lifecycle import (
     STATUS_CRITICAL,
@@ -148,17 +150,23 @@ async def default_org_native(session: AsyncSession) -> Any:
     the value exactly as stored. Keeping the two lookups separate is the point: one feeds a
     UUID column, the other feeds an integer one, and forcing either to serve both is what
     broke this.
+
+    UPDATE, 17 Sep 2026: none of the above is true of this database — organizations.id is
+    uuid, as is vendors.organization_id — and the "platform organization" this returned was
+    simply whichever tenant sorted first. A certificate arriving without an organization
+    therefore registered its supplier inside an unrelated company, where that company's
+    staff could see it and where it counted towards their coverage. Seven certificates in
+    the live database are attached to another tenant's vendor; this is one of the two ways
+    that happened.
+
+    There is no default. The certificate still lands — it simply keeps no vendor until
+    someone attaches one, which is the honest state.
     """
-    try:
-        row = (
-            await session.execute(
-                text("SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1")
-            )
-        ).mappings().first()
-        return row["id"] if row else None
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cert.default_org_native_failed", error=str(exc)[:200])
-        return None
+    log.warning(
+        "cert.vendor_create_without_organization",
+        detail="no organization on this certificate; refusing to register its vendor under a guess",
+    )
+    return None
 
 
 async def resolve_default_org(session: AsyncSession) -> UUID | None:
@@ -611,6 +619,10 @@ def cert_to_dict(c: ComplianceCertificate) -> dict[str, Any]:
         "site_label": meta.get("site_label"),
         "building_name": c.building_name,
         "building_reference": c.building_reference,
+        # The resolved graph link, and the basis it was made on.
+        "building_id": str(c.building_id) if getattr(c, "building_id", None) else None,
+        "building_link": meta.get("building_link"),
+        "graph_document_id": meta.get("graph_document_id"),
         "vendor_id": str(c.vendor_id) if c.vendor_id else None,
         "issue_date": c.issue_date.isoformat() if c.issue_date else None,
         "expiry_date": c.expiry_date.isoformat() if c.expiry_date else None,
@@ -626,6 +638,10 @@ def cert_to_dict(c: ComplianceCertificate) -> dict[str, Any]:
         "status": c.status,
         "days_to_expiry": c.days_to_expiry,
         "insurance_risk_flag": c.insurance_risk_flag,
+        "energy_rating": getattr(c, "energy_rating", None),
+        "energy_score": getattr(c, "energy_score", None),
+        "mees": (epc_rating.mees_position(c.energy_rating)["status"]
+                 if epc_rating.is_epc_type(c.certificate_type_code or c.cert_type) else None),
         "authenticity_warning": c.authenticity_warning,
         "country_code": c.country_code,
         # Sub-national grouping, so the dashboard can scope below country level.
@@ -787,6 +803,51 @@ async def _enrich_certificate_rows(
             or {}
         )
 
+    # The building each certificate is filed against, read from the FK that holds it.
+    # Resolution below went site_id -> sites, else the building_name text column captured at
+    # ingestion. building_id was never consulted, and it is the only one of the three set on
+    # every linked row — so a certificate filed correctly against a building answered "no
+    # such building" to every name filter, which is how the agents ask.
+    # Parsed defensively. This list is built on every certificate listing, including the
+    # console's first paint, and one unparseable value here would cost every other row its
+    # page — a bad id in one certificate is not a reason to fail the whole register.
+    building_ids: list[UUID] = []
+    for r in rows:
+        raw_bid = r.get("building_id")
+        if not raw_bid:
+            continue
+        try:
+            building_ids.append(UUID(str(raw_bid)))
+        except (ValueError, AttributeError, TypeError):
+            log.warning("certificates.building_id_unparseable", value=str(raw_bid)[:60])
+    buildings: dict[str, dict[str, str | None]] = {}
+    if building_ids:
+
+        async def _load_buildings():
+            stmt = text(
+                """
+                SELECT building_id, name, building_code
+                FROM plenum_cafm.buildings
+                WHERE building_id IN :ids
+                """
+            ).bindparams(bindparam("ids", expanding=True))
+            brows = (await session.execute(stmt, {"ids": building_ids})).mappings().all()
+            return {
+                str(b["building_id"]): {"name": b["name"], "code": b["building_code"]}
+                for b in brows
+                if b.get("name")
+            }
+
+        buildings = (
+            await _safe_exec(
+                session,
+                _load_buildings,
+                label="certificates.building_enrich_failed",
+                default={},
+            )
+            or {}
+        )
+
     site_cache: dict[str, dict[str, str | None]] = {}
     for r in rows:
         sid = r.get("site_id")
@@ -844,6 +905,16 @@ async def _enrich_certificate_rows(
             r["asset_code"] = None
             r["asset_reference"] = None
 
+        # The FK first. A stored name that disagrees with it still wins, because a name
+        # read off the document is what the certificate itself says and correcting that
+        # silently would hide a mis-filing rather than show it.
+        bld = buildings.get(str(r.get("building_id") or "")) or {}
+        if bld.get("name"):
+            r["building_name"] = r.get("building_name") or bld["name"]
+            r["building_reference"] = (
+                r.get("building_reference") or bld.get("code") or bld["name"]
+            )
+
         if r.get("site_id") and r["site_id"] in site_cache:
             site = site_cache[r["site_id"]]
             r["building_name"] = r.get("building_name") or site.get("building_name")
@@ -860,6 +931,18 @@ async def _enrich_certificate_rows(
             r["building_name"] = bn
             r["building_address"] = rmeta.get("building_address") or rmeta.get("address")
             r["building_reference"] = r.get("building_reference") or bn or r.get("site_id")
+
+        # Where a person checks this certificate — read-only; see human_verification.
+        rmv = r.get("raw_metadata") if isinstance(r.get("raw_metadata"), dict) else {}
+        r["verify_link"] = certificate_verify_link(
+            register_url=r.get("verification_url"),
+            certificate_type_code=r.get("certificate_type_code"),
+            issuing_body=r.get("issuing_body"),
+            certificate_number=r.get("certificate_number"),
+            accreditation_number=r.get("inspector_accreditation_number"),
+            vendor_name=r.get("vendor_name"),
+            stored=rmv.get("verification") if isinstance(rmv.get("verification"), dict) else None,
+        )
 
         risk = vendor_risk_level(r.get("days_to_expiry"))
         r["risk_level"] = risk
@@ -918,7 +1001,7 @@ async def ensure_entity_tables(session: AsyncSession) -> None:
         return
     from pathlib import Path
 
-    from ...db import _split_sql, engine
+    from ...db import _split_sql, exec_migration_statements
 
     sql_path = (
         Path(__file__).resolve().parents[2] / "migrations" / "compliance_entity_bootstrap.sql"
@@ -928,10 +1011,9 @@ async def ensure_entity_tables(session: AsyncSession) -> None:
         return
     try:
         sql = sql_path.read_text(encoding="utf-8")
-        async with engine.begin() as conn:
-            for stmt in _split_sql(sql):
-                if stmt.strip():
-                    await conn.exec_driver_sql(stmt)
+        _, errs = await exec_migration_statements(_split_sql(sql))
+        for err in errs:
+            log.warning("compliance.bootstrap_stmt_failed", error=err)
         _ENTITY_TABLES_READY = True
         log.info("compliance.entity_tables_ready")
     except Exception as exc:  # noqa: BLE001 — bootstrap must never crash ingestion
@@ -1341,6 +1423,9 @@ async def upsert_certificate(
             cert_id = existing.id
 
     cert = existing or ComplianceCertificate(id=cert_id)
+    # Read before the replace below overwrites them — see _keep_vendor_id / _keep_vendor_meta.
+    _prior_vendor_id = existing.vendor_id if existing is not None else None
+    _prior_meta = dict(existing.raw_metadata or {}) if existing is not None else {}
 
     cert.organization_id = org_id
     cert.org_id = org_id
@@ -1351,7 +1436,7 @@ async def upsert_certificate(
     cert.cert_scope = scope
     cert.asset_id = _parse_uuid(data.get("asset_id"))
     cert.site_id = _parse_uuid(data.get("site_id"))
-    cert.vendor_id = _parse_uuid(data.get("vendor_id"))
+    cert.vendor_id = _keep_vendor_id(_parse_uuid(data.get("vendor_id")), _prior_vendor_id)
     # Vendor scope: resolve FK from company name when not provided (A3 ingest)
     if scope == "Vendor" and cert.vendor_id is None:
         from .contractors import resolve_or_create_vendor
@@ -1379,10 +1464,9 @@ async def upsert_certificate(
                 company = m.group(1).strip()
             elif re.search(r"pest[\s_-]?guard", src, re.I):
                 company = "PestGuard"
-        # org_id is the UUID the certificate row stores, and is None whenever the
-        # organizations table keys on integers — which it does. Vendor creation needs the
-        # org as the vendors table stores it, so it gets its own lookup rather than
-        # inheriting a value shaped for a different column.
+        # The certificate's own company scopes both the match and the create. When the
+        # certificate carries none, default_org_native no longer guesses one — it returns
+        # None, and the certificate keeps no vendor rather than borrowing another tenant's.
         vendor_org = org_id if org_id is not None else await default_org_native(session)
         resolved = await resolve_or_create_vendor(
             session,
@@ -1392,6 +1476,19 @@ async def upsert_certificate(
         )
         if resolved:
             cert.vendor_id = resolved
+            # The registration check ran in svc-deepagents BEFORE this function resolved the
+            # vendor — and resolve_or_create_vendor may have just created it. Its
+            # "not found on-platform" verdict then describes a state that ended a moment ago,
+            # and carrying it onto the record is not harmless: the Compliance console counts
+            # ANY authenticity_warning as "Authenticity failed · forensics flagged the
+            # document". On 22 Sep 2026 that reported three Northbridge accreditations as
+            # authenticity failures whose forensics had passed clean at risk 0.
+            # The vendor exists and is linked, so that clause is dropped and the warning
+            # rebuilt from what is still true — forensics, and the soft register note.
+            if (vendor_registration or {}).get("platform_compliance") == "unknown_vendor":
+                warning = merge_authenticity_warnings(
+                    soft_warning, forensics_payload, None
+                )
         elif company:
             # A vendor-scope certificate whose vendor could not be resolved is not a
             # neutral outcome: nothing will block, and the vendor KPIs will not count it.
@@ -1412,8 +1509,34 @@ async def upsert_certificate(
     cert.defects_found = data.get("defects_found")
     cert.remedial_actions = data.get("remedial_actions")
     cert.remedial_status = remedial_status
-    cert.document_id = _parse_uuid(data.get("document_id"))
-    cert.source_document_id = cert.document_id
+    # B5: the EPC band and score. Only for certificate types that carry one; a register
+    # figure already on the row is not overwritten by a document's, and a re-file that
+    # says nothing about the band leaves the band alone.
+    if epc_rating.is_epc_type(cert.certificate_type_code or type_code):
+        band, score = epc_rating.rating_from_fields(data)
+        register_band = epc_rating.rating_from_verification(data.get("raw_metadata"))
+        if register_band:
+            band = register_band
+        if band:
+            cert.energy_rating = band
+        if score is not None:
+            cert.energy_score = score
+    # The file this certificate was read from. Sticky: a re-file that carries no
+    # document_id must not blank the one an earlier pass established. Ingest is an upsert on
+    # certificate_number, so the second filing of a certificate — a corrected expiry date, a
+    # PM confirmation, a re-run — routinely arrives without the id, and clearing it here also
+    # deprived attach_to_graph below of an id to reuse, so it minted a fresh
+    # plenum_cafm.documents row every time. Five passes over one certificate left five
+    # document rows, four of them orphaned and all five shown on the building.
+    _doc_id = _parse_uuid(data.get("document_id"))
+    if _doc_id is not None:
+        cert.document_id = _doc_id
+        cert.source_document_id = _doc_id
+    # The graph document from a previous pass, if there was one. Not written onto the
+    # certificate — cert.document_id means "there is a real file behind this", and the
+    # download routes rely on that — but passed to the graph below so it updates that row
+    # instead of creating a second identity for the same file.
+    _prior_graph_doc = (cert.raw_metadata or {}).get("graph_document_id")
     cert.country_code = country
     # Sub-national grouping, broad to narrow. Normalised so "scotland", "SCT" and
     # "Scotland" do not become three separate rows in a report grouped by state, and so a
@@ -1431,7 +1554,7 @@ async def upsert_certificate(
     cert.insurance_risk_flag = life.insurance_risk_flag if confirmed_by_pm else False
     cert.authenticity_warning = warning
     cert.issuer = data.get("issuer") or pack.issuing_body
-    meta = dict(data.get("raw_metadata") or {})
+    meta = _keep_vendor_meta(data.get("raw_metadata"), _prior_meta)
     meta["field_confidence"] = data.get("field_confidence") or meta.get("field_confidence") or {}
     # Persist the CERTIFIED company as vendor_name so ccc_verify matches the register on the
     # accredited firm — not on cert.issuer, which for many vendor certs is the assessing/issuing
@@ -1554,6 +1677,55 @@ async def upsert_certificate(
                     meta["site_link_source"] = f"ingest:{link.matched_on}"
             except Exception as exc:  # noqa: BLE001 — best-effort site FK
                 log.warning("compliance.site_resolve_failed", error=str(exc)[:150])
+
+    # ── the building graph ───────────────────────────────────────────────────────────
+    # Place the certificate on the graph: resolve the building it belongs to, and record the
+    # source file in plenum_cafm.documents so the certificate hangs off a document rather
+    # than off nothing. Both are best-effort — a certificate that cannot be placed is still
+    # ingested, with the reason stored, because a certificate that exists is worth more than
+    # one rejected for want of a building.
+    # Unconditional. This used to run only when the certificate named a building or a site,
+    # so a vendor accreditation — which names neither — recorded no document row at all: the
+    # file it was read from existed nowhere in the graph and could never appear in a drawer.
+    # Whether a document can be placed on a building is a separate question from whether the
+    # document exists, and only the second one is always answerable.
+    if True:
+        try:
+            from ..energy.graph_ingest import attach_to_graph
+
+            graph = await attach_to_graph(
+                session,
+                document_id=cert.document_id or cert.source_document_id or _prior_graph_doc,
+                building_name=cert.building_name,
+                building_reference=cert.building_reference,
+                site_name=meta.get("site_label"),
+                site_id=cert.site_ref or (str(cert.site_id) if cert.site_id else None),
+                doc_type="compliance_certificate",
+                title=cert.certificate_type_code,
+                file_name=meta.get("source_file_name"),
+            )
+            if graph.get("building_id"):
+                cert.building_id = graph["building_id"]
+            elif graph.get("document_building_id"):
+                # Nothing in the certificate named a building, but the document it was read
+                # from is already on one — put there by whoever uploaded it, who said which
+                # building they meant. A certificate with no building appears in no drawer
+                # and in no coverage figure, so an answer somebody actually gave beats the
+                # null we would otherwise keep.
+                cert.building_id = graph["document_building_id"]
+                meta["building_link_via"] = "document"
+            # The basis of the link travels with the record: a match on an exact code and one
+            # inferred from a site with a single building are different claims.
+            meta["building_link"] = {
+                "outcome": graph.get("building_link_outcome"),
+                "reason": graph.get("building_link_reason"),
+                "building": graph.get("building_label"),
+            }
+            if graph.get("document_id"):
+                meta["graph_document_id"] = graph["document_id"]
+        except Exception as exc:  # noqa: BLE001 — the graph must never fail an ingest
+            log.warning("compliance.graph_attach_failed", error=str(exc)[:200])
+
     meta["confirmed_by_pm"] = bool(confirmed_by_pm)
     meta["requires_pm_confirmation"] = not bool(confirmed_by_pm)
     if not confirmed_by_pm:
@@ -1989,6 +2161,11 @@ async def list_certificates(
     expiry_month: str | None = None,
     include_archived: bool = False,
     limit: int = 200,
+    # The caller's buildings. None = every building in the company. A restricted caller
+    # sees certificates filed for their buildings plus vendor accreditations — which name
+    # no property — and never another building's certificate. Applied in SQL, before the
+    # limit, so a one-building user's page is not the first 200 rows of somebody else's.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     # Fetch a wider window when filtering client-side so deep-links stay accurate.
     # Status is filtered AFTER enrichment (recomputed from expiry) so "expired"/"lapsed"
@@ -2023,6 +2200,11 @@ async def list_certificates(
         q = q.where(ComplianceCertificate.site_id == site_id)
     if site_ref:
         q = q.where(ComplianceCertificate.site_ref == site_ref)
+    if building_ids is not None:
+        vendor_only = ComplianceCertificate.building_id.is_(None) & (
+            func.lower(ComplianceCertificate.cert_scope) == "vendor"
+        )
+        q = q.where(ComplianceCertificate.building_id.in_(list(building_ids)) | vendor_only)
     rows = list((await session.execute(q)).scalars().all())
     # Hide test fixtures / superseded duplicates from Saved Space lists — the same rows the
     # nightly scan already skips — so the PM sees real certificates, not seeded fixtures.
@@ -2262,6 +2444,7 @@ async def count_certificates(
     organization_id: UUID | None = None,
     risk_filter: str | None = None,
     limit: int = 500,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Deterministic filter+count for attribute questions the LLM must not guess.
 
@@ -2276,6 +2459,7 @@ async def count_certificates(
         risk_filter=risk_filter,
         draft=draft,
         limit=limit,
+        building_ids=building_ids,
     )
     matches = [
         r
@@ -2459,14 +2643,12 @@ async def _link_document_to_entities(
         or f"{cert.certificate_type_code or 'certificate'}.pdf"
     )[:255]
     doc_url = f"/backend/deep-agents/api/documents/{cert.document_id}/download"
-    try:
-        org_val: int | None = (
-            int(cert.organization_id or cert.org_id)
-            if (cert.organization_id or cert.org_id)
-            else None
-        )
-    except (TypeError, ValueError):
-        org_val = None
+    # The company id goes into files.organization_id exactly as the certificate carries it.
+    # This used to read int(cert.organization_id or cert.org_id) — int() on a uuid always
+    # throws, the except swallowed it, and every file row a certificate created was written
+    # with no organization at all, visible to whichever query forgot to filter.
+    org_val = cert.organization_id or cert.org_id
+    org_val = str(org_val) if org_val else None
 
     def _as_uuid(v: Any) -> str | None:
         try:
@@ -2902,7 +3084,11 @@ async def create_vendor_for_certificate(
     # Reuse an existing vendor of the same name; else insert a new stub row.
     # Same identity rule the contract path uses, so "Gough & Kelly Limited" on a certificate
     # and "Gough and Kelly Ltd." on a contract resolve to one vendor rather than two.
-    _matched_id = await find_vendor_id(session, name)
+    # Scoped to this certificate's own company. Without it, a certificate for one tenant
+    # attached itself to another tenant's supplier of the same name — seven live rows did.
+    _matched_id = await find_vendor_id(
+        session, name, organization_id=(cert.organization_id or cert.org_id)
+    )
     existing = {"id": _matched_id} if _matched_id else None
     # Merge form/profile fields into a whitelist-guarded column set (trade_category → trade).
     prof = dict(profile or {})
@@ -2931,14 +3117,11 @@ async def create_vendor_for_certificate(
                 pass
     else:
         vendor_id = str(uuid4())
-        try:
-            org_val: int | None = (
-                int(cert.organization_id or cert.org_id)
-                if (cert.organization_id or cert.org_id)
-                else None
-            )
-        except (TypeError, ValueError):
-            org_val = None
+        # Same cast, same lie about a "legacy INTEGER org column": int() on a uuid throws,
+        # the except turned that into None, and this INSERT then created a vendor belonging
+        # to no company — a row every tenant's unfiltered query can see.
+        org_val = cert.organization_id or cert.org_id
+        org_val = str(org_val) if org_val else None
         binds: dict[str, Any] = {"id": vendor_id, "org": org_val, "name": name[:255]}
         col_sql = ["id", "organization_id", "vendor_name", "status", "created_at"]
         val_sql = [":id", ":org", ":name", "'active'", "now()"]
@@ -3354,6 +3537,7 @@ async def saved_space_summary(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
+    scope: Any | None = None,
 ) -> dict[str, Any]:
     """Compliance Saved Space summary rows for Building + Vendor sections + WoW trend.
 
@@ -3369,6 +3553,12 @@ async def saved_space_summary(
         Medium <90d         = 31 ≤ dte ≤ 90
         Accreditations      = total vendor certificates
     Days/status are recomputed from expiry_date so counts stay accurate between scans.
+
+    ``scope`` (an ``access.Scope``, kept as ``Any`` to avoid an import cycle): when the
+    caller is building-restricted, the Building KPI buckets are counted only from
+    certificates against an allocated building — the Vendor buckets are untouched, since
+    vendor accreditation is not building-scoped (same rule as list_certificates() and
+    coverage.building_coverage()).
     """
     from datetime import date as date_cls, timedelta
     from uuid import uuid4
@@ -3416,6 +3606,13 @@ async def saved_space_summary(
             or (c.raw_metadata or {}).get("archived")
         )
     ]
+    if scope is not None and getattr(scope, "restricted", False):
+        rows = [
+            c
+            for c in rows
+            if str(c.cert_scope or "").strip().lower() != "building"
+            or scope.allows_building(c.building_id)
+        ]
 
     # Prefetch vendor block states (case-insensitive) for accurate blocked KPIs
     vendor_block: dict[str, str] = {}
@@ -3740,3 +3937,40 @@ def _parse_uuid(val: Any) -> UUID | None:
     if isinstance(val, UUID):
         return val
     return UUID(str(val))
+
+
+# ── vendor identity survives a partial re-upsert ────────────────────────────────────────
+# upsert_certificate is a full replace: every column is reassigned from `data`. That is
+# right for a first ingest, where `data` IS the whole document. It is wrong for the second
+# write of the same certificate, which the compliance sub-agent makes through the
+# `upsert_compliance_certificate` tool carrying only the fields the model chose to repeat.
+#
+# On 22 Sep 2026 that cost three Northbridge accreditations their vendor: the single-door
+# pass resolved and set vendor_id, the sub-agent re-upserted seconds later without it, and
+# the link was reset to NULL. Nothing warned, because the unresolved-vendor warning below
+# only fires when a company name WAS supplied — a payload carrying none fails silently.
+#
+# So identity is carried forward rather than replaced by absence. An explicit value still
+# wins, which keeps re-assignment working; clearing a vendor is what /certificates/{id}/link
+# is for, and it goes through its own path.
+
+
+def _keep_vendor_id(incoming: UUID | None, prior: UUID | None) -> UUID | None:
+    """The vendor on the record, unless this write names a different one."""
+    return incoming or prior
+
+
+def _keep_vendor_meta(
+    incoming: dict[str, Any] | None, prior: dict[str, Any] | None
+) -> dict[str, Any]:
+    """`incoming`, with vendor identity carried forward when it omits it.
+
+    Only the identity keys are carried. The rest of the old metadata is deliberately NOT
+    merged: a stale forensics verdict from an earlier run must not outlive the write that
+    replaced it.
+    """
+    out = dict(incoming or {})
+    for key in ("vendor_name", "company_name"):
+        if not out.get(key) and (prior or {}).get(key):
+            out[key] = (prior or {})[key]
+    return out

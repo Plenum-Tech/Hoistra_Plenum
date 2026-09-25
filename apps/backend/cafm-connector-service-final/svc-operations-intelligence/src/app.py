@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import time
 import uuid as _uuid
+from urllib.parse import urlparse
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -11,12 +13,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    admin_router,
     approvals_router,
+    auth_router,
     compliance_router,
     contract_performance_router,
     energy_router,
+    ingestion_router,
+    reports_router,
+    superadmin_router,
+    value_router,
 )
 from .config import settings
+from .engines.auth import keys as auth_keys
 from .core.exceptions import OpsIntelligenceError
 from .core.logging import configure_logging, get_logger
 from .db import AsyncSessionLocal, apply_sql_seed, init_db
@@ -29,6 +38,13 @@ async def lifespan(app: FastAPI):
     configure_logging()
     log.info("service.startup", service=settings.service_name, version="1.2.0")
     await init_db()
+
+    # After the migrations, because on a fresh database plenum_cafm.users does not exist
+    # until create_all has run. Before the first request, because a key type is a property
+    # of the deployment: knowable now, unchanging while this process lives, and fatal to
+    # get wrong. A service that cannot read it cannot serve auth, so it does not start.
+    async with AsyncSessionLocal() as session:
+        await auth_keys.resolve(session)
     if settings.auto_seed_portfolio_buildings:
         try:
             await apply_sql_seed("portfolio_buildings.sql")
@@ -56,7 +72,21 @@ async def lifespan(app: FastAPI):
             log.warning(
                 "country_pack.startup_seed_failed", country=country, error=str(exc)
             )
+    # The report clock: due cards refresh on their cadence whether or not a browser is open.
+    # One task per process; several replicas coordinate through the claim query.
+    scheduler_stop = asyncio.Event()
+    scheduler_task = None
+    if settings.report_scheduler_enabled:
+        from .engines.reports import scheduler as report_scheduler
+
+        scheduler_task = asyncio.create_task(report_scheduler.run_forever(scheduler_stop))
     yield
+    scheduler_stop.set()
+    if scheduler_task is not None:
+        try:
+            await asyncio.wait_for(scheduler_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            scheduler_task.cancel()
     log.info("service.shutdown", service=settings.service_name)
 
 
@@ -71,17 +101,45 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+def _cors_origins() -> list[str]:
+    """The browser origins allowed to call this service, credentials included.
+
+    The local ports are the developer defaults. The rest are wherever this deployment has
+    been told it is actually reached from — PUBLIC_APP_URL is the origin invitation links
+    are built on, FRONTEND_PUBLIC_URL the one emailed links point back to. Hardcoding only
+    localhost meant that on any real deployment whose UI is served from its own origin, the
+    browser refused every call before it left the page: the accept-invitation screen would
+    fail with a CORS error and nothing in the service log to show for it, because the
+    request never arrived.
+
+    Only the scheme://host:port is kept — a path (PUBLIC_BASE_URL carries one) is not an
+    origin and Starlette matches these exactly. `allow_credentials=True` forbids "*", which
+    is the whole reason this has to be an explicit list.
+    """
+    out = [
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+    ]
+    for raw in (settings.public_app_url, settings.frontend_public_url):
+        parsed = urlparse((raw or "").strip())
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in out:
+            out.append(origin)
+    return out
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The certificate download names its file in Content-Disposition; a frontend on another
+    # origin can only read that header if it is exposed.
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -128,6 +186,12 @@ async def metrics():
 
 
 app.include_router(approvals_router)
+app.include_router(auth_router)
+app.include_router(superadmin_router)
+app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(energy_router)
+app.include_router(ingestion_router)
+app.include_router(reports_router)
+app.include_router(value_router)

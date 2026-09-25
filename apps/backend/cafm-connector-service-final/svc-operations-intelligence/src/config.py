@@ -1,5 +1,9 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
+
+#: The two the dispatcher in shared/approvals.py actually implements. Anything else is a
+#: typo that would read as "do not send" — see _known_delivery_mode below.
+_DELIVERY_MODES = {"handoff", "platform_send"}
 
 
 class Settings(BaseSettings):
@@ -11,10 +15,47 @@ class Settings(BaseSettings):
     service_name: str = "svc-operations-intelligence"
     service_port: int = 8009
 
+    #: How an approved email leaves the platform. "handoff" builds a mailto: the person sends
+    #: from their own client, which is the answer PRD Q1 locked; "platform_send" has the
+    #: platform send it. The default had drifted to "platform", which matches neither branch —
+    #: it fell through to handoff anyway, so this change is behaviour the service already had,
+    #: now said out loud.
     email_delivery_mode: str = Field(
-        "platform",
+        "handoff",
         validation_alias=AliasChoices("EMAIL_DELIVERY_MODE", "email_delivery_mode"),
     )
+
+    @field_validator("email_delivery_mode")
+    @classmethod
+    def _known_delivery_mode(cls, v: str) -> str:
+        """Refuse a mode the dispatcher does not implement, rather than drifting into handoff.
+
+        approvals.py asks `if mode == "platform_send"` and treats everything else as handoff,
+        so any value that is not exactly one of the two silently means "do not send". That has
+        now happened twice on the same setting: it was "platform" once — the comment above
+        records it — and "smtp" after that, which is a real transport name and reads like it
+        would send. Nothing failed either time. Mail simply stopped leaving, and the console
+        went on reporting that it had.
+
+        A typo here is not a preference, it is an outage nobody is told about, so it stops the
+        service instead.
+        """
+        mode = (v or "").strip().lower()
+        if not mode:
+            # An empty variable — `EMAIL_DELIVERY_MODE=` in an env file, `${VAR:-}` in a
+            # compose file — is a choice not made, and pydantic-settings hands it over
+            # rather than dropping it. An unmade choice is the default, not a typo, and
+            # stopping the service over it would be the outage this validator exists to
+            # prevent.
+            return "handoff"
+        if mode not in _DELIVERY_MODES:
+            raise ValueError(
+                f"EMAIL_DELIVERY_MODE={v!r} is not a delivery mode. Use one of: "
+                + ", ".join(sorted(_DELIVERY_MODES))
+                + '. "platform_send" has the platform send it; "handoff" builds a mailto: '
+                "for the reader to send from their own client."
+            )
+        return mode
     smtp_host: str = Field("", validation_alias=AliasChoices("SMTP_HOST", "smtp_host"))
     smtp_port: int = Field(587, validation_alias=AliasChoices("SMTP_PORT", "smtp_port"))
     smtp_user: str = Field("", validation_alias=AliasChoices("SMTP_USER", "smtp_user"))
@@ -33,6 +74,18 @@ class Settings(BaseSettings):
     smtp_use_ssl: bool = Field(
         False,
         validation_alias=AliasChoices("SMTP_USE_SSL", "smtp_use_ssl"),
+    )
+    # Where invitation links point: the frontend's public origin. Blank means links are
+    # emitted relative and the client resolves them against itself.
+    # The kill switch, not the default. Every domain route requires a signed-in caller and
+    # scopes to their company and buildings. Set false ONLY to recover a live deployment
+    # where a client has not yet learned to send a token; every request then logs that the
+    # boundary is off, so it cannot quietly stay that way.
+    auth_enforce_scope: bool = Field(
+        True, validation_alias=AliasChoices("AUTH_ENFORCE_SCOPE", "auth_enforce_scope"),
+    )
+    public_app_url: str = Field(
+        "", validation_alias=AliasChoices("PUBLIC_APP_URL", "public_app_url"),
     )
     email_dry_run: bool = Field(
         True,
@@ -73,6 +126,43 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AUTO_SEED_PORTFOLIO_BUILDINGS", "auto_seed_portfolio_buildings"),
     )
     auto_migrate_on_startup: bool = True
+
+    # Custom reports — cards refreshed on a cadence by the in-service scheduler, each run
+    # asked of the orchestrator as the card's owner.
+    deep_agents_base_url: str = Field(
+        "http://127.0.0.1:8008",
+        validation_alias=AliasChoices("DEEP_AGENTS_BASE_URL", "deep_agents_base_url"),
+    )
+    report_scheduler_enabled: bool = Field(
+        True, validation_alias=AliasChoices("REPORT_SCHEDULER_ENABLED", "report_scheduler_enabled"),
+    )
+    report_scheduler_tick_seconds: int = Field(
+        30, validation_alias=AliasChoices("REPORT_SCHEDULER_TICK_SECONDS", "report_scheduler_tick_seconds"),
+    )
+    report_run_timeout_seconds: int = Field(
+        180, validation_alias=AliasChoices("REPORT_RUN_TIMEOUT_SECONDS", "report_run_timeout_seconds"),
+    )
+    # Benchmark validation — every building against its market's rule, derived from its
+    # readings, run by the same in-service scheduler so the Energy page never waits on a click.
+    benchmark_validation_enabled: bool = Field(
+        True, validation_alias=AliasChoices("BENCHMARK_VALIDATION_ENABLED", "benchmark_validation_enabled"),
+    )
+    benchmark_validation_every_hours: int = Field(
+        24, validation_alias=AliasChoices("BENCHMARK_VALIDATION_EVERY_HOURS", "benchmark_validation_every_hours"),
+    )
+
+    #: Migration files permitted to remain unapplied without stopping the service.
+    #:
+    #: Comma-separated filenames. A migration for a table another service owns will never
+    #: apply here, and that is not a fault — but it has to be SAID, per file, so that an
+    #: allowance is a deliberate statement someone can read and challenge. A blanket
+    #: "ignore migration errors" boolean would be used once in a hurry and never removed,
+    #: which is the behaviour this replaces.
+    migrations_allowed_to_fail: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "MIGRATIONS_ALLOWED_TO_FAIL", "migrations_allowed_to_fail"),
+    )
 
     public_base_url: str = Field(
         "http://localhost:8009",
@@ -173,6 +263,120 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "AZURE_BLOB_CONTAINER_NAME",
             "azure_blob_container_name",
+        ),
+    )
+
+    # ── Authentication ──────────────────────────────────────────────────────────────
+    #
+    # Email is the account identifier: there is no separate username to lose or collide.
+    #
+    # Both secrets below are DELIBERATELY empty by default rather than carrying a
+    # development fallback. A shipped default signing key is the same key in every
+    # deployment that forgot to set it, and anyone holding it can mint a token for any
+    # account. Empty means the service refuses to start in production and generates an
+    # ephemeral per-process key in development — where restarting invalidates every
+    # token, which is annoying exactly often enough to be noticed and set properly.
+    auth_jwt_secret: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_JWT_SECRET", "JWT_SECRET", "auth_jwt_secret"),
+    )
+    auth_jwt_algorithm: str = Field(
+        "HS256",
+        validation_alias=AliasChoices("AUTH_JWT_ALGORITHM", "auth_jwt_algorithm"),
+    )
+    # Keyed hash for one-time codes. Separate from the signing key so that disclosure of
+    # one does not hand over the other, and so the signing key can be rotated (ending
+    # sessions) without invalidating every code in flight, or the reverse.
+    auth_otp_pepper: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_OTP_PEPPER", "auth_otp_pepper"),
+    )
+
+    # Short, because an access token cannot be revoked — it is only ever outlived.
+    auth_access_token_ttl_minutes: int = Field(
+        30,
+        validation_alias=AliasChoices("AUTH_ACCESS_TOKEN_TTL_MINUTES", "auth_access_token_ttl_minutes"),
+    )
+    # Long, because a refresh token IS a row and can be revoked the moment it needs to be.
+    auth_refresh_token_ttl_days: int = Field(
+        14,
+        validation_alias=AliasChoices("AUTH_REFRESH_TOKEN_TTL_DAYS", "auth_refresh_token_ttl_days"),
+    )
+
+    auth_otp_length: int = Field(
+        6,
+        validation_alias=AliasChoices("AUTH_OTP_LENGTH", "auth_otp_length"),
+    )
+    # Long enough to fetch an email, short enough that a code read over someone's shoulder
+    # is worthless by the time it is typed somewhere else.
+    auth_otp_ttl_minutes: int = Field(
+        10,
+        validation_alias=AliasChoices("AUTH_OTP_TTL_MINUTES", "auth_otp_ttl_minutes"),
+    )
+    # Six digits is a million combinations, which is a great many at one guess per request
+    # and none at all without a cap.
+    auth_otp_max_attempts: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_ATTEMPTS", "auth_otp_max_attempts"),
+    )
+    # Resending is also an attack: on the mailbox owner, whose inbox fills, and on the
+    # code space, since every send is a fresh million-to-one draw.
+    auth_otp_resend_cooldown_seconds: int = Field(
+        60,
+        validation_alias=AliasChoices("AUTH_OTP_RESEND_COOLDOWN_SECONDS", "auth_otp_resend_cooldown_seconds"),
+    )
+    auth_otp_max_per_hour: int = Field(
+        5,
+        validation_alias=AliasChoices("AUTH_OTP_MAX_PER_HOUR", "auth_otp_max_per_hour"),
+    )
+
+    # NIST SP 800-63B: length is what matters; composition rules push people towards
+    # Passw0rd! and no further.
+    auth_password_min_length: int = Field(
+        12,
+        validation_alias=AliasChoices("AUTH_PASSWORD_MIN_LENGTH", "auth_password_min_length"),
+    )
+    auth_login_max_failures: int = Field(
+        8,
+        validation_alias=AliasChoices("AUTH_LOGIN_MAX_FAILURES", "auth_login_max_failures"),
+    )
+    auth_lockout_minutes: int = Field(
+        15,
+        validation_alias=AliasChoices("AUTH_LOCKOUT_MINUTES", "auth_lockout_minutes"),
+    )
+
+    # Which organisation a self-registered account joins. Left empty, registration uses
+    # the only organisation on the platform, and refuses to guess when there is more than
+    # one — putting a new account in the wrong tenant is not a mistake that announces
+    # itself.
+    auth_default_organization_id: str = Field(
+        "",
+        validation_alias=AliasChoices("AUTH_DEFAULT_ORGANIZATION_ID", "auth_default_organization_id"),
+    )
+    # POST /api/admin/data-reset empties a company's operational data (its own rows only).
+    # Unset means "only on a database named hoistra_test": a deployment pointed anywhere else,
+    # production included, has to switch it on deliberately.
+    org_data_reset_enabled: bool | None = Field(
+        None,
+        validation_alias=AliasChoices("ORG_DATA_RESET_ENABLED", "org_data_reset_enabled"),
+    )
+
+    # Open sign-up. Off means an account can only be created by an existing operator.
+    auth_allow_self_registration: bool = Field(
+        True,
+        validation_alias=AliasChoices("AUTH_ALLOW_SELF_REGISTRATION", "auth_allow_self_registration"),
+    )
+
+    # The chicken-and-egg of a fresh deployment: only a superadmin can appoint a
+    # superadmin, and a new platform has none. The FIRST account registered with this
+    # address becomes one — and only while the platform still has no superadmin at all,
+    # so setting it later, or leaving it set afterwards, grants nothing. The address
+    # still has to be confirmed by email like any other, so setting this does not hand
+    # the platform to whoever types it first; they must hold the mailbox.
+    auth_bootstrap_superadmin_email: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "AUTH_BOOTSTRAP_SUPERADMIN_EMAIL", "auth_bootstrap_superadmin_email",
         ),
     )
 

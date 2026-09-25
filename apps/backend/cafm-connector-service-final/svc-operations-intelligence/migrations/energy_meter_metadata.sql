@@ -14,5 +14,5 @@ COMMENT ON COLUMN plenum_cafm.energy_meters.raw_metadata
        'rather than a real DCC feed.';
 
 -- The simulator selects on this flag every 30 minutes.
-CREATE INDEX IF NOT EXISTS ix_energy_meters_simulate
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_energy_meters_simulate
     ON plenum_cafm.energy_meters ((raw_metadata ->> 'simulate'));

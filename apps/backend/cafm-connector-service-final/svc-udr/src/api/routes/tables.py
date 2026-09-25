@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...services.database_service import DatabaseService
+from ...services.principal import Principal, require_admin
 from ...core.exceptions import (
     TableNotFoundError,
     ColumnNotFoundError,
@@ -31,8 +32,16 @@ router = APIRouter()
 log = get_logger(__name__)
 
 
-def _svc(session: AsyncSession = Depends(get_session)) -> DatabaseService:
-    return DatabaseService(session)
+def _svc(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_admin),
+) -> DatabaseService:
+    """The engine, bound to whoever is asking.
+
+    The router already depends on require_admin, so this does not add a gate — it makes the
+    caller available to the query builder. Without it every route here ran unfiltered: the role
+    decided whether you got in, and nothing decided which rows you got."""
+    return DatabaseService(session, principal)
 
 
 def _http_error(exc: Exception) -> HTTPException:

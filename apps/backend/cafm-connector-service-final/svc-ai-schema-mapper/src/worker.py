@@ -386,34 +386,39 @@ async def resume_migration(
 
     # The graph restores state from PostgresSaver using thread_id.
     # Command(resume=decisions) is passed to the interrupted interrupt() call.
-    async with session_factory() as db_session:
-        if gate_type == "ddl_retry":
-            # DDL retry: Node 9 ran to completion (with failure — status="ddl_failed").
-            # The graph is NOT paused at an interrupt(); we need to re-run Node 9 with
-            # corrected extra_fields_config injected into state.
-            # Use Command with update only (no resume value needed).
-            corrected_config = decisions.get("extra_fields_config", [])
-            resume_command = Command(
-                resume=None,
-                update={
-                    "db_session": db_session,
-                    "extra_fields_config": corrected_config,
-                    "status": "running",
-                    "error_message": None,
-                },
-            )
-        else:
-            # Inject db_session into state so resumed nodes can still write to DB.
-            resume_command = Command(
-                resume=decisions,
-                update={"db_session": db_session},
-            )
-
-        result = await _run_graph(
-            graph, resume_command, config, migration_id, session_factory
+    # NOTHING LIVE GOES IN A Command(update=...).
+    #
+    # Every resume used to carry {"db_session": <AsyncSession>} here, and every resume
+    # failed: "Type is not msgpack serializable: AsyncSession". A Command's update is
+    # recorded by the checkpointer as a pending write BEFORE undeclared channels are
+    # filtered out, so the session reached msgpack and killed the run at its first
+    # checkpoint after the gate. The initial run passes one too (run_migration) and
+    # survives only because plain input IS filtered first — MigrationState declares no
+    # db_session channel at all.
+    #
+    # Nothing needed it either: the migration nodes each open their own session from the
+    # app factory (nodes/db_writer.py's _get_session_factory), so state["db_session"] is
+    # read by no node in this graph. Only the fiix_* nodes read it, from a different graph
+    # whose state does declare it.
+    if gate_type == "ddl_retry":
+        # DDL retry: Node 9 ran to completion (with failure — status="ddl_failed").
+        # The graph is NOT paused at an interrupt(); we need to re-run Node 9 with
+        # corrected extra_fields_config injected into state.
+        # Use Command with update only (no resume value needed).
+        resume_command = Command(
+            resume=None,
+            update={
+                "extra_fields_config": decisions.get("extra_fields_config", []),
+                "status": "running",
+                "error_message": None,
+            },
         )
+    else:
+        resume_command = Command(resume=decisions)
 
-    return result
+    return await _run_graph(
+        graph, resume_command, config, migration_id, session_factory
+    )
 
 
 async def run_schema_mapping(
@@ -763,6 +768,30 @@ async def on_startup(ctx: dict) -> None:
         from .services.registry_cache import load_or_build
 
         _oai = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        # AND PUBLISH IT TO app.py's GETTERS, NOT ONLY TO THE CACHE BUILDER.
+        #
+        # The nodes are handed no client: they call app.get_openai_client() /
+        # get_anthropic_client(), which read module-level globals that ONLY the FastAPI
+        # lifespan sets. In this process those globals are None, so on 21 Sep 2026 every
+        # resumed run died inside Node 3 with "OpenAI client not initialized". The
+        # exception was swallowed as "[Node 3] Unhandled exception", the graph ended early,
+        # and the job row was left saying `running` — a migration stuck on "Working…" for
+        # ever with no error recorded anywhere. Building a client here for the embeddings
+        # cache while leaving the getters empty is exactly what made it look initialised.
+        from . import app as _app
+
+        if getattr(_app, "_openai_client", None) is None:
+            _app._openai_client = _oai
+            logger.info("[worker] openai client published to app getters")
+        if getattr(_app, "_anthropic_client", None) is None and settings.anthropic_api_key:
+            import anthropic as _anthropic
+
+            _app._anthropic_client = _anthropic.AsyncAnthropic(
+                api_key=settings.anthropic_api_key, timeout=3600
+            )
+            logger.info("[worker] anthropic client published to app getters")
+
         _config = await load_or_build(settings.db_url)
         canonical_fields = _config.get("canonical_fields", {})
 
@@ -775,9 +804,25 @@ async def on_startup(ctx: dict) -> None:
             canonical_fields = _HARDCODED_CANONICAL_FIELDS
 
         await initialize_canonical_embeddings(_oai, canonical_fields)
-        logger.info(
-            f"[worker] Canonical embeddings initialized: {len(canonical_fields)} fields"
-        )
+
+        # COUNT WHAT LANDED, DO NOT REPORT WHAT WAS ASKED FOR.
+        #
+        # initialize_canonical_embeddings swallows its own failures, so on 22 Sep 2026 an
+        # invalidated OpenAI key produced "Failed to initialize canonical embeddings:
+        # Error code: 401" followed immediately by "Canonical embeddings initialized: 30
+        # fields" — the count of fields REQUESTED, printed over an empty cache. Node 3 then
+        # had nothing to match against. The cache is the only honest source.
+        from .embeddings import get_cached_embeddings
+
+        cached = len(get_cached_embeddings() or {})
+        if cached:
+            logger.info(f"[worker] Canonical embeddings initialized: {cached} fields")
+        else:
+            logger.error(
+                "[worker] Canonical embeddings are EMPTY after initialization "
+                f"({len(canonical_fields)} fields requested) — semantic mapping (Node 3) "
+                "will have nothing to match against. Check the OpenAI key."
+            )
 
     except Exception as exc:
         logger.error(f"[worker] Failed to initialize canonical embeddings at startup: {exc}")

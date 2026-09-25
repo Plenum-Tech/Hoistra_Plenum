@@ -22,6 +22,21 @@ export default function DecisionQueue({ vals }) {
         <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--color-divider)", flexShrink: "0", display: "flex", flexDirection: "column", gap: "9px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
             <span style={{ fontSize: "10.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginRight: "2px" }}>
+              {"Show"}
+            </span>
+            {(vals.queueFilterOpts || []).map((o, $index) => (
+              <React.Fragment key={$index}>
+                <div onClick={o.pick} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", padding: "4px 10px", borderRadius: "20px", cursor: "pointer", border: `1px solid ${o.border}`, color: o.fg, background: o.bg }}>
+                  {o.label}
+                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", opacity: "0.75" }}>
+                    {o.n}
+                  </span>
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "10.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginRight: "2px" }}>
               {"Runs"}
             </span>
             {(vals.freqOpts || []).map((o, $index) => (
@@ -86,6 +101,9 @@ export default function DecisionQueue({ vals }) {
           </div>
         </div>
         <div style={{ flex: "1", overflowY: "auto", padding: "14px 20px 40px", display: "flex", flexDirection: "column", gap: "9px" }}>
+          <div style={{ display: vals.queueEmptyShow, fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.55", padding: "6px 2px" }}>
+            {vals.queueEmptyNote}
+          </div>
           {(vals.queueItems || []).map((d, $index) => (
             <React.Fragment key={$index}>
               <div className="hv1" onClick={d.click} style={{ padding: "14px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", cursor: "pointer" }}>

@@ -14,7 +14,9 @@ problem must never fail an otherwise-successful migration. It is not in ``interr
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from functools import partial
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -76,27 +78,34 @@ async def udr_node(state) -> dict:
             from ...matchers.fm_ontology import fm_field_lookup as _field_resolver
         except Exception:  # pragma: no cover — RAG/FM tiers gracefully degrade
             _alias_resolver = _alias_resolver or None
-        result = run_udr_pipeline(
-            full_tables,
-            run_id=run_id,
-            dest_table_by_source=state.get("cafm_table_matches") or {},
-            # count of ingested source datasets (sheets/tables) — the available proxy for
-            # "documents ingested" in the structured migration flow (no separate file count).
-            documents_ingested=len(full_tables),
-            mapping_decisions=_build_mapping_decisions(state) or None,
-            confidence_by_source=state.get("cafm_table_match_confidence") or {},
-            # User-approved PK from the pre-semantic confirmation gate → overlays the B7.1/B8.1
-            # report so the final analysis reflects the signed-off PK, not the auto-detected one.
-            pk_override_by_table=state.get("pk_confirmed_by_table") or {},
-            # B20.1 classification-gate decisions (rejections + FK ↔ Shared re-classifications) —
-            # re-applied to the rebuilt column-intelligence report so the post-write analysis
-            # reflects the human-approved classification, not the raw auto-detection.
-            classification_decisions={
-                "rejected": state.get("classification_rejected") or [],
-                "overrides": state.get("classification_overrides") or {},
-            },
-            alias_resolver=_alias_resolver,
-            field_resolver=_field_resolver,
+        # On a thread, not on the loop. This is the last thing a migration does and the
+        # longest: prefix_columns alone took 69.5s on a 17-sheet workbook, and while it held
+        # the loop this process served no request, so the page polling for the status Node 9
+        # had already written timed out at 60s and kept saying "Running · Node 8 of 9".
+        result = await asyncio.to_thread(
+            partial(
+                run_udr_pipeline,
+                full_tables,
+                run_id=run_id,
+                dest_table_by_source=state.get("cafm_table_matches") or {},
+                # count of ingested source datasets (sheets/tables) — the available proxy for
+                # "documents ingested" in the structured migration flow (no separate file count).
+                documents_ingested=len(full_tables),
+                mapping_decisions=_build_mapping_decisions(state) or None,
+                confidence_by_source=state.get("cafm_table_match_confidence") or {},
+                # User-approved PK from the pre-semantic confirmation gate → overlays the B7.1/B8.1
+                # report so the final analysis reflects the signed-off PK, not the auto-detected one.
+                pk_override_by_table=state.get("pk_confirmed_by_table") or {},
+                # B20.1 classification-gate decisions (rejections + FK ↔ Shared re-classifications) —
+                # re-applied to the rebuilt column-intelligence report so the post-write analysis
+                # reflects the human-approved classification, not the raw auto-detection.
+                classification_decisions={
+                    "rejected": state.get("classification_rejected") or [],
+                    "overrides": state.get("classification_overrides") or {},
+                },
+                alias_resolver=_alias_resolver,
+                field_resolver=_field_resolver,
+            )
         )
     except Exception as e:  # pragma: no cover — never fail the migration on a UDR error
         logger.exception(f"[Node 10/UDR] pipeline failed: {e}")
