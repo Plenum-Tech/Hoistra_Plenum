@@ -59,22 +59,7 @@ export const maintenanceMethods = {
       // DetailDrawer reads icon / module / meta / title / body / chain[].a / chain[].t.
       // Built in any other shape it opens with a broken glyph and a blank chain, so the row
       // looks clickable and tells you nothing.
-      open: () => this.setState({
-        detail: {
-          icon: "ph-wrench", module: "Maintenance",
-          title: d.asset, meta: d.b + " · " + d.state, tone: STATE_TONE[d.state] || "warn",
-          status: d.state, body: d.detail, refinement: "",
-          chain: [{ a: "trigger", t: d.trigger }, { a: "source", t: d.src },
-                  { a: "building", t: d.b }, { a: "work order", t: d.id || "not raised yet" }],
-          fields: [
-            { l: "Work order", v: d.id || "not raised yet" },
-            { l: "Building", v: d.b }, { l: "Vendor", v: d.vendor },
-            { l: "Estimate", v: d.est }, { l: "Due", v: d.due || "—" },
-            { l: "Statutory", v: d.statutory ? d.statutoryNote : "not forced by a certificate" }
-          ],
-          actions: []
-        }
-      })
+      open: () => this.setState({ detail: this.mxDecisionDetail(d) })
     });
 
     const groups = (m.groups || []).map((g, i) => {
@@ -148,7 +133,7 @@ export const maintenanceMethods = {
       // A card the database cannot answer is not asked — the question would return the same
       // "cannot answer", and offering it as a link reads as if there were something behind it.
       askShow: c.answerable ? "pointer" : "default",
-      ask: () => (c.answerable ? this.openInsp(c.q) : this.flash(c.l + " — " + (c.s || "this database cannot answer that card."))),
+      ask: () => (c.answerable ? this.mxInspAsk(c.q) : this.flash(c.l + " — " + (c.s || "this database cannot answer that card."))),
       method: c.method || ""
     }));
     const corpus = m.corpus || null;
@@ -212,10 +197,10 @@ export const maintenanceMethods = {
 
       mxInspQ: s.inspDraft || "",
       mxInspSet: (e) => this.setState({ inspDraft: e.target.value }),
-      mxInspKey: (e) => { if (e.key === "Enter") this.openInsp(s.inspDraft || ""); },
-      mxInspRun: () => this.openInsp(s.inspDraft || ""),
+      mxInspKey: (e) => { if (e.key === "Enter") this.mxInspAsk(s.inspDraft || ""); },
+      mxInspRun: () => this.mxInspAsk(s.inspDraft || ""),
       mxInspOpen: () => this.openInsp(""),
-      mxInspChips: chips.map((c) => ({ label: c, run: () => this.openInsp(c) })),
+      mxInspChips: chips.map((c) => ({ label: c, run: () => this.mxInspAsk(c) })),
 
       mxPpm: ppm,
       mxPpmEmpty: ppm.length ? "none" : "block",
@@ -267,6 +252,40 @@ export const maintenanceMethods = {
         ? m.lastRead.reports_read + " reports read"
         : "no read recorded yet"
     };
+  },
+
+  // One decision as the DetailDrawer reads it — shared by the Maintenance grid's rows and
+  // the shell's Decision queue, so the same record opens the same drawer from either.
+  // DetailDrawer reads icon / module / meta / title / body / chain[].a / chain[].t; built in
+  // any other shape it opens with a broken glyph and a blank chain.
+  mxDecisionDetail(d) {
+    return {
+      icon: "ph-wrench", module: "Maintenance",
+      title: d.asset, meta: d.b + " · " + d.state, tone: STATE_TONE[d.state] || "warn",
+      status: d.state, body: d.detail, refinement: "",
+      chain: [{ a: "trigger", t: d.trigger }, { a: "source", t: d.src },
+              { a: "building", t: d.b }, { a: "work order", t: d.id || "not raised yet" }],
+      fields: [
+        { l: "Work order", v: d.id || "not raised yet" },
+        { l: "Building", v: d.b }, { l: "Vendor", v: d.vendor },
+        { l: "Estimate", v: d.est }, { l: "Due", v: d.due || "—" },
+        { l: "Statutory", v: d.statutory ? d.statutoryNote : "not forced by a certificate" }
+      ],
+      actions: []
+    };
+  },
+
+  // The inspection ask box, its chips and the four reading cards go to the orchestrator,
+  // the way every other page's ask bar does: askScoped → ccAsk, answered in the side dock
+  // with the reports still on screen. They used to open the reports page and put the words
+  // to POST /api/maintenance/ask — a fixed phrase matcher that answered anything off its
+  // list with "not a question these records can answer". chatContext() tells the
+  // orchestrator what this page is showing. An empty box opens the reports instead.
+  mxInspAsk(question) {
+    const q = String(question || "").trim();
+    if (!q) return this.openInsp("");
+    this.setState({ inspDraft: "" });
+    return this.askScoped(q);
   },
 
   openInsp(q) {

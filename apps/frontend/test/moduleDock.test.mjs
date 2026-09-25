@@ -158,7 +158,7 @@ test('the suggestions are actually there to be checked, on every dock page', () 
 
 // ── the pages that already worked must not change ────────────────────────────────────
 
-['cc', 'vp', 'buildings'].forEach((view) => {
+['cc', 'vp', 'buildings', 'insp'].forEach((view) => {
   test(`the ${view} page still answers in its dock`, () => {
     c.setState({ view: view, ccBusy: true, orchOpen: true });
     assert.equal(c.dockAnswers(), true);
@@ -201,4 +201,45 @@ test('the energy context is still energy, not a generic module line', () => {
   // firing it for Assets would tell the orchestrator about a page the user is not on.
   onModule('energy');
   assert.match(c.chatContext(), /Energy module page/);
+});
+
+
+// ── the inspection ask box goes to the orchestrator, like every other page's ─────────
+
+test('the Maintenance inspection box asks the orchestrator in the dock, not the phrase matcher', () => {
+  onModule('ops');
+  const asked = [], matched = [];
+  const realAsk = c.ccAsk, realMx = c.mxAsk;
+  c.ccAsk = (q) => { asked.push(q); };
+  c.mxAsk = (q) => { matched.push(q); };
+  try {
+    c.setState({ inspDraft: 'Which PPM contracts are behind plan?' });
+    c.renderVals().mxInspRun();
+    assert.deepEqual(asked, ['Which PPM contracts are behind plan?']);
+    assert.deepEqual(matched, [], 'POST /api/maintenance/ask is no longer what answers it');
+    assert.equal(c.state.view, 'module', 'the page stays put; the answer lands beside it');
+    assert.equal(c.state.inspDraft, '');
+    const chip = (c.renderVals().mxInspChips || [])[0];
+    if (chip) { chip.run(); assert.equal(asked.length, 2); }
+  } finally { c.ccAsk = realAsk; c.mxAsk = realMx; }
+});
+
+test('an empty inspection box opens the reports page instead of asking nothing', () => {
+  onModule('ops');
+  const realAsk = c.ccAsk; const asked = [];
+  c.ccAsk = (q) => { asked.push(q); };
+  try {
+    c.setState({ inspDraft: '   ' });
+    c.renderVals().mxInspRun();
+    assert.equal(c.state.view, 'insp');
+    assert.deepEqual(asked, []);
+  } finally { c.ccAsk = realAsk; }
+});
+
+test('a question from the inspection-reports page tells the orchestrator where it came from', () => {
+  c.setState({ view: 'insp' });
+  assert.match(c.chatContext(), /inspection-reports page/);
+  assert.equal(c.ctxLabel(), 'Inspection reports');
+  onModule('ops');
+  assert.match(c.chatContext(), /inspection reports/i);
 });

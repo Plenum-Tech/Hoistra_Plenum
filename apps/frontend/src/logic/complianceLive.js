@@ -595,7 +595,8 @@ export function overdueBars(certificates, register) {
 // tiles and the ask bar stay in view and the orchestrator works beside them, as it does on
 // the compliance console. The chat page is reached from a space's ask bar and by reopening
 // a conversation from the sessions list.
-export const DOCK_VIEWS = ["cc", "vp", "buildings"];
+// "insp" is the inspection-reports page (Maintenance → Open all reports).
+export const DOCK_VIEWS = ["cc", "vp", "buildings", "insp"];
 //: The modules whose page answers beside itself instead of handing the screen over to the
 //: conversation. They share one view name ("module"), so they cannot live in DOCK_VIEWS.
 //: These are MODULES keys, not page titles: Maintenance is keyed "ops". Naming it by its
@@ -694,6 +695,21 @@ export const complianceLiveMethods = {
   // there ran and opened the dock while the dock rendered the legacy task panel — the answer
   // had been produced and was simply never on screen.
   dockAnswers() { return this.isModuleDock() || DOCK_VIEWS.indexOf(this.state.view) > -1; },
+  // What the inspection panel is showing, for the orchestrator: the corpus and the four
+  // cross-report readings as the page states them (a card this database cannot answer is
+  // said to be unanswerable, not given a number).
+  mxInspContext() {
+    if (!this.mxIsLive()) return "The inspection reports have not loaded from the backend yet.";
+    const m = this.mxModel();
+    const c = m.corpus;
+    const parts = [c
+      ? "Inspection reports on file: " + c.reports + " reports across " + c.assets + " assets" + (c.since ? " since " + c.since : "") + ", read together with warranty documents."
+      : "No inspection report is on record for the user's buildings."];
+    const cards = (m.intelligence || []).map((x) => x.l + ": " + (x.answerable ? (x.n === null ? "—" : x.n) : "cannot be answered from this database" + (x.s ? " (" + x.s + ")" : "")));
+    if (cards.length) parts.push("The page's readings across the reports — " + cards.join("; ") + ".");
+    parts.push("Questions from the inspection box are about these reports: recommendations, findings, grades, warranties and the PPM contracts they belong to.");
+    return parts.join(" ");
+  },
   askScoped(q) {
     if (this.chatView()) return this.ccAsk(q);
     return this.ask(q);
@@ -782,9 +798,13 @@ export const complianceLiveMethods = {
         parts.push(this.mxIsLive()
           ? "The maintenance register is live from svc-work-order-management."
           : "The maintenance register has not loaded from the backend yet.");
+        parts.push(this.mxInspContext());
       }
       if (s.filter && s.filter !== "All") parts.push("Current filter — " + s.filter + ".");
       return parts.join(" ");
+    }
+    if (s.view === "insp") {
+      return "The user is on the Hoistra inspection-reports page (Maintenance → inspection reports). " + this.mxInspContext();
     }
     if (s.view === "cc") {
       const d = this.ccData();

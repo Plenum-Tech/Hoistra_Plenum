@@ -298,6 +298,7 @@ export const coreMethods = {
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
     if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
+    if (s.view === "insp") return "Inspection reports";
     if (s.view === "answer") return "Query";
     if (s.view === "chat") return "Orchestrator";
     if (s.view === "sessions") return "Sessions";
