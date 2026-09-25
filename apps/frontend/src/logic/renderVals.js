@@ -1,4 +1,5 @@
 import { docLabel } from './chatCases.js';
+import { filterQueue, QUEUE_FILTERS } from './queueLive.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_BUILDING, VECTOR_CLASSES, VFILES, UNITS, PER_BUILDING, NUM, SUB_OF, REGIONS, PACKS, ACTION_SPECS, CC, MK, VENDOR_POOL, CRONS, TONE, t, MODULES, VALUE_LEDGER, INGEST_ASK } from './constants.js';
@@ -139,6 +140,8 @@ export const renderValsMethods = {
     const D = this.D();
     const s = this.state;
     if (!D) return {};
+    // The Decision queue's live model (memoized on its reads — queueLive.js).
+    const qlm = this.queueModel();
     // Sessions and reports are one shared browser store, not per-account (see
     // makeSession()'s own comment) — every account that has ever signed in in this tab,
     // superadmin's view-as-company included, left its own rows in the same arrays. These
@@ -327,9 +330,14 @@ export const renderValsMethods = {
       chatRetry: () => this.chatConnect(true),
       chatIntro: "Ask about compliance, energy, vendors, work orders or documents. The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
       queueOpen: s.queueOpen, paletteOpen: s.paletteOpen, detailOpen: !!detail,
-      toggleQueue: () => this.setState((p) => ({ queueOpen: !p.queueOpen, acctOpen: false, paletteOpen: false, detail: null })),
+      toggleQueue: () => this.setState((p) => ({ queueOpen: !p.queueOpen, acctOpen: false, paletteOpen: false, detail: null }), () => {
+        // "On demand" means the run happens when you come for it: opening the drawer
+        // re-reads the queue's sources. Silent — the fresh rows are on screen.
+        if (this.state.queueOpen && this.state.freq === "On demand") this.queueRefresh({ silent: true });
+        else if (this.state.queueOpen) { this.queueSeenInit(); this.queueModel().items.forEach((i) => { if (this._qSeen) this._qSeen[i.key] = true; }); }
+      }),
       closeQueue: () => this.setState({ queueOpen: false }),
-      queueCount: Math.max(D.decisions.length, CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length), query: s.query,
+      queueCount: qlm.live ? qlm.count : Math.max(D.decisions.length, CRONS.filter((c) => c.action && !s.cronsGone.includes(c.text)).length), query: s.query,
       chainOpen: s.chainOpen, chainIcon: s.chainOpen ? "ph-caret-down" : "ph-caret-right",
       toastOn: !!s.toast, toast: s.toast, askedQuery: s.askedQuery,
       themeIcon: s.dark ? "ph-sun" : "ph-moon",
@@ -473,14 +481,14 @@ export const renderValsMethods = {
       setCDate: (e) => this.setState({ cDate: e.target.value }),
       setCTime: (e) => this.setState({ cTime: e.target.value }),
       customSummary: s.cFreq + " from " + s.cDate + " at " + s.cTime,
-      saveCustom: () => this.orch("Set schedule — " + s.cFreq + " at " + s.cTime, "Activity Log"),
+      saveCustom: () => this.queueSaveCustom(),
 
       freqOpts: ["On demand", "30 min", "Hourly", "Nightly 02:00", "Custom"].map((o) => ({
         label: o,
         fg: o === s.freq ? "var(--color-accent)" : "var(--color-neutral-400)",
         border: o === s.freq ? "var(--color-accent)" : "var(--color-divider)",
         bg: o === s.freq ? "var(--color-accent-900)" : "transparent",
-        pick: () => this.setState({ freq: o })
+        pick: () => this.queueSetFreq(o)
       })),
       chanOpts: ["In-platform", "Email", "Push", "SMS"].map((o) => {
         const on = s.channels.includes(o);
@@ -489,7 +497,7 @@ export const renderValsMethods = {
           fg: on ? "var(--color-accent)" : "var(--color-neutral-500)",
           border: on ? "var(--color-accent)" : "var(--color-divider)",
           bg: on ? "var(--color-accent-900)" : "transparent",
-          pick: () => this.setState((p) => ({ channels: on ? p.channels.filter((c) => c !== o) : p.channels.concat([o]) }))
+          pick: () => this.queueToggleChannel(o)
         };
       }),
 
@@ -2891,14 +2899,37 @@ export const renderValsMethods = {
         };
       }),
 
-      queuePreview: D.decisions.slice(0, 3).map((d) => ({
+      // The Decision queue, live: pending approvals (compliance + vendor), open energy
+      // anomalies and maintenance decisions owed, ranked by consequence (queueLive.js).
+      // Seed cards only until any of those reads answers. A live card opens the same
+      // detail drawer the record's own page opens.
+      queuePreview: (qlm.live ? qlm.items.slice(0, 3) : D.decisions.slice(0, 3)).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon,
-        color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.detailFromDecision(d)
+        color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
       })),
-      queueItems: D.decisions.map((d) => ({
+      // Filtered by the drawer's "Show" chips (queueLive.filterQueue). The badge keeps the
+      // unfiltered total — it is what is waiting, not what this view is showing.
+      queueItems: filterQueue(qlm.live ? qlm.items : D.decisions, s.queueFilter).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon, module: d.module,
-        color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.detailFromDecision(d)
+        color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
       })),
+      queueFilterOpts: QUEUE_FILTERS.map((f) => {
+        const pool = qlm.live ? qlm.items : D.decisions;
+        const n = f === "All" ? pool.length : pool.filter((i) => i.module === f).length;
+        const on = (s.queueFilter || "All") === f;
+        return {
+          label: f, n: String(n),
+          fg: on ? "var(--color-accent)" : (n ? "var(--color-neutral-400)" : "var(--color-neutral-600)"),
+          border: on ? "var(--color-accent)" : "var(--color-divider)",
+          bg: on ? "var(--color-accent-900)" : "transparent",
+          pick: () => this.queueSetFilter(f)
+        };
+      }),
+      // Live with nothing waiting is a fact worth stating; an empty drawer says nothing.
+      queueEmptyShow: qlm.live && !filterQueue(qlm.items, s.queueFilter).length ? "block" : "none",
+      queueEmptyNote: (s.queueFilter && s.queueFilter !== "All")
+        ? "Nothing in " + s.queueFilter + " is waiting on you."
+        : "Nothing is waiting on you — no pending approval, open anomaly or maintenance decision on your buildings.",
 
       // Hoist Crons. Live: what the engines raised (approvals queue) and detected (energy
       // anomalies), newest first, grouped by day. Seed until the backend answers, and the

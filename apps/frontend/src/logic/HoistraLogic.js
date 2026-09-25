@@ -11,6 +11,7 @@ import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
 import { complianceLiveMethods } from './complianceLive.js';
 import { homeLiveMethods } from './homeLive.js';
+import { queueLiveMethods } from './queueLive.js';
 import { vendorsLiveMethods } from './vendorsLive.js';
 import { vendorsWriteMethods } from './vendorsWrite.js';
 import { CB_DEFAULTS, chatBuildingMethods } from './chatBuilding.js';
@@ -137,7 +138,7 @@ export class HoistraLogic extends Controller {
     // The held document this session is answering (logic/chatCases.js).
     ...CC_CASE_DEFAULTS,
     ccPivot: "buildings", ccTab: 0, ccFocus: { kind: "building", name: "Bishopsgate Tower" }, nyView: "building",
-    ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform", "Email"],
+    ccQueue: null, ccQueueOpenId: null, currency: "GBP", freq: "30 min", channels: ["In-platform"], queueFilter: "All",
     // Compliance register from svc-operations-intelligence (null = seed data shown).
     ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
     // Scan runs on the page, not in the chat: these drive the status pill / LAST RUN.
@@ -308,4 +309,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);

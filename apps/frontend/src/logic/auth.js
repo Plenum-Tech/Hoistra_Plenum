@@ -372,6 +372,11 @@ export const authMethods = {
     setActingOrg(null);
     if (this._ccAbort) this._ccAbort.abort();
     clearInterval(this._orchTick);
+    // The Decision queue's refresh timer reads as the account that armed it; firing on the
+    // gate would only collect 401s. queueBoot re-arms it on the next sign-in.
+    clearTimeout(this._qTimer);
+    this._qTimer = null;
+    this._qSeen = null;
     this.setState({
       account: null, accessToken: null, refreshToken: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,

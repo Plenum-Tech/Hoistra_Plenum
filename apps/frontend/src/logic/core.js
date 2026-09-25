@@ -74,6 +74,7 @@ export const coreMethods = {
     clearTimeout(this._saLiveRetry); clearTimeout(this._saLiveRefresh);
     clearInterval(this._ingT);
     clearTimeout(this._mgTimer);
+    clearTimeout(this._qTimer);
   },
 
   // The account-scoped reads: the Buildings table, compliance register, home tiles,
@@ -82,6 +83,9 @@ export const coreMethods = {
   // authEnter for a fresh sign-in — both call sites must fire the same set, or a
   // page reload and an in-tab account switch would load different data.
   loadLiveData() {
+    // The Decision queue's saved schedule and channels (queueLive.js) — restored before the
+    // reads so the timer cadence is the reader's own from the first tick.
+    this.queueBoot();
     this.ccLoad();
     this.homeLoad();
     this.vpLoad();
@@ -324,6 +328,20 @@ export const coreMethods = {
   },
 
   detailFromDecision(d) { this.setState({ detail: d, queueOpen: false }); },
+
+  // A Decision-queue card. A live one opens the same detail drawer the record's own page
+  // builds — cronDetail for approvals and anomalies, the Maintenance grid's for a decision.
+  // A seed card (no reads answered yet) keeps its scripted detail.
+  queueOpenItem(d) {
+    if (d.kind === "approval" || d.kind === "anomaly") {
+      return this.setState({
+        detail: this.cronDetail({ kind: d.kind, agent: d.module === "Vendors" ? "Vendor" : d.module, tone: d.tone, text: d.title, item: d.item }),
+        queueOpen: false
+      });
+    }
+    if (d.kind === "decision") return this.setState({ detail: this.mxDecisionDetail(d.d), queueOpen: false });
+    return this.detailFromDecision(d);
+  },
 
   detailFor(module, obj) {
     const D = this.D();
