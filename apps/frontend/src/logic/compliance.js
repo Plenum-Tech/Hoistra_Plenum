@@ -2,7 +2,6 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { TAG, MK } from './constants.js';
 import { relDays, countryMeta } from './complianceLive.js';
-import { documentUrl } from '../api/docRag.js';
 
 export const complianceMethods = {
   // ── Compliance console ──────────────────────────────────────────────
@@ -413,10 +412,53 @@ export const complianceMethods = {
           risk: c.risk, riskBg: TAG[c.sev].bg, riskFg: TAG[c.sev].fg,
           auth: c.auth, authBg: TAG[c.authSev].bg, authFg: TAG[c.authSev].fg,
           ver: c.doc ? c.ver : c.ver + " · no document",
-          // The real file behind this certificate — GET /api/documents/{id}/download on
-          // svc-deepagents, which redirects to the stored original (or its extracted text
-          // when no original was kept). Null when nothing was ever ingested for this row.
-          downloadUrl: c.documentId ? documentUrl(c.documentId) : null,
+          // Laid out for the table: the issuer under the name, a short chip for the
+          // verification, and "No file" as a tag rather than a clause glued to a sentence.
+          issuer: c.issuer || null,
+          noDoc: !c.doc,
+          verChip: (c.verChip && c.verChip.label) || c.ver,
+          verChipBg: TAG[(c.verChip && c.verChip.sev) || "none"].bg,
+          verChipFg: TAG[(c.verChip && c.verChip.sev) || "none"].fg,
+          // Verify ↗ — the certificate's register, opened in a new tab. The platform does
+          // not scrape these sites, so for most UK types the check is a person's.
+          verifyUrl: c.verifyUrl || null,
+          verifyTitle: (c.verifyRegister ? "Open " + c.verifyRegister : "Open the register") + (c.verifyNote ? ". " + c.verifyNote : ""),
+          verLine: (c.verState && c.verState.line) || null,
+          verFg: c.verState && c.verState.state === "human"
+            ? (c.verState.ok ? "var(--st-ok)" : "var(--st-risk)")
+            : "var(--color-neutral-500)",
+          // Anyone can record a result while nobody has; a recorded result can be redone
+          // (the register may have changed), which is why the label changes rather than hides.
+          hvShow: !!c.id,
+          hvLabel: c.verState && c.verState.state === "human" ? "Re-check" : "Record",
+          hvTitle: "Record what the register showed — confirmed, not on the register, or details differ",
+          hvToggle: () => this.setState(s.ccHvId === c.id
+            ? { ccHvId: null, ccHvError: "" }
+            : { ccHvId: c.id, ccHvOutcome: "", ccHvNote: "", ccHvError: "" }),
+          hvOpen: s.ccHvId === c.id,
+          hvOutcomes: [["confirmed", "On the register"], ["not_found", "Not on the register"], ["mismatch", "Details differ"]].map(([k, label]) => ({
+            label: label,
+            on: s.ccHvOutcome === k,
+            border: s.ccHvOutcome === k ? (k === "confirmed" ? "var(--st-ok)" : "var(--st-risk)") : "var(--color-divider)",
+            fg: s.ccHvOutcome === k ? (k === "confirmed" ? "var(--st-ok)" : "var(--st-risk)") : "var(--color-neutral-400)",
+            pick: () => this.setState({ ccHvOutcome: k, ccHvError: "" })
+          })),
+          hvNote: s.ccHvId === c.id ? s.ccHvNote : "",
+          hvNoteSet: (e) => this.setState({ ccHvNote: e.target.value }),
+          hvPlaceholder: s.ccHvOutcome && s.ccHvOutcome !== "confirmed"
+            ? "Required — what did the register show?"
+            : "Optional — registration number seen, name on the register",
+          hvHelp: c.verifyNote || "Open the register, look the certificate or company up, then record what it showed.",
+          hvBusy: !!s.ccHvBusy,
+          hvError: s.ccHvId === c.id ? s.ccHvError : "",
+          hvSave: () => (s.ccHvBusy ? null : this.ccHumanVerify(c)),
+          hvCancel: () => this.setState({ ccHvId: null, ccHvError: "" }),
+          // Download from Azure Blob through the compliance service (scope-checked).
+          dlShow: !!(c.id && c.hasFile),
+          dlLabel: s.ccDlId === c.id ? "Downloading…" : "Download",
+          dlBusy: s.ccDlId === c.id,
+          dlTitle: s.ccDlId === c.id ? "Downloading…" : "Download the certificate file",
+          dl: () => this.ccDownloadCert(c),
           actLabel: sent ? "Sent for approval" : acts[0],
           actBorder: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-divider)"),
           actFg: sent ? "var(--st-ok)" : (urgent ? "var(--color-accent)" : "var(--color-neutral-400)"),

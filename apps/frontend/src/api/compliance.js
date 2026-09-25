@@ -90,6 +90,20 @@ export const complianceApi = {
 
   // ── CCC verification ────────────────────────────────────────────────────
   // Verification of one stored certificate against its register / public API.
+  // A person's finding after opening the certificate's register — for the certificates the
+  // platform cannot check itself (website-only registers, unconfigured partner APIs).
+  // outcome: confirmed | not_found | mismatch; a note is required unless confirmed.
+  // The certificate's own file, streamed by the service from Azure Blob after a scope
+  // check — never the blob URL itself, which only opens while the container is public.
+  // Resolves { blob, filename, type }.
+  certificateFile: (certificateId) =>
+    apiFetch(B, '/api/compliance/certificates/' + enc(certificateId) + '/download', {
+      raw: true, timeoutMs: T_WORK
+    }),
+  recordHumanVerification: (certificateId, body) =>
+    apiFetch(B, '/api/compliance/certificates/' + enc(certificateId) + '/human-verification', {
+      method: 'POST', body: body, timeoutMs: T_WORK
+    }),
   verifyCertificate: (certificateId) =>
     apiFetch(B, '/api/compliance/certificates/' + enc(certificateId) + '/verify', {
       method: 'POST', timeoutMs: T_WORK

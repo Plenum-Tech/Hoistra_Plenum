@@ -137,6 +137,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The certificate download names its file in Content-Disposition; a frontend on another
+    # origin can only read that header if it is exposed.
+    expose_headers=["Content-Disposition"],
 )
 
 

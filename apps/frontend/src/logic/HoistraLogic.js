@@ -79,6 +79,10 @@ export class HoistraLogic extends Controller {
     ccChat: [], ccBusy: false, orchW: null, ccStepsOpen: {},
     // Certificate ids whose evidence request has been approved into the queue.
     ccRequested: {}, emCertId: null,
+    // The "Record result" panel under a certificate row: which row, the finding, the note.
+    ccHvId: null, ccHvOutcome: "", ccHvNote: "", ccHvBusy: false, ccHvError: "",
+    // The certificate whose file is downloading (one at a time).
+    ccDlId: null,
     // Documents/photos staged to ride along with the next chat question.
     ccFiles: [],
     // Partial answer while a turn streams: steps and zones as they arrive.

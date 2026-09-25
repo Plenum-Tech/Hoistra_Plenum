@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -50,6 +50,22 @@ class CertificateUpsertRequest(BaseModel):
 
 class RemedialStatusRequest(BaseModel):
     remedial_status: str
+
+
+class HumanVerificationRequest(BaseModel):
+    """What a person found after opening the certificate's register.
+
+    ``outcome``: confirmed | not_found | mismatch. A note is required unless confirmed —
+    say what the register showed (a different company, a lapsed membership, no record)."""
+
+    # Literal, so a typo is a 422 rather than a 200 carrying {ok: false} that a caller
+    # checking only the status would read as saved.
+    outcome: Literal["confirmed", "not_found", "mismatch"]
+    note: str | None = None
+    register_url: str | None = None
+    # Ignored — the server names the checker from the signed-in account. Kept so an older
+    # client that still sends it is not rejected.
+    checked_by_label: str | None = None
 
 
 class ConfirmCertificateRequest(BaseModel):

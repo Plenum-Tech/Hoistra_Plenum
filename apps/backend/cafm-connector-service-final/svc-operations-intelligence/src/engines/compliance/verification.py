@@ -311,6 +311,10 @@ def govuk_energy_certificate_url(reference: str | None) -> str | None:
     link rather than as "this certificate is not on the register".
     """
     ref = (reference or "").strip()
+    digits = re.sub(r"[\s-]", "", ref)
+    if not _RRN_RE.match(ref) and re.fullmatch(r"\d{20}", digits):
+        # The same reference written without its dashes, as some PDFs print it.
+        ref = "-".join(digits[i:i + 4] for i in range(0, 20, 4))
     return f"{_GOVUK_ENERGY_HOST}/energy-certificate/{ref}" if _RRN_RE.match(ref) else None
 
 
@@ -332,13 +336,11 @@ def _append_register_search_params(
         direct = govuk_energy_certificate_url(
             certificate_number
         ) or govuk_energy_certificate_url(accreditation_number)
-        if direct:
-            return direct
-        ref = (certificate_number or accreditation_number or "").strip()
-        if ref:
-            sep = "&" if "?" in url else "?"
-            return f"{url}{sep}{urlencode({'reference_number': ref})}"
-        return url
+        # Anything else opens the empty search form. The form validates the field as a
+        # 20-digit number, so pre-filling "EPC-SYN-FA96128A" landed the person on
+        # "Enter a 20-digit certificate number" — an error page that reads as a broken link
+        # rather than as "this number is not a lodgement reference".
+        return direct or url
 
     if not prefills_number:
         return url

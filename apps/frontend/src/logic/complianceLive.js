@@ -98,12 +98,66 @@ function authOf(r) {
   if (cleared) return { auth: "genuine", authSev: "ok" };
   return { auth: "not checked", authSev: "none" };
 }
+const webUrl = (u) => (typeof u === "string" && /^https?:\/\/[^\s]+$/i.test(u.trim()) ? u.trim() : null);
+
+// What a person recorded after opening the register, in words.
+const HUMAN_VER = {
+  human_verified: "Confirmed on the register",
+  human_not_found: "Not on the register",
+  human_mismatch: "Register details differ"
+};
+function verificationOf(r) {
+  const meta = r.raw_metadata || {};
+  return meta.verification || meta.ccc_verification || {};
+}
 function verOf(r) {
   const meta = r.raw_metadata || {};
-  const v = meta.verification || meta.ccc_verification || {};
+  const v = verificationOf(r);
   const st = v.status || v.result || meta.verification_status;
+  if (st && HUMAN_VER[st]) return HUMAN_VER[st];
   if (st) return String(st).replace(/_/g, " ");
   return r.issuing_body || "Not checked";
+}
+// The Verification column's chip: a short status and its severity, never the issuer
+// sentence (that sits under the certificate name, where it has room).
+const VER_CHIP = {
+  human_verified: ["Confirmed on register", "ok"],
+  human_not_found: ["Not on register", "risk"],
+  human_mismatch: ["Details differ", "risk"],
+  verified: ["Verified", "ok"],
+  website_only: ["Website only", "none"],
+  needs_human: ["Needs a person", "warn"],
+  needs_partner: ["Needs partner", "warn"],
+  needs_config: ["Not configured", "none"],
+  failed: ["Failed", "risk"],
+  dump_miss: ["Not in register data", "warn"]
+};
+export function verChipOf(r) {
+  const v = verificationOf(r);
+  const st = String(v.status || v.result || (r.raw_metadata || {}).verification_status || "");
+  if (VER_CHIP[st]) return { label: VER_CHIP[st][0], sev: VER_CHIP[st][1] };
+  if (v.verified === true) return { label: "Verified", sev: "ok" };
+  if (v.verified === false) return { label: "Failed", sev: "risk" };
+  if (st) return { label: st.replace(/_/g, " ").replace(/^./, (x) => x.toUpperCase()), sev: "none" };
+  return { label: "Not checked", sev: "none" };
+}
+
+// Where the verification stands, for the row's controls:
+//   system — the platform checked it against the register (verified true/false)
+//   human  — a person checked it and recorded the finding
+//   open   — nobody has: website-only / needs human / needs partner, or never run
+export function verStateOf(r) {
+  const v = verificationOf(r);
+  const st = String(v.status || "");
+  if (HUMAN_VER[st]) {
+    const when = v.checked_at ? fmtDate(String(v.checked_at).slice(0, 10)) : null;
+    return {
+      state: "human", ok: st === "human_verified",
+      line: "Checked by " + (v.checked_by_label || "a person") + (when ? " · " + when : "") + (v.human_note ? " — " + v.human_note : "")
+    };
+  }
+  if (v.verified === true || v.verified === false) return { state: "system", ok: v.verified === true, line: null };
+  return { state: "open", ok: null, line: null };
 }
 function riskOf(days, blocked) {
   if (blocked) return { risk: "Blocked", sev: "risk" };
@@ -164,11 +218,25 @@ export function shapeLiveCompliance(input) {
       auth: a.auth, authSev: a.authSev, ver: verOf(r), pos: runwayPos(d0),
       status: r.status || null, trade: r.trade_category || null,
       verificationUrl: r.verification_url || null, draft: !!r.draft,
+      // GET /certificates carries verify_link: the register URL for this certificate,
+      // prefilled where the register allows it. A plain link — building it writes nothing.
+      // http(s) only — the stored URL is client-writable, and <a href="javascript:…">
+      // would run in the app on click. The backend filters too; this is the second lock.
+      verifyUrl: webUrl((r.verify_link && r.verify_link.url) || r.verification_url),
+      verifyRegister: (r.verify_link && r.verify_link.register) || r.issuing_body || null,
+      verifyNote: (r.verify_link && r.verify_link.note) || null,
+      verState: verStateOf(r),
+      verChip: verChipOf(r),
+      issuer: r.issuing_body || null,
       // Is there a source document behind this certificate, or only fields someone typed?
       // A certificate with no document cannot be re-read, cannot be scored by forensics and
       // cannot be produced to an insurer — so the register says which it is rather than
       // showing both the same way.
-      doc: !!documentId, documentId: documentId
+      doc: !!documentId, documentId: documentId,
+      // Worth offering a download: a document is linked. The download route serves its stored
+      // original, or its extracted text when no original was kept. raw_metadata.blob_url is
+      // not a source — it is a client-writable field (see certificate_file.py).
+      hasFile: !!documentId
     };
   });
 
@@ -846,6 +914,57 @@ export const complianceLiveMethods = {
     } catch (e) {
       deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Verify register failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id } });
       this.setState({ flow: null, flowDone: "Verification failed: " + ((e && e.message) || e) });
+    }
+  },
+
+  // A person opened the register and says what it showed. Validated here before the
+  // network: a negative finding without a note is refused by the server, and a refusal after
+  // the click reads as "saved" to someone who has already looked away.
+  async ccHumanVerify(c) {
+    const outcome = this.state.ccHvOutcome;
+    const note = String(this.state.ccHvNote || "").trim();
+    if (["confirmed", "not_found", "mismatch"].indexOf(outcome) < 0) {
+      return this.setState({ ccHvError: "Pick what the register showed." });
+    }
+    if (outcome !== "confirmed" && !note) {
+      return this.setState({ ccHvError: "Say what the register showed — a different company, a lapsed membership, no record." });
+    }
+    this.setState({ ccHvBusy: true, ccHvError: "" });
+    try {
+      const r = await complianceApi.recordHumanVerification(c.id, {
+        outcome: outcome, note: note || null, register_url: c.verifyUrl || null,
+        // The server names the checker from the signed-in account and ignores this; sent
+        // for older servers, and from the account — never the sign-in form's email field.
+        checked_by_label: (this.state.account && (this.state.account.email || this.state.account.full_name)) || null
+      });
+      if (!r || r.ok === false) throw new Error((r && r.error) || "not recorded");
+      this.setState({ ccHvBusy: false, ccHvId: null, ccHvOutcome: "", ccHvNote: "" });
+      this.flash("Recorded: " + c.nm + " — " + ({ confirmed: "confirmed on the register", not_found: "not on the register", mismatch: "register details differ" })[outcome] + ".");
+      await this.ccLoad();
+    } catch (e) {
+      this.setState({ ccHvBusy: false, ccHvError: "Not recorded: " + ((e && e.message) || e) });
+    }
+  },
+
+  // Download the certificate from Azure Blob through the service. Saved under the
+  // uploader's filename; the object URL is revoked once the browser has taken it.
+  async ccDownloadCert(c) {
+    if (!c || !c.id || this.state.ccDlId) return;
+    this.setState({ ccDlId: c.id });
+    try {
+      const f = await complianceApi.certificateFile(c.id);
+      const url = URL.createObjectURL(f.blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = f.filename || (c.nm + ".pdf");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      this.setState({ ccDlId: null });
+    } catch (e) {
+      this.setState({ ccDlId: null });
+      this.flash("Could not download " + c.nm + ": " + ((e && e.message) || e));
     }
   },
 

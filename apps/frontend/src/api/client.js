@@ -164,7 +164,8 @@ async function request(base, path, o, token) {
   }
   try {
     const hasBody = o.body !== undefined;
-    const headers = o.form ? { Accept: 'application/json' }
+    const headers = o.raw ? { Accept: '*/*' }
+      : o.form ? { Accept: 'application/json' }
       : hasBody ? { 'Content-Type': 'application/json', Accept: 'application/json' }
       : { Accept: 'application/json' };
     if (token) headers.Authorization = 'Bearer ' + token;
@@ -174,6 +175,16 @@ async function request(base, path, o, token) {
       body: o.form ? o.form : (hasBody ? JSON.stringify(o.body) : undefined),
       signal: ctrl.signal
     });
+    // `raw`: a file, not JSON — handed back as a Blob with the server's filename, after
+    // the same token, refresh and error handling every other read gets.
+    if (o.raw && res.ok) {
+      const cd = res.headers.get('content-disposition') || '';
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="?([^";]+)"?/i.exec(cd);
+      let filename = null;
+      try { filename = star ? decodeURIComponent(star[1]) : (plain ? plain[1] : null); } catch (e) { filename = plain ? plain[1] : null; }
+      return { blob: await res.blob(), filename: filename, type: res.headers.get('content-type') };
+    }
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }

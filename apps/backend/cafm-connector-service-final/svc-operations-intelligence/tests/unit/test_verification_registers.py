@@ -159,8 +159,33 @@ async def test_verify_now_falls_back_to_the_registers_own_search_field():
         )
     finally:
         ver.get_pack_type = original
-    assert not_a_reference["verification_url"] == (
-        f"{GOVUK_SEARCH}?reference_number=EPC-SYN-16FA8CA4"
-    )
+    # GOV.UK validates the field as a 20-digit number and answers anything else with
+    # "Enter a 20-digit certificate number" (seen live on 25 Sep 2026 with EPC-SYN-FA96128A),
+    # so a number that is not a lodgement reference opens the empty form, not an error page.
+    assert not_a_reference["verification_url"] == GOVUK_SEARCH
     assert "q=" not in not_a_reference["verification_url"]
     assert nothing_at_all["verification_url"] == GOVUK_SEARCH
+
+
+@pytest.mark.asyncio
+async def test_a_twenty_digit_reference_without_dashes_still_opens_the_certificate():
+    import src.engines.compliance.verification as ver
+
+    row = SimpleNamespace(
+        certificate_type_name="Energy Performance Certificate (EPC)",
+        issuing_body="Accredited Energy Assessor",
+        trade_category="Energy",
+        verification_url=GOVUK_SEARCH,
+    )
+    original = ver.get_pack_type
+    ver.get_pack_type = AsyncMock(return_value=row)
+    try:
+        r = await build_verify_now_link(
+            MagicMock(), certificate_type_code="EPC", certificate_number="99201010062608902091"
+        )
+    finally:
+        ver.get_pack_type = original
+    assert r["verification_url"] == (
+        "https://find-energy-certificate.service.gov.uk"
+        "/energy-certificate/9920-1010-0626-0890-2091"
+    )

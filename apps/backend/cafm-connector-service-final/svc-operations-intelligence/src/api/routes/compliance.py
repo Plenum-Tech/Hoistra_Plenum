@@ -31,6 +31,8 @@ from ...engines.compliance import membership as membership_svc
 from ...engines.compliance import register_dump as dump_svc
 from ...engines.compliance.channels import register_search as register_search_svc
 from ...engines.compliance import reverify as reverify_svc
+from ...engines.compliance import human_verification as human_verify_svc
+from ...engines.compliance import certificate_file as cert_file_svc
 from ...shared import approvals as approvals_svc
 from ...swarm import adversary as adversary_svc
 from ..schemas.compliance import (
@@ -44,6 +46,7 @@ from ..schemas.compliance import (
     CccVerifyRequest,
     CertificateUpsertRequest,
     ConfirmCertificateRequest,
+    HumanVerificationRequest,
     CreateVendorForCertificateRequest,
     LinkCertificateDocumentRequest,
     CountryPackLoadRequest,
@@ -730,6 +733,66 @@ async def ccc_verify(
         certificate_id=body.certificate_id,
         organization_id=org_id,
         persist=body.persist,
+    )
+
+
+@router.get("/certificates/{certificate_id}/download")
+async def download_certificate_file(
+    certificate_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The certificate's own file, streamed from Azure Blob after a scope check.
+
+    Read with the storage account key, never by redirecting to the blob URL — that only
+    works while the container allows anonymous reads, and it hands the file to anyone."""
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
+    cert = await session.get(cert_svc.ComplianceCertificate, certificate_id)
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    try:
+        f = await cert_file_svc.open_certificate_file(session, cert)
+    except cert_file_svc.CertificateFileError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{f["filename"].encode("ascii", "ignore").decode() or "certificate"}"; '
+            f"filename*=UTF-8''{quote(f['filename'])}"
+        ),
+        "Cache-Control": "private, no-store",
+    }
+    if f.get("size"):
+        headers["Content-Length"] = str(f["size"])
+    return StreamingResponse(f["stream"], media_type=f["content_type"], headers=headers)
+
+
+@router.post("/certificates/{certificate_id}/human-verification")
+async def record_human_verification(
+    certificate_id: UUID,
+    body: HumanVerificationRequest,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Record a person's check against the register, for a certificate the platform could
+    not verify itself. Closes the certificate's pending `verification_human` items."""
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id)
+    # Recording a verdict writes to the certificate and closes its queue items — a write, so
+    # a read-only account may look at the register but not certify against it.
+    access.assert_can_ingest(s)
+    return await human_verify_svc.record_human_verification(
+        session,
+        certificate_id,
+        outcome=body.outcome,
+        note=body.note,
+        register_url=body.register_url,
+        checked_by=s.user_id,
+        # Named by the server from the signed-in account, never taken from the request:
+        # a label the client chose could say anyone checked it.
+        checked_by_label=await human_verify_svc.account_label(session, s.user_id),
     )
 
 

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .human_verification import certificate_verify_link
 from ...shared.vendor_identity import find_vendor_id
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
@@ -930,6 +931,18 @@ async def _enrich_certificate_rows(
             r["building_name"] = bn
             r["building_address"] = rmeta.get("building_address") or rmeta.get("address")
             r["building_reference"] = r.get("building_reference") or bn or r.get("site_id")
+
+        # Where a person checks this certificate — read-only; see human_verification.
+        rmv = r.get("raw_metadata") if isinstance(r.get("raw_metadata"), dict) else {}
+        r["verify_link"] = certificate_verify_link(
+            register_url=r.get("verification_url"),
+            certificate_type_code=r.get("certificate_type_code"),
+            issuing_body=r.get("issuing_body"),
+            certificate_number=r.get("certificate_number"),
+            accreditation_number=r.get("inspector_accreditation_number"),
+            vendor_name=r.get("vendor_name"),
+            stored=rmv.get("verification") if isinstance(rmv.get("verification"), dict) else None,
+        )
 
         risk = vendor_risk_level(r.get("days_to_expiry"))
         r["risk_level"] = risk
