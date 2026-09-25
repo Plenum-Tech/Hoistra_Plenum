@@ -35,13 +35,20 @@ export const coreMethods = {
     // Every account-scoped register: compliance, home tiles, vendor scorecards, buildings,
     // energy, assets, maintenance, saved spaces. Shared with authEnter, which calls the same
     // loadLiveData() whenever a fresh sign-in swaps the account within one tab.
-    this.loadLiveData();
-    // The admin surfaces: users + audit read /api/admin eagerly like everything above —
-    // a non-admin's 403 lands in the error slice and deliberately arms no retry timer,
-    // and authEnter re-kicks both the moment an admin account signs in. The Super Admin
-    // console loads on open (the account-menu item in auth.js), never here.
-    this.usLiveLoad();
-    this.auLiveLoad();
+    //
+    // Only for a shell that loadSession() restored as signed in. On the gate there is no
+    // token to send: every read 401'd missing_token, asked for a refresh there was nothing
+    // to refresh with, and armed its own retry — six rounds, 30s apart, of noise against a
+    // tab the person is still signing into. authEnter fires the same set once they are in.
+    if (this.state.signedIn) {
+      this.loadLiveData();
+      // The admin surfaces: users + audit read /api/admin eagerly like everything above —
+      // a non-admin's 403 lands in the error slice and deliberately arms no retry timer,
+      // and authEnter re-kicks both the moment an admin account signs in. The Super Admin
+      // console loads on open (the account-menu item in auth.js), never here.
+      this.usLiveLoad();
+      this.auLiveLoad();
+    }
     this.rpStart();
     // A reload that lands on the conversation page re-checks the orchestrator link.
     if (this.state.view === "chat") this.chatConnect();
@@ -94,6 +101,9 @@ export const coreMethods = {
     // sign-in that swaps accounts in this tab has to re-read them here, not wait up to
     // POLL_MS for rpStart's timer to come round and correct the navigator.
     this.rpLoad();
+    // The refresh-cadence menu. Not company-scoped, but it needs a token, and rpStart no
+    // longer reads it from the sign-in gate — this is where a fresh sign-in picks it up.
+    if (typeof this.rpLoadPresets === 'function') this.rpLoadPresets();
   },
 
   // Clears every register loadLiveData() fills, and cancels any retry/refresh timer

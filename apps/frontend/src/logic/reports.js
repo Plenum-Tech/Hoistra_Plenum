@@ -225,8 +225,12 @@ export const reportsMethods = {
   // stuck on "pending" long after the server actually answered it.
   rpStart() {
     this.rpStop();
-    this.rpLoad();
-    this.rpLoadPresets();
+    // A tab on the sign-in gate has no token to read with; loadLiveData() does both of
+    // these once authEnter lets the person in.
+    if (this.state.signedIn) {
+      this.rpLoad();
+      this.rpLoadPresets();
+    }
     this._rpTimer = setInterval(() => { if (this.state.signedIn) this.rpLoad(); }, POLL_MS);
   },
   rpStop() { clearInterval(this._rpTimer); clearTimeout(this._rpArmTimer); },

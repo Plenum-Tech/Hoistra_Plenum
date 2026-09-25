@@ -179,7 +179,12 @@ export const authMethods = {
       // Signing out is the honest end: it is the same conclusion the 401 branch reaches,
       // for a credential that is just as finished. authBoot never comes through here (it
       // checks for the token first and shows the gate), so this only ever fires mid-session.
-      this.authSignedOut('Your session has ended. Sign in again.');
+      //
+      // Only a signed-in shell has a session to end, though. A tab still on the gate reaches
+      // here whenever a loader's 401 missing_token asks for a refresh, and signing it out
+      // told someone who never signed in that their session had ended — and wiped the
+      // password, code and new password they were typing, on every loader retry.
+      if (this.state.signedIn) this.authSignedOut('Your session has ended. Sign in again.');
       // Shaped like the 401 the server would have sent, so apiFetch's interceptor treats it
       // as terminal rather than retrying a refresh that can never succeed.
       return Promise.reject(new ApiError('no refresh token', 401, {

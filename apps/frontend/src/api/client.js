@@ -110,7 +110,12 @@ export async function apiFetch(base, path, opts) {
   const out = await attempt(base, path, o, useAuth ? hooks.getToken() : null, useAuth);
   // Checked AFTER the await, on the way back — the company can change while this is in
   // flight, and this is the one place every register's reads pass through.
-  if (issuedUnder !== orgEpoch) {
+  //
+  // Never for `auth: false`. Those are the auth endpoints, which are not company-scoped,
+  // and a /refresh response carries the ONLY copy of the rotated refresh token: discarding
+  // it because a company switch landed mid-flight left the next refresh presenting the
+  // token the server had just consumed — a replay, which revokes every session on the account.
+  if (useAuth && issuedUnder !== orgEpoch) {
     const stale = new Error('the company changed while this request was in flight');
     stale.staleScope = true;
     throw stale;
