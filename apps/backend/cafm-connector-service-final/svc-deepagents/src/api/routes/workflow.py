@@ -10,6 +10,7 @@ Endpoints:
   WS   /api/workflow/ws/{session_id}      — real-time streaming over WebSocket
 """
 import json
+import os
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -1093,6 +1094,37 @@ async def activity_turns(session_id: str, limit: int = Query(200, ge=1, le=2000)
     passed through, token totals and whether every step succeeded."""
     turns = await activity_log.list_turns(session_id, limit=limit)
     return {"ok": True, "session_id": session_id, "count": len(turns), "turns": turns}
+
+
+class InvestigationSummaryRequest(BaseModel):
+    """What the Assets page's Investigate fetched: the asset, and the bms_trend, utility_bill
+    and weather datasets exactly as ops-intelligence returned them."""
+
+    asset: dict[str, Any] = Field(default_factory=dict)
+    sources: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/investigation-summary")
+@limiter.limit("30/minute")
+async def investigation_summary(
+    request: Request,
+    body: InvestigationSummaryRequest,
+    principal: Principal = Depends(current_principal),
+) -> dict[str, Any]:
+    """The orchestrator's summary at the end of an Investigate.
+
+    One model pass over the three datasets the page sent, each line's figures grounded against
+    them: a line citing a figure the data does not hold is dropped and named, the overall
+    sentence is reported rather than rewritten. It reads no database, writes nothing, and is not
+    a chat turn — nobody asked it a question.
+    """
+    from ...agents import investigation_summary as isum
+
+    model = (os.environ.get("INVESTIGATION_SUMMARY_MODEL") or "").strip() or isum.DEFAULT_MODEL
+    return await isum.summarise(
+        asset=body.asset, sources=body.sources,
+        api_key=(getattr(settings, "anthropic_api_key", "") or "").strip(), model=model,
+    )
 
 
 @router.post("/activity", status_code=201)

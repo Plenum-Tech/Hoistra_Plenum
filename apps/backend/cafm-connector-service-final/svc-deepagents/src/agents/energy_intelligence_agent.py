@@ -1123,6 +1123,8 @@ async def investigate_asset(asset_id: str) -> dict:
       sources          each source walked, what it was asked, and what it gave back
       sources_found    how many produced evidence
       sources_missing  which produced none — bms_trend, weather, work_order, document
+      sources_unreadable  which could not be read at all (the query or the provider failed) —
+                       not evidence either way
       evidence         statements with a confidence each
       conclusion       cause, cost_to_date, cost_annualised
       actions          what may be raised, already shaped for the decision queue
@@ -1130,7 +1132,9 @@ async def investigate_asset(asset_id: str) -> dict:
     **A missing source is a finding, not a gap in the search.** A condenser-clean report the
     contract requires and nobody filed is itself the answer, and it carries full confidence
     because nothing is inferred from it. Report `sources_missing` explicitly — an answer that
-    quietly omits them implies six sources agreed when one spoke.
+    quietly omits them implies six sources agreed when one spoke. Report `sources_unreadable`
+    too, and never as missing: a source that could not be read says nothing, whereas a missing
+    record is itself the finding.
 
     Where the evidence is thin, say so and let the actions ask the people who were on site.
     `conclusion.cause` of "the records this asset should carry are not on file" is a real
