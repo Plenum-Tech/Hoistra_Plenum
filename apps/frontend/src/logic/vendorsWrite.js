@@ -59,6 +59,25 @@ export const actorUuid = (account) => {
 const why = (e) => (e && e.message) || String(e || 'unknown error');
 
 export const vendorsWriteMethods = {
+  // The directory's "Terms not confirmed" note. Opens that vendor on Contract terms and brings
+  // the Confirm terms button into view, lit for a moment. It confirms nothing and arms
+  // nothing — confirming stays two deliberate clicks on the panel, after reading the terms.
+  // An edit half-typed on the previous vendor is dropped rather than carried across.
+  vpGoConfirm(vendorId) {
+    clearTimeout(this._vpFlashT);
+    clearTimeout(this._vpJumpT);
+    this.setState({ vpVendor: vendorId, vpTab: 1, vpConfirmArmed: false, vpEditField: '', vpEditValue: '', vpConfirmFlash: vendorId });
+    this._vpFlashT = setTimeout(() => this.setState({ vpConfirmFlash: null }), 2400);
+    // React paints the new vendor on the next tick; the button exists only after that.
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    this._vpJumpT = setTimeout(() => {
+      const btn = document.getElementById('vp-confirm-terms');
+      const bar = document.getElementById('vp-confirm-bar');
+      if (bar) bar.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (btn) btn.focus({ preventScroll: true });
+    }, 60);
+  },
+
   // Turn a draft parameter set into the agreed one. `contractId` comes from the panel, which
   // knows which vendor is open; passing it in keeps this method independent of the selection.
   async vpConfirmContract(contractId) {

@@ -58,6 +58,9 @@ import { energyApi } from '../api/energy.js';
 import { complianceApi } from '../api/compliance.js';
 import { isStaleScope } from '../api/client.js';
 import { t } from './constants.js';
+import { actionCtx, actionSteps, mailDraft, investigationQuestion as shapeQuery, investigationSteps, shapeInvestigation, investigationError,
+  datasetOf, datasetFailure, summaryBody, summaryReply } from './assetsActions.js';
+import { deepAgentsApi } from '../api/deepAgents.js';
 
 // What is still unknown says so. These are claims about the data, not decoration.
 // One inspection report as a note under its asset. Pure, so the tests can hold it to the
@@ -95,13 +98,22 @@ export function inspectionNotes(rows) {
 // BLOCKED / AWAITING / LIVE) plus the platform's own statuses. A migrated order keeps the
 // status its CMMS gave it - "Draft", "In progress", "Held" - and matching only the platform's
 // four left every one of them uncounted and unshown.
+//
+// Spelling is normalised first — case, and spaces, hyphens and underscores alike — because a
+// workbook writes "In progress", the service writes in_progress and a CMMS export IN-PROGRESS.
+// This is the ONE definition of an open order on the page: the row's count and the notes under
+// it read it, so a row can never say "0 open" above an order it lists (28 Sep 2026: two
+// definitions were written the same day, and they disagreed on drafts).
 export function woState(status) {
-  const s = String(status || '').trim().toLowerCase();
-  if (['blocked', 'on hold', 'onhold', 'held', 'suspended'].includes(s)) return 'held';
-  if (['pending_approval', 'pending approval', 'awaiting approval', 'submitted', 'draft'].includes(s)) return 'awaiting';
-  if (['open', 'inprogress', 'in progress', 'in_progress', 'assigned', 'scheduled', 'active', 'preparing', 'prepared'].includes(s)) return 'live';
+  const s = String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+  if (['blocked', 'on hold', 'onhold', 'held', 'suspended', 'awaiting parts'].includes(s)) return 'held';
+  if (['pending approval', 'awaiting approval', 'submitted', 'draft', 'raised'].includes(s)) return 'awaiting';
+  if (['open', 'inprogress', 'in progress', 'assigned', 'scheduled', 'active', 'preparing', 'prepared'].includes(s)) return 'live';
   return null;
 }
+
+/** Whether a work order is still open: held, awaiting approval or in hand. */
+export const isOpenWorkOrder = (status) => !!woState(status);
 
 // An asset's open work orders as notes under it, after its inspection reports: "WO-4527 ·
 // Predictive · Draft" then "Awaiting approval"; an order in hand reads what it is for; a held
@@ -585,15 +597,32 @@ export const assetsConditionMethods = {
   // One asset's full intelligence, read when its drawer opens: section, vendor, the
   // value-at-risk arithmetic with its basis in words, readings against their bands, and the
   // failure assessment with its drivers. One call per asset, so it is never eager.
-  async asCondLoadIntel(assetId) {
-    if (!assetId || (this.state.asIntel || {})[assetId]) return;
+  //
+  // An answered read is kept; a failed one is not. It used to cache `{error}` (and
+  // `{loading}`) for good, so one 404 — every asset 404'd while the call went out without the
+  // company in view — meant Raise work order answered "No vendor on this asset record" for
+  // the rest of the session, and a click during the page's own seeding read did the same.
+  // Now a failure is tried again on the next call, and calls made while one is in flight
+  // share it rather than returning early with nothing.
+  asCondLoadIntel(assetId) {
+    if (!assetId) return Promise.resolve();
+    const cur = (this.state.asIntel || {})[assetId];
+    if (cur && !cur.loading && !cur.error) return Promise.resolve();
+    this._asIntelP = this._asIntelP || {};
+    if (this._asIntelP[assetId]) return this._asIntelP[assetId];
     this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { loading: true } }) }));
-    try {
-      const res = await energyApi.assetIntelligence(assetId);
-      this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: res || {} }) }));
-    } catch (e) {
-      this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { error: (e && e.message) || String(e) } }) }));
-    }
+    const run = (async () => {
+      try {
+        const res = await energyApi.assetIntelligence(assetId);
+        this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: res || {} }) }));
+      } catch (e) {
+        this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { error: (e && e.message) || String(e), status: e && e.status } }) }));
+      } finally {
+        delete this._asIntelP[assetId];
+      }
+    })();
+    this._asIntelP[assetId] = run;
+    return run;
   },
 
   /* Asset condition. Two thresholds the user owns, applied to real numbers: how far over
@@ -666,13 +695,18 @@ export const assetsConditionMethods = {
     // work_orders.asset_id is on WorkOrderResponse since 47b949e, so this is a real join.
     // The name fallback stays for rows imported before the column was populated; it is the
     // approximation the whole page used to run on, now the exception rather than the rule.
+    // Keyed by building as well as name: "AHU-1" is in every building, and a job on another
+    // building's AHU-1 is not this one's. A job that names no building still matches by name.
     const openWo = {}, openWoByName = {};
+    const nameKey = (b, n) => (b ? String(b) : '*') + '|' + String(n || '').trim().toLowerCase();
     (s.asLiveWos || []).forEach((w) => {
       if (!w || !woState(w.status)) return;
       if (w.asset_id) (openWo[String(w.asset_id)] = openWo[String(w.asset_id)] || []).push(w);
-      else if (w.asset) { const k = String(w.asset).trim().toLowerCase(); (openWoByName[k] = openWoByName[k] || []).push(w); }
+      else if (w.asset) { const k = nameKey(w.building_id, w.asset); (openWoByName[k] = openWoByName[k] || []).push(w); }
     });
-    const wosOf = (a) => (openWo[String(a.asset_id)] || []).concat(openWoByName[String(a.asset_name || '').trim().toLowerCase()] || []);
+    const wosOf = (a) => (openWo[String(a.asset_id)] || [])
+      .concat(a.building_id ? (openWoByName[nameKey(a.building_id, a.asset_name)] || []) : [])
+      .concat(openWoByName[nameKey(null, a.asset_name)] || []);
     const woCount = (a) => wosOf(a).length;
 
     // GET /api/energy/condition/assets decides the band. The page used to decide it here,
@@ -835,7 +869,11 @@ export const assetsConditionMethods = {
       const nWo = woCount(a);
       const mt = meterLine(a);
       x.meterText = mt.text;
+      // The dock is working on this asset: marked with the design's marker tint for as long
+      // as its task is open, so the row a draft or an investigation is about stays findable.
+      const active = !!(s.orchOpen && s.orchTask && s.orchTask.ctx === actionCtx({ assetName: a.asset_name, building: x.b ? x.b.name : null }));
       return {
+        active: active, rowBg: active ? 'var(--marker-tint)' : 'transparent',
         id: a.asset_id, name: a.asset_name,
         cls: a.category_name || (a.category_id ? 'Category name not on file' : 'No category set'),
         // The condition read names the vendor for every asset in scope; the per-asset
@@ -873,12 +911,14 @@ export const assetsConditionMethods = {
         valLine: varOf(a) ? (varOf(a).basis || (varOf(a).design_life_used_pct != null ? Math.round(varOf(a).design_life_used_pct) + '% of design life used' : '')) : NOT_COMPUTABLE,
         hist: histOf(a), histShow: histOf(a).length ? 'flex' : 'none',
         invShow: x.anomaly ? 'inline-flex' : 'none',
-        investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.asCondOpenAnomaly(x.anomaly); },
+        // The asset's own investigation, in the dock: GET /api/energy/assets/{id}/investigate
+        // walks its sources and says what each gave back. It used to open a four-line drawer.
+        investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asCondInvestigate(x); },
         // assets.vendor_id now names who holds the asset, so an order has a recipient. The
         // vendor arrives with the per-asset intelligence, so the action reads it first.
         woPrimary: x.cond === 'threat', inspectPrimary: x.cond !== 'threat',
-        wo: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.asCondAction(x, 'wo'); },
-        inspect: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.asCondAction(x, 'inspect'); },
+        wo: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asCondAction(x, 'wo'); },
+        inspect: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asCondAction(x, 'inspect'); },
         woLabel: 'Raise work order', inspectLabel: 'Request inspection',
         openWorkOrders: nWo,
         locName: loc ? (loc.name || [loc.floor, loc.zone].filter(Boolean).join(' · ') || 'Unnamed location') : 'Location not set',
@@ -1109,7 +1149,8 @@ export const assetsConditionMethods = {
         { l: 'Threat', v: String(threats.length),
           s: 'section over its own reference + anomaly attributed'
             + (raisedByHealth ? ' · ' + raisedByHealth + ' raised here on health score' : '')
-            + (cSum && cSum.threat !== threats.length - raisedByHealth
+            // A summary without a threat count says nothing about it — never "reports undefined".
+            + (cSum && typeof cSum.threat === 'number' && cSum.threat !== threats.length - raisedByHealth
                ? ' · engine reports ' + cSum.threat : ''),
           color: t('risk').color },
         { l: 'Watch', v: String(watches.length),
@@ -1210,25 +1251,6 @@ export const assetsConditionMethods = {
     };
   },
 
-  asCondOpenAnomaly(an) {
-    if (!an) return;
-    this.setState({
-      detail: {
-        icon: 'ph-lightning', color: t('risk').color, module: 'Assets',
-        title: an.anomaly_type || 'Anomaly', meta: 'energy_anomalies · ' + (an.id || ''),
-        body: 'Attributed to this asset through energy_anomalies.asset_id, which svc-operations-intelligence sets from meters.asset_id.',
-        chain: [
-          { a: 'detected', t: an.detected_at || 'not recorded' },
-          { a: 'status', t: an.status || 'open' },
-          { a: 'excess', t: typeof an.annualised_excess_kwh === 'number' ? Math.round(an.annualised_excess_kwh).toLocaleString('en-GB') + ' kWh/yr' : 'not priced' },
-          { a: 'cost', t: typeof an.financial_gbp === 'number' ? '£' + Math.round(an.financial_gbp).toLocaleString('en-GB') : 'not priced' }
-        ],
-        refinement: ''
-      },
-      detailFields: [], detailActions: []
-    });
-  },
-
   // `detail` is a snapshot in state, not a live view, so filling it from asIntel at open
   // time and firing the read without awaiting bakes "Reading…" into every field for good.
   // The read therefore rebuilds it, exactly as the work-history patch below already does.
@@ -1315,38 +1337,185 @@ export const assetsConditionMethods = {
     });
   },
 
-  // Raising an order or an inspection now has a recipient: assets.vendor_id names who holds
-  // the asset. The vendor arrives with the per-asset intelligence, so read it, then draft.
-  async asCondAction(x, kind) {
-    const a = x.a;
-    await this.asCondLoadIntel(a.asset_id);
-    const i = (this.state.asIntel || {})[a.asset_id] || {};
-    const vendor = (i.asset && i.asset.vendor) || null;
-    if (!vendor) return this.flash('No vendor on this asset record — nothing to send to.');
-    const isWo = kind === 'wo';
-    const iv = i.value || {}, an = i.anomaly || {};
-    const evidence = [
-      // iotVals' remediate/replace actions carry no deviation, so this is guarded: a draft
-      // addressed to a vendor must never read "(null%)".
-      x.b ? '• Building ' + x.b.name + ' at ' + (x.b.euiN != null ? x.b.euiN : '—') + ' against a reference of '
-          + (x.b.benchN != null ? x.b.benchN : '—') + ' kWh/m²/yr'
-          + (typeof x.deviation === 'number' ? ' (' + (x.deviation > 0 ? '+' : '') + x.deviation + '%)' : ' (deviation not on record)') : null,
-      (i.asset && i.asset.section) ? '• Section ' + i.asset.section + (i.asset.section_reference_eui != null ? ', reference ' + i.asset.section_reference_eui + ' kWh/m²/yr' : '') : null,
-      an.open ? '• ' + an.open + ' open finding' + (an.open === 1 ? '' : 's') + ' attributed to this asset, worst ' + (an.worst_pct != null ? Math.round(an.worst_pct) + '%' : '—') + ', running ' + (an.weeks != null ? an.weeks + ' weeks' : 'unknown') : '• No anomaly attributed to this asset',
-      iv.value_at_risk != null ? '• Value at risk £' + Math.round(iv.value_at_risk).toLocaleString('en-GB') + ' — ' + (iv.basis || '') : '• ' + NOT_COMPUTABLE,
-      '• Asset ' + a.asset_id + (a.asset_code ? ' · ' + a.asset_code : '') + (a.installation_date ? ' · installed ' + a.installation_date : '')
-    ].filter(Boolean).join('\n');
-    this.setState({ detail: null });
-    this.orchWith(isWo ? 'Raise work order' : 'Request inspection', a.asset_name + ' · ' + (x.b ? x.b.name : 'Unlinked'), 'email', {
-      emKind: isWo ? 'wo' : 'inspect',
-      emKicker: isWo ? 'Work order request · draft' : 'Inspection request · draft',
-      emTo: '', emSubject: (isWo ? 'Work order request — ' : 'Inspection request — ') + a.asset_name,
-      emBody: 'Hello ' + vendor + ' team,\n\n' + (isWo
-        ? 'Please raise a predictive work order on ' + a.asset_name + '. The engine has both the building and the asset out of pattern, so we are not waiting for a fault report.'
-        : 'Please inspect ' + a.asset_name + '. The engine has flagged this asset for a condition check ahead of any fault.')
-        + '\n\nWhat the record shows:\n' + evidence + '\n\nRegards,\nPlanum Technologies · Hoistra',
-      fSubject: a.asset_name, fVendor: vendor
+  // What the row and the reads above it know about one asset, in the terms the drafts and the
+  // investigation use (logic/assetsActions.js). Only facts a read returned: the section from
+  // the condition read, the vendor from the per-asset read or the condition read, the address
+  // from the vendor's contact record, the latest inspection note from the maintenance read.
+  asCondFacts(x, extra) {
+    const s = this.state, a = x.a;
+    const i = (s.asIntel || {})[a.asset_id] || {};
+    const ia = i.asset || {};
+    const band = (s.asCondBands || []).find((r) => r && String(r.asset_id) === String(a.asset_id)) || {};
+    const secId = band.section_id || ia.section_id || null;
+    const sc = secId ? (s.asSections || []).find((r) => String(r.section_id) === String(secId)) : null;
+    const measured = sc && sc.measured !== false && typeof sc.eui_kwh_per_m2 === 'number';
+    // The row's anomaly comes from the page's open-anomaly read (capped at 500). The asset's
+    // own read carries its open findings too, and a draft must not tell a vendor there is no
+    // anomaly when that read says there are two.
+    const ian = i.anomaly && i.anomaly.open ? i.anomaly : null;
+    const an = x.anomaly || (ian ? {
+      anomaly_type: ian.open === 1 ? 'Open anomaly' : ian.open + ' open anomalies',
+      financial_gbp: typeof ian.annual_cost === 'number' ? ian.annual_cost : null,
+      status: 'open', weeks: ian.weeks
+    } : null);
+    const notes = inspectionNotes((s.asInspections || []).filter((r) =>
+      String(r.asset_id || '') === String(a.asset_id) || (a.asset_code && String(r.asset_code || '') === String(a.asset_code))));
+    const ex = extra || {};
+    const account = s.account || {};
+    return {
+      assetId: a.asset_id, assetName: a.asset_name, assetCode: a.asset_code || null,
+      category: a.category_name || null, installed: a.installation_date || null,
+      building: x.b ? x.b.name : (ia.building || null),
+      section: sc ? {
+        name: sc.name + (sc.section_type ? ' · ' + sc.section_type : ''),
+        measured: !!measured,
+        eui: measured ? sc.eui_kwh_per_m2 : null,
+        ref: typeof sc.reference_eui_kwh_m2 === 'number' ? sc.reference_eui_kwh_m2 : null,
+        deviation: measured && typeof sc.deviation_pct === 'number' ? sc.deviation_pct : null,
+        // Its meters are its meters whether or not an intensity came out of them.
+        meterCount: typeof sc.meters === 'number' ? sc.meters : null,
+        meters: sc.meters ? (sc.meters === 1 ? 'sub-meter' : sc.meters + ' sub-meters') : null
+      } : (ia.section ? { name: ia.section, eui: null, ref: null } : null),
+      anomaly: an ? {
+        type: an.anomaly_type || 'Anomaly',
+        annualCost: typeof an.financial_gbp === 'number' ? an.financial_gbp : null,
+        days: typeof x.anomalyDays === 'number' ? x.anomalyDays
+          : typeof an.weeks === 'number' ? Math.round(an.weeks * 7) : null,
+        status: an.status || null
+      } : null,
+      vendor: ex.vendor || ia.vendor || band.vendor || null,
+      vendorEmail: ex.vendorEmail || ia.vendor_email || null,
+      // Several contacts and none marked primary: the To line stays empty and these are named.
+      vendorEmailCandidates: ex.vendorEmailCandidates || ia.vendor_email_candidates || [],
+      vendorReadFailed: !ex.vendorEmail && !!i.error,
+      latestNote: notes.length ? { id: notes[0].id, when: notes[0].when.split(' · ')[0] } : null,
+      sender: s.viewOrgName || account.organization_name || account.org_name || null
+    };
+  },
+
+  // Raise work order / Request inspection: the dock opens, the four agents run, and a draft
+  // addressed from the vendor record fills it. Approve & send emails it — the only write
+  // (Hussain, 28 Sep 2026: email only, real sending), so nothing else claims to have been
+  // raised. A vendor or address the reads do not hold leaves the draft unaddressed for the
+  // reader, rather than stopping at a toast the way it used to.
+  //
+  // `opts.fromInv` opens the draft inside a running investigation (its actions), keeping that
+  // investigation's task and returning to it once the email has gone.
+  async asCondAction(x, kind, opts) {
+    const o = opts || {};
+    // From an investigation the vendor and its address came back with the answer, so the
+    // draft opens at once; from the row, the per-asset read is what names them.
+    if (!o.fromInv) await this.asCondLoadIntel(x.a.asset_id);
+    const f = this.asCondFacts(x, o);
+    const draft = mailDraft(kind, f, { scope: o.scope || null });
+    if (o.fromInv) {
+      return this.setState(Object.assign({ flow: 'email', flowDone: '', fSpec: null, emFromInv: true, detail: null }, draft));
+    }
+    this.orch(kind === 'wo' ? 'Raise work order' : kind === 'records' ? 'Request records' : 'Request inspection', actionCtx(f), actionSteps(kind, f));
+    this.setState(Object.assign({ flow: 'email', flowDone: '', fSpec: null, emFromInv: false }, draft));
+  },
+
+  // Investigate: the asset's own investigation from the sources, in the dock. The walk is
+  // played the way the design plays it — each source ticking in, then the evidence, the
+  // conclusion and the actions — but every line of it is what the engine returned. Nothing
+  // here writes: the actions open drafts, and a proposal the platform cannot carry out is
+  // shown for what it is.
+  async asCondInvestigate(x) {
+    const f = this.asCondFacts(x);
+    clearInterval(this._invTick);
+    this.orch('Investigate', actionCtx(f), investigationSteps(f));
+    const token = (this._invToken = (this._invToken || 0) + 1);
+    this._asInvRow = x;
+    this.setState({
+      flow: 'investigate', flowDone: '', emFromInv: false, invStage: 0, invSrcDone: 0,
+      inv: { live: true, loading: true, error: '', kind: 'asset', assetId: f.assetId, title: actionCtx(f), sub: f.vendor || '',
+        query: shapeQuery(f), plan: '', sources: [], findings: [], actions: [], replies: [], cause: '', costLine: '' }
     });
+    // The data behind the bms_trend, utility_bill and weather lines, fetched beside the walk
+    // rather than after it: it is what the summary at the end is written from, and what a
+    // follow-up typed in the dock is answered from.
+    const datasets = this.asInvFetchDatasets(x);
+    let res = null, err = null;
+    try { res = await energyApi.assetInvestigate(x.a.asset_id); } catch (e) { err = e; }
+    // Closed, or a newer investigation started, while this one was out: drop the answer.
+    if (token !== this._invToken || !this.state.inv || this.state.inv.assetId !== f.assetId || this.state.flow !== 'investigate') return;
+    if (err || !res || res.ok === false) {
+      return this.setState((p) => ({ inv: Object.assign({}, p.inv, { loading: false, error: investigationError(err || { status: 404 }) }) }));
+    }
+    const inv = shapeInvestigation(res, Object.assign({}, f, {
+      vendor: f.vendor || (res.asset && res.asset.vendor) || null
+    }));
+    inv.vendorEmail = (res.asset && res.asset.vendor_email) || f.vendorEmail || null;
+    inv.vendorEmailCandidates = (res.asset && res.asset.vendor_email_candidates) || [];
+    this.setState((p) => ({
+      inv: inv,
+      // The plan and the verdict are known now, so the chain says them.
+      orchTask: p.orchTask ? Object.assign({}, p.orchTask, { steps: investigationSteps(f, res) }) : p.orchTask
+    }));
+    datasets.then((ds) => {
+      if (token !== this._invToken || !this.state.inv || this.state.inv.assetId !== f.assetId) return;
+      this.setState((p) => ({ inv: Object.assign({}, p.inv, { datasets: ds }) }), () => this.asInvMaybeSummarise(token, f));
+    });
+    // The walk: one source every 420 ms, then evidence, conclusion and actions.
+    const n = inv.sources.length;
+    this._invTick = setInterval(() => {
+      const st = this.state;
+      if (!st.inv || !st.inv.live || st.flow === null) { clearInterval(this._invTick); return; }
+      if ((st.invSrcDone || 0) < n) return this.setState({ invSrcDone: (st.invSrcDone || 0) + 1 });
+      if ((st.invStage || 0) < 3) return this.setState({ invStage: (st.invStage || 0) + 1 });
+      clearInterval(this._invTick);
+      this.asInvMaybeSummarise(token, f);
+    }, 420);
+  },
+
+  // The three datasets, each read softly: a read that fails is the same "unreadable" the
+  // engine uses, so the summary says it could not be read rather than dropping the source.
+  async asInvFetchDatasets(x) {
+    const a = x.a;
+    const soft = (p) => Promise.resolve(p).then(datasetOf, datasetFailure);
+    const [bms, bill, wx] = await Promise.all([
+      soft(energyApi.assetBmsTrend(a.asset_id, 8)),
+      soft(energyApi.assetUtilityBill(a.asset_id, 8)),
+      a.building_id ? soft(energyApi.degreeDays(a.building_id, { weeks: 8 }))
+        : Promise.resolve({ status: 'not_found', detail: 'the asset names no building, so its weather cannot be looked up' })
+    ]);
+    return { bms_trend: bms, utility_bill: bill, weather: wx };
+  },
+
+  // The orchestrator's summary, once per investigation: when the walk has played AND the
+  // datasets are in, whichever lands second. It is added to the investigation's own thread;
+  // an answer that arrives after the dock closed, or after a newer investigation began, is
+  // dropped the same way the investigation's own answer is.
+  async asInvMaybeSummarise(token, f) {
+    const st = this.state;
+    if (token !== this._invToken || !st.inv || !st.inv.live || !st.inv.datasets) return;
+    if ((st.invStage || 0) < 3 || this._invSummarised === token) return;
+    this._invSummarised = token;
+    const pending = { id: 'summary', you: '', tag: 'summary · ', lines: [], bot: 'Summarising the BMS trend, the metered consumption and the weather…' };
+    // First in the thread whenever it lands: it is the walk's own conclusion, so it sits under
+    // the walk, above anything the reader has since done with the actions.
+    this.setState((p) => ({ inv: Object.assign({}, p.inv, { replies: [pending].concat(p.inv.replies || []) }) }));
+    let res = null, err = null;
+    try { res = await deepAgentsApi.investigationSummary(summaryBody(f, st.inv.datasets)); } catch (e) { err = e; }
+    if (token !== this._invToken || !this.state.inv || this.state.inv.assetId !== f.assetId) return;
+    const reply = summaryReply(res, err);
+    this.setState((p) => ({ inv: Object.assign({}, p.inv, {
+      replies: (p.inv.replies || []).map((r) => (r.id === 'summary' ? reply : r))
+    }) }));
+  },
+
+  // One of the investigation's actions. A work order or an inspection opens its draft inside
+  // the investigation (the engine's own scope line carried into it); a proposal with no way to
+  // carry it out here does nothing and says so.
+  asInvAct(i) {
+    const inv = this.state.inv;
+    const a = inv && inv.actions ? inv.actions[i] : null;
+    if (!a || !inv.live) return;
+    if (a.k === 'note') return this.flash(a.l + ' is a proposal this platform does not carry out' + (a.s ? ' — ' + a.s : '') + '.');
+    const x = this._asInvRow;
+    if (!x) return;
+    this.setState({ inv: Object.assign({}, inv, { actions: inv.actions.map((y, j) => (j === i ? Object.assign({}, y, { drafted: true }) : y)) }) });
+    return this.asCondAction(x, a.k === 'wo' ? 'wo' : a.k === 'records' ? 'records' : 'inspect', { fromInv: true, scope: a.scope, vendor: inv.sub || null, vendorEmail: inv.vendorEmail || null, vendorEmailCandidates: inv.vendorEmailCandidates || [] });
   },
 
   /* Instrumented assets. plenum_cafm.asset_readings is real telemetry and nothing else is:

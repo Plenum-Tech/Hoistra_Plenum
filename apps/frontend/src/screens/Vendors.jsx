@@ -221,6 +221,16 @@ export default function Vendors({ vals }) {
                       <div style={{ fontSize: "10px", color: v.capFg, marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: v.capShow }}>
                         {v.cap}
                       </div>
+                      <button type="button" className="hv3" onClick={v.goConfirm} title={v.termsTitle}
+                        style={{ display: v.termsShow, alignItems: "center", gap: "5px", maxWidth: "100%", marginTop: "5px", padding: "2px 9px 2px 6px", borderRadius: "20px", border: "1px solid var(--st-warn)", background: "var(--st-warn-bg)", color: "var(--st-warn)", fontFamily: "var(--font-body)", fontSize: "10px", lineHeight: "1.5", cursor: "pointer" }}>
+                        <i className="ph ph-warning-circle" style={{ fontSize: "11px", flex: "none" }}></i>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {v.termsNote}
+                        </span>
+                        <span style={{ flex: "none", whiteSpace: "nowrap", fontWeight: "600" }}>
+                          {"· Confirm ›"}
+                        </span>
+                      </button>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "16px", lineHeight: "1", color: v.scoreFg }}>
@@ -467,7 +477,7 @@ export default function Vendors({ vals }) {
                     <div style={{ padding: "12px 16px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                       {"A default is not a contract term. Anything marked default was not found in the signed document, so the score is measured against a platform assumption rather than something the vendor agreed to — worth closing before the next renewal."}
                     </div>
-                    <div style={{ display: vals.vp.confirmShow || "none", flexDirection: "column", gap: "9px", padding: "13px 16px", borderTop: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                    <div id="vp-confirm-bar" style={{ display: vals.vp.confirmShow || "none", flexDirection: "column", gap: "9px", padding: "13px 16px", borderTop: "1px solid var(--color-divider)", background: vals.vp.confirmFlash ? "var(--color-accent-900)" : "var(--color-bg)", boxShadow: vals.vp.confirmFlash ? "inset 0 0 0 2px var(--color-accent)" : "none", transition: "background .5s ease, box-shadow .5s ease" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: vals.vp.confirmStatusBg, color: vals.vp.confirmStatusFg }}>
                           {vals.vp.confirmStatus}
@@ -476,7 +486,7 @@ export default function Vendors({ vals }) {
                           {vals.vp.confirmNote}
                         </span>
                         {vals.vp.confirmDone || vals.vp.confirmArmed ? null : (
-                          <button onClick={vals.vp.confirmArm} style={{ fontSize: "11.5px", padding: "6px 13px", borderRadius: "7px", border: "none", background: "var(--color-accent)", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+                          <button id="vp-confirm-terms" onClick={vals.vp.confirmArm} style={{ fontSize: "11.5px", padding: "6px 13px", borderRadius: "7px", border: "none", background: "var(--color-accent)", color: "#fff", cursor: "pointer", whiteSpace: "nowrap", boxShadow: vals.vp.confirmFlash ? "0 0 0 4px var(--color-accent-700)" : "none", transition: "box-shadow .5s ease" }}>
                             {"Confirm terms"}
                           </button>
                         )}
@@ -501,87 +511,189 @@ export default function Vendors({ vals }) {
                 ) : null}
                 {vals.vpPaneEvidence ? (
                   <>
-                    <div style={{ padding: "11px 16px 0", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
-                      {"The jobs behind the numbers. Criticality sets the weight — an L1 miss counts three times an L3 miss, and the service credit is calculated per breach from the clause named on the Terms tab."}
+                    {/* Month and year. Outside evShow: a month still reading, or with nothing
+                        scored, must still offer the way to another month. */}
+                    <div style={{ display: vals.vp.evMonthShow, alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "12px 16px 0" }}>
+                      <i className="ph ph-calendar-blank" style={{ fontSize: "13px", color: "var(--color-neutral-500)" }}></i>
+                      <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>
+                        {"Work orders for"}
+                      </span>
+                      <select value={vals.vp.evMonth} onChange={vals.vp.evPickMonth} aria-label="Month"
+                        style={{ fontFamily: "var(--font-body)", fontSize: "11.5px", padding: "4px 7px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", cursor: "pointer" }}>
+                        {(vals.vp.evMonthOpts || []).map((o) => (
+                          <option key={o.value} value={o.value} disabled={o.disabled}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select value={vals.vp.evYear} onChange={vals.vp.evPickYear} aria-label="Year"
+                        style={{ fontFamily: "var(--font-body)", fontSize: "11.5px", padding: "4px 7px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", cursor: "pointer" }}>
+                        {(vals.vp.evYears || []).map((y) => (
+                          <option key={y.value} value={y.value}>
+                            {y.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" className="hv13" onClick={vals.vp.evLatest}
+                        style={{ display: vals.vp.evLatestShow, alignItems: "center", gap: "5px", fontSize: "11px", padding: "4px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "transparent", color: "var(--color-accent)", fontFamily: "var(--font-body)", cursor: "pointer" }}>
+                        <i className="ph ph-arrow-counter-clockwise" style={{ fontSize: "11px" }}></i>
+                        {vals.vp.evLatestLabel}
+                      </button>
                     </div>
-                    <div style={{ overflowX: "auto", marginTop: "9px" }}>
-                      <div style={{ minWidth: "600px" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "0.9fr 1.1fr 1.1fr 0.5fr 0.9fr 1.2fr 0.6fr 0.7fr", gap: "10px", padding: "9px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                          <span>
-                            {"Work order"}
-                          </span>
-                          <span>
-                            {"Asset"}
-                          </span>
-                          <span>
-                            {"Building"}
-                          </span>
-                          <span>
-                            {"Crit"}
-                          </span>
-                          <span>
-                            {"Metric"}
-                          </span>
-                          <span>
-                            {"Target vs actual"}
-                          </span>
-                          <span>
-                            {"Weight"}
-                          </span>
-                          <span>
-                            {"Credit"}
-                          </span>
+                    {/* Evidence — one row per work order, its four checks side by side. */}
+                    <div style={{ display: vals.vp.evShow, padding: "12px 16px 0" }}>
+                      <div style={{ fontSize: "12px", color: "var(--color-text)", lineHeight: "1.5" }}>
+                        {vals.vp.evSummary}
+                      </div>
+                      <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", marginTop: "3px" }}>
+                        {"Each job is checked against the confirmed contract. An SLA miss is weighted by the asset's criticality — L1 3×, L2 1.5×, L3 1×. Open a row to see its timeline."}
+                      </div>
+                      {vals.vp.evDupeNote ? (
+                        <div style={{ display: "flex", gap: "8px", alignItems: "flex-start", marginTop: "10px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--st-warn)", background: "var(--st-warn-bg)", fontSize: "11px", color: "var(--color-text)", lineHeight: "1.5" }}>
+                          <i className="ph ph-copy" style={{ fontSize: "13px", color: "var(--st-warn)", marginTop: "1px" }}></i>
+                          <span>{vals.vp.evDupeNote}</span>
                         </div>
-                        {(vals.vp.breaches || []).map((b, $index) => (
-                          <React.Fragment key={$index}>
-                            <div className="hv2" onClick={b.click} style={{ display: "grid", gridTemplateColumns: "0.9fr 1.1fr 1.1fr 0.5fr 0.9fr 1.2fr 0.6fr 0.7fr", gap: "10px", alignItems: "center", padding: "9px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "11.5px", cursor: "pointer" }}>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-accent)" }}>
-                                {b.wo}
-                              </span>
-                              <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {b.asset}
-                              </span>
-                              <span style={{ minWidth: "0", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {b.building}
-                              </span>
-                              <span>
-                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", padding: "2px 5px", borderRadius: "4px", background: b.critBg, color: b.critFg }}>
-                                  {b.crit}
+                      ) : null}
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginTop: "11px" }}>
+                        {(vals.vp.evFilters || []).map((f) => (
+                          <button key={f.key} type="button" onClick={f.click} aria-pressed={f.active}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "4px 10px", borderRadius: "20px", cursor: "pointer", border: `1px solid ${f.border}`, color: f.fg, background: f.bg, fontFamily: "var(--font-body)" }}>
+                            {f.label}
+                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", opacity: f.active ? 1 : 0.8 }}>
+                              {f.n}
+                            </span>
+                          </button>
+                        ))}
+                        <div style={{ flex: "1", minWidth: "150px", display: "flex", justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", maxWidth: "230px", padding: "4px 8px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                            <i className="ph ph-magnifying-glass" style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
+                            <input value={vals.vp.evQuery} onChange={vals.vp.evSetQuery} placeholder="Find a work order or asset" aria-label="Find a work order or asset"
+                              style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "11.5px", color: "var(--color-text)" }} />
+                            <button type="button" onClick={vals.vp.evClearQuery} aria-label="Clear the search"
+                              style={{ display: vals.vp.evClearShow, alignItems: "center", background: "none", border: "none", padding: "0", cursor: "pointer", color: "var(--color-neutral-500)" }}>
+                              <i className="ph ph-x" style={{ fontSize: "11px" }}></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="vp-ev-table" style={{ display: vals.vp.evShow, overflowX: "auto", marginTop: "11px", scrollMarginTop: "72px" }}>
+                      <div style={{ minWidth: "560px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 64px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.75fr) 14px", gap: "10px", padding: "8px 16px", background: "var(--color-bg)", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                          <span>{"Work order"}</span>
+                          <span title="Asset criticality, and the weight an SLA miss carries">{"Crit"}</span>
+                          <span title="Hours to attend, against the contract's response target">{"Response"}</span>
+                          <span title="Hours to complete, against the contract's completion target">{"Completion"}</span>
+                          <span title="Fixed on the first visit, or a return visit was needed">{"First fix"}</span>
+                          <span title="Whether the fault came back after the job was closed">{"Recall"}</span>
+                          <span></span>
+                        </div>
+                        {(vals.vp.evRows || []).map((r) => (
+                          <React.Fragment key={r.key}>
+                            <div className="hv2" role="button" tabIndex={0} aria-expanded={r.open} onClick={r.toggle}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); r.toggle(); } }}
+                              style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 64px minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr) minmax(0,0.75fr) 14px", gap: "10px", alignItems: "center", padding: "8px 16px", borderBottom: "1px solid var(--color-divider)", boxShadow: `inset 3px 0 0 ${r.edge}`, background: r.bg, cursor: "pointer" }}>
+                              <span style={{ minWidth: "0" }}>
+                                <span style={{ display: "block", fontFamily: "ui-monospace,monospace", fontSize: "11px", color: "var(--color-accent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {r.wo}
+                                </span>
+                                <span style={{ display: "block", marginTop: "2px", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {r.sub}
                                 </span>
                               </span>
-                              <span style={{ color: "var(--color-neutral-400)" }}>
-                                {b.metric}
-                              </span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                <span style={{ color: "var(--color-neutral-500)" }}>
-                                  {b.target}
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}>
+                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", padding: "2px 5px", borderRadius: "4px", background: r.critBg, color: r.critFg }}>
+                                  {r.crit}
                                 </span>
-                                {" → "}
-                                <span style={{ color: b.actualFg }}>
-                                  {b.actual}
+                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: r.critFg }}>
+                                  {r.weight}
                                 </span>
                               </span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", color: b.critFg }}>
-                                {b.mult}
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <span style={{ color: r.response.fg }}>{r.response.value}</span>
+                                {" "}
+                                <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>{r.response.of}</span>
                               </span>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--st-ok)" }}>
-                                {b.cost}
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <span style={{ color: r.completion.fg }}>{r.completion.value}</span>
+                                {" "}
+                                <span style={{ fontSize: "10px", color: "var(--color-neutral-500)" }}>{r.completion.of}</span>
                               </span>
+                              <span style={{ fontSize: "11px", color: r.firstFix.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {r.firstFix.value}
+                              </span>
+                              <span style={{ fontSize: "11px", color: r.recall.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {r.recall.value}
+                              </span>
+                              <i className={`ph ${r.caret}`} style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}></i>
                             </div>
+                            {r.open ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "4px", padding: "9px 16px 12px 19px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)", boxShadow: `inset 3px 0 0 ${r.edge}` }}>
+                                {r.detail.map((line, $i) => (
+                                  <div key={$i} style={{ fontSize: "11px", lineHeight: "1.55", color: $i === 0 ? "var(--color-text)" : "var(--color-neutral-400)" }}>
+                                    {line}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
                           </React.Fragment>
                         ))}
-                        <div style={{ display: "grid", gridTemplateColumns: "0.9fr 1.1fr 1.1fr 0.5fr 0.9fr 1.2fr 0.6fr 0.7fr", gap: "10px", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "11.5px" }}>
-                          <span style={{ gridColumn: "1/7", color: "var(--color-neutral-500)" }}>
-                            {"Recoverable this period under the service credit clause"}
-                          </span>
-                          <span style={{ gridColumn: "7/9", fontFamily: "ui-monospace,monospace", fontSize: "12.5px", color: "var(--st-ok)", textAlign: "right" }}>
-                            {vals.vp.creditTotal}
-                          </span>
+                      </div>
+                    </div>
+                    <div style={{ display: vals.vp.evNoMatchShow, padding: "16px", fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.55", borderBottom: "1px solid var(--color-divider)" }}>
+                      {vals.vp.evNoMatch}
+                    </div>
+                    <div style={{ display: vals.vp.evShow }}>
+                      <nav aria-label="Evidence pages" style={{ display: vals.vp.evPagerShow, alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)" }}>
+                        <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>
+                          {vals.vp.evPageLabel}
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                          <button type="button" className="hv13" onClick={vals.vp.evPrev} disabled={!vals.vp.evPrevOn} aria-label="Previous page"
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "transparent", fontFamily: "var(--font-body)", color: vals.vp.evPrevOn ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.vp.evPrevOn ? "pointer" : "default", opacity: vals.vp.evPrevOn ? "1" : "0.45" }}>
+                            <i className="ph ph-caret-left" style={{ fontSize: "11px" }}></i>
+                            {"Prev"}
+                          </button>
+                          {(vals.vp.evPages || []).map((pg, $i) => (
+                            pg.gap ? (
+                              <span key={"gap" + $i} aria-hidden="true" style={{ minWidth: "22px", textAlign: "center", fontSize: "11px", color: "var(--color-neutral-500)" }}>
+                                {pg.label}
+                              </span>
+                            ) : (
+                              <button key={pg.label} type="button" className="hv13" onClick={pg.click} aria-label={"Page " + pg.label} aria-current={pg.current ? "page" : undefined}
+                                style={{ minWidth: "28px", fontFamily: "ui-monospace,monospace", fontSize: "11px", padding: "5px 7px", borderRadius: "7px", border: `1px solid ${pg.border}`, background: pg.bg, color: pg.fg, cursor: pg.current ? "default" : "pointer" }}>
+                                {pg.label}
+                              </button>
+                            )
+                          ))}
+                          <button type="button" className="hv13" onClick={vals.vp.evNext} disabled={!vals.vp.evNextOn} aria-label="Next page"
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "transparent", fontFamily: "var(--font-body)", color: vals.vp.evNextOn ? "var(--color-text)" : "var(--color-neutral-500)", cursor: vals.vp.evNextOn ? "pointer" : "default", opacity: vals.vp.evNextOn ? "1" : "0.45" }}>
+                            {"Next"}
+                            <i className="ph ph-caret-right" style={{ fontSize: "11px" }}></i>
+                          </button>
                         </div>
+                      </nav>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)" }}>
+                        <span style={{ minWidth: "0" }}>
+                          <span style={{ display: "block", fontSize: "11.5px", color: "var(--color-neutral-400)" }}>
+                            {"Service credit recoverable this period"}
+                          </span>
+                          <span style={{ display: vals.vp.creditNote ? "block" : "none", fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
+                            {vals.vp.creditNote}
+                          </span>
+                        </span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "12.5px", color: vals.vp.creditNote ? "var(--color-neutral-500)" : "var(--st-ok)" }}>
+                          {vals.vp.creditTotal}
+                        </span>
                       </div>
                     </div>
                     <div style={{ display: vals.vp.breachEmptyShow, padding: "14px 16px", fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.55" }}>
                       {vals.vp.breachEmpty}
+                      <span className="hv11" role="button" tabIndex={0} onClick={vals.vp.evRetry}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") vals.vp.evRetry(); }}
+                        style={{ display: vals.vp.evRetryShow, marginLeft: "6px", color: "var(--color-accent)", cursor: "pointer" }}>
+                        {"Retry"}
+                      </span>
                     </div>
                     <div style={{ display: "flex", gap: "9px", flexWrap: "wrap", padding: "12px 16px" }}>
                       <div className="hv15" onClick={vals.vp.claim} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", display: vals.vp.claimShow }}>

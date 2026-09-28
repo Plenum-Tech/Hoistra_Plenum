@@ -51,6 +51,12 @@ function ReportsGrid({ vals }) {
               <i className="ph ph-circle-notch" style={{ fontSize: "16px", animation: "spin 1s linear infinite" }}></i>
               <span>{"Loading your report cards…"}</span>
             </div>
+          ) : vals.reportGridFailed ? (
+            <div role="status" style={{ marginTop: "34px", padding: "34px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start", border: "1px solid var(--st-risk)" }}>
+              <i className="ph ph-warning-circle" style={{ fontSize: "21px", color: "var(--st-risk)" }}></i>
+              <div style={{ fontSize: "15px" }}>{"Report cards could not be read"}</div>
+              <div style={{ fontSize: "12.5px", color: "var(--color-neutral-400)", maxWidth: "62ch", lineHeight: "1.55" }}>{vals.reportGridFailText}</div>
+            </div>
           ) : vals.reportGridEmpty ? (
             <div style={{ marginTop: "34px", padding: "34px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "8px", alignItems: "flex-start" }}>
               <i className="ph ph-sparkle" style={{ fontSize: "21px", color: "var(--color-accent)" }}></i>

@@ -85,7 +85,7 @@ export const energyApi = {
   // Every work order billed against one asset, with billed vs. over-contract amounts.
   // Billed and over-contract are different numbers and are never added together.
   assetWorkHistory: (assetId) =>
-    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/work-history', { timeoutMs: 20000 }),
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/work-history', { query: withOrg(), timeoutMs: 20000 }),
 
   // ── Energy module reads ──────────────────────────────────────────────────
   // Open anomalies, newest first. Rows carry raw site_id / asset_id / meter_id (UUIDs), no
@@ -181,11 +181,35 @@ export const energyApi = {
     apiFetch(B, '/api/energy/condition/summary', {
       query: withOrg(buildingId ? { building_id: buildingId } : {}), timeoutMs: 20000 }),
 
-  // One asset: section, vendor, open anomalies, the value-at-risk arithmetic with its
-  // `basis` in words, banded readings, and the failure assessment. 404 for an asset outside
-  // your buildings — the same answer as one that does not exist.
+  // One asset: section, vendor (with the contact address on its record), open anomalies,
+  // the value-at-risk arithmetic with its `basis` in words, banded readings, and the failure
+  // assessment. 404 for an asset outside your buildings — the same answer as one that does
+  // not exist.
+  //
+  // Scoped to the company in view like every other read on the Assets page. Without it a
+  // superadmin viewing another company was scoped to their own, and every asset on the page
+  // 404'd here — which is why Raise work order and Request inspection stopped at "No vendor
+  // on this asset record" on 28 Sep 2026 while the row beside them named the vendor.
   assetIntelligence: (assetId) =>
-    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/intelligence', { timeoutMs: 20000 }),
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/intelligence', { query: withOrg(), timeoutMs: 20000 }),
+  // Why this asset is costing what it is, from the sources: six walked, each saying what it
+  // gave back (the empty ones included), the evidence with each rule's fixed confidence, a
+  // conclusion with its cost and caveat, and proposals. Read-only — `written` is false.
+  assetInvestigate: (assetId) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/investigate', { query: withOrg(), timeoutMs: 30000 }),
+  // The data behind the walk's bms_trend, utility_bill and weather lines — the same datasets
+  // the lines are derived from, so what the orchestrator summarises cannot disagree with them.
+  // Each carries status found | not_found | unreadable. Read-only; 404 outside your buildings.
+  assetBmsTrend: (assetId, weeks) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/bms-trend', { query: withOrg({ weeks: weeks || 8 }), timeoutMs: 20000 }),
+  assetUtilityBill: (assetId, weeks) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/utility-bill', { query: withOrg({ weeks: weeks || 8 }), timeoutMs: 20000 }),
+  // Heating and cooling degree days (Open-Meteo unless the platform holds its own record).
+  // `weeks` gives the investigation's window; without it, whole months.
+  degreeDays: (buildingId, opts) =>
+    apiFetch(B, '/api/energy/weather/degree-days', {
+      query: withOrg(Object.assign({ building_id: buildingId }, opts && opts.weeks ? { weeks: opts.weeks } : { months: (opts && opts.months) || 12 })),
+      timeoutMs: 25000 }),
 
   // kW/RT over a window against a chiller's design figure — the position, breach or not.
   chillerEfficiency: (assetId, windowDays) =>

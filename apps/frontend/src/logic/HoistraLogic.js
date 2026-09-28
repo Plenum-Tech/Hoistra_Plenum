@@ -148,7 +148,7 @@ export class HoistraLogic extends Controller {
     homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
     // Vendors page reads from svc-operations-intelligence (null = seed shown). Raw responses
     // are kept; vpModel() shapes them once per load.
-    vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null,
+    vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null, vpEv: null, vpEvMonths: {},
     // Buildings table from svc-operations-intelligence (null = nothing loaded; the table is
     // DB-only and shows an empty state until the endpoint answers).
     bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,

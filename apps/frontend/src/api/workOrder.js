@@ -42,8 +42,11 @@ export const workOrderApi = {
     apiFetch(B, '/api/locations', { query: withOrg(Object.assign({ limit: 200 }, query || {})) }),
   // plenum_cafm.work_orders, newest first. Note: the response has no estimated_cost field
   // even though the underlying column exists — WorkOrderResponse never exposes it.
+  // Scoped to the company in view like assets and locations. Without it a superadmin viewing
+  // company X read every company's work orders, and another company's open job on an "AHU-1"
+  // counted against X's "AHU-1" (28 Sep 2026).
   workOrders: (query) =>
-    apiFetch(B, '/api/work-orders/', { query: Object.assign({ limit: 100 }, query || {}), timeoutMs: 30000 }),
+    apiFetch(B, '/api/work-orders/', { query: withOrg(Object.assign({ limit: 100 }, query || {})), timeoutMs: 30000 }),
   activeWorkOrders: () => apiFetch(B, '/api/work-orders/filter/active'),
   pendingApprovalWorkOrders: () => apiFetch(B, '/api/work-orders/filter/pending-approval'),
   workOrderHistory: (workOrderId) => apiFetch(B, '/api/work-orders/' + encodeURIComponent(workOrderId) + '/history'),

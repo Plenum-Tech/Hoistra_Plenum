@@ -40,6 +40,25 @@ export default function OrchestratorDock({ vals }) {
         <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "4px" }}>
           {vals.orchStatus}
         </div>
+        {/* The four agents a task runs through, ticking in turn — the design's dock. Hidden
+            where the dock is a conversation, which reports its own route per reply. */}
+        <div style={{ display: vals.orchStepsShow, flexDirection: "column", gap: "0", marginTop: "18px" }}>
+          {(vals.orchSteps || []).map((st, $index) => (
+            <React.Fragment key={$index}>
+              <div style={{ display: "grid", gridTemplateColumns: "16px 1fr", gap: "10px", padding: "9px 0", borderTop: "1px solid var(--color-divider)" }}>
+                <i className={`ph ${st.icon}`} style={{ fontSize: "13px", color: st.dot, marginTop: "2px" }}></i>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <span style={{ fontSize: "10.5px", padding: "1px 6px", borderRadius: "4px", background: "var(--color-accent-900)", color: "var(--color-accent-300)", alignSelf: "flex-start" }}>
+                    {st.a}
+                  </span>
+                  <span style={{ fontSize: "11.5px", lineHeight: "1.5", color: st.fg }}>
+                    {st.t}
+                  </span>
+                </div>
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
         {/* Hoist / edit a building — the real form, as a dock flow (HoistBuildingCard.jsx). */}
         {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
         {vals.fUpdate ? (
@@ -461,7 +480,7 @@ export default function OrchestratorDock({ vals }) {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "8px", fontSize: "10px", color: "var(--color-neutral-500)" }}>
                   <span style={{ display: vals.invLive, width: "5px", height: "5px", borderRadius: "50%", background: "var(--color-accent)", animation: "pendingBlink 1.2s ease-in-out infinite", flexShrink: "0" }}></span>
-                  <span>
+                  <span style={{ color: vals.invStatusFg }}>
                     {vals.invStatus}
                   </span>
                 </div>
@@ -487,7 +506,7 @@ export default function OrchestratorDock({ vals }) {
                                 {f.src}
                               </span>
                               <span style={{ display: f.gapShow, fontFamily: "ui-monospace,monospace", fontSize: "9px", padding: "1px 5px", borderRadius: "4px", background: "var(--st-risk-bg)", color: "var(--st-risk)" }}>
-                                {"missing record"}
+                                {f.chip || "missing record"}
                               </span>
                               <span style={{ flex: "1" }}></span>
                               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: f.confFg }}>
@@ -540,7 +559,7 @@ export default function OrchestratorDock({ vals }) {
                     <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "8px" }}>
                       {(vals.invActions || []).map((a, $index) => (
                         <React.Fragment key={$index}>
-                          <div className="hv13" onClick={a.click} style={{ display: "grid", gridTemplateColumns: "15px minmax(0,1fr)", gap: "8px", alignItems: "start", padding: "7px 9px", borderRadius: "7px", border: `1px solid ${a.edge}`, background: "var(--color-bg)", cursor: "pointer", opacity: a.op }}>
+                          <div className="hv13" role="button" tabIndex={a.cursor === "default" ? -1 : 0} onClick={a.click} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); a.click(); } }} style={{ display: "grid", gridTemplateColumns: "15px minmax(0,1fr)", gap: "8px", alignItems: "start", padding: "7px 9px", borderRadius: "7px", border: `1px solid ${a.edge}`, background: "var(--color-bg)", cursor: a.cursor || "pointer", opacity: a.op }}>
                             <i className={`ph ${a.icon}`} style={{ fontSize: "13px", color: a.fg, marginTop: "1px" }}></i>
                             <div style={{ minWidth: "0" }}>
                               <div style={{ fontSize: "11.5px", lineHeight: "1.3" }}>
@@ -555,7 +574,7 @@ export default function OrchestratorDock({ vals }) {
                       ))}
                     </div>
                     <div style={{ display: "flex", gap: "6px", marginTop: "9px", flexWrap: "wrap" }}>
-                      <div className="hv7" onClick={vals.invApproveAll} style={{ fontSize: "11px", padding: "5px 10px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
+                      <div className="hv7" onClick={vals.invApproveAll} style={{ display: vals.invApproveShow || "block", fontSize: "11px", padding: "5px 10px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: "pointer" }}>
                         {"Approve all"}
                       </div>
                       <div className="hv16" onClick={vals.fCancel} style={{ fontSize: "11px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
@@ -567,14 +586,29 @@ export default function OrchestratorDock({ vals }) {
               ) : null}
               {(vals.invReplies || []).map((m, $index) => (
                 <React.Fragment key={$index}>
-                  <div style={{ alignSelf: "flex-end", maxWidth: "92%", padding: "8px 11px", borderRadius: "10px 10px 3px 10px", background: "var(--color-text)", color: "var(--color-bg)", fontSize: "11.5px", lineHeight: "1.4", animation: "fadeUp 0.2s ease both" }}>
-                    {m.you}
-                  </div>
+                  {m.you ? (
+                    <div style={{ alignSelf: "flex-end", maxWidth: "92%", padding: "8px 11px", borderRadius: "10px 10px 3px 10px", background: "var(--color-text)", color: "var(--color-bg)", fontSize: "11.5px", lineHeight: "1.4", animation: "fadeUp 0.2s ease both" }}>
+                      {m.you}
+                    </div>
+                  ) : null}
                   <div style={{ maxWidth: "96%", padding: "8px 11px", borderRadius: "10px 10px 10px 3px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.45", animation: "fadeUp 0.25s ease both", textWrap: "pretty" }}>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-accent)" }}>
-                      {"queued · "}
+                      {m.tag !== undefined ? m.tag : "queued · "}
                     </span>
-                    {m.bot}{"\n            "}
+                    {(m.lines || []).map((l, $i) => (
+                      <div key={$i} style={{ marginTop: $i ? "5px" : "2px" }}>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
+                          {l.label + " · "}
+                        </span>
+                        {l.text}
+                      </div>
+                    ))}
+                    {m.lines && m.lines.length && m.bot ? (
+                      <div style={{ marginTop: "6px", fontWeight: "500" }}>{m.bot}</div>
+                    ) : m.bot}
+                    {m.note ? (
+                      <div style={{ marginTop: "5px", fontSize: "10.5px", color: "var(--st-warn)" }}>{m.note}</div>
+                    ) : null}
                   </div>
                 </React.Fragment>
               ))}

@@ -326,6 +326,80 @@ export function evidenceRows(scores) {
   return out.sort((a, b) => rank(a) - rank(b) || String(a.wo).localeCompare(String(b.wo)));
 }
 
+// One score per work order per month. On 28 Sep 2026 the read carried two score rows for
+// every Bishopsgate job in the month, and the tab, the L1/L2/L3 split and the L1 tile all
+// counted each job twice. A code with no value is never folded: two unnamed scores are two
+// jobs as far as anyone can tell. Of two copies the one that names its asset and building
+// is kept; `dupes` is how many copies were dropped, so the page can say so.
+export function uniqueScores(scores) {
+  const keep = {}, order = [];
+  let dupes = 0;
+  const richness = (s) => (s.building_name ? 2 : 0) + (s.asset_name ? 1 : 0);
+  (scores || []).forEach((s) => {
+    if (!s.wo_code) { order.push({ s }); return; }
+    // A copy is the same job scored twice — same code, month, completion, asset and verdicts.
+    // GET /wo-scores reads completion from the work order it joins BY CODE, so two jobs that
+    // only share a code (legacy numbering reused across buildings) can read alike there; what
+    // each was scored still tells them apart, and they stay two jobs.
+    const k = [s.wo_code, s.score_month, s.completed_at, s.asset_id, s.overall_score,
+      s.sla_response_met, s.sla_completion_met, s.first_fix, s.recall].map((v) => String(v == null ? "" : v)).join("|");
+    if (!keep[k]) { keep[k] = { s }; order.push(keep[k]); return; }
+    dupes += 1;
+    if (richness(s) > richness(keep[k].s)) keep[k].s = s;
+  });
+  return { scores: order.map((o) => o.s), dupes };
+}
+
+// The Evidence tab's rows: each scored work order once, its four checks side by side.
+// Misses lead (most first), then the work orders in code order with the numbers read as
+// numbers, so WO-99 comes before WO-100. `weight` is the criticality multiplier and exists
+// only when an SLA check was missed — the engine applies it to nothing else.
+const collate = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+export function evidenceJobs(scores) {
+  const jobs = (scores || []).map((s) => {
+    const crit = SLA_MULT[s.criticality] ? s.criticality : "L2";
+    const sla = (met, target, actual) => ({ target: hrs(target), actual: hrs(actual), met: met === true ? true : met === false ? false : null });
+    const response = sla(s.sla_response_met, s.response_target_hours, s.response_hours);
+    const completion = sla(s.sla_completion_met, s.completion_target_hours, s.completion_hours);
+    const firstFix = s.first_fix === true ? true : s.first_fix === false ? false : null;
+    const recall = s.recall === true ? true : s.recall === false ? false : null;
+    const missed = [];
+    if (response.met === false) missed.push("Response");
+    if (completion.met === false) missed.push("Completion");
+    if (firstFix === false) missed.push("First fix");
+    if (recall === true) missed.push("Recall");
+    const slaMissed = response.met === false || completion.met === false;
+    return {
+      key: s.id || s.wo_code, wo: s.wo_code || "—",
+      asset: s.asset_name || (s.asset_id ? "Asset " + String(s.asset_id).slice(0, 8) : "No asset on record"),
+      building: s.building_name || null, crit: crit, priority: s.priority || null,
+      reportedAt: s.reported_at || null, attendedAt: s.attended_at || null, completedAt: s.completed_at || null,
+      noTarget: s.contract_parameters_id ? "no target for " + (s.priority || "this priority") : "no confirmed target",
+      response: response, completion: completion, firstFix: firstFix, recall: recall,
+      missed: missed, weight: slaMissed ? SLA_MULT[crit] : null, score: num(s.overall_score)
+    };
+  });
+  return jobs.sort((a, b) => b.missed.length - a.missed.length || collate.compare(String(a.wo), String(b.wo)));
+}
+
+// What the Evidence tab shows for the month chosen on it. The newest card's month comes from
+// the page's first read (R.jobs); any other month from its own read, held in `cache` under
+// "vendor|month" as { status: "loading" | "ok" | "error", jobs, dupes, error }. A month still
+// reading shows the jobs it had before (a refresh), or none — never the newest month's jobs
+// under another month's name.
+export function evidenceForMonth(R, vendorId, ev, cache) {
+  const r = R || {};
+  const cardIso = r.monthIso || null;
+  const want = ev && ev.vendor === vendorId && ev.month && (r.months || []).indexOf(ev.month) >= 0 ? ev.month : null;
+  if (!want || want === cardIso) {
+    return { iso: cardIso, label: r.month || null, latest: true, status: r.evidenceRead ? "ok" : "error",
+      jobs: r.jobs || [], dupes: r.evidenceDupes || 0, error: null };
+  }
+  const hit = (cache || {})[vendorId + "|" + want] || null;
+  return { iso: want, label: monthLabel(want), latest: false, status: hit ? hit.status : "loading",
+    jobs: (hit && hit.jobs) || [], dupes: (hit && hit.dupes) || 0, error: (hit && hit.error) || null };
+}
+
 // ── the shaping ─────────────────────────────────────────────────────────
 // input: the reads, each null / missing when that request failed
 //   summary       GET /api/contract-performance/saved-space/summary
@@ -407,11 +481,15 @@ export function shapeLiveVendors(input, now) {
   // Newest card per vendor. The list is newest-first already, but sort defensively.
   const latest = {};
   const nameById = {};
+  // Every month each vendor has a card for — the months the Evidence tab can be turned to.
+  const cardMonths = {};
   (cards || []).forEach((c) => {
     const id = String(c.vendor_id || "");
     if (!id) return;
     if (c.vendor_name && !nameById[id]) nameById[id] = c.vendor_name;
     if (!latest[id] || String(c.score_month) > String(latest[id].score_month)) latest[id] = c;
+    const iso = String(c.score_month || "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso) && (cardMonths[id] = cardMonths[id] || []).indexOf(iso) < 0) cardMonths[id].push(iso);
   });
   // Parameter sets by vendor (newest first in the list, so the first wins) and by id.
   const paramsByVendor = {}, paramsById = {};
@@ -669,8 +747,10 @@ export function shapeLiveVendors(input, now) {
       blockedType: blockedType
     });
     // The jobs behind the card on screen: its month when there is a card, else every month.
-    const mine = woScores ? (woByVendor[id] || []).filter((w) => !card || w.score_month === card.score_month) : null;
+    const scored = woScores ? uniqueScores((woByVendor[id] || []).filter((w) => !card || w.score_month === card.score_month)) : null;
+    const mine = scored ? scored.scores : null;
     const breaches = mine ? evidenceRows(mine) : [];
+    const jobs = mine ? evidenceJobs(mine) : [];
     const crit = mine ? mine.reduce((t, w) => { const k = SLA_MULT[w.criticality] ? w.criticality : "L2"; t[k] += 1; return t; }, { L1: 0, L2: 0, L3: 0 }) : null;
     if (mine) l1Misses += breaches.filter((b) => b.crit === "L1" && b.met === false && b.mult !== "—").length;
     V[id] = {
@@ -678,7 +758,13 @@ export function shapeLiveVendors(input, now) {
       // but no card has not earned one — it would sit in "below 70" and drag the average
       // down with a number no engine ever published.
       contract: contract, terms: terms, rows: rowsRaw, raw: rawTotal, score: score,
-      capApplied: capApplied, cap: cap, samples: samples, crit: crit, breaches: breaches, evidenceRead: !!woScores, evidenceTruncated: woTruncated, certs: certRows, invoices: invoices,
+      capApplied: capApplied, cap: cap, samples: samples, crit: crit, breaches: breaches, jobs: jobs, evidenceDupes: scored ? scored.dupes : 0,
+      evidenceRead: !!woScores, evidenceTruncated: woTruncated, certs: certRows, invoices: invoices,
+      // null when GET /approvals failed — the held lines were not read, not found to be none.
+      invoicesError: approvals ? null : ((raw.errors && raw.errors.approvals) || "no answer"),
+      // Newest first. The Evidence tab opens on monthIso — the card on screen — and reads any
+      // other of these months on demand (vpLoadEvidenceMonth).
+      months: (cardMonths[id] || []).slice().sort().reverse(), monthIso: card ? String(card.score_month).slice(0, 10) : null,
       critNote: critNote, sourceNote: sourceNote, woCount: woCount,
       month: card ? monthLabel(card.score_month) : null, ppm: card ? num(card.ppm_compliance_pct) : null,
       invoiceSignal: invoiceSignal, parameterSource: bd.parameter_source || null
@@ -816,6 +902,14 @@ export const vendorsLiveMethods = {
     }
     this._vpAttempts = 0;
     this.setState({ vpRaw: raw, vpLoading: false, vpError: "", vpLoadedAt: raw.fetchedAt });
+    // A reload (Rebuild scorecards, the timer) can change any month's scores. The month on
+    // screen is read again, its jobs staying up meanwhile; every other month is forgotten and
+    // read afresh when chosen.
+    const ev = this.state.vpEv;
+    const onScreen = ev && ev.month ? ev.vendor + "|" + ev.month : null;
+    const keep = onScreen && (this.state.vpEvMonths || {})[onScreen];
+    this.setState({ vpEvMonths: keep ? { [onScreen]: keep } : {} });
+    if (onScreen) this.vpLoadEvidenceMonth(ev.vendor, ev.month, { force: true });
     if (opts && opts.announce) {
       const m = shapeLiveVendors(raw);
       this.flash("Vendors refreshed — " + m.vendors.length + " vendors" + (m.month ? ", " + m.month + " scorecard" : ""));
@@ -823,6 +917,43 @@ export const vendorsLiveMethods = {
     this._vpRefresh = setTimeout(() => this.vpLoad(), REFRESH_MS);
   },
   vpRetryNow() { this._vpAttempts = 0; return this.vpLoad({ announce: true }); },
+  // The Evidence tab turned to a month other than the card on screen. One vendor, one month,
+  // GET only. The jobs are built once here, not on every render. `_vpEvReq` holds the newest
+  // request per month: a reply that is no longer the newest — superseded, or issued before a
+  // company switch (resetLiveData empties the map) — is dropped. A failed re-read keeps the
+  // jobs an earlier read of that month returned.
+  async vpLoadEvidenceMonth(vendorId, monthIso, opts) {
+    const key = vendorId + "|" + monthIso;
+    const had = (this.state.vpEvMonths || {})[key];
+    if (had && had.status === "loading" && !(opts && opts.force)) return;
+    const token = {};
+    (this._vpEvReq = this._vpEvReq || {})[key] = token;
+    const put = (entry) => this.setState({ vpEvMonths: Object.assign({}, this.state.vpEvMonths, { [key]: entry }) });
+    const kept = had && had.jobs && had.jobs.length ? had : null;
+    put({ status: "loading", jobs: kept ? kept.jobs : null, dupes: kept ? kept.dupes : 0 });
+    try {
+      const r = await opsApi.woScores({ vendor_id: vendorId, score_month: monthIso, limit: 1000 });
+      if (!this._vpEvReq || this._vpEvReq[key] !== token) return;
+      const rows = (r && Array.isArray(r.wo_scores) ? r.wo_scores : [])
+        .filter((w) => String(w.vendor_id || "") === vendorId && String(w.score_month || "").slice(0, 10) === monthIso);
+      const u = uniqueScores(rows);
+      put({ status: "ok", jobs: evidenceJobs(u.scores), dupes: u.dupes });
+    } catch (e) {
+      if (!this._vpEvReq || this._vpEvReq[key] !== token || isStaleScope(e)) return;
+      put(kept ? Object.assign({}, kept, { status: "ok" })
+        : { status: "error", jobs: null, dupes: 0, error: (e && e.message) || String(e) });
+    }
+  },
+  // Choosing a month starts the view clean — All, the first page, no row open — and keeps the
+  // search, which is as useful in one month as the next. The card's own month needs no read.
+  vpPickEvidenceMonth(vendorId, monthIso, cardIso) {
+    const cur = this.state.vpEv && this.state.vpEv.vendor === vendorId ? this.state.vpEv : null;
+    const month = !monthIso || monthIso === cardIso ? null : monthIso;
+    this.setState({ vpEv: { vendor: vendorId, filter: "all", page: 0, q: cur ? cur.q || "" : "", open: null, month: month } });
+    if (!month) return;
+    const had = (this.state.vpEvMonths || {})[vendorId + "|" + month];
+    if (!had || had.status === "error") this.vpLoadEvidenceMonth(vendorId, month);
+  },
   // Release a work order that scoring is holding back, by saying which record is right.
   //
   // `accept` is 'stored' or 'incoming' and nothing else. Validated here rather than left to

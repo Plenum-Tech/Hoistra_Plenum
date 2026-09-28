@@ -140,16 +140,26 @@ export const coreMethods = {
     clearTimeout(this._asRuleTimer);
     this._asRuleToken = (this._asRuleToken || 0) + 1;
     this._asRulePending = false;
+    // An Evidence month read still in flight belongs to the old company: drop its reply.
+    this._vpEvReq = {};
+    // So does an open investigation: its datasets, its summary on the wire, the walk's timer
+    // and the row its drafts address. Left in place it reopened on the next company's Assets
+    // page and fed the previous company's readings into that company's chat.
+    clearInterval(this._invTick);
+    this._invToken = (this._invToken || 0) + 1;
+    this._asInvRow = null;
+    if (this.state.flow === 'investigate') this.setState({ flow: null });
     this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
     this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
     this._mxLiveAttempts = 0; this._spAttempts = 0;
     this.setState({
       ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
       homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
-      vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null,
+      vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null, vpEv: null, vpEvMonths: {},
       bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
       enAnomLive: null, enMetersLive: null, enFloorsLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
+      inv: null, invStage: 0, invSrcDone: 0,
       asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
       asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,
       // The condition rule is per organisation, so none of it survives a company switch:
@@ -210,11 +220,12 @@ export const coreMethods = {
   // as a chat session and only borrows the dock's title.
   orch(task, ctx, chain, opts) {
     const label = ctx ? task + " — " + ctx : task;
+    // A task that brings no chain of its own shows its intent and nothing more. The scripted
+    // Planner / Worker / Quality lines ticked to green checks for actions that make no call at
+    // all — "Rotate the ingest token", "Sync every connected source" — and said a write had been
+    // executed and validated when none was (review, 28 Sep 2026).
     const steps = chain || [
-      { a: "Orchestrator", t: "Intent: " + task.toLowerCase() + (ctx ? " · scope: " + ctx : "") },
-      { a: "Planner", t: "Resolved the Hoist Graph cells this touches and the agents that own them" },
-      { a: "Worker", t: "Executing against the live graph — every write logged with actor and timestamp" },
-      { a: "Quality", t: "Validation gate armed: the result is checked before it is written back" }
+      { a: "Orchestrator", t: "Intent: " + task.toLowerCase() + (ctx ? " · scope: " + ctx : "") }
     ];
     // A task is a session record (logic/sessions.js): `task`/`ctx` keep the raw
     // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
@@ -244,9 +255,11 @@ export const coreMethods = {
     const dockPage = typeof this.dockAnswers !== "function" || this.dockAnswers();
     if (record && !this.state.orchOpen && dockPage) this.ccChatReset();
     clearInterval(this._orchTick);
+    // emFromInv: a draft opened from an investigation belongs to that investigation's task. A
+    // new task never inherits it, or its first send returns into the old investigation.
     this.setState((p) => Object.assign({
       orchOpen: true, orchTask: entry, orchDone: 0,
-      paletteOpen: false, queueOpen: false, detail: null
+      paletteOpen: false, queueOpen: false, detail: null, emFromInv: false
     }, record ? { sessions: trimSessions([entry].concat(p.sessions || [])) } : {}));
     this._orchTick = setInterval(() => {
       this.setState((p) => {

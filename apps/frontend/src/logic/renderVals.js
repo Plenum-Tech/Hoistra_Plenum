@@ -14,6 +14,8 @@ import { documentUrl } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
 import { isSpreadsheet } from './migration.js';
 import { accountCanIngest } from './auth.js';
+import { evidencePane } from './vendorsEvidence.js';
+import { evidenceForMonth } from './vendorsLive.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -248,6 +250,8 @@ export const renderValsMethods = {
     const N = (x) => (x === null || x === undefined ? "—" : String(x));
     const vpV = VD.vendors.find((x) => x.id === s.vpVendor) || VD.vendors[0] || null;
     const vpR = vpV ? (VD.V[vpV.id] || null) : null;
+    // The Evidence tab's chosen month: the card on screen, or another month read on demand.
+    const vpEvm = vpV && vpR ? evidenceForMonth(vpR, vpV.id, s.vpEv, s.vpEvMonths) : null;
     const vpScore = VD.score;
     const SC = vpR ? vpScore(vpV.id) : { rows: [], raw: null, score: null };
     const score = vpR ? SC.score : null;
@@ -1060,6 +1064,7 @@ export const renderValsMethods = {
         const active = vpV && vpV.id === v.id;
         const sc = vpScore(v.id);
         const n = sc.score;
+        const draft = !!(R && R.contract && R.contract.id && !R.contract.confirmed);
         return {
           name: v.name, meta: v.meta || "",
           cap: capped ? "ceiling 60 — mandatory lapse" : "", capShow: capped ? "block" : "none", capFg: "var(--st-risk)",
@@ -1070,12 +1075,18 @@ export const renderValsMethods = {
           covFg: cov === null ? "var(--color-neutral-500)" : cov >= 90 ? "var(--st-ok)" : cov >= 60 ? "var(--st-warn)" : "var(--st-risk)",
           edge: capped ? "var(--st-risk)" : (v.score !== null && v.score >= 85) ? "var(--st-ok)" : "var(--st-warn)",
           bg: active ? "var(--color-accent-900)" : "transparent",
-          pick: () => this.setState({ vpVendor: v.id, vpTab: 0 })
+          pick: () => this.setState({ vpVendor: v.id, vpTab: 0 }),
+          // A draft contract says so here: scoring refuses a draft, and "not scored" alone
+          // never said why. Only a set with an id has anything to confirm.
+          termsShow: draft ? "inline-flex" : "none",
+          termsNote: draft ? (R.contract.readNothing ? "No terms read — review before confirming" : "Terms not confirmed") : "",
+          termsTitle: draft ? "Scoring is blocked until this vendor's contract terms are confirmed. Opens the terms so you can review and confirm them." : "",
+          goConfirm: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.vpGoConfirm(v.id); }
         };
       }),
       // The count on each tab is the number of rows behind it. An empty tab counts 0 — it
       // never borrows the five components a scorecard would have had.
-      vpTabs: [["Scorecard", SC.rows.length], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpR ? vpR.breaches.length : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? vpR.invoices.length : 0)]].map((t, i) => ({
+      vpTabs: [["Scorecard", SC.rows.length], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpEvm ? (vpEvm.status === "loading" && !vpEvm.jobs.length ? "…" : vpEvm.jobs.length) : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? (vpR.invoicesError ? "—" : vpR.invoices.length) : 0)]].map((t, i) => ({
         label: t[0], n: String(t[1]),
         edge: s.vpTab === i ? "var(--color-accent)" : "transparent",
         fg: s.vpTab === i ? "var(--color-accent)" : "var(--color-neutral-500)",
@@ -1086,6 +1097,7 @@ export const renderValsMethods = {
       vp: (() => {
         const v = vpV, R = vpR;
         if (!v || !R) return {};
+        const evm = vpEvm;
         const capped = capOf(v);
         // Seed: the cap is a rule applied here. Live: the engine says whether it capped the
         // published score (block_capped); a block raised after the card was cut shows as a
@@ -1101,7 +1113,6 @@ export const renderValsMethods = {
           Credited: ["var(--st-ok-bg)", "var(--st-ok)"], Approved: ["var(--color-neutral-900)", "var(--color-neutral-400)"]
         };
         const tag = (k) => TAGS[k] || TAGS["Not on record"];
-        const CRIT = { L1: ["var(--st-risk-bg)", "var(--st-risk)"], L2: ["var(--st-warn-bg)", "var(--st-warn)"], L3: ["var(--color-neutral-900)", "var(--color-neutral-400)"] };
         // Only rows the engine priced count. It has no credit schedule yet, so every row carries
         // creditValue null and there is no total — "£0" would say the clause was worked out.
         const priced = R.breaches.filter((b) => typeof b.creditValue === "number");
@@ -1211,6 +1222,8 @@ export const renderValsMethods = {
           confirmStatusFg: R.contract.confirmed ? "var(--st-ok)" : "var(--st-warn)",
           confirmDone: !!R.contract.confirmed,
           confirmArmed: !!s.vpConfirmArmed && !R.contract.confirmed,
+          // Lit for a moment after the directory's "Terms not confirmed" note brought you here.
+          confirmFlash: s.vpConfirmFlash === v.id && !R.contract.confirmed,
           // What confirming actually commits to, in the reader's own numbers. A contract
           // ingested on 17 Sep 2026 carried a £350/day labour rate the document never
           // stated — priced per hour, per trade — and the panel called it "default", which
@@ -1242,22 +1255,26 @@ export const renderValsMethods = {
             this.setState({ vpConfirmArmed: false });
             return this.vpConfirmContract(R.contract.id);
           },
-          breaches: R.breaches.map((b) => ({
-            wo: b.wo, asset: b.asset, building: b.building, crit: b.crit, metric: b.metric,
-            target: b.target, actual: b.actual, mult: b.mult, cost: b.cost,
-            critBg: (CRIT[b.crit] || CRIT.L2)[0], critFg: (CRIT[b.crit] || CRIT.L2)[1],
-            actualFg: b.met === false ? "var(--st-risk)" : b.met === true ? "var(--st-ok)" : "var(--color-neutral-400)",
-            click: () => this.flash(b.wo + " — " + b.asset + " at " + b.building + ". " + b.metric + " target " + b.target + ", actual " + b.actual + ". " +
-              (b.met === false
-                ? b.crit + " asset" + (b.mult !== "—" ? ", so the miss is weighted " + b.mult : "") + ". No service credit is priced for it: the engine has no credit schedule."
-                : b.met === true ? "Met." : "Not measured — a timestamp or the contract target is missing."))
-          })),
+          // Evidence: one row per work order, filtered, searchable, a page at a time.
+          ...evidencePane(R, v.id, s.vpEv, (ev) => this.setState({ vpEv: ev }),
+            { view: evm, pick: (iso) => this.vpPickEvidenceMonth(v.id, iso, R.monthIso) }),
           // With no breach rows there is no recoverable total — "£0" would say the clause
           // was worked and came to nothing, and there is nothing to claim against it.
           creditTotal: priced.length ? "£" + credit.toLocaleString() : "—",
+          creditNote: priced.length ? "" : "Not priced — the engine has no service-credit schedule, so nothing is claimed.",
           claimShow: priced.length ? "block" : "none",
-          breachEmptyShow: R.breaches.length ? "none" : "block",
-          breachEmpty: !R.evidenceRead
+          breachEmptyShow: evm.jobs.length ? "none" : "block",
+          // The month select is already on the failed month, and choosing the selected option
+          // again fires no change — so "choose it again to retry" could never retry. A button can.
+          evRetryShow: !evm.latest && evm.status === "error" ? "inline-block" : "none",
+          evRetry: () => this.vpPickEvidenceMonth(v.id, evm.iso, R.monthIso),
+          breachEmpty: !evm.latest
+            ? evm.status === "loading"
+              ? "Reading the work orders scored for " + evm.label + "…"
+              : evm.status === "error"
+                ? "The work orders scored for " + evm.label + " could not be read (GET /api/contract-performance/wo-scores: " + evm.error + ")."
+                : "No scored work order came back for " + evm.label + ", though the engine published a card for it."
+            : !R.evidenceRead
             ? "The scored work orders could not be read (GET /api/contract-performance/wo-scores did not answer), so there is no evidence to show. The score above is the card the engine published."
             : v.score === null
               ? "No work order has been scored for this vendor yet. Rebuild scorecards scores the completed work orders once the vendor has a confirmed contract; each one then appears here with its hours against the contract."
@@ -1285,7 +1302,9 @@ export const renderValsMethods = {
           // Only flagged lines reach the approvals queue, so an empty tab means nothing was
           // held — not that every line was checked and matched.
           invEmptyShow: R.invoices.length ? "none" : "block",
-          invEmpty: "No invoice line for this vendor is held. Only lines the rate check flags reach this queue, so matched lines are not listed here and no total is stated for them.",
+          invEmpty: R.invoicesError
+            ? "The held invoice lines could not be read (GET /api/contract-performance/approvals: " + R.invoicesError + "), so this tab cannot say whether any are held. Refresh to try again."
+            : "No invoice line for this vendor is held. Only lines the rate check flags reach this queue, so matched lines are not listed here and no total is stated for them.",
           invTotal: R.invoices.some((i) => i.status === "Held" || i.status === "Disputed")
             ? "£" + invTotal.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—",
           invActionsShow: R.invoices.length ? "flex" : "none",
@@ -2217,7 +2236,14 @@ export const renderValsMethods = {
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
       fEmail: s.flow === "email", fDone: !!s.flowDone, fDoneText: s.flowDone,
-      fCancel: () => this.setState({ flow: null, flowDone: "" }),
+      // Cancel on a draft opened from an investigation goes back to that investigation; anywhere
+      // else it closes the card. Either way nothing stays armed for the next email.
+      // A draft that is sending is not cancelled from under itself — the send decides where the
+      // dock goes. The investigation branch clears flowDone: a "Not sent" belonged to the draft.
+      fCancel: () => this.setState((p) => (p.emSending ? {}
+        : p.emFromInv && p.inv && p.flow === "email"
+          ? { flow: "investigate", flowDone: "", emFromInv: false }
+          : { flow: null, flowDone: "", emFromInv: false })),
       fNewVendor: () => this.setState({ flow: "new" }),
 
       bk: {
@@ -2307,6 +2333,10 @@ export const renderValsMethods = {
           if (!to) return this.flash("An address is needed before this can be sent.");
           const kind = s.emKind;
           const subject = s.emSubject || "";
+          // The task this draft belongs to. A send takes seconds, and the reader may start
+          // something else meanwhile; the outcome then goes to a toast, not over that task.
+          const task0 = this.state.orchTask ? this.state.orchTask.id : null;
+          const seq = (this._sendSeq = (this._sendSeq || 0) + 1);
           this.setState({ emSending: true });
           let res = null, err = null;
           try {
@@ -2349,32 +2379,59 @@ export const renderValsMethods = {
           if (handoff && res.handoff && res.handoff.mailto_uri && typeof window !== "undefined") {
             window.location.href = res.handoff.mailto_uri;
           }
-          this.setState((prev) => ({
+          // The Assets page's work-order and inspection requests are emails and nothing else
+          // (Hussain, 28 Sep 2026: email only), so the confirmation says exactly that. It fell
+          // through to "Extension request sent to …" before — the wording of another flow.
+          const about = s.fSubject ? " about " + s.fSubject : "";
+          const requestSent = kind === "wo"
+            ? "Work order request sent to " + to + about + ". It is recorded in ops_email_log. No work-order record was created in Hoistra."
+            : kind === "inspect"
+              ? "Inspection request sent to " + to + about + ". It is recorded in ops_email_log. No inspection or work-order record was created in Hoistra."
+              : kind === "records"
+                ? "Records request sent to " + to + about + ". It is recorded in ops_email_log. No work-order record was created in Hoistra."
+                : kind === "investigate" ? "Sent to " + to + "." : null;
+          if ((this.state.orchTask ? this.state.orchTask.id : null) !== task0) {
+            if (this._sendSeq === seq) this.setState({ emSending: false });
+            this.flash((subject ? subject + ": " : "") + (outcome || requestSent || ("Sent to " + to + ".")));
+            return;
+          }
+          // A draft opened from an investigation's actions returns to the investigation, with
+          // what happened to it added to the thread — decided from the state as it is NOW, not
+          // as it was before the send: a dock closed while the mail was going stays closed.
+          this.setState((prev) => {
+            const backToInv = !keepDraft && !!prev.inv && !!prev.orchOpen && (kind === "investigate" || !!prev.emFromInv);
+            return {
             emSending: false,
+            emFromInv: keepDraft ? prev.emFromInv : false,
             // An approved evidence request is remembered against the certificate so its row
             // stops offering the same request again — but only once it has genuinely gone.
             ccRequested: sent && kind === "evidence" && s.emCertId
               ? Object.assign({}, prev.ccRequested || {}, { [s.emCertId]: true })
               : prev.ccRequested,
             // A problem or a handoff leaves the composer open; a confirmed outcome closes it.
-            flow: keepDraft ? prev.flow : (kind === "investigate" && s.inv ? "investigate" : null),
-            inv: kind === "investigate" && s.inv
-              ? Object.assign({}, s.inv, {
-                  replies: (s.inv.replies || []).concat([{
+            flow: keepDraft ? prev.flow : (backToInv ? "investigate" : null),
+            inv: backToInv
+              ? Object.assign({}, prev.inv, {
+                  replies: (prev.inv.replies || []).concat([prev.inv.live ? {
+                    you: "Send — " + subject,
+                    bot: outcome || requestSent || ("Sent to " + to + "."),
+                    tag: outcome ? "" : "sent · "
+                  } : {
                     you: "Send the email",
                     bot: outcome || ("Sent to " + to + ". The reply lands on this case; a "
                       + "document attached to it is ingested and bound to the asset record "
                       + "automatically.")
                   }])
                 })
-              : s.inv,
-            flowDone: kind === "investigate" ? "" : (outcome || (
+              : prev.inv,
+            flowDone: backToInv ? "" : (outcome || requestSent || (
               spec0 && spec0.done && spec0.k === kind ? spec0.done(s.fiVals, s.fLabel, s.fSubject)
               : kind === "renewal" ? "Renewal email sent to " + to + "."
               : kind === "quote" ? "Quote request sent to " + to + ". The reply is watched and a scorecard opens on award."
               : kind === "booking" ? "Booking instruction sent to " + to + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
               : "Extension request sent to " + to + ". The obligation is marked as contested pending their reply."))
-          }));
+            };
+          });
         }
       },
 
@@ -2829,6 +2886,9 @@ export const renderValsMethods = {
       // Empty means no REPORTS, not no cards: a report whose cards have all been deleted
       // still has to render, or the only thing that can delete it is off the screen.
       reportGridEmpty: !myReports.length,
+      // No cards because the read failed is not "no report cards yet" — say which it is.
+      reportGridFailed: !myReports.length && !!s.reportsError,
+      reportGridFailText: "Your report cards could not be read (GET /api/reports: " + (s.reportsError || "") + "). They are not gone — this page could not reach them. Refresh to try again.",
       reportSelectedCount: (s.reportSelected || []).length,
       reportAnySelected: (s.reportSelected || []).length > 0,
       reportAllSelected: myCards.length > 0 && (s.reportSelected || []).length === myCards.length,

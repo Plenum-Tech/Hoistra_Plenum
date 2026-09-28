@@ -140,6 +140,9 @@ export const energyMethods = {
     const excess = measured.reduce((q, b) => q + Math.max(0, b.euiN - b.benchN) * m2(b) * rate(b), 0);
 
     const allAnoms = this.enAnomalies();
+    // The anomaly read failed and none was ever read: there is nothing to count, and "£0 ·
+    // 0 anomalies" would say the portfolio is clean. (A failed refresh keeps the last read.)
+    const anomUnread = !this.enAnomIsLive() && !!s.enError;
     const anomCc = (a) => a.cc;
     const anoms = sc.isAll ? allAnoms : allAnoms.filter((a) => sc.sel.indexOf(anomCc(a)) > -1);
     const anomSum = anomalyTotal(anoms);
@@ -165,6 +168,11 @@ export const energyMethods = {
 
     return {
       isEnergy: s.view === "module" && s.module === "energy",
+      enReadFailShow: s.enError ? "flex" : "none",
+      enReadFailText: !s.enError ? ""
+        : anomUnread
+          ? "The energy anomalies and meters could not be read (" + s.enError + "). Nothing on this page counts them, so a building showing none may have some. It retries on its own; refresh to try now."
+          : "The last refresh of anomalies and meters failed (" + s.enError + "), so what is shown is the previous read.",
       enChips: [{ cc: null, label: "All countries", flag: "" }].concat(sc.all.map((cc) => ({ cc: cc, label: PACKS[cc].name, flag: PACKS[cc].flag }))).map((c) => {
         const on = c.cc ? (s.eScope || []).indexOf(c.cc) > -1 : sc.isAll;
         return {
@@ -205,7 +213,9 @@ export const energyMethods = {
         { l: "Cost above benchmark / year", v: eui === null ? "—" : money(excess),
           s: eui === null ? "no EUI reading to compare against a benchmark" : "(EUI − reference) × area × tariff",
           tone: eui === null ? "dormant" : "risk" },
-        { l: "Anomaly cost / year", v: money(anomSum), s: anoms.length + (anoms.length === 1 ? " anomaly" : " anomalies") + " · largest finding per meter, not added — overlapping rules read the same consumption", tone: anoms.length > 4 ? "warn" : "ok" }
+        anomUnread
+          ? { l: "Anomaly cost / year", v: "—", s: "the anomalies could not be read — this is not the same as none", tone: "dormant" }
+          : { l: "Anomaly cost / year", v: money(anomSum), s: anoms.length + (anoms.length === 1 ? " anomaly" : " anomalies") + " · largest finding per meter, not added — overlapping rules read the same consumption", tone: anoms.length > 4 ? "warn" : "ok" }
       ].map((c) => ({ l: c.l, v: c.v, s: c.s, color: c.tone === "dormant" ? "var(--color-neutral-500)" : t(c.tone).color })),
 
       enAvail: (sc.single ? E.avail : ENC_MIXED_AVAIL).map((x) => ({ label: x })),
@@ -458,6 +468,7 @@ export const energyMethods = {
     };
     const allBuildings = this.bldData();
     const allAnoms = this.enAnomalies();
+    const anomUnreadB = !this.enAnomIsLive() && !!this.state.enError;
     const total = allBuildings.length;
     const buckets = sc.isAll ? sc.all.concat(["—"]) : sc.sel;
     const rawGroups = [];
@@ -516,7 +527,8 @@ export const energyMethods = {
             toggle: () => this.setState((p) => ({ enOpenB: p.enOpenB === b.name ? null : b.name })),
             investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.investigate("building", b); },
             emptyShow: x.anoms.length ? "none" : "block",
-            emptyText: x.all.length ? "No anomalies match the current filter."
+            emptyText: anomUnreadB ? "The anomalies could not be read, so this building's are unknown — not none."
+              : x.all.length ? "No anomalies match the current filter."
               : (hasEui ? "No open anomalies. Any gap above reference here is structural — investigate the building to size the capex case."
                 : "No open anomalies, and no EUI reading on record yet to say whether this building is over reference."),
             ...floorsOf(b),
@@ -614,8 +626,70 @@ export const energyMethods = {
     // from the Buildings table.
     const allBuildings = this.bldData();
     const bs = b0.isAll ? allBuildings : allBuildings.filter((b) => b0.sel.indexOf(b.cc) > -1);
-    return {
+    // A LIVE investigation (the Assets page, logic/assetsActions.js) is the engine's answer
+    // from GET /api/energy/assets/{id}/investigate: its plan, its sources with their status,
+    // its evidence and its proposals. Its actions open real drafts rather than reporting a
+    // queue that nothing wrote to, so the scripted wording below is not used for it.
+    const live = !!(inv && inv.live);
+    const srcDone = s.invSrcDone || 0;
+    // `unreadable` is a source whose query failed: it says nothing either way, so it gets
+    // neither the tick of an answer nor the cross of an absence.
+    const SRC = { found: ["ph-check-circle", "var(--st-ok)"], partial: ["ph-check-circle", "var(--st-warn)"], not_found: ["ph-x-circle", "var(--st-risk)"], unreadable: ["ph-warning-circle", "var(--st-risk)"] };
+    const liveVals = !live ? null : (() => {
+      const n = inv.sources.length;
+      const acts = inv.actions || [];
+      return {
+        fInvestigate: s.flow === "investigate",
+        inv: inv,
+        invQuery: inv.query,
+        invPlan: inv.loading ? "Asking the investigation engine to walk this asset's sources…" : (inv.plan || ""),
+        invReplies: inv.replies || [],
+        invEscShow: inv.escalate ? "flex" : "none",
+        invEscText: inv.escText || "",
+        invSources: inv.sources.map((r, i) => {
+          const done = i < srcDone, look = SRC[r.status] || SRC.partial;
+          return {
+            tbl: r.tbl, what: r.what, n: done ? r.n : "",
+            icon: done ? look[0] : "ph-circle-dashed", fg: done ? look[1] : "var(--color-neutral-500)",
+            op: done ? "1" : "0.55",
+            gap: r.status === "not_found" || r.status === "unreadable" ? "var(--st-risk)" : r.status === "partial" ? "var(--st-warn)" : "var(--color-neutral-500)"
+          };
+        }),
+        invStage1: !inv.error && stage >= 1, invStage2: !inv.error && stage >= 2, invStage3: !inv.error && stage >= 3,
+        invStatus: inv.error ? inv.error
+          : inv.loading ? "Retrieving from the Hoist Graph"
+          : stage === 0 ? "Retrieving from the Hoist Graph — " + Math.min(srcDone, n) + " of " + n + " sources"
+          : stage === 1 ? "Weighing the evidence" : stage === 2 ? "Naming the cause" : "Actions ready — nothing has been written yet",
+        invStatusFg: inv.error ? "var(--st-risk)" : "var(--color-neutral-500)",
+        invLive: !inv.error && stage < 3 ? "block" : "none",
+        invFindings: inv.findings.map((f) => ({
+          t: f.t, src: f.src, conf: f.conf === null ? "" : f.conf + "%",
+          confFg: f.conf === null ? "var(--color-neutral-500)" : f.conf >= 90 ? "var(--st-ok)" : f.conf >= 80 ? "var(--color-text)" : "var(--st-warn)",
+          gapShow: f.gap ? "inline-flex" : "none",
+          chip: f.chip || "missing record"
+        })),
+        invAskMsg: !acts.some((a) => a.k !== "note")
+          ? "Nothing in these sources calls for an action. Raise a work order or request an inspection from the asset row if you want one anyway."
+          : inv.escalate
+            ? "The sources do not settle this on their own, so the first step asks the vendor for what is missing. Each action opens a draft — nothing is sent until you approve it."
+            : "The evidence supports these. Each opens a draft for you to check — nothing is sent until you approve it.",
+        invActions: acts.map((a, i) => ({
+          l: a.l, s: a.s,
+          icon: a.k === "note" ? "ph-info" : a.drafted ? "ph-pencil-simple" : a.k === "wo" ? "ph-wrench" : "ph-clipboard-text",
+          fg: a.k === "note" ? "var(--color-neutral-500)" : "var(--color-accent)",
+          edge: a.drafted ? "var(--color-accent)" : "var(--color-divider)",
+          op: a.k === "note" ? "0.75" : "1",
+          cursor: a.k === "note" ? "default" : "pointer",
+          click: () => this.asInvAct(i)
+        })),
+        invApproveShow: "none",
+        invApproveAll: () => {}
+      };
+    })();
+    const base = {
       fInvestigate: s.flow === "investigate" && !!inv,
+      invStatusFg: "var(--color-neutral-500)",
+      invApproveShow: "block",
       inv: inv || { title: "", sub: "", cause: "", costLine: "" },
       invQuery: inv ? inv.query : "",
       invPlan: inv ? "I'll walk " + inv.sources.length + " tables in the Hoist Graph — readings first, then the maintenance record around " + (inv.kind === "anomaly" ? "the asset" : "the building") + ", then the documents that should exist for it." : "",
@@ -674,6 +748,7 @@ export const energyMethods = {
       enRulesCaret: s.enRulesOpen ? "ph-caret-down" : "ph-caret-right",
       enRulesToggle: () => this.setState((p) => ({ enRulesOpen: !p.enRulesOpen }))
     };
+    return liveVals ? Object.assign(base, liveVals) : base;
   },
 
   anomalyDetail(a) {

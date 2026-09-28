@@ -444,6 +444,10 @@ export default function Module({ vals }) {
                   {vals.enListSummary}
                 </span>
               </div>
+              <div role="status" style={{ display: vals.enReadFailShow, alignItems: "center", gap: "9px", padding: "9px 13px", borderRadius: "10px", marginTop: "12px", border: "1px solid var(--st-risk)", background: "var(--st-risk-bg)", color: "var(--color-text)", fontSize: "11.5px" }}>
+                <i className="ph ph-warning-circle" style={{ fontSize: "14px", flexShrink: "0", color: "var(--st-risk)" }}></i>
+                <span>{vals.enReadFailText}</span>
+              </div>
               <div style={{ display: vals.enSimulatedShow, alignItems: "center", gap: "9px", padding: "9px 13px", borderRadius: "10px", marginTop: "12px", border: "1px solid var(--color-warn-border, #e0b877)", background: "var(--color-warn-bg, #fdf6e7)", color: "var(--color-warn-fg, #8a6116)", fontSize: "11.5px" }}>
                 <i className="ph ph-flask" style={{ fontSize: "14px", flexShrink: "0" }}></i>
                 <span>

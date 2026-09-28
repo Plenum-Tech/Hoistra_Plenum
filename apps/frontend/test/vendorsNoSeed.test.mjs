@@ -134,12 +134,14 @@ test('the Evidence tab shows the scored work orders from GET /wo-scores, misses 
   }] };
   c.setState({ vpRaw: r, vpVendor: A1, vpTab: 2 });
   const v = c.renderVals();
-  assert.equal(v.vpTabs[2].n, '2');
-  const [miss, met] = v.vp.breaches;
-  assert.deepEqual([miss.wo, miss.asset, miss.building, miss.metric, miss.target, miss.actual, miss.mult],
-    ['WO-B101-0007', 'AHU-01', 'Harbour Point', 'Response', '4h', '6.5h', '3×']);
-  assert.equal(miss.actualFg, 'var(--st-risk)');
-  assert.equal(met.actualFg, 'var(--st-ok)');
+  assert.equal(v.vpTabs[2].n, '1');                     // one work order, however many checks it had
+  const [job] = v.vp.evRows;
+  assert.deepEqual([job.wo, job.crit, job.weight, job.response.value, job.response.of],
+    ['WO-B101-0007', 'L1', '×3', '6.5h', '/ 4h']);
+  assert.match(job.sub, /AHU-01/);
+  assert.equal(v.vp.evBuilding, 'Harbour Point');
+  assert.equal(job.response.fg, 'var(--st-risk)');
+  assert.equal(job.completion.fg, 'var(--st-ok)');
   assert.equal(v.vp.breachEmptyShow, 'none');
   assert.equal(v.vp.creditTotal, '—');                  // nothing priced, so no total and no claim
   assert.equal(v.vp.claimShow, 'none');

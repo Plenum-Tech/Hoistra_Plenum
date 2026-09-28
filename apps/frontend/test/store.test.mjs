@@ -148,13 +148,16 @@ test('an orchestrator task is a session too, and reopens the dock on its chain',
   const t = c.state.sessions[0];
   assert.equal(t.kind, 'task');
   assert.equal(t.title, 'Export compliance pack — Compliance');
-  assert.equal(t.steps.length, 4);
+  // A task with no chain of its own shows its intent only — no scripted "executed against
+  // the live graph" step claiming work that no call did (review, 28 Sep 2026).
+  assert.equal(t.steps.length, 1);
+  assert.ok(!t.steps.some((x) => /Executing against the live graph|Validation gate armed/.test(x.t)));
   assert.ok(t.at > 0);
   c.closeOrch();
   c.openSession(t.id);
   assert.equal(c.state.orchOpen, true);
   assert.equal(c.state.orchTask, t);
-  assert.equal(c.state.orchDone, 4);
+  assert.equal(c.state.orchDone, t.steps.length);
   cleanup();
 });
 

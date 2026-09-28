@@ -7,6 +7,7 @@
 // nothing is asserted without disclosure.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { investigationContext } from './assetsActions.js';
 import { MODULES, INGEST_ASK } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
 import { complianceApi } from '../api/compliance.js';
@@ -794,6 +795,12 @@ export const complianceLiveMethods = {
             ? "The asset register on this page did not load (" + String(s.asLiveError).slice(0, 120) +
               "). That is the page's own fetch, not evidence about the data — the tools read the register themselves. Do not mention it unless asked."
             : "The asset register has not loaded from the backend yet.");
+        // An investigation open in the dock: its three datasets ride along, so a follow-up
+        // ("why is the bill not comparable?") is answered from them rather than from nothing.
+        if (s.flow === "investigate" && s.orchOpen) {
+          const block = investigationContext(s.inv);
+          if (block) parts.push(block);
+        }
       } else if (s.module === "ops") {
         parts.push(this.mxIsLive()
           ? "The maintenance register is live from svc-work-order-management."

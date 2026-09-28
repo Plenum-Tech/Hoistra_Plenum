@@ -67,6 +67,16 @@ export const deepAgentsApi = {
       timeoutMs: T_ASK
     }),
 
+  // POST /api/workflow/investigation-summary → { ok, lines[{source,text}], overall, dropped[], meta }
+  // The summary at the end of an Investigate: one model pass over the three datasets the page
+  // fetched, every figure checked against them. Not a chat turn; no session.
+  investigationSummary: (body) =>
+    apiFetch(B, '/api/workflow/investigation-summary', {
+      method: 'POST',
+      body: { asset: body.asset || {}, sources: body.sources || {} },
+      timeoutMs: 45000
+    }),
+
   // Same contract, but the session survives an interrupt() gate so it can be resumed.
   // This is the path the compliance console uses: the structured compliance answer is
   // produced by a preflight that only the stateful route reaches.

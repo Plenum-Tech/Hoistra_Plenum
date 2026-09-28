@@ -22,6 +22,32 @@ import { workOrderApi } from '../api/workOrder.js';
 import { energyApi } from '../api/energy.js';
 import { isStaleScope } from '../api/client.js';
 
+// Reads a paged list to its end: page 1, 2, … until a page comes back short. `complete` is
+// false only when maxPages ran out first, so a caller can say the list was cut rather than
+// present it as everything. A page that fails fails the whole read — the pages before it are
+// not all of it, and passing them off as the list is the silence this replaced.
+//
+// `key` names a row. Offset paging over a sort with ties can hand back one row on two pages
+// and another on none; the routes now break ties on the primary key, and a repeat the reader
+// still sees (an insert between two page reads shifts every later page) is kept once.
+export async function readAllPages(fetchPage, { size = 200, maxPages = 50, key = null } = {}) {
+  const rows = [];
+  const seen = new Set();
+  for (let page = 1; page <= maxPages; page++) {
+    const got = (await fetchPage(page, size)) || [];
+    for (const r of got) {
+      const k = key ? key(r) : null;
+      if (k !== null && k !== undefined && k !== "") {
+        if (seen.has(k)) continue;
+        seen.add(k);
+      }
+      rows.push(r);
+    }
+    if (got.length < size) return { rows, complete: true };
+  }
+  return { rows, complete: false };
+}
+
 const RETRY_MS = 30000;
 const RETRY_MAX = 6;
 
@@ -43,21 +69,25 @@ export const assetsLiveMethods = {
     clearTimeout(this._asLiveRetry);
     this.setState({ asLiveLoading: true });
     try {
-      // The newest 200, and every open one besides: a building with thousands of completed
-      // orders otherwise leaves its open ones off the page the notes are built from.
-      const [assets, recent, open] = await Promise.all([workOrderApi.assets({ limit: 200 }),
-        workOrderApi.workOrders({ limit: 200 }),
-        workOrderApi.workOrders({ open: true, limit: 200 }).catch(() => [])]);
-      const seen = new Set();
-      const workOrders = [...(open || []), ...(recent || [])].filter((w) => {
-        const k = w && (w.work_order_id || w.id || w.wo_code);
-        if (!k || seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
+      // Every page of each. Both routes cap a page at 200, and one page was all the page read:
+      // on 28 Sep 2026 that was 200 of Bishopsgate's 1,985 work orders, with nothing said.
+      const [a, w] = await Promise.all([
+        readAllPages((page, limit) => workOrderApi.assets({ limit, page }), { size: 200, key: (r) => r && r.asset_id }),
+        readAllPages((page, limit) => workOrderApi.workOrders({ limit, page }), { size: 200, key: (r) => r && (r.work_order_id || r.id) })
+      ]);
+      const assets = a.rows;
+      let workOrders = w.rows;
+      // Past the page ceiling the list was cut, and a building with thousands of completed
+      // orders could lose its open ones off the end. The open ones are then read on their own
+      // (?open=true) and merged in, so the notes and counts built from them are never short.
+      if (!w.complete) {
+        const open = await workOrderApi.workOrders({ open: true, limit: 200 }).catch(() => []);
+        const seen = new Set(workOrders.map((x) => x && (x.work_order_id || x.id)));
+        workOrders = workOrders.concat((open || []).filter((x) => x && !seen.has(x.work_order_id || x.id)));
+      }
       this._asLiveAttempts = 0;
       this.setState({
-        asLive: assets || [], asLiveWos: workOrders || [],
+        asLive: assets, asLiveWos: workOrders, asLiveWosComplete: w.complete, asLiveComplete: a.complete,
         asLiveLoading: false, asLiveError: '', asLiveLoadedAt: new Date().toISOString()
       });
       if (opts && opts.announce) this.flash('Asset register loaded — ' + (assets || []).length + ' assets');

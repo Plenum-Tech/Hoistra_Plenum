@@ -183,7 +183,7 @@ export default function Assets({ vals }) {
                                 </div>
                                 {(sec.rows || []).map((r, $index) => (
                                   <React.Fragment key={$index}>
-                                    <div className="hv19" onClick={r.open} style={{ display: "flex", alignItems: "flex-start", gap: "12px", flexWrap: "wrap", padding: "11px 14px 11px 40px", borderBottom: "1px solid var(--color-divider)", borderLeft: `3px solid ${r.rail}`, cursor: "pointer" }}>
+                                    <div className="hv19" onClick={r.open} style={{ display: "flex", alignItems: "flex-start", gap: "12px", flexWrap: "wrap", padding: "11px 14px 11px 40px", borderBottom: "1px solid var(--color-divider)", borderLeft: `3px solid ${r.rail}`, background: r.rowBg || "transparent", cursor: "pointer" }}>
                                       <div style={{ flex: "1 1 220px", minWidth: "0" }}>
                                         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                                           <span style={{ fontSize: "12.5px" }}>
