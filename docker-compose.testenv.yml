@@ -277,6 +277,10 @@ services:
     environment:
       DB_URL: *db
       db_url: *db
+      # Where this container validates a caller's token (OPS /api/auth/me). The default is
+      # 127.0.0.1:8009, right only for the all-in-one image; here ops-intelligence is its own
+      # container, so without this every signed-in route answers 503 (28 Sep 2026).
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MAX_QUERY_ROWS: "500"
       MAX_AGENT_ITERATIONS: "6"

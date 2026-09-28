@@ -168,6 +168,12 @@ services:
       - ./apps/backend/.env
     environment:
       DB_URL: ${PLENUM_DB_DSN}?sslmode=require
+      # Where this container validates a caller's token: it resolves the principal against
+      # OPS /api/auth/me and defaults to 127.0.0.1:8009, which is right only for the all-in-one
+      # image. Here ops-intelligence is its own container, so the default is this container's
+      # own port, nothing listens, and every signed-in route answered 503 — the Buildings graph
+      # and saved spaces read nothing from 14 Sep (83b0e4c) until 28 Sep 2026.
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://svc-operations-intelligence:8009
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
       MAX_QUERY_ROWS: "500"
       MAX_AGENT_ITERATIONS: "10"
