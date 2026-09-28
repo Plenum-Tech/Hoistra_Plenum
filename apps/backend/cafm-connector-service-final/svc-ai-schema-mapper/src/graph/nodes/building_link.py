@@ -127,13 +127,22 @@ class BuildingResolver:
             return []
         self.reads += 1
         rows = await self._fetch(
-            f"SELECT building_id::text FROM {self._schema}.buildings "
+            f"SELECT building_id::text, lower(coalesce(building_code, '')), "
+            f"lower(coalesce(site_id::text, '')) FROM {self._schema}.buildings "
             f"WHERE organization_id::text = :org AND ("
             f"lower(name) = ANY(:names) OR lower(coalesce(building_code, '')) = ANY(:names) "
-            f"OR lower(coalesce(site_id::text, '')) = ANY(:names)) LIMIT 3",
+            f"OR lower(coalesce(site_id::text, '')) = ANY(:names)) LIMIT 5",
             {"org": self._org, "names": wanted},
         )
-        return sorted({str(r[0]) for r in rows if r and r[0]})
+        ids = sorted({str(r[0]) for r in rows if r and r[0]})
+        # A code or site id is an identifier; a name is not. On 27 Sep 2026 the hint "B-301"
+        # became {"b-301", "bishopsgate tower"} through the run's Sites sheet, matched B-301 by
+        # code AND a second "Bishopsgate Tower" (B-103, added from the UI) by name, and the
+        # whole workbook was written with no building at all. When exactly one building
+        # matches by identifier, that is the building.
+        by_ident = sorted({str(r[0]) for r in rows
+                           if r and r[0] and len(r) >= 3 and ({r[1], r[2]} & set(wanted)) - {""}})
+        return by_ident if len(ids) > 1 and len(by_ident) == 1 else ids
 
     async def _resolve(self, key: str) -> str | None:
         # 1. The hint, or the name the run's own Sites sheet gives it, is a building.

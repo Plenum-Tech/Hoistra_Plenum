@@ -43,7 +43,7 @@ class FakeDb:
         self.calls.append(sql)
         if ".buildings" in sql:
             names = set(params["names"])
-            return [(b[0],) for b in self.buildings
+            return [(b[0], (b[2] or "").lower(), (b[3] or "").lower()) for b in self.buildings
                     if b[1].lower() in names or (b[2] or "").lower() in names or (b[3] or "").lower() in names]
         if ".sites" in sql:
             k = params["k"]
@@ -116,6 +116,21 @@ def test_nothing_or_more_than_one_thing_is_no_link_and_the_ambiguity_is_kept():
     assert r.ambiguous == ["tower"]
     assert run(r.resolve("S-99")) is None
     assert run(r.resolve("")) is None and run(r.resolve(None)) is None
+
+
+def test_a_code_match_wins_over_a_second_building_that_only_shares_the_name():
+    # Bishopsgate, 27 Sep 2026: the workbook's B-301 and a UI-created B-103 are both called
+    # "Bishopsgate Tower"; the run's Sites sheet turns the hint B-301 into that name too.
+    db = FakeDb(buildings=[("id-301", "Bishopsgate Tower", "B-301", "S-301"),
+                           ("id-103", "Bishopsgate Tower", "B-103", None)], sites=[])
+    r = bl.BuildingResolver(db.fetch, ORG, site_names={"b-301": "Bishopsgate Tower",
+                                                       "s-301": "Bishopsgate Tower"})
+    assert run(r.resolve("B-301")) == "id-301"
+    assert run(r.resolve("S-301")) == "id-301"
+    assert r.ambiguous == []
+    # the name alone still names two buildings, and stays unresolved
+    assert run(r.resolve("Bishopsgate Tower")) is None
+    assert r.ambiguous == ["bishopsgate tower"]
 
 
 def test_each_distinct_hint_is_read_at_most_twice_and_then_remembered():

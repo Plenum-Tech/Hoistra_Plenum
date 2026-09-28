@@ -158,6 +158,9 @@ async def create(
         # A placeholder password hash that can never verify: the account cannot be used
         # until the invitation is accepted and a real password set.
         placeholder = password_engine.hash_password(secrets.token_urlsafe(48))
+        # users.full_name is NOT NULL and the Super Admin form asks only for an email: the
+        # address's local part stands in until the person accepts and names themselves.
+        full_name = (full_name or "").strip() or addr.split("@", 1)[0]
         user_id = (
             await session.execute(
                 text("""INSERT INTO plenum_cafm.users

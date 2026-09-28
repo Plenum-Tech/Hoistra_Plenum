@@ -52,6 +52,14 @@ class InviteAdmin(BaseModel):
 _CODE_STRIP = re.compile(r"[^A-Z0-9]+")
 
 
+async def _has_code_column(session: AsyncSession) -> bool:
+    """plenum_agent's organizations has code (NOT NULL, UNIQUE); hoistra_test's has no such
+    column, and querying it there 500'd every creation. Probed, not assumed."""
+    return bool((await session.execute(text(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'plenum_cafm' "
+        "AND table_name = 'organizations' AND column_name = 'code'"))).scalar())
+
+
 async def _unique_code(session: AsyncSession, name: str) -> str:
     """A short slug for organizations.code — NOT NULL and UNIQUE in the live schema, but
     the create-company form never asked for one (nor should it: existing rows are hand-picked
@@ -103,19 +111,23 @@ async def create_company(
             detail={"ok": False, "error": "A company with that name already exists.",
                     "reason": "duplicate_name", "organization_id": dup},
         )
-    org_code = await _unique_code(session, body.name)
+    params = {"n": body.name.strip(), "ind": body.industry, "c": body.country_code,
+              "cc": code, "tz": body.timezone, "ae": str(body.admin_email) if body.admin_email else None,
+              "by": principal.user_id}
+    code_col = code_val = ""
+    if await _has_code_column(session):
+        params["code"] = await _unique_code(session, body.name)
+        code_col, code_val = " code,", " :code,"
     org_id = (await session.execute(
         # organizations.id has no default in the live schema (unlike users, invitations
         # and the ledgers), so the key is generated here rather than left to the database.
-        text("""INSERT INTO plenum_cafm.organizations
-                    (id, name, code, industry, country, country_code, timezone, status, lifecycle,
+        text(f"""INSERT INTO plenum_cafm.organizations
+                    (id, name,{code_col} industry, country, country_code, timezone, status, lifecycle,
                      admin_email, created_by, created_at, updated_at)
-                VALUES (gen_random_uuid(), :n, :code, :ind, :c, :cc, :tz, 'active', 'created',
+                VALUES (gen_random_uuid(), :n,{code_val} :ind, :c, :cc, :tz, 'active', 'created',
                         :ae, :by, now(), now())
                 RETURNING id"""),
-        {"n": body.name.strip(), "code": org_code, "ind": body.industry, "c": body.country_code,
-         "cc": code, "tz": body.timezone, "ae": str(body.admin_email) if body.admin_email else None,
-         "by": principal.user_id},
+        params,
     )).scalar()
     await write_audit(
         session, actor=str(principal.email), action_type="superadmin.company.created",
