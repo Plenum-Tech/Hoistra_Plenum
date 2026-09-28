@@ -1,7 +1,7 @@
 """Energy Intelligence API — Feature C."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -41,6 +41,7 @@ from ...engines.energy import floor_meters as floor_svc
 from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ask as ask_svc
 from ...engines.energy import investigate as inv_svc
+from ...engines.energy import asset_sources
 from ...engines.energy import market_profiles as mp_svc
 from ...engines.energy import pricing as price_svc
 from ...engines.energy import asset_intelligence as ai_svc
@@ -1907,3 +1908,107 @@ async def investigate_asset(
             "ok": False, "error": "No such asset in your buildings.",
             "reason": out.get("reason", "not_found")})
     return out
+
+
+# ── The data behind an investigation's bms_trend, utility_bill and weather lines ────────
+# Read-only, scoped like /investigate, and the same datasets the walk's lines are derived
+# from — so the line in the dock and what the orchestrator summarises cannot disagree.
+
+async def _asset_in_scope(session: AsyncSession, s: access.Scope, asset_id: str) -> dict:
+    try:
+        asset_id = await anom_svc.resolve_asset(session, asset_id) or asset_id
+    except anom_svc.UnknownAsset as exc:
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "reason": "unknown_asset", "error": str(exc)}) from exc
+    ids = await position_svc.building_ids_for(session, s, None)
+    detail = await ai_svc.asset_detail(session, asset_id=asset_id, building_ids=ids)
+    if not detail.get("ok"):
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such asset in your buildings.",
+            "reason": detail.get("reason", "not_found")})
+    return detail
+
+
+def _asset_head(detail: dict) -> dict:
+    a = detail["asset"]
+    return {"id": a["id"], "asset_name": a["asset_name"], "asset_code": a.get("asset_code"),
+            "building_id": a["building_id"], "building": a.get("building")}
+
+
+@router.get("/assets/{asset_id}/bms-trend")
+async def asset_bms_trend(
+    asset_id: str,
+    weeks: int = Query(8, ge=1, le=52),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The asset's BMS record over the window: chiller kW/RT when it has one, otherwise its own
+    readings as daily buckets, each graded against its band.
+
+    A type with no band is ungraded, never "in band". ``status`` is ``found``, ``not_found``
+    (the query ran and nothing is on record) or ``unreadable`` (the query failed). Nothing is
+    written. 404 for an asset outside your buildings — the same answer as one that does not
+    exist.
+    """
+    detail = await _asset_in_scope(session, s, asset_id)
+    since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
+    ds = await asset_sources.bms_trend(
+        session, asset_id=detail["asset"]["id"], since=since,
+        bands=asset_sources.bands_from_readings(detail.get("readings")))
+    return {"ok": True, "asset": _asset_head(detail), **ds, "written": False}
+
+
+@router.get("/assets/{asset_id}/utility-bill")
+async def asset_utility_bill(
+    asset_id: str,
+    weeks: int = Query(8, ge=1, le=52),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Supply-meter consumption for the asset's building, by fuel and by week, against the same
+    weeks last year.
+
+    There is no utility-bill register on this platform, so the meter stands in for the bill,
+    and ``basis`` says so. The supply meters are counted once — sub-meters sit beneath them —
+    and ``change_pct`` is present only when last year's window is on record for at least 90% of
+    this year's days. A £ figure appears only where every meter used carries a tariff.
+    """
+    detail = await _asset_in_scope(session, s, asset_id)
+    since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
+    ds = await asset_sources.utility_bill(
+        session, building_id=detail["asset"]["building_id"], since=since)
+    return {"ok": True, "asset": _asset_head(detail), **ds, "written": False}
+
+
+@router.get("/weather/degree-days")
+async def read_degree_days(
+    building_id: str = Query(..., description="The building whose weather to read"),
+    months: int = Query(12, ge=1, le=36),
+    weeks: int | None = Query(None, ge=1, le=52, description=(
+        "Instead of whole months: the last N weeks — the window an investigation's weather "
+        "line covers, so a summary beside that line quotes the same figures")),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Heating and cooling degree days for a building, by month, against the same months last
+    year — the read counterpart of POST on this path.
+
+    The platform's own weather_degree_days record when it covers the months; otherwise
+    Open-Meteo's ERA5 archive for the building's location (its site's postcode, else its city),
+    computed at 15.5 °C and stored nowhere. The window ends at the archive's last full day.
+    ``unreadable`` when the provider could not be read — never "no degree days".
+    """
+    ids = {str(b) for b in await position_svc.building_ids_for(session, s, None)}
+    if str(building_id) not in ids:
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such building in your buildings.", "reason": "not_found"})
+    today = datetime.now(timezone.utc).date()
+    if weeks:
+        first = today - timedelta(weeks=weeks)
+    else:
+        first = today.replace(day=1)
+        for _ in range(months - 1):
+            first = (first - timedelta(days=1)).replace(day=1)
+    ds = await asset_sources.degree_days(session, building_id=str(building_id), start=first,
+                                         end=today, today=today, monthly=True)
+    return {"ok": True, "building_id": str(building_id), **ds, "written": False}

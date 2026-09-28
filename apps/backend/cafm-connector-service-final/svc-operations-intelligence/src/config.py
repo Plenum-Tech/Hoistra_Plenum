@@ -245,6 +245,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DCC_API_BASE_URL", "dcc_api_base_url"),
     )
     dcc_api_key: str = Field("", validation_alias=AliasChoices("DCC_API_KEY", "dcc_api_key"))
+    # Open-Meteo historical weather, for the degree days an investigation compares. Without a
+    # key the free endpoints are used, which Open-Meteo licenses for non-commercial use only;
+    # with one, the customer endpoints (commercial licence). Plenum decides before production.
+    open_meteo_api_key: str = Field(
+        "", validation_alias=AliasChoices("OPEN_METEO_API_KEY", "open_meteo_api_key"),
+    )
     # SAM.gov Entity Management API — official US federal register of entities doing
     # business with the government. Free key from https://sam.gov (Account Details ->
     # Request Public API Key). Used to verify a US vendor entity is registered and not

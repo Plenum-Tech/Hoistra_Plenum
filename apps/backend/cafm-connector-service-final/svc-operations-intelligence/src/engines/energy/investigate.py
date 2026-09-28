@@ -25,18 +25,14 @@ it holds no INSERT, no UPDATE, and no queue write.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...core.logging import get_logger
 from . import asset_intelligence as ai
-from .meter_scope import counted_meters
-
-log = get_logger(__name__)
+from . import asset_sources as sources
 
 #: The rule set that produced an investigation, named in the response.
 METHOD = "rule:asset-investigation/v1"
@@ -65,33 +61,28 @@ AMBIENT_MATCH_C = 2.0
 #: A drift in kW/RT bigger than this, at matched ambient, is worth naming.
 KW_PER_RT_DRIFT = 0.02
 
+#: A reading measured against the limit set for it: nothing is inferred, so nothing is discounted.
+CONF_READING_OUT_OF_BAND = 1.0
 
-def _num(v: Any) -> float | None:
-    try:
-        return float(v) if v is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _iso(v: Any) -> Any:
-    return v.isoformat() if hasattr(v, "isoformat") else v
-
-
-async def _rows(session: AsyncSession, sql: str, params: dict, what: str) -> list[dict]:
-    """One source, in its own savepoint. A source this database shapes differently comes back
-    empty and is reported as unreadable — it does not take the investigation down with it."""
-    try:
-        async with session.begin_nested():
-            return [dict(r) for r in
-                    (await session.execute(text(sql), params)).mappings().all()]
-    except Exception as exc:  # noqa: BLE001
-        log.warning("investigate.source_failed", source=what, error=str(exc)[:220])
-        return []
+#: The shared reads. The walk's lines are derived from the same datasets the bms-trend,
+#: utility-bill and degree-days endpoints return, so a line and its dataset cannot disagree.
+#: ``_rows`` returns ``None`` on a failed query, never ``[]`` — the two used to be the same
+#: value, so weather said "no degree days" for as long as its SQL did not parse.
+_rows = sources.read_rows
+_num = sources.num
+_iso = sources.iso
+_a_year_before = sources.a_year_before
 
 
 def _source(name: str, question: str, status: str, badge: str, **detail) -> dict[str, Any]:
     """One line of the walk: what was asked of a source and what it gave back."""
     return {"source": name, "question": question, "status": status, "badge": badge, **detail}
+
+
+def _unreadable(name: str, question: str) -> dict[str, Any]:
+    """A source whose query failed. Not a finding, and not the absence of one."""
+    return _source(name, question, "unreadable", "could not be read",
+                   detail="the query for this source failed, so it says nothing either way")
 
 
 # ── the walk ─────────────────────────────────────────────────────────────────────────
@@ -129,15 +120,15 @@ async def _walk_efficiency(session, asset, since) -> dict[str, Any]:
           FROM plenum_cafm.chiller_performance_readings
          WHERE asset_id::text = :aid AND reading_at >= :since""",
         {"aid": aid, "since": since, "mid": mid}, "chiller_readings")
+    if reads is None:
+        return _unreadable("bms_trend", f"{asset['asset_name']} kW per RT against design")
     r = reads[0] if reads else {}
     points = int(r.get("points") or 0)
     actual = _num(r.get("kw_per_rt"))
     spec = _num(design[0]["design_kw_per_rt"]) if design else None
 
     if not points:
-        return _source("bms_trend", f"{asset['asset_name']} kW per RT against design",
-                       "not_found", "no readings",
-                       detail="no performance reading is on record for this asset")
+        return await _walk_bms_readings(session, asset, since)
 
     early, late = _num(r.get("early_kw_rt")), _num(r.get("late_kw_rt"))
     ea, la = _num(r.get("early_ambient")), _num(r.get("late_ambient"))
@@ -167,6 +158,38 @@ async def _walk_efficiency(session, asset, since) -> dict[str, Any]:
         first_at=_iso(r.get("first_at")), last_at=_iso(r.get("last_at")))
 
 
+async def _walk_bms_readings(session, asset, since) -> dict[str, Any]:
+    """Plant with no chiller performance record: its own BMS readings, against their bands.
+
+    The kW/RT walk is the only one that can say *why* a chiller costs what it does, and it
+    only reads ``chiller_performance_readings``. Every boiler, AHU and pump therefore read
+    "no readings" while ``asset_readings`` held their temperatures and pressures. The line is
+    derived from ``asset_sources.asset_readings_trend`` — the bms-trend endpoint's dataset —
+    graded against the bands the asset read already resolved. None of the chiller rules can
+    fire off it; the out-of-band rule can.
+    """
+    question = f"{asset['asset_name']} BMS readings against their bands, {WINDOW_WEEKS} weeks"
+    ds = await sources.asset_readings_trend(session, asset_id=asset["asset_id"], since=since,
+                                            bands=asset.get("bands") or {})
+    if ds["status"] == "unreadable":
+        return _unreadable("bms_trend", question)
+    if ds["status"] == "not_found":
+        return _source("bms_trend", f"{asset['asset_name']} kW per RT against design",
+                       "not_found", "no readings", detail=ds["detail"])
+    oob = ds["out_of_band"]
+    cut = bool(ds.get("truncated"))
+    return _source(
+        "bms_trend", question, "found",
+        f"{ds['points']:,} points{' (newest kept)' if cut else ''} · {len(oob)} out of band",
+        points=ds["points"], reading_types=ds["reading_types"], graded_types=ds["graded_types"],
+        out_of_band=oob, truncated=cut,
+        latest=[{"reading_type": t["reading_type"], "unit": t["unit"], **t["latest"]}
+                for t in ds["types"]],
+        first_at=ds["first_at"], last_at=ds["last_at"],
+        detail=(ds["detail"] + (f"; the window held more readings than are read at once, so the "
+                                f"newest {ds['points']:,} were kept" if cut else "")))
+
+
 async def _walk_meter(session, asset, since) -> dict[str, Any]:
     """Whether the plant this asset sits in is sub-metered, and what it drew."""
     rows = await _rows(session, """
@@ -178,6 +201,8 @@ async def _walk_meter(session, asset, since) -> dict[str, Any]:
                  ON r.meter_id = m.id AND r.reading_at >= :since
          WHERE m.active AND (m.asset_id::text = :aid OR m.building_id = :bid)""",
         {"aid": asset["asset_id"], "bid": asset["building_id"], "since": since}, "meters")
+    if rows is None:
+        return _unreadable("meter_reading", f"sub-metered plant, {WINDOW_WEEKS} weeks")
     r = rows[0] if rows else {}
     meters = int(r.get("meters") or 0)
     if not meters:
@@ -192,61 +217,81 @@ async def _walk_meter(session, asset, since) -> dict[str, Any]:
 
 
 async def _walk_bill(session, asset, since) -> dict[str, Any]:
-    """Billed consumption against the same period last year.
+    """Billed consumption against the same period last year — from the supply meters.
 
-    There is no utility-bill register on this platform, so this is answered from metered
-    consumption over the billing period instead — and says so, because a bill and a meter
-    are different records and one standing in for the other has to be visible.
+    There is no utility-bill register on this platform, so the meter stands in for the bill,
+    and the question says so. The line is derived from ``asset_sources.utility_bill`` — the
+    utility-bill endpoint's dataset: supply meters counted once (Bishopsgate: 4.09 GWh with
+    the sub-meters added against a supply of 1.51), and last year compared only when it is on
+    record (its supply meters start 28 Sep 2025, so the same eight weeks held one day).
     """
-    rows = await _rows(session, f"""
-        SELECT sum(CASE WHEN r.reading_at >= :since THEN r.consumption_kwh END) AS now_kwh,
-               sum(CASE WHEN r.reading_at >= :since - interval '1 year'
-                         AND r.reading_at <  :since - interval '1 year' + (now() - :since)
-                        THEN r.consumption_kwh END) AS last_year_kwh
-          FROM plenum_cafm.energy_meters m
-          JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
-         WHERE m.active AND m.building_id = :bid
-           -- The supply meters only (meter_scope): a floor sub-meter from this year counted on
-           -- top of the supply that feeds it read as growth against a year that had none.
-           AND {counted_meters("m")}""",
-        {"bid": asset["building_id"], "since": since}, "billing")
-    r = rows[0] if rows else {}
-    now_kwh, last_kwh = _num(r.get("now_kwh")), _num(r.get("last_year_kwh"))
-    if not now_kwh or not last_kwh:
-        return _source("utility_bill", "billing-period consumption vs same month last year",
-                       "not_found", "no comparable period",
-                       detail=("no utility-bill register exists here, and metered consumption "
-                               "does not cover the same period last year"))
-    change = round((now_kwh - last_kwh) / last_kwh * 100, 1)
-    return _source("utility_bill", "billing-period consumption vs same month last year",
-                   "partial", f"{change:+.0f}%",
-                   change_pct=change, now_kwh=round(now_kwh), last_year_kwh=round(last_kwh),
+    question = (f"supply-meter consumption, last {WINDOW_WEEKS} weeks vs the same weeks last "
+                "year — the meter stands in for the bill")
+    ds = await sources.utility_bill(session, building_id=asset["building_id"], since=since)
+    if ds["status"] == "unreadable":
+        return _unreadable("utility_bill", question)
+    if ds["status"] == "not_found":
+        return _source("utility_bill", question, "not_found", "no comparable period",
+                       detail=f"no utility-bill register exists here, and {ds['detail']}")
+    t = ds["total"]
+    if not t["comparable"]:
+        return _source("utility_bill", question, "not_found", "no comparable period",
+                       now_kwh=round(t["now_kwh"]), now_days=t["now_days"],
+                       last_year_days=t["last_year_days"],
+                       first_reading_at=ds.get("first_reading_at"),
+                       detail=("no utility-bill register exists here, and the metered record "
+                               f"does not cover the same weeks last year: {t['last_year_days']} "
+                               f"of {t['now_days']} days are on record"
+                               + (f" — metered history starts {ds['first_reading_at'][:10]}"
+                                  if ds.get("first_reading_at") else "")))
+    change = t["change_pct"]
+    return _source("utility_bill", question, "partial", f"{change:+.0f}%",
+                   change_pct=change, now_kwh=round(t["now_kwh"]),
+                   last_year_kwh=round(t["last_year_kwh"]),
                    detail=("from metered consumption — there is no utility-bill register on "
                            "this platform, so the meter stands in for the bill"))
 
 
 async def _walk_weather(session, asset, since) -> dict[str, Any]:
-    """Cooling degree days against last year: is the weather the explanation?"""
-    rows = await _rows(session, """
-        SELECT sum(CASE WHEN month >= :since_m THEN cdd END) AS now_cdd,
-               sum(CASE WHEN month >= (:since_m::date - interval '1 year')
-                         AND month <  (:since_m::date - interval '1 year')
-                                      + age(current_date, :since_m::date) THEN cdd END)
-                   AS last_cdd
-          FROM plenum_cafm.weather_degree_days WHERE building_id = :bid""",
-        {"bid": asset["building_id"], "since_m": since.date().replace(day=1)}, "weather")
-    r = rows[0] if rows else {}
-    now_cdd, last_cdd = _num(r.get("now_cdd")), _num(r.get("last_cdd"))
-    if not now_cdd or not last_cdd:
-        return _source("weather", "cooling degree days vs last year", "not_found",
-                       "no degree days",
-                       detail="no degree-day record covers this building and period")
-    change = round((now_cdd - last_cdd) / last_cdd * 100, 1)
-    flat = abs(change) <= CDD_FLAT_PCT
-    return _source("weather", "cooling degree days vs last year", "found",
-                   "flat" if flat else f"{change:+.0f}%",
-                   change_pct=change, flat=flat, now_cdd=round(now_cdd),
-                   last_year_cdd=round(last_cdd))
+    """Heating and cooling degree days against the same weeks last year.
+
+    Is the weather the explanation? The line is derived from ``asset_sources.degree_days`` —
+    the degree-days endpoint's dataset: the platform's own weather_degree_days record when it
+    covers the window, otherwise Open-Meteo's archive for the building's location, computed at
+    15.5 °C and stored nowhere. ``flat`` stays cooling-based, for the chiller rule it serves;
+    ``hdd_flat`` is the check that matters for heating plant.
+    """
+    question = "heating and cooling degree days vs the same weeks last year"
+    ds = await sources.degree_days(session, building_id=asset["building_id"],
+                                   start=since.date(), end=datetime.now(timezone.utc).date())
+    if ds["status"] == "unreadable":
+        out = _unreadable("weather", question)
+        return {**out, "detail": ds.get("detail") or out["detail"]}
+    if ds["status"] == "not_found":
+        return _source("weather", question, "not_found", "no degree days", detail=ds["detail"])
+    t = ds["total"]
+    if not t.get("comparable"):
+        return _source("weather", question, "not_found", "no comparable period",
+                       detail=("the weather record does not cover the same dates last year; "
+                               + ds.get("detail", "")))
+
+    def part(label: str, now: float, last: float, pct: float | None) -> tuple[str, bool]:
+        if not now and not last:
+            return f"no {'heating' if label == 'HDD' else 'cooling'}", True
+        if pct is None:
+            return f"{label} {now:.0f} vs {last:.0f}", False
+        flat = abs(pct) <= CDD_FLAT_PCT
+        return (f"{label} flat" if flat else f"{label} {pct:+.0f}%"), flat
+
+    h_txt, h_flat = part("HDD", t["hdd"], t["last_year_hdd"], t["hdd_change_pct"])
+    c_txt, c_flat = part("CDD", t["cdd"], t["last_year_cdd"], t["cdd_change_pct"])
+    return _source("weather", question, "found", f"{h_txt} · {c_txt}",
+                   change_pct=t["cdd_change_pct"], flat=c_flat,
+                   hdd_change_pct=t["hdd_change_pct"], hdd_flat=h_flat,
+                   now_hdd=t["hdd"], last_year_hdd=t["last_year_hdd"],
+                   now_cdd=t["cdd"], last_year_cdd=t["last_year_cdd"],
+                   source_of_record=ds.get("source"), location=ds.get("location"),
+                   detail=ds.get("detail"))
 
 
 async def _walk_work_orders(session, asset, since) -> dict[str, Any]:
@@ -265,6 +310,8 @@ async def _walk_work_orders(session, asset, since) -> dict[str, Any]:
          WHERE w.asset_id::text = :aid
          ORDER BY coalesce(w.completed_at, w.closed_at, w.created_at) DESC NULLS LAST
          LIMIT 10""", {"aid": asset["asset_id"]}, "work_orders")
+    if rows is None:
+        return _unreadable("work_order", "planned maintenance on this asset")
     if not rows:
         return _source("work_order", "planned maintenance on this asset", "not_found",
                        "none on record",
@@ -289,6 +336,8 @@ async def _walk_documents(session, asset, since) -> dict[str, Any]:
     rows = await _rows(session, """
         SELECT count(*) AS n FROM plenum_cafm.asset_documents WHERE asset_id::text = :aid""",
         {"aid": asset["asset_id"]}, "asset_documents")
+    if rows is None:
+        return _unreadable("document", "records filed against this asset")
     n = int(rows[0]["n"]) if rows else 0
     if n:
         return _source("document", "records filed against this asset", "found",
@@ -300,6 +349,35 @@ async def _walk_documents(session, asset, since) -> dict[str, Any]:
 
 
 # ── the evidence ─────────────────────────────────────────────────────────────────────
+
+def _label(reading_type: str) -> str:
+    return str(reading_type).replace("_", " ")
+
+
+def _num_text(v: Any) -> str:
+    """A figure as a person writes it: 18.4, 12, 1,234,567 — never 1.23457e+06. The text goes
+    into the evidence and into the email a vendor reads."""
+    n = _num(v)
+    if n is None:
+        return str(v)
+    return f"{n:,.4f}".rstrip("0").rstrip(".")
+
+
+def _reading_phrase(x: dict[str, Any]) -> str:
+    """'fan current 18.4 A (band 12–17.5, out of band on 2 of 2 days)'."""
+    unit = f" {x['unit']}" if x.get("unit") else ""
+    lo, hi = x.get("band_lo"), x.get("band_hi")
+    band = (f"band {_num_text(lo)}–{_num_text(hi)}" if lo is not None and hi is not None
+            else f"limit {_num_text(hi)}" if hi is not None else f"minimum {_num_text(lo)}")
+    days = (f", out of band on {x['days_out_of_band']} of {x['days']} days"
+            if x.get("days") else "")
+    return f"{_label(x['reading_type'])} {_num_text(x['value'])}{unit} ({band}{days})"
+
+
+def _names(oob: list[dict[str, Any]]) -> str:
+    labels = [_label(x["reading_type"]) for x in oob]
+    return labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+
 
 def _evidence(walk: dict[str, dict], asset: dict) -> list[dict[str, Any]]:
     """The findings the walk supports, each naming its sources and how far it reasons.
@@ -382,6 +460,21 @@ def _evidence(walk: dict[str, dict], asset: dict) -> list[dict[str, Any]]:
             "confidence": CONF_MEASURED_TOTAL,
             "kind": "corroborating total",
         })
+
+    # 5. A reading outside the band set for it. Measured against a stated limit, with no cause
+    # inferred, so it carries full confidence — AHU-3 read "6 out of band" in the walk while
+    # the conclusion spoke only of a missing report, because no rule looked at the readings.
+    oob = eff.get("out_of_band") or []
+    if oob:
+        graded = eff.get("graded_types") or len(oob)
+        out.append({
+            "statement": (f"{len(oob)} of {graded} graded BMS readings on {asset['asset_name']} "
+                          "are outside their bands on the latest read: "
+                          + "; ".join(_reading_phrase(x) for x in oob) + "."),
+            "sources": ["bms_trend"],
+            "confidence": CONF_READING_OUT_OF_BAND,
+            "kind": "out of band",
+        })
     return out
 
 
@@ -403,6 +496,12 @@ def _conclusion(evidence: list[dict], walk: dict, asset: dict,
                  "the planned visit closed without a report.")
     elif "measured gap" in kinds:
         cause = f"{asset['asset_name']} is consuming above its design efficiency."
+    elif "out of band" in kinds:
+        names = _names((walk.get("bms_trend") or {}).get("out_of_band") or [])
+        cause = (f"{names} are outside their bands, and the last visit closed without a report."
+                 if missing else f"{names} are outside their bands.")
+        if names and not names.count(" and ") and "," not in names:
+            cause = cause.replace(" are outside their bands", " is outside its band")
     else:
         cause = "The records this asset should carry are not on file."
 
@@ -413,13 +512,15 @@ def _conclusion(evidence: list[dict], walk: dict, asset: dict,
         "cost_annualised": _num(anomaly.get("annual_cost")),
         "currency": anomaly.get("currency"),
         "rests_on": "inference" if inferred else "record",
-        "confirmation_required": bool(missing or inferred),
+        "confirmation_required": bool(missing or inferred or "out of band" in kinds),
         "caveat": (
             "A record the contract requires is missing, so the cause rests on inference. "
             "Confirm with the people who were on site and request the missing document "
             "before anything is claimed." if missing else
             "The cause is inferred from readings rather than read from a record. Confirm "
-            "before anything is claimed." if inferred else None),
+            "before anything is claimed." if inferred else
+            "The readings establish the symptom, not the cause. Confirm on site before "
+            "anything is claimed." if "out of band" in kinds else None),
     }
 
 
@@ -431,7 +532,14 @@ def _actions(evidence: list[dict], walk: dict, asset: dict) -> list[dict[str, An
     """
     kinds = {e["kind"] for e in evidence}
     wo = walk.get("work_order", {}) or {}
-    vendor = (wo.get("latest") or {}).get("vendor")
+    # Every draft is addressed to the asset's registered vendor (the dock reads its contact
+    # record), so that is who the text names. The latest visit may have been someone else's,
+    # and a request for that visit's records says whose it was.
+    visit_vendor = (wo.get("latest") or {}).get("vendor")
+    vendor = asset.get("vendor") or visit_vendor
+    other_visit = (f" (the visit was carried out by {visit_vendor})"
+                   if visit_vendor and asset.get("vendor") and visit_vendor != asset.get("vendor")
+                   else "")
     eff = walk.get("bms_trend", {}) or {}
     out: list[dict[str, Any]] = []
 
@@ -455,7 +563,21 @@ def _actions(evidence: list[dict], walk: dict, asset: dict) -> list[dict[str, An
             "body": {"asset": asset["asset_name"], "building_id": asset["building_id"],
                      "request_type": "inspection",
                      "issue_description": ("Request the report and water-treatment log for the "
-                                           "closed planned visit — neither is on file")},
+                                           "closed planned visit — neither is on file"
+                                           + other_visit)},
+        })
+    if "out of band" in kinds:
+        oob = eff.get("out_of_band") or []
+        out.append({
+            "id": "inspect_out_of_band",
+            "label": "Request inspection — readings out of band",
+            "detail": f"{_names(oob)} · draft to {vendor or 'the vendor'}",
+            "endpoint": "POST /api/work-orders/",
+            "body": {"asset": asset["asset_name"], "building_id": asset["building_id"],
+                     "request_type": "inspection",
+                     "issue_description": (f"Inspect {asset['asset_name']}: "
+                                           + "; ".join(_reading_phrase(x) for x in oob)
+                                           + " — outside their bands on the latest BMS read")},
         })
     if eff.get("over_design"):
         out.append({
@@ -490,12 +612,15 @@ async def investigate(
 
     a = detail["asset"]
     asset = {"asset_id": a["id"], "asset_name": a["asset_name"],
-             "building_id": a["building_id"], "building": a["building"]}
+             "building_id": a["building_id"], "building": a["building"], "vendor": a.get("vendor")}
     since = datetime.now(timezone.utc) - timedelta(weeks=WINDOW_WEEKS)
 
     walkers = (_walk_efficiency, _walk_meter, _walk_bill, _walk_weather,
                _walk_work_orders, _walk_documents)
-    walk_list = [await w(session, asset, since) for w in walkers]
+    # The readings the asset read already graded against their bands travel with the walk,
+    # so plant with no chiller record is not re-graded a second, different way.
+    walk_asset = {**asset, "bands": sources.bands_from_readings(detail.get("readings"))}
+    walk_list = [await w(session, walk_asset, since) for w in walkers]
     walk = {w["source"]: w for w in walk_list}
 
     evidence = _evidence(walk, asset)
@@ -504,7 +629,9 @@ async def investigate(
 
     return {
         "ok": True,
-        "asset": {**asset, "vendor": a.get("vendor"), "section": a.get("section")},
+        "asset": {**asset, "vendor": a.get("vendor"), "vendor_email": a.get("vendor_email"),
+                  "vendor_email_candidates": a.get("vendor_email_candidates") or [],
+                  "section": a.get("section")},
         "method": METHOD,
         "plan": (
             f"I will walk {len(walkers)} sources — the readings first, then the maintenance "
@@ -512,6 +639,7 @@ async def investigate(
         "sources": walk_list,
         "sources_found": sum(1 for w in walk_list if w["status"] == "found"),
         "sources_missing": [w["source"] for w in walk_list if w["status"] == "not_found"],
+        "sources_unreadable": [w["source"] for w in walk_list if w["status"] == "unreadable"],
         "evidence": evidence,
         "conclusion": conclusion,
         "actions": actions,

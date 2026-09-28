@@ -222,3 +222,90 @@ class TestTheRuleIsNamed:
 
     def test_an_absent_record_is_never_discounted_below_a_measurement(self):
         assert CONF_RECORD_ABSENT >= CONF_MEASURED_GAP > CONF_TREND_TO_CAUSE
+
+
+# ── Readings outside their bands (28 Sep 2026) ───────────────────────────────────────
+# AHU-3 read "6 out of band" in the walk while its conclusion spoke only of a missing report.
+# A reading against the limit set for it is a measurement with nothing inferred, so it is a
+# finding at full confidence, it reaches the conclusion, and it proposes an inspection.
+
+AHU = {"asset_id": "a3", "asset_name": "AHU-3", "building_id": "b1", "building": "Bishopsgate Tower"}
+OOB = [
+    {"reading_type": "fan_current", "value": 18.4, "unit": "A", "band_lo": 12.0, "band_hi": 17.5,
+     "days_out_of_band": 2, "days": 2},
+    {"reading_type": "fan_vibration", "value": 4.6, "unit": "mm/s", "band_lo": 0.0, "band_hi": 4.5,
+     "days_out_of_band": 1, "days": 2},
+]
+
+
+def bms_readings(**over):
+    return {"bms_trend": {"source": "bms_trend", "status": "found", "badge": "192 points · 2 out of band",
+                          "points": 192, "graded_types": 8, "out_of_band": OOB, **over}}
+
+
+class TestReadingsOutsideTheirBands:
+    def test_an_out_of_band_reading_is_a_full_confidence_finding(self):
+        from src.engines.energy.investigate import CONF_READING_OUT_OF_BAND
+        ev = _evidence(walk(**bms_readings()), AHU)
+        f = next(e for e in ev if e["kind"] == "out of band")
+        assert f["confidence"] == CONF_READING_OUT_OF_BAND == 1.0
+        assert f["sources"] == ["bms_trend"]
+        assert "2 of 8" in f["statement"]
+        assert "fan current 18.4 A (band 12–17.5, out of band on 2 of 2 days)" in f["statement"]
+        assert "fan vibration 4.6 mm/s (band 0–4.5, out of band on 1 of 2 days)" in f["statement"]
+
+    def test_readings_in_band_say_nothing(self):
+        assert "out of band" not in kinds(_evidence(walk(**bms_readings(out_of_band=[])), AHU))
+
+    def test_with_a_missing_report_the_conclusion_names_both(self):
+        w = walk(**bms_readings(),
+                 work_order={"closed_without_report": 1, "latest": {"title": "supply fan PPM"}},
+                 document={"status": "not_found"})
+        c = _conclusion(_evidence(w, AHU), w, AHU, {})
+        assert c["cause"] == ("fan current and fan vibration are outside their bands, and the "
+                              "last visit closed without a report.")
+        assert c["rests_on"] == "record"
+        assert c["confirmation_required"] is True
+
+    def test_alone_the_conclusion_is_the_symptom_not_a_cause(self):
+        w = walk(**bms_readings())
+        c = _conclusion(_evidence(w, AHU), w, AHU, {})
+        assert c["cause"] == "fan current and fan vibration are outside their bands."
+        assert c["confirmation_required"] is True
+        assert "symptom, not the cause" in c["caveat"]
+
+    def test_a_chiller_measured_gap_keeps_its_precedence(self):
+        w = walk(bms_trend={"kw_per_rt": 0.81, "over_design": True, "out_of_band": OOB})
+        c = _conclusion(_evidence(w, ASSET), w, ASSET, {})
+        assert "design efficiency" in c["cause"]
+
+    def test_it_proposes_an_inspection_the_dock_turns_into_a_draft(self):
+        w = walk(**bms_readings(), work_order={"latest": {"vendor": "Apex Mechanical"}})
+        a = next(x for x in _actions(_evidence(w, AHU), w, AHU) if x["id"] == "inspect_out_of_band")
+        assert a["endpoint"] == "POST /api/work-orders/"
+        assert a["body"]["request_type"] == "inspection"
+        assert "fan current 18.4 A (band 12–17.5" in a["body"]["issue_description"]
+        assert "Apex Mechanical" in a["detail"]
+
+
+class TestReviewFixes:
+    def test_the_draft_is_described_as_going_to_the_vendor_it_is_addressed_to(self):
+        # The dock addresses every draft to the asset's registered vendor; the action text used
+        # to name the latest work order's vendor instead, so it could say "draft to X" and
+        # open a draft to Y.
+        asset = {**AHU, "vendor": "Apex Mechanical"}
+        w = walk(**bms_readings(),
+                 work_order={"closed_without_report": 1,
+                             "latest": {"vendor": "Mitie", "title": "supply fan PPM"}},
+                 document={"status": "not_found"})
+        acts = {a["id"]: a for a in _actions(_evidence(w, asset), w, asset)}
+        assert "Apex Mechanical" in acts["request_records"]["detail"]
+        assert "Apex Mechanical" in acts["inspect_out_of_band"]["detail"]
+        assert "carried out by Mitie" in acts["request_records"]["body"]["issue_description"]
+
+    def test_readings_are_written_out_in_full_not_in_scientific_notation(self):
+        from src.engines.energy.investigate import _reading_phrase
+        p = _reading_phrase({"reading_type": "energy_kwh", "value": 1234567.0, "unit": "kWh",
+                             "band_lo": None, "band_hi": 1000000.0, "days_out_of_band": 3, "days": 3})
+        assert p == "energy kwh 1,234,567 kWh (limit 1,000,000, out of band on 3 of 3 days)"
+        assert "fan current 18.4 A (band 12–17.5" in _reading_phrase(OOB[0])
