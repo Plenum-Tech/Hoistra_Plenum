@@ -136,9 +136,13 @@ HEADERS = {
                          "contract_start", "contract_end", "contract_value", "country_code", "status", "sla_terms"],
     "Technicians": ["engineer_id", "full_name", "trade", "site_ref", "certification", "user_full_name",
                     "base_location", "user_id"],
+    # category_id, condition_updated_at and warranty_expiry are what the Assets page puts in an
+    # asset's header line ("Chiller · installed 2009 · condition read 10 Jul · warranty to Mar
+    # 2027"); without them every row read "No category set · condition never dated".
     "Assets": ["asset_code", "asset_name", "manufacturer", "model", "site_ref", "site_name", "status",
                "install_date", "maintained_by", "replacement_value", "replacement_currency", "design_life_years",
-               "wear_coefficient", "condition_score", "criticality", "section_name", "building_code"],
+               "wear_coefficient", "condition_score", "criticality", "section_name", "building_code",
+               "category_id", "condition_updated_at", "warranty_expiry"],
     "Asset_Reading_Bands": ["reading_type", "unit", "lo", "hi", "note"],
     "Asset_Readings": ["asset_code", "reading_type", "value", "unit", "recorded_at"],
     "Maintenance_Plans": ["sm_code", "asset_code", "building_code", "description", "maintenance_type",
@@ -188,6 +192,17 @@ VENDORS = [
     ("CLWC", "Clearwater Compliance", "Water hygiene", "12 Fleet Mews, Reading RG1 9ZZ", "+44 118 496 0661", "LCA member 1188"),
 ]
 VCODE = {v[1]: v[0] for v in VENDORS}
+#: Asset class -> plenum_cafm.asset_categories.name. The writer has no by-name lookup for a
+#: category, so the id is looked up in hoistra_test when the workbook is built (--org-name) and
+#: written as category_id. LV board and water system have no category on record and stay blank.
+CATEGORY_OF_CLASS = {"Air handling": "HVAC · Air Handling", "Chiller": "HVAC · Chillers",
+                     "Boiler": "HVAC · Boilers", "Fan coil": "HVAC · Terminal Units",
+                     "Pump": "Mechanical · Pumps", "Generator": "Electrical · Standby Power",
+                     "Lift": "Vertical Transport", "Fire panel": "Life Safety · Fire Detection"}
+CATEGORY_IDS: dict[str, str] = {}
+CATEGORY_OF_CLASS["Lighting panel"] = "Electrical · Lighting Control"
+#: The floors as plenum_cafm.floors and the floor companion name them.
+FLOOR_NAMES = ["Basement", "Ground"] + [f"Level {i}" for i in range(1, FLOORS - 1)]
 #: The two Bishopsgate vendors the compliance console shows Blocked (HOISTRA_CC.vendors).
 BLOCK = {
     "SFLT": ("Blocked", "Public liability insurance lapsed; LOLER competence not on record", "CONTRACTOR_PL_INSURANCE"),
@@ -246,6 +261,8 @@ FAULTS = {
     "LV board": ["Outgoing way tripped — L7 lighting", "Thermography hot spot on busbar",
                  "Emergency lighting circuit fault"],
     "Fire panel": ["Panel fault — loop 2", "Detector contaminated — L9 east", "Sounder circuit fault"],
+    "Lighting panel": ["Lighting zone not switching off out of hours", "PIR sensors unresponsive — east core",
+                       "Scene controller offline"],
     "Water system": ["TMV failed temperature check — L6", "Cold water tank above 20 °C",
                      "Calorifier flow below 60 °C", "Dead-leg flushing overdue — L14"],
 }
@@ -466,6 +483,7 @@ MAKE = {  # generated: manufacturer, model
     "Fan coil": ("Daikin", "FWD 10"), "Lift": ("Otis", "Gen2 Premier"), "Generator": ("Cummins", "C825 D5"),
     "Boiler": ("Hoval", "UltraGas 450"), "Fire panel": ("Advanced", "MxPro 5"), "LV board": ("Schneider", "Prisma P"),
     "Water system": ("Andrews", "MAXXflo Evo calorifier"),
+    "Lighting panel": ("Helvar", "Imagine Router 910"),
 }
 
 #: Normal ranges. The first fifteen are the spec's (and Northbridge's) and are also GEN-1's
@@ -658,6 +676,21 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     ]:
         assets.append(dict(code=f"{CODE}-{code}", name=name, cls=cls, sec=sec, vendor=vendor, installed=dt.date(yr, 3, 15),
                            l1=l1, life=life, value=val, wear=0.9, cond=2, ppm=None, src="generated"))
+    # Every floor's own plant, so a floor section opens onto what is on that floor: a fan-coil
+    # bank on each occupied floor and a lighting control panel on every floor. Their section is
+    # the floor itself (the floor companion's section names), not one of the prototype's zones.
+    # L12-L20 were refitted in 2016, the rest is the 2009 fit-out.
+    for fl in FLOOR_NAMES:
+        tag = "B" if fl == "Basement" else "G" if fl == "Ground" else "L" + fl.split()[-1].zfill(2)
+        refit = fl.startswith("Level") and int(fl.split()[-1]) >= 12
+        if fl != "Basement":
+            assets.append(dict(code=f"{CODE}-FCU-{tag}", name=f"Fan coil units — {fl}", cls="Fan coil", sec=fl,
+                               vendor="Apex Mechanical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
+                               life=15, value=38000 if fl != "Ground" else 22000, wear=1.0, cond=2, ppm=None,
+                               src="generated (floor plant)"))
+        assets.append(dict(code=f"{CODE}-LCP-{tag}", name=f"Lighting control panel — {fl}", cls="Lighting panel", sec=fl,
+                           vendor="Northgate Electrical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
+                           life=20, value=6500, wear=0.8, cond=2, ppm=None, src="generated (floor plant)"))
     # The chiller the floor-meter builder puts its excursion on is the FIRST chiller in the
     # sheet: CHILLER-101, whose anomaly the prototype names.
     assets.sort(key=lambda a: (0 if a["code"].endswith("CHILLER-101") else 1))
@@ -665,7 +698,8 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
         make = MAKE.get(a["cls"], ("Generic", "-"))
         sheets["Assets"].append([a["code"], a["name"], make[0], make[1], SITE, BUILDING, "Active", a["installed"],
                                  a["vendor"], a["value"], "GBP", a["life"], a["wear"], a["cond"],
-                                 "high" if a["l1"] else "medium", a["sec"], CODE])
+                                 "high" if a["l1"] else "medium", a["sec"], CODE,
+                                 CATEGORY_IDS.get(CATEGORY_OF_CLASS.get(a["cls"], "")), None, None])
         origin.append(("Assets", a["code"], a["src"]))
     code_of = {a["name"]: a["code"] for a in assets}
 
@@ -704,6 +738,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
             "LIFT-4471": ("Monthly", 1), "BOILER-01": ("Quarterly", 3), "BOILER-02": ("Quarterly", 3),
             "FIRE-PANEL-01": ("Quarterly", 3), "DB-01": ("Quarterly", 3), "GEN-01": ("Monthly", 1),
             "DHW-01": ("Monthly", 1)}
+    freq.update({a["code"][len(CODE) + 1:]: ("Quarterly", 3) for a in assets if a["cls"] in ("Fan coil", "Lighting panel")})
     contract_of = lambda a: CONTRACT_OF_VENDOR[VCODE[a["vendor"]]]  # noqa: E731
     next_mech = sh(pdate(ppm_proto["next"]))
     # The prototype's Mechanical figures: 32 planned, 29 done (2 of them late), 1 missed,
@@ -735,7 +770,8 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
                     "Pump": "Pump service — seals, bearings, alignment", "Fan coil": "FCU service — filter, condensate, fan",
                     "Lift": "Lift maintenance visit", "Boiler": "Boiler service — combustion analysis, flue",
                     "Fire panel": "Fire alarm service — detectors, sounders, panel", "LV board": "LV board thermography and inspection",
-                    "Water system": "L8 monitoring — temperatures, TMVs, tank inspection"}[a["cls"]]
+                    "Water system": "L8 monitoring — temperatures, TMVs, tank inspection",
+                    "Lighting panel": "Lighting controls check — scenes, sensors, emergency changeover"}[a["cls"]]
             sheets["PPM_Visits"].append([f"PPM-{a['code']}-{k + 1:02d}", a["vendor"], a["code"], task, fname, sched, done,
                                          14, st, contract_of(a), CODE])
 
@@ -887,6 +923,33 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
              status=status)
     sheets["Compliance_Certificates"] = certs
 
+    # An asset's condition is as current as the last time someone looked at it: its latest
+    # inspection, else its last completed PPM visit. A component warranty an inspection names
+    # ("Compressor 2 under OEM warranty to Mar 2027") is the asset's warranty_expiry.
+    ah = HEADERS["Assets"]
+    ih, ph = HEADERS["Inspections"], HEADERS["PPM_Visits"]
+    seen: dict[str, dt.date] = {}
+    for r in sheets["Inspections"]:
+        d = r[ih.index("inspection_date")]
+        c = r[ih.index("asset_code")]
+        if d and (c not in seen or d > seen[c]):
+            seen[c] = d
+    for r in sheets["PPM_Visits"]:
+        d, c = r[ph.index("completed_date")], r[ph.index("asset_code")]
+        if d and c not in seen:
+            seen[c] = max(d, seen.get(c, d))
+    warranty = {}
+    for i in MX["inspections"]:
+        m = re.search(r"warranty to ([A-Z][a-z]{2}) (\d{4})", i.get("warranty") or "")
+        if isb(i) and m:
+            mon = dt.datetime.strptime(m.group(1), "%b").month
+            nxt = dt.date(int(m.group(2)) + (mon == 12), mon % 12 + 1, 1)
+            warranty[code_of[i["asset"]]] = nxt - dt.timedelta(days=1)
+    for r in sheets["Assets"]:
+        c = r[ah.index("asset_code")]
+        r[ah.index("condition_updated_at")] = seen.get(c)
+        r[ah.index("warranty_expiry")] = warranty.get(c)
+
     # write
     wb = openpyxl.Workbook(write_only=True)
     for name in ORDER:
@@ -898,6 +961,16 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     return {"sheets": {k: len(v) for k, v in sheets.items()}, "origin": origin, "shift_days": shift.days,
             "technician_users": [u for u in org_users[:2]] if org_users else [],
             "vendors": vendor_report["report"]}
+
+
+async def category_ids() -> dict[str, str]:
+    from _env import hoistra_test_dsn
+    import asyncpg
+    c = await asyncpg.connect(hoistra_test_dsn().replace("postgresql+asyncpg", "postgresql"), timeout=15)
+    try:
+        return {r[1]: r[0] for r in await c.fetch("SELECT id::text, name FROM plenum_cafm.asset_categories")}
+    finally:
+        await c.close()
 
 
 async def org_logins(org_name: str) -> tuple[str | None, list[tuple[str, str]]]:
@@ -932,6 +1005,7 @@ def main() -> None:
     users: list[tuple[str, str]] = []
     if args.org_name:
         org, users = asyncio.run(org_logins(args.org_name))
+        CATEGORY_IDS.update(asyncio.run(category_ids()))
         print(f"  organization {args.org_name!r}: {org or 'NOT FOUND'} · {len(users)} login(s)")
     if args.finish:
         comp = os.path.splitext(args.out)[0] + "-floorlevel_submeter.xlsx"

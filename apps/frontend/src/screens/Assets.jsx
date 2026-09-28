@@ -161,6 +161,26 @@ export default function Assets({ vals }) {
                             </div>
                             {sec.open ? (
                               <>
+                                {sec.emptyNote ? (
+                                  <div style={{ padding: "9px 14px 4px 40px", fontSize: "11px", color: "var(--color-neutral-500)" }}>
+                                    {sec.emptyNote}
+                                  </div>
+                                ) : null}
+                                <div style={{ display: sec.metersShow || "none", flexDirection: "column", gap: "6px", padding: "8px 14px 10px 40px", borderBottom: "1px solid var(--color-divider)" }}>
+                                  {(sec.meterRows || []).map((m, $index) => (
+                                    <div key={$index} style={{ display: "flex", alignItems: "center", gap: "10px 16px", flexWrap: "wrap", fontSize: "11px" }}>
+                                      <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", flex: "0 0 180px" }}>
+                                        <i className={`ph ${m.icon}`} style={{ fontSize: "12px", color: "var(--color-neutral-400)" }}></i>
+                                        <span>{m.name}</span>
+                                      </span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace", color: "var(--color-neutral-500)", flex: "0 0 150px" }}>{m.ref}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace" }}>{m.kwh}</span>
+                                      <span style={{ color: "var(--color-neutral-500)" }}>{m.share}</span>
+                                      <span style={{ fontFamily: "ui-monospace,monospace" }}>{m.cost}</span>
+                                      <span style={{ color: m.anomColor }}>{m.anoms}</span>
+                                    </div>
+                                  ))}
+                                </div>
                                 {(sec.rows || []).map((r, $index) => (
                                   <React.Fragment key={$index}>
                                     <div className="hv19" onClick={r.open} style={{ display: "flex", alignItems: "flex-start", gap: "12px", flexWrap: "wrap", padding: "11px 14px 11px 40px", borderBottom: "1px solid var(--color-divider)", borderLeft: `3px solid ${r.rail}`, cursor: "pointer" }}>

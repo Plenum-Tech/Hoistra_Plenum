@@ -55,6 +55,7 @@
 import { healthBand } from './assetsLive.js';
 import { workOrderApi } from '../api/workOrder.js';
 import { energyApi } from '../api/energy.js';
+import { complianceApi } from '../api/compliance.js';
 import { isStaleScope } from '../api/client.js';
 import { t } from './constants.js';
 
@@ -85,6 +86,65 @@ export function inspectionNotes(rows) {
         warranty: r.warranty || '', warrShow: r.warranty ? 'inline-block' : 'none'
       };
     });
+}
+
+// A section's own sub-meters, for when the section is opened. A floor section carries no
+// assets - the plant sits in the zones - so it opened onto nothing although both its meters
+// were on record. Each meter: fuel, kWh over the window, share of the building's supply on
+// that fuel, cost, open anomalies.
+export function sectionMeterRows(meters, assetCount, days) {
+  const ms = (meters || []).slice().sort((p, q) => String(p.fuel).localeCompare(String(q.fuel)));
+  const n = (v) => (typeof v === 'number' ? Math.round(v).toLocaleString('en-GB') : '—');
+  const meterRows = ms.map((m) => ({
+    icon: m.fuel === 'gas' ? 'ph-flame' : 'ph-lightning',
+    name: (m.fuel === 'gas' ? 'Gas' : 'Electricity') + ' sub-meter',
+    ref: m.supply || m.description || '',
+    kwh: n(m.kwh) + ' kWh' + (days ? ' · last ' + days + ' days' : ''),
+    share: typeof m.share_pct === 'number' ? m.share_pct + "% of the building's " + (m.fuel || 'supply') : '',
+    cost: typeof m.cost === 'number' ? '£' + n(m.cost) : '',
+    anoms: m.open_anomalies ? m.open_anomalies + (m.open_anomalies === 1 ? ' open anomaly' : ' open anomalies') : 'no open anomaly',
+    anomColor: m.open_anomalies ? 'var(--color-accent)' : 'var(--color-neutral-500)'
+  }));
+  return {
+    meterRows,
+    metersShow: meterRows.length ? 'flex' : 'none',
+    emptyNote: assetCount ? ''
+      : meterRows.length ? 'No assets are placed in this section — its energy is read on its own sub-meters.'
+      : 'No assets are placed in this section, and it has no sub-meter of its own.'
+  };
+}
+
+// The certificates an asset drawer names: the asset's own (a lift's LOLER examination, a
+// chiller's F-Gas log) and its vendor's accreditation. Neither was on the Assets page, so
+// nothing tied a lift to its examination or to the blocked contractor who maintains it.
+const fmtCertDay = (d) => {
+  if (!d) return 'no expiry on record';
+  const x = new Date(String(d).slice(0, 10) + 'T12:00:00');
+  return isNaN(x) ? String(d) : x.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+const certName = (c) => c.certificate_type_name || c.certificate_type_code || 'Certificate';
+const pastExpiry = (c, now) => {
+  const days = typeof c.days_to_expiry === 'number' ? c.days_to_expiry : null;
+  if (days !== null) return days < 0;
+  return c.expiry_date ? new Date(String(c.expiry_date).slice(0, 10) + 'T23:59:59') < (now || new Date()) : false;
+};
+export function assetCertificatesLine(rows, now) {
+  const cs = (rows || []).filter((c) => String(c.cert_scope || '').toLowerCase() !== 'vendor');
+  if (!cs.length) return 'None on record for this asset';
+  return cs.map((c) => certName(c) + ' · ' + (pastExpiry(c, now) ? 'lapsed ' : 'expires ') + fmtCertDay(c.expiry_date)
+    + (c.certificate_number ? ' · ' + c.certificate_number : '')).join('; ');
+}
+export function vendorAccreditationLine(rows, now) {
+  const cs = (rows || []).filter((c) => String(c.cert_scope || '').toLowerCase() === 'vendor');
+  if (!cs.length) return 'No vendor certificate on record';
+  const lapsed = cs.filter((c) => pastExpiry(c, now));
+  const soon = cs.filter((c) => !pastExpiry(c, now) && typeof c.days_to_expiry === 'number' && c.days_to_expiry <= 30);
+  const blocked = cs.some((c) => /blocked/i.test(String(c.vendor_block_state || '')));
+  const head = blocked ? 'Blocked' : lapsed.length ? 'Lapsed' : soon.length ? 'Expiring' : 'Current';
+  const bits = lapsed.map((c) => certName(c) + ' lapsed ' + fmtCertDay(c.expiry_date))
+    .concat(soon.map((c) => certName(c) + ' expires ' + fmtCertDay(c.expiry_date)));
+  return head + ' · ' + cs.length + (cs.length === 1 ? ' certificate' : ' certificates') + ' on file'
+    + (bits.length ? ' · ' + bits.join('; ') : '');
 }
 
 export const NOT_METERED = 'Not metered — no sub-meter or no area on record, which is not the same as no consumption';
@@ -315,13 +375,20 @@ export const assetsConditionMethods = {
       // Keyed by asset id: every sub-meter that names the asset (an asset can carry one per
       // fuel). Built here so row() below is a lookup, not a scan.
       const assetMeters = {};
+      // ...and by section: a floor's own electricity and gas meters, and the meter on a zone
+      // like L12–L20. A floor section holds no assets, so without these it opened onto nothing.
+      const sectionMeters = {};
       if (floors && !floors.__err && Array.isArray(floors.buildings)) {
         floors.buildings.forEach((b) => (b.assets || []).forEach((m) => {
           if (m.asset_id) (assetMeters[String(m.asset_id)] = assetMeters[String(m.asset_id)] || []).push(m);
         }));
+        floors.buildings.forEach((b) => (b.floors || []).map((f) => f.meters || []).concat([b.unplaced || []])
+          .forEach((ms) => ms.forEach((m) => {
+            if (m.section_id && !m.asset_id) (sectionMeters[String(m.section_id)] = sectionMeters[String(m.section_id)] || []).push(m);
+          })));
       }
       this.setState(Object.assign(seed, {
-        asAssetMeters: assetMeters, asAssetMetersDays: floors && !floors.__err ? (floors.days || 30) : null,
+        asAssetMeters: assetMeters, asSectionMeters: sectionMeters, asAssetMetersDays: floors && !floors.__err ? (floors.days || 30) : null,
         asAssetMetersError: floors && floors.__err ? floors.__err : '',
         asLocations: list(locs, 'locations'), asLocationsError: locs && locs.__err ? locs.__err : '',
         asAnoms: list(anoms, 'anomalies'), asAnomsError: anoms && anoms.__err ? anoms.__err : '',
@@ -738,6 +805,9 @@ export const assetsConditionMethods = {
           || (bandRow[String(a.asset_id)] && bandRow[String(a.asset_id)].vendor) || 'No vendor on the asset record',
         meta: [a.asset_code || null, a.category_name || null,
                a.installation_date ? 'installed ' + String(a.installation_date) : 'install date not on record',
+               // The condition read carries the last completed PPM visit for every asset.
+               (bandRow[String(a.asset_id)] && bandRow[String(a.asset_id)].last_ppm_date)
+                 ? 'last PPM ' + String(bandRow[String(a.asset_id)].last_ppm_date).slice(0, 10) : null,
                a.criticality ? a.criticality + ' criticality' : 'criticality not set',
                // An undated score reads as current when it may be years old, so the date
                // travels with it rather than being an extra somewhere else.
@@ -845,7 +915,8 @@ export const assetsConditionMethods = {
         pct: measured && ref ? Math.min(100, Math.round((sc.eui_kwh_per_m2 / (ref * 1.5)) * 100)) + '%' : '0%',
         refPct: Math.round(100 / 1.5) + '%',
         barColor: !measured ? 'var(--color-divider)' : over ? t('risk').color : t('ok').color,
-        rows: mine.map(row)
+        rows: mine.map(row),
+        ...sectionMeterRows((s.asSectionMeters || {})[String(sc.section_id)], mine.length, s.asAssetMetersDays)
       };
     });
 
@@ -1166,13 +1237,32 @@ export const assetsConditionMethods = {
           { a: 'readings', t: (i.readings && i.readings.length)
               ? i.readings.slice(0, 6).map((r) => r.reading_type + ' ' + r.value + (r.unit ? ' ' + r.unit : '') + ' · ' + band(r)).join('; ')
               : (i.loading ? 'Reading…' : 'None on file') },
-          { a: 'work history', t: 'Reading svc-operations-intelligence…' }
+          { a: 'work history', t: 'Reading svc-operations-intelligence…' },
+          { a: 'certificates', t: 'Reading the compliance register…' },
+          { a: 'vendor accreditation', t: 'Reading the compliance register…' }
         ],
         refinement: ''
       },
       detailFields: [], detailActions: []
     });
     this._asCondDetailId = a.asset_id;
+    // The asset's own certificates, and its vendor's - by name, which is what the condition
+    // read carries for the asset; the register matches vendor_name exactly.
+    const patch = (key, text) => this.setState((p) => p.detail && p.detail.title === a.asset_name
+      ? { detail: Object.assign({}, p.detail, { chain: p.detail.chain.map((c) => c.a === key ? { a: c.a, t: text } : c) }) } : {});
+    const vendorName = ((this.state.asCondBands || []).find((r) => r && String(r.asset_id) === String(a.asset_id)) || {}).vendor || null;
+    complianceApi.listCertificates({ asset_id: a.asset_id }).then((res) => {
+      if (this._asCondDetailId !== a.asset_id) return;
+      patch('certificates', assetCertificatesLine((res && (res.certificates || res.items)) || (Array.isArray(res) ? res : [])));
+    }).catch((e) => { if (this._asCondDetailId === a.asset_id) patch('certificates', 'Unreachable — ' + ((e && e.message) || e)); });
+    if (vendorName) {
+      complianceApi.listCertificates({ cert_scope: 'Vendor', vendor_name: vendorName }).then((res) => {
+        if (this._asCondDetailId !== a.asset_id) return;
+        patch('vendor accreditation', vendorName + ' — ' + vendorAccreditationLine((res && (res.certificates || res.items)) || (Array.isArray(res) ? res : [])));
+      }).catch((e) => { if (this._asCondDetailId === a.asset_id) patch('vendor accreditation', 'Unreachable — ' + ((e && e.message) || e)); });
+    } else {
+      patch('vendor accreditation', 'No vendor on the asset record');
+    }
     energyApi.assetWorkHistory(a.asset_id).then((hist) => {
       if (this._asCondDetailId !== a.asset_id || !this.state.detail || this.state.detail.title !== a.asset_name) return;
       const wos = (hist && Array.isArray(hist.work_orders)) ? hist.work_orders : [];
