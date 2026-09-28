@@ -81,34 +81,43 @@ async def monthly_vendor_scorecards(ctx: dict) -> dict:
     score_month = (first_this - timedelta(days=1)).replace(day=1)
 
     async with AsyncSessionLocal() as session:
-        vendor_ids: list = []
+        # One card per vendor for each company whose scores it has this month. This cut each
+        # vendor's card with no company named, which read every company's rows and overwrote
+        # the card that company's own Rebuild had cut (review, 28 Sep 2026). A vendor's
+        # company-less rows — a deployment with no companies, or rows from runs that named
+        # none — get their own pass, last; a company's card refuses to be overwritten by it.
+        pairs: list = []
         try:
             rows = (
                 await session.execute(
                     text(
                         """
-                        SELECT DISTINCT vendor_id
+                        SELECT DISTINCT vendor_id, organization_id
                         FROM plenum_cafm.vendor_wo_scores
                         WHERE score_month = :m AND vendor_id IS NOT NULL
+                        ORDER BY vendor_id, organization_id NULLS LAST
                         """
                     ),
                     {"m": score_month},
                 )
             ).fetchall()
-            vendor_ids = [r[0] for r in rows]
+            pairs = [(r[0], r[1]) for r in rows]
         except Exception as exc:  # noqa: BLE001
             log.warning("worker.scorecards.vendor_query_failed", error=str(exc)[:200])
 
         generated = []
-        for vid in vendor_ids:
+        for vid, oid in pairs:
+            org = str(oid) if oid else None
             try:
                 result = await generate_monthly_scorecard(
-                    session, vendor_id=vid, score_month=score_month
+                    session, vendor_id=vid, score_month=score_month, organization_id=oid
                 )
-                generated.append({"vendor_id": str(vid), "ok": result.get("ok")})
+                generated.append({"vendor_id": str(vid), "organization_id": org,
+                                  "ok": result.get("ok"), "error": result.get("error")})
             except Exception as exc:  # noqa: BLE001
                 generated.append(
-                    {"vendor_id": str(vid), "ok": False, "error": str(exc)[:200]}
+                    {"vendor_id": str(vid), "organization_id": org, "ok": False,
+                     "error": str(exc)[:200]}
                 )
 
         log.info(

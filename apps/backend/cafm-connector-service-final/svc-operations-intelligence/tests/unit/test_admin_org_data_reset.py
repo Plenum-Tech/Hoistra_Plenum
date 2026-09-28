@@ -123,6 +123,43 @@ def test_only_the_approvals_an_area_raised_go_with_it(cols):
             assert "item_type" in s.where, "the whole approvals queue would go"
 
 
+def _approval_types(cols, area):
+    step = next(s for s in steps_for(cols, [area]).steps if s.table == "approvals_queue_items")
+    return step.where
+
+
+def test_a_certificate_reset_takes_the_scan_items_about_those_certificates(cols):
+    # The compliance scan raises these about a certificate. They survived a Compliance reset
+    # and sat pending over an empty register (28 Sep 2026).
+    where = _approval_types(cols, "compliance")
+    for t in ("alert", "booking_request", "adversary_gate"):
+        assert f"item_type = '{t}'" in where, t
+
+
+def test_a_vendor_reset_takes_the_blocks_raised_on_those_vendors(cols):
+    # block_ack / block_lift / passport_share name a vendor; Contracts is where vendors go.
+    where = _approval_types(cols, "contracts")
+    for t in ("block_ack", "block_lift", "passport_share"):
+        assert f"item_type = '{t}'" in where, t
+
+
+def test_a_maintenance_reset_keeps_the_renewal_bookings_of_the_certificates_it_keeps(cols):
+    # Review, 28 Sep 2026: booking_request sat in Maintenance as well as Compliance, so a
+    # Maintenance-only reset deleted the renewal bookings — with their emails and tokens —
+    # of certificates it left in the register. A booking names a certificate.
+    assert "booking_request" not in _approval_types(cols, "maintenance")
+
+
+def test_no_approval_item_type_goes_with_two_areas():
+    # Each area's deletes run on their own, so a type listed twice goes with whichever area
+    # is cleared first, whatever the other area keeps.
+    seen: dict[str, str] = {}
+    for area, spec in rs.AREAS.items():
+        for pattern in spec.approvals:
+            assert pattern not in seen, f"{pattern!r} is in both {seen[pattern]} and {area}"
+            seen[pattern] = area
+
+
 def test_a_row_is_deleted_before_anything_it_points_at(cols):
     """Both halves of a declared foreign key are being deleted: the child must go first, or
     the parent's delete is refused and the whole reset rolls back."""

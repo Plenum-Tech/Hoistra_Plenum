@@ -11,12 +11,20 @@ from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import String, and_, cast, column, exists, func, or_, select, table
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..core.logging import get_logger
-from ..models import ApprovalsQueueItem, OpsAuditLog, OpsEmailLog
+from ..models import (
+    ApprovalsQueueItem,
+    ComplianceCertificate,
+    ContractSlaParameters,
+    EnergyAnomaly,
+    OpsAuditLog,
+    OpsEmailLog,
+)
+from ..models.base import SCHEMA
 from .email_graph import graph_configured, send_via_microsoft_graph
 
 log = get_logger(__name__)
@@ -203,6 +211,50 @@ async def enqueue_approval(
     return item
 
 
+#: The subjects a queue item can name that this service can look up. vendors has no model
+#: here, and its id is varchar (about half are legacy non-uuid ids), so the uuid is cast.
+_VENDORS = table("vendors", column("id", String), schema=SCHEMA)
+_CHECKED_SUBJECTS = ("compliance_certificate", "vendor", "energy_anomaly", "contract_sla_parameters")
+#: The flags list_certificates() hides a certificate for: an item about a certificate the
+#: register does not show is not one anybody can open.
+_HIDDEN_CERTIFICATE_FLAGS = ("archived", "superseded_duplicate", "a1_test_fixture")
+
+
+def _subject_on_record() -> Any:
+    """The item is decided history, names nothing this can check, or its subject is still
+    there to act on.
+
+    related_entity_id is a loose uuid, not a foreign key, and nothing that removes a subject
+    closes the items about it: deleting a document takes its certificates, a data reset
+    empties a company's Compliance and Contracts tables, archiving hides a certificate. Each
+    left its lapse alert or vendor block pending — on 28 Sep 2026 the top bar read
+    "7 Pending", all Compliance, over a register holding no certificates. Applied in SQL, so
+    the LIMIT counts only items a person can act on and orphans cannot crowd live ones out.
+    A site, a document or no subject at all cannot be proved gone, so those stay listed.
+    """
+    q, c = ApprovalsQueueItem, ComplianceCertificate
+    hidden = or_(*[
+        func.coalesce(c.raw_metadata[flag].astext, "").notin_(["", "false", "0"])
+        for flag in _HIDDEN_CERTIFICATE_FLAGS
+    ])
+    return or_(
+        q.status != "pending",
+        q.related_entity_id.is_(None),
+        q.related_entity_type.is_(None),
+        q.related_entity_type.notin_(_CHECKED_SUBJECTS),
+        and_(q.related_entity_type == "compliance_certificate",
+             exists().where(c.id == q.related_entity_id, ~hidden)),
+        # Both sides as text: vendors.id is varchar on production and uuid on hoistra_test,
+        # and casting only the item's side raised "uuid = character varying" there.
+        and_(q.related_entity_type == "vendor",
+             exists().where(cast(_VENDORS.c.id, String) == cast(q.related_entity_id, String))),
+        and_(q.related_entity_type == "energy_anomaly",
+             exists().where(EnergyAnomaly.id == q.related_entity_id)),
+        and_(q.related_entity_type == "contract_sla_parameters",
+             exists().where(ContractSlaParameters.id == q.related_entity_id)),
+    )
+
+
 async def list_queue(
     session: AsyncSession,
     *,
@@ -212,7 +264,8 @@ async def list_queue(
     limit: int = 100,
     scope: Any | None = None,
 ) -> list[ApprovalsQueueItem]:
-    q = select(ApprovalsQueueItem).order_by(ApprovalsQueueItem.created_at.desc()).limit(limit)
+    q = (select(ApprovalsQueueItem).where(_subject_on_record())
+         .order_by(ApprovalsQueueItem.created_at.desc()).limit(limit))
     if organization_id:
         q = q.where(ApprovalsQueueItem.organization_id == organization_id)
     if status:

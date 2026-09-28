@@ -290,6 +290,22 @@ async def list_criticalities(
 # ── B2 Scoring / admin weights / scorecards ─────────────────────────
 
 
+async def _refuse_scoring_for_no_company(session: AsyncSession, org_id: UUID | None) -> None:
+    """A scoring run writes one company's scores, card and cost alert, so it names the company.
+
+    With none in scope — a superadmin not viewing as a company, or AUTH_ENFORCE_SCOPE=false
+    with no organization_id — a run wrote company-less copies of a company's scores beside its
+    own, counted both, and overwrote its card (review, 28 Sep 2026). Where the deployment has
+    no company at all, every row is company-less and the org-less run is the only one there is.
+    """
+    if org_id is None and await score_svc.deployment_has_companies(session):
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_organization",
+            "error": "Choose a company to score. Scores, scorecards and cost alerts belong to "
+                     "one company, and none is in scope for this request.",
+        })
+
+
 @router.get("/admin/weights")
 async def get_weights(
     organization_id: UUID | None = None,
@@ -321,6 +337,7 @@ async def score_work_orders(
     s: access.Scope = Depends(scope),
 ):
     org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     return await score_svc.score_completed_work_orders(
         session,
         body.work_orders,
@@ -342,6 +359,7 @@ async def score_from_udr(
     posting hand-crafted score batches.
     """
     org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     if body.all_buckets:
         return await score_svc.score_all_from_udr(
             session,
@@ -383,6 +401,7 @@ async def monthly_scorecard(
     s: access.Scope = Depends(scope),
 ):
     org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     return await score_svc.generate_monthly_scorecard(
         session,
         vendor_id=body.vendor_id,

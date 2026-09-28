@@ -64,21 +64,29 @@ AREAS: dict[str, Area] = {
         "inventory_transactions", "bom_group_parts", "receipt_line_items",
         "purchase_order_line_items", "receipts", "purchase_orders",
         "spare_parts", "technicians", "resources",
-    ), ("work_order_%", "booking_request")),
+    # Not booking_request: a renewal booking names a certificate, so it goes with Compliance.
+    # Listed here as well, a Maintenance-only reset deleted the bookings of certificates it
+    # kept (review, 28 Sep 2026).
+    ), ("work_order_%",)),
     "energy": Area("Energy", (
         "meter_readings", "energy_anomalies", "eui_snapshots",
         "building_energy_profiles", "energy_ratings", "energy_meters", "meters",
     ), ("energy_%", "meter_reading_%")),
+    # An item goes with the area that deletes what it is about. The scan's lapse alerts,
+    # renewal bookings and adversary flags name a certificate; its blocks, block lifts and
+    # passport shares name a vendor, and vendors go with Contracts. Missing, they outlived a
+    # reset and sat pending over an empty register (28 Sep 2026).
     "compliance": Area("Compliance", (
         "compliance_certificates", "compliance_risk_snapshots", "compliance_scan_runs",
-    ), ("certificate_%", "verification_human", "forgery_alert", "remedial")),
+    ), ("certificate_%", "verification_human", "forgery_alert", "remedial",
+        "alert", "booking_request", "adversary_gate")),
     "contracts": Area("Contracts", (
         "invoice_verifications", "invoice_lines", "invoices",
         "vendor_monthly_scorecards",
         "contract_sla_parameters", "vendor_contacts", "vendor_contracts",
         "sla_policies", "vendors",
     ), ("contract_%", "overlapping_contracts_tie", "invoice_flag%", "vendor_risk",
-        "vendor_email", "cost_variance_alert")),
+        "vendor_email", "cost_variance_alert", "block_ack", "block_lift", "passport_share")),
     "assets": Area("Assets", (
         "asset_readings", "asset_documents", "asset_offline_log", "asset_warranties",
         "assets", "asset_reading_bands", "building_sections",
