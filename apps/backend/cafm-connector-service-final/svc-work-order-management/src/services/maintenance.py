@@ -81,6 +81,11 @@ SOURCE_OF = {
 #: contain, so the same five chips are on the screen whatever the data holds.
 SOURCE_LABELS: tuple[str, ...] = tuple(sorted(set(SOURCE_OF.values()) | {"Maintenance"}))
 
+#: The raw_metadata flags that hide a certificate from the register — the same three
+#: operations-intelligence's shared/approvals.py (_HIDDEN_CERTIFICATE_FLAGS) drops a queue
+#: item for. Stated again rather than imported: this service ships in its own image.
+HIDDEN_CERTIFICATE_FLAGS: tuple[str, ...] = ("archived", "superseded_duplicate", "a1_test_fixture")
+
 
 async def shape(session: AsyncSession) -> dict[str, set[str]]:
     """Which columns each table this module reads actually has, cached per process."""
@@ -474,6 +479,17 @@ async def _decisions_from_approvals(
     cert_kind = "c." + (_pick(cc, "certificate_type_code", "cert_type") or "id") if cc else "NULL"
     resolved = " COALESCE(" + ", ".join([x for x in (anomaly_b, cert_b) if x] or ["NULL"]) + ")::text"
     where_scope = f" AND {resolved} = ANY(CAST(:scope_b AS text[]))" if restricted else ""
+    # An item about a certificate the register hides is not a decision. /api/approvals drops
+    # these, and this read did not, so an archived certificate's lapse alert went on reading
+    # "To raise" here and the top bar counted it after the queue had let it go (28 Sep 2026).
+    # COALESCE to '' because c is NULL for every item that is not about a certificate, and ''
+    # is visible — without it an energy anomaly would fail the test and vanish. Only where the
+    # column exists: a missing one would fail the statement, and the savepoint would turn that
+    # into no approvals decisions at all.
+    visible_cert = "".join(
+        f" AND COALESCE(c.raw_metadata->>'{flag}', '') IN ('', 'false', '0')"
+        for flag in HIDDEN_CERTIFICATE_FLAGS
+    ) if "raw_metadata" in cc else ""
     sql = f"""
         SELECT q.id::text AS id, q.related_entity_type AS kind, q.summary AS summary,
                q.severity AS severity, q.source_feature AS feature,
@@ -486,7 +502,7 @@ async def _decisions_from_approvals(
           FROM plenum_cafm.approvals_queue_items q
           {joins}
           LEFT JOIN plenum_cafm.buildings b ON b.building_id::text = {resolved}
-         WHERE q.status = 'pending' AND {resolved} IS NOT NULL{where_scope}
+         WHERE q.status = 'pending' AND {resolved} IS NOT NULL{where_scope}{visible_cert}
          ORDER BY q.created_at DESC NULLS LAST
          LIMIT :lim"""
     sql = sql.format(cert_expiry=cert_expiry, cert_ref=cert_ref, cert_kind=cert_kind)

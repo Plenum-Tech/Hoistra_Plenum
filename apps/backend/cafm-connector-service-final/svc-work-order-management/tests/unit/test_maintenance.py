@@ -370,3 +370,93 @@ def test_a_warranty_in_the_recommendation_is_its_own_field():
     # an extracted report's own field wins, and nothing at all is (None, None)
     assert split_warranty("Re-test", {"warranty": "VSD to Dec 2026"}) == ("Re-test", "VSD to Dec 2026")
     assert split_warranty(None, None) == (None, None)
+
+
+# ── a queue item about a hidden certificate is not a decision ─────────────────────────────
+# operations-intelligence's list_queue drops items about a certificate the register hides —
+# archived, superseded as a duplicate, or an A1 test fixture, all flags in raw_metadata —
+# because an item about a certificate nobody can open is not one anybody can act on. This
+# service reads approvals_queue_items itself for the Maintenance decisions, and did not, so an
+# archived certificate's lapse alert went on reading "To raise" under Maintenance and the top
+# bar counted it after /api/approvals had let it go (28 Sep 2026).
+
+import contextlib
+import re
+
+
+class _ApprovalsSession:
+    """Records the SQL _decisions_from_approvals sends, and answers with no rows."""
+
+    def __init__(self):
+        self.sql: list[str] = []
+
+    def begin_nested(self):
+        return contextlib.nullcontext()
+
+    async def execute(self, stmt, params=None):
+        self.sql.append(" ".join(str(stmt).split()))
+
+        class _R:
+            def mappings(self): return self
+            def all(self): return []
+
+        return _R()
+
+
+_CERT_COLS = {"id", "building_id", "asset_id", "vendor_id", "expiry_date",
+              "certificate_number", "certificate_type_code"}
+
+
+async def _approvals_sql(monkeypatch, cert_cols, building_ids=None) -> str:
+    async def _shape(_session):
+        out = {"approvals_queue_items": {"id", "status", "related_entity_type",
+                                         "related_entity_id", "created_at"}}
+        if cert_cols is not None:
+            out["compliance_certificates"] = set(cert_cols)
+        return out
+
+    monkeypatch.setattr(mx, "shape", _shape)
+    s = _ApprovalsSession()
+    await mx._decisions_from_approvals(s, building_ids=building_ids, limit=50)
+    (sql,) = s.sql
+    return sql
+
+
+def test_the_hidden_flags_are_the_ones_the_register_and_the_queue_hide():
+    """operations-intelligence shared/approvals.py _HIDDEN_CERTIFICATE_FLAGS. Not imported —
+    this service ships in its own image — so stated here and pinned."""
+    assert mx.HIDDEN_CERTIFICATE_FLAGS == ("archived", "superseded_duplicate", "a1_test_fixture")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("building_ids", [None, [MINE]])
+async def test_an_item_about_a_hidden_certificate_is_not_a_decision(monkeypatch, building_ids):
+    sql = await _approvals_sql(monkeypatch, _CERT_COLS | {"raw_metadata"}, building_ids)
+    where = sql.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)[0]
+    for flag in mx.HIDDEN_CERTIFICATE_FLAGS:
+        # Visible means every flag is unset, false or 0 — the exact complement of the
+        # coalesce(...) NOT IN ('', 'false', '0') that list_queue treats as hidden.
+        visible = f"COALESCE(c.raw_metadata->>'{flag}', '') IN ('', 'false', '0')"
+        assert visible in where, (flag, where)
+
+
+@pytest.mark.asyncio
+async def test_an_item_about_anything_but_a_certificate_still_passes(monkeypatch):
+    """The certificate is LEFT JOINed only for compliance_certificate items, so for an energy
+    anomaly c is NULL. Every raw_metadata read must fall back to '' — which is visible — or
+    the filter would drop every item that is not about a certificate."""
+    sql = await _approvals_sql(monkeypatch, _CERT_COLS | {"raw_metadata"})
+    reads = re.findall(r"(\S*)c\.raw_metadata->>'(\w+)'(\S*)", sql)
+    assert reads, "the flags must be read at all"
+    for before, flag, after in reads:
+        assert (before, after) == ("COALESCE(", ","), (before, flag, after)
+    assert sql.count(", '') IN ('', 'false', '0')") == len(mx.HIDDEN_CERTIFICATE_FLAGS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cert_cols", [_CERT_COLS, None])
+async def test_a_database_without_raw_metadata_is_not_filtered_on_it(monkeypatch, cert_cols):
+    """A column that is not there would fail the whole statement, and the savepoint would
+    turn that into no approvals decisions at all — worse than the leak it closes."""
+    sql = await _approvals_sql(monkeypatch, cert_cols)
+    assert "raw_metadata" not in sql

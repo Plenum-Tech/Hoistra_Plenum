@@ -237,3 +237,64 @@ def test_an_asset_on_another_building_is_refused(client):
     wire(client, make((MINE,)), Recording([a]))
     r = client.get(f"/api/assets/{a.asset_id}")
     assert r.status_code == 403, r.text[:200]
+
+
+# ── a superadmin viewing one company gets that company's work orders ───────────
+# /api/assets took organization_id and /api/work-orders/ did not, so a superadmin viewing
+# company X got X's assets beside every company's work orders. The Assets page matches an
+# order to an asset by name when the order carries no asset_id — and none raised through
+# this service does — so company Y's forty open orders on "AHU-1" were counted against X's
+# AHU-1 (28 Sep 2026). The two reads have to describe one portfolio.
+
+def _org_params(stmt) -> set:
+    """Every bound value in the statement that is a company id."""
+    params = stmt.compile(dialect=postgresql.dialect()).params
+    return {v for v in params.values() if isinstance(v, UUID)} & {ORG_A, ORG_B}
+
+
+ORG_A, ORG_B = uuid4(), uuid4()
+
+
+def _su(org=ORG_A):
+    return P.Principal(user_id=uuid4(), email="s@example.com", organization_id=org,
+                       role="superadmin", building_ids=None)
+
+
+def _admin(org=ORG_A):
+    return P.Principal(user_id=uuid4(), email="a@example.com", organization_id=org,
+                       role="admin", building_ids=None)
+
+
+def test_a_superadmin_naming_a_company_gets_only_its_work_orders(client):
+    s = Recording()
+    wire(client, _su(ORG_A), s)
+    r = client.get("/api/work-orders/", params={"organization_id": str(ORG_B)})
+    assert r.status_code == 200, r.text[:200]
+    sql = compiled(s.statements[-1])
+    assert "plenum_cafm.buildings" in sql, "the read must be drawn through the company's buildings"
+    assert _org_params(s.statements[-1]) == {ORG_B}, "the company asked for, not their own"
+
+
+def test_naming_another_company_cannot_widen_anyone_elses_work_orders(client):
+    """The parameter only narrows: an admin naming another company still gets their own."""
+    s = Recording()
+    wire(client, _admin(ORG_A), s)
+    r = client.get("/api/work-orders/", params={"organization_id": str(ORG_B)})
+    assert r.status_code == 200, r.text[:200]
+    assert _org_params(s.statements[-1]) == {ORG_A}
+
+
+@pytest.mark.parametrize("who,asked", [
+    (_su, ORG_B), (_su, None), (_su, "not-a-company"), (_admin, ORG_B), (_admin, None),
+])
+def test_work_orders_and_assets_answer_for_the_same_company(client, who, asked):
+    """Whatever the caller and whatever they ask for, the two reads the Assets page joins are
+    bounded by the same company."""
+    principal = who()
+    params = {} if asked is None else {"organization_id": str(asked)}
+    wos, assets = Recording(), Recording()
+    wire(client, principal, wos)
+    assert client.get("/api/work-orders/", params=params).status_code == 200
+    wire(client, principal, assets)
+    assert client.get("/api/assets", params=params).status_code == 200
+    assert _org_params(wos.statements[-1]) == _org_params(assets.statements[-1]), (who, asked)

@@ -22,7 +22,8 @@ from ...api.schemas.work_order import (
     StatusUpdate,
 )
 from ...services.approval_chain_service import approval_suggestion_after_create
-from ...services.principal import Principal, assert_building, current_principal, scope_select
+from ...services.principal import (Principal, acting_organization, assert_building,
+                                   current_principal, scope_select)
 from ...services.maintenance import AWAITING, BLOCKED, LIVE
 from ...api.schemas.journey import StatusHistoryEntry, BulkStatusUpdate
 from ...core.exceptions import (
@@ -214,6 +215,9 @@ async def list_work_orders(
     from_date:     Optional[datetime] = Query(None),
     to_date:       Optional[datetime] = Query(None),
     open_only:     bool               = Query(False, alias="open"),
+    organization_id: Optional[str] = Query(
+        None, description="Superadmins only: answer for this company instead of reading across "
+                          "all of them. Ignored for everybody else, who always get their own."),
     page:          int                = Query(1, ge=1),
     limit:         int                = Query(20, ge=1, le=200),
     session:       AsyncSession       = Depends(get_session),
@@ -225,7 +229,12 @@ async def list_work_orders(
         asset=asset, page=page, limit=limit,
     )
     q = select(WorkOrder).where(WorkOrder.work_order_id.isnot(None))
-    q = scope_select(q, principal, WorkOrder.building_id)
+    # Pinned to the same company /api/assets answers for, so the two reads the Assets page
+    # joins describe one portfolio. Without it a superadmin viewing company X got every
+    # company's work orders beside X's assets, and the page's by-name match counted company
+    # Y's open orders on "AHU-1" against X's AHU-1 (28 Sep 2026).
+    q = scope_select(q, principal, WorkOrder.building_id,
+                     organization_id=acting_organization(principal, organization_id))
     if status_filter:
         q = q.where(WorkOrder.status == status_filter)
     if open_only:
@@ -241,7 +250,12 @@ async def list_work_orders(
         q = q.where(WorkOrder.created_at >= from_date)
     if to_date:
         q = q.where(WorkOrder.created_at <= to_date)
-    q = q.order_by(WorkOrder.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    # The key last, so the order is total. created_at is not unique — a workbook migration
+    # loads every row in one transaction, so every row shares one DEFAULT now() — and OFFSET
+    # paging over ties let Postgres order them differently on each page: the Assets page,
+    # which reads every page, got some orders four times and others never (28 Sep 2026).
+    q = (q.order_by(WorkOrder.created_at.desc(), WorkOrder.work_order_id.desc())
+          .offset((page - 1) * limit).limit(limit))
     try:
         result = await session.execute(q)
     except SQLAlchemyError as exc:

@@ -77,8 +77,11 @@ async def list_assets(
     try:
         total = (await session.execute(
             select(func.count()).select_from(query.subquery()))).scalar_one()
+        # The key last, so the order is total: asset names repeat across buildings, and OFFSET
+        # paging over a tied sort key repeats some rows and loses others between pages — the
+        # Assets page reads every page and never saw it, because the count still summed to N.
         rows = (await session.execute(
-            query.order_by(Asset.asset_name).offset((page - 1) * limit).limit(limit)
+            query.order_by(Asset.asset_name, Asset.asset_id).offset((page - 1) * limit).limit(limit)
         )).scalars().all()
     except SQLAlchemyError as exc:
         log.error("assets.list.db_error", exc_info=exc)
@@ -183,7 +186,11 @@ async def list_locations(
                          organization_id=acting_organization(principal, organization_id))
     if q:
         query = query.where(Location.name.ilike(f"%{q}%"))
-    query = query.order_by(Location.name).offset((page - 1) * limit).limit(limit)
+    # The key last, so the order is total: a location name like "Roof" or "Plant Room" repeats
+    # in every building, and OFFSET paging over a tied sort key repeats some rows and loses
+    # others between pages — the same fault /api/assets had (28 Sep 2026).
+    query = (query.order_by(Location.name, Location.location_id)
+                  .offset((page - 1) * limit).limit(limit))
 
     try:
         result = await session.execute(query)
