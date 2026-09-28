@@ -1161,6 +1161,10 @@ def create_app() -> FastAPI:
                     uploaded_by="streamlit_ui",
                     source_blob_path=source_blob_path,
                     source_filename=filename,
+                    # The inline state above carries it; without it here a worker run loses the
+                    # building the uploader selected (28 Sep 2026) and a meter export that names
+                    # no site has every reading skipped.
+                    building_id=building_id,
                 )
                 await _pool.aclose()
                 _enqueued = True
@@ -1480,6 +1484,9 @@ def create_app() -> FastAPI:
                             uploaded_by="single_door_multi",
                             source_blob_path=source_blob_path,
                             source_filename=combined_filename,
+                            # Same as start-with-upload: the inline state carries the selected
+                            # building, so the worker run must too (28 Sep 2026).
+                            building_id=building_id,
                         )
                         await _pool.aclose()
                         _enqueued = True

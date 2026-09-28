@@ -233,11 +233,13 @@ async def run_migration(
     json_mapper: dict = None,
     source_blob_path: str = None,
     source_filename: str = None,
+    building_id: str = None,
 ) -> dict:
     """
     Start a fresh migration run through the 9-node pipeline.
 
-    Creates the persistent db_session, builds initial state, and calls ainvoke().
+    Builds initial state and calls ainvoke(). ``building_id`` is the building the uploader
+    selected; it defaults to None so a job enqueued before it was passed still runs.
     If the graph pauses at a gate the task exits with status="awaiting_review".
     """
     session_factory = get_async_session_factory()
@@ -284,36 +286,40 @@ async def run_migration(
         },
     }
 
-    # ── Build persistent session for nodes that write to DB ──────────
-    async with session_factory() as db_session:
-        initial_state: MigrationState = {
-            "migration_id": migration_id,
-            "organization_id": organization_id,
-            "cmms_name": cmms_name,
-            "source_system": cmms_name,
-            "source_blob_url": source_blob_url,
-            # source_blob_path lets Node 1 re-pull the (combined) upload the inline start path
-            # persisted to Blob — it's checked BEFORE source_blob_url (ingest_node.py:121).
-            "source_blob_path": source_blob_path,
-            "source_filename": source_filename or cmms_name,
-            "uploaded_by": uploaded_by,
-            "upload_timestamp": datetime.utcnow(),
-            "current_step": 0,
-            "status": "running",
-            "checkpoint_count": 0,
-            "event_log": [],
-            "tier1_mapped_count": 0,
-            "tier2_human_count": 0,
-            "overall_confidence": 0.0,
-            "db_session": db_session,   # ← passed to every node for DB writes
-        }
+    # No db_session in the input: the checkpointer serialises the whole input before LangGraph
+    # drops undeclared keys, so a live AsyncSession here failed every run at its first checkpoint
+    # ("Type is not msgpack serializable: AsyncSession"). The migration nodes open their own
+    # sessions from the app factory; see the note in resume_migration.
+    initial_state: MigrationState = {
+        "migration_id": migration_id,
+        "organization_id": organization_id,
+        # The inline start paths always carried the selected building; the worker input did not,
+        # so once worker runs got past their first checkpoint (28 Sep 2026) write_node had no
+        # default_building_id and skipped every reading of a meter export that names no site.
+        # MigrationState declares it, so it is checkpointed and a resume reads it back.
+        "building_id": building_id,
+        "cmms_name": cmms_name,
+        "source_system": cmms_name,
+        "source_blob_url": source_blob_url,
+        # source_blob_path lets Node 1 re-pull the (combined) upload the inline start path
+        # persisted to Blob — it's checked BEFORE source_blob_url (ingest_node.py:125).
+        "source_blob_path": source_blob_path,
+        "source_filename": source_filename or cmms_name,
+        "uploaded_by": uploaded_by,
+        "upload_timestamp": datetime.utcnow(),
+        "current_step": 0,
+        "status": "running",
+        "checkpoint_count": 0,
+        "event_log": [],
+        "tier1_mapped_count": 0,
+        "tier2_human_count": 0,
+        "overall_confidence": 0.0,
+    }
 
-        if json_mapper:
-            initial_state["json_mapper"] = json_mapper
+    if json_mapper:
+        initial_state["json_mapper"] = json_mapper
 
-        result = await _run_graph(graph, initial_state, config, migration_id, session_factory)
-
-    return result
+    return await _run_graph(graph, initial_state, config, migration_id, session_factory)
 
 
 async def resume_migration(
@@ -392,9 +398,9 @@ async def resume_migration(
     # failed: "Type is not msgpack serializable: AsyncSession". A Command's update is
     # recorded by the checkpointer as a pending write BEFORE undeclared channels are
     # filtered out, so the session reached msgpack and killed the run at its first
-    # checkpoint after the gate. The initial run passes one too (run_migration) and
-    # survives only because plain input IS filtered first — MigrationState declares no
-    # db_session channel at all.
+    # checkpoint after the gate. The initial run (run_migration) passed one too and failed
+    # the same way at its first checkpoint (28 Sep 2026): plain input is recorded whole
+    # before it is filtered, so it no longer carries one either.
     #
     # Nothing needed it either: the migration nodes each open their own session from the
     # app factory (nodes/db_writer.py's _get_session_factory), so state["db_session"] is

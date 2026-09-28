@@ -93,6 +93,10 @@ class MigrationState(TypedDict, total=False):
 
     # ── Node 1: Ingest ────────────────────────────────────────────────────
     source_blob_url: str  # Azure Blob URL (NOT file bytes)
+    #: The upload's path inside the container ("migrations/<id>/source/<file>"), which Node 1
+    #: re-pulls with the connection string. Undeclared, LangGraph drops it from the input and
+    #: Node 1 reads the relative path in source_blob_url as a URL whose host is "migrations".
+    source_blob_path: Optional[str]
     source_file_bytes: Optional[bytes]  # Transient; cleared before checkpoint
     source_encoding: str  # e.g., "utf-8", "iso-8859-1"
     source_delimiter: str  # "," or "\t" or ";"
