@@ -28,6 +28,8 @@ the rule. A person can disagree with it on the evidence shown.
 """
 from __future__ import annotations
 
+import re
+
 from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -387,6 +389,7 @@ async def asset_detail(
     risk["remaining_life_months"] = var["remaining_life_months"]
     risk["design_life_used_pct"] = var["design_life_used_pct"]
 
+    contacts = await vendor_contacts(session, row["vendor_id"])
     return {
         "ok": True,
         "asset": {
@@ -401,6 +404,10 @@ async def asset_detail(
             "section_reference_eui": _num(row["section_reference"]),
             "vendor_id": row["vendor_id"], "vendor": row["vendor"],
             "vendor_code": row["vendor_code"],
+            "vendor_email": contacts["email"],
+            # Several addresses and none marked primary: the draft leaves To empty and names
+            # these, rather than picking one at random.
+            "vendor_email_candidates": contacts["candidates"],
         },
         "anomaly": anom,
         "value": var,
@@ -411,6 +418,66 @@ async def asset_detail(
 
 def _iso(v: Any) -> Any:
     return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+#: Enough of an address to be worth offering: something@something.something, no spaces.
+_ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+async def _has_is_primary(session: AsyncSession) -> bool:
+    """Whether vendor_contacts carries is_primary here — the contractor recommender's own check,
+    read once per process."""
+    from ..compliance.contractors import _has_is_primary as has_it  # local: avoids an import cycle
+    return await has_it(session)
+
+
+async def vendor_contacts(session: AsyncSession, vendor_id: str | None) -> dict[str, Any]:
+    """Where this vendor can be written to: ``{"email", "candidates"}``.
+
+    The Assets page's work-order and inspection drafts are sent for real, so the To line is
+    only ever an address a record holds — never a guess. That means the primary contact where
+    the register marks one; the only usable address where there is just one; and, where there
+    are several and none is marked, no address at all and the candidates for the reader to
+    choose from. "The first on record" used to be ORDER BY a random uuid, which sent a real
+    email to whichever contact's id sorted lowest (review, 28 Sep 2026). Read in its own
+    savepoint: a database that shapes vendor_contacts differently loses the address, not the
+    asset.
+    """
+    blank: dict[str, Any] = {"email": None, "candidates": []}
+    if not vendor_id:
+        return blank
+    has_primary = await _has_is_primary(session)
+    primary = "vc.is_primary" if has_primary else "NULL::boolean"
+    order = "vc.is_primary DESC NULLS LAST, vc.email" if has_primary else "vc.email"
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(f"""
+                SELECT vc.email, {primary} AS primary_flag FROM plenum_cafm.vendor_contacts vc
+                 WHERE vc.vendor_id::text = :vid AND vc.email IS NOT NULL
+                   AND btrim(vc.email) <> ''
+                 ORDER BY {order} LIMIT 10"""), {"vid": str(vendor_id)})).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("asset_intel.vendor_email_failed", error=str(exc)[:200])
+        return blank
+    usable: list[str] = []
+    marked: str | None = None
+    for r in rows:
+        email = str(r.get("email") or "").strip()
+        if not _ADDRESS.match(email) or email.lower() in (u.lower() for u in usable):
+            continue
+        usable.append(email)
+        if marked is None and r.get("primary_flag") is True:
+            marked = email
+    if marked:
+        return {"email": marked, "candidates": []}
+    if len(usable) == 1:
+        return {"email": usable[0], "candidates": []}
+    return {"email": None, "candidates": usable}
+
+
+async def vendor_contact_email(session: AsyncSession, vendor_id: str | None) -> str | None:
+    """The address a draft to this vendor may be sent to, or None — see vendor_contacts."""
+    return (await vendor_contacts(session, vendor_id))["email"]
 
 
 async def _asset_anomaly(session: AsyncSession, asset_id: str) -> dict[str, Any]:

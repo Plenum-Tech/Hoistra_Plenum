@@ -70,9 +70,11 @@ async def _has_is_primary(session: AsyncSession) -> bool:
                 ).scalar()
             _IS_PRIMARY = bool(found)
         except Exception as exc:  # noqa: BLE001 — an unreadable catalogue costs the
-            # preference, never the recommendation.
+            # preference, never the recommendation. It is not remembered: a transient failure
+            # (a timeout at start-up) is not the column's absence, and caching it as False held
+            # every later read to the no-primary order until a restart.
             log.warning("contractors.is_primary_probe_failed", error=str(exc)[:160])
-            _IS_PRIMARY = False
+            return False
     return _IS_PRIMARY
 
 
