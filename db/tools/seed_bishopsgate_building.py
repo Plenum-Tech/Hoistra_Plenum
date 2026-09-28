@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import uuid
@@ -72,10 +73,20 @@ async def main() -> None:
                 fields["country_code"] = "UK"
             if "gross_internal_area_m2" in cols:
                 fields["gross_internal_area_m2"] = str(GIA_M2)
+            # The ingest skips a building that already exists, so the use and country the energy
+            # engines read are set here - the way the UI records them on Northbridge's buildings.
+            # Without them the building has no market, no TM46 benchmark and no MEES tiles.
+            if "primary_use" in cols:
+                fields["primary_use"] = "Commercial"
             if "raw_metadata" in cols:
-                fields["raw_metadata"] = "{}"
+                fields["raw_metadata"] = json.dumps({
+                    "country": "UK", "country_code": "UK", "use_type": "Commercial",
+                    "use_mix": [{"pct": 100.0, "use": "office"}], "metering_granularity": "half-hourly",
+                    "source": "seed_bishopsgate_building"})
             names = list(fields)
-            ph = ", ".join(f"${i + 1}" + ("::jsonb" if n == "raw_metadata" else "") for i, n in enumerate(names))
+            ph = ", ".join(f"${i + 1}" + ("::jsonb" if n == "raw_metadata" else
+                                          "::plenum_cafm.building_primary_use" if n == "primary_use" else "")
+                           for i, n in enumerate(names))
             upd = ", ".join(f"{n} = EXCLUDED.{n}" for n in names if n != "building_id")
             await c.execute(
                 f"INSERT INTO plenum_cafm.buildings ({', '.join(names)}, created_at, updated_at) "

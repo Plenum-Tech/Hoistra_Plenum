@@ -33,7 +33,7 @@ TWO PLACES THE PROTOTYPE DISAGREES WITH ITSELF:
          --as-of (default: today), so "LOLER expires in 23 days" is still true when ingested.
 
     python db/tools/build_bishopsgate_workbook.py "C:/Users/balap/Downloads/Hoistra_1 (1).html"
-    python db/tools/build_floor_submeters.py  <out>.xlsx
+    python db/tools/build_floor_submeters.py  <out>.xlsx --shares per-floor
     python db/tools/build_complete_workbook.py <out>.xlsx
     python db/tools/verify_workbook.py <out>-complete.xlsx
 
@@ -122,7 +122,10 @@ def pdate(s: str) -> dt.date:
 # ── the workbook ─────────────────────────────────────────────────────────────────────────
 
 HEADERS = {
-    "Sites": ["site_id", "site_name", "city", "postcode", "region", "manager_email"],
+    # country_code on the site: the energy engines read a building's country from its site (or
+    # location, or raw_metadata), never from buildings.country_code - without it the building
+    # is in no market and gets no benchmark, MEES or EPC tile.
+    "Sites": ["site_id", "site_name", "city", "postcode", "region", "manager_email", "country_code"],
     "Buildings": ["building_code", "name", "site_ref", "country_code", "primary_use", "floors",
                   "gross_area_sqft", "gross_internal_area_m2", "eui_kwh_m2", "hoist_score"],
     "Building_Sections": ["building_code", "name", "section_type", "floor_name", "gross_area_m2",
@@ -595,7 +598,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     origin: list[tuple[str, str, str]] = []                       # (sheet, row, where it came from)
 
     # Sites, Buildings, sections
-    sheets["Sites"].append([SITE, BUILDING, "London", "EC2M 9ZZ", bld_cc["state"], "fm@plenum-technologies.example"])
+    sheets["Sites"].append([SITE, BUILDING, "London", "EC2M 9ZZ", bld_cc["state"], "fm@plenum-technologies.example", "UK"])
     sheets["Buildings"].append([CODE, BUILDING, SITE, "UK", bld_cc["use"], FLOORS, round(GIA_M2 * 10.7639, 2),
                                 GIA_M2, None, None])
     for name, stype, floor, area, ref, src, _ in SECTIONS:
@@ -874,7 +877,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
             ("CLWC", "ISO_9001", "Certificated", 36, dt.date(2024, 6, 1), "valid"),
             ("SFLT", "LEIA", "Member", 12, dt.date(2026, 2, 12), "valid"),
             ("SFLT", "CONTRACTOR_EL_INSURANCE", "GBP 5,000,000", 12, dt.date(2025, 11, 20), "valid"),
-            ("SFLT", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000 — lapsed, renewal not supplied", 12, dt.date(2025, 7, 18), "expired"),
+            ("SFLT", "CONTRACTOR_PL_INSURANCE", "Lapsed — renewal not supplied", 12, dt.date(2025, 7, 18), "expired"),
             ("PCFR", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 5, 1), "valid"),
             ("PCFR", "BAFE_SP203_1", "Registration lapsed", 36, dt.date(2023, 7, 8), "expired")]
     for vcode, typ, result, months, issued, status in vend:

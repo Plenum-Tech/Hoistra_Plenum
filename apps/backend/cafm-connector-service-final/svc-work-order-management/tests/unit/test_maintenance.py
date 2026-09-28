@@ -355,3 +355,18 @@ def test_a_caller_holding_the_human_code_still_finds_the_row():
     src = inspect.getsource(work_orders._get_wo_or_404)
     assert "WorkOrder.wo_code" in src
     assert "cast(" in src and "String" in src
+
+
+# ── inspection notes: the warranty the recommendation carries ─────────────────────────────
+
+def test_a_warranty_in_the_recommendation_is_its_own_field():
+    from src.services.maintenance import split_warranty
+    rec, w = split_warranty("Leak test within 3 months; condenser clean "
+                            "(Compressor 2 under OEM warranty to Mar 2027 — contactor claimable)", None)
+    assert rec == "Leak test within 3 months; condenser clean"
+    assert w == "Compressor 2 under OEM warranty to Mar 2027 — contactor claimable"
+    # a bracket that is not about warranty stays in the recommendation
+    assert split_warranty("Replace belts (both AHUs)", None) == ("Replace belts (both AHUs)", None)
+    # an extracted report's own field wins, and nothing at all is (None, None)
+    assert split_warranty("Re-test", {"warranty": "VSD to Dec 2026"}) == ("Re-test", "VSD to Dec 2026")
+    assert split_warranty(None, None) == (None, None)

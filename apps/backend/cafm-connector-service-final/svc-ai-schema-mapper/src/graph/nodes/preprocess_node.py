@@ -536,10 +536,18 @@ def _coerce_dates(df: pd.DataFrame, col_name: str) -> bool:
             if count > best_count:
                 best_parsed, best_count = parsed, count
 
-        # Fallback — let pandas infer the format from the original values
-        # (day-first to match the DD/MM/YYYY preference in DATE_FORMATS).
+        # Fallback — let pandas infer the format from the original values (day-first to match
+        # the DD/MM/YYYY preference in DATE_FORMATS) — except for year-first values, which are
+        # never day-first. An Excel date arrives here as "2026-07-10 00:00:00", which none of
+        # DATE_FORMATS matches; with dayfirst pandas read it as year-DAY-month, so 10 Jul became
+        # 7 Oct, and a day over 12 became NaT — and 4 of 5 still cleared the 80 % bar below.
+        # Bishopsgate's inspections landed that way on 28 Sep 2026: every date wrong or lost.
         try:
-            parsed = pd.to_datetime(original, errors="coerce", dayfirst=True)
+            iso = original.dropna().astype(str).str.match(r"^\s*\d{4}-\d{1,2}-\d{1,2}([ T]|$)")
+            if len(iso) and iso.mean() >= 0.8:
+                parsed = pd.to_datetime(original, errors="coerce", format="ISO8601")
+            else:
+                parsed = pd.to_datetime(original, errors="coerce", dayfirst=True)
             count = int(parsed.notna().sum())
             if count > best_count:
                 best_parsed, best_count = parsed, count

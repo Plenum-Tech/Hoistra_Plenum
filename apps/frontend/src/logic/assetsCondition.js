@@ -59,6 +59,34 @@ import { isStaleScope } from '../api/client.js';
 import { t } from './constants.js';
 
 // What is still unknown says so. These are claims about the data, not decoration.
+// One inspection report as a note under its asset. Pure, so the tests can hold it to the
+// design: "WO-4421 · 14 Jun 2026 · Apex Mechanical · High risk", the findings, then
+// "Recommendation open · …" in the risk colour (done reads muted), then the warranty chip.
+export function inspectionNotes(rows) {
+  const day = (d) => {
+    if (!d) return 'date not on record';
+    const x = new Date(String(d).slice(0, 10) + 'T12:00:00');
+    return isNaN(x) ? String(d) : x.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+  return (rows || []).slice()
+    .sort((p, q) => String(q.inspection_date || '').localeCompare(String(p.inspection_date || '')))
+    .slice(0, 3)
+    .map((r) => {
+      const open = !!r.recommendation_open;
+      const risk = r.risk_level ? String(r.risk_level) + ' risk' : null;
+      return {
+        icon: 'ph-clipboard-text', color: open ? 'var(--color-accent)' : 'var(--color-neutral-500)',
+        id: r.wo_code || 'Inspection',
+        when: [day(r.inspection_date), r.vendor || r.inspector || null, risk].filter(Boolean).join(' · '),
+        text: String(r.observations || r.finding_type || 'No findings recorded').split(/;\s*/).join(' · '),
+        flag: r.recommendation ? 'Recommendation ' + (open ? 'open' : 'done') + ' · ' + r.recommendation : '',
+        flagShow: r.recommendation ? 'block' : 'none',
+        flagColor: open ? 'var(--color-accent)' : 'var(--color-neutral-500)',
+        warranty: r.warranty || '', warrShow: r.warranty ? 'inline-block' : 'none'
+      };
+    });
+}
+
 export const NOT_METERED = 'Not metered — no sub-meter or no area on record, which is not the same as no consumption';
 export const NO_SECTION_LINK = 'Not yet linked to a section';
 export const NO_SECTION_LINK_WHY = 'assets.section_id exists on the table but AssetResponse does not return it, so the link cannot be made in bulk';
@@ -252,7 +280,7 @@ export const assetsConditionMethods = {
       return { __err: (e && e.message) || String(e) };
     });
     try {
-      const [locs, anoms, sections, var_, cond, csum, floors] = await Promise.all([
+      const [locs, anoms, sections, var_, cond, csum, floors, insp] = await Promise.all([
         soft(workOrderApi.locations({ limit: 500 })),
         soft(energyApi.anomalies({ limit: 500 })),
         soft(energyApi.sections()),
@@ -264,7 +292,10 @@ export const assetsConditionMethods = {
         // consumption comes from its own, and until this read the page never showed it — ten
         // metered chillers, boilers and lifts sat under "not metered" sections and looked
         // unmetered themselves.
-        soft(energyApi.metersByFloor())
+        soft(energyApi.metersByFloor()),
+        // The inspection reports on each asset: what was found, what was recommended and
+        // whether it was done, the warranty it named, and the order it was written on.
+        soft(workOrderApi.maintenanceInspections({ limit: 500 }))
       ]);
       if (stale) throw stale;
       const list = (v, ...keys) => Array.isArray(v) ? v
@@ -294,6 +325,7 @@ export const assetsConditionMethods = {
         asAssetMetersError: floors && floors.__err ? floors.__err : '',
         asLocations: list(locs, 'locations'), asLocationsError: locs && locs.__err ? locs.__err : '',
         asAnoms: list(anoms, 'anomalies'), asAnomsError: anoms && anoms.__err ? anoms.__err : '',
+        asInspections: list(insp, 'inspections'), asInspectionsError: insp && insp.__err ? insp.__err : '',
         asSections: list(sections, 'sections'), asSectionsSummary: (sections && sections.summary) || null,
         asSectionsError: sections && sections.__err ? sections.__err : '',
         asVar: var_ && !var_.__err ? var_ : null, asVarError: var_ && var_.__err ? var_.__err : '',
@@ -682,6 +714,15 @@ export const assetsConditionMethods = {
       };
     };
 
+    // Inspection reports by asset, newest first: the notes under each row, as the design has
+    // them — order and date, who and the grade, what was found, what was asked and whether it
+    // was done, and any warranty the report named.
+    const inspByAsset = {};
+    (s.asInspections || []).forEach((r) => {
+      const k = String(r.asset_id || r.asset_code || '');
+      if (k) (inspByAsset[k] = inspByAsset[k] || []).push(r);
+    });
+    const histOf = (a) => inspectionNotes(inspByAsset[String(a.asset_id)] || inspByAsset[String(a.asset_code || '')] || []);
     const row = (x) => {
       const a = x.a, tone = t(TONE_OF[x.cond]);
       const loc = a.location_id ? locById[String(a.location_id)] : null;
@@ -691,7 +732,10 @@ export const assetsConditionMethods = {
       return {
         id: a.asset_id, name: a.asset_name,
         cls: a.category_name || (a.category_id ? 'Category name not on file' : 'No category set'),
-        vendor: (intel[a.asset_id] && intel[a.asset_id].asset && intel[a.asset_id].asset.vendor) || 'Open the asset to read its vendor',
+        // The condition read names the vendor for every asset in scope; the per-asset
+        // intelligence, once opened, is the same column read one asset at a time.
+        vendor: (intel[a.asset_id] && intel[a.asset_id].asset && intel[a.asset_id].asset.vendor)
+          || (bandRow[String(a.asset_id)] && bandRow[String(a.asset_id)].vendor) || 'No vendor on the asset record',
         meta: [a.asset_code || null, a.category_name || null,
                a.installation_date ? 'installed ' + String(a.installation_date) : 'install date not on record',
                a.criticality ? a.criticality + ' criticality' : 'criticality not set',
@@ -718,7 +762,7 @@ export const assetsConditionMethods = {
         valLoss: varOf(a) ? '−' + money(varOf(a).value_at_risk) : '—',
         valLossColor: varOf(a) && varOf(a).value_at_risk > 0 ? t('risk').color : 'var(--color-neutral-500)',
         valLine: varOf(a) ? (varOf(a).basis || (varOf(a).design_life_used_pct != null ? Math.round(varOf(a).design_life_used_pct) + '% of design life used' : '')) : NOT_COMPUTABLE,
-        hist: [], histShow: 'none',
+        hist: histOf(a), histShow: histOf(a).length ? 'flex' : 'none',
         invShow: x.anomaly ? 'inline-flex' : 'none',
         investigate: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.asCondOpenAnomaly(x.anomaly); },
         // assets.vendor_id now names who holds the asset, so an order has a recipient. The

@@ -100,6 +100,16 @@ FIXED_SHARE = {
     "electricity": {"Basement": 0.14, "Ground": 0.10},
     "gas": {"Basement": 0.62, "Ground": 0.08},
 }
+#: --shares per-floor: basement and ground as MULTIPLES OF AN AVERAGE FLOOR, the tenant floors
+#: 1.0 each, normalised to COVERAGE. The fixed slices above were tuned on Harbour Point's 14
+#: floors; on Bishopsgate's 22 the same 14 % and 62 % put 977 kWh/m2 on a 2,246 m2 basement
+#: (+443 % against its reference). And gas is burnt in the basement but heats every floor, so
+#: here it follows the floors it heats; the boiler sub-meters still carry it as plant. Northbridge
+#: is built with the default and does not change.
+PER_FLOOR_SHARE = {
+    "electricity": {"Basement": 1.47, "Ground": 1.10},
+    "gas": {"Basement": 0.60, "Ground": 1.10},
+}
 NOISE = 0.05
 #: A tenant floor whose night-time electricity creeps up over the last five weeks, so the
 #: scan has something to find at floor level. Applied to the highest tenant floor.
@@ -178,7 +188,11 @@ def read_sheet(wb, name: str) -> tuple[list[str], list[list]]:
     return header, [list(r) for r in rows]
 
 
-def shares(fuel: str, names: list[str]) -> dict[str, float]:
+def shares(fuel: str, names: list[str], mode: str = "fixed") -> dict[str, float]:
+    if mode == "per-floor":
+        mult = {n: PER_FLOOR_SHARE[fuel].get(n, 1.0) for n in names}
+        total = sum(mult.values())
+        return {n: COVERAGE[fuel] * m / total for n, m in mult.items()}
     fixed = FIXED_SHARE[fuel]
     tenants = [n for n in names if n not in fixed]
     remaining = COVERAGE[fuel] - sum(fixed.get(n, 0.0) for n in names if n in fixed)
@@ -196,7 +210,7 @@ def _parse_at(v) -> dt.datetime:
     return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
 
 
-def build(path: str, *, days: int, seed: int) -> str:
+def build(path: str, *, days: int, seed: int, mode: str = "fixed") -> str:
     rng = random.Random(seed)
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
 
@@ -250,7 +264,7 @@ def build(path: str, *, days: int, seed: int) -> str:
         main_ref = str(main.get("meter_ref") or main.get("mpan") or main.get("mprn"))
         prefix = main_ref.rsplit("-", 1)[0]          # NB-B-101-E0 -> NB-B-101
         letter = "E" if fuel == "electricity" else "G"
-        share = shares(fuel, names)
+        share = shares(fuel, names, mode)
         for fname in names:
             ref = f"{prefix}-{letter}-{floor_code(fname)}"
             meters.append([
@@ -384,12 +398,14 @@ def main() -> None:
     ap.add_argument("workbooks", nargs="*", default=DEFAULT_WORKBOOKS)
     ap.add_argument("--days", type=int, default=90, help="trailing window of half-hours per sub-meter")
     ap.add_argument("--seed", type=int, default=101)
+    ap.add_argument("--shares", choices=("fixed", "per-floor"), default="fixed",
+                    help="fixed: Harbour Point's slices (Northbridge); per-floor: basement and ground as multiples of an average floor")
     args = ap.parse_args()
     for i, p in enumerate(args.workbooks):
         if not os.path.exists(p):
             print(f"  missing: {p}", file=sys.stderr)
             continue
-        build(p, days=args.days, seed=args.seed + i)
+        build(p, days=args.days, seed=args.seed + i, mode=args.shares)
 
 
 if __name__ == "__main__":

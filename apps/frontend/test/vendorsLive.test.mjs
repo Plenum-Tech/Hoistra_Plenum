@@ -637,3 +637,25 @@ test('evidence: a failed wo-scores read leaves the split and the L1 tile unsourc
   assert.equal(m.V[A1].evidenceRead, false);
   assert.equal(m.tiles.L1, null);
 });
+
+test('an Overdue certificate not yet past its date is expiring, not a lapsed accreditation', () => {
+  // Northgate Electrical, 28 Sep 2026: NICEIC 22 days from expiry, marked Overdue by the
+  // renewal ladder (8-30 days), read "lapsed accreditation" while the scorer held it current.
+  const NG = '00000000-0000-0000-0000-0000000000b7';
+  const certs = [
+    cert(NG, 'Northgate Electrical', 'NICEIC', 'NICEIC Approved Contractor', 'Overdue', '2026-09-29', 22, 'Electrical'),
+    cert(NG, 'Northgate Electrical', 'CHAS_SSIP', 'SSIP', 'Critical', '2026-09-12', 5, null),
+    cert(NG, 'Northgate Electrical', 'ISO_9001', 'ISO 9001', 'Current', '2027-02-28', 174, null)
+  ];
+  const params = { ok: true, parameters: [{ id: 'p-ng', vendor_id: NG, vendor_name: 'Northgate Electrical', contract_ref: 'NE-2025-ELEC-01',
+    status: 'draft', field_sources: {} }] };
+  const m = shapeLiveVendors({ contracts: params, certificates: certs, coverage: {}, packs }, NOW);
+  const v = m.vendors.find((x) => x.id === NG);
+  assert.equal(v.accred, 'Expiring');
+  assert.match(v.meta, /expiring accreditation/);
+  const rows = m.V[NG].certs;
+  assert.equal(rows.find((c) => c.code === 'NICEIC').status, 'Expiring');
+  assert.equal(rows.find((c) => c.code === 'CHAS_SSIP').status, 'Expiring');
+  // ...and one past its date still lapses, whatever the label (the SafeLift fixture above).
+  assert.equal(full().V[A3].certs.find((c) => c.name === 'LEIA Membership').status, 'Lapsed');
+});

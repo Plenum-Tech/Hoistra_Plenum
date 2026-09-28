@@ -191,8 +191,18 @@ const STRUCTURED_TERMS = new Set([
 ]);
 
 // The register's status vocabulary → the four tags the Coverage tab shows.
-function certStatus(raw) {
+// The compliance ladder's "Overdue" (8–30 days) and "Critical" (≤7 days) are renewal states
+// BEFORE expiry; only past expiry is lapsed. Rows written by older scans say "Overdue" for a
+// certificate already past its date, so the date decides: Northgate's NICEIC, 22 days from
+// expiry, read "lapsed accreditation" on 28 Sep 2026 while the scorer held it current.
+function certStatus(raw, row, at) {
   const s = lower(raw);
+  if (/overdue|critical/.test(s) && row) {
+    const days = num(row.days_to_expiry);
+    const exp = row.expiry_date ? new Date(String(row.expiry_date).slice(0, 10) + "T23:59:59") : null;
+    const past = days !== null ? days < 0 : exp ? exp < (at || new Date()) : true;
+    return past ? "Lapsed" : "Expiring";
+  }
   if (/lapsed|overdue|expired|revoked|suspended/.test(s)) return "Lapsed";
   if (/expir|renewal|due/.test(s)) return "Expiring";
   if (/current|valid|active|compliant|verified/.test(s)) return "Current";
@@ -462,7 +472,7 @@ export function shapeLiveVendors(input, now) {
     // ── accreditation posture ──
     const blockedNow = !!(cov2 && /blocked/i.test(String(cov2.block_state || ""))) ||
       certs.some((c) => /blocked/i.test(String(c.vendor_block_state || "")));
-    const statuses = certs.map((c) => certStatus(c.status));
+    const statuses = certs.map((c) => certStatus(c.status, c, at));
     const accred = blockedNow || statuses.indexOf("Lapsed") > -1 ? "Lapsed"
       : statuses.indexOf("Expiring") > -1 || certs.some((c) => num(c.days_to_expiry) !== null && num(c.days_to_expiry) <= 90) ? "Expiring"
       : certs.length ? "Current" : "Not on record";
@@ -611,7 +621,7 @@ export function shapeLiveVendors(input, now) {
       // The pack's vendor-scope types are the mandatory ones; so is whatever the engine blocked on.
       req: vendorTypes[c.certificate_type_code] || gaps.indexOf(c.certificate_type_code) > -1 ||
         (blockedType && (blockedType === c.certificate_type_name || blockedType === c.certificate_type_code)) ? "Mandatory" : "Preferred",
-      status: certStatus(c.status),
+      status: certStatus(c.status, c, at),
       exp: c.expiry_date ? fmtDay(c.expiry_date) : "—",
       ver: certVer(c),
       code: c.certificate_type_code

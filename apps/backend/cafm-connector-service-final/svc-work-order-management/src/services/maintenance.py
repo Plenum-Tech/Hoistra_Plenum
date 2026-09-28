@@ -29,6 +29,7 @@ there, the same way the asset catalogue decides its own column names.
 from __future__ import annotations
 
 import json
+import re
 
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
@@ -536,6 +537,11 @@ async def inspections(
     findings = "i.findings_jsonb" if "findings_jsonb" in ins else "NULL"
     section = "i.section" if "section" in ins else "NULL"
     source = "i.source_file" if "source_file" in ins else "NULL"
+    # What the report recommended, and the work order it was written on. A migrated report
+    # names neither by id - the order is the completed one on the same asset that day - and
+    # without them the Assets page could show a finding but not what was asked or who did it.
+    recommendation = "i.recommendation" if "recommendation" in ins else "NULL"
+    wo_ref = ("i.work_order_id::text" if "work_order_id" in ins else "NULL")
     params: dict[str, Any] = {"lim": int(limit)}
     clause = ""
     if ids is not None:
@@ -554,13 +560,23 @@ async def inspections(
                {findings}            AS findings,
                {section}             AS section,
                {source}              AS source_file,
+               {recommendation}      AS recommendation,
+               a.id::text            AS asset_id,
                a.building_id::text   AS building_id,
                a.asset_name          AS asset_name,
-               b.name                AS building
+               b.name                AS building,
+               v.vendor_name         AS vendor,
+               coalesce(wo_id.wo_code, wo_day.wo_code) AS wo_code
           FROM plenum_cafm.inspections i
           JOIN plenum_cafm.assets a
             ON a.asset_code = i.asset_code OR a.id::text = i.asset_id::text
           LEFT JOIN plenum_cafm.buildings b ON b.building_id = a.building_id
+          LEFT JOIN plenum_cafm.vendors v ON v.id::text = a.vendor_id::text
+          LEFT JOIN plenum_cafm.work_orders wo_id ON wo_id.id::text = {wo_ref}
+          LEFT JOIN LATERAL (
+                SELECT w.wo_code FROM plenum_cafm.work_orders w
+                 WHERE w.asset_id = a.id AND w.completed_at::date = i.inspection_date
+                 ORDER BY w.completed_at LIMIT 1) wo_day ON TRUE
          WHERE a.building_id IS NOT NULL{clause}
          ORDER BY i.inspection_date DESC NULLS LAST
          LIMIT :lim"""
@@ -576,6 +592,7 @@ async def inspections(
         d = r.get("inspection_date")
         r["inspection_date"] = d.isoformat() if hasattr(d, "isoformat") else d
         r["recommendation_open"] = bool(r.get("corrective_action"))
+        r["recommendation"], r["warranty"] = split_warranty(r.get("recommendation"), r.get("findings"))
     return {
         "ok": True,
         "count": len(out),
@@ -583,6 +600,26 @@ async def inspections(
         "by_risk": _tally(out, "risk_level"),
         "inspections": out,
     }
+
+
+_WARRANTY_TAIL = re.compile(r"\s*\(([^()]*warrant[^()]*)\)\s*$", re.I)
+
+
+def split_warranty(recommendation: Any, findings: Any) -> tuple[str | None, str | None]:
+    """(recommendation, warranty). A report records warranty cover in findings_jsonb when it
+    was extracted from a document; a migrated one carries it as a closing bracket on the
+    recommendation - "Leak test within 3 months (Compressor 2 under OEM warranty to Mar 2027)"
+    - which is the claim worth a chip of its own: a part still under warranty is a repair
+    somebody else pays for."""
+    rec = str(recommendation).strip() if recommendation not in (None, "") else None
+    fj = findings if isinstance(findings, dict) else {}
+    w = fj.get("warranty") if isinstance(fj.get("warranty"), str) else None
+    if rec:
+        m = _WARRANTY_TAIL.search(rec)
+        if m:
+            w = w or m.group(1).strip()
+            rec = rec[: m.start()].strip() or None
+    return rec, w
 
 
 def _tally(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
