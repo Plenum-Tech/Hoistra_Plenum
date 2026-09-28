@@ -373,7 +373,10 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
                 except Exception as csv_err:
                     log(f"CSV parse failed: {csv_err}; trying Excel...")
                     wb = ExcelWorkbook(io.BytesIO(file_content))  # calamine, workbook opened once
+                    from .ingest_node import _is_post_write_sheet
                     for sheet_name in wb.sheet_names:
+                        if _is_post_write_sheet(sheet_name):
+                            continue      # read by the post-write engines, not a migrated table
                         df_full = wb.read(sheet_name, dtype=str)
                         records_tables[sheet_name] = df_full.to_dict(orient="records")
                         df_tables[sheet_name] = df_full

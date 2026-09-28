@@ -1,7 +1,7 @@
 """BE1-05/08/09/13/14 + BE2-09/12/16 — Work Order CRUD + status machine + history + bulk."""
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -23,6 +23,7 @@ from ...api.schemas.work_order import (
 )
 from ...services.approval_chain_service import approval_suggestion_after_create
 from ...services.principal import Principal, assert_building, current_principal, scope_select
+from ...services.maintenance import AWAITING, BLOCKED, LIVE
 from ...api.schemas.journey import StatusHistoryEntry, BulkStatusUpdate
 from ...core.exceptions import (
     WorkOrderNotFound, InvalidStatusTransition,
@@ -196,6 +197,11 @@ async def create_work_order(
 
 # ── List (BE2-16: pagination added) ──────────────────────────────────────────
 
+#: What ?open=true keeps (services.maintenance's BLOCKED / AWAITING / LIVE, and the
+#: platform's own in-flight statuses).
+OPEN_STATUSES = sorted(set(BLOCKED + AWAITING + LIVE) | {"preparing", "prepared", "active"})
+
+
 @router.get(
     "/",
     response_model=List[WorkOrderResponse],
@@ -207,6 +213,7 @@ async def list_work_orders(
     asset:         Optional[str]      = Query(None),
     from_date:     Optional[datetime] = Query(None),
     to_date:       Optional[datetime] = Query(None),
+    open_only:     bool               = Query(False, alias="open"),
     page:          int                = Query(1, ge=1),
     limit:         int                = Query(20, ge=1, le=200),
     session:       AsyncSession       = Depends(get_session),
@@ -221,6 +228,11 @@ async def list_work_orders(
     q = scope_select(q, principal, WorkOrder.building_id)
     if status_filter:
         q = q.where(WorkOrder.status == status_filter)
+    if open_only:
+        # Every spelling of "not finished": the platform's own statuses and a migrated
+        # CMMS's ("Draft", "In progress", "Held"). A building with a few thousand completed
+        # orders otherwise pushed its open ones out of any page a screen could load.
+        q = q.where(func.lower(func.trim(WorkOrder.status)).in_(OPEN_STATUSES))
     if priority:
         q = q.where(WorkOrder.priority == priority)
     if asset:

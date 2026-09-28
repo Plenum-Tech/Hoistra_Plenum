@@ -166,10 +166,21 @@ HEADERS = {
                                 "inspector_accreditation_number", "issue_date", "expiry_date", "next_due_date",
                                 "inspection_frequency_months", "result", "status", "country_code", "defects_found",
                                 "remedial_actions", "remedial_status", "energy_rating", "energy_score"],
+    # Plant telemetry and weather - not tables the migration writes. The platform reads these
+    # four after the run (workbook_extras) into the chiller, degree-day and BMS stores the
+    # energy scan and the investigation walk read.
+    "Chiller_Design_Specs": ["asset_code", "building_code", "design_kw_per_rt", "design_capacity_rt",
+                             "design_ambient_c", "design_chw_supply_c", "source", "notes"],
+    "Chiller_Readings": ["asset_code", "building_code", "reading_at", "kw_input", "cooling_load_rt",
+                         "ambient_c", "chw_supply_c", "chw_return_c"],
+    "Weather_Degree_Days": ["building_code", "month", "hdd", "cdd", "base_temp_c", "station"],
+    "BMS_Trends": ["building_code", "zone", "asset_code", "recorded_at", "heating_pct", "cooling_pct",
+                   "zone_temp_c", "setpoint_c"],
 }
 ORDER = ["Sites", "Buildings", "Building_Sections", "Vendors", "Vendor_Contracts", "Technicians", "Assets",
          "Asset_Reading_Bands", "Asset_Readings", "Maintenance_Plans", "PPM_Visits", "Work_Orders",
-         "Inspections", "Spare_Parts", "Energy_Meters", "Meter_Readings", "Compliance_Certificates"]
+         "Inspections", "Spare_Parts", "Energy_Meters", "Meter_Readings", "Compliance_Certificates",
+         "Chiller_Design_Specs", "Chiller_Readings", "Weather_Degree_Days", "BMS_Trends"]
 
 #: The prototype's four sections (name, type, area, EUI) plus the two that make up the GIA.
 SECTIONS = [
@@ -190,15 +201,19 @@ VENDORS = [
     ("NGEL", "Northgate Electrical", "Electrical", "41 Northgate Row, Manchester M3 9ZZ", "+44 161 496 0284", "NICEIC 034512"),
     ("PCFR", "ProudCastle Fire", "Fire", "Castle Court, Croydon CR0 9ZZ", "+44 20 7946 0957", "none current"),
     ("CLWC", "Clearwater Compliance", "Water hygiene", "12 Fleet Mews, Reading RG1 9ZZ", "+44 118 496 0661", "LCA member 1188"),
+    # Not in the prototype: a second mechanical contractor, so the Vendors page compares two of
+    # a trade. It holds the floor fan-coil banks; Apex keeps the central plant.
+    ("FNMC", "Fenmoor Mechanical", "Mechanical", "Unit 4, Brickfield Lane, London E3 9ZZ", "+44 20 7946 0588", "Gas Safe 648213"),
 ]
 VCODE = {v[1]: v[0] for v in VENDORS}
 #: Asset class -> plenum_cafm.asset_categories.name. The writer has no by-name lookup for a
-#: category, so the id is looked up in hoistra_test when the workbook is built (--org-name) and
-#: written as category_id. LV board and water system have no category on record and stay blank.
+#: category, so the id of the company's own category is looked up in hoistra_test when the
+#: workbook is built (--org-name) and written as category_id.
 CATEGORY_OF_CLASS = {"Air handling": "HVAC · Air Handling", "Chiller": "HVAC · Chillers",
                      "Boiler": "HVAC · Boilers", "Fan coil": "HVAC · Terminal Units",
                      "Pump": "Mechanical · Pumps", "Generator": "Electrical · Standby Power",
-                     "Lift": "Vertical Transport", "Fire panel": "Life Safety · Fire Detection"}
+                     "Lift": "Vertical Transport", "Fire panel": "Life Safety · Fire Detection",
+                     "LV board": "Electrical · LV Distribution", "Water system": "Water Hygiene"}
 CATEGORY_IDS: dict[str, str] = {}
 CATEGORY_OF_CLASS["Lighting panel"] = "Electrical · Lighting Control"
 #: The floors as plenum_cafm.floors and the floor companion name them.
@@ -215,13 +230,15 @@ BLOCK = {
 VP_ID = {"APXM": "v1", "NGEL": "v3", "APXL": "v4", "CLWC": "v6"}
 #: The other two exist in the prototype only as compliance rows (both Blocked). Their KPIs are
 #: generated to that posture: below the portfolio, and declining.
-GEN_PERF = {"SFLT": {"sla_r": 82, "sla_c": 74, "firstfix": 70, "recall": 12, "invoice": 70, "trend": "declining"},
+GEN_PERF = {"FNMC": {"sla_r": 92, "sla_c": 87, "firstfix": 83, "recall": 7, "invoice": 82, "trend": "stable"},
+            "SFLT": {"sla_r": 82, "sla_c": 74, "firstfix": 70, "recall": 12, "invoice": 70, "trend": "declining"},
             "PCFR": {"sla_r": 85, "sla_c": 78, "firstfix": 72, "recall": 10, "invoice": 75, "trend": "declining"}}
-GEN_CONTRACT = {"SFLT": {"ref": "SL-2025-LIFT-01", "signed": "03 Mar 2025", "expires": "02 Mar 2027"},
+GEN_CONTRACT = {"FNMC": {"ref": "FM-2025-MECH-02", "signed": "12 May 2025", "expires": "11 May 2028"},
+                "SFLT": {"ref": "SL-2025-LIFT-01", "signed": "03 Mar 2025", "expires": "02 Mar 2027"},
                 "PCFR": {"ref": "PC-2024-FIRE-02", "signed": "15 Jul 2024", "expires": "14 Jul 2027"}}
 GEN_TERMS = [("P1 response", "4 hours"), ("P2 response", "1 business day"), ("P3 response", "5 business days"),
              ("Completion target", "95%"), ("First-time fix target", "85%"), ("Recall window", "28 days")]
-GEN_RATES = {"SFLT": (74, 111), "PCFR": (62, 93)}
+GEN_RATES = {"FNMC": (72, 108), "SFLT": (74, 111), "PCFR": (62, 93)}
 #: One contract per vendor: scoring reads a vendor's newest confirmed parameter set, and two
 #: sets signed the same day block it (FR-035), so Heating folds into Mechanical.
 CONTRACTS = [
@@ -231,6 +248,7 @@ CONTRACTS = [
     ("NGEL", "Electrical · Bishopsgate", "LV distribution, EICR, emergency lighting", 4, 21000),
     ("PCFR", "Fire and security · Bishopsgate", "Fire alarm, detection, FRA", 4, 16000),
     ("CLWC", "Water hygiene · Bishopsgate", "L8 monitoring, TMVs, tanks and calorifiers", 12, 14000),
+    ("FNMC", "Terminal units PPM · Bishopsgate", "Fan coil units on every floor: filters, condensate, fan motors", 4, 48000),
 ]
 CONTRACT_OF_VENDOR = {c[0]: c[1] for c in CONTRACTS}
 #: Engine defaults for what a contract does not state (svc-operations-intelligence
@@ -266,6 +284,186 @@ FAULTS = {
     "Water system": ["TMV failed temperature check — L6", "Cold water tank above 20 °C",
                      "Calorifier flow below 60 °C", "Dead-leg flushing overdue — L14"],
 }
+
+
+#: What an engineer's service report on each kind of plant finds and recommends.
+REPORT_FINDINGS = {
+    "Air handling": ["Filters at 240 Pa - changed", "Drive belt tension low - adjusted", "Coil face fouled - cleaned",
+                     "Fan bearing noise within limits"],
+    "Chiller": ["Refrigerant charge within 2% of design", "Condenser coils fouled - cleaned",
+                "Compressor 2 running amps 6% high", "Oil sample clean"],
+    "Pump": ["Mechanical seal weeping - monitored", "Bearing temperature normal", "Coupling alignment within tolerance"],
+    "Fan coil": ["Filters replaced on all units", "3 condensate trays cleaned", "2 fan motors noisy - replaced"],
+    "Boiler": ["Combustion efficiency 89%", "Burner nozzle wear", "Flue gas CO 110 ppm"],
+    "Lift": ["Door operator adjusted", "Ropes within discard criteria", "Levelling within 8 mm"],
+    "Generator": ["Load bank test 80% for 2 h - passed", "Battery voltage 26.8 V", "Coolant topped up"],
+    "LV board": ["Thermography - no hot spots", "Busbar torque check completed", "RCD tests passed"],
+    "Fire panel": ["Loop 2 earth fault cleared", "25% of detectors tested", "Standby batteries three years old"],
+    "Water system": ["Calorifier flow 61 C", "TMVs 43 C at outlets", "Cold water tanks 17 C"],
+    "Lighting panel": ["Scene timings verified", "2 PIR sensors unresponsive - replaced", "Emergency changeover tested"],
+}
+REPORT_RECOMMEND = {
+    "Air handling": "Replace drive belts at next visit; review weekend schedule",
+    "Chiller": "Leak test within 3 months; clean condenser coils quarterly",
+    "Pump": "Replace mechanical seal at next shutdown",
+    "Fan coil": "Replace remaining original fan motors over the next year",
+    "Boiler": "Burner service and flue gas analysis",
+    "Lift": "Monitor door operator; re-adjust at next monthly visit",
+    "Generator": "Replace starter batteries within 6 months",
+    "LV board": "Repeat thermography in 12 months",
+    "Fire panel": "Replace standby batteries next year",
+    "Water system": "Remove L14 dead legs; monthly temperature monitoring",
+    "Lighting panel": "Recommission out-of-hours scenes with the tenant",
+}
+#: An engineer's report by class and condition grade: findings (with {u} units, {k}/{k2} counts,
+#: {tag} the floor tag) and the recommendation that follows from them. A grade 3 or 4 report
+#: leaves its recommendation open; grade 1-2 reads "Monitor". Missing grades fall back to 2.
+REPORT_STORIES = {
+    "Fan coil": {
+        1: (["Filters replaced on all {u} units", "Condensate trays clean", "Fan speeds verified on the BMS"], "Monitor at routine PPM"),
+        2: (["Filters replaced on all {u} units", "{k} condensate trays cleaned", "Valve actuators stroked — all respond"], "Monitor at routine PPM"),
+        3: (["Filters at 180 Pa on {k} of {u} units — replaced", "{k2} condensate pumps weak — trays near overflow",
+             "Actuator on unit {tag}-{x} sticking at 40%"], "Replace the condensate pumps; free or replace the sticking actuator"),
+        4: (["Heating and cooling valves both open on {k} units overnight", "Actuators on {tag}-04 and {tag}-09 stuck at 40%",
+             "BMS night setback not applied to the floor"], "Replace the two actuators; reinstate night setback on the BMS"),
+    },
+    "Lighting panel": {
+        1: (["Scene timings verified", "Emergency changeover tested", "All PIR sensors respond"], "Monitor at routine PPM"),
+        2: (["Scene timings verified", "{k} PIR sensors unresponsive — replaced", "Emergency changeover tested"], "Monitor at routine PPM"),
+        3: (["Out-of-hours scene holds lighting on to 23:00", "Astronomical clock {k}0 min slow", "{k2} PIR sensors unresponsive"],
+            "Reset the out-of-hours scene with the tenant; correct the clock"),
+    },
+    "Chiller": {
+        2: (["Refrigerant charge within 2% of design", "Oil sample clean", "Condenser approach 2.1 °C"], "Monitor at routine PPM"),
+        3: (["Compressor 1 running amps 6% high", "Condenser approach 3.4 °C", "Oil acidity rising"],
+            "Oil change and condenser brush-clean at the next visit"),
+    },
+    "Pump": {
+        2: (["Bearing temperature normal", "Coupling alignment within tolerance", "Mechanical seal dry"], "Monitor at routine PPM"),
+        3: (["Drive-end bearing vibration 4.6 mm/s (2.8 at commissioning)", "Mechanical seal weeping", "Motor current 9% above baseline"],
+            "Replace the bearing and seal at the next shutdown"),
+    },
+    "Boiler": {
+        2: (["Combustion efficiency 90%", "Flue gas CO 60 ppm", "Safety interlocks tested"], "Monitor"),
+        3: (["Combustion efficiency 86% vs 91% commissioned", "Burner nozzle wear", "Flue gas CO 150 ppm"],
+            "Burner service and flue gas analysis"),
+    },
+    "Fire panel": {
+        2: (["25% of detectors tested — all passed", "Standby batteries 24.9 V", "No faults on the log"], "Monitor"),
+        3: (["Loop 2 earth fault — intermittent", "Standby batteries three years old", "{k} detectors overdue their 12-month test"],
+            "Clear the loop 2 fault; replace the standby batteries"),
+    },
+    "LV board": {
+        2: (["Thermography — no hot spots", "Busbar torque check completed", "RCD trip times within limits"], "Repeat thermography in 12 months"),
+        3: (["Thermography — 14 °C rise on outgoing way 7", "Busbar torque check completed", "Surge protection indicator amber"],
+            "Re-terminate way 7; replace the SPD cartridge"),
+    },
+    "Generator": {
+        2: (["Load bank test 80% for 2 h — passed", "Battery voltage 26.8 V", "Coolant topped up"], "Monitor"),
+        3: (["Load bank test passed, 12 s to take load", "Starter battery 24.1 V under crank", "Coolant hose perished"],
+            "Replace the starter batteries and the coolant hose"),
+    },
+    "Water system": {
+        2: (["Calorifier flow 61 °C", "TMVs 43 °C at outlets", "Cold water tanks 17 °C"], "Monitor monthly temperatures"),
+        3: (["Calorifier return 49 °C — below 50 °C", "3 TMVs failed the fail-safe test", "Dead leg on the L14 riser"],
+            "Descale the calorifier; replace 3 TMV cartridges; remove the L14 dead leg"),
+    },
+}
+#: The grade each asset's latest report gives, where it is not the default 2 — a mix of Threat,
+#: Watch and In control, and each tied to what else the workbook says about the asset:
+#: Level 20's fan coils fight overnight (BMS_Trends), its lighting holds on late (the night
+#: drift on its sub-meter), PUMP-01 has a predictive order, DHW-01 the descale Clearwater bills.
+REPORT_GRADE = {"PUMP-01": 3, "BOILER-01": 3, "FIRE-PANEL-01": 3, "DHW-01": 3, "FCU-L20": 4, "FCU-L07": 3,
+                "FCU-L14": 3, "LCP-L20": 3, "LCP-L09": 3}
+#: Refitted in 2016 and looked after: grade 1 unless named above.
+REPORT_GRADE_REFIT = 1
+#: Open orders in the prototype's four kinds, each on an asset whose report explains it:
+#: (number, asset suffix, priority, status, type, days ago, description).
+OPEN_ORDERS = [
+    ("4560", "FCU-L20", "P2", "In progress", "Reactive", 2,
+     "Level 20 heating and cooling fighting overnight — two actuators stuck at 40%, BMS night setback missing"),
+    ("4561", "PUMP-01", "P3", "Draft", "Predictive", 3,
+     "CHW pump 1 — drive-end bearing vibration 4.6 mm/s against 2.8 baseline, rising for 3 weeks"),
+    ("4562", "FIRE-PANEL-01", "P2", "Held", "Compliance", 6,
+     "Blocked — accreditation: ProudCastle Fire's BAFE SP203-1 has lapsed; the loop 2 fault waits for an accredited contractor"),
+    ("4563", "DHW-01", "P3", "Scheduled", "Planned", 1,
+     "Calorifier descale and TMV cartridge replacement — booked"),
+]
+
+
+def report_story(rng, cls: str, grade: int, tag: str) -> tuple[list[str], str, int]:
+    """(findings, recommendation, the grade the story is for) - a class with no grade-1 story
+    tells its grade-2 one, and says grade 2."""
+    st = REPORT_STORIES.get(cls)
+    if not st:
+        finds = rng.sample(REPORT_FINDINGS[cls], k=min(2 + (grade >= 3), len(REPORT_FINDINGS[cls])))
+        return finds, REPORT_RECOMMEND[cls] if grade >= 3 else "Monitor at routine PPM", grade
+    told = grade if grade in st else max((g for g in st if g <= grade), default=min(st))
+    finds, rec = st[told]
+    u = rng.randint(18, 26)
+    vals = dict(u=u, k=rng.randint(2, 5), k2=rng.randint(2, 3), x=f"{rng.randint(1, 12):02d}", tag=tag)
+    return [f.format(**vals) for f in finds], rec, told
+
+
+#: Warranties the service reports name, by asset code suffix.
+REPORT_WARRANTY = {"CHILLER-102": "Compressor 1 under 2-year parts warranty to Jan 2028 — compressor claimable",
+                   "BOILER-01": "Burner under 5-year manufacturer warranty to Mar 2027 — nozzle claimable",
+                   "PUMP-01": "Pump set under 3-year warranty to Aug 2027 — bearing and seal claimable",
+                   "GEN-01": "Alternator under extended warranty to Jun 2027",
+                   "FCU-L16": "EC fan motors under installer warranty to Nov 2026 — replacements claimable"}
+
+
+def service_reports(rng, assets: list[dict], ppm_rows: list[list], ppm_header: list[str], code: str,
+                    skip_codes: set[str], as_of: dt.date | None = None) -> tuple[list[list], list[list]]:
+    """(work orders, inspection rows): the engineer's report on each asset's recent PPM visits -
+    the two latest for plant, the latest for floor plant - each on the completed order it was
+    written on (same asset, same day), so the Assets page reads order, date, vendor, grade,
+    findings, the recommendation open or done, and any warranty the report names."""
+    ix = {h: i for i, h in enumerate(ppm_header)}
+    done: dict[str, list[dt.date]] = {}
+    for r in ppm_rows:
+        d = r[ix["completed_date"]]
+        if d:
+            done.setdefault(r[ix["asset_code"]], []).append(d)
+    wos, reports, n = [], [], 7001
+    for a in assets:
+        if a["code"] in skip_codes:
+            continue
+        floor = str(a.get("src", "")).startswith("generated (floor")
+        dates = sorted(done.get(a["code"], []))[-(1 if floor else 2):]
+        if not dates and a["cls"] == "Generator" and as_of:
+            # Run-tested, not on a PPM contract: the reports are the last two monthly run tests,
+            # on the first Monday of each month.
+            for back in (2, 1):
+                m0 = (as_of.replace(day=1) - dt.timedelta(days=28 * back)).replace(day=1)
+                dates.append(m0 + dt.timedelta(days=(7 - m0.weekday()) % 7))
+        tail = a["code"][len(code) + 1:]
+        top = int(a["cond"])
+        for k, d in enumerate(dates):
+            latest = k == len(dates) - 1
+            # The visit before found it a grade better, and what it asked for was done.
+            grade = max(1, min(5, top if latest else top - 1))
+            risk = {5: "High", 4: "High", 3: "Medium"}.get(grade, "Low")
+            open_ = latest and grade >= 3
+            finds, rec, grade = report_story(rng, a["cls"], grade, tail.split("-")[-1])
+            risk = {5: "High", 4: "High", 3: "Medium"}.get(grade, "Low")
+            open_ = latest and grade >= 3
+            # Two visits that found the same thing are one note, not two identical ones.
+            if not latest and (finds, rec) == report_story(random.Random(0), a["cls"], top, tail.split("-")[-1])[:2]:
+                continue
+            w = REPORT_WARRANTY.get(tail)
+            if w and latest:
+                rec += f" ({w})"
+            rep = dt.datetime.combine(d, dt.time(8, 0))
+            wo = f"WO-{code}-R{n - 7000:03d}"     # its own series: the reactive orders run 6001 upward
+            wos.append([wo, a["vendor"], a["code"], a["name"], "; ".join(finds), "Planned", "Completed",
+                        iso(rep), iso(rep + dt.timedelta(hours=1)), iso(rep + dt.timedelta(hours=5)), "yes", "no", 4.0,
+                        rng.choice([0, 45, 85, 120]), 420, 420, code, "Inspection",
+                        iso(rep + dt.timedelta(days=5)), f"{a['name']} - service report"])
+            reports.append([f"INS-{code}-R{n - 7000:03d}", a["code"], d, f"{a['vendor']} engineer", f"Condition grade {grade}", risk,
+                            "; ".join(finds), rec, "true" if open_ else "false"])
+            n += 1
+    return wos, reports
 
 
 def js_round(x: float) -> int:
@@ -540,6 +738,84 @@ def _gas_shape(s: dt.datetime) -> float:
     return month * day * (0.7 if s.weekday() >= 5 else 1.0)
 
 
+#: The main meters reach this far back beyond the year. The investigation compares its last 8
+#: weeks with the same weeks a year earlier; a year of readings leaves last year's side empty.
+HISTORY_WEEKS = 9
+#: The chillers as sold: kW per RT at full load and capacity. No design ambient - a UK plant is
+#: rated at Eurovent conditions London never reaches, and matching on it would drop every sample.
+CHILLER_DESIGN = {"CHILLER-101": (0.62, 450.0), "CHILLER-102": (0.62, 450.0)}
+#: London Heathrow monthly degree days, base 15.5 C (HDD, CDD). August and September are held
+#: within a few per cent year on year, so the weather is ruled out as the cause of the drift.
+DEGREE_DAYS = {1: (330, 0), 2: (290, 0), 3: (255, 1), 4: (175, 5), 5: (100, 22), 6: (40, 58),
+               7: (15, 104), 8: (20, 97), 9: (45, 60), 10: (130, 6), 11: (240, 0), 12: (305, 0)}
+#: BMS zones and the fan coils that serve them. Level 20's two zones fight overnight - heating
+#: and cooling both calling 00:00-05:00 since the night drift began on its sub-meter.
+BMS_ZONES = [("Ground reception", "FCU-G"), ("L4 East", "FCU-L04"), ("L12 open plan", "FCU-L12"),
+             ("L16 open plan", "FCU-L16"), ("L20 North", "FCU-L20"), ("L20 South", "FCU-L20")]
+BMS_DAYS = 14
+CHILLER_WEEKS = 8
+
+
+def plant_telemetry(rng, as_of: dt.date, code: str) -> dict[str, list[list]]:
+    """The chiller, BMS and weather records the energy scan and the investigation walk read.
+
+    CHILLER-101's condenser fouls across the eight weeks: 1.00x design at the start, 1.20x at
+    the end, and 1.40x over the three days its asset meter spikes (build_floor_submeters.py) -
+    over the 15% the rule allows. CHILLER-102 stays within 3% of design. The ambient is a warm,
+    even late summer, so the two halves of the window compare at matched ambient."""
+    import build_floor_submeters as bfs
+    latest = dt.datetime.combine(as_of - dt.timedelta(days=1), dt.time(23, 30), tzinfo=dt.timezone.utc)
+    spike_end = latest - dt.timedelta(days=bfs.SPIKE_ENDS_DAYS_BEFORE_LATEST)
+    spike_start = spike_end - dt.timedelta(days=bfs.SPIKE_DAYS)
+    drift_start = latest - dt.timedelta(weeks=bfs.DRIFT_WEEKS)
+    out: dict[str, list[list]] = {"Chiller_Design_Specs": [], "Chiller_Readings": [],
+                                  "Weather_Degree_Days": [], "BMS_Trends": []}
+    for tail, (kwrt, cap) in CHILLER_DESIGN.items():
+        out["Chiller_Design_Specs"].append([f"{code}-{tail}", code, kwrt, cap, None, 6.0, "manufacturer data sheet",
+                                            "Full-load kW/RT at Eurovent rating conditions"])
+    first = (latest - dt.timedelta(weeks=CHILLER_WEEKS)).replace(minute=0)
+    span = (latest - first).total_seconds()
+    t = first
+    while t <= latest:
+        if t.weekday() < 5 and 7 <= t.hour < 19:
+            amb = 17.5 + 4.5 * math.sin(math.pi * (t.hour - 9) / 12) + rng.uniform(-1.2, 1.2)
+            for tail, (kwrt, cap) in CHILLER_DESIGN.items():
+                load = cap * min(0.85, max(0.45, 0.50 + 0.025 * (amb - 16) + rng.uniform(-0.04, 0.04)))
+                if tail == "CHILLER-101":
+                    factor = 1.40 if spike_start <= t < spike_end else 1.0 + 0.20 * (t - first).total_seconds() / span
+                else:
+                    factor = 1.02 + rng.uniform(-0.01, 0.01)
+                kw = load * kwrt * factor * (1 + 0.01 * (amb - 18)) * rng.uniform(0.98, 1.02)
+                out["Chiller_Readings"].append([f"{code}-{tail}", code, t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                                round(kw, 1), round(load, 1), round(amb, 1),
+                                                round(6.0 + (factor - 1) * 1.5 + rng.uniform(-0.2, 0.2), 2),
+                                                round(11.8 + rng.uniform(-0.4, 0.4), 2)])
+        t += dt.timedelta(hours=1)
+    m = dt.date(as_of.year - 2, as_of.month, 1)
+    while m <= as_of.replace(day=1):
+        hdd, cdd = DEGREE_DAYS[m.month]
+        k = 1 + (rng.uniform(-0.03, 0.03) if m.month in (8, 9) else rng.uniform(-0.12, 0.12))
+        out["Weather_Degree_Days"].append([code, m.isoformat(), round(hdd * k, 1), round(cdd * k, 1), 15.5,
+                                           "London Heathrow"])
+        m = (m + dt.timedelta(days=32)).replace(day=1)
+    t = (latest - dt.timedelta(days=BMS_DAYS)).replace(minute=0) + dt.timedelta(minutes=30)
+    while t <= latest:
+        occupied = t.weekday() < 5 and 7 <= t.hour < 19
+        for zone, tail in BMS_ZONES:
+            fight = zone.startswith("L20") and t >= drift_start and t.hour < 5
+            if fight:
+                h, c, zt, sp = rng.uniform(30, 45), rng.uniform(25, 40), rng.uniform(20.6, 21.4), 21.0
+            elif occupied:
+                h, c = rng.uniform(0, 4), rng.uniform(25, 60)
+                zt, sp = rng.uniform(21.6, 23.0), 22.0
+            else:
+                h, c, zt, sp = rng.uniform(0, 3), rng.uniform(0, 3), rng.uniform(19.5, 21.0), 18.0
+            out["BMS_Trends"].append([code, zone, f"{code}-{tail}", t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                      round(h, 1), round(c, 1), round(zt, 1), sp])
+        t += dt.timedelta(minutes=15)
+    return out
+
+
 def finish(companion: str, as_of: dt.date, seed: int) -> dict:
     """Add what the floor companion cannot derive: the prototype's four section sub-meters,
     sized to the section EUIs it states, and AHU-3's spike on AHU-3's own asset meter.
@@ -685,12 +961,19 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
         refit = fl.startswith("Level") and int(fl.split()[-1]) >= 12
         if fl != "Basement":
             assets.append(dict(code=f"{CODE}-FCU-{tag}", name=f"Fan coil units — {fl}", cls="Fan coil", sec=fl,
-                               vendor="Apex Mechanical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
+                               vendor="Fenmoor Mechanical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
                                life=15, value=38000 if fl != "Ground" else 22000, wear=1.0, cond=2, ppm=None,
                                src="generated (floor plant)"))
         assets.append(dict(code=f"{CODE}-LCP-{tag}", name=f"Lighting control panel — {fl}", cls="Lighting panel", sec=fl,
                            vendor="Northgate Electrical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
                            life=20, value=6500, wear=0.8, cond=2, ppm=None, src="generated (floor plant)"))
+    reported = {i["asset"] for i in MX["inspections"] if isb(i)}
+    for a in assets:
+        if a["name"] in reported:
+            continue                                   # the prototype's own report sets its grade
+        tail = a["code"][len(CODE) + 1:]
+        refit = a["src"].startswith("generated (floor") and tail.split("-")[-1][:1] == "L" and int(tail[-2:]) >= 12
+        a["cond"] = REPORT_GRADE.get(tail, REPORT_GRADE_REFIT if refit else a["cond"])
     # The chiller the floor-meter builder puts its excursion on is the FIRST chiller in the
     # sheet: CHILLER-101, whose anomaly the prototype names.
     assets.sort(key=lambda a: (0 if a["code"].endswith("CHILLER-101") else 1))
@@ -762,10 +1045,14 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
                 st = mech_status[mech_i]
                 mech_i += 1
             done = None
+            if sched >= as_of:
+                # A visit not yet due is scheduled, not done: a completed date after today put a
+                # lift's "latest" scorecard month in November with one job in it.
+                st = "Scheduled"
             if st == "Completed":
-                done = sched + dt.timedelta(days=rng.randint(-3, 2))
+                done = min(sched + dt.timedelta(days=rng.randint(-3, 2)), as_of - dt.timedelta(days=1))
             elif st == "Late":
-                done, st = sched + dt.timedelta(days=rng.randint(18, 26)), "Completed"
+                done, st = min(sched + dt.timedelta(days=rng.randint(18, 26)), as_of - dt.timedelta(days=1)), "Completed"
             task = {"Air handling": "AHU service — filters, belts, coils", "Chiller": "Chiller service — refrigerant, condenser, oil",
                     "Pump": "Pump service — seals, bearings, alignment", "Fan coil": "FCU service — filter, condensate, fan",
                     "Lift": "Lift maintenance visit", "Boiler": "Boiler service — combustion analysis, flue",
@@ -803,19 +1090,38 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
         wos.append([f"WO-{CODE}-{i['wo'][3:]}", i["vendor"], code_of[i["asset"]], i["asset"], desc, "Planned", "Completed",
                     iso(rep), iso(rep + dt.timedelta(hours=1)), iso(rep + dt.timedelta(hours=5)), "yes", "no", 4.0, 120,
                     420, 420, CODE, i["type"], iso(rep + dt.timedelta(days=5)), f"{i['type']} visit — {i['asset']}"])
+    # The service reports behind every asset's notes, on their own completed orders - added
+    # only where the prototype has none: an asset it names reads exactly its notes, as its
+    # Assets page does, and a generated report cannot contradict them (CHILLER-101's coils
+    # "cleaned" two days before WO-4421 finds them fouled). They go in
+    # BEFORE the vendors' reactive work, so the exact month counts below account for them.
+    proto_insp = {code_of[i["asset"]] for i in MX["inspections"] if isb(i)}
+    rep_wos, rep_rows = service_reports(rng, assets, sheets["PPM_Visits"], HEADERS["PPM_Visits"], CODE,
+                                        skip_codes=proto_insp, as_of=as_of)
+    wos = wos + rep_wos
+    vendor_of = {a["code"]: a["vendor"] for a in assets}
+    name_of = {a["code"]: a["name"] for a in assets}
+    for num, tail, pri, status, typ, back, desc in OPEN_ORDERS:
+        ac = f"{CODE}-{tail}"
+        rep = now - dt.timedelta(days=back)
+        att = rep + dt.timedelta(hours=3) if status == "In progress" else None
+        sla_h = {"P1": 24, "P2": 48, "P3": 120}[pri]
+        wos.append([f"WO-{CODE}-{num}", vendor_of[ac], ac, name_of[ac], desc, pri, status, iso(rep), iso(att), None, None, None,
+                    None, None, {"P2": 650, "P3": 420}[pri], None, CODE, typ, iso(rep + dt.timedelta(hours=sla_h)), desc[:120]])
     gen_wos, vendor_report = gen_vendor_work_orders(rng, as_of, assets, VP, H, wos)
     wos = wos + gen_wos
     origin.append(("Work_Orders", f"{len(gen_wos)} vendor work orders",
                    "generated so the scorecards reproduce HOISTRA_VP's measured KPIs"))
     sheets["Work_Orders"] = wos
 
-    # Inspections
+    # Inspections: the prototype's five, then the service report on every asset's recent PPM
     for i in [x for x in MX["inspections"] if isb(x)]:
         sheets["Inspections"].append([f"INS-{CODE}-{i['wo'][3:]}", code_of[i["asset"]], sh(pdate(i["date"])),
-                                      f"{i['vendor']} engineer", "Condition",
+                                      f"{i['vendor']} engineer", f"Condition grade {i['cond']}",
                                       {4: "High", 3: "Medium"}.get(i["cond"], "Low"), "; ".join(i["findings"]),
                                       i["rec"] + (f" ({i['warranty']})" if i.get("warranty") else ""),
                                       "false" if i["recDone"] else "true"])
+    sheets["Inspections"].extend(rep_rows)
 
     # Spare parts - filters below reorder, as the prototype's "filter change deferred — stock"
     for p in [("PRT-AHU-FILTER", "AHU filter set (G4 + F7)", 165, 1, 4, "Apex Mechanical"),
@@ -841,9 +1147,14 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     end_slot = slots[-1]
     annual = {"electricity": EUI * GIA_M2 * ELEC_SHARE, "gas": EUI * GIA_M2 * (1 - ELEC_SHARE)}
     readings = []
+    history = [slots[0] - dt.timedelta(minutes=30 * k) for k in range(HISTORY_WEEKS * 7 * 48, 0, -1)]
     for ref, fuel, _ in meters:
         shape = _elec_shape if fuel == "electricity" else _gas_shape
         base = annual[fuel] / sum(shape(s) for s in slots)
+        # The weeks before the year: the same building a year earlier, 3% leaner.
+        for s in history:
+            v = base * shape(s) * rng.uniform(0.94, 1.06) * 0.97
+            readings.append([ref, CODE, fuel, s.strftime("%Y-%m-%dT%H:%M:%SZ"), round(v, 3), 30, "dcc"])
         for s in slots:
             v = base * shape(s) * rng.uniform(0.94, 1.06)
             if fuel == "electricity":
@@ -855,6 +1166,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
                     v += SPIKE_KWH                               # AHU-3 non-occupancy spike
             readings.append([ref, CODE, fuel, s.strftime("%Y-%m-%dT%H:%M:%SZ"), round(v, 3), 30, "dcc"])
     sheets["Meter_Readings"] = readings
+    sheets.update(plant_telemetry(random.Random(seed + 11), as_of, CODE))
 
     # Compliance certificates
     certs = []
@@ -910,6 +1222,8 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     # ...and what else the compliance console says they hold; then SafeLift and ProudCastle,
     # which it shows Blocked - each with the lapsed accreditation that blocks it (generated).
     vend = [("APXM", "GAS_SAFE", "Registered", 12, dt.date(2026, 2, 1), "valid"),
+            ("FNMC", "GAS_SAFE", "Registered", 12, dt.date(2026, 4, 14), "valid"),
+            ("FNMC", "CONTRACTOR_PL_INSURANCE", "GBP 10,000,000", 12, dt.date(2026, 1, 9), "valid"),
             ("CLWC", "ISO_9001", "Certificated", 36, dt.date(2024, 6, 1), "valid"),
             ("SFLT", "LEIA", "Member", 12, dt.date(2026, 2, 12), "valid"),
             ("SFLT", "CONTRACTOR_EL_INSURANCE", "GBP 5,000,000", 12, dt.date(2025, 11, 20), "valid"),
@@ -963,12 +1277,17 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
             "vendors": vendor_report["report"]}
 
 
-async def category_ids() -> dict[str, str]:
+async def category_ids(org_name: str) -> dict[str, str]:
+    """The company's OWN categories (seed_bishopsgate_building.py creates them): a category is
+    per organisation, and an asset pointing at another company's is a link across tenants."""
     from _env import hoistra_test_dsn
     import asyncpg
     c = await asyncpg.connect(hoistra_test_dsn().replace("postgresql+asyncpg", "postgresql"), timeout=15)
     try:
-        return {r[1]: r[0] for r in await c.fetch("SELECT id::text, name FROM plenum_cafm.asset_categories")}
+        return {r[1]: r[0] for r in await c.fetch(
+            """SELECT c.id::text, c.name FROM plenum_cafm.asset_categories c
+                 JOIN plenum_cafm.organizations o ON o.id = c.organization_id
+                WHERE lower(o.name) = lower($1)""", org_name)}
     finally:
         await c.close()
 
@@ -1005,7 +1324,9 @@ def main() -> None:
     users: list[tuple[str, str]] = []
     if args.org_name:
         org, users = asyncio.run(org_logins(args.org_name))
-        CATEGORY_IDS.update(asyncio.run(category_ids()))
+        CATEGORY_IDS.update(asyncio.run(category_ids(args.org_name)))
+        print(f"  asset categories of {args.org_name!r}: {len(CATEGORY_IDS)}"
+              + ("" if CATEGORY_IDS else " - run seed_bishopsgate_building.py --apply first"))
         print(f"  organization {args.org_name!r}: {org or 'NOT FOUND'} · {len(users)} login(s)")
     if args.finish:
         comp = os.path.splitext(args.out)[0] + "-floorlevel_submeter.xlsx"

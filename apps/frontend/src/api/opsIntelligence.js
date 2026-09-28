@@ -23,6 +23,12 @@ const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ or
 const T_MAIL = 60000;
 
 export const opsApi = {
+  // After a migration: the contract terms and invoices a single end-to-end workbook carried,
+  // through the contract ingest and the invoice matcher. found:false when it had none.
+  migrationWorkbookExtras: (migrationId) =>
+    apiFetch(B, '/api/contract-performance/migration/' + encodeURIComponent(migrationId) + '/workbook-extras',
+      { method: 'POST', query: withOrg({}), timeoutMs: 180000 }),
+
   // ── Approvals ───────────────────────────────────────────────────────────
   // Everything the engines have queued for a human. `status` defaults to pending on the
   // server too; `source_feature` (A|B|C) narrows to one engine. Server caps limit at 500.

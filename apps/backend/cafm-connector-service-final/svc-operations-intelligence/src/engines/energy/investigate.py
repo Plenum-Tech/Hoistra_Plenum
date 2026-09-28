@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from . import asset_intelligence as ai
+from .meter_scope import counted_meters
 
 log = get_logger(__name__)
 
@@ -197,14 +198,17 @@ async def _walk_bill(session, asset, since) -> dict[str, Any]:
     consumption over the billing period instead — and says so, because a bill and a meter
     are different records and one standing in for the other has to be visible.
     """
-    rows = await _rows(session, """
+    rows = await _rows(session, f"""
         SELECT sum(CASE WHEN r.reading_at >= :since THEN r.consumption_kwh END) AS now_kwh,
                sum(CASE WHEN r.reading_at >= :since - interval '1 year'
                          AND r.reading_at <  :since - interval '1 year' + (now() - :since)
                         THEN r.consumption_kwh END) AS last_year_kwh
           FROM plenum_cafm.energy_meters m
           JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
-         WHERE m.active AND m.building_id = :bid""",
+         WHERE m.active AND m.building_id = :bid
+           -- The supply meters only (meter_scope): a floor sub-meter from this year counted on
+           -- top of the supply that feeds it read as growth against a year that had none.
+           AND {counted_meters("m")}""",
         {"bid": asset["building_id"], "since": since}, "billing")
     r = rows[0] if rows else {}
     now_kwh, last_kwh = _num(r.get("now_kwh")), _num(r.get("last_year_kwh"))

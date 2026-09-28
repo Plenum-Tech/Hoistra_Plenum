@@ -322,8 +322,9 @@ def build(path: str, *, days: int, seed: int, mode: str = "fixed") -> str:
     wh, wrows = read_sheet(wb, "Work_Orders")
     wi = {h: i for i, h in enumerate(wh)}
     have_wo = {str(r[wi["asset_code"]]) for r in wrows if r[wi["asset_code"]]}
-    next_n = 1 + max((int(str(r[wi["wo_code"]]).rsplit("-", 1)[-1])
-                      for r in wrows if r[wi["wo_code"]]), default=0)
+    # Numeric series only: service-report orders end in R001.., which is not a number.
+    tails = (str(r[wi["wo_code"]]).rsplit("-", 1)[-1] for r in wrows if r[wi["wo_code"]])
+    next_n = 1 + max((int(t) for t in tails if t.isdigit()), default=0)
     vendor_of = {str(r[ai["asset_code"]]): r[ai["maintained_by"]] for r in arows}
 
     work_orders = []

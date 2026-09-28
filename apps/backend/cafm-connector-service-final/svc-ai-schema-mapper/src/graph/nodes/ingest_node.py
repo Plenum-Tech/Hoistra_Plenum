@@ -32,6 +32,18 @@ from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
 
 
+#: Sheets a single end-to-end workbook carries for engines that run AFTER the write: the
+#: contract terms (-> contract parameter sets) and the invoices (-> invoice verification).
+#: The plant telemetry and weather (-> the chiller, degree-day and BMS stores the energy
+#: engines read). A README sheet is a note, not a table. Matched case- and separator-insensitively.
+POST_WRITE_SHEETS = frozenset({"contractterms", "invoices", "invoicelines", "readme",
+                               "chillerdesignspecs", "chillerreadings", "weatherdegreedays", "bmstrends"})
+
+
+def _is_post_write_sheet(sheet_name: str) -> bool:
+    return "".join(ch for ch in str(sheet_name).lower() if ch.isalnum()) in POST_WRITE_SHEETS
+
+
 def _sanitize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """
     Replace pandas' Unnamed: N fallback column labels with positional col_N
@@ -245,6 +257,14 @@ async def ingest_node(state: MigrationState) -> MigrationState:
                     wb = ExcelWorkbook(io.BytesIO(file_content))
                 full_tables = {}
                 for sheet_name in wb.sheet_names:
+                    # Sheets another engine reads after the write, not tables to migrate: contract
+                    # terms go to the contract ingest and invoice lines to the invoice matcher
+                    # (POST /api/contract-performance/migration/{id}/workbook-extras). Written here
+                    # they would land as rows with no vendor and no matching - invoice lines the
+                    # Vendors page cannot reach and never held for a decision.
+                    if _is_post_write_sheet(sheet_name):
+                        logger.info(f"[Node 1] Sheet {sheet_name}: set aside for the post-write engines, not migrated")
+                        continue
                     # Detect which row is actually the header — skip banner / title rows so we don't
                     # end up with "Unnamed: N" columns spread across what was really blank padding.
                     header_row = wb.header_row(sheet_name)

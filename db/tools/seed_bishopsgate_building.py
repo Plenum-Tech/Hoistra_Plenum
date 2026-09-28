@@ -28,6 +28,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 NS = uuid.UUID("b4c1f0d2-3a57-4e0c-9d61-5f2e8a7c3301")
 CODE, NAME = "B-301", "Bishopsgate Tower"
 FLOORS = ["Basement", "Ground"] + [f"Level {i}" for i in range(1, 21)]
+#: The company's own asset categories. asset_categories is per organisation (unique on
+#: organization_id + name), as Northbridge's are (seed_northbridge_assets.py); the workbook's
+#: Assets.category_id is looked up among THESE, never another company's.
+CATEGORIES = [("HVAC · Air Handling", "AHUs"), ("HVAC · Chillers", "Chillers and chilled water plant"),
+              ("HVAC · Boilers", "Boilers and heating plant"), ("HVAC · Terminal Units", "Fan coil units"),
+              ("Mechanical · Pumps", "Pumps"), ("Electrical · Standby Power", "Generators"),
+              ("Electrical · Lighting Control", "Lighting control panels"),
+              ("Electrical · LV Distribution", "LV switchboards and distribution"),
+              ("Vertical Transport", "Lifts"), ("Life Safety · Fire Detection", "Fire alarm and detection"),
+              ("Water Hygiene", "Domestic water, tanks, calorifiers and TMVs")]
 GIA_M2 = 49_400.0
 
 
@@ -99,8 +109,14 @@ async def main() -> None:
                        ON CONFLICT (floor_id) DO UPDATE SET level = EXCLUDED.level, name = EXCLUDED.name""",
                     uuid.uuid5(NS, f"floor:{bid}:{fname}"), bid, level, fname,
                     round(GIA_M2 * 10.7639 / len(FLOORS), 2))
+            for cname, desc in CATEGORIES:
+                await c.execute(
+                    """INSERT INTO plenum_cafm.asset_categories (id, organization_id, name, description)
+                       VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, name) DO NOTHING""",
+                    uuid.uuid5(NS, f"category:{org}:{cname}"), org, cname, desc)
         n = await c.fetchval("SELECT count(*) FROM plenum_cafm.floors WHERE building_id = $1", bid)
-        print(f"\n  written: building {CODE}, {n} floors")
+        k = await c.fetchval("SELECT count(*) FROM plenum_cafm.asset_categories WHERE organization_id = $1", org)
+        print(f"\n  written: building {CODE}, {n} floors, {k} asset categories")
     finally:
         await c.close()
 

@@ -22,10 +22,35 @@
 // Pure helpers are named exports; the methods are mixed into HoistraLogic.prototype and
 // `this` is the controller.
 import { schemaMapperApi } from '../api/schemaMapper.js';
+import { opsApi } from '../api/opsIntelligence.js';
 import { currentOrgId, isStaleScope } from '../api/client.js';
 
 // Statuses after which the run will not move again.
 export const TERMINAL = new Set(['complete', 'failed', 'ddl_failed', 'cancelled']);
+
+// What the post-write engines did with a single workbook's Contract_Terms and Invoice_Lines.
+// Empty when the workbook carried neither - an ordinary migration says nothing more.
+export function extrasLine(res) {
+  if (!res) return '';
+  if (res.loading) return "Reading the workbook's contract terms and invoices…";
+  if (res.error) return 'Contract terms and invoices could not be read — ' + res.error;
+  if (!res.found) return '';
+  const cs = res.contracts || [], iv = res.invoices || [];
+  const held = iv.reduce((n, x) => n + (Number(x.held) || 0), 0);
+  const bits = [];
+  if (cs.length) bits.push(cs.length + (cs.length === 1 ? ' contract' : ' contracts') + ' read into draft terms — confirm each on the Vendors page');
+  if (iv.length) bits.push(iv.length + (iv.length === 1 ? ' invoice' : ' invoices') + ' verified' + (held ? ', ' + held + (held === 1 ? ' line' : ' lines') + ' held for your decision' : ''));
+  const tel = res.telemetry || {};
+  if (tel.chiller_readings || tel.degree_days || tel.bms_samples) {
+    bits.push('plant telemetry stored (' + [
+      tel.chiller_readings ? tel.chiller_readings + ' chiller readings' : '',
+      tel.degree_days ? tel.degree_days + ' months of degree days' : '',
+      tel.bms_samples ? tel.bms_samples + ' BMS samples' : ''].filter(Boolean).join(', ') + ') — run the energy scan to assess them');
+  }
+  const sk = (res.skipped || []).length;
+  if (sk) bits.push(sk + ' skipped (' + (res.skipped || []).map((x) => x.reason).filter((v, i, a) => a.indexOf(v) === i).join(', ') + ')');
+  return bits.join(' · ');
+}
 export const isTerminal = (status) => TERMINAL.has(String(status || '').toLowerCase());
 
 // The pipeline's nodes, numbered as the service numbers them in `nodes[].node_id`, plus the
@@ -517,6 +542,17 @@ export const migrationMethods = {
   },
 
   // ── the open run ──────────────────────────────────────────────────────────────────
+  // The contract terms and invoices of a finished run, through their engines. Safe to repeat:
+  // an invoice already verified is skipped and a re-read contract keeps the PM's rulings, so
+  // the page offers it again when a call dies (a replica scaled away mid-request once did).
+  mgRunExtras(id) {
+    if (!id) return;
+    this.setState({ mgExtras: { loading: true } });
+    opsApi.migrationWorkbookExtras(id)
+      .then((res) => { if (this.state.mgId === id) this.setState({ mgExtras: res || {} }); })
+      .catch((e) => { if (this.state.mgId === id) this.setState({ mgExtras: { error: (e && e.message) || String(e) } }); });
+  },
+
   // One read of the status document, then the next is scheduled by what it said. Reads only
   // while this page is showing — the document is large and a gate does not move on its own.
   async mgPoll(immediate) {
@@ -550,6 +586,12 @@ export const migrationMethods = {
       mgArmed: gateChanged ? false : this.state.mgArmed
     });
     if (this._mgRepoll) { this._mgRepoll = false; return this.mgPoll(true); }
+    // A finished run: once per run, hand the workbook's contract terms and invoices to their
+    // engines. The route answers found:false for a workbook without them.
+    if (String(doc.status || '') === 'complete' && this._mgExtrasFor !== id) {
+      this._mgExtrasFor = id;
+      this.mgRunExtras(id);
+    }
     // A step pause is continued once. Until the document changes, the same pause is not
     // advanced again — a service still reporting step_paused right after /advance would
     // otherwise be hit in a loop, and (with an answer that arrives without I/O) one that
@@ -916,13 +958,15 @@ export const migrationMethods = {
         if (next && runKind(this.state.mgStatus) === 'step') { this._mgAdvanced = null; this.mgAdvance(); }
       },
       mgRefresh: () => this.mgPoll(true),
+      mgExtrasRetry: kind === 'done' && !!(s.mgExtras && s.mgExtras.error),
+      mgRetryExtras: () => this.mgRunExtras(s.mgId),
       mgNew: () => this.mgNew(),
       mgLoadedAt: s.mgLoadedAt ? whenLabel(new Date(s.mgLoadedAt).toISOString(), now) : '',
 
       // the open gate / step
       mgGate: gate,
       mgGateTitle: kind === 'gate' ? text[0] : kind === 'step' ? (payload.label || 'Step finished') : kind === 'done' ? 'Migration complete' : kind === 'failed' ? 'Migration stopped' : 'Working…',
-      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
+      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' + (extrasLine(s.mgExtras) ? ' ' + extrasLine(s.mgExtras) + '.' : '') : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
         // No document at all is not "working" — it is "nobody has looked". Saying the
         // pipeline is busy when nothing has been read is how a restored run sat at
         // "Not loaded" for ever and read as progress.

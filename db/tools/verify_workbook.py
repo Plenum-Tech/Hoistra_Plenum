@@ -89,6 +89,11 @@ def run(path: str, db: dict | None) -> int:
     wos = g("Work_Orders", [])
     c.refs(wos, "asset_code", acodes, "every work order names an asset")
     c.refs(wos, "vendor", vnames, "every work order names a vendor")
+    # A code is the work order's natural key: two orders under one code collide on ingest, and an
+    # invoice line citing it is matched against whichever the index happened to keep.
+    _codes = [str(w.get("wo_code") or "") for w in wos]
+    _dups = sorted({x for x in _codes if x and _codes.count(x) > 1}) if len(_codes) < 20000 else []
+    c(not _dups, "every work order code is unique", ", ".join(_dups[:5]))
     c(all(str(w.get("title") or "").strip() for w in wos),
       "every work order has a title",
       f"{sum(1 for w in wos if not str(w.get('title') or '').strip())} without one")

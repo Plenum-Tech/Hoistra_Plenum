@@ -607,6 +607,36 @@ async def start_schema_mapping_from_file(
         return {"error": str(exc)[:300]}
 
 
+async def _workbook_extras(migration_id: str) -> dict[str, Any] | None:
+    try:
+        from ..http_client import request as _svc_request
+        resp = await _svc_request(
+            "POST", settings.operations_intelligence_base_url,
+            f"/api/contract-performance/migration/{migration_id}/workbook-extras",
+            service="operations-intelligence", timeout=180.0, max_attempts=1)
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001 - the tables are written; this is the follow-up
+        log.warning("single_door.workbook_extras_failed", migration_id=migration_id, error=str(exc)[:200])
+        return None
+
+
+def _extras_summary(extras: dict[str, Any] | None) -> str:
+    if not extras or not extras.get("found"):
+        return ""
+    cs, iv = extras.get("contracts") or [], extras.get("invoices") or []
+    held = sum(int(x.get("held") or 0) for x in iv)
+    out = ""
+    if cs or iv:
+        out = (f"; {len(cs)} contract(s) read into draft terms - confirm them on the Vendors page; "
+               f"{len(iv)} invoice(s) verified, {held} line(s) held for your decision")
+    tel = extras.get("telemetry") or {}
+    if any(tel.get(k) for k in ("chiller_readings", "degree_days", "bms_samples")):
+        out += (f"; plant telemetry stored - {tel.get('chiller_readings', 0)} chiller reading(s), "
+                f"{tel.get('degree_days', 0)} month(s) of degree days, {tel.get('bms_samples', 0)} BMS sample(s)"
+                " - run the energy scan to assess them")
+    return out
+
+
 async def _drive_migration_gates(
     *,
     migration_id: str,
@@ -626,9 +656,16 @@ async def _drive_migration_gates(
         )
         run_status = str(status.get("status") or "").lower()
         if run_status == "complete":
+            # A single end-to-end workbook's Contract_Terms and Invoice_Lines, which the
+            # migration set aside, go to the contract ingest and the invoice matcher now -
+            # under the caller's own sign-in, which request() forwards. found:false for an
+            # ordinary workbook; never fatal to a migration that has already written.
+            extras = await _workbook_extras(migration_id)
+            if extras is not None:
+                tool_calls.append({"tool": "workbook_extras", "input": {"migration_id": migration_id}, "output": extras})
             return {
                 "status": "done",
-                "summary": f"Migration completed ({migration_id})",
+                "summary": f"Migration completed ({migration_id})" + _extras_summary(extras),
                 "error": None,
                 "tool_calls": tool_calls,
             }
@@ -1231,13 +1268,14 @@ async def _reconcile_feature_b_migration(file_paths: list[str]) -> dict[str, Any
         return None
     try:
         base = settings.operations_intelligence_base_url.rstrip("/")
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{base}/api/contract-performance/migration/reconcile",
-                json={"vendor_links": links},
-            )
-            resp.raise_for_status()
-            out = resp.json()
+        # Through request(), which forwards the caller's sign-in: every contract-performance
+        # route needs one, and a bare httpx call here was refused and logged as a warning.
+        from ..http_client import request as _svc_request
+        resp = await _svc_request(
+            "POST", base, "/api/contract-performance/migration/reconcile",
+            service="operations-intelligence", timeout=90.0, max_attempts=1,
+            json={"vendor_links": links})
+        out = resp.json()
         log.info("single_door.feature_b_reconciled", tables=out.get("tables"))
         return out
     except Exception as exc:  # noqa: BLE001

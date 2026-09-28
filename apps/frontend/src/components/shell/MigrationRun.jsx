@@ -495,6 +495,11 @@ export default function MigrationRun({ vals }) {
               ) : null}
             </div>
             <p style={{ fontSize: "11.5px", color: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-neutral-400)", margin: "5px 0 0", lineHeight: "1.5", maxWidth: "80ch" }}>{vals.mgGateBlurb}</p>
+            {vals.mgExtrasRetry ? (
+              <button type="button" className="hv13" onClick={vals.mgRetryExtras} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", marginTop: "8px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
+                {"Read the contract terms and invoices again"}
+              </button>
+            ) : null}
 
             {vals.mgLoading ? <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "12px" }}>{"Reading the migration…"}</div> : null}
 

@@ -3,7 +3,7 @@
 // was hard-coded hist: [] and the block never showed, although the reports were on record.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { inspectionNotes } from '../src/logic/assetsCondition.js';
+import { inspectionNotes, woState, openWorkOrderNotes } from '../src/logic/assetsCondition.js';
 
 const chiller = {
   asset_id: 'a-101', asset_code: 'B-301-CHILLER-101', wo_code: 'WO-B-301-4421', inspection_date: '2026-07-10',
@@ -38,4 +38,30 @@ test('newest first, three at most, and nothing on record is an empty list', () =
   assert.deepEqual(inspectionNotes(rows).map((n) => n.text), ['2026-09-01', '2026-06-01', '2026-03-01']);
   assert.deepEqual(inspectionNotes([]), []);
   assert.deepEqual(inspectionNotes(null), []);
+});
+
+test('a report that records a grade reads it, as the prototype does', () => {
+  const [n] = inspectionNotes([{ inspection_date: '2026-06-14', vendor: 'Apex Mechanical', risk_level: 'High',
+    finding_type: 'Condition grade 4', observations: 'Condenser coils fouled', wo_code: 'WO-4421' }]);
+  assert.equal(n.when, '14 Jun 2026 · Apex Mechanical · grade 4');
+  const [m] = inspectionNotes([{ inspection_date: '2026-06-14', risk_level: 'High', finding_type: 'Condition' }]);
+  assert.match(m.when, /High risk$/);
+});
+
+test('migrated open orders are open, in their CMMS spelling, and read as the prototype does', () => {
+  assert.equal(woState('Draft'), 'awaiting');
+  assert.equal(woState('In progress'), 'live');
+  assert.equal(woState('Held'), 'held');
+  assert.equal(woState('active'), 'live');
+  assert.equal(woState('Completed'), null);
+  const notes = openWorkOrderNotes([
+    { wo_code: 'WO-4527', request_type: 'Predictive', status: 'Draft', created_at: '2026-09-25' },
+    { wo_code: 'WO-4512', request_type: 'Compliance', status: 'Held', issue_description: 'Blocked — accreditation', created_at: '2026-09-20' },
+    { wo_code: 'WO-4400', status: 'Completed' }]);
+  assert.equal(notes.length, 2);
+  assert.equal(notes[0].id, 'WO-4527');
+  assert.equal(notes[0].when, 'Predictive · Draft');
+  assert.equal(notes[0].text, 'Awaiting approval');
+  assert.equal(notes[1].text, 'Blocked — accreditation');
+  assert.equal(notes[1].icon, 'ph-wrench');
 });

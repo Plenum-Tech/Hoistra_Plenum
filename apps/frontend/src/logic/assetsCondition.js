@@ -74,7 +74,10 @@ export function inspectionNotes(rows) {
     .slice(0, 3)
     .map((r) => {
       const open = !!r.recommendation_open;
-      const risk = r.risk_level ? String(r.risk_level) + ' risk' : null;
+      // The condition grade the engineer gave, where the report records one ("Condition
+      // grade 4"); the risk level otherwise.
+      const g = /grade\s*([1-5])/i.exec(String(r.finding_type || ''));
+      const risk = g ? 'grade ' + g[1] : r.risk_level ? String(r.risk_level) + ' risk' : null;
       return {
         icon: 'ph-clipboard-text', color: open ? 'var(--color-accent)' : 'var(--color-neutral-500)',
         id: r.wo_code || 'Inspection',
@@ -84,6 +87,41 @@ export function inspectionNotes(rows) {
         flagShow: r.recommendation ? 'block' : 'none',
         flagColor: open ? 'var(--color-accent)' : 'var(--color-neutral-500)',
         warranty: r.warranty || '', warrShow: r.warranty ? 'inline-block' : 'none'
+      };
+    });
+}
+
+// Where an open work order stands, in the maintenance service's vocabulary (maintenance.py
+// BLOCKED / AWAITING / LIVE) plus the platform's own statuses. A migrated order keeps the
+// status its CMMS gave it - "Draft", "In progress", "Held" - and matching only the platform's
+// four left every one of them uncounted and unshown.
+export function woState(status) {
+  const s = String(status || '').trim().toLowerCase();
+  if (['blocked', 'on hold', 'onhold', 'held', 'suspended'].includes(s)) return 'held';
+  if (['pending_approval', 'pending approval', 'awaiting approval', 'submitted', 'draft'].includes(s)) return 'awaiting';
+  if (['open', 'inprogress', 'in progress', 'in_progress', 'assigned', 'scheduled', 'active', 'preparing', 'prepared'].includes(s)) return 'live';
+  return null;
+}
+
+// An asset's open work orders as notes under it, after its inspection reports: "WO-4527 ·
+// Predictive · Draft" then "Awaiting approval"; an order in hand reads what it is for; a held
+// one reads why it is held.
+export function openWorkOrderNotes(wos) {
+  const tone = { held: 'var(--st-risk)', awaiting: 'var(--color-accent)', live: 'var(--st-ok)' };
+  return (wos || [])
+    .map((w) => ({ w, st: woState(w && w.status) }))
+    .filter((x) => x.st)
+    .sort((p, q) => String((q.w.created_at || '')).localeCompare(String(p.w.created_at || '')))
+    .slice(0, 3)
+    .map(({ w, st }) => {
+      const desc = String(w.issue_description || '').trim();
+      const text = st === 'awaiting' ? 'Awaiting approval' + (desc ? ' · ' + desc : '')
+        : st === 'held' ? (desc || 'Held — no reason recorded') : (desc || 'In progress');
+      return {
+        icon: 'ph-wrench', color: tone[st], id: w.wo_code || 'Work order',
+        when: [w.request_type || null, String(w.status || '').replace(/_/g, ' ')].filter(Boolean)
+          .map((v) => v.charAt(0).toUpperCase() + v.slice(1)).join(' · '),
+        text, flag: '', flagShow: 'none', flagColor: '', warranty: '', warrShow: 'none'
       };
     });
 }
@@ -154,7 +192,6 @@ export const NOT_COMPUTABLE = 'Not computable — needs a replacement value, a d
 export const UNGRADED = 'Ungraded — no band defined for this reading type';
 export const RULE_NOT_MODEL = 'A named rule over recorded signals, not a fitted model';
 
-const OPEN_WO = new Set(['pending_approval', 'preparing', 'prepared', 'active']);
 const DAY = 86400000;
 
 // ── the two steppers ─────────────────────────────────────────────────────────────────
@@ -631,11 +668,12 @@ export const assetsConditionMethods = {
     // approximation the whole page used to run on, now the exception rather than the rule.
     const openWo = {}, openWoByName = {};
     (s.asLiveWos || []).forEach((w) => {
-      if (!w || !OPEN_WO.has(w.status)) return;
-      if (w.asset_id) openWo[String(w.asset_id)] = (openWo[String(w.asset_id)] || 0) + 1;
-      else if (w.asset) { const k = String(w.asset).trim().toLowerCase(); openWoByName[k] = (openWoByName[k] || 0) + 1; }
+      if (!w || !woState(w.status)) return;
+      if (w.asset_id) (openWo[String(w.asset_id)] = openWo[String(w.asset_id)] || []).push(w);
+      else if (w.asset) { const k = String(w.asset).trim().toLowerCase(); (openWoByName[k] = openWoByName[k] || []).push(w); }
     });
-    const woCount = (a) => (openWo[String(a.asset_id)] || 0) + (openWoByName[String(a.asset_name || '').trim().toLowerCase()] || 0);
+    const wosOf = (a) => (openWo[String(a.asset_id)] || []).concat(openWoByName[String(a.asset_name || '').trim().toLowerCase()] || []);
+    const woCount = (a) => wosOf(a).length;
 
     // GET /api/energy/condition/assets decides the band. The page used to decide it here,
     // and the two answers were not the same: measured over hoistra_test on 15 Sep 2026 they
@@ -789,7 +827,8 @@ export const assetsConditionMethods = {
       const k = String(r.asset_id || r.asset_code || '');
       if (k) (inspByAsset[k] = inspByAsset[k] || []).push(r);
     });
-    const histOf = (a) => inspectionNotes(inspByAsset[String(a.asset_id)] || inspByAsset[String(a.asset_code || '')] || []);
+    const histOf = (a) => inspectionNotes(inspByAsset[String(a.asset_id)] || inspByAsset[String(a.asset_code || '')] || [])
+      .concat(openWorkOrderNotes(wosOf(a)));
     const row = (x) => {
       const a = x.a, tone = t(TONE_OF[x.cond]);
       const loc = a.location_id ? locById[String(a.location_id)] : null;

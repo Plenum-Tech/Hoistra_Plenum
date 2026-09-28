@@ -43,7 +43,18 @@ export const assetsLiveMethods = {
     clearTimeout(this._asLiveRetry);
     this.setState({ asLiveLoading: true });
     try {
-      const [assets, workOrders] = await Promise.all([workOrderApi.assets({ limit: 200 }), workOrderApi.workOrders({ limit: 200 })]);
+      // The newest 200, and every open one besides: a building with thousands of completed
+      // orders otherwise leaves its open ones off the page the notes are built from.
+      const [assets, recent, open] = await Promise.all([workOrderApi.assets({ limit: 200 }),
+        workOrderApi.workOrders({ limit: 200 }),
+        workOrderApi.workOrders({ open: true, limit: 200 }).catch(() => [])]);
+      const seen = new Set();
+      const workOrders = [...(open || []), ...(recent || [])].filter((w) => {
+        const k = w && (w.work_order_id || w.id || w.wo_code);
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
       this._asLiveAttempts = 0;
       this.setState({
         asLive: assets || [], asLiveWos: workOrders || [],

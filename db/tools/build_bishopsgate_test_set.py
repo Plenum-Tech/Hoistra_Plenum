@@ -267,7 +267,7 @@ def build_certificates(wb, out: str, pack: dict) -> list[dict]:
                    details=cert_details(c, assets.get(c.get("asset_code") or ""), vendors.get(c.get("vendor_code") or "")),
                    signer_line=f"{c.get('inspector_name') or 'Authorised signatory'}, {lh['name']}")
         stamp(path, iss, tname)
-        made.append(dict(path=path, type=t, scope=scope, number=c["certificate_number"], issue=iss,
+        made.append(dict(row=c, type_name=tname, path=path, type=t, scope=scope, number=c["certificate_number"], issue=iss,
                          expiry=as_date(c["expiry_date"]), vendor=c.get("vendor_name"),
                          chat=not sub, status=c.get("status")))
     return made
@@ -440,7 +440,12 @@ def build_invoices(wb, out: str) -> list[dict]:
             res = [invoice.match_invoice_line(dict(ln), work_orders=idx, labour_day_rate=merged.get("labour_day_rate"),
                                               labour_hour_rate=merged.get("labour_hour_rate"),
                                               parts_framework=merged.get("parts_pricing_json") or {}) for ln in lines]
-            made.append(dict(path=path, vendor=vc, no=no, lines=len(lines), date=inv_date,
+            for r_out, r in zip(rows_out, res):
+                r_out["expected_result"] = "matched" if r["status"] == "matched" else "held"
+                r_out["expected_delta_gbp"] = r.get("delta_gbp") or 0.0
+                r_out["expected_discrepancy"] = r.get("discrepancy") or ""
+            made.append(dict(rows=rows_out, subtotal=sub, contract_ref=ref, vendor_name=vname,
+                             path=path, vendor=vc, no=no, lines=len(lines), date=inv_date,
                              matched=sum(r["status"] == "matched" for r in res),
                              flagged=[(r["wo_code"], r["delta_gbp"]) for r in res if r["status"] != "matched"]))
     return made
@@ -546,6 +551,141 @@ def prove(certs: list[dict], contracts: list[dict], invoices: list[dict]) -> lis
     return lines
 
 
+SINGLE_NAME = "plenum_technologies_B-301_bishopsgate_tower-single.xlsx"
+
+
+def write_single(out: str, workbook: str, s: dict) -> str:
+    """The whole building in ONE workbook for one Migration upload: every sheet of the -complete
+    workbook (certificates and the full year of readings included), then Contract_Terms,
+    Invoices and Invoice_Lines. The migration writes the tables and sets those three aside;
+    when the run completes the platform reads them from the stored upload and puts them
+    through the contract ingest and the invoice matcher
+    (POST /api/contract-performance/migration/{id}/workbook-extras)."""
+    src = openpyxl.load_workbook(workbook, read_only=True)
+    wb = openpyxl.Workbook(write_only=True)
+    readme = wb.create_sheet("README")
+    for line in [["Bishopsgate Tower (B-301) - Plenum Technologies - single end-to-end workbook"],
+                 ["Upload this one file on the Migration page with Bishopsgate Tower selected; accept the gates and confirm the write."],
+                 ["Contract_Terms, Invoices and Invoice_Lines are not migrated as tables: when the run completes they go"],
+                 ["through the contract ingest (draft terms - confirm them on the Vendors page) and the invoice matcher."],
+                 ["Chiller_Design_Specs, Chiller_Readings, Weather_Degree_Days and BMS_Trends go the same way, into the"],
+                 ["chiller, degree-day and BMS stores the energy scan and the investigation read."],
+                 ["Then: Energy -> Run energy scan; Vendors -> confirm each contract, Rebuild scorecards."]]:
+        readme.append(line)
+    for name in src.sheetnames:
+        ws = wb.create_sheet(name)
+        for r in src[name].iter_rows(values_only=True):
+            ws.append(r)
+    ct = wb.create_sheet("Contract_Terms")
+    ct.append(["contract_ref", "contract_name", "vendor_code", "vendor_name", "building_code", "signed_date",
+               "term", "value", "source", "clause", "page"])
+    it = src["Vendor_Contracts"].iter_rows(values_only=True)
+    hdr = next(it)
+    for r in it:
+        d = dict(zip(hdr, r))
+        doc = json.loads(d["sla_terms"])
+        for t in doc["terms"]:
+            ct.append([doc["contract_ref"], d["contract_name"], d["vendor_code"], d["vendor_name"], CODE, doc.get("signed"),
+                       t["label"], t["value"], t.get("src"), t.get("clause"), t.get("page")])
+    inv = wb.create_sheet("Invoices")
+    inv.append(["invoice_no", "invoice_date", "vendor_code", "vendor_name", "contract_ref", "building_code", "lines",
+                "subtotal_gbp", "vat_gbp", "total_gbp"])
+    lines = wb.create_sheet("Invoice_Lines")
+    cols = None
+    for i in sorted(s["invoices"], key=lambda x: (x["vendor"], x["date"], x["no"])):
+        inv.append([i["no"], i["date"].isoformat(), i["vendor"], i["vendor_name"], i["contract_ref"], CODE, i["lines"],
+                    round(i["subtotal"], 2), round(i["subtotal"] * 0.2, 2), round(i["subtotal"] * 1.2, 2)])
+        for r in i["rows"]:
+            r = dict(r, vendor_code=i["vendor"])
+            if cols is None:
+                cols = list(r)
+                lines.append(cols)
+            lines.append([r.get(c) for c in cols])
+    path = os.path.join(out, SINGLE_NAME)
+    wb.save(path)
+    return path
+
+
+def write_extracts(out: str, workbook: str, s: dict, as_of: dt.date) -> list[str]:
+    """extracted/*.csv - what the platform should read out of the documents, one row per record,
+    so an ingest can be checked field by field (or loaded on its own). Each row names the file
+    it came from."""
+    ex = os.path.join(out, "extracted")
+    os.makedirs(ex, exist_ok=True)
+    rel = lambda p: os.path.relpath(p, out).replace("\\", "/")  # noqa: E731
+    made = []
+
+    def write(name, rows):
+        if not rows:
+            return
+        path = os.path.join(ex, name)
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            cols = list(dict.fromkeys(k for r in rows for k in r))      # every column any row has
+            w = csv.DictWriter(f, fieldnames=cols, restval="")
+            w.writeheader()
+            w.writerows(rows)
+        made.append(f"{name} ({len(rows)} rows)")
+
+    certs = []
+    for c in sorted(s["certificates"], key=lambda x: (x["scope"], x["type"], x["number"])):
+        r = c["row"]
+        exp = c["expiry"]
+        certs.append({
+            "certificate_number": c["number"], "certificate_type_code": c["type"], "certificate_type_name": c["type_name"],
+            "cert_scope": c["scope"], "building_code": r.get("building_code") or CODE, "building_name": BUILDING,
+            "asset_code": r.get("asset_code") or "", "vendor_code": r.get("vendor_code") or "",
+            "vendor_name": r.get("vendor_name") or "", "issuer": r.get("issuer") or "",
+            "inspector_name": r.get("inspector_name") or "", "inspector_accreditation_number": r.get("inspector_accreditation_number") or "",
+            "issue_date": c["issue"].isoformat(), "expiry_date": exp.isoformat() if exp else "",
+            "inspection_frequency_months": r.get("inspection_frequency_months") or "",
+            "result": r.get("result") or "", "energy_rating": r.get("energy_rating") or "", "energy_score": r.get("energy_score") or "",
+            "defects_found": r.get("defects_found") or "", "remedial_actions": r.get("remedial_actions") or "",
+            "remedial_status": r.get("remedial_status") or "",
+            "state_on_" + as_of.isoformat(): ("lapsed" if exp and exp < as_of else
+                                               "expiring within 30 days" if exp and (exp - as_of).days <= 30 else "current"),
+            "ingest_from_chat": "yes" if c["chat"] else "no - not classifiable from the chat",
+            "file": rel(c["path"])})
+    write("certificates.csv", certs)
+
+    inv, lines = [], []
+    for i in sorted(s["invoices"], key=lambda x: (x["vendor"], x["date"], x["no"])):
+        held = [r for r in i["rows"] if r["expected_result"] == "held"]
+        inv.append({"invoice_no": i["no"], "invoice_date": i["date"].isoformat(), "vendor_code": i["vendor"],
+                    "vendor_name": i["vendor_name"], "contract_ref": i["contract_ref"], "building_code": CODE,
+                    "lines": i["lines"], "subtotal_gbp": round(i["subtotal"], 2), "vat_gbp": round(i["subtotal"] * 0.2, 2),
+                    "total_gbp": round(i["subtotal"] * 1.2, 2), "expected_matched": i["lines"] - len(held),
+                    "expected_held": len(held), "expected_held_gbp": round(sum(float(r["expected_delta_gbp"]) for r in held), 2),
+                    "file": rel(i["path"])})
+        for r in i["rows"]:
+            lines.append(dict(r, vendor_code=i["vendor"], file=rel(i["path"])))
+    write("invoices.csv", inv)
+    write("invoice_lines.csv", lines)
+
+    # energy: every meter, and each meter's kWh by month - from the workbook the set was built
+    # from, which still holds the year the e2e workbook and the two CSVs split between them
+    wb = openpyxl.load_workbook(workbook, read_only=True)
+    meters = sheet_rows(wb, "Energy_Meters")
+    write("energy_meters.csv", [{k: ("" if v is None else v) for k, v in m.items()} for m in meters])
+    it = wb["Meter_Readings"].iter_rows(values_only=True)
+    hdr = next(it)
+    ix = {h: n for n, h in enumerate(hdr)}
+    tot: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0])
+    for r in it:
+        at = r[ix["reading_at"]]
+        month = (at.strftime("%Y-%m") if isinstance(at, dt.datetime) else str(at)[:7])
+        t = tot[(r[ix["meter_ref"]], month)]
+        t[0] += float(r[ix["consumption_kwh"]] or 0)
+        t[1] += 1
+    kind = {m["meter_ref"]: m for m in meters}
+    monthly = [{"meter_ref": ref, "meter_type": kind.get(ref, {}).get("meter_type", ""),
+                "sub_meter": kind.get(ref, {}).get("is_sub_meter", ""),
+                "section_name": kind.get(ref, {}).get("section_name") or "", "asset_code": kind.get(ref, {}).get("asset_code") or "",
+                "month": month, "kwh": round(k, 1), "half_hours": n}
+               for (ref, month), (k, n) in sorted(tot.items())]
+    write("energy_monthly.csv", monthly)
+    return made
+
+
 def write_docs(out: str, s: dict, as_of: dt.date) -> None:
     rel = lambda p: os.path.relpath(p, out).replace("\\", "/")  # noqa: E731
     certs, contracts, invoices, energy = s["certificates"], s["contracts"], s["invoices"], s["energy"]
@@ -575,6 +715,13 @@ instead of creating strangers. The figures are the 15 Sep 2026 design prototype'
 | `certificates/*.pdf` | chat: "ingest these certificates" (building chosen) | the `Building reference` row; vendor certificates by exact vendor name |
 | `contracts/*.pdf` | chat: "ingest this contract" (building chosen) | the document the upload is filed against |
 | `invoices/*.pdf` (+ `.csv`) | chat: "verify this invoice" | the completed work orders each line cites |
+
+## extracted/ - what the platform should read out of each file
+`certificates.csv` (every certificate, the fields its PDF states and the file it is in),
+`invoices.csv` and `invoice_lines.csv` (every invoice and line, with the result the platform's own
+invoice matcher gives it - matched or held, and the amount held), `energy_meters.csv` and
+`energy_monthly.csv` (every meter, and its kWh by month over the whole year). Check an ingest
+against them field by field, or load them on their own.
 
 ## 1. Workbook -> Migration
 {rel(s['workbook'])}: the 16 sheets of the -complete workbook **without** Compliance_Certificates (the PDFs
@@ -658,6 +805,17 @@ def main() -> None:
     as_of = dt.date.fromisoformat(args.as_of) if args.as_of else dt.date.today()
     out = args.out
     if os.path.isdir(out):
+        # Refuse before deleting anything if a file is open (a PDF left open in a viewer):
+        # rmtree stops at the first locked file and leaves the set half deleted.
+        locked = []
+        for d, _, fs in os.walk(out):
+            for f in fs:
+                try:
+                    open(os.path.join(d, f), "ab").close()
+                except PermissionError:
+                    locked.append(os.path.relpath(os.path.join(d, f), out))
+        if locked:
+            raise SystemExit("close these first - nothing was changed: " + "; ".join(locked))
         shutil.rmtree(out)
     os.makedirs(out)
     pack = {t["certificate_type_code"]: t for t in json.load(open(PACK, encoding="utf-8"))["certificate_types"]}
@@ -671,8 +829,11 @@ def main() -> None:
         f.write(f"{TEST_SET}\nScored {dt.date.today().isoformat()} with the platform's run_document_forensics and the chat "
                 "door's classify_compliance_certificate_doc.\n\n" + "\n".join(report) + "\n")
     summary = dict(workbook=e2e, certificates=certs, contracts=contracts, invoices=invoices, energy=energy)
-    json.dump(summary, open(os.path.join(out, "manifest.json"), "w", encoding="utf-8"), default=str, indent=1)
+    json.dump({k: v for k, v in summary.items()}, open(os.path.join(out, "manifest.json"), "w", encoding="utf-8"),
+              default=str, indent=1)
     write_docs(out, summary, as_of)
+    extracts = write_extracts(out, args.workbook, summary, as_of)
+    single = write_single(out, args.workbook, summary)
     print(f"\n  {out}")
     print(f"  workbook      {os.path.basename(e2e)}")
     print(f"  certificates  {len(certs)} ({sum(not c['chat'] for c in certs)} not classifiable from chat)")
@@ -682,6 +843,8 @@ def main() -> None:
         by_v[i["vendor"]][0] += i["matched"]
         by_v[i["vendor"]][1] += i["lines"]
     print(f"  invoices      {len(invoices)}: " + ", ".join(f"{v} {m}/{n}={round(100 * m / n)}%" for v, (m, n) in by_v.items()))
+    print(f"  extracted     " + ", ".join(extracts))
+    print(f"  single        {os.path.basename(single)} - one Migration upload for everything")
     print(f"  energy        " + ", ".join(f"{e['meter']} {e['rows']} half-hours {e['first']}..{e['last']}" for e in energy))
     bad = [r for r in report if not r.startswith("pass") or "MISMATCH" in r]
     print(f"  proof         {len(report) - len(bad)} of {len(report)} pass" + ("" if not bad else "\n    " + "\n    ".join(bad)))

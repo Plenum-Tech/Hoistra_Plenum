@@ -228,6 +228,13 @@ class Settings(BaseSettings):
         ),
     )
 
+    # The schema mapper's own API, for the stored source of a migration (the single end-to-end
+    # workbook's contract terms and invoices are read from it after the write).
+    schema_mapper_base_url: str = Field(
+        "http://127.0.0.1:8003",
+        validation_alias=AliasChoices("SCHEMA_MAPPER_BASE_URL", "schema_mapper_base_url"),
+    )
+
     # Feature C — Energy
     doc_rag_base_url: str = Field(
         "http://localhost:8004",

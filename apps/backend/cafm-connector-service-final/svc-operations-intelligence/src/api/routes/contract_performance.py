@@ -93,6 +93,49 @@ async def reconcile_migration(
     )
 
 
+@router.post("/migration/{migration_id}/workbook-extras")
+async def migration_workbook_extras(
+    migration_id: UUID,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """After a migration: the contract terms and invoices its workbook carried, through the
+    contract ingest and the invoice matcher (engines/contract_performance/workbook_extras.py).
+
+    The migration set the Contract_Terms and Invoice_Lines sheets aside; this reads them from
+    the stored upload. A workbook without them answers found:false. Nothing is confirmed.
+    """
+    import httpx
+    from sqlalchemy import text as _text
+
+    from ...config import settings
+    from ...engines.contract_performance import workbook_extras
+
+    org_id = access.organization_for(s, organization_id)
+    row = (await session.execute(
+        _text("SELECT organization_id::text FROM plenum_cafm.migration_jobs WHERE id = :m"),
+        {"m": migration_id})).first()
+    # A run belongs to the company it was started for; another company's run is not found.
+    if not row or (org_id is not None and row[0] and row[0] != str(org_id)):
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "migration_not_found"})
+    org_id = org_id or (UUID(row[0]) if row[0] else None)
+    if org_id is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "no_company"})
+    url = f"{settings.schema_mapper_base_url.rstrip('/')}/api/migration/{migration_id}/source"
+    async with httpx.AsyncClient(timeout=180) as client:
+        res = await client.get(url)
+    if res.status_code == 404:
+        return {"ok": True, "found": False, "reason": "the migration's source file was not stored"}
+    res.raise_for_status()
+    try:
+        return await workbook_extras.run(session, content=res.content, organization_id=org_id)
+    except Exception as exc:  # noqa: BLE001 - a CSV or a workbook openpyxl cannot read
+        if "zip" in str(exc).lower() or "not a zip" in str(exc).lower():
+            return {"ok": True, "found": False, "reason": "the source is not a workbook"}
+        raise
+
+
 @router.post("/contracts/ingest")
 async def ingest_contract(
     body: ContractIngestRequest,
