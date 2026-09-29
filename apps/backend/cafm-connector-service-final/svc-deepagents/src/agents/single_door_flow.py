@@ -612,7 +612,7 @@ async def _workbook_extras(migration_id: str) -> dict[str, Any] | None:
         from ..http_client import request as _svc_request
         resp = await _svc_request(
             "POST", settings.operations_intelligence_base_url,
-            f"/api/contract-performance/migration/{migration_id}/workbook-extras",
+            f"/api/contract-performance/migration/{migration_id}/workbook-extras?trigger=chat",
             service="operations-intelligence", timeout=180.0, max_attempts=1)
         return resp.json()
     except Exception as exc:  # noqa: BLE001 - the tables are written; this is the follow-up
@@ -621,15 +621,26 @@ async def _workbook_extras(migration_id: str) -> dict[str, Any] | None:
 
 
 def _extras_summary(extras: dict[str, Any] | None) -> str:
-    if not extras or not extras.get("found"):
+    """The chat's line for what the platform did with the workbook's extras. The service
+    answers the run's status row - counts under "summary"; a run it is still reading, or
+    will read on its next sweep, says so rather than nothing."""
+    if not extras:
         return ""
-    cs, iv = extras.get("contracts") or [], extras.get("invoices") or []
-    held = sum(int(x.get("held") or 0) for x in iv)
+    st = extras.get("status")
+    if st in ("running", "waiting"):
+        return ("; the platform is reading the workbook's contract terms, invoices and telemetry - "
+                "the Vendors page shows it when done")
+    if st == "failed":
+        return "; reading the contract terms and invoices failed - the platform retries, and the Migration page can ask again"
+    sm = extras.get("summary") or {}
+    if not sm.get("found"):
+        return ""
+    ncs, niv, held = int(sm.get("contracts") or 0), int(sm.get("invoices") or 0), int(sm.get("lines_held") or 0)
     out = ""
-    if cs or iv:
-        out = (f"; {len(cs)} contract(s) read into draft terms - confirm them on the Vendors page; "
-               f"{len(iv)} invoice(s) verified, {held} line(s) held for your decision")
-    tel = extras.get("telemetry") or {}
+    if ncs or niv:
+        out = (f"; {ncs} contract(s) read into draft terms - confirm them on the Vendors page; "
+               f"{niv} invoice(s) verified, {held} line(s) held for your decision")
+    tel = sm.get("telemetry") or {}
     if any(tel.get(k) for k in ("chiller_readings", "degree_days", "bms_samples")):
         out += (f"; plant telemetry stored - {tel.get('chiller_readings', 0)} chiller reading(s), "
                 f"{tel.get('degree_days', 0)} month(s) of degree days, {tel.get('bms_samples', 0)} BMS sample(s)"

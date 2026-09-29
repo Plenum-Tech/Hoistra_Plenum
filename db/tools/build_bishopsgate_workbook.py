@@ -204,7 +204,21 @@ VENDORS = [
     # Not in the prototype: a second mechanical contractor, so the Vendors page compares two of
     # a trade. It holds the floor fan-coil banks; Apex keeps the central plant.
     ("FNMC", "Fenmoor Mechanical", "Mechanical", "Unit 4, Brickfield Lane, London E3 9ZZ", "+44 20 7946 0588", "Gas Safe 648213"),
+    # Alternates, so every trade has three vendors to compare (invented names). They hold no
+    # asset of their own: like SafeLift, they are called out to the trade's plant.
+    ("CRVM", "Corvane Mechanical", "Mechanical", "2 Saltmarsh Yard, London E14 9ZZ", "+44 20 7946 0614", "Gas Safe 651170"),
+    ("TLVL", "Talvern Lifts", "Lifts", "Unit 7, Quarry Road, Croydon CR2 9ZZ", "+44 20 7946 0822", "LEIA member 3350"),
+    ("BRKE", "Brackwell Electrical", "Electrical", "14 Ropewalk, Salford M5 9ZZ", "+44 161 496 0417", "NICEIC 045118"),
+    ("OSTP", "Ostley Power Services", "Electrical", "3 Kiln Lane, Stockport SK4 9ZZ", "+44 161 496 0931", "NICEIC lapsed"),
+    ("KSTF", "Kestamere Fire Protection", "Fire", "Unit 11, Mill Court, Guildford GU1 9ZZ", "+44 20 7946 0275", "BAFE SP203-1 reg 20417"),
+    ("LUMF", "Lumora Fire & Security", "Fire", "48 Beacon Street, Reading RG2 9ZZ", "+44 118 496 0350", "BAFE SP203-1 reg 21905"),
+    ("AQLW", "Aquilon Water Hygiene", "Water hygiene", "9 Weir Close, Basingstoke RG21 9ZZ", "+44 118 496 0719", "LCA member 1402"),
+    ("FNKH", "Fennick Hygiene Services", "Water hygiene", "Unit 2, Station Yard, Slough SL1 9ZZ", "+44 118 496 0528", "LCA member 1577"),
 ]
+#: The plant an alternate vendor is called out to (it maintains none of it).
+ALT_POOL = {"SFLT": ("Lift",), "CRVM": ("Air handling", "Chiller", "Pump", "Boiler", "Fan coil"), "TLVL": ("Lift",),
+            "BRKE": ("LV board", "Lighting panel", "Generator"), "OSTP": ("LV board", "Lighting panel", "Generator"),
+            "KSTF": ("Fire panel",), "LUMF": ("Fire panel",), "AQLW": ("Water system",), "FNKH": ("Water system",)}
 VCODE = {v[1]: v[0] for v in VENDORS}
 #: Asset class -> plenum_cafm.asset_categories.name. The writer has no by-name lookup for a
 #: category, so the id of the company's own category is looked up in hoistra_test when the
@@ -222,6 +236,7 @@ FLOOR_NAMES = ["Basement", "Ground"] + [f"Level {i}" for i in range(1, FLOORS - 
 BLOCK = {
     "SFLT": ("Blocked", "Public liability insurance lapsed; LOLER competence not on record", "CONTRACTOR_PL_INSURANCE"),
     "PCFR": ("Blocked", "BAFE SP203-1 registration lapsed; SP101, SP105 and NSI Gold not on record", "BAFE_SP203_1"),
+    "OSTP": ("Blocked", "NICEIC Approved Contractor registration lapsed", "NICEIC"),
 }
 
 # ── vendor performance ───────────────────────────────────────────────────────────────────
@@ -231,14 +246,31 @@ VP_ID = {"APXM": "v1", "NGEL": "v3", "APXL": "v4", "CLWC": "v6"}
 #: The other two exist in the prototype only as compliance rows (both Blocked). Their KPIs are
 #: generated to that posture: below the portfolio, and declining.
 GEN_PERF = {"FNMC": {"sla_r": 92, "sla_c": 87, "firstfix": 83, "recall": 7, "invoice": 82, "trend": "stable"},
+            "CRVM": {"sla_r": 90, "sla_c": 84, "firstfix": 78, "recall": 8, "invoice": 88, "trend": "improving"},
+            "TLVL": {"sla_r": 89, "sla_c": 83, "firstfix": 80, "recall": 9, "invoice": 85, "trend": "stable"},
+            "BRKE": {"sla_r": 90, "sla_c": 85, "firstfix": 80, "recall": 8, "invoice": 86, "trend": "improving"},
+            "OSTP": {"sla_r": 78, "sla_c": 70, "firstfix": 66, "recall": 14, "invoice": 68, "trend": "declining"},
+            "KSTF": {"sla_r": 93, "sla_c": 89, "firstfix": 85, "recall": 6, "invoice": 92, "trend": "stable"},
+            "LUMF": {"sla_r": 86, "sla_c": 80, "firstfix": 76, "recall": 10, "invoice": 80, "trend": "improving"},
+            "AQLW": {"sla_r": 91, "sla_c": 86, "firstfix": 82, "recall": 7, "invoice": 88, "trend": "stable"},
+            "FNKH": {"sla_r": 80, "sla_c": 72, "firstfix": 70, "recall": 12, "invoice": 72, "trend": "declining"},
             "SFLT": {"sla_r": 82, "sla_c": 74, "firstfix": 70, "recall": 12, "invoice": 70, "trend": "declining"},
             "PCFR": {"sla_r": 85, "sla_c": 78, "firstfix": 72, "recall": 10, "invoice": 75, "trend": "declining"}}
 GEN_CONTRACT = {"FNMC": {"ref": "FM-2025-MECH-02", "signed": "12 May 2025", "expires": "11 May 2028"},
+                "CRVM": {"ref": "CV-2025-MECH-03", "signed": "04 Aug 2025", "expires": "03 Aug 2027"},
+                "TLVL": {"ref": "TL-2025-LIFT-02", "signed": "19 Jun 2025", "expires": "18 Jun 2027"},
+                "BRKE": {"ref": "BE-2025-ELEC-02", "signed": "02 Apr 2025", "expires": "01 Apr 2028"},
+                "OSTP": {"ref": "OP-2024-ELEC-03", "signed": "21 Oct 2024", "expires": "20 Oct 2026"},
+                "KSTF": {"ref": "KF-2025-FIRE-01", "signed": "08 Jan 2025", "expires": "07 Jan 2028"},
+                "LUMF": {"ref": "LF-2025-FIRE-03", "signed": "15 Sep 2025", "expires": "14 Sep 2027"},
+                "AQLW": {"ref": "AW-2025-WATER-02", "signed": "27 Feb 2025", "expires": "26 Feb 2028"},
+                "FNKH": {"ref": "FH-2024-WATER-05", "signed": "11 Nov 2024", "expires": "10 Nov 2026"},
                 "SFLT": {"ref": "SL-2025-LIFT-01", "signed": "03 Mar 2025", "expires": "02 Mar 2027"},
                 "PCFR": {"ref": "PC-2024-FIRE-02", "signed": "15 Jul 2024", "expires": "14 Jul 2027"}}
 GEN_TERMS = [("P1 response", "4 hours"), ("P2 response", "1 business day"), ("P3 response", "5 business days"),
              ("Completion target", "95%"), ("First-time fix target", "85%"), ("Recall window", "28 days")]
-GEN_RATES = {"FNMC": (72, 108), "SFLT": (74, 111), "PCFR": (62, 93)}
+GEN_RATES = {"FNMC": (72, 108), "SFLT": (74, 111), "PCFR": (62, 93), "CRVM": (70, 105), "TLVL": (72, 108),
+             "BRKE": (66, 99), "OSTP": (58, 87), "KSTF": (64, 96), "LUMF": (60, 90), "AQLW": (58, 87), "FNKH": (54, 81)}
 #: One contract per vendor: scoring reads a vendor's newest confirmed parameter set, and two
 #: sets signed the same day block it (FR-035), so Heating folds into Mechanical.
 CONTRACTS = [
@@ -249,6 +281,14 @@ CONTRACTS = [
     ("PCFR", "Fire and security · Bishopsgate", "Fire alarm, detection, FRA", 4, 16000),
     ("CLWC", "Water hygiene · Bishopsgate", "L8 monitoring, TMVs, tanks and calorifiers", 12, 14000),
     ("FNMC", "Terminal units PPM · Bishopsgate", "Fan coil units on every floor: filters, condensate, fan motors", 4, 48000),
+    ("CRVM", "Mechanical call-out · Bishopsgate", "Reactive HVAC and heating support out of hours", 0, 24000),
+    ("TLVL", "Lift call-out · Bishopsgate", "Lift breakdown response and entrapment release", 0, 12000),
+    ("BRKE", "Electrical minor works · Bishopsgate", "Reactive electrical, lighting and small power", 0, 18000),
+    ("OSTP", "Standby power · Bishopsgate", "Generator and LV reactive support", 2, 9500),
+    ("KSTF", "Fire alarm maintenance · Bishopsgate", "Alarm panel, detection and extinguishers", 4, 15000),
+    ("LUMF", "Fire and security call-out · Bishopsgate", "Alarm faults and access control call-outs", 0, 8000),
+    ("AQLW", "Water hygiene monitoring · Bishopsgate", "Monthly temperatures, TMVs and tank inspections", 12, 13000),
+    ("FNKH", "Water treatment · Bishopsgate", "Descaling, disinfection and remedial works", 2, 7500),
 ]
 CONTRACT_OF_VENDOR = {c[0]: c[1] for c in CONTRACTS}
 #: Engine defaults for what a contract does not state (svc-operations-intelligence
@@ -375,6 +415,29 @@ REPORT_STORIES = {
 #: drift on its sub-meter), PUMP-01 has a predictive order, DHW-01 the descale Clearwater bills.
 REPORT_GRADE = {"PUMP-01": 3, "BOILER-01": 3, "FIRE-PANEL-01": 3, "DHW-01": 3, "FCU-L20": 4, "FCU-L07": 3,
                 "FCU-L14": 3, "LCP-L20": 3, "LCP-L09": 3}
+REPORT_GRADE.update({"GOODS-LIFT-01": 3, "WTR-01": 3, "FIRE-PANEL-02": 1, "SMOKE-VENT-01": 2, "CWS-01": 2})
+#: Plant moved to an alternate vendor (the L12-L20 lighting panels go to Brackwell too).
+VENDOR_OVERRIDE = {"BOILER-01": "Corvane Mechanical", "BOILER-02": "Corvane Mechanical",
+                   "GEN-01": "Ostley Power Services"}
+#: Stories for one asset where its class's story would not fit (a closed system is not a calorifier).
+REPORT_STORY_CODE = {
+    "WTR-01": {2: (["Inhibitor within the dosing target", "Side-stream filter bag changed", "System pressure 1.8 bar"],
+                   "Monitor quarterly"),
+               3: (["Inhibitor at 40% of the dosing target", "Dosing pot valve seized",
+                    "Side-stream filter bag not changed since March"],
+                   "Dose to target; free the dosing pot valve; replace the filter bag")},
+    "CWS-01": {2: (["Tank temperatures 16 °C", "Lids and insect screens secure", "No sediment on inspection"],
+                   "Monitor monthly temperatures")},
+    "SMOKE-VENT-01": {1: (["Vent actuators opened on all 4 stair cores", "Break-glass tests passed",
+                           "Battery backup 26.1 V"], "Monitor"),
+                      2: (["Vent actuators opened on all 4 stair cores", "Stair 3 actuator slow — 14 s to open",
+                           "Battery backup 25.4 V"], "Monitor the stair 3 actuator")},
+}
+REPORT_STORIES["Lift"] = {
+    2: (["Levelling within 8 mm", "Door operator adjusted", "Ropes within discard criteria"], "Monitor at routine PPM"),
+    3: (["Levelling error 22 mm at L2", "Door operator belt worn", "Controller log: 6 trips in 30 days"],
+        "Replace the door operator belt; re-level at L2"),
+}
 #: Refitted in 2016 and looked after: grade 1 unless named above.
 REPORT_GRADE_REFIT = 1
 #: Open orders in the prototype's four kinds, each on an asset whose report explains it:
@@ -388,13 +451,26 @@ OPEN_ORDERS = [
      "Blocked — accreditation: ProudCastle Fire's BAFE SP203-1 has lapsed; the loop 2 fault waits for an accredited contractor"),
     ("4563", "DHW-01", "P3", "Scheduled", "Planned", 1,
      "Calorifier descale and TMV cartridge replacement — booked"),
+    ("4564", "FIRE-PANEL-01", "P2", "In progress", "Reactive", 2,
+     "Loop 2 earth fault — reassigned from ProudCastle Fire (blocked) to the alternate, Kestamere Fire Protection",
+     "Kestamere Fire Protection"),
+    ("4565", "BOILER-01", "P3", "Draft", "Predictive", 4,
+     "Boiler 1 — flue gas CO up 30% over 6 weeks to 150 ppm; burner service proposed"),
+    ("4566", "LCP-L20", "P3", "Scheduled", "Planned", 1,
+     "Level 20 out-of-hours lighting scene reset with the tenant — booked"),
+    ("4567", "GOODS-LIFT-01", "P2", "In progress", "Reactive", 1,
+     "Goods lift levelling error at L2 — car stopping 22 mm high"),
+    ("4568", "GEN-01", "P2", "Held", "Compliance", 5,
+     "Blocked — accreditation: Ostley Power Services' NICEIC registration has lapsed; the monthly run test waits for an accredited contractor"),
+    ("4569", "WTR-01", "P3", "Draft", "Planned", 2,
+     "Closed-system inhibitor top-up and dosing pot valve replacement"),
 ]
 
 
-def report_story(rng, cls: str, grade: int, tag: str) -> tuple[list[str], str, int]:
+def report_story(rng, cls: str, grade: int, tag: str, code: str | None = None) -> tuple[list[str], str, int]:
     """(findings, recommendation, the grade the story is for) - a class with no grade-1 story
     tells its grade-2 one, and says grade 2."""
-    st = REPORT_STORIES.get(cls)
+    st = REPORT_STORY_CODE.get(code or "") or REPORT_STORIES.get(cls)
     if not st:
         finds = rng.sample(REPORT_FINDINGS[cls], k=min(2 + (grade >= 3), len(REPORT_FINDINGS[cls])))
         return finds, REPORT_RECOMMEND[cls] if grade >= 3 else "Monitor at routine PPM", grade
@@ -445,11 +521,11 @@ def service_reports(rng, assets: list[dict], ppm_rows: list[list], ppm_header: l
             grade = max(1, min(5, top if latest else top - 1))
             risk = {5: "High", 4: "High", 3: "Medium"}.get(grade, "Low")
             open_ = latest and grade >= 3
-            finds, rec, grade = report_story(rng, a["cls"], grade, tail.split("-")[-1])
+            finds, rec, grade = report_story(rng, a["cls"], grade, tail.split("-")[-1], tail)
             risk = {5: "High", 4: "High", 3: "Medium"}.get(grade, "Low")
             open_ = latest and grade >= 3
             # Two visits that found the same thing are one note, not two identical ones.
-            if not latest and (finds, rec) == report_story(random.Random(0), a["cls"], top, tail.split("-")[-1])[:2]:
+            if not latest and (finds, rec) == report_story(random.Random(0), a["cls"], top, tail.split("-")[-1], tail)[:2]:
                 continue
             w = REPORT_WARRANTY.get(tail)
             if w and latest:
@@ -576,7 +652,8 @@ def gen_vendor_work_orders(rng, as_of, assets, vp, hw, base_wos, months=6) -> tu
     by_vendor = {}
     for a in assets:
         by_vendor.setdefault(VCODE[a["vendor"]], []).append(a)
-    by_vendor.setdefault("SFLT", [a for a in assets if a["cls"] == "Lift"])
+    for vc, classes_ in ALT_POOL.items():
+        by_vendor.setdefault(vc, [a for a in assets if a["cls"] in classes_])
     out, report, seq = [], {}, 6001
     # Named rows: the prototype's Bishopsgate breaches, and the work behind its invoice lines.
     named = {  # (vendor, months back) -> [(wo number, asset suffix, priority, outcome, desc, labour, parts)]
@@ -949,6 +1026,18 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
         ("DB-01", "Main LV switchboard", "LV board", "Central plant · basement", "Northgate Electrical", 2009, 85000, 30, True),
         ("DHW-01", "Domestic water — tanks, calorifiers and TMVs", "Water system", "Central plant · basement",
          "Clearwater Compliance", 2011, 45000, 25, True),
+        # Plant the alternate vendors maintain, so each shows on the Assets page as well as on
+        # the Vendors page.
+        ("GOODS-LIFT-01", "Goods lift — service core", "Lift", "Ground · reception and common", "Talvern Lifts",
+         2014, 95000, 25, True),
+        ("FIRE-PANEL-02", "Fire alarm sub-panel — L12–L20", "Fire panel", "L12–L20 · tenant floors",
+         "Kestamere Fire Protection", 2016, 9000, 15, True),
+        ("SMOKE-VENT-01", "Smoke ventilation panel — stair cores", "Fire panel", "Ground · reception and common",
+         "Lumora Fire & Security", 2016, 12000, 15, True),
+        ("CWS-01", "Cold water storage tanks", "Water system", "Central plant · basement", "Aquilon Water Hygiene",
+         2011, 30000, 25, True),
+        ("WTR-01", "Closed-system water treatment — dosing", "Water system", "Central plant · basement",
+         "Fennick Hygiene Services", 2011, 8000, 20, False),
     ]:
         assets.append(dict(code=f"{CODE}-{code}", name=name, cls=cls, sec=sec, vendor=vendor, installed=dt.date(yr, 3, 15),
                            l1=l1, life=life, value=val, wear=0.9, cond=2, ppm=None, src="generated"))
@@ -967,6 +1056,10 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
         assets.append(dict(code=f"{CODE}-LCP-{tag}", name=f"Lighting control panel — {fl}", cls="Lighting panel", sec=fl,
                            vendor="Northgate Electrical", installed=dt.date(2016 if refit else 2009, 5, 20), l1=False,
                            life=20, value=6500, wear=0.8, cond=2, ppm=None, src="generated (floor plant)"))
+    for a in assets:
+        tail = a["code"][len(CODE) + 1:]
+        a["vendor"] = VENDOR_OVERRIDE.get(tail) or (
+            "Brackwell Electrical" if tail.startswith("LCP-L") and int(tail[-2:]) >= 12 else a["vendor"])
     reported = {i["asset"] for i in MX["inspections"] if isb(i)}
     for a in assets:
         if a["name"] in reported:
@@ -1101,12 +1194,12 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     wos = wos + rep_wos
     vendor_of = {a["code"]: a["vendor"] for a in assets}
     name_of = {a["code"]: a["name"] for a in assets}
-    for num, tail, pri, status, typ, back, desc in OPEN_ORDERS:
+    for num, tail, pri, status, typ, back, desc, *who in OPEN_ORDERS:
         ac = f"{CODE}-{tail}"
         rep = now - dt.timedelta(days=back)
         att = rep + dt.timedelta(hours=3) if status == "In progress" else None
         sla_h = {"P1": 24, "P2": 48, "P3": 120}[pri]
-        wos.append([f"WO-{CODE}-{num}", vendor_of[ac], ac, name_of[ac], desc, pri, status, iso(rep), iso(att), None, None, None,
+        wos.append([f"WO-{CODE}-{num}", who[0] if who else vendor_of[ac], ac, name_of[ac], desc, pri, status, iso(rep), iso(att), None, None, None,
                     None, None, {"P2": 650, "P3": 420}[pri], None, CODE, typ, iso(rep + dt.timedelta(hours=sla_h)), desc[:120]])
     gen_wos, vendor_report = gen_vendor_work_orders(rng, as_of, assets, VP, H, wos)
     wos = wos + gen_wos
@@ -1224,6 +1317,24 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     vend = [("APXM", "GAS_SAFE", "Registered", 12, dt.date(2026, 2, 1), "valid"),
             ("FNMC", "GAS_SAFE", "Registered", 12, dt.date(2026, 4, 14), "valid"),
             ("FNMC", "CONTRACTOR_PL_INSURANCE", "GBP 10,000,000", 12, dt.date(2026, 1, 9), "valid"),
+            ("CRVM", "GAS_SAFE", "Registered", 12, dt.date(2026, 3, 2), "valid"),
+            ("CRVM", "REFCOM", "Certificated", 12, dt.date(2026, 5, 18), "valid"),
+            ("CRVM", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 2, 10), "valid"),
+            ("TLVL", "LEIA", "Member", 12, dt.date(2026, 3, 25), "valid"),
+            ("TLVL", "LOLER_CP", "Competent person", 12, dt.date(2026, 1, 30), "valid"),
+            ("TLVL", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 4, 2), "valid"),
+            ("BRKE", "NICEIC", "Approved Contractor", 12, dt.date(2026, 6, 1), "valid"),
+            ("BRKE", "CONTRACTOR_PL_INSURANCE", "GBP 10,000,000", 12, dt.date(2026, 3, 14), "valid"),
+            ("OSTP", "NICEIC", "Registration lapsed", 12, dt.date(2024, 8, 10), "expired"),
+            ("OSTP", "CONTRACTOR_PL_INSURANCE", "GBP 2,000,000", 12, dt.date(2026, 1, 20), "valid"),
+            ("KSTF", "BAFE_SP203_1", "Registered", 36, dt.date(2025, 1, 8), "valid"),
+            ("KSTF", "CONTRACTOR_PL_INSURANCE", "GBP 10,000,000", 12, dt.date(2026, 2, 3), "valid"),
+            ("LUMF", "BAFE_SP203_1", "Registered", 36, dt.date(2025, 9, 15), "valid"),
+            ("LUMF", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 5, 6), "valid"),
+            ("AQLW", "LCA", "Registered", 12, dt.date(2026, 2, 27), "valid"),
+            ("AQLW", "ISO_9001", "Certificated", 36, dt.date(2025, 3, 1), "valid"),
+            ("FNKH", "LCA", "Registered", 12, dt.date(2025, 11, 11), "valid"),
+            ("FNKH", "CONTRACTOR_PL_INSURANCE", "GBP 2,000,000", 12, dt.date(2026, 4, 20), "valid"),
             ("CLWC", "ISO_9001", "Certificated", 36, dt.date(2024, 6, 1), "valid"),
             ("SFLT", "LEIA", "Member", 12, dt.date(2026, 2, 12), "valid"),
             ("SFLT", "CONTRACTOR_EL_INSURANCE", "GBP 5,000,000", 12, dt.date(2025, 11, 20), "valid"),

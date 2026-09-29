@@ -839,6 +839,9 @@ export const vendorsLiveMethods = {
     clearTimeout(this._vpRetry);
     clearTimeout(this._vpRefresh);
     this.setState({ vpLoading: true });
+    // The latest migration's read, for the highlight - apart from the page's own reads, so a
+    // service that does not know the route yet cannot mark the page as partly failed.
+    opsApi.latestWorkbookExtras().then((r) => this.setState({ vpExtras: r || null })).catch(() => {});
     const reads = {
       summary: () => opsApi.contractSummary(),
       contracts: () => opsApi.contracts(),

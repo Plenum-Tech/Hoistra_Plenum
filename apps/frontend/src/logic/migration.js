@@ -23,6 +23,7 @@
 // `this` is the controller.
 import { schemaMapperApi } from '../api/schemaMapper.js';
 import { opsApi } from '../api/opsIntelligence.js';
+import { extrasStatus } from './workbookExtras.js';
 import { currentOrgId, isStaleScope } from '../api/client.js';
 
 // Statuses after which the run will not move again.
@@ -542,14 +543,36 @@ export const migrationMethods = {
   },
 
   // ── the open run ──────────────────────────────────────────────────────────────────
-  // The contract terms and invoices of a finished run, through their engines. Safe to repeat:
-  // an invoice already verified is skipped and a re-read contract keeps the PM's rulings, so
-  // the page offers it again when a call dies (a replica scaled away mid-request once did).
-  mgRunExtras(id) {
+  // What the platform did with a finished run's contract terms, invoices and telemetry. The
+  // service reads the run itself (its sweep); the page asks where that stands, follows it
+  // while it reads, and only asks for the read when nothing has picked the run up yet.
+  mgLoadExtras(id, askIfWaiting = true) {
     if (!id) return;
-    this.setState({ mgExtras: { loading: true } });
-    opsApi.migrationWorkbookExtras(id)
-      .then((res) => { if (this.state.mgId === id) this.setState({ mgExtras: res || {} }); })
+    clearTimeout(this._mgExtrasTimer);
+    if (!this.state.mgExtras) this.setState({ mgExtras: { loading: true } });
+    opsApi.migrationWorkbookExtrasStatus(id)
+      .then((st) => {
+        if (this.state.mgId !== id) return;
+        if (st && st.status === 'waiting' && askIfWaiting) return this.mgRunExtras(id);
+        this.setState({ mgExtras: st || {} });
+        if (st && (st.status === 'running' || st.status === 'waiting')) {
+          this._mgExtrasTimer = setTimeout(() => this.mgLoadExtras(id, false), 8000);
+        }
+      })
+      .catch((e) => { if (this.state.mgId === id) this.setState({ mgExtras: { error: (e && e.message) || String(e) } }); });
+  },
+  // Ask for the read now - "Read now", "Try again", "Read again" (force). Safe to repeat: an
+  // invoice already verified is skipped and a re-read contract keeps the PM's rulings.
+  mgRunExtras(id, force = false) {
+    if (!id) return;
+    clearTimeout(this._mgExtrasTimer);
+    this.setState({ mgExtras: { status: 'running' } });
+    opsApi.migrationWorkbookExtras(id, { force })
+      .then((res) => {
+        if (this.state.mgId !== id) return;
+        this.setState({ mgExtras: res || {} });
+        if (res && res.status === 'running') this._mgExtrasTimer = setTimeout(() => this.mgLoadExtras(id, false), 8000);
+      })
       .catch((e) => { if (this.state.mgId === id) this.setState({ mgExtras: { error: (e && e.message) || String(e) } }); });
   },
 
@@ -586,11 +609,12 @@ export const migrationMethods = {
       mgArmed: gateChanged ? false : this.state.mgArmed
     });
     if (this._mgRepoll) { this._mgRepoll = false; return this.mgPoll(true); }
-    // A finished run: once per run, hand the workbook's contract terms and invoices to their
-    // engines. The route answers found:false for a workbook without them.
+    // A finished run: once per run, show what the platform did with its contract terms,
+    // invoices and telemetry - reading it now only if nothing has picked it up.
     if (String(doc.status || '') === 'complete' && this._mgExtrasFor !== id) {
       this._mgExtrasFor = id;
-      this.mgRunExtras(id);
+      this.setState({ mgExtras: null });
+      this.mgLoadExtras(id);
     }
     // A step pause is continued once. Until the document changes, the same pause is not
     // advanced again — a service still reporting step_paused right after /advance would
@@ -958,15 +982,17 @@ export const migrationMethods = {
         if (next && runKind(this.state.mgStatus) === 'step') { this._mgAdvanced = null; this.mgAdvance(); }
       },
       mgRefresh: () => this.mgPoll(true),
-      mgExtrasRetry: kind === 'done' && !!(s.mgExtras && s.mgExtras.error),
-      mgRetryExtras: () => this.mgRunExtras(s.mgId),
+      mgExtrasChip: kind === 'done' ? extrasStatus(s.mgExtras) : extrasStatus(null),
+      mgExtrasRetry: kind === 'done' && !!extrasStatus(s.mgExtras).action,
+      mgExtrasAction: extrasStatus(s.mgExtras).action,
+      mgRetryExtras: () => this.mgRunExtras(s.mgId, !!(s.mgExtras && ['done', 'none', 'predates', 'failed'].includes(s.mgExtras.status))),
       mgNew: () => this.mgNew(),
       mgLoadedAt: s.mgLoadedAt ? whenLabel(new Date(s.mgLoadedAt).toISOString(), now) : '',
 
       // the open gate / step
       mgGate: gate,
       mgGateTitle: kind === 'gate' ? text[0] : kind === 'step' ? (payload.label || 'Step finished') : kind === 'done' ? 'Migration complete' : kind === 'failed' ? 'Migration stopped' : 'Working…',
-      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' + (extrasLine(s.mgExtras) ? ' ' + extrasLine(s.mgExtras) + '.' : '') : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
+      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
         // No document at all is not "working" — it is "nobody has looked". Saying the
         // pipeline is busy when nothing has been read is how a restored run sat at
         // "Not loaded" for ever and read as progress.

@@ -80,13 +80,22 @@ async def lifespan(app: FastAPI):
         from .engines.reports import scheduler as report_scheduler
 
         scheduler_task = asyncio.create_task(report_scheduler.run_forever(scheduler_stop))
+    # The migration sweep: a finished run's workbook extras are read here, not only by the
+    # page or the chat that happened to be watching when it finished.
+    sweep_task = None
+    if settings.workbook_extras_sweep_enabled:
+        from .engines.contract_performance import workbook_extras_runner
+
+        sweep_task = asyncio.create_task(workbook_extras_runner.run_forever(scheduler_stop))
     yield
     scheduler_stop.set()
-    if scheduler_task is not None:
+    for task in (scheduler_task, sweep_task):
+        if task is None:
+            continue
         try:
-            await asyncio.wait_for(scheduler_task, timeout=5)
+            await asyncio.wait_for(task, timeout=5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
-            scheduler_task.cancel()
+            task.cancel()
     log.info("service.shutdown", service=settings.service_name)
 
 
