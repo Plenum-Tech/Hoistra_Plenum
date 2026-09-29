@@ -73,3 +73,16 @@ def test_plant_telemetry_sheets_are_read_and_their_values_parse():
     assert wt._at(sheets["chillerreadings"][0]["reading_at"]) == datetime(2026, 9, 14, 15, tzinfo=timezone.utc)
     assert wt._month("2026-09-17") == wt._month("2026-09") == date(2026, 9, 1)
     assert wt._at("not a time") is None and wt._f("") is None
+
+
+def test_a_finished_read_is_kept_as_counts():
+    from src.engines.contract_performance.workbook_extras_runner import summarise
+
+    s = summarise({"found": True, "contracts": [{}, {}],
+                   "invoices": [{"matched": 9, "held": 1}, {"matched": 3, "held": 0}],
+                   "skipped": [{"reason": "already verified"}, {"reason": "already verified"}],
+                   "telemetry": {"chiller_readings": 960, "bms_samples": 8070, "skipped": []}})
+    assert s["contracts"] == 2 and s["invoices"] == 2
+    assert s["lines_held"] == 1 and s["lines_matched"] == 12
+    assert s["skipped"] == 2 and s["skip_reasons"] == ["already verified"]
+    assert s["telemetry"] == {"chiller_readings": 960, "bms_samples": 8070}

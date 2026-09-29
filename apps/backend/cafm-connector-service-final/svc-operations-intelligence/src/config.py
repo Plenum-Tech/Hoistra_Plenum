@@ -133,6 +133,14 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8008",
         validation_alias=AliasChoices("DEEP_AGENTS_BASE_URL", "deep_agents_base_url"),
     )
+    # A finished migration's contract terms, invoices and telemetry are read by the service
+    # (engines/contract_performance/workbook_extras_runner.py), whoever started the run.
+    workbook_extras_sweep_enabled: bool = Field(
+        True, validation_alias=AliasChoices("WORKBOOK_EXTRAS_SWEEP_ENABLED", "workbook_extras_sweep_enabled"),
+    )
+    workbook_extras_sweep_seconds: int = Field(
+        60, validation_alias=AliasChoices("WORKBOOK_EXTRAS_SWEEP_SECONDS", "workbook_extras_sweep_seconds"),
+    )
     report_scheduler_enabled: bool = Field(
         True, validation_alias=AliasChoices("REPORT_SCHEDULER_ENABLED", "report_scheduler_enabled"),
     )

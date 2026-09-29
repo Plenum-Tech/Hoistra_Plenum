@@ -44,7 +44,8 @@ SVC = os.path.join(HERE, "..", "..", "apps", "backend", "cafm-connector-service-
 
 BUILDING, CODE = "Bishopsgate Tower", "B-301"
 #: Invoice lines per vendor over the half-year, about half the prototype's yearly sample.
-INVOICE_LINES = {"APXM": 21, "APXL": 13, "NGEL": 17, "CLWC": 10, "SFLT": 12, "PCFR": 12, "FNMC": 12}
+INVOICE_LINES = {"APXM": 21, "APXL": 13, "NGEL": 17, "CLWC": 10, "SFLT": 12, "PNFS": 12, "FNMC": 12,
+                 "CRVM": 12, "TLVL": 12, "BRKE": 12, "OSTP": 12, "KSTF": 12, "LUMF": 12, "AQLW": 12, "FNKH": 12}
 #: The prototype's invoice lines the engine can judge (HOISTRA_VP.V.*.invoices), each on the
 #: work order build_bishopsgate_workbook.py made for it. INV-8766, a recall credited by the
 #: vendor, is not among them: the matcher has no notion of recall chargeability.

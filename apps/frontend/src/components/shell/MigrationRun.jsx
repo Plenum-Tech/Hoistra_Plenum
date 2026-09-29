@@ -495,11 +495,24 @@ export default function MigrationRun({ vals }) {
               ) : null}
             </div>
             <p style={{ fontSize: "11.5px", color: vals.mgKind === "failed" ? "var(--st-risk)" : "var(--color-neutral-400)", margin: "5px 0 0", lineHeight: "1.5", maxWidth: "80ch" }}>{vals.mgGateBlurb}</p>
-            {vals.mgExtrasRetry ? (
-              <button type="button" className="hv13" onClick={vals.mgRetryExtras} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", marginTop: "8px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
-                {"Read the contract terms and invoices again"}
-              </button>
-            ) : null}
+            {/* What the platform did with the workbook's contract terms, invoices and telemetry
+                after the write - read by the service itself, whoever started the run. */}
+            {vals.mgExtrasChip && vals.mgExtrasChip.show ? (() => {
+              const c = vals.mgExtrasChip, tone = ({ ok: ["var(--st-ok)", "var(--st-ok-bg)"], warn: ["var(--st-warn)", "var(--st-warn-bg)"], risk: ["var(--st-risk)", "var(--st-risk-bg)"], muted: ["var(--color-neutral-400)", "var(--color-surface)"] })[c.tone] || [];
+              return (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap", marginTop: "10px", padding: "9px 12px", borderRadius: "8px", background: tone[1], border: "1px solid " + tone[0] }}>
+                  <span style={{ fontSize: "10.5px", fontWeight: "600", letterSpacing: "0.04em", textTransform: "uppercase", color: tone[0], whiteSpace: "nowrap", paddingTop: "1px" }}>
+                    {"Contracts, invoices & telemetry · " + c.label}
+                  </span>
+                  <span style={{ fontSize: "11.5px", color: "var(--color-neutral-300)", lineHeight: "1.5", flex: "1 1 320px", minWidth: "0" }}>{c.detail}</span>
+                  {vals.mgExtrasRetry ? (
+                    <button type="button" className="hv13" onClick={vals.mgRetryExtras} style={{ ...BARE, fontSize: "11px", padding: "3px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
+                      {vals.mgExtrasAction}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })() : null}
 
             {vals.mgLoading ? <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "12px" }}>{"Reading the migration…"}</div> : null}
 

@@ -79,6 +79,19 @@ export default function Vendors({ vals }) {
             </div>
           </div>
 
+          {/* The latest migration's contract terms, invoices and telemetry: what the platform
+              read, and what is left for a person - the contracts waiting to be confirmed. */}
+          {vals.vpExtras && vals.vpExtras.show ? (() => {
+            const b = vals.vpExtras, tone = ({ ok: ["var(--st-ok)", "var(--st-ok-bg)"], warn: ["var(--st-warn)", "var(--st-warn-bg)"], risk: ["var(--st-risk)", "var(--st-risk-bg)"], muted: ["var(--color-neutral-400)", "var(--color-surface)"] })[b.tone] || [];
+            return (
+              <div style={{ border: "1px solid " + tone[0], background: tone[1], borderRadius: "10px", padding: "12px 16px", marginTop: "14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                <span style={{ fontSize: "12.5px", fontWeight: "600", color: tone[0] }}>{b.title}</span>
+                <span style={{ fontSize: "11.5px", color: "var(--color-neutral-300)", lineHeight: "1.5" }}>{b.detail}</span>
+                {b.next ? <span style={{ fontSize: "11.5px", fontWeight: "600", color: "var(--color-text)" }}>{b.next}</span> : null}
+              </div>
+            );
+          })() : null}
+
           {/* Work orders scoring is holding back. Each names what disagrees and both
               readings of it, because the choice is between two records — a dismiss button
               here would discard a decision about money. */}

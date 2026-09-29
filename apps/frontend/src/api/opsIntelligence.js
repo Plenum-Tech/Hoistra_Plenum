@@ -23,11 +23,16 @@ const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ or
 const T_MAIL = 60000;
 
 export const opsApi = {
-  // After a migration: the contract terms and invoices a single end-to-end workbook carried,
-  // through the contract ingest and the invoice matcher. found:false when it had none.
-  migrationWorkbookExtras: (migrationId) =>
+  // After a migration: the contract terms, invoices and plant telemetry a single end-to-end
+  // workbook carried. The platform reads a finished run itself; POST asks it now (force: read
+  // again), GET says where it stands, latest is the company's newest for the Vendors page.
+  migrationWorkbookExtras: (migrationId, opts) =>
     apiFetch(B, '/api/contract-performance/migration/' + encodeURIComponent(migrationId) + '/workbook-extras',
-      { method: 'POST', query: withOrg({}), timeoutMs: 180000 }),
+      { method: 'POST', query: withOrg(opts && opts.force ? { force: true } : {}), timeoutMs: 180000 }),
+  migrationWorkbookExtrasStatus: (migrationId) =>
+    apiFetch(B, '/api/contract-performance/migration/' + encodeURIComponent(migrationId) + '/workbook-extras',
+      { query: withOrg({}) }),
+  latestWorkbookExtras: () => apiFetch(B, '/api/contract-performance/workbook-extras/latest', { query: withOrg({}) }),
 
   // ── Approvals ───────────────────────────────────────────────────────────
   // Everything the engines have queued for a human. `status` defaults to pending on the

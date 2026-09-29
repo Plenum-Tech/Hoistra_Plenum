@@ -6,6 +6,7 @@ import { USE_TINT, BUILDINGS, GRAPH, GRAPH_EDGES, GB, HUBS, SHARED_N, CHILD_OF_B
 import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
+import { vendorsExtrasBanner } from './workbookExtras.js';
 import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
 import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
@@ -885,6 +886,7 @@ export const renderValsMethods = {
       vpRebuilding: !!s.vpRebuilding,
       vpRebuildLabel: s.vpRebuilding ? "Scoring…" : "Rebuild scorecards",
       vpRebuildNote: s.vpRebuildNote || "",
+      vpExtras: vendorsExtrasBanner(s.vpExtras),
       // Work orders scoring is holding back. The flag is sticky and the scoring fetch skips
       // flagged rows, so without a control here the only way to release one was a hand-written
       // UPDATE — which is what a reader had to do on 24 Sep when a comparison bug flagged the

@@ -93,47 +93,76 @@ async def reconcile_migration(
     )
 
 
-@router.post("/migration/{migration_id}/workbook-extras")
-async def migration_workbook_extras(
-    migration_id: UUID,
-    organization_id: UUID | None = None,
-    session: AsyncSession = Depends(get_session),
-    s: access.Scope = Depends(scope),
-):
-    """After a migration: the contract terms and invoices its workbook carried, through the
-    contract ingest and the invoice matcher (engines/contract_performance/workbook_extras.py).
-
-    The migration set the Contract_Terms and Invoice_Lines sheets aside; this reads them from
-    the stored upload. A workbook without them answers found:false. Nothing is confirmed.
-    """
-    import httpx
+async def _migration_org(session: AsyncSession, migration_id: UUID, org_id: UUID | None) -> UUID:
+    """The company a run belongs to, given the caller's (already checked) company."""
     from sqlalchemy import text as _text
 
-    from ...config import settings
-    from ...engines.contract_performance import workbook_extras
-
-    org_id = access.organization_for(s, organization_id)
     row = (await session.execute(
-        _text("SELECT organization_id::text FROM plenum_cafm.migration_jobs WHERE id = :m"),
-        {"m": migration_id})).first()
+        _text("SELECT organization_id::text FROM plenum_cafm.migration_jobs WHERE id::text = :m"),
+        {"m": str(migration_id)})).first()
     # A run belongs to the company it was started for; another company's run is not found.
     if not row or (org_id is not None and row[0] and row[0] != str(org_id)):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "migration_not_found"})
     org_id = org_id or (UUID(row[0]) if row[0] else None)
     if org_id is None:
         raise HTTPException(status_code=400, detail={"ok": False, "error": "no_company"})
-    url = f"{settings.schema_mapper_base_url.rstrip('/')}/api/migration/{migration_id}/source"
-    async with httpx.AsyncClient(timeout=180) as client:
-        res = await client.get(url)
-    if res.status_code == 404:
-        return {"ok": True, "found": False, "reason": "the migration's source file was not stored"}
-    res.raise_for_status()
-    try:
-        return await workbook_extras.run(session, content=res.content, organization_id=org_id)
-    except Exception as exc:  # noqa: BLE001 - a CSV or a workbook openpyxl cannot read
-        if "zip" in str(exc).lower() or "not a zip" in str(exc).lower():
-            return {"ok": True, "found": False, "reason": "the source is not a workbook"}
-        raise
+    return org_id
+
+
+@router.post("/migration/{migration_id}/workbook-extras")
+async def migration_workbook_extras(
+    migration_id: UUID,
+    organization_id: UUID | None = None,
+    force: bool = False,
+    trigger: str = "page",
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """After a migration: the contract terms, invoices and plant telemetry its workbook carried,
+    through their engines (engines/contract_performance/workbook_extras_runner.py).
+
+    Each run is read once. The service's own sweep usually gets there first; asked again,
+    this answers the run's status rather than reading it twice. force=true reads it again
+    (the page's "read again"). Nothing is confirmed.
+    """
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    org_id = await _migration_org(session, migration_id, access.organization_for(s, organization_id))
+    trig = trigger if trigger in ("page", "chat") else "page"
+    return await runner.process(session, migration_id=str(migration_id), organization_id=org_id,
+                                trigger=trig, force=force)
+
+
+@router.get("/migration/{migration_id}/workbook-extras")
+async def migration_workbook_extras_status(
+    migration_id: UUID,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Where one run's read stands: waiting (not yet swept), running, done, none (the workbook
+    carried no extras), failed, or predates (finished before the sweep existed)."""
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    await _migration_org(session, migration_id, access.organization_for(s, organization_id))
+    st = await runner.status(session, str(migration_id))
+    return {"ok": True, **(st or {"migration_id": str(migration_id), "status": "waiting"})}
+
+
+@router.get("/workbook-extras/latest")
+async def latest_workbook_extras(
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The company's latest migration read, and how many contracts still wait for a named
+    person - the Vendors page's highlight."""
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    org_id = access.organization_for(s, organization_id)
+    if org_id is None:
+        return {"ok": True, "run": None, "drafts_awaiting": 0, "confirmed": 0}
+    return await runner.latest(session, org_id)
 
 
 @router.post("/contracts/ingest")
