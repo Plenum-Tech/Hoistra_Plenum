@@ -63,10 +63,11 @@ def as_(p: Principal):
 
 ADMIN_ROUTES = [
     ("GET", "/api/admin/users"), ("GET", "/api/admin/buildings"), ("GET", "/api/admin/usage"),
-    ("GET", "/api/admin/ingestion-audit"),
+    ("GET", "/api/admin/ingestion-audit"), ("GET", "/api/admin/vendor-audit"),
 ]
 SUPER_ROUTES = [
     ("GET", "/api/superadmin/companies"), ("GET", "/api/superadmin/credits"),
+    ("GET", "/api/superadmin/value"),
     ("GET", f"/api/superadmin/companies/{uuid4()}"),
 ]
 
@@ -177,7 +178,30 @@ def test_the_new_routes_are_all_registered():
     paths = _all_paths(app.routes)
     for p in ("/api/superadmin/companies", "/api/superadmin/companies/{organization_id}",
               "/api/superadmin/companies/{organization_id}/invite-admin", "/api/superadmin/credits",
+              "/api/superadmin/value",
               "/api/admin/users", "/api/admin/users/invite", "/api/admin/users/{user_id}",
               "/api/admin/buildings", "/api/admin/usage", "/api/admin/ingestion-audit",
-              "/api/auth/invitations/accept"):
+              "/api/admin/vendor-audit", "/api/auth/invitations/accept"):
         assert p in paths, p
+
+
+def test_the_vendor_trail_is_read_for_the_admins_own_company(monkeypatch):
+    seen = {}
+
+    async def _list(session, *, organization_id, limit):
+        seen.update(org=organization_id, limit=limit)
+        return {"ok": True, "events": [], "unreadable": []}
+
+    async def _s():
+        yield object()
+
+    monkeypatch.setattr(admin_routes.vendor_audit, "list_events", _list)
+    app.dependency_overrides[get_session] = _s
+    try:
+        as_(principal("admin"))
+        r = TestClient(app).get("/api/admin/vendor-audit")
+        assert r.status_code == 200, r.text
+        assert r.json() == {"ok": True, "events": [], "unreadable": []}
+        assert seen == {"org": ORG, "limit": 300}
+    finally:
+        app.dependency_overrides.clear()

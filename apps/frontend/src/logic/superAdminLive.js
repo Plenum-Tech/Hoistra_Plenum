@@ -72,6 +72,19 @@ export function fmtBytes(n) {
   return Math.max(1, Math.round(b / 1e6)) + " MB";
 }
 
+//: How long the list reuses a platform value read before reading it again.
+const VALUE_FRESH_MS = 5 * 60 * 1000;
+
+// udr_rows (the rows the company holds across the unified store, or null when the count could
+// not be made) → "289,604 rows" / "Not read". It was the document text in MB, which read
+// 0 MB for a company with 289,604 migrated rows (29 Sep 2026).
+export function fmtRows(n) {
+  if (n === null || n === undefined) return "Not read";
+  const v = Number(n);
+  if (!isFinite(v) || v < 0) return "Not read";
+  return Math.round(v).toLocaleString("en-GB") + (Math.round(v) === 1 ? " row" : " rows");
+}
+
 // api_requests_30d (raw int) → the seed's "0" / "9k" / "112k" / "1.21M" style.
 export function fmtCount(n) {
   if (n === null || n === undefined) return "—";
@@ -103,10 +116,13 @@ export function shapeLiveCompany(c, card, now) {
     buildings: card ? intOf(card.buildings_created) : null,
     graphs: card ? intOf(card.hoist_graphs) : null,
     last: lastActiveLabel(card ? card.last_activity : row.last_activity, now),
-    udr: card ? fmtBytes(card.udr_data_bytes) : "—",
+    udr: card ? fmtRows(card.udr_rows) : "—",
     certs: card ? intOf(card.compliance_certificates) : null,
     certCc: card ? (card.certificate_countries || []).map(ccLabel).join(", ") || "—" : "—",
-    api: card ? fmtCount(card.api_requests_30d) : "—",
+    // Nothing records API requests yet: the card says so (null / recorded false), and so does
+    // the tile, rather than a zero that reads like a measurement.
+    api: card ? (card.api_requests_recorded === false || card.api_requests_30d == null ? "Not recorded"
+      : fmtCount(card.api_requests_30d)) : "—",
     credits: Math.round(Number(creditsRaw) || 0),
     users: card ? intOf(card.users && card.users.total) : null,
     // The list route carries no admin_email; lifecycle is the proxy there — invite-admin
@@ -121,6 +137,43 @@ export const superAdminLiveMethods = {
   // The two reads are independent: the credits read cannot build rows on its own, but its
   // per-company figures are worth folding in when the list read also answered. The console
   // is live once the companies read answers.
+  // Each company's Platform value for the list — in place of its credits (Hussain, 29 Sep
+  // 2026): GET /api/superadmin/value, the same ledger total the company's own Home page shows.
+  // saValueOf maps org id → total (null = nothing counted / not readable); a failed read is
+  // an empty map, so every row shows a dash rather than a £0 nobody measured.
+  //
+  // Re-review, 29 Sep 2026: the read is ~ten ledger queries per company, and it ran again on
+  // every list read (each token refresh included). It is reused for five minutes unless
+  // `force` (Refresh, a company created or invited); and a read that fails later keeps the
+  // values already on screen — the failure is kept in saValueError, not shown as dashes.
+  saLiveLoadValue(force) {
+    if (this._saValueInFlight) return this._saValueP;
+    if (!force && this._saValueAt && Date.now() - this._saValueAt < VALUE_FRESH_MS) return this._saValueP;
+    this._saValueInFlight = true;
+    const token = (this._saValueToken = (this._saValueToken || 0) + 1);
+    this.setState({ saValueLoading: true });
+    this._saValueP = (async () => {
+      let res = null, err = null;
+      try { res = await superAdminApi.value(); } catch (e) { err = e; }
+      this._saValueInFlight = false;
+      if (token !== this._saValueToken) return;
+      if (!res || !Array.isArray(res.companies)) {
+        return this.setState({ saValueLoading: false,
+          saValueError: (err && err.message) || "the platform value could not be read" });
+      }
+      const of = {}, partial = {};
+      res.companies.forEach((r) => {
+        const id = String(r.organization_id);
+        of[id] = r.total_detected == null ? null : Number(r.total_detected);
+        if (r.partial) partial[id] = (r.unreadable || []).map(String);
+      });
+      this._saValueAt = Date.now();
+      this.setState({ saValueOf: of, saValuePartial: partial, saValueYear: res.year || null,
+        saValueLoading: false, saValueError: "" });
+    })();
+    return this._saValueP;
+  },
+
   async saLiveLoad(opts) {
     if (this._saLiveLoading) return;
     this._saLiveLoading = true;
@@ -155,6 +208,8 @@ export const superAdminLiveMethods = {
       this.setState(patch);
       // Fresh tile numbers for whichever company the overlay is showing.
       if (this.state.saSel) this.saLiveLoadCompany(this.state.saSel);
+      // The value beside each company, read after the list so the list is not held up.
+      this.saLiveLoadValue(!!(opts && (opts.announce || opts.fresh)));
       if (opts && opts.announce) this.flash("Companies refreshed — " + rows.length + " on the platform.");
       return;
     }
@@ -242,7 +297,7 @@ export const superAdminLiveMethods = {
         : inv && inv.accept_url ? "Company created — the invitation email was not delivered. Share the activation link: " + inv.accept_url
         : "Company created — admin invitation sent to " + email);
       clearTimeout(this._saLiveRefresh);
-      this._saLiveRefresh = setTimeout(() => this.saLiveLoad(), REFRESH_AFTER_WRITE_MS);
+      this._saLiveRefresh = setTimeout(() => this.saLiveLoad({ fresh: true }), REFRESH_AFTER_WRITE_MS);
     } catch (e) {
       this.flash("Company not created — " + ((e && e.message) || String(e)));
     } finally {

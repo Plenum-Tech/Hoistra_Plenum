@@ -23,8 +23,9 @@ export const superAdminApi = {
   createCompany: (body) => apiFetch(B, '/api/superadmin/companies', { method: 'POST', body }),
 
   // One company's usage card: buildings_created, hoist_graphs, last_activity,
-  // udr_data_bytes (raw bytes — format client-side), compliance_certificates,
-  // certificate_countries[], api_requests_30d, credits_this_month/_total (floats),
+  // udr_rows (rows in the unified store, null when not countable), udr_tables{}, compliance_certificates,
+  // certificate_countries[], api_requests_30d (null until recorded) + api_requests_recorded,
+  // credits_this_month/_total (floats),
   // users{total,active,invited,can_ingest}, pending_invitations, tariff, counted_from.
   company: (organizationId) =>
     apiFetch(B, '/api/superadmin/companies/' + encodeURIComponent(organizationId)),
@@ -37,5 +38,11 @@ export const superAdminApi = {
       { method: 'POST', body }),
 
   // The bars: {month_total, tariff, companies: [{organization_id, name, credits_this_month}]}.
-  credits: () => apiFetch(B, '/api/superadmin/credits')
+  credits: () => apiFetch(B, '/api/superadmin/credits'),
+
+  // Each company's Platform value — its ledger's total detected, the sum of the DETECTED
+  // column its own Home page shows → {ok, year, currency, companies[{organization_id, name,
+  // total_detected (null: nothing counted or not readable), counted_modules, error}]}. About
+  // ten reads per company server-side, hence the longer timeout.
+  value: () => apiFetch(B, '/api/superadmin/value', { timeoutMs: 120000 })
 };

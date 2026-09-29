@@ -398,7 +398,7 @@ async def company_usage(
     scope: access.Scope = Depends(admin_scope),
 ):
     """Usage across the company's buildings and users."""
-    card = await usage_engine.company_usage(session, scope.organization_id)
+    card = await usage_engine.company_usage(session, scope.organization_id, with_udr=False)
     return {
         "ok": True,
         "company": card.get("company"),

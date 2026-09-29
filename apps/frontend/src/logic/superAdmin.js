@@ -15,6 +15,7 @@
 // chosen company; Assets and Maintenance do not (svc-work-order-management has no
 // per-company scoping yet) and keep showing this deployment's own data regardless.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { money } from './homeLive.js';
 import { setActingOrg } from '../api/client.js';
 import { authApi } from '../api/auth.js';
 
@@ -46,6 +47,20 @@ export const superAdminMethods = {
       saLiveRetry: () => { if (typeof this.saLiveRetryNow === "function") this.saLiveRetryNow(); },
       saCompanies: s.saCompanies.map((c) => ({
         name: c.name, cc: c.cc, status: c.status, credits: (c.credits || 0).toLocaleString("en-GB") + " cr",
+        // In place of the credits (29 Sep 2026): the company's Platform value detected — the
+        // sum of the DETECTED column on its own Home page. "…" while reading, "—" when
+        // nothing is counted or it could not be read, never a £0 nobody measured.
+        value: !c.live ? "—"
+          : s.saValueOf && Object.prototype.hasOwnProperty.call(s.saValueOf, c.id)
+            ? (s.saValueOf[c.id] == null ? "—"
+              : money(s.saValueOf[c.id]) + ((s.saValuePartial || {})[c.id] ? "*" : ""))
+            : (s.saValueLoading ? "…" : "—"),
+        // A total missing a priced module (it could not be read) is marked * and says which.
+        valueTitle: "Platform value detected, " + (s.saValueYear || new Date().getFullYear())
+          + " to date — the sum of the Detected column on this company's Home page"
+          + ((s.saValuePartial || {})[c.id]
+            ? ". Partial — " + (s.saValuePartial[c.id].join(", ") || "a module") + " could not be read."
+            : ""),
         dot: c.status === "Active" ? "var(--st-ok)" : c.status === "Onboarding" ? "var(--st-warn)" : "var(--color-neutral-500)",
         bg: s.saSel === c.id ? "var(--color-accent-900)" : "var(--color-surface)",
         edge: s.saSel === c.id ? "var(--color-accent)" : "transparent",
@@ -96,9 +111,9 @@ export const superAdminMethods = {
         { value: nn(co.buildings), label: "Buildings created", hint: "access boundary per user", color: "var(--color-accent)" },
         { value: nn(co.graphs), label: "Hoist graphs", hint: "one per hoisted building", color: "var(--color-accent)" },
         { value: co.last, label: "Last activity", hint: "most recent update", color: "var(--color-neutral-300)" },
-        { value: co.udr, label: "UDR data", hint: "volume added", color: "var(--color-neutral-300)" },
+        { value: co.udr, label: "UDR data", hint: "rows in the unified store", color: "var(--color-neutral-300)" },
         { value: nn(co.certs), label: "Compliance certificates", hint: co.certCc === "—" ? "none yet" : "countries: " + co.certCc, color: "var(--st-ok)" },
-        { value: co.api, label: "API requests", hint: "30 days · platform usage", color: "var(--color-neutral-300)" },
+        { value: co.api, label: "API requests", hint: co.api === "Not recorded" ? "not counted by the platform yet" : "30 days · platform usage", color: "var(--color-neutral-300)" },
         { value: (co.credits || 0).toLocaleString("en-GB"), label: "Credits consumed", hint: "this month", color: "var(--st-warn)" },
         { value: nn(co.users), label: "Users", hint: "no seat limit", color: "var(--color-neutral-300)" }
       ],

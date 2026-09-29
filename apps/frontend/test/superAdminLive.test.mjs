@@ -2,7 +2,7 @@
 // GET /api/superadmin/companies, GET /api/superadmin/companies/{id} and
 // GET /api/superadmin/credits. Fixtures mirror the backend contract EXACTLY as transcribed
 // from the route handlers (scratchpad contract.md §8–§12, 12 Sep 2026): canonical
-// country codes UK/US/AE/SG, lowercase lifecycle, float credits, raw udr_data_bytes,
+// country codes UK/US/AE/SG, lowercase lifecycle, float credits, raw udr_rows,
 // admin_email on the detail card only — never on the list row.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,8 +28,8 @@ const CARD1 = {
   ok: true,
   company: { id: ORG1, name: 'Plenum Group', country_code: 'UK', country: 'United Kingdom', lifecycle: 'active', status: 'active', admin_email: 'ops@plenum.co', created_at: '2026-05-02T09:00:00Z', updated_at: '2026-09-12T13:48:00Z' },
   buildings_created: 12, hoist_graphs: 9, last_activity: '2026-09-12T13:48:00Z',
-  udr_data_bytes: 5260000000, udr_documents: 233,
-  compliance_certificates: 40, certificate_countries: ['AE', 'UK'], api_requests_30d: 1210000,
+  udr_rows: 289604, udr_tables: { meter_readings: 283064, assets: 61 }, udr_unlinked: [],
+  compliance_certificates: 40, certificate_countries: ['AE', 'UK'], api_requests_30d: 1210000, api_requests_recorded: true,
   queries: 1042, ingests: 77, credits_this_month: 8420.0, credits_total: 20110.5,
   users: { total: 6, active: 4, invited: 1, can_ingest: 3 },
   tariff: { query: 1.0, ingest: 5.0, api_request: 0.1 }, counted_from: {}, pending_invitations: 1
@@ -38,8 +38,8 @@ const CARD2 = {
   ok: true,
   company: { id: ORG2, name: 'Gulf Estates FZ', country_code: 'AE', country: 'United Arab Emirates', lifecycle: 'created', status: 'active', admin_email: null, created_at: '2026-09-01T08:00:00Z', updated_at: '2026-09-01T08:00:00Z' },
   buildings_created: 0, hoist_graphs: 0, last_activity: null,
-  udr_data_bytes: 0, udr_documents: 0,
-  compliance_certificates: 0, certificate_countries: [], api_requests_30d: 0,
+  udr_rows: 0, udr_tables: {}, udr_unlinked: [],
+  compliance_certificates: 0, certificate_countries: [], api_requests_30d: null, api_requests_recorded: false,
   queries: 0, ingests: 0, credits_this_month: 2040.4, credits_total: 2040.4,
   users: { total: 0, active: 0, invited: 0, can_ingest: 0 },
   tariff: { query: 1.0, ingest: 5.0, api_request: 0.1 }, counted_from: {}, pending_invitations: 0
@@ -87,7 +87,7 @@ test('a row with its usage card carries all eight tile figures in the seed forma
   assert.equal(r.id, ORG1);
   assert.equal(r.buildings, 12);
   assert.equal(r.graphs, 9);
-  assert.equal(r.udr, '5.3 GB', 'raw udr_data_bytes format client-side');
+  assert.equal(r.udr, '289,604 rows', 'the rows the company holds in the UDR (29 Sep 2026)');
   assert.equal(r.certs, 40);
   assert.equal(r.certCc, 'UAE, UK', 'certificate country codes join as display names');
   assert.equal(r.api, '1.21M');
@@ -103,8 +103,8 @@ test('the card alone can shape a full row — the merge path after saLiveLoadCom
   assert.equal(r.name, 'Gulf Estates FZ');
   assert.equal(r.cc, 'UAE');
   assert.equal(r.status, 'Created');
-  assert.equal(r.udr, '0 MB');
-  assert.equal(r.api, '0');
+  assert.equal(r.udr, '0 rows');
+  assert.equal(r.api, 'Not recorded');
   assert.equal(r.certCc, '—');
   assert.equal(r.invited, false, 'no admin_email and no pending invitation');
 });
@@ -259,7 +259,7 @@ test('saLiveLoad replaces the seed in place, re-points the selection and pulls t
   assert.equal(v.saCo.name, 'Plenum Group');
   assert.equal(v.saCo.inviteLabel, 'Re-send admin invitation');
   assert.equal(v.saTiles[0].value, '12', 'buildings created from the card');
-  assert.equal(v.saTiles[3].value, '5.3 GB', 'UDR bytes formatted');
+  assert.equal(v.saTiles[3].value, '289,604 rows', 'UDR rows formatted');
   assert.equal(v.saTiles[4].hint, 'countries: UAE, UK');
   assert.equal(v.saTiles[5].value, '1.21M');
   assert.equal(v.saTiles[6].value, '8,420');
@@ -541,4 +541,95 @@ test('exitViewAsCompany is a no-op when nothing is being viewed as', () => {
   assert.equal(c.state.viewOrgId, null);
   c.exitViewAsCompany();
   assert.equal(c.state.toast, '', 'no flash, no state churn, when there was nothing to exit');
+});
+
+
+// 29 Sep 2026: UDR data is rows in the UDR, and API requests say they are not recorded
+// rather than showing a zero nothing ever measured.
+test('a company with no API requests on record says so, not zero', () => {
+  const r = shapeLiveCompany(COMPANIES.companies[1], CARD2, NOW);
+  assert.equal(r.api, 'Not recorded');
+  assert.equal(r.udr, '0 rows');
+});
+
+test('a UDR count that could not be made reads as not read, never as zero', () => {
+  const r = shapeLiveCompany(COMPANIES.companies[0], Object.assign({}, CARD1, { udr_rows: null }), NOW);
+  assert.equal(r.udr, 'Not read');
+});
+
+// 29 Sep 2026 — in place of the credits beside each company name, its Platform value: the
+// sum of the DETECTED column on that company's own Home page (GET /api/superadmin/value).
+const VALUE = { ok: true, year: 2026, currency: 'GBP', companies: [
+  { organization_id: ORG1, name: 'Plenum Group', total_detected: 129028, counted_modules: 4, error: null },
+  { organization_id: ORG2, name: 'Gulf Estates FZ', total_detected: null, counted_modules: 0, error: null }
+] };
+const rowNamed = (v, name) => v.saCompanies.find((r) => r.name === name);
+
+test('each company in the list shows its platform value in place of its credits', async () => {
+  fresh({
+    ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+    ['GET ' + B + '/companies/' + ORG1]: CARD1, ['GET ' + B + '/value']: VALUE
+  });
+  await c.saLiveLoad();
+  await c._saValueP;
+  const v = c.saVals(c.state);
+  assert.equal(rowNamed(v, 'Plenum Group').value, '£129k');
+  assert.equal(rowNamed(v, 'Gulf Estates FZ').value, '—', 'nothing counted is a dash, not £0');
+  assert.match(rowNamed(v, 'Plenum Group').valueTitle, /Platform value detected, 2026/);
+  assert.equal(calls.filter((k) => k.key === 'GET ' + B + '/value').length, 1);
+});
+
+test('before the values answer the list says so, and a failed read shows dashes, never £0', async () => {
+  fresh({ ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+    ['GET ' + B + '/companies/' + ORG1]: CARD1 });
+  await c.saLiveLoad();
+  c.setState({ saValueLoading: true });
+  assert.equal(rowNamed(c.saVals(c.state), 'Plenum Group').value, '…');
+  await c._saValueP;
+  c.setState({ saValueLoading: false });
+  const v = c.saVals(c.state);
+  assert.equal(rowNamed(v, 'Plenum Group').value, '—');
+  assert.equal(rowNamed(v, 'Gulf Estates FZ').value, '—');
+});
+
+// Re-review, 29 Sep 2026: the value read is ~ten ledger queries per company and ran again on
+// every list read — each token refresh included. Once per five minutes unless asked for; and
+// a later failure keeps the values already on screen rather than blanking them.
+test('the value read is not repeated on every list refresh, only when asked for', async () => {
+  fresh({ ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+    ['GET ' + B + '/companies/' + ORG1]: CARD1, ['GET ' + B + '/value']: VALUE });
+  await c.saLiveLoad();
+  await c._saValueP;
+  await c.saLiveLoad();
+  await c._saValueP;
+  const reads = () => calls.filter((k) => k.key === 'GET ' + B + '/value').length;
+  assert.equal(reads(), 1, 'a refresh inside five minutes reuses the values');
+  await c.saLiveRetryNow();
+  await c._saValueP;
+  assert.equal(reads(), 2, 'Refresh asks again');
+});
+
+test('a value read that fails later keeps the values already on screen', async () => {
+  fresh({ ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+    ['GET ' + B + '/companies/' + ORG1]: CARD1, ['GET ' + B + '/value']: VALUE });
+  await c.saLiveLoad();
+  await c._saValueP;
+  delete routes['GET ' + B + '/value'];
+  await c.saLiveLoadValue(true);
+  const v = c.saVals(c.state);
+  assert.equal(rowNamed(v, 'Plenum Group').value, '£129k');
+  assert.ok(c.state.saValueError, 'the failure is kept for the banner');
+});
+
+test('a total missing a module is marked partial and says which', async () => {
+  const partial = { ok: true, year: 2026, currency: 'GBP', companies: [
+    { organization_id: ORG1, name: 'Plenum Group', total_detected: 28, counted_modules: 1, error: null,
+      partial: true, unreadable: ['Energy'] }] };
+  fresh({ ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS,
+    ['GET ' + B + '/companies/' + ORG1]: CARD1, ['GET ' + B + '/value']: partial });
+  await c.saLiveLoad();
+  await c._saValueP;
+  const r = rowNamed(c.saVals(c.state), 'Plenum Group');
+  assert.equal(r.value, '£28*');
+  assert.match(r.valueTitle, /Partial — Energy could not be read/);
 });

@@ -41,6 +41,33 @@ OUTCOMES = frozenset({
 })
 
 
+def billing_org(principal_org: UUID | None, acting_org: Any) -> UUID | None:
+    """The company a receipt is written against: the company the work was done in.
+
+    A superadmin working inside another company ("View as this company") names it on every
+    turn; the routes resolve it, and that is whose data the turn used. Billing the caller's
+    home company instead put every credit on "Your Organisation" and none on the company worked
+    in (Hussain, 29 Sep 2026: "company worked in"). No company in view, or a malformed one, is
+    the caller's own.
+    """
+    if acting_org:
+        try:
+            return UUID(str(acting_org))
+        except ValueError:
+            pass
+    return principal_org
+
+
+def billed_detail(detail: dict[str, Any] | None, principal_org: UUID | None,
+                  acting_org: Any) -> dict[str, Any]:
+    """The receipt's detail, plus the person's own company when it is not the one billed."""
+    out = dict(detail or {})
+    billed = billing_org(principal_org, acting_org)
+    if principal_org and billed and billed != principal_org:
+        out["by_org"] = str(principal_org)
+    return out
+
+
 async def record_usage(
     *, kind: str, organization_id: UUID | None, user_id: UUID | None,
     building_id: UUID | None = None, detail: dict[str, Any] | None = None,

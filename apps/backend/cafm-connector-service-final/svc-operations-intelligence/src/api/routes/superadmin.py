@@ -27,6 +27,7 @@ from ...engines.auth import invitations as invite_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import tokens as token_engine
 from ...engines.auth import usage as usage_engine
+from ...engines import value_ledger
 from ...engines.energy.buildings import country_code_for
 from ...shared.approvals import PLATFORM_FEATURE, write_audit
 from .auth import require_superadmin
@@ -241,3 +242,15 @@ async def credits(
                            "credits_this_month": r["credits_this_month"]} for r in rows],
             "billing_note": ("Usage-led: platform activity, API requests and credits, with no "
                              "seat limit. More users simply consume more.")}
+
+
+@router.get("/value")
+async def platform_value(
+    year: int | None = Query(None, ge=2000, le=2100, description="Calendar year; defaults to the current one."),
+    session: AsyncSession = Depends(get_session),
+    _: token_engine.Principal = Depends(require_superadmin),
+):
+    """Each company's Platform value — its ledger's total detected, the sum of the DETECTED
+    column its own Home page shows — for the console's company list. None where a company has
+    nothing counted or its ledger cannot be read; the console shows a dash, never £0."""
+    return await value_ledger.value_by_company(session, year=year)

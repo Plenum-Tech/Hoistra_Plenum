@@ -55,7 +55,7 @@ export default function SuperAdminOverlay({ vals }) {
                     <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
                     <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{c.cc}{" · "}{c.status}</div>
                   </div>
-                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{c.credits}</span>
+                  <span title={c.valueTitle} style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{c.value}</span>
                 </div>
               </React.Fragment>
             ))}

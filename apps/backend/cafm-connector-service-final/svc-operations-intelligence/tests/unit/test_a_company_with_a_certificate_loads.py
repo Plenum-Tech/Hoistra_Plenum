@@ -44,10 +44,13 @@ class TestTheCertificateCountQuery:
         """buildings.country_code is null on every row; a building's country lives on locations."""
         assert "b.country_code" not in _certs_sql()
 
-    def test_the_join_and_the_scope_are_unchanged(self):
+    def test_it_is_scoped_to_the_one_company_by_the_certificates_own_company(self):
+        # 29 Sep 2026: through the company's buildings, every vendor certificate (they carry no
+        # building) and every certificate filed without one was missing from the count. It is
+        # the certificate's own company now, as the Compliance page counts them.
         sql = _certs_sql()
-        assert "JOIN plenum_cafm.buildings b ON b.building_id = c.building_id" in sql
-        assert "WHERE b.organization_id = :o" in sql, "still scoped to the one company"
+        assert "WHERE c.organization_id = :o OR c.org_id = :o" in sql, "scoped to the one company"
+        assert "JOIN plenum_cafm.buildings" not in sql
 
     def test_a_certificate_naming_no_country_is_dropped_not_counted_as_one(self):
         assert "array_remove(array_agg(DISTINCT c.country_code), NULL)" in _certs_sql()

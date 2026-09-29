@@ -354,7 +354,8 @@ async def run_workflow(
     caller_authorization.set(request.headers.get("authorization"))
     # And the caller themselves, for the reads that run SQL here rather than over HTTP.
     caller_principal.set(principal)
-    caller_organization_id.set(_resolve_acting_org(body.organization_id, principal))
+    _acting = _resolve_acting_org(body.organization_id, principal)
+    caller_organization_id.set(_acting)
     activity_log.set_current_session(body.session_id, body.session_id)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run", message_len=len(body.message), session_id=body.session_id,
@@ -365,8 +366,10 @@ async def run_workflow(
         extra_context=body.context,
     )
     await usage_events.record_usage(
-        kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
-        detail={"session_id": body.session_id, "chars": len(body.message)},
+        kind="query", organization_id=usage_events.billing_org(principal.organization_id, _acting),
+        user_id=principal.user_id,
+        detail=usage_events.billed_detail({"session_id": body.session_id, "chars": len(body.message)},
+                                          principal.organization_id, _acting),
     )
     return _to_response(result)
 
@@ -395,16 +398,20 @@ async def run_stateful_workflow(
     caller_authorization.set(request.headers.get("authorization"))
     # And the caller themselves, for the reads that run SQL here rather than over HTTP.
     caller_principal.set(principal)
-    caller_organization_id.set(_resolve_acting_org(body.organization_id, principal))
-    await usage_events.record_usage(
-        kind="query", organization_id=principal.organization_id, user_id=principal.user_id,
-        detail={"session_id": sid, "chars": len(body.message), "stateful": True},
-    )
+    _acting = _resolve_acting_org(body.organization_id, principal)
+    caller_organization_id.set(_acting)
     if not sid:
         raise HTTPException(
             status_code=400,
             detail="session_id is required for stateful (HITL-capable) workflow runs.",
         )
+    # Billed once the request is accepted — a refused one is not charged (re-review, 29 Sep).
+    await usage_events.record_usage(
+        kind="query", organization_id=usage_events.billing_org(principal.organization_id, _acting),
+        user_id=principal.user_id,
+        detail=usage_events.billed_detail({"session_id": sid, "chars": len(body.message), "stateful": True},
+                                          principal.organization_id, _acting),
+    )
     activity_log.set_current_session(sid, sid)
     activity_log.start_turn()  # one transaction per request; every row below shares it
     log.info("workflow.run_stateful", session_id=sid, message_len=len(body.message))
@@ -497,11 +504,11 @@ async def run_stateful_workflow_with_files(
         # Court cannot file a document against Bishopsgate Tower however the form is filled.
         if not principal.allows_building(building):
             await usage_events.record_ingestion_audit(
-                outcome="rejected", organization_id=principal.organization_id,
+                outcome="rejected", organization_id=usage_events.billing_org(principal.organization_id, org),
                 actor_user_id=principal.user_id, actor_role=principal.role,
                 document_name=", ".join((f.filename or "?") for f in files)[:500] or None,
                 building_id=UUID(building), warning="building not allocated to this user",
-                detail={"session_id": session_id},
+                detail=usage_events.billed_detail({"session_id": session_id}, principal.organization_id, org),
             )
             raise HTTPException(status_code=403, detail={
                 "ok": False, "reason": "building_not_allocated", "building_id": building,
@@ -712,23 +719,25 @@ async def run_stateful_workflow_with_files(
             # The receipt. One ingest event for the turn and one audit row per file, so the
             # trail can answer "who put this here" and the bill "what did it cost".
             await usage_events.record_usage(
-                kind="ingest", organization_id=principal.organization_id,
+                kind="ingest", organization_id=usage_events.billing_org(principal.organization_id, org),
                 user_id=principal.user_id,
                 building_id=UUID(building) if building else None,
-                detail={"session_id": session_id, "files": len(saved_paths),
-                        "bound": {k: v for k, v in (bound or {}).items()
-                                  if isinstance(v, int)}},
+                detail=usage_events.billed_detail(
+                    {"session_id": session_id, "files": len(saved_paths),
+                     "bound": {k: v for k, v in (bound or {}).items() if isinstance(v, int)}},
+                    principal.organization_id, org),
             )
             _held_names = {c.get("document_name") for c in held}
             for _p in saved_paths:
                 if Path(_p).name in _held_names:
                     continue  # the validation service already recorded why it was held
                 await usage_events.record_ingestion_audit(
-                    outcome="accepted", organization_id=principal.organization_id,
+                    outcome="accepted", organization_id=usage_events.billing_org(principal.organization_id, org),
                     actor_user_id=principal.user_id, actor_role=principal.role,
                     document_name=Path(_p).name,
                     building_id=UUID(building) if building else None,
-                    detail={"session_id": session_id, "where": "inline"},
+                    detail=usage_events.billed_detail({"session_id": session_id, "where": "inline"},
+                                                      principal.organization_id, org),
                 )
 
             orchestrator.mark_single_door_ingestion(

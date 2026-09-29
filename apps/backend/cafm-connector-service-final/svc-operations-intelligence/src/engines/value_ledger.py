@@ -440,7 +440,7 @@ def shape_value_summary(
 def _energy_module(agg: dict[str, Any], items: Any) -> dict[str, Any]:
     err = _err(agg)
     if err:
-        return _not_counted("energy", f"the anomaly store could not be read — {err}")
+        return _not_counted("energy", f"the anomaly store could not be read — {err}", unreadable=True)
     saved_st = ("resolved", "closed")
     rows = items if isinstance(items, list) else []
     return {
@@ -476,7 +476,8 @@ def _vendors_module(lines: dict[str, Any], variance: dict[str, Any], items: Any,
     lerr, verr = _err(lines), _err(variance)
     if lerr and verr:
         return _not_counted(
-            "vendors", f"neither invoice lines nor variance alerts could be read — {lerr}")
+            "vendors", f"neither invoice lines nor variance alerts could be read — {lerr}",
+            unreadable=True)
     detected = 0.0
     notes: list[str] = []
     if lerr:
@@ -505,6 +506,8 @@ def _vendors_module(lines: dict[str, Any], variance: dict[str, Any], items: Any,
     rows = items if isinstance(items, list) else []
     return {
         "key": "vendors", "name": _MODULE_NAMES["vendors"], "counted": True,
+        # One of its two halves could not be read: the figure is the other half alone.
+        "partial": bool(lerr or verr),
         "detected": round(detected, 2), "saved": round(saved, 2),
         "items": [{
             "what": str(r.get("what") or "Flagged line"),
@@ -550,7 +553,7 @@ def _compliance_module(approvals: dict[str, Any], certs: dict[str, Any]) -> dict
 def _assets_module(recs: dict[str, Any], items: Any) -> dict[str, Any]:
     err = _err(recs)
     if err:
-        return _not_counted("assets", f"the recommendation store could not be read — {err}")
+        return _not_counted("assets", f"the recommendation store could not be read — {err}", unreadable=True)
     rows = items if isinstance(items, list) else []
     return {
         "key": "assets", "name": _MODULE_NAMES["assets"], "counted": True,
@@ -573,9 +576,14 @@ def _assets_module(recs: dict[str, Any], items: Any) -> dict[str, Any]:
     }
 
 
-def _not_counted(key: str, note: str) -> dict[str, Any]:
-    return {"key": key, "name": _MODULE_NAMES[key], "counted": False,
-            "detected": None, "saved": None, "items": [], "note": note}
+def _not_counted(key: str, note: str, unreadable: bool = False) -> dict[str, Any]:
+    """A module with no figure. ``unreadable``: it has priced rows but they could not be read —
+    unlike a module nothing prices, a total without it is partial."""
+    out = {"key": key, "name": _MODULE_NAMES[key], "counted": False,
+           "detected": None, "saved": None, "items": [], "note": note}
+    if unreadable:
+        out["unreadable"] = True
+    return out
 
 
 def _pnl(raw: dict[str, Any]) -> dict[str, Any]:
@@ -628,3 +636,38 @@ def _pnl(raw: dict[str, Any]) -> dict[str, Any]:
         "note": ("No budget ledger is connected — budgets are null and no saving against "
                  "budget is claimed. Actuals are read from the store."),
     }
+
+
+async def value_by_company(session: AsyncSession, *, year: int | None = None) -> dict[str, Any]:
+    """Every company's Platform value — its ledger's total detected — for the Super Admin
+    console's company list (Hussain, 29 Sep 2026: in place of the credits beside each name).
+
+    Read through read_value_summary itself, with every one of the company's buildings in scope,
+    so the figure is the one the company's own Home page shows and the two cannot drift. A
+    ledger with nothing counted is None, and so is one that cannot be read (named in error) —
+    never a £0 that reads like a measurement. The others still show.
+    """
+    rows = (await session.execute(text(
+        "SELECT id::text AS id, name FROM plenum_cafm.organizations ORDER BY name"))).mappings().all()
+    yr = int(year or datetime.now(timezone.utc).year)
+    out = []
+    for r in rows:
+        entry: dict[str, Any] = {"organization_id": r["id"], "name": r["name"],
+                                 "total_detected": None, "counted_modules": 0, "error": None,
+                                 "partial": False, "unreadable": []}
+        try:
+            summary = await read_value_summary(session, organization_id=UUID(str(r["id"])),
+                                               building_ids=None, year=yr)
+            ledger = (summary or {}).get("ledger") or {}
+            entry["total_detected"] = _num(ledger.get("total_detected"))
+            entry["counted_modules"] = int(ledger.get("counted_modules") or 0)
+            # A priced module that could not be read makes the total partial — said, not hidden
+            # behind a figure that reads complete (re-review, 29 Sep 2026).
+            entry["unreadable"] = [str(m.get("name") or m.get("key")) for m in ledger.get("modules") or []
+                                   if m.get("unreadable") or m.get("partial")]
+            entry["partial"] = bool(entry["unreadable"])
+        except Exception as exc:  # noqa: BLE001 — one company's ledger never hides the rest
+            log.warning("value.company_unreadable", organization_id=r["id"], error=str(exc)[:200])
+            entry["error"] = str(exc)[:200]
+        out.append(entry)
+    return {"ok": True, "year": yr, "currency": "GBP", "companies": out}

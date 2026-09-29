@@ -56,6 +56,113 @@ async def record_event(
     return credits
 
 
+#: The unified store's data tables — what a company's "UDR data" is counted over (Hussain,
+#: 29 Sep 2026: "rows in the UDR"). The workbook migration's destination tables plus
+#: documents, floors and locations. `contracts` is a view over vendor_contracts, so counting it
+#: would count the same rows twice.
+UDR_TABLES: tuple[str, ...] = (
+    "sites", "buildings", "building_sections", "floors", "locations", "vendors",
+    "vendor_contracts", "technicians", "assets", "asset_reading_bands", "asset_readings",
+    "maintenance_plans", "ppm_visits", "work_orders", "inspections", "spare_parts",
+    "energy_meters", "meter_readings", "compliance_certificates", "documents",
+)
+
+#: The link columns a row can reach its company by, in order, and the set of the company's ids
+#: each must be in (a CTE below), or None for a column that names the company itself.
+_LINKS: tuple[tuple[str, str | None], ...] = (
+    ("organization_id", None), ("org_id", None), ("building_id", "b"), ("section_id", "s"),
+    ("asset_id", "a"), ("meter_id", "m"), ("vendor_id", "v"),
+)
+#: The CTEs, in dependency order: name -> (table, its id column).
+_SETS: tuple[tuple[str, str, str], ...] = (
+    ("b", "buildings", "building_id"), ("s", "building_sections", "section_id"),
+    ("a", "assets", "id"), ("m", "energy_meters", "id"), ("v", "vendors", "id"),
+)
+
+
+def _predicates(table: str, cols: set[str], sets: set[str]) -> str | None:
+    """How a row of ``table`` reaches the company, as one SQL condition over alias x.
+
+    A row's own company column decides for it; only a row that carries NO company is placed
+    by its building, section, asset, meter or vendor. OR-ing the two counted another company's
+    row that pointed at this company's building or vendor (re-review, 29 Sep 2026). None when
+    the table has no way to reach a company.
+    """
+    own = {t: n for n, t, _c in _SETS}.get(table)
+    own_cols = [c for c, via in _LINKS if via is None and c in cols]
+    links = [f"x.{c}::text IN (SELECT id FROM {via})" for c, via in _LINKS
+             if via is not None and c in cols and via in sets and via != own]
+    mine = " OR ".join(f"x.{c}::text = :o" for c in own_cols)
+    if own_cols and links:
+        empty = " AND ".join(f"x.{c} IS NULL" for c in own_cols)
+        return f"({mine}) OR ({empty} AND ({' OR '.join(links)}))"
+    if own_cols:
+        return f"({mine})"
+    return " OR ".join(links) if links else None
+
+
+async def udr_rows(session: AsyncSession, organization_id: UUID) -> dict[str, Any]:
+    """The rows the company holds across UDR_TABLES, per table, in one query.
+
+    Each table is reached by whichever link it has — its own company column, or its building,
+    section, asset, meter or vendor — and a row counts once however many of its links point at
+    the company. The columns are read from the database, not assumed: production carries more
+    tables and columns than the schema file (a table with no link to a company is named, not
+    guessed at). A count that cannot be made is None, never a zero.
+    """
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text("""
+                SELECT c.table_name, c.column_name, c.data_type
+                  FROM information_schema.columns c
+                  JOIN information_schema.tables t
+                    ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                 WHERE c.table_schema = 'plenum_cafm' AND t.table_type = 'BASE TABLE'
+                   AND c.table_name = ANY(:tables)"""), {"tables": list(UDR_TABLES)})).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("usage.udr_columns_unreadable", error=str(exc)[:200])
+        return {"rows": None, "tables": {}, "unlinked": []}
+    cols: dict[str, set[str]] = {}
+    for r in rows:
+        # A company column that is not a uuid or text (sites.organization_id is an integer in
+        # the schema file) cannot name a uuid company: it is not a link, and a table with no
+        # other link is named unlinked rather than silently counted 0.
+        if r["column_name"] in ("organization_id", "org_id") and str(r.get("data_type") or "").lower() \
+                not in ("uuid", "text", "character varying", "character"):
+            continue
+        cols.setdefault(r["table_name"], set()).add(r["column_name"])
+
+    ctes, sets = [], set()
+    for name, table, idcol in _SETS:
+        if table in cols and idcol in cols[table]:
+            cond = _predicates(table, cols[table], sets)
+            if cond:
+                ctes.append(f"{name} AS (SELECT x.{idcol}::text AS id FROM plenum_cafm.{table} x "
+                            f"WHERE {cond})")
+                sets.add(name)
+    parts, unlinked = [], []
+    for table in UDR_TABLES:
+        if table not in cols:
+            continue
+        cond = _predicates(table, cols[table], sets)
+        if not cond:
+            unlinked.append(table)
+            continue
+        parts.append(f"SELECT '{table}' AS t, count(*) AS n FROM plenum_cafm.{table} x "
+                     f"WHERE {cond}")
+    if not parts:
+        return {"rows": 0, "tables": {}, "unlinked": unlinked}
+    sql = (("WITH " + ", ".join(ctes) + " ") if ctes else "") + " UNION ALL ".join(parts)
+    try:
+        async with session.begin_nested():
+            counted = (await session.execute(text(sql), {"o": str(organization_id)})).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("usage.udr_rows_unreadable", error=str(exc)[:200])
+        return {"rows": None, "tables": {}, "unlinked": unlinked}
+    per = {r["t"]: int(r["n"] or 0) for r in counted if int(r["n"] or 0)}
+    return {"rows": sum(per.values()), "tables": per, "unlinked": unlinked}
+
+
 def _month_start() -> datetime:
     now = datetime.now(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -81,7 +188,8 @@ async def credits_by_company(session: AsyncSession) -> list[dict[str, Any]]:
     return [dict(r, credits_this_month=float(r["credits_this_month"] or 0)) for r in rows]
 
 
-async def company_usage(session: AsyncSession, organization_id: UUID) -> dict[str, Any]:
+async def company_usage(session: AsyncSession, organization_id: UUID,
+                        with_udr: bool = True) -> dict[str, Any]:
     """One company's usage card. Every figure names where it was counted from.
 
     Counted, never estimated. A figure this console cannot count is reported as null with
@@ -119,12 +227,14 @@ async def company_usage(session: AsyncSession, organization_id: UUID) -> dict[st
     #
     # The certificate's own country is the right figure here regardless: it names the regime the
     # certificate was issued under, which is what a count of certificates is worth knowing by.
+    # Counted by the certificate's own company, as the Compliance page counts them. Through
+    # the company's buildings (as this was), every vendor certificate — they carry no building
+    # — and every certificate filed without one was missing (29 Sep 2026).
     certs = (await q(text("""
         SELECT count(*) AS n,
                array_remove(array_agg(DISTINCT c.country_code), NULL) AS countries
           FROM plenum_cafm.compliance_certificates c
-          JOIN plenum_cafm.buildings b ON b.building_id = c.building_id
-         WHERE b.organization_id = :o"""), p)).mappings().first()
+         WHERE c.organization_id = :o OR c.org_id = :o"""), p)).mappings().first()
     users = (await q(text("""
         SELECT count(*) FILTER (WHERE lower(status) = 'active') AS active,
                count(*) FILTER (WHERE lower(status) = 'invited') AS invited,
@@ -136,20 +246,21 @@ async def company_usage(session: AsyncSession, organization_id: UUID) -> dict[st
                COALESCE(sum(credits), 0)                                    AS credits_total,
                count(*) FILTER (WHERE kind = 'api_request'
                                   AND occurred_at >= now() - interval '30 days') AS api_30d,
+               count(*) FILTER (WHERE kind = 'api_request') AS api_all,
                count(*) FILTER (WHERE kind = 'query') AS queries,
                count(*) FILTER (WHERE kind = 'ingest') AS ingests,
                max(occurred_at) AS last_activity
           FROM plenum_cafm.platform_usage_events WHERE organization_id = :o"""), p)).mappings().first()
-    # UDR volume: bytes of ingested source text is the closest thing to "data added" that
-    # exists on a row. ingestion_documents has no size column, so this is the sum of
-    # extracted text over the company's documents.
-    udr = (await q(text("""
-        SELECT COALESCE(sum(octet_length(COALESCE(i.final_json::text, ''))), 0) AS bytes,
-               count(*) AS documents
-          FROM plenum_cafm.ingestion_documents i
-          JOIN plenum_cafm.documents d ON d.document_id = i.id
-          JOIN plenum_cafm.buildings b ON b.building_id = d.building_id
-         WHERE b.organization_id = :o"""), p)).mappings().first()
+    # UDR data: the rows the company holds across the unified store (udr_rows). It was the
+    # extracted text of documents only, so 289,604 migrated rows read 0 MB.
+    # with_udr=False: the company admin's card shows no UDR figure and should not pay for a
+    # scan of every data table on each read.
+    udr = (await udr_rows(session, organization_id) if with_udr
+           else {"rows": None, "tables": {}, "unlinked": []})
+    unreadable = [] if (udr["rows"] is not None or not with_udr) else ["rows in the UDR"]
+    # Nothing on the platform writes an api_request event yet: until one is written the count
+    # is None ("not recorded"), not a zero that reads like a measurement.
+    api_recorded = int(usage["api_all"] or 0) > 0
     last_update = (await q(text("""
         SELECT greatest(
             (SELECT max(updated_at) FROM plenum_cafm.buildings WHERE organization_id = :o),
@@ -165,22 +276,26 @@ async def company_usage(session: AsyncSession, organization_id: UUID) -> dict[st
         "buildings_created": int(buildings or 0),
         "hoist_graphs": int(graphs or 0),
         "last_activity": last_update.isoformat() if last_update else None,
-        "udr_data_bytes": int(udr["bytes"] or 0),
-        "udr_documents": int(udr["documents"] or 0),
+        "udr_rows": udr["rows"],
+        "udr_tables": udr["tables"],
+        "udr_unlinked": udr["unlinked"],
         "compliance_certificates": int(certs["n"] or 0),
         "certificate_countries": sorted(str(c) for c in (certs["countries"] or [])),
-        "api_requests_30d": int(usage["api_30d"] or 0),
+        "api_requests_30d": int(usage["api_30d"] or 0) if api_recorded else None,
+        "api_requests_recorded": api_recorded,
         "queries": int(usage["queries"] or 0),
         "ingests": int(usage["ingests"] or 0),
         "credits_this_month": float(usage["credits_month"] or 0),
         "credits_total": float(usage["credits_total"] or 0),
         "users": {k: int(users[k] or 0) for k in ("total", "active", "invited", "can_ingest")},
         "tariff": TARIFF,
+        "unreadable": unreadable,
         "counted_from": {
             "buildings_created": "buildings.organization_id",
             "hoist_graphs": "buildings with at least one documents/assets/floors row",
-            "udr_data_bytes": "octet_length(ingestion_documents.final_json) over the company's documents",
-            "compliance_certificates": "compliance_certificates joined to the company's buildings",
+            "udr_rows": "rows in UDR_TABLES reached by company, building, section, asset, meter or vendor",
+            "compliance_certificates": "compliance_certificates.organization_id / org_id",
+            "api_requests": "platform_usage_events kind=api_request (none written yet)",
             "credits": "platform_usage_events at the tariff in force when each row was written",
         },
     }
