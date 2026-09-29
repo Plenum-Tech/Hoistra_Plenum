@@ -125,6 +125,39 @@ def build_structure_markdown(
     return "\n".join(lines)
 
 
+async def upload_artefacts(svc, container: str, base_path: str, artefacts: dict,
+                           beat, log) -> "tuple[dict[str, str], int]":
+    """Upload each artefact to ``{base_path}/{filename}``; returns (urls by filename, count).
+
+    A large workbook's artefacts run to ~180 MB, minutes from a laptop, so every block sent
+    counts towards ``beat`` (a ProgressBeat) and the run card can tell working from stalled.
+    A file that fails is logged and skipped; the rest still go.
+    """
+    # Encoded one at a time: the artefacts of a large run are ~180 MB, and a second encoded copy
+    # of all of them at once doubled the worker's peak. The total counts characters — the beat
+    # is a heartbeat, not a meter.
+    total = sum(len(c) for c in artefacts.values())
+    sent = 0
+    urls: dict[str, str] = {}
+    for filename, content in artefacts.items():
+        data = content.encode("utf-8") if isinstance(content, str) else content
+        before = sent
+
+        async def _hook(current, _file_total, _before=before):
+            await beat.tick(_before + (current or 0), total)
+
+        try:
+            client = svc.get_blob_client(container=container, blob=f"{base_path}/{filename}")
+            await client.upload_blob(data, overwrite=True, progress_hook=_hook)
+            urls[filename] = client.url
+            log(f"  ✅ Uploaded: {filename} ({len(data):,} bytes) → {client.url}")
+        except Exception as e:
+            log(f"  ⚠️  Failed to upload {filename}: {e}")
+        sent = before + len(data)
+        await beat.tick(sent, total)
+    return urls, len(urls)
+
+
 async def output_generator_node(state: MigrationState) -> MigrationState:
     """
     Node 8: Generate all output formats and upload to Azure Blob.
@@ -656,18 +689,13 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         if not blob_connection_string:
             log("⚠️  AZURE_STORAGE_CONNECTION_STRING not set — skipping blob upload, URLs will be empty")
         else:
+            from ..progress_beat import ProgressBeat
+
             async with BlobServiceClient.from_connection_string(blob_connection_string) as svc:
-                for filename, content in artefacts.items():
-                    blob_path = f"{blob_base_path}/{filename}"
-                    try:
-                        blob_client = svc.get_blob_client(container=blob_container, blob=blob_path)
-                        data: bytes = content.encode("utf-8") if isinstance(content, str) else content
-                        await blob_client.upload_blob(data, overwrite=True)
-                        urls_generated[filename] = blob_client.url
-                        uploaded_count += 1
-                        log(f"  ✅ Uploaded: {filename} ({len(data):,} bytes) → {blob_client.url}")
-                    except Exception as e:
-                        log(f"  ⚠️  Failed to upload {filename}: {e}")
+                urls_generated, uploaded_count = await upload_artefacts(
+                    svc, blob_container, blob_base_path, artefacts,
+                    ProgressBeat(migration_id, 80.0, 88.0), log,
+                )
 
         log(f"✅ Uploaded {uploaded_count}/{len(artefacts)} artefacts to Blob")
 

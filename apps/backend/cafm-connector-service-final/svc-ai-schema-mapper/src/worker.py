@@ -837,9 +837,14 @@ async def on_startup(ctx: dict) -> None:
 # Populate WorkerSettings.functions now that all @async_task functions are defined.
 # ARQ requires actual Function objects (the result of @async_task), not string names.
 WorkerSettings.on_startup = on_startup
+from arq.worker import func as _arq_func  # noqa: E402
+
 WorkerSettings.functions = [
     run_migration,
-    resume_migration,
+    # keep_result=0: every resume of a migration carries one job id
+    # (migration_runs.resume_job_id) and arq refuses that id while a job or its kept result
+    # holds it; keeping no result frees it the moment the job ends.
+    _arq_func(resume_migration, keep_result=0),
     run_schema_mapping,
     resume_schema_mapping,
     run_fiix_data_ingestion,

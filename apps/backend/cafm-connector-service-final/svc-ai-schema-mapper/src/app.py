@@ -103,6 +103,11 @@ from .api.mappings import router as mappings_router
 from .runtime_logs import bind_runtime_log_context, get_runtime_logs, install_runtime_log_capture
 
 from .migration_runs import await_migration_run as _await_migration_run
+from .migration_runs import await_checkpoint_past as _await_checkpoint_past
+from .migration_runs import paused_node_for as _paused_node_for
+from .migration_runs import claim_awaiting_gate as _claim_awaiting_gate
+from .migration_runs import enqueue_resume as _enqueue_resume
+from .migration_runs import release_gate as _release_gate
 from .migration_runs import track_migration_run as _track_migration_run
 
 logger = get_logger(__name__)
@@ -2302,15 +2307,21 @@ def create_app() -> FastAPI:
         # burning time. With the flip, run_migration keeps polling "running" and waits for the
         # resume to reach the next gate. Guarded on awaiting_review (a no-op if already running),
         # which also blocks a second concurrent resume from double-invoking the graph on the thread.
-        await session.execute(
-            update(MigrationJob)
-            .where(
-                MigrationJob.id == migration_id_uuid,
-                MigrationJob.status == "awaiting_review",
+        # The swap is checked: an answer that finds the gate no longer waiting — the page's
+        # second Confirm while the first is applied (f87078d7, 29 Sep 2026) — is not applied.
+        # Read before the claim commits: the gate to hand back if the answer cannot be queued.
+        _prev_gate = migration_job.pending_gate_type or gate_type
+        _prev_payload = migration_job.pending_gate_payload
+        if not await _claim_awaiting_gate(session, migration_id_uuid):
+            logger.info(
+                f"[{migration_id}] Gate '{gate_type}' already answered — not resuming again"
             )
-            .values(status="running", pending_gate_type=None, pending_gate_payload=None)
-        )
-        await session.commit()
+            return MigrationApprovalResponse(
+                migration_id=migration_id_uuid,
+                status="running",
+                message=f"Gate '{gate_type}' was already answered; that answer is being applied.",
+                decisions_processed=0,
+            )
 
         # The job is now RUNNING again (the gate is answered). Re-sync the per-run Activity entry
         # NOW so its status flips pending_human_input → running and the Section-3 "Awaiting your
@@ -2373,13 +2384,46 @@ def create_app() -> FastAPI:
             if settings.redis_url:
                 redis_settings = RedisSettings.from_dsn(settings.redis_url)
                 pool = await create_pool(redis_settings)
-                await pool.enqueue_job(
-                    "resume_migration",
-                    migration_id=migration_id,
-                    gate_type=gate_type,
-                    decisions=decisions,
-                )
-                await pool.aclose()
+                try:
+                    _new = await _enqueue_resume(
+                        pool, migration_id=migration_id, gate_type=gate_type,
+                        decisions=decisions,
+                    )
+                except Exception as _enq_err:
+                    # The queue failed mid-wait while a resume of this migration may still be
+                    # running: resuming inline beside it would be two runs on one thread.
+                    logger.warning(f"[{migration_id}] resume enqueue failed mid-wait: {_enq_err}")
+                    _new = "busy"
+                finally:
+                    await pool.aclose()
+                if _new == "duplicate":
+                    # The answer the running resume is applying already — this is its echo.
+                    logger.info(f"[{migration_id}] gate '{gate_type}' answer is the one being applied")
+                    return MigrationApprovalResponse(
+                        migration_id=migration_id_uuid,
+                        status="running",
+                        message=f"Gate '{gate_type}' was already answered; that answer is being applied.",
+                        decisions_processed=0,
+                    )
+                if _new != "queued":
+                    # The resume before it is still running after the wait. Hand the gate back
+                    # so this answer can be given again, rather than report it applied.
+                    await _release_gate(session, migration_id_uuid, _prev_gate, _prev_payload)
+                    try:
+                        from .graph.nodes.schema_db_writer import _sync_run_activity
+
+                        await _sync_run_activity(migration_id, caller="gate_released")
+                    except Exception:  # pragma: no cover - non-fatal audit sync
+                        pass
+                    logger.warning(
+                        f"[{migration_id}] gate '{gate_type}' answered while the previous resume "
+                        f"is still running — handed back, not queued"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(f"The previous answer is still being applied; answer "
+                                f"'{gate_type}' again in a moment."),
+                    )
                 logger.info(f"[{migration_id}] resume_migration enqueued via ARQ")
                 arq_enqueued = True
         except HTTPException:
@@ -3369,6 +3413,20 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail=f"Step '{step_key}' is still finishing; advance again in a moment.",
             )
+        # ...and a run in the ARQ worker, which that wait cannot see: resume only once the
+        # SAVED checkpoint is past the step that paused, or the graph restarts that step.
+        # 60 s: inside the page's 90 s advance timeout, so it hears the 409 and asks again.
+        _paused_node = _paused_node_for(step_key)
+        if _paused_node and not await _await_checkpoint_past(
+            get_migration_graph_instance(),
+            {"configurable": {"thread_id": migration_id}},
+            _paused_node,
+            timeout=60.0,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step '{step_key}' is still being saved; advance again in a moment.",
+            )
         _now = (
             await session.execute(
                 select(MigrationJob.status, MigrationJob.pending_gate_type)
@@ -3718,15 +3776,24 @@ def create_app() -> FastAPI:
                 settings = get_settings()
                 if settings.redis_url:
                     redis_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-                    await redis_pool.enqueue_job(
-                        "resume_migration",
-                        migration_id=migration_id,
-                        gate_type="ddl_retry",
-                        decisions={"extra_fields_config": corrected_config},
-                    )
-                    await redis_pool.aclose()
+                    try:
+                        _new = await _enqueue_resume(
+                            redis_pool, migration_id=migration_id, gate_type="ddl_retry",
+                            decisions={"extra_fields_config": corrected_config},
+                        )
+                    finally:
+                        await redis_pool.aclose()
+                    if _new == "busy":
+                        # A resume of this migration is still running: running this one inline
+                        # beside it would be two runs on one thread. Status stays ddl_failed.
+                        raise HTTPException(
+                            status_code=409,
+                            detail="A previous step is still being applied; retry the DDL in a moment.",
+                        )
                     enqueued = True
                     logger.info(f"[{migration_id}] DDL retry enqueued via ARQ")
+            except HTTPException:
+                raise
             except Exception as arq_err:
                 logger.warning(f"[{migration_id}] ARQ enqueue failed, running inline: {arq_err}")
 

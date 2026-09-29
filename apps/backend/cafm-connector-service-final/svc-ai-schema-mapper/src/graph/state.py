@@ -256,11 +256,13 @@ class MigrationState(TypedDict, total=False):
     output_csv_url: str  # Azure Blob URL
     output_sql_url: str  # Azure Blob URL
     output_sql_script: str  # Generated SQL statements (used by Node 9 direct DB apply)
+    output_sql_script_ref: Optional[str]  # Blob-offload ref for output_sql_script (bulk_tables)
     migration_report_url: str  # PDF report
     mapping_flow_url: str  # Optional flow diagram
 
     # IntermediateSchema Pydantic object (serialized as dict for checkpoint)
     intermediate_schema: Optional[dict[str, Any]]
+    intermediate_schema_ref: Optional[str]  # Blob-offload ref for intermediate_schema (bulk_tables)
 
     # ── Node 9: Write to Platform ─────────────────────────────────────────
     write_review_payload: Optional[dict[str, Any]]  # Interrupt payload for GATE 3

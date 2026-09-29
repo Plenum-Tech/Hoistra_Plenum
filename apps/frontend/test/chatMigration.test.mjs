@@ -347,6 +347,34 @@ test('a document that moves clears the stall note', async () => {
   assert.equal(c.renderVals().mgStallNote, '', 'movement is movement');
 });
 
+// On 29 Sep 2026 the output step of a 289,606-row workbook spent 13 minutes uploading 180 MB
+// from a laptop, and the card told the reader the worker was probably not running while it
+// was busy the whole time. Long steps now beat progress_pct as the bytes and rows go, and that
+// is movement too.
+test('a long step that keeps reporting progress is not called stalled', async () => {
+  handlers[STATUS] = doc({ status: 'running', pending_gate_type: null, pending_gate_payload: {}, current_step: 8, progress_pct: 81.2 });
+  c.mgOpen(ID);
+  await settle();
+  c._mgMovedAt = Date.now() - 5 * 60 * 1000;
+  handlers[STATUS] = doc({ status: 'running', pending_gate_type: null, pending_gate_payload: {}, current_step: 8, progress_pct: 84.6 });
+  await c.mgPoll(true);
+  await settle();
+  assert.equal(c.renderVals().mgStallNote, '', 'bytes going up is the step working');
+});
+
+test('the stall note does not tell the reader every step takes seconds', async () => {
+  handlers[STATUS] = doc({ status: 'running', pending_gate_type: null, pending_gate_payload: {}, current_step: 8 });
+  c.mgOpen(ID);
+  await settle();
+  c._mgMovedAt = Date.now() - 5 * 60 * 1000;
+  await c.mgPoll(true);
+  await settle();
+  const note = c.renderVals().mgStallNote;
+  assert.match(note, /has not moved/);
+  assert.doesNotMatch(note, /A node takes seconds/, 'a large upload takes minutes');
+  assert.match(note, /report progress as they go/, 'what the silence means now');
+});
+
 test('a run waiting at a gate is never called stalled — it is waiting for a person', async () => {
   handlers[STATUS] = doc();   // awaiting_review at pk_approval
   c.mgOpen(ID);

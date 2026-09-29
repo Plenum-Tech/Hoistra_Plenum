@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..state import ExtraFieldConfig, MigrationState
+from ..progress_beat import ProgressBeat
 from ..event_enrich import append_event
 from .building_link import (
     ASSET_BUILDING_SQL, ASSET_LOOKUP_SQL, BuildingResolver, asset_match_code,
@@ -587,6 +588,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                     approved_new_columns=_collect_approved_new_columns(state),
                     confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
                     default_building_id=state.get("building_id") or None,
+                    beat=ProgressBeat(migration_id, 90.0, 99.0),
                 )
                 state["handoff_status"] = "applied_sql_aligned"
                 state["svc_ingestion_response"] = {
@@ -627,7 +629,8 @@ async def write_node(state: MigrationState) -> MigrationState:
         elif sql_script:
             logger.info("[Node 9] Applying output SQL artifact directly to target DB")
             try:
-                sql_apply_result = await _apply_sql_artifact(sql_script)
+                sql_apply_result = await _apply_sql_artifact(
+                    sql_script, beat=ProgressBeat(migration_id, 90.0, 99.0))
                 state["handoff_status"] = "applied_sql"
                 state["svc_ingestion_response"] = {
                     "status": "applied_sql",
@@ -654,6 +657,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                             approved_new_columns=_collect_approved_new_columns(state),
                             confirmed_hierarchies=state.get("confirmed_hierarchies") or [],
                             default_building_id=state.get("building_id") or None,
+                            beat=ProgressBeat(migration_id, 90.0, 99.0),
                         )
                         state["handoff_status"] = "applied_sql_aligned"
                         state["svc_ingestion_response"] = {
@@ -900,19 +904,24 @@ def _split_sql_statements(sql_script: str) -> list[str]:
     return cleaned
 
 
-async def _apply_sql_artifact(sql_script: str) -> dict:
+async def _apply_sql_artifact(sql_script: str, beat=None) -> dict:
     """
-    Execute generated SQL artifact inside one transaction.
+    Execute generated SQL artifact inside one transaction. ``beat`` (a ProgressBeat) counts
+    each statement, so a script of 290k INSERTs is not minutes of silence on the run card.
     """
     statements = _split_sql_statements(sql_script)
     if not statements:
         raise Exception("output.sql is empty or contains no executable statements")
+    if beat is not None:
+        beat.total = len(statements)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
         try:
             for stmt in statements:
                 await session.execute(text(stmt))
+                if beat is not None:
+                    await beat.advance(1)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -1119,6 +1128,7 @@ async def _insert_rows(
     pending: list[tuple[dict, str, dict]],
     unique_sets: set[frozenset] | None,
     nullable_cols: set[str],
+    beat=None,
 ) -> dict:
     """Insert a batch in as few round trips as the data allows.
 
@@ -1211,6 +1221,8 @@ async def _insert_rows(
                     return {"inserted": inserted, "skipped": skipped + max(_left, 0),
                             "errors": errors, "orphans": orphans, "abandoned": abandoned}
 
+    if beat is not None:  # a ProgressBeat: the batch is done, however it went
+        await beat.advance(len(pending))
     return {"inserted": inserted, "skipped": skipped, "errors": errors, "orphans": orphans,
             "abandoned": abandoned}
 
@@ -1606,6 +1618,7 @@ async def _apply_records_with_schema_alignment(
     approved_new_columns: dict[str, set[str]] | None = None,
     confirmed_hierarchies: list | None = None,
     default_building_id: str | None = None,
+    beat=None,
 ) -> dict:
     """
     Insert cleaned records while filtering to real DB columns.
@@ -1890,6 +1903,8 @@ async def _apply_records_with_schema_alignment(
             if _write_order != [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]:
                 logger.info(f"[Node 9] Write order (parents first): {_write_order}")
             _ordered_tables = [(s, cleaned_tables[s]) for s in _write_order]
+            if beat is not None:  # a ProgressBeat, advanced by every batch _insert_rows sends
+                beat.total = sum(len(r) for _s, r in _ordered_tables if isinstance(r, list))
 
             for source_table_name, records in _ordered_tables:
                 if not isinstance(records, list) or not records:
@@ -2422,7 +2437,7 @@ async def _apply_records_with_schema_alignment(
                             _batch = await _insert_rows(
                                 session, schema_name=schema_name, table_name=safe_table,
                                 pending=_pending_rows, unique_sets=unique_sets,
-                                nullable_cols=db_nullable_cols,
+                                nullable_cols=db_nullable_cols, beat=beat,
                             )
                             _pending_rows = []
                             table_rows += _batch["inserted"]
@@ -2482,7 +2497,7 @@ async def _apply_records_with_schema_alignment(
                     _batch = await _insert_rows(
                         session, schema_name=schema_name, table_name=safe_table,
                         pending=_pending_rows, unique_sets=unique_sets,
-                        nullable_cols=db_nullable_cols,
+                        nullable_cols=db_nullable_cols, beat=beat,
                     )
                     _pending_rows = []
                     table_rows += _batch["inserted"]

@@ -139,12 +139,14 @@ export function progressKey(doc) {
   if (!doc) return '';
   const nodes = Array.isArray(doc.nodes) ? doc.nodes : [];
   const done = nodes.filter((n) => String(n.status || '') === 'complete').length;
-  return [doc.status, doc.current_step, done, doc.pending_gate_type || ''].join('|');
+  // progress_pct is the heartbeat of a long step: the output step's uploads and the write
+  // step's batches beat it a few times a minute (svc-ai-schema-mapper graph/progress_beat.py).
+  return [doc.status, doc.current_step, done, doc.pending_gate_type || '', doc.progress_pct == null ? '' : doc.progress_pct].join('|');
 }
 
-// How long a run may report the same thing before the card stops calling it work. Nodes
-// take seconds and a gate answer resumes in seconds, so minutes of silence is a stall —
-// see the ARQ-worker case in test/chatMigration.test.mjs.
+// How long a run may report the same thing before the card stops calling it work. Short
+// steps finish in seconds and long ones beat progress_pct as they go, so minutes of silence
+// is a stall — see the ARQ-worker case in test/chatMigration.test.mjs.
 export const STALL_AFTER_MS = 3 * 60 * 1000;
 
 export const cmmsName = (v) => (String(v == null ? '' : v).trim() || 'Custom');
@@ -977,7 +979,7 @@ export const migrationMethods = {
       // a gate waits for a person and may wait all day, and a finished or failed run is
       // not waiting for anything.
       mgStallNote: ((kind === 'running' || kind === 'step') && this._mgMovedAt && (now - this._mgMovedAt) > STALL_AFTER_MS)
-        ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. A node takes seconds, so the pipeline is probably not processing it: answering a gate hands the run to the migration worker (arq src.worker.WorkerSettings), and if that worker is not running the job waits in the queue and nothing here will change.'
+        ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. Steps that upload files or write rows report progress as they go, so a run this quiet is probably not being processed: answering a gate hands the run to the migration worker (arq src.worker.WorkerSettings), and if that worker is not running the job waits in the queue and nothing here will change.'
         : '',
       mgPrimary: primary,
       mgStepFacts: stepFacts,

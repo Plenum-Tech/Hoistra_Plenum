@@ -111,6 +111,28 @@ def _route_after_semantic(state: MigrationState) -> str:
     return "preprocess_node"
 
 
+#: Bulk-row offload (graph/bulk_tables.py): node -> (hydrate before it runs, offload after).
+#: The output step's intermediate_schema + output_sql_script (every row again, twice) are
+#: offloaded too: left in the state they made the post-output checkpoint ~150 MB, saved for
+#: many minutes while the job already read "paused" (migration f87078d7, 29 Sep 2026). Only
+#: the write step reads them.
+BULK_IO: "dict[str, tuple[list[str], list[str]]]" = {
+    "ingest_node":               ([], ["full_tables"]),
+    "deterministic_mapper_node": (["full_tables"], []),
+    "pk_review_node":            (["full_tables"], []),
+    "unique_table_review_node":  (["full_tables"], []),
+    "pre_semantic_review_node":  (["full_tables"], []),
+    "preprocess_node":           (["full_tables"], ["full_tables", "cleaned_tables"]),
+    "hierarchy_node":            (["cleaned_tables"], []),
+    "verify_hierarchy_node":     (["cleaned_tables"], []),
+    "output_generator_node":     (["full_tables", "cleaned_tables"],
+                                  ["intermediate_schema", "output_sql_script"]),
+    "write_node":                (["cleaned_tables", "intermediate_schema", "output_sql_script"], []),
+    "udr_node":                  (["full_tables", "cleaned_tables"], []),
+    "test_2_node":               (["cleaned_tables"], []),
+}
+
+
 def build_migration_graph(
     checkpointer: Any,
 ) -> Any:
@@ -133,26 +155,12 @@ def build_migration_graph(
     # request size N" (seen on a 1.887M-row run where the post-preprocess checkpoint carried
     # BOTH). Wrap each node so the bulk rows are HYDRATED from Blob before a node that reads
     # them runs, and DEHYDRATED (offloaded + cleared) from the state before the checkpoint —
-    # so the state only ever carries a small ref. Map: node → (hydrate-before, offload-after).
+    # so the state only ever carries a small ref. Map: BULK_IO (module level) — node →
+    # (hydrate-before, offload-after).
     from .bulk_tables import hydrate as _bulk_hydrate, dehydrate as _bulk_dehydrate
 
-    _BULK_IO: "dict[str, tuple[list[str], list[str]]]" = {
-        "ingest_node":               ([], ["full_tables"]),
-        "deterministic_mapper_node": (["full_tables"], []),
-        "pk_review_node":            (["full_tables"], []),
-        "unique_table_review_node":  (["full_tables"], []),
-        "pre_semantic_review_node":  (["full_tables"], []),
-        "preprocess_node":           (["full_tables"], ["full_tables", "cleaned_tables"]),
-        "hierarchy_node":            (["cleaned_tables"], []),
-        "verify_hierarchy_node":     (["cleaned_tables"], []),
-        "output_generator_node":     (["full_tables", "cleaned_tables"], []),
-        "write_node":                (["cleaned_tables"], []),
-        "udr_node":                  (["full_tables", "cleaned_tables"], []),
-        "test_2_node":               (["cleaned_tables"], []),
-    }
-
     def _add_node(name: str, fn: Callable) -> None:
-        _hydrate_ch, _offload_ch = _BULK_IO.get(name, ([], []))
+        _hydrate_ch, _offload_ch = BULK_IO.get(name, ([], []))
 
         async def _wrapped(state, _fn=fn, _h=_hydrate_ch, _o=_offload_ch):
             mig = state.get("migration_id") if isinstance(state, dict) else None

@@ -80,6 +80,25 @@ async def update_node_progress(
         logger.warning(f"[db_writer] update_node_progress failed (non-fatal): {e}")
 
 
+async def report_progress_pct(migration_id: str, pct: float) -> None:
+    """Write ONLY progress_pct — the heartbeat of a long step (graph/progress_beat.py).
+
+    Status, step and gate are left alone: a beat that landed after the step's own pause must
+    not turn "paused" back into "running". Non-fatal, like every writer here.
+    """
+    try:
+        session_factory = _get_session_factory()
+        async with session_factory() as session:
+            await session.execute(
+                update(MigrationJob)
+                .where(MigrationJob.id == UUID(migration_id))
+                .values(progress_pct=float(pct))
+            )
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"[db_writer] report_progress_pct failed (non-fatal): {e}")
+
+
 async def write_gate_payload(
     migration_id: str,
     gate_type: str,
