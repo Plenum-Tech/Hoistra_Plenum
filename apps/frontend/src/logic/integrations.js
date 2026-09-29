@@ -111,7 +111,12 @@ export const integrationsMethods = {
         label: "Audit trail", icon: "ph-scroll", badge: s.auLiveLoadedAt || s.auLiveError ? String(s.audit.length) : "…",
         color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",
-        click: () => { window.scrollTo(0, 0); this.setState({ view: "audit", role: "admin", navOpen: true, detail: null }); }
+        click: () => {
+          window.scrollTo(0, 0);
+          this.setState({ view: "audit", role: "admin", navOpen: true, detail: null });
+          // Coming back to the page is a visit to the tab it is on (pre-push review, 29 Sep 2026).
+          if (this.state.auTab === "vendors") this.vaLoad();
+        }
       }],
 
       intTiles: [

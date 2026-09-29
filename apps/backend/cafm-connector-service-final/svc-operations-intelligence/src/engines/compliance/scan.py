@@ -228,9 +228,26 @@ async def _set_vendor_block(
     *,
     accreditation_type: str,
     reason: str,
+    source: str = "compliance_scan",
+    certificate_id: str | None = None,
+    record: bool = True,
 ) -> bool:
+    """Block the vendor. A vendor that was not blocked before gets one vendor-audit entry
+    (auth/vendor_audit.py); every scan re-blocks a lapsed vendor, and that is not a change.
+    ``record=False``: the caller (the scan's vendor worker) records the run's net change."""
     try:
         async with session.begin_nested():
+            prior = (await session.execute(
+                text(
+                    """
+                    SELECT COALESCE(block_state, 'Clear') AS block_state, vendor_name,
+                           organization_id::text AS organization_id
+                      FROM plenum_cafm.vendors
+                     WHERE id::text = :vid
+                    """
+                ),
+                {"vid": str(vendor_id)},
+            )).mappings().first()
             await session.execute(
                 text(
                     """
@@ -244,10 +261,20 @@ async def _set_vendor_block(
                 ),
                 {"vid": str(vendor_id), "reason": reason, "acct": accreditation_type},
             )
-        return True
     except Exception as exc:  # noqa: BLE001
         log.error("scan.block_failed", vendor_id=str(vendor_id), error=str(exc))
         return False
+    if record and prior and prior.get("block_state") != "Blocked":
+        from ..auth import vendor_audit
+
+        await vendor_audit.record_block_event(
+            session, action=vendor_audit.BLOCKED, vendor_id=vendor_id,
+            vendor_name=prior.get("vendor_name"), organization_id=prior.get("organization_id"),
+            source=source,
+            detail={"reason": reason, "accreditation_type": accreditation_type,
+                    "certificate_id": certificate_id},
+        )
+    return True
 
 
 async def _clear_vendor_block(
@@ -257,8 +284,12 @@ async def _clear_vendor_block(
     organization_id: UUID | None = None,
     accreditation_type: str | None = None,
     enqueue_confirm: bool = True,
+    source: str = "compliance_scan",
+    certificate_id: str | None = None,
+    record: bool = True,
 ) -> bool:
-    """Clear Blocked state. Returns True if a row was updated (block lifted)."""
+    """Clear Blocked state. Returns True if a row was updated (block lifted), and records the
+    lift in the vendor audit trail (auth/vendor_audit.py)."""
     from ...shared.approvals import enqueue_approval
 
     result = await session.execute(
@@ -270,7 +301,7 @@ async def _clear_vendor_block(
                 block_date = NULL,
                 blocked_accreditation_type = NULL
             WHERE id::text = :vid AND COALESCE(block_state, 'Clear') = 'Blocked'
-            RETURNING vendor_name
+            RETURNING vendor_name, organization_id::text AS organization_id
             """
         ),
         {"vid": str(vendor_id)},
@@ -278,6 +309,15 @@ async def _clear_vendor_block(
     row = result.mappings().first()
     if not row:
         return False
+    from ..auth import vendor_audit
+
+    if record:
+        await vendor_audit.record_block_event(
+            session, action=vendor_audit.CLEARED, vendor_id=vendor_id,
+            vendor_name=row.get("vendor_name"),
+            organization_id=row.get("organization_id") or organization_id, source=source,
+            detail={"accreditation_type": accreditation_type, "certificate_id": certificate_id},
+        )
     if enqueue_confirm:
         vname = row.get("vendor_name") or "Vendor"
         acct = accreditation_type or "accreditation"
@@ -643,8 +683,11 @@ async def apply_vendor_cert_ladder(
     organization_id: UUID | None,
     type_name: str,
     renewal_url: str | None,
+    source: str = "compliance_scan",
+    record: bool = True,
 ) -> dict[str, Any]:
-    """CCC §5 vendor risk ladder for ONE certificate.
+    """CCC §5 vendor risk ladder for ONE certificate. ``source`` names what ran it in the
+    vendor audit trail: the nightly scan, or a certificate being ingested.
 
     Medium Risk → informational queue item; High Risk / Lapsed → vendor renewal email
     draft (+ block_state=Blocked on Lapsed); Clear → lift any block. Reused by the nightly
@@ -671,6 +714,9 @@ async def apply_vendor_cert_ladder(
                 vendor_id,
                 organization_id=organization_id or cert.organization_id,
                 accreditation_type=type_name,
+                source=source,
+                certificate_id=str(cert.id) if cert.id else None,
+                record=record,
             )
             if lifted:
                 result["alerts_created"] += 1
@@ -770,6 +816,9 @@ async def apply_vendor_cert_ladder(
                 vendor_id,
                 accreditation_type=type_name,
                 reason=f"Accreditation lapsed: {type_name}",
+                source=source,
+                certificate_id=str(cert.id) if cert.id else None,
+                record=record,
             )
             if ok:
                 result["blocks_set"] += 1
@@ -820,6 +869,12 @@ async def _process_vendor_certs(
     organization_id: UUID | None,
 ) -> WorkerResult:
     wr = WorkerResult(worker="vendor_cert_worker", stream="vendor", ok=True)
+    # The ladder runs per certificate, so one vendor can be blocked and cleared inside this run.
+    # Each vendor's net change over the run is what the vendor audit trail records.
+    from ..auth import vendor_audit
+
+    vendor_ids = list(dict.fromkeys(str(c.vendor_id) for c in certs if c.vendor_id))
+    before = await vendor_audit.read_vendor_states(session, vendor_ids)
     for cert in certs:
         wr.scanned += 1
         country = cert.country_code or settings.default_country_code
@@ -845,12 +900,15 @@ async def _process_vendor_certs(
             organization_id=organization_id,
             type_name=type_name,
             renewal_url=renewal_url,
+            record=False,
         )
         wr.alerts_created += ladder["alerts_created"]
         wr.blocks_set += ladder["blocks_set"]
         wr.details.extend(ladder["details"])
         for adv in ladder["adversaries"]:
             _tally_adversary(adv, wr)
+    after = await vendor_audit.read_vendor_states(session, vendor_ids)
+    await vendor_audit.record_net_changes(session, before, after, source="compliance_scan")
     return wr
 
 

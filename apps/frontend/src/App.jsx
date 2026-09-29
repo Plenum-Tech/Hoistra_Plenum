@@ -24,6 +24,7 @@ import IngestionAgentModal from './components/shell/IngestionAgentModal.jsx';
 import SuperAdminOverlay from './components/shell/SuperAdminOverlay.jsx';
 import DecisionQueue from './components/shell/DecisionQueue.jsx';
 import DetailDrawer from './components/shell/DetailDrawer.jsx';
+import VendorDrawer from './components/shell/VendorDrawer.jsx';
 import CommandPalette from './components/shell/CommandPalette.jsx';
 import Toast from './components/shell/Toast.jsx';
 
@@ -69,6 +70,7 @@ export default function App() {
       {vals.saOn ? <SuperAdminOverlay vals={vals} /> : null}
       {vals.queueOpen ? <DecisionQueue vals={vals} /> : null}
       {vals.detailOpen ? <DetailDrawer vals={vals} /> : null}
+      {vals.vendorDrawerOpen ? <VendorDrawer vals={vals} /> : null}
       {vals.paletteOpen ? <CommandPalette vals={vals} /> : null}
       {vals.toastOn ? <Toast vals={vals} /> : null}
     </div>

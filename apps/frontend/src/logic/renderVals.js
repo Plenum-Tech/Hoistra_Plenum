@@ -187,6 +187,9 @@ export const renderValsMethods = {
     const mkActions = (labels, ctx) => labels.map((l, i) => ({
       label: l, cls: i === 0 ? "btn-primary" : "btn-secondary",
       click: () => {
+        // A drawer that brings its own handler for a button uses it — the asset drawer's
+        // Vendor opens the vendor drawer, which no label match below could know about.
+        if (detail && detail.handlers && typeof detail.handlers[l] === "function") return detail.handlers[l]();
         const low = l.toLowerCase();
         // The console is the live register; the module is the seed table. Check the
         // console first because its label also contains "open compliance".
@@ -334,6 +337,7 @@ export const renderValsMethods = {
       chatRetry: () => this.chatConnect(true),
       chatIntro: "Ask about compliance, energy, vendors, work orders or documents. The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
       queueOpen: s.queueOpen, paletteOpen: s.paletteOpen, detailOpen: !!detail,
+      vendorDrawerOpen: !!(s.vdOpen && s.signedIn), vd: s.vdOpen && s.signedIn ? this.vendorDrawerVals() : null,
       toggleQueue: () => this.setState((p) => ({ queueOpen: !p.queueOpen, acctOpen: false, paletteOpen: false, detail: null }), () => {
         // "On demand" means the run happens when you come for it: opening the drawer
         // re-reads the queue's sources. Silent — the fresh rows are on screen.
@@ -1319,6 +1323,7 @@ export const renderValsMethods = {
       ...this.enBuildingVals(s),
       ...this.usersVals(s),
       ...this.auditVals(s),
+      ...this.vendorAuditVals(s),
       ...this.ingestionVals(s),
       ...this.saVals(s),
       ...this.mgVals(s),

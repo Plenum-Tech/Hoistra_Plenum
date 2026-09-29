@@ -200,6 +200,14 @@ export const energyApi = {
   // The data behind the walk's bms_trend, utility_bill and weather lines — the same datasets
   // the lines are derived from, so what the orchestrator summarises cannot disagree with them.
   // Each carries status found | not_found | unreadable. Read-only; 404 outside your buildings.
+  // The vendor drawer: the asset's vendor, its contact, block state and score, when the
+  // assignment last changed, and the company's vendors it could move to. PATCH moves it —
+  // admins only, audited in the same transaction on the server.
+  assetVendor: (assetId) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/vendor', { query: withOrg(), timeoutMs: 20000 }),
+  changeAssetVendor: (assetId, vendorId, note) =>
+    apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/vendor', {
+      method: 'PATCH', query: withOrg(), body: { vendor_id: vendorId, note: note || null }, timeoutMs: 30000 }),
   assetBmsTrend: (assetId, weeks) =>
     apiFetch(B, '/api/energy/assets/' + enc(assetId) + '/bms-trend', { query: withOrg({ weeks: weeks || 8 }), timeoutMs: 20000 }),
   assetUtilityBill: (assetId, weeks) =>

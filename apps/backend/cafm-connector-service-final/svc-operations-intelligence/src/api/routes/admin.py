@@ -9,6 +9,7 @@
     GET    /api/admin/buildings                  the company's buildings, for the allocation chips
     GET    /api/admin/usage                      per-building and per-user usage
     GET    /api/admin/ingestion-audit            the audit trail, filterable by outcome
+    GET    /api/admin/vendor-audit               vendor reassignments, blocks and clears
     GET    /api/admin/data-reset                 what a reset would delete, table by table
     POST   /api/admin/data-reset                 delete the company's page data: compliance, contracts,
                                                  assets, energy, maintenance - any of them (confirm by name)
@@ -39,6 +40,7 @@ from ...config import settings
 from ...engines.admin import org_data_reset, org_export
 from ...engines.auth import access
 from ...engines.auth import ingestion_audit
+from ...engines.auth import vendor_audit
 from ...engines.auth import invitations as invite_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import usage as usage_engine
@@ -441,6 +443,22 @@ async def ingestion_audit_trail(
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=out)
     return out
+
+
+@router.get("/vendor-audit")
+async def vendor_audit_trail(
+    limit: int = Query(300, le=1000),
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """Which vendor changed, how, when, and who or what changed it — asset reassignments
+    (audit_logs) plus compliance blocks and clears (ops_audit_log), newest first.
+
+    The company comes from the verified scope, never from the URL, for the reason given on
+    /ingestion-audit above. The page filters by range, kind and text itself.
+    """
+    return await vendor_audit.list_events(session, organization_id=scope.organization_id,
+                                          limit=limit)
 
 
 # ── the company's data, as a file ────────────────────────────────────────────

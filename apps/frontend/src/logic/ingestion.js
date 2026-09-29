@@ -154,7 +154,7 @@ export const ingestionMethods = {
       msgs.push({ who: "agent", text: (s.ingOutcome.outcome ? s.ingOutcome.outcome + " — " : "") + s.ingOutcome.msg });
       // The admin VIEW MODE is only for accounts auth.js lets toggle it — the modal runs
       // for every signed-in user and must not escalate a real user account's view.
-      actions.push({ label: "View audit trail", kind: "primary", click: () => { clearInterval(this._ingT); window.scrollTo(0, 0); this.setState((p) => ({ ingOn: false, view: "audit", role: canAdmin(p.account) ? "admin" : p.role, navOpen: true, detail: null })); } });
+      actions.push({ label: "View audit trail", kind: "primary", click: () => { clearInterval(this._ingT); window.scrollTo(0, 0); this.setState((p) => ({ ingOn: false, view: "audit", auTab: "ingestion", role: canAdmin(p.account) ? "admin" : p.role, navOpen: true, detail: null })); } });
       actions.push({ label: "Close", kind: "secondary", click: () => this.setState({ ingOn: false }) });
     }
 

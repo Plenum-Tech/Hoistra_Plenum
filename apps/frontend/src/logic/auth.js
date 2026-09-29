@@ -367,6 +367,7 @@ export const authMethods = {
   // Local sign-out. `notice` is what the gate shows — the server's own line when it ended
   // the session, nothing when the person chose to leave.
   authSignedOut(notice) {
+    this._vdToken = (this._vdToken || 0) + 1;
     // A viewAsCompany() override belongs to the session that chose it — never left
     // armed for whoever signs into this tab next.
     setActingOrg(null);
@@ -380,6 +381,9 @@ export const authMethods = {
     this.setState({
       account: null, accessToken: null, refreshToken: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
+      // The vendor drawer is a fixed overlay too; left open it showed a company's vendor,
+      // contacts and change controls over the sign-in gate.
+      vdOpen: false, vd: null, vdConfirm: false, vdSaving: false,
       // The Super Admin console is a fixed, full-screen overlay keyed on saOn alone — App.jsx
       // renders it with no signedIn check at all. Without resetting it here, signing out from
       // inside the console (its own Sign out button, a 401, another tab signing out) cleared

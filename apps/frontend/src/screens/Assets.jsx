@@ -216,7 +216,10 @@ export default function Assets({ vals }) {
                                         <div style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "8px" }}>
                                           {"Vendor"}
                                         </div>
-                                        <div style={{ fontSize: "11.5px", marginTop: "3px" }}>
+                                        <div className="hv11" role="button" tabIndex={0} onClick={r.vendorOpen}
+                                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") r.vendorOpen(e); }}
+                                          title="Open the vendor — and, for an admin, change it"
+                                          style={{ fontSize: "11.5px", marginTop: "3px", cursor: "pointer", color: "var(--color-accent)", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: "3px" }}>
                                           {r.vendor}
                                         </div>
                                       </div>

@@ -19,6 +19,8 @@ import { CC_CASE_DEFAULTS, chatCaseMethods } from './chatCases.js';
 import { buildingsLiveMethods } from './buildingsLive.js';
 import { energyLiveMethods } from './energyLive.js';
 import { assetsLiveMethods } from './assetsLive.js';
+import { assetsVendorMethods } from './assetsVendor.js';
+import { vendorAuditMethods } from './vendorAudit.js';
 import { maintenanceLiveMethods } from './maintenanceLive.js';
 import { graphLiveMethods } from './graphLive.js';
 import { chatMethods } from './chat.js';
@@ -204,6 +206,9 @@ export class HoistraLogic extends Controller {
     // "what happened today", and All is one click away. auTotal is the server's own count,
     // filled by auLiveLoad; auNow exists so a test can pin the clock the ranges read.
     auQuery: "", auBuilding: "", auPerson: "", auRange: "Today", auTotal: 0, auNow: null,
+    // Vendor audit trail (logic/vendorAudit.js), the page's second tab; read when opened.
+    auTab: "ingestion", vaEvents: null, vaLoading: false, vaError: "", vaUnreadable: [],
+    vaQuery: "", vaKind: "All", vaRange: "All", vaOpen: null, vaNow: null,
     // The person picker: a standing scope (everyone / admins / users), one name when one is
     // picked, and the popover's own open state and type-ahead.
     auPeopleScope: "", auPeopleOpen: false, auPeopleQuery: "", auPersonId: "",
@@ -309,4 +314,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);

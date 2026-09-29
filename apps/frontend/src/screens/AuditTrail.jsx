@@ -1,7 +1,9 @@
-// AuditTrail — Ingestion audit trail (admin). `vals` is the view model from useHoistra().
-// The tiles, chip counts and day groups all describe the SAME filtered set the rows below
-// them show; auditTrail.js is where that narrowing happens.
+// AuditTrail — the Audit trail page (admin): two tabs, the Ingestion audit trail and the
+// Vendor audit trail (screens/VendorAuditTrail.jsx). `vals` is the view model from
+// useHoistra(). The tiles, chip counts and day groups all describe the SAME filtered set the
+// rows below them show; auditTrail.js and vendorAudit.js are where that narrowing happens.
 import React from 'react';
+import VendorAuditTrail from './VendorAuditTrail.jsx';
 
 export default function AuditTrail({ vals }) {
   return (
@@ -15,9 +17,20 @@ export default function AuditTrail({ vals }) {
           <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"/"}</span>
           <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Administration"}</span>
           <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"/"}</span>
-          <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Ingestion audit trail"}</span>
+          <span style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{vals.auCrumb}</span>
         </div>
 
+        <div role="tablist" aria-label="Audit trails" style={{ display: "flex", gap: "22px", marginTop: "16px", borderBottom: "1px solid var(--color-divider)" }}>
+          {(vals.auTabs || []).map((t, $i) => (
+            <div key={$i} role="tab" aria-selected={t.on} onClick={t.pick} className={t.on ? "" : "hv11"}
+              style={{ fontSize: "12.5px", padding: "8px 2px 9px", marginBottom: "-1px", cursor: "pointer", whiteSpace: "nowrap", color: t.on ? "var(--color-accent)" : "var(--color-neutral-400)", borderBottom: t.on ? "2px solid var(--color-accent)" : "2px solid transparent" }}>
+              {t.label}
+            </div>
+          ))}
+        </div>
+
+        {vals.auIsVendors ? <VendorAuditTrail vals={vals} /> : (
+        <React.Fragment>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "16px 24px", marginTop: "18px" }}>
           <div style={{ minWidth: "0", flex: "1 1 340px" }}>
             <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-accent)" }}>{"Administration · ingestion-validation"}</div>
@@ -221,6 +234,8 @@ export default function AuditTrail({ vals }) {
             {"Nothing in this range. Widen the dates, or clear a filter."}
           </div>
         ) : null}
+        </React.Fragment>
+        )}
       </div>
     </div>
   );

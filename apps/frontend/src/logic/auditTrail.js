@@ -13,7 +13,7 @@
 // every OTHER filter, never by the chip you are standing on: a chip whose own count changed
 // when you pressed it could never tell you what pressing a different one would give you.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
-const AU_TONE = {
+export const AU_TONE = {
   ok: ["var(--st-ok)", "var(--st-ok-bg)"],
   warn: ["var(--st-warn)", "var(--st-warn-bg)"],
   risk: ["var(--st-risk)", "var(--st-risk-bg)"],
@@ -32,15 +32,15 @@ const AU_STATUSES = ["All", "Accepted", "Reassigned", "Overridden", "Rejected"];
 //: first screen of. The type-ahead is what reaches the rest, and the footer says so.
 const AU_BLD_SHOWN = 60;
 //: How many days back each range reaches. 0 = today only, null = the whole trail.
-const AU_RANGES = [["Today", 0], ["7 days", 7], ["14 days", 14], ["All", null]];
+export const AU_RANGES = [["Today", 0], ["7 days", 7], ["14 days", 14], ["All", null]];
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTHS = ["January", "February", "March", "April", "May", "June",
+export const MONTHS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
 
 const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 //: Whole days between two instants, counted by calendar date rather than elapsed hours —
 //: 23:59 and 00:01 are a day apart to a reader even though they are two minutes apart.
-function daysBetween(at, now) {
+export function daysBetween(at, now) {
   const d = at ? new Date(at) : null;
   if (!d || isNaN(d)) return null;
   return Math.round((midnight(now) - midnight(d)) / 86400000);
@@ -56,7 +56,7 @@ function matchesStatus(outcome, status) {
 }
 const isClean = (outcome) => matchesStatus(outcome, "Accepted");
 
-function dayLabel(at, now) {
+export function dayLabel(at, now) {
   const ago = daysBetween(at, now);
   if (ago === null) return "Undated";
   if (ago === 0) return "Today";

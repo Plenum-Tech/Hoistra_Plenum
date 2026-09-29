@@ -611,16 +611,24 @@ export const assetsConditionMethods = {
     this._asIntelP = this._asIntelP || {};
     if (this._asIntelP[assetId]) return this._asIntelP[assetId];
     this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { loading: true } }) }));
+    // An answer read before the asset changed (its vendor was just reassigned — assetsVendor.js
+    // bumps _asIntelGen) is dropped: written back, it restored the old vendor, and Raise work
+    // order drafted to that vendor's contact (pre-push review, 29 Sep 2026).
+    this._asIntelGen = this._asIntelGen || {};
+    const gen = this._asIntelGen[assetId] || 0;
+    const current = () => (this._asIntelGen[assetId] || 0) === gen;
+    const box = {};
     const run = (async () => {
       try {
         const res = await energyApi.assetIntelligence(assetId);
-        this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: res || {} }) }));
+        if (current()) this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: res || {} }) }));
       } catch (e) {
-        this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { error: (e && e.message) || String(e), status: e && e.status } }) }));
+        if (current()) this.setState((p) => ({ asIntel: Object.assign({}, p.asIntel, { [assetId]: { error: (e && e.message) || String(e), status: e && e.status } }) }));
       } finally {
-        delete this._asIntelP[assetId];
+        if (this._asIntelP[assetId] === box.run) delete this._asIntelP[assetId];
       }
     })();
+    box.run = run;
     this._asIntelP[assetId] = run;
     return run;
   },
@@ -922,7 +930,9 @@ export const assetsConditionMethods = {
         woLabel: 'Raise work order', inspectLabel: 'Request inspection',
         openWorkOrders: nWo,
         locName: loc ? (loc.name || [loc.floor, loc.zone].filter(Boolean).join(' · ') || 'Unnamed location') : 'Location not set',
-        open: () => this.asCondOpenAsset(x, loc, nWo)
+        open: () => this.asCondOpenAsset(x, loc, nWo),
+        // The vendor name opens the vendor drawer — without opening the asset drawer too.
+        vendorOpen: (e) => { if (e && e.stopPropagation) e.stopPropagation(); return this.asVendorOpen(Object.assign({}, x, { nWo: nWo })); }
       };
     };
 
@@ -1302,7 +1312,10 @@ export const assetsConditionMethods = {
           { a: 'certificates', t: 'Reading the compliance register…' },
           { a: 'vendor accreditation', t: 'Reading the compliance register…' }
         ],
-        refinement: ''
+        refinement: '',
+        // The vendor drawer: who the asset is assigned to, and for an admin, moving it.
+        actions: ['Vendor'],
+        handlers: { Vendor: () => this.asVendorOpen(Object.assign({}, x, { nWo: nWo })) }
       },
       detailFields: [], detailActions: []
     });

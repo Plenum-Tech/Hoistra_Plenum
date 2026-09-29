@@ -1172,6 +1172,8 @@ async def _supersede_prior_vendor_certs(
                     organization_id=org_id if isinstance(org_id, UUID) else None,
                     accreditation_type=type_code,
                     enqueue_confirm=False,
+                    source="certificate_superseded",
+                    certificate_id=str(cert.id) if getattr(cert, "id", None) else None,
                 )
             except Exception as exc:  # noqa: BLE001 — block-lift is best-effort
                 log.warning("compliance.supersede_block_lift_failed", error=str(exc)[:200])
@@ -1945,6 +1947,7 @@ async def upsert_certificate(
                 organization_id=org_id,
                 type_name=pack.certificate_type_name,
                 renewal_url=pack.verification_url,
+                source="certificate",
             )
         except Exception as exc:  # noqa: BLE001 — vendor ladder must not block the upsert
             log.warning("certificate.vendor_ladder_failed", error=str(exc)[:200])

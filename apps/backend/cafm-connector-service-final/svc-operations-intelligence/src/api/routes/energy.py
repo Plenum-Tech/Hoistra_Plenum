@@ -42,6 +42,7 @@ from ...engines.energy import detection_coverage as coverage_svc
 from ...engines.energy import ask as ask_svc
 from ...engines.energy import investigate as inv_svc
 from ...engines.energy import asset_sources
+from ...engines.energy import asset_vendor
 from ...engines.energy import market_profiles as mp_svc
 from ...engines.energy import pricing as price_svc
 from ...engines.energy import asset_intelligence as ai_svc
@@ -1933,6 +1934,72 @@ def _asset_head(detail: dict) -> dict:
     a = detail["asset"]
     return {"id": a["id"], "asset_name": a["asset_name"], "asset_code": a.get("asset_code"),
             "building_id": a["building_id"], "building": a.get("building")}
+
+
+class AssetVendorChange(BaseModel):
+    vendor_id: str = Field(..., min_length=1, description="The company's vendor to assign")
+    note: str | None = Field(None, max_length=2000, description="Why — kept in the audit entry")
+
+
+#: What each refusal of a vendor change answers as.
+_VENDOR_CHANGE_STATUS = {"not_admin": 403, "not_found": 404, "vendor_not_found": 404,
+                         "blocked": 409, "inactive": 409, "different_trade": 409, "legacy_id": 422,
+                         "unchecked": 503,
+                         "not_recorded": 503, "not_changed": 503}
+
+
+@router.get("/assets/{asset_id}/vendor")
+async def asset_vendor_view(
+    asset_id: str,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The Assets page's vendor drawer: the vendor this asset is assigned to, its contact on
+    record, its accreditation and block state, its latest scorecard, when the assignment last
+    changed and by whom — and the company's vendors it could be moved to, each saying whether it
+    can be assigned and why not. ``can_change`` says whether this reader may change it.
+    Reads only. 404 for an asset outside your buildings."""
+    detail = await _asset_in_scope(session, s, asset_id)
+    out = await asset_vendor.vendor_view(session, asset_id=detail["asset"]["id"],
+                                         organization_id=s.organization_id,
+                                         include_choices=s.is_admin)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail={
+            "ok": False, "error": "No such asset in your buildings.", "reason": "not_found"})
+    return {**out, "can_change": s.is_admin, "written": False}
+
+
+@router.patch("/assets/{asset_id}/vendor")
+async def asset_vendor_change(
+    asset_id: str,
+    body: AssetVendorChange,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Assign the asset to another of its company's vendors.
+
+    Admins only (403 otherwise). The asset must be in your buildings (404) and the vendor in the
+    asset's company (404, the same answer as a vendor that does not exist). A blocked or
+    inactive vendor is refused with its reason (409); a legacy vendor id that the asset's column
+    cannot hold is refused (422). The change and its audit_logs entry are written in one
+    transaction — if the entry cannot be written, nothing changes (503). Choosing the vendor
+    already assigned changes nothing. Future work-order, inspection and records emails go to the
+    new vendor; past work orders and scores stay where they are."""
+    vendor_id = body.vendor_id.strip()
+    if not vendor_id:
+        raise HTTPException(status_code=422, detail={"ok": False, "reason": "no_vendor",
+                                                     "error": "Choose a vendor."})
+    detail = await _asset_in_scope(session, s, asset_id)
+    if not s.is_admin:
+        raise HTTPException(status_code=403, detail={
+            "ok": False, "reason": "not_admin",
+            "error": "Only an admin can change the vendor an asset is assigned to."})
+    out = await asset_vendor.change_vendor(
+        session, asset_id=detail["asset"]["id"], vendor_id=vendor_id, user_id=s.user_id,
+        role=s.role, note=body.note, organization_id=s.organization_id)
+    if not out.get("ok"):
+        raise HTTPException(status_code=_VENDOR_CHANGE_STATUS.get(out.get("reason"), 400), detail=out)
+    return {**out, "written": bool(out.get("changed"))}
 
 
 @router.get("/assets/{asset_id}/bms-trend")

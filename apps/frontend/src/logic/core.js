@@ -147,6 +147,9 @@ export const coreMethods = {
     // page and fed the previous company's readings into that company's chat.
     clearInterval(this._invTick);
     this._invToken = (this._invToken || 0) + 1;
+    // The vendor drawer names one company's vendors and would move an asset to one of them.
+    this._vdToken = (this._vdToken || 0) + 1;
+    this._vaToken = (this._vaToken || 0) + 1;
     this._asInvRow = null;
     if (this.state.flow === 'investigate') this.setState({ flow: null });
     this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
@@ -160,6 +163,10 @@ export const coreMethods = {
       enAnomLive: null, enMetersLive: null, enFloorsLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
       inv: null, invStage: 0, invSrcDone: 0,
+      vdOpen: false, vd: null, vdConfirm: false, vdSaving: false,
+      // Back to the Ingestion tab: a Vendor tab left showing an emptied trail read nothing until
+      // it was clicked again (pre-push review, 29 Sep 2026).
+      auTab: "ingestion", vaEvents: null, vaLoading: false, vaError: "", vaUnreadable: [], vaOpen: null,
       asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
       asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,
       // The condition rule is per organisation, so none of it survives a company switch:

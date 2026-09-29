@@ -60,6 +60,11 @@ export const adminApi = {
   // overridden | rejected | approved_on_confirmation | validated | held | clarified) —
   // the UI's "Accepted" chip folds approved_on_confirmation in client-side. `count` is the
   // filtered total (the pagination denominator); by_outcome ignores the filter.
+  // The Vendor audit trail: asset reassignments plus compliance blocks and clears, newest
+  // first → {ok, events[{id, kind, at, actor, source, vendor, from_vendor, to_vendor, asset,
+  // building, note, reason, accreditation, certificate_id}], unreadable[]}.
+  vendorAudit: () => apiFetch(B, '/api/admin/vendor-audit', { query: Object.assign({ limit: 300 }, orgQuery()) }),
+
   ingestionAudit: (query) =>
     apiFetch(B, '/api/admin/ingestion-audit', { query: Object.assign({ limit: 100, offset: 0 }, orgQuery(), query || {}) }),
 
