@@ -744,7 +744,7 @@ chat**: the classifier has no hint for LOLER or FGAS (the F-Gas log would be fil
 |---|---|---|---|---|
 {cert_rows}
 
-SafeLift's lapsed public liability and ProudCastle's lapsed BAFE SP203-1 are what block them (ceiling 60).
+SafeLift's lapsed public liability and Pennard's lapsed BAFE SP203-1 are what block them (ceiling 60).
 
 ## 4. Contracts -> contract extraction
 Each states only what the prototype says was read from the contract (clause numbers kept); everything else is
@@ -778,7 +778,7 @@ Invoice lines need the LLM to be read (the heuristic reader does not take `WO-B-
    write. Assets, Maintenance, sections and meters fill.
 2. **Energy**: ingest both CSVs in `energy/`, then **Run energy scan**. EUI ~215 against TM46 212.
 3. **Certificates**: choose Bishopsgate Tower in the composer, attach everything in `certificates/` (not the
-   subfolder), say "ingest these certificates". SafeLift and ProudCastle turn Blocked on ingest.
+   subfolder), say "ingest these certificates". SafeLift and Pennard turn Blocked on ingest.
 4. **Contracts**: attach each file in `contracts/`, "ingest this contract". Six draft parameter sets appear on
    the Vendors page, with each term marked contract or default.
 5. **Invoices**: attach each PDF in `invoices/`, "verify this invoice". The held lines appear under the
@@ -790,7 +790,7 @@ Invoice lines need the LLM to be read (the heuristic reader does not take `WO-B-
 - Apex Mechanical: response 94 %, completion 88 %, first fix 81 %, recall 6 %; invoices 74 % with INV-8841
   (£544) and INV-8802 (£212) held; trend declining.
 - Northgate Electrical 98 / 96 / 92 / 3, improving; Apex Lifts 96 / 93 / 88 / 4, stable; Clearwater
-  88 / 81 / 79 / 9, declining; SafeLift and ProudCastle capped at 60.
+  88 / 81 / 79 / 9, declining; SafeLift and Pennard capped at 60.
 - Compliance: the FRA lapsed; Apex Mechanical's SSIP, Clearwater's PL and Northgate's NICEIC expiring.
 """
     open(os.path.join(out, "DEMO_WORKFLOW.md"), "w", encoding="utf-8").write(demo)

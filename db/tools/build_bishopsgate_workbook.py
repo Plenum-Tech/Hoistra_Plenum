@@ -199,7 +199,7 @@ VENDORS = [
     ("APXL", "Apex Lifts", "Lifts", "3 Tannery Yard, London SE1 3ZZ", "+44 20 7946 0730", "LEIA member 2291"),
     ("SFLT", "SafeLift Engineering", "Lifts", "Bay 2, Riverside Park, Dartford DA1 9ZZ", "+44 1322 496 018", "LEIA member 3107"),
     ("NGEL", "Northgate Electrical", "Electrical", "41 Northgate Row, Manchester M3 9ZZ", "+44 161 496 0284", "NICEIC 034512"),
-    ("PCFR", "ProudCastle Fire", "Fire", "Castle Court, Croydon CR0 9ZZ", "+44 20 7946 0957", "none current"),
+    ("PNFS", "Pennard Fire Services", "Fire", "7 Pennard Road, Croydon CR0 9ZZ", "+44 20 7946 0957", "none current"),
     ("CLWC", "Clearwater Compliance", "Water hygiene", "12 Fleet Mews, Reading RG1 9ZZ", "+44 118 496 0661", "LCA member 1188"),
     # Not in the prototype: a second mechanical contractor, so the Vendors page compares two of
     # a trade. It holds the floor fan-coil banks; Apex keeps the central plant.
@@ -235,7 +235,7 @@ FLOOR_NAMES = ["Basement", "Ground"] + [f"Level {i}" for i in range(1, FLOORS - 
 #: The two Bishopsgate vendors the compliance console shows Blocked (HOISTRA_CC.vendors).
 BLOCK = {
     "SFLT": ("Blocked", "Public liability insurance lapsed; LOLER competence not on record", "CONTRACTOR_PL_INSURANCE"),
-    "PCFR": ("Blocked", "BAFE SP203-1 registration lapsed; SP101, SP105 and NSI Gold not on record", "BAFE_SP203_1"),
+    "PNFS": ("Blocked", "BAFE SP203-1 registration lapsed; SP101, SP105 and NSI Gold not on record", "BAFE_SP203_1"),
     "OSTP": ("Blocked", "NICEIC Approved Contractor registration lapsed", "NICEIC"),
 }
 
@@ -255,7 +255,7 @@ GEN_PERF = {"FNMC": {"sla_r": 92, "sla_c": 87, "firstfix": 83, "recall": 7, "inv
             "AQLW": {"sla_r": 91, "sla_c": 86, "firstfix": 82, "recall": 7, "invoice": 88, "trend": "stable"},
             "FNKH": {"sla_r": 80, "sla_c": 72, "firstfix": 70, "recall": 12, "invoice": 72, "trend": "declining"},
             "SFLT": {"sla_r": 82, "sla_c": 74, "firstfix": 70, "recall": 12, "invoice": 70, "trend": "declining"},
-            "PCFR": {"sla_r": 85, "sla_c": 78, "firstfix": 72, "recall": 10, "invoice": 75, "trend": "declining"}}
+            "PNFS": {"sla_r": 85, "sla_c": 78, "firstfix": 72, "recall": 10, "invoice": 75, "trend": "declining"}}
 GEN_CONTRACT = {"FNMC": {"ref": "FM-2025-MECH-02", "signed": "12 May 2025", "expires": "11 May 2028"},
                 "CRVM": {"ref": "CV-2025-MECH-03", "signed": "04 Aug 2025", "expires": "03 Aug 2027"},
                 "TLVL": {"ref": "TL-2025-LIFT-02", "signed": "19 Jun 2025", "expires": "18 Jun 2027"},
@@ -266,10 +266,10 @@ GEN_CONTRACT = {"FNMC": {"ref": "FM-2025-MECH-02", "signed": "12 May 2025", "exp
                 "AQLW": {"ref": "AW-2025-WATER-02", "signed": "27 Feb 2025", "expires": "26 Feb 2028"},
                 "FNKH": {"ref": "FH-2024-WATER-05", "signed": "11 Nov 2024", "expires": "10 Nov 2026"},
                 "SFLT": {"ref": "SL-2025-LIFT-01", "signed": "03 Mar 2025", "expires": "02 Mar 2027"},
-                "PCFR": {"ref": "PC-2024-FIRE-02", "signed": "15 Jul 2024", "expires": "14 Jul 2027"}}
+                "PNFS": {"ref": "PN-2024-FIRE-02", "signed": "15 Jul 2024", "expires": "14 Jul 2027"}}
 GEN_TERMS = [("P1 response", "4 hours"), ("P2 response", "1 business day"), ("P3 response", "5 business days"),
              ("Completion target", "95%"), ("First-time fix target", "85%"), ("Recall window", "28 days")]
-GEN_RATES = {"FNMC": (72, 108), "SFLT": (74, 111), "PCFR": (62, 93), "CRVM": (70, 105), "TLVL": (72, 108),
+GEN_RATES = {"FNMC": (72, 108), "SFLT": (74, 111), "PNFS": (62, 93), "CRVM": (70, 105), "TLVL": (72, 108),
              "BRKE": (66, 99), "OSTP": (58, 87), "KSTF": (64, 96), "LUMF": (60, 90), "AQLW": (58, 87), "FNKH": (54, 81)}
 #: One contract per vendor: scoring reads a vendor's newest confirmed parameter set, and two
 #: sets signed the same day block it (FR-035), so Heating folds into Mechanical.
@@ -278,7 +278,7 @@ CONTRACTS = [
     ("APXL", "Lifts · Bishopsgate", "Passenger lifts: monthly service, LOLER support", 12, 38000),
     ("SFLT", "Lift LOLER support · Bishopsgate", "LOLER examination support and lift call-outs", 2, 9000),
     ("NGEL", "Electrical · Bishopsgate", "LV distribution, EICR, emergency lighting", 4, 21000),
-    ("PCFR", "Fire and security · Bishopsgate", "Fire alarm, detection, FRA", 4, 16000),
+    ("PNFS", "Fire and security · Bishopsgate", "Fire alarm, detection, FRA", 4, 16000),
     ("CLWC", "Water hygiene · Bishopsgate", "L8 monitoring, TMVs, tanks and calorifiers", 12, 14000),
     ("FNMC", "Terminal units PPM · Bishopsgate", "Fan coil units on every floor: filters, condensate, fan motors", 4, 48000),
     ("CRVM", "Mechanical call-out · Bishopsgate", "Reactive HVAC and heating support out of hours", 0, 24000),
@@ -448,11 +448,11 @@ OPEN_ORDERS = [
     ("4561", "PUMP-01", "P3", "Draft", "Predictive", 3,
      "CHW pump 1 — drive-end bearing vibration 4.6 mm/s against 2.8 baseline, rising for 3 weeks"),
     ("4562", "FIRE-PANEL-01", "P2", "Held", "Compliance", 6,
-     "Blocked — accreditation: ProudCastle Fire's BAFE SP203-1 has lapsed; the loop 2 fault waits for an accredited contractor"),
+     "Blocked — accreditation: Pennard Fire Services's BAFE SP203-1 has lapsed; the loop 2 fault waits for an accredited contractor"),
     ("4563", "DHW-01", "P3", "Scheduled", "Planned", 1,
      "Calorifier descale and TMV cartridge replacement — booked"),
     ("4564", "FIRE-PANEL-01", "P2", "In progress", "Reactive", 2,
-     "Loop 2 earth fault — reassigned from ProudCastle Fire (blocked) to the alternate, Kestamere Fire Protection",
+     "Loop 2 earth fault — reassigned from Pennard Fire Services (blocked) to the alternate, Kestamere Fire Protection",
      "Kestamere Fire Protection"),
     ("4565", "BOILER-01", "P3", "Draft", "Predictive", 4,
      "Boiler 1 — flue gas CO up 30% over 6 weeks to 150 ppm; burner service proposed"),
@@ -1022,7 +1022,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
     for code, name, cls, sec, vendor, yr, val, life, l1 in [
         ("BOILER-01", "Boiler 1 — central plant", "Boiler", "Central plant · basement", "Apex Mechanical", 2012, 60000, 20, True),
         ("BOILER-02", "Boiler 2 — central plant", "Boiler", "Central plant · basement", "Apex Mechanical", 2012, 60000, 20, False),
-        ("FIRE-PANEL-01", "Fire alarm panel — ground", "Fire panel", "Ground · reception and common", "ProudCastle Fire", 2016, 14000, 15, True),
+        ("FIRE-PANEL-01", "Fire alarm panel — ground", "Fire panel", "Ground · reception and common", "Pennard Fire Services", 2016, 14000, 15, True),
         ("DB-01", "Main LV switchboard", "LV board", "Central plant · basement", "Northgate Electrical", 2009, 85000, 30, True),
         ("DHW-01", "Domestic water — tanks, calorifiers and TMVs", "Water system", "Central plant · basement",
          "Clearwater Compliance", 2011, 45000, 25, True),
@@ -1279,7 +1279,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
          add(sh(pdate(lol["expiry"])), 6), 6, "Satisfactory")
     cert(f"FGAS-{CODE}-CH101", "FGAS", "Asset", code_of[fgas["asset"]], "APXM", "Apex Mechanical", "Sam Whitlock",
          "REFCOM 55120", add(sh(pdate(fgas["expiry"])), 12), 12, "Leak check passed")
-    cert(f"FRA-{CODE}-2025", "FRA", "Building", None, "PCFR", "ProudCastle Fire", "Helen Marsh", "IFE 88231",
+    cert(f"FRA-{CODE}-2025", "FRA", "Building", None, "PNFS", "Pennard Fire Services", "Helen Marsh", "IFE 88231",
          add(sh(pdate(fra["exp"])), 12), 12, "Significant findings", status="expired",
          defects="Compartmentation breaches at L12 riser", remedial="Fire-stop riser penetrations; re-assess",
          rstatus="open")
@@ -1288,9 +1288,9 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
          sh(dt.date(2024, 6, 11)), 60, "Satisfactory")
     cert("0310-4471-2090-6655-2281", "EPC", "Building", None, None, "Kestrel Energy Assessors", "Ruth Callaghan",
          "EPC/NDEA 0219934", sh(dt.date(2019, 4, 2)), 120, "D", rating="D", score=88)
-    cert(f"FAS-{CODE}-2026-03", "FIRE_ALARM_SERVICE", "Building", None, "PCFR", "ProudCastle Fire", "Helen Marsh", "IFE 88231",
+    cert(f"FAS-{CODE}-2026-03", "FIRE_ALARM_SERVICE", "Building", None, "PNFS", "Pennard Fire Services", "Helen Marsh", "IFE 88231",
          sh(dt.date(2026, 4, 2)), 6, "Satisfactory")
-    cert(f"FAS-{CODE}-2026-08", "FIRE_ALARM_SERVICE", "Building", None, "PCFR", "ProudCastle Fire", "Helen Marsh", "IFE 88231",
+    cert(f"FAS-{CODE}-2026-08", "FIRE_ALARM_SERVICE", "Building", None, "PNFS", "Pennard Fire Services", "Helen Marsh", "IFE 88231",
          sh(dt.date(2026, 8, 20)), 6, "Satisfactory with 1 observation", defects="Two detectors on L7 slow to respond",
          remedial="Replace detectors L7-14, L7-15", rstatus="open")
     cert(f"CP17-{CODE}-2026", "CP17", "Building", None, "APXM", "Apex Mechanical", "Sam Whitlock", "Gas Safe 612044",
@@ -1312,7 +1312,7 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
             n += 1
             cert(f"{typ}-{vcode}-{n:02d}", typ, "Vendor", None, vcode, c["ver"].split("— ")[-1], None, None,
                  exp - dt.timedelta(days=int(30.44 * months)), months, c["req"], exp=exp)
-    # ...and what else the compliance console says they hold; then SafeLift and ProudCastle,
+    # ...and what else the compliance console says they hold; then SafeLift and Pennard,
     # which it shows Blocked - each with the lapsed accreditation that blocks it (generated).
     vend = [("APXM", "GAS_SAFE", "Registered", 12, dt.date(2026, 2, 1), "valid"),
             ("FNMC", "GAS_SAFE", "Registered", 12, dt.date(2026, 4, 14), "valid"),
@@ -1339,8 +1339,8 @@ def build(proto: dict, out_path: str, as_of: dt.date, org_users: list[tuple[str,
             ("SFLT", "LEIA", "Member", 12, dt.date(2026, 2, 12), "valid"),
             ("SFLT", "CONTRACTOR_EL_INSURANCE", "GBP 5,000,000", 12, dt.date(2025, 11, 20), "valid"),
             ("SFLT", "CONTRACTOR_PL_INSURANCE", "Lapsed — renewal not supplied", 12, dt.date(2025, 7, 18), "expired"),
-            ("PCFR", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 5, 1), "valid"),
-            ("PCFR", "BAFE_SP203_1", "Registration lapsed", 36, dt.date(2023, 7, 8), "expired")]
+            ("PNFS", "CONTRACTOR_PL_INSURANCE", "GBP 5,000,000", 12, dt.date(2026, 5, 1), "valid"),
+            ("PNFS", "BAFE_SP203_1", "Registration lapsed", 36, dt.date(2023, 7, 8), "expired")]
     for vcode, typ, result, months, issued, status in vend:
         vname = next(v[1] for v in VENDORS if v[0] == vcode)
         n += 1
