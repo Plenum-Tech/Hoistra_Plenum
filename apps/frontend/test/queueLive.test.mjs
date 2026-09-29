@@ -1,7 +1,7 @@
 // The Decision queue ("N Pending") shaped from the live reads: pending approvals, open
 // energy anomalies and maintenance decisions owed — ranked by consequence, seed until any
 // read answers, each live card opening the record's own detail drawer.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 globalThis.window = { location: { origin: 'http://test.local' }, scrollTo: () => {}, addEventListener: () => {}, removeEventListener: () => {} };
@@ -250,9 +250,11 @@ test('a delay beyond a day never reaches setTimeout — it waits a day and re-pl
   c.setState({ signedIn: true, freq: 'Custom', cFreq: 'Monthly', cDate: '2026-01-31', cTime: '02:00' });
   let refreshed = 0;
   c.queueRefresh = async () => { refreshed += 1; };
+  // A fixed clock: on the real one, the day before the month's run is less than a day away.
+  mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-02T12:00:00') });
   const real = globalThis.setTimeout; const delays = [];
   globalThis.setTimeout = (fn, ms) => { delays.push(ms); return real(() => {}, 0); };
-  try { c.queueSchedule(); } finally { globalThis.setTimeout = real; }
+  try { c.queueSchedule(); } finally { globalThis.setTimeout = real; mock.timers.reset(); }
   assert.equal(delays.at(-1), 24 * 3600000);
   assert.equal(refreshed, 0);
   clearInterval(c._orchTick);
