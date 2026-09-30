@@ -493,9 +493,12 @@ async def _persist(
     # this same block, and replacing it wholesale would erase the link while the status line
     # kept rendering — a loss nobody would see.
     verification = dict(meta.get("verification") or {})
+    # Where the check actually landed, when it names one: the GOV.UK lookup reaches the
+    # certificate's own page, while the result's source_url is the register's search form.
+    landed = str((result.get("evidence") or {}).get("source_url") or "")
     verification.update({
         "channel": result.get("channel"),
-        "source_url": result.get("source_url"),
+        "source_url": landed if landed.startswith("https://") else result.get("source_url"),
         "checked_at": result.get("checked_at"),
         "verified": result.get("verified"),
         "status": result.get("status"),

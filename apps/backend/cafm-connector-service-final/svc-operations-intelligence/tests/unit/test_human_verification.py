@@ -34,6 +34,22 @@ def test_a_stored_prefilled_govuk_error_link_is_rebuilt_not_reused():
     assert link["url"] == GOVUK
 
 
+def test_a_stored_bare_search_page_gives_way_to_the_certificate_page():
+    # What a verify run stored for the RT5 TM44: the search form, with no number on it - the
+    # Verify button opened an empty box although the platform knew the certificate's page.
+    for typ, num in (("TM44", "8835-5966-2832-1595-3906"), ("DEC", "9920-1010-0626-0890-2091")):
+        link = hv.certificate_verify_link(register_url=GOVUK, certificate_type_code=typ, certificate_number=num,
+                                          stored={"source_url": GOVUK, "status": "verified"})
+        assert link["url"].endswith("/energy-certificate/" + num) and link["direct"] is True
+
+
+def test_a_stored_certificate_page_is_kept():
+    page = "https://find-energy-certificate.service.gov.uk/energy-certificate/8835-5966-2832-1595-3906"
+    link = hv.certificate_verify_link(register_url=GOVUK, certificate_type_code="TM44",
+                                      certificate_number="8835-5966-2832-1595-3906", stored={"source_url": page})
+    assert link["url"] == page
+
+
 def test_a_register_that_prefills_gets_the_number():
     link = hv.certificate_verify_link(register_url=GAS, certificate_type_code="CP17",
                                       accreditation_number="123456")

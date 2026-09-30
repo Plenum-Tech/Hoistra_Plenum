@@ -88,8 +88,12 @@ def certificate_verify_link(
             prefills_number=bool((reg or {}).get("prefills_number", True)),
             certificate_number=certificate_number,
         )
-        # A stored GOV.UK link may predate the 20-digit fix and point at the error page.
-        if not url or (_GOVUK_ENERGY_HOST in str(url) and "reference_number=" in str(url)):
+        # A stored GOV.UK link that is not a certificate's own page gives way to the one built
+        # from its number: a pre-filled search may predate the 20-digit fix and land on the
+        # error page, and the bare search form a verify run used to store opened with an empty
+        # box - the number never reached the register.
+        stored_direct = str(url or "").startswith(_GOVUK_ENERGY_HOST + "/energy-certificate/")
+        if not url or (_GOVUK_ENERGY_HOST in str(url) and not stored_direct):
             url = built
     # Only a web address is a link. The stored URL is client-writable (the certificate
     # upsert accepts raw_metadata), and a "javascript:" value rendered into <a href> would
