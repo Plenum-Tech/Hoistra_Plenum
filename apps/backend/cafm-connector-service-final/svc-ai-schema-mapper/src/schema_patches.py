@@ -110,8 +110,66 @@ async def apply_patch(
     return "lock_skipped"  # unreachable; keeps the return type honest
 
 
+#: "cancelled" is final. DELETE /api/migration/{id} marks a run cancelled, but the run may still
+#: be inside a step, and some thirty places write a job's status - a step's progress, a gate
+#: pausing, the error handlers around every graph invocation. Any of them landing after the
+#: cancel would put the run back to running, awaiting_review or failed, and a user who pressed
+#: Cancel would see it carry on. One trigger holds for all of them, including writers added
+#: later. Only the status and the gate are held; progress, logs and error text still update.
+CANCEL_TRIGGER = "migration_jobs_cancel_is_final"
+CANCEL_FUNCTION_DDL = """
+CREATE OR REPLACE FUNCTION plenum_cafm.migration_jobs_keep_cancelled() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF OLD.status = 'cancelled' AND NEW.status IS DISTINCT FROM 'cancelled' THEN
+        NEW.status := 'cancelled';
+        NEW.completed_at := COALESCE(OLD.completed_at, NEW.completed_at);
+        NEW.pending_gate_type := NULL;
+        NEW.pending_gate_payload := NULL;
+    END IF;
+    RETURN NEW;
+END
+$fn$"""
+CANCEL_TRIGGER_DDL = (
+    "CREATE TRIGGER " + CANCEL_TRIGGER + " BEFORE UPDATE ON plenum_cafm.migration_jobs "
+    "FOR EACH ROW EXECUTE FUNCTION plenum_cafm.migration_jobs_keep_cancelled()"
+)
+_TRIGGER_EXISTS_SQL = text(
+    "SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'plenum_cafm' AND c.relname = 'migration_jobs' AND t.tgname = :name AND NOT t.tgisinternal"
+)
+
+
+async def ensure_cancel_is_final(engine: Any, *, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> str:
+    """Install the trigger once. Asked first, so an existing trigger takes no lock (rule one);
+    under the same lock timeout and retries as the column patches (rule two)."""
+    try:
+        async with engine.connect() as conn:
+            if (await conn.execute(_TRIGGER_EXISTS_SQL, {"name": CANCEL_TRIGGER})).scalar():
+                logger.info("migration_jobs cancel trigger already installed, no lock taken")
+                return "already_applied"
+    except Exception:  # noqa: BLE001 - fall through; the CREATE is the authority
+        pass
+    for attempt in range(1, LOCK_RETRIES + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+                await conn.execute(text(CANCEL_FUNCTION_DDL))
+                await conn.execute(text(CANCEL_TRIGGER_DDL))
+            logger.info("migration_jobs cancel trigger installed")
+            return "applied"
+        except Exception as exc:  # noqa: BLE001
+            if is_lock_timeout(exc) and attempt < LOCK_RETRIES:
+                await sleep(LOCK_RETRY_SLEEP_S)
+                continue
+            logger.warning("migration_jobs cancel trigger skipped (%s); next start retries", exc)
+            return "lock_skipped" if is_lock_timeout(exc) else "failed"
+    return "lock_skipped"
+
+
 async def ensure_migration_jobs_schema_patches() -> None:
     """Add columns introduced after initial deploy without requiring Alembic upgrade."""
     engine = get_async_engine()
     for name, ddl in PATCHES:
         await apply_patch(engine, name, ddl)
+    await ensure_cancel_is_final(engine)

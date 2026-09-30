@@ -262,3 +262,11 @@ test('the domain label is read off the tools behind a reply', () => {
   assert.equal(domainOf([]), 'Orchestrator');
   assert.equal(domainOf(undefined), 'Orchestrator');
 });
+
+test('a work-order engine answer is badged Work orders, not Compliance', () => {
+  // The exact trace of the lift question on 30 Sep 2026: every structured answer carries
+  // compliance_pipeline, so the engine tag has to win.
+  assert.equal(domainOf(['search_assets', 'compliance_pipeline', 'phase2_engine:wo_engine']), 'Work orders');
+  assert.equal(domainOf(['compliance_pipeline', 'phase2_engine:udr']), 'Database');
+  assert.equal(domainOf(['compliance_pipeline', 'phase2_engine:compliance']), 'Compliance');
+});

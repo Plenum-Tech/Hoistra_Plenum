@@ -41,6 +41,7 @@ from redis import asyncio as aioredis
 from openai import AsyncOpenAI
 from fastapi import FastAPI, Request, WebSocket, HTTPException, Query, Path, Depends, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
+from .services.principal import Principal, current_principal, may_cancel
 from fastapi.responses import Response, JSONResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from sqlalchemy import select, update, func, text
@@ -4909,8 +4910,16 @@ def create_app() -> FastAPI:
     async def cancel_migration(
         migration_id: str = Path(..., description="Migration UUID"),
         session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(current_principal),
     ) -> MigrationCancelResponse:
-        """Cancel a running migration and clean up resources."""
+        """Cancel a migration - running, paused at a step, or waiting at a review gate.
+
+        The caller must be signed in and allowed to run migrations for the run's company
+        (services/principal.may_cancel): this route took no token until 30 Sep 2026, and it
+        is now a button. A run that is mid-step stops at the next step boundary - the pipeline
+        checks the status before every node (graph/migration_graph.py) - and "cancelled" is
+        final: a trigger keeps any later write from replacing it (schema_patches.py).
+        """
         try:
             migration_id_uuid = UUID(migration_id)
 
@@ -4922,7 +4931,12 @@ def create_app() -> FastAPI:
             if not migration_job:
                 raise HTTPException(status_code=404, detail="Migration not found")
 
-            if migration_job.status in ["complete", "cancelled", "failed"]:
+            allowed, why = may_cancel(principal, migration_job.organization_id)
+            if not allowed:
+                logger.warning(f"cancel refused for {migration_id}: {why} (caller {principal.email})")
+                raise HTTPException(status_code=403, detail=why)
+
+            if migration_job.status in ["complete", "cancelled", "failed", "ddl_failed"]:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot cancel migration with status: {migration_job.status}",
@@ -4935,9 +4949,11 @@ def create_app() -> FastAPI:
             migration_job.completed_at = datetime.utcnow()
             migration_job.pending_gate_type = None
             migration_job.pending_gate_payload = None
+            if not migration_job.error_message:
+                migration_job.error_message = "Cancelled by " + (principal.email or "a user")
             await session.commit()
 
-            logger.info(f"Cancelled migration: {migration_id}")
+            logger.info(f"Cancelled migration: {migration_id} by {principal.email}")
 
             # Finalise the Activity Log card to "cancelled" — cancelling never runs the Node-10
             # emit, so without this the per-run card stays stuck at its last running/pending sync.

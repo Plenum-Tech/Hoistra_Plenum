@@ -2,6 +2,9 @@
 name: udr-database-query
 agent: udr
 description: Answers any question about data held in the plenum_cafm database when no specialist engine owns it — assets, locations, sites, vendors, spare parts, users, readings, inventory, purchase orders, categories — including questions that need two or more tables joined. The default skill for "how many", "list", "show me", "which", "who", and any cross-table lookup.
+references:
+  - buildings
+  - assets
 triggers:
   - query
   - database
@@ -32,6 +35,30 @@ triggers:
   - complete information
   - all information
   - everything about
+  - list buildings
+  - how many buildings
+  - building details
+  - building profile
+  - about the building
+  - building code
+  - floor area
+  - gross internal area
+  - how many floors
+  - which floors
+  - building section
+  - plant room
+  - asset register
+  - asset list
+  - asset category
+  - asset criticality
+  - condition grade
+  - latest inspection
+  - last inspected
+  - design life
+  - replacement value
+  - warranty expiry
+  - manufacturer
+  - model number
 ---
 
 # UDR — Universal Database Reader
@@ -47,8 +74,9 @@ Run the shared five-step loop: **RESOLVE → LOCATE → PULL → JOIN → SUMMAR
 
 | Table | Grain | Key columns | Joins out on |
 |-------|-------|-------------|--------------|
-| `assets` | one physical asset | `id` (varchar), `asset_code`, `asset_name`, `serial_number`, `barcode`, `site_id`, `location_id`, `category_id`, `criticality`, `status`, `is_online`, `health_score`, `condition_score`, `document_ids` | `id` → work_orders / plans / readings / meters / certificates |
-| `sites` | one building or site | `site_id` (varchar PK), `site_name`, `site_code`, `city`, `country`, `gfa_sqm`, `manager`, `region` | `site_id` → assets, energy, compliance |
+| `assets` | one physical asset | `id` (uuid), `asset_code`, `asset_name`, `serial_number`, `barcode`, `building_id`, `section_id`, `category_id`, `criticality`, `status`, `is_online`, `health_score`, `condition_score` | `id` → work_orders / plans / readings / meters / certificates; `building_id` → buildings. Detail: **assets.md** |
+| `buildings` | one building | `building_id` (uuid PK, no `id`), `building_code`, `name`, `primary_use`, `floors`, `gross_area_sqft`, `site_id` | `building_id` → assets, work orders, certificates, meters, floors, sections. Detail: **buildings.md** |
+| `sites` | the CMMS site record behind a building | `site_id` (varchar PK), `site_name`, `site_code`, `city`, `country`, `gfa_sqm`, `manager`, `region` | `site_id` → `buildings.site_id` only. **Never** to `assets.site_id` (a uuid, empty) |
 | `locations` | location tree node | `id`, `name`, `type`, `parent_location_id`, `level`, `city` | `id` → assets.location_id |
 | `asset_categories` | category tree | `id`, `name`, `parent_id` | `id` → assets.category_id |
 | `vendors` | one contractor | `id` (varchar), `vendor_name`, `vendor_code`, `specialty`, `trade`, `status`, `block_state`, `block_reason` | `id` → contracts, certificates, scorecards, invoices |
@@ -72,6 +100,7 @@ Confirm both against `get_schema()` before you filter on them.
 
 | Tool | Use it for |
 |------|-----------|
+| `answer_from_records(question)` | **First call for a question about particular records** — a named or coded asset, building, work order, certificate, vendor or meter, lists and counts of them by state, and what is linked to them. It plans in business terms, resolves names and codes, compiles the SQL from the ontology and reads inside the caller's scope. Answer from its `records` by its `answer_rules`; `found: false` → pass on `answer_hint`. Use the tools below when it returns `ok: false` or the question is a shape it cannot plan. |
 | `find_tables(question)` | **First call for any question whose table you are not certain of.** Searches the table catalogue by meaning: purpose, the questions each table answers, its grain, keys, links (declared and by-name) and sample values. Pass the question as asked. |
 | `table_card(table)` | One table's card before you write SQL against it: every column with sample values (status spellings, id formats), every join available, which service owns it. |
 | `get_schema()` | Every table, every column, live. Confirms exact names after `find_tables` has chosen the table. |
@@ -91,11 +120,13 @@ Confirm both against `get_schema()` before you filter on them.
 ## 3. Recipes
 
 ### "How many assets are at each site?" — one table, aggregate
+A "site" in the question is a building. Assets key on `building_id`; joining through `sites`
+returns zero for every building.
 ```sql
-SELECT s.site_name, COUNT(a.id) AS assets
-FROM plenum_cafm.sites s
-LEFT JOIN plenum_cafm.assets a ON a.site_id = s.site_id
-GROUP BY s.site_name ORDER BY assets DESC
+SELECT b.building_code, b.name, COUNT(a.id) AS assets
+FROM plenum_cafm.buildings b
+LEFT JOIN plenum_cafm.assets a ON a.building_id = b.building_id
+GROUP BY b.building_code, b.name ORDER BY assets DESC
 ```
 Answer: total first, then the table.
 

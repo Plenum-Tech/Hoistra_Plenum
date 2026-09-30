@@ -47,6 +47,31 @@ logger = get_logger(__name__)
 
 
 # ── Node implementations are now imported from .nodes modules ──────────────
+
+
+class MigrationCancelled(Exception):
+    """The run was cancelled (DELETE /api/migration/{id}); raised at the next step boundary."""
+
+
+async def _is_cancelled(migration_id) -> bool:
+    """Whether the run was cancelled. One small read per step (compared as text, which works
+    whichever type the two databases give the id).
+
+    A failure to ask is "not cancelled": the check exists to stop a run someone asked to stop,
+    and a database hiccup must not end a run nobody asked to stop."""
+    if not migration_id:
+        return False
+    try:
+        from sqlalchemy import text as _text
+        from ..db import get_async_engine
+        async with get_async_engine().connect() as conn:
+            got = (await conn.execute(
+                _text("SELECT status FROM plenum_cafm.migration_jobs WHERE id::text = :i"),
+                {"i": str(migration_id)})).scalar()
+        return got == "cancelled"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"migration cancel check failed for {migration_id}: {exc}")
+        return False
 # All 9 nodes are fully implemented in Phase 3-6
 
 
@@ -162,8 +187,14 @@ def build_migration_graph(
     def _add_node(name: str, fn: Callable) -> None:
         _hydrate_ch, _offload_ch = BULK_IO.get(name, ([], []))
 
-        async def _wrapped(state, _fn=fn, _h=_hydrate_ch, _o=_offload_ch):
+        async def _wrapped(state, _fn=fn, _h=_hydrate_ch, _o=_offload_ch, _name=name):
             mig = state.get("migration_id") if isinstance(state, dict) else None
+            # A cancelled run stops here, before its next step, instead of running to the end
+            # and writing tables for a migration the user stopped. The step already running
+            # when cancel arrived finishes; nothing after it starts.
+            if await _is_cancelled(mig):
+                logger.info(f"migration {mig} cancelled; not starting {_name}")
+                raise MigrationCancelled(f"Migration {mig} was cancelled before {_name}")
             if _h:
                 await _bulk_hydrate(state, _h)
             try:

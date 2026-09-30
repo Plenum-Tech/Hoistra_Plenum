@@ -80,6 +80,11 @@ export const schemaMapperApi = {
   list: (organizationId, limit) =>
     apiFetch(B, '/api/migration', { query: { organization_id: organizationId || undefined, limit: limit || 12 }, timeoutMs: 30000 }),
 
+  // DELETE /api/migration/{id} — cancel the run. Signed-in, and only for a run of the caller's
+  // own company (svc-ai-schema-mapper services/principal.may_cancel). A run inside a step stops
+  // before its next one; "cancelled" is final.
+  cancel: (id) => apiFetch(B, '/api/migration/' + enc(id), { method: 'DELETE', timeoutMs: T_GATE }),
+
   // POST /api/migration/{id}/advance — continue past a step_paused node.
   advance: (id) => apiFetch(B, '/api/migration/' + enc(id) + '/advance', { method: 'POST', timeoutMs: T_GATE }),
 

@@ -108,6 +108,13 @@ async def _run_graph(
             )
             return {"status": "awaiting_review", "gate_type": gate_type}
 
+        # ── Cancelled: the graph stopped at a step boundary because the user cancelled ──
+        # Not an error, and nothing to write: the cancel already marked the job, and the
+        # trigger keeps it cancelled (schema_patches.ensure_cancel_is_final).
+        if type(exc).__name__ == "MigrationCancelled":
+            logger.info("migration_graph_cancelled", migration_id=migration_id)
+            return {"status": "cancelled"}
+
         # ── Unexpected error ──────────────────────────────────────────
         logger.error(
             "migration_graph_failed",

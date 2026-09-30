@@ -549,3 +549,43 @@ test('a reload lands back on the open run: the conversation and the migration id
   saveSession({ signedIn: true, refreshToken: 'ref-1', email: 'a@b.c', role: 'admin', account: { id: 'u1', email: 'a@b.c', role: 'admin', status: 'active' }, view: 'home', mgId: 'not an id at all!' }, { signedIn: true });
   assert.equal(loadSession().mgId, undefined, 'a malformed id is not restored');
 });
+
+// Cancel is two presses: the first arms the button, the second sends DELETE. A finished run
+// offers nothing to cancel, and a refusal from the service (another company's run) is shown.
+test('a run can be cancelled with two presses, and a finished run offers no cancel', async () => {
+  handlers[STATUS] = doc();
+  handlers['GET /backend/schema-mapper/api/migration'] = { total_count: 0, migrations: [] };
+  handlers['DELETE /backend/schema-mapper/api/migration/' + ID] = { migration_id: ID, status: 'cancelled', message: 'ok' };
+  c.mgOpen(ID);
+  await settle();
+  let v = c.renderVals();
+  assert.equal(v.mgCanCancel, true);
+  assert.equal(v.mgCancelLabel, 'Cancel migration');
+
+  v.mgCancel();
+  await settle();
+  v = c.renderVals();
+  assert.equal(v.mgCancelArmed, true);
+  assert.equal(v.mgCancelLabel, 'Click again to cancel');
+  assert.ok(!calls.some((x) => x.key.startsWith('DELETE')), 'the first press only arms');
+
+  handlers[STATUS] = Object.assign(doc(), { status: 'cancelled', pending_gate_type: null, pending_gate_payload: null });
+  v.mgCancel();
+  await settle();
+  assert.equal(calls.filter((x) => x.key === 'DELETE /backend/schema-mapper/api/migration/' + ID).length, 1);
+  v = c.renderVals();
+  assert.equal(v.mgCanCancel, false, 'a cancelled run has nothing left to cancel');
+  clearTimeout(c._mgCancelTimer);
+});
+
+test('a refused cancel says why and leaves the run as it was', async () => {
+  handlers[STATUS] = doc();
+  c.mgOpen(ID);
+  await settle();
+  c.setState({ mgCancelArmed: ID });   // already armed
+  await c.mgCancel();                  // DELETE not mocked -> the service refuses
+  await settle();
+  const v = c.renderVals();
+  assert.match(v.mgError, /^The migration was not cancelled/);
+  assert.equal(v.mgCanCancel, true);
+});

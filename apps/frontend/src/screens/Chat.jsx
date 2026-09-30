@@ -160,14 +160,28 @@ export default function Chat({ vals }) {
                             <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.mgRecentNote}</div>
                           ) : null}
                           {(vals.mgRecent || []).map((r) => (
-                            <button key={r.id} type="button" className="hv13" onClick={r.open} title={r.id}
-                              style={{ ...BARE, display: "flex", alignItems: "center", gap: "10px", padding: "7px 10px", borderRadius: "8px", border: "1px solid " + (r.active ? "var(--color-accent)" : "var(--color-divider)"), textAlign: "left", width: "100%" }}>
-                              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.short}</span>
-                              <span style={{ fontSize: "11.5px" }}>{r.cmms}</span>
-                              <span style={{ flex: "1" }}></span>
-                              <span style={{ fontSize: "10.5px", color: r.tone }}>{r.status}</span>
-                              <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.when}</span>
-                            </button>
+                            // The row opens the run; Cancel sits beside it, not inside it - a
+                            // button inside a button is not valid, and a press on it would open
+                            // the run too. Only runs that can still be stopped offer it.
+                            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <button type="button" className="hv13" onClick={r.open} title={r.id}
+                                style={{ ...BARE, display: "flex", alignItems: "center", gap: "10px", padding: "7px 10px", borderRadius: "8px", border: "1px solid " + (r.active ? "var(--color-accent)" : "var(--color-divider)"), textAlign: "left", flex: "1", minWidth: "0" }}>
+                                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.short}</span>
+                                <span style={{ fontSize: "11.5px" }}>{r.cmms}</span>
+                                <span style={{ flex: "1" }}></span>
+                                <span style={{ fontSize: "10.5px", color: r.tone }}>{r.status}</span>
+                                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{r.when}</span>
+                              </button>
+                              {r.canCancel ? (
+                                <button type="button" className="hv13" onClick={r.cancel}
+                                  title={r.cancelArmed ? "Click again to cancel this migration" : "Cancel this migration"}
+                                  style={{ ...BARE, fontSize: "10.5px", padding: "6px 8px", borderRadius: "8px", whiteSpace: "nowrap",
+                                    border: "1px solid " + (r.cancelArmed ? "var(--st-risk)" : "var(--color-divider)"),
+                                    color: r.cancelArmed ? "var(--st-risk)" : "var(--color-neutral-500)" }}>
+                                  <i className="ph ph-stop-circle" style={{ fontSize: "11px", marginRight: r.cancelArmed ? "4px" : "0" }}></i>{r.cancelArmed ? "Confirm" : ""}
+                                </button>
+                              ) : null}
+                            </div>
                           ))}
                         </div>
                         <div style={{ display: m.stoppedShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>{"Stopped."}</div>

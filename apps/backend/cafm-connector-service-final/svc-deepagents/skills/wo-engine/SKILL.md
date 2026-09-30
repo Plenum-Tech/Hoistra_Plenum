@@ -78,6 +78,28 @@ closed, plus the PPM schedule that raises jobs on a timer.
 
 ---
 
+## 0. A question about a record — ask the records first
+
+"What is the status of Lift Asset-4471?", "open work orders on the Bishopsgate boilers", "which
+certificates block work on CHILLER-101" — a question about particular assets, work orders,
+certificates or vendors and what is linked to them. Call `answer_from_records(question)` with
+the question as asked **before** any other tool. It resolves the name or code (codes exactly,
+names loosely, then every other kind of record), reads only what the caller may see, and returns
+the record, its latest inspection, its open work orders and the rest of what the question asked
+for. Write the answer from its `records`, following its `answer_rules`.
+
+- `found: false` → pass its `answer_hint` on. Do not search again with a shorter name and
+  report the first thing that comes back.
+- `ok: false` → fall back to `search_assets` / `get_asset_details` / `list_work_orders`.
+- Raising, approving, moving or closing a job is still yours below; this tool only reads.
+- For an asset it always returns the whole status: open work orders, PPM visits not done and
+  the last one done, the maintenance plan's next due date, open energy anomalies with their
+  cost, and certificates. "Anything pending" is answered from those - do not report "nothing
+  pending" when the plan or the anomalies list is not empty, and do not ask the energy engine
+  again by the asset's name; if you need it, pass the asset's `id` from the records.
+
+---
+
 ## 1. Tables behind your tools
 
 | Table | Grain | Key columns |

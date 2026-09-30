@@ -90,6 +90,15 @@ async def test_any_other_error_is_skipped_without_retrying():
 async def test_the_entry_point_runs_every_patch_against_the_engine(monkeypatch):
     e = _Engine(column_present=True)
     monkeypatch.setattr(sp, "get_async_engine", lambda: e)
+    # The cancel trigger has its own existence check and its own tests (test_migration_cancel);
+    # here it only has to be run, against the same engine, after the column patches.
+    trigger_runs = []
+
+    async def _trigger(engine, **_k):
+        trigger_runs.append(engine)
+        return "already_applied"
+    monkeypatch.setattr(sp, "ensure_cancel_is_final", _trigger)
     await sp.ensure_migration_jobs_schema_patches()
     assert e.alters == 0
     assert sum("information_schema" in s for s in e.executed) == len(sp.PATCHES)
+    assert trigger_runs == [e]

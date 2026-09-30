@@ -9,6 +9,7 @@ Startup sequence:
   4. Build the singleton DeepAgentOrchestrator
   5. Serve on PORT (default 8008)
 """
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -127,6 +128,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointer=checkpointer,
     )
     log.info("svc-deepagents.orchestrator.ready")
+
+    # The record-question ontology (agents/ontology_qa.py) takes about a minute to build from
+    # the schema. Built here in the background, so the first question after a deploy does not
+    # wait for it; a question that arrives first simply waits on the same build.
+    async def _warm_ontology() -> None:
+        try:
+            from ..agents.ontology_qa import get_ontology
+
+            onto = await get_ontology()
+            log.info("svc-deepagents.ontology.ready", concepts=len(onto.concepts), rules=list(onto.derived))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("svc-deepagents.ontology.warm_failed", error=str(exc)[:300])
+
+    app.state.ontology_warm = asyncio.create_task(_warm_ontology())
 
     yield
 

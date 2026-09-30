@@ -297,6 +297,7 @@ class _TaskRunner:
             udr_search_records,
         )
         from .udr_hybrid_tools import answer_with_graph_context, retrieve_vector_evidence
+        from .ontology_qa import answer_from_records
         from .wo_engine_agent import (
             approve_work_order,
             close_work_order,
@@ -397,6 +398,7 @@ class _TaskRunner:
             "udr": create_react_agent(
                 llm,
                 tools=[
+                    answer_from_records,
                     find_tables, table_card,
                     get_schema, udr_list_tables, udr_describe_table,
                     find_asset, find_location, get_asset_documents,

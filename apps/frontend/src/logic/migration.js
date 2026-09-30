@@ -648,6 +648,35 @@ export const migrationMethods = {
     this.mgPoll(true);
   },
 
+  // Cancels the open run. Two presses: the first arms the button for five seconds, the second
+  // cancels - stopping a migration is not something one stray click should do. The service
+  // refuses a run of another company, and a finished run has nothing to cancel.
+  async mgCancel(id) {
+    const target = id || this.state.mgId;
+    if (!target || this.state.mgBusy) return;
+    if (this.state.mgCancelArmed !== target) {
+      clearTimeout(this._mgCancelTimer);
+      this.setState({ mgCancelArmed: target });
+      this._mgCancelTimer = setTimeout(() => {
+        if (this.state.mgCancelArmed === target) this.setState({ mgCancelArmed: null });
+      }, 5000);
+      return;
+    }
+    clearTimeout(this._mgCancelTimer);
+    this.setState({ mgCancelArmed: null, mgBusy: target === this.state.mgId ? 'Cancelling…' : '', mgError: '' });
+    try {
+      await schemaMapperApi.cancel(target);
+      this.setState({ mgBusy: '' });
+    } catch (e) {
+      if (isStaleScope(e)) { this.setState({ mgBusy: '' }); return; }
+      // Nothing changed, so nothing is re-read: a re-read would clear the reason just shown.
+      this.setState({ mgBusy: '', mgError: 'The migration was not cancelled: ' + ((e && e.message) || String(e)) });
+      return;
+    }
+    if (target === this.state.mgId) this.mgPoll(true);
+    this.mgListLoad();
+  },
+
   // Answers the open gate. `body` overrides the default built from the decisions — the
   // write gate passes {confirmed} explicitly.
   async mgSubmitGate(body) {
@@ -943,7 +972,10 @@ export const migrationMethods = {
         tone: isTerminal(m.status) ? (m.status === 'complete' ? 'var(--st-ok)' : 'var(--st-risk)') : m.status === 'awaiting_review' ? 'var(--color-accent)' : 'var(--color-neutral-400)',
         when: whenLabel(m.started_at, now), mapped: (m.t1_count || 0) + (m.t2_count || 0),
         active: m.migration_id === s.mgId,
-        open: () => this.mgOpen(m.migration_id)
+        open: () => this.mgOpen(m.migration_id),
+        canCancel: !isTerminal(m.status),
+        cancelArmed: s.mgCancelArmed === m.migration_id,
+        cancel: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.mgCancel(m.migration_id); }
       })),
       mgRecentEmpty: !s.mgListLoading && list.length === 0,
       mgRecentNote: s.mgListLoading && !list.length ? 'Reading recent runs…' : s.mgListError ? 'Recent runs could not be read: ' + s.mgListError : '',
@@ -984,6 +1016,12 @@ export const migrationMethods = {
         if (next && runKind(this.state.mgStatus) === 'step') { this._mgAdvanced = null; this.mgAdvance(); }
       },
       mgRefresh: () => this.mgPoll(true),
+      // Cancel: offered while the run can still be stopped - running, paused at a step, or
+      // waiting at a gate. Nothing to offer once it is complete, failed or cancelled.
+      mgCanCancel: !!(doc && s.mgId && !isTerminal(doc.status)),
+      mgCancelArmed: !!s.mgId && s.mgCancelArmed === s.mgId,
+      mgCancelLabel: s.mgBusy === 'Cancelling…' ? 'Cancelling…' : (s.mgId && s.mgCancelArmed === s.mgId) ? 'Click again to cancel' : 'Cancel migration',
+      mgCancel: () => this.mgCancel(),
       mgExtrasChip: kind === 'done' ? extrasStatus(s.mgExtras) : extrasStatus(null),
       mgExtrasRetry: kind === 'done' && !!extrasStatus(s.mgExtras).action,
       mgExtrasAction: extrasStatus(s.mgExtras).action,

@@ -28,6 +28,13 @@ export function domainOf(calls) {
     if (engine.includes("contract_performance")) return "Vendors";
     if (engine.includes("energy")) return "Energy";
     if (engine.includes("compliance")) return "Compliance";
+    // Every structured answer carries `compliance_pipeline` (the renderer's contract), so an
+    // engine missing here fell through to the ladder and was badged Compliance: a work-order
+    // answer about a lift read "COMPLIANCE" above a trace saying wo_engine (30 Sep 2026).
+    if (engine.includes("wo_engine")) return "Work orders";
+    if (engine.includes("migration")) return "Migration";
+    if (engine.includes("doc_rag")) return "Documents";
+    if (engine.includes("udr")) return "Database";
   }
   if (has(/compliance|certificate|accreditation|country_pack/)) return "Compliance";
   if (has(/energy|meter|anomal|eui|tm46/)) return "Energy";

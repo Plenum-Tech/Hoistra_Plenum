@@ -423,6 +423,15 @@ export default function MigrationRun({ vals }) {
           <button type="button" className="hv13" onClick={vals.mgRefresh} style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
             <i className="ph ph-arrow-clockwise" style={{ fontSize: "11px", marginRight: "5px" }}></i>{"Refresh"}
           </button>
+          {vals.mgCanCancel ? (
+            <button type="button" className="hv13" onClick={vals.mgCancel}
+              title="Stop this migration. A step already running finishes; nothing after it starts, and nothing more is written."
+              style={{ ...BARE, fontSize: "11px", padding: "4px 10px", borderRadius: "7px", whiteSpace: "nowrap",
+                border: "1px solid " + (vals.mgCancelArmed ? "var(--st-risk)" : "var(--color-divider)"),
+                color: vals.mgCancelArmed ? "var(--st-risk)" : "var(--color-neutral-400)" }}>
+              <i className="ph ph-stop-circle" style={{ fontSize: "11px", marginRight: "5px" }}></i>{vals.mgCancelLabel}
+            </button>
+          ) : null}
           <button type="button" className="hv11" onClick={vals.mgNew} title="Put this run aside — it keeps running and stays in the list" style={{ ...BARE, fontSize: "11px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
             {"Close"}
           </button>

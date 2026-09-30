@@ -4870,6 +4870,11 @@ class DeepAgentOrchestrator:
             tool_calls.append(
                 {"tool": "pack_facts", "input": {}, "output": pack_facts}
             )
+        # What the certificates reach - assets, their maintenance, their energy (see
+        # _certificate_reach_call). Both answer paths add it: this one reads the register itself.
+        reach_call = await self._certificate_reach_call(fetched_rows, session_id, _step)
+        if reach_call:
+            tool_calls.append(reach_call)
         analysis = await self._claude_analyse_compliance(
             user_message,
             self._compliance_data_json(tool_calls, taxonomy=is_taxonomy),
@@ -5860,6 +5865,48 @@ class DeepAgentOrchestrator:
             tool_calls=list(shortcut.get("tool_calls") or []),
         )
 
+    async def _certificate_reach_call(
+        self, rows: list[dict[str, Any]], session_id: str, step: Any = None
+    ) -> dict[str, Any] | None:
+        """What these certificates reach, as one more data block for the analyst, or None.
+
+        The assets each certificate covers (its own asset, or every asset its vendor
+        maintains), those assets' open work orders, PPMs and plans, and the open energy
+        anomalies on them or on the certificate's building - read by the ontology engine for
+        exactly these rows, inside the caller's scope, with no model call. It is what lets a
+        compliance answer say what a lapsed certificate puts at risk, not only its date.
+        Best effort: a failure here never stops the answer it would have added to.
+        """
+        ids = [r.get("id") for r in rows or [] if isinstance(r, dict) and r.get("id")]
+        if not ids:
+            return None
+        try:
+            from .ontology_qa import linked_for_certificates
+
+            reach = await linked_for_certificates(ids, budget=25000)
+        except Exception as rexc:  # noqa: BLE001
+            log.warning("compliance.certificate_reach_failed", session_id=session_id, error=str(rexc)[:300])
+            return None
+        log.info("compliance.certificate_reach", session_id=session_id, certificates=len(ids),
+                 reaching=reach.get("certificates_reaching_something"), assets=reach.get("assets"),
+                 detail=reach.get("detail"), ok=reach.get("ok"), error=reach.get("error"))
+        if not reach.get("ok") or not reach.get("certificates_reaching_something"):
+            return None
+        if step is not None:
+            await step(
+                {
+                    "stage": "links",
+                    "label": "Linked assets, maintenance and energy",
+                    "detail": (
+                        f"{reach['certificates_reaching_something']} certificate(s) reach "
+                        f"{reach['assets']} asset(s); their open work orders, PPMs, plans and "
+                        "open energy anomalies read from the ontology"
+                    ),
+                }
+            )
+        return {"tool": "certificate_reach", "input": {"certificates": len(ids)},
+                "output": {k: v for k, v in reach.items() if k != "ok"}}
+
     async def _compose_structured_compliance(
         self,
         user_message: str,
@@ -5929,6 +5976,12 @@ class DeepAgentOrchestrator:
             + str(agent_draft or "")[:3000]
             + "\n\n"
         )
+        # The same links the register path adds, for the rows the agent's tools returned. The
+        # first live question after the links shipped came down this path, and its answer named
+        # twelve certificates and none of the assets, work or energy they reach.
+        reach_call = await self._certificate_reach_call(rows, session_id, _step)
+        if reach_call:
+            data_calls.append(reach_call)
         data_json = self._compliance_data_json(data_calls, taxonomy=is_taxonomy)
         analysis = await self._claude_analyse_compliance(
             user_message, data_json, on_zone=on_zone, query_notes=notes, taxonomy=is_taxonomy

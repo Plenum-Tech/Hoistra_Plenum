@@ -1126,7 +1126,10 @@ async def search_assets(query: str, limit: int = 20) -> list[dict]:
         resp = await _request(
             "GET", settings.wo_management_base_url, "/api/assets",
             service=_SERVICE, timeout=_TIMEOUT,
-            params={"search": query, "limit": min(limit, 100)},
+            # The route reads `q` (a substring of name, code or serial). It read `search` here, which
+            # the route ignores, so every search returned the first page of the register unfiltered
+            # and "Lift Asset-4471" came back as "not found" (30 Sep 2026).
+            params={"q": query, "limit": min(limit, 100)},
         )
         return resp.json()
     except Exception as exc:
@@ -1165,7 +1168,7 @@ async def search_locations(query: str | None = None) -> list[dict]:
     """
     params: dict[str, Any] = {}
     if query:
-        params["search"] = query
+        params["q"] = query  # the route's name filter; `search` was ignored, as on /api/assets
 
     try:
         resp = await _request(
@@ -1355,7 +1358,10 @@ async def get_maintenance_overview(building_id: str | None = None) -> dict:
 # in the orchestrator) rather than through the general loop. That engine runs without a
 # checkpointer, so it must never hold a tool that interrupts for approval or writes a record:
 # a "raise me an order" reaching it would die on the first gate. READ tools only, here.
+from .ontology_qa import answer_from_records  # noqa: E402 - the record-question engine
+
 MAINTENANCE_READ_TOOLS = [
+    answer_from_records,
     get_maintenance_overview,
     list_maintenance_decisions,
     get_inspection_intelligence,
