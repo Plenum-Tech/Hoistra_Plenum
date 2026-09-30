@@ -399,6 +399,21 @@ export default function OrchestratorDock({ vals }) {
               <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
                 {vals.em.kicker}
               </div>
+              {/* Already sent: what went out and when, and the reminder / new-request switch. */}
+              <div style={{ display: vals.em.prevShow, marginTop: "9px", padding: "8px 10px", borderRadius: "7px", background: "var(--st-warn-bg)", border: "1px solid var(--st-warn)", fontSize: "11px", lineHeight: "1.5" }}>
+                <div style={{ display: "flex", gap: "7px", alignItems: "flex-start" }}>
+                  <i className="ph ph-clock-counter-clockwise" style={{ fontSize: "13px", color: "var(--st-warn)", flexShrink: "0", marginTop: "1px" }}></i>
+                  <span style={{ color: "var(--color-text)" }}>
+                    {vals.em.prevNote}{" "}
+                    <span style={{ color: "var(--color-neutral-500)" }}>
+                      {vals.em.prevIsReminder ? "This draft is a reminder of it." : "This draft is a new request."}
+                    </span>
+                  </span>
+                </div>
+                <span className="hv11" onClick={vals.em.prevSwitch} style={{ display: "inline-block", marginTop: "5px", marginLeft: "20px", color: "var(--color-accent)", cursor: "pointer", fontSize: "10.5px" }}>
+                  {vals.em.prevSwitchLabel}
+                </span>
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "7px", marginTop: "10px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
@@ -435,7 +450,7 @@ export default function OrchestratorDock({ vals }) {
                     and stops accepting clicks while it does. A second click on a slow send
                     is a second email to the same vendor. */}
                 <div className="hv7" onClick={vals.em.sendBusy ? undefined : vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.em.sendBusy ? "default" : "pointer", opacity: vals.em.sendBusy ? 0.6 : 1 }}>
-                  {vals.em.sendBusy ? "Sending…" : "Approve & send"}
+                  {vals.em.sendBusy ? "Sending…" : vals.em.prevIsReminder ? "Approve & send reminder" : "Approve & send"}
                 </div>
                 <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
                   {"Cancel"}

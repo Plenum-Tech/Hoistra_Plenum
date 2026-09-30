@@ -50,6 +50,10 @@ export const opsApi = {
   // caller must read `status`: "sent" left the platform, "dry_run" did not. Reporting on
   // `ok` alone is how the dock came to tell a PM that a vendor had been emailed when the
   // button made no request at all.
+  // What this company already sent for one request (matched on the subject) - the dock turns a
+  // repeat draft into a reminder. Never returns a body.
+  sentEmails: (subject) =>
+    apiFetch(B, '/api/approvals/sent-emails', { query: withOrg({ subject }) }),
   sendEmail: (body) =>
     apiFetch(B, '/api/approvals/send-email', {
       method: 'POST',

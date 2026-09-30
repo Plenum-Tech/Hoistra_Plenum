@@ -56,9 +56,14 @@ class Settings(BaseSettings):
                 "for the reader to send from their own client."
             )
         return mode
+    # Which transport sends platform email. "auto" keeps the old order - Microsoft Graph when
+    # its Azure app credentials are set, else SMTP. "smtp" sends through the mailbox below even
+    # while the Graph credentials stay set (they are still what reads the inbox); "graph"
+    # never falls back to SMTP.
+    email_provider: str = Field("auto", validation_alias=AliasChoices("EMAIL_PROVIDER", "email_provider"))
     smtp_host: str = Field("", validation_alias=AliasChoices("SMTP_HOST", "smtp_host"))
     smtp_port: int = Field(587, validation_alias=AliasChoices("SMTP_PORT", "smtp_port"))
-    smtp_user: str = Field("", validation_alias=AliasChoices("SMTP_USER", "smtp_user"))
+    smtp_user: str = Field("", validation_alias=AliasChoices("SMTP_USER", "SMTP_USERNAME", "smtp_user"))
     smtp_password: str = Field(
         "",
         validation_alias=AliasChoices("SMTP_PASSWORD", "smtp_password"),

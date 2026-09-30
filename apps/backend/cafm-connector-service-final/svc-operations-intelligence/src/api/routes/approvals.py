@@ -60,6 +60,20 @@ async def list_all_approvals(
     }
 
 
+@router.get("/sent-emails")
+async def sent_emails(
+    subject: str = Query(..., min_length=3, max_length=500),
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+) -> dict[str, Any]:
+    """Whether this company already sent this request, and when - so the dock offers a
+    reminder instead of a fresh copy. Matched on the subject a draft is given (and its
+    "Reminder: " copies); the body is never returned - the log holds what went out."""
+    org_id = access.organization_for(s, organization_id)
+    return await approvals_svc.sent_email_history(session, subject=subject, organization_id=org_id)
+
+
 @router.post("/send-email")
 async def send_email_draft(
     body: SendEmailDraftRequest,

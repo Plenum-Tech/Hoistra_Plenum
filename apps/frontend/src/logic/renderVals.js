@@ -7,6 +7,7 @@ import { fmtTime, runwayTicks, overdueBars } from './complianceLive.js';
 import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
 import { vendorsExtrasBanner } from './workbookExtras.js';
+import { historyNote } from './emailHistory.js';
 import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
 import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
@@ -2209,6 +2210,7 @@ export const renderValsMethods = {
         if (!spec0) return;
         const m = spec0.mail(s.fiVals, s.fSubject || "the flagged item", s.fVendor || "the responsible vendor");
         this.setState({ flow: "email", emKind: spec0.k, emKicker: m.kicker, emTo: m.to, emSubject: m.subject, emBody: m.body });
+        this.emCheckHistory();
       },
 
       // Ingest documents: a real upload against the orchestrator (deepAgentsApi.runStatefulWithFiles
@@ -2268,7 +2270,7 @@ export const renderValsMethods = {
           emTo: (bkVendor === "Apex Lifts" ? "ops@apexlifts.co.uk" : "ops@" + bkVendor.toLowerCase().replace(/[^a-z]/g, "") + ".co.uk"),
           emSubject: "Booking instruction — " + (s.fSubject || "statutory inspection") + ", " + s.bkDate,
           emBody: "Dear " + bkVendor + ",\n\nPlease attend to carry out the statutory inspection and certificate issue for " + (s.fSubject || "the obligation named below") + ".\n\nDate: " + s.bkDate + "\nWindow: " + s.bkWindow + "\n\nAccess will be arranged for the window above. Please confirm attendance by return, and upload the satisfactory certificate on completion — it is ingested directly into our compliance record.\n\nThis instruction is issued under the existing framework agreement at contracted rates.\n\nKind regards,\nPlanum Technologies"
-        })
+        }, () => this.emCheckHistory())
       },
 
       vendorPool: VENDOR_POOL.concat(s.vendors).map((v) => ({
@@ -2280,7 +2282,7 @@ export const renderValsMethods = {
           emSubject: "Booking instruction — " + (s.fSubject || "statutory inspection") + ", " + s.bkDate,
           emBody: "Dear " + v.name + ",\n\nYou have been assigned as the responsible contractor for " + (s.fSubject || "the obligation named below") + ", replacing the previously appointed vendor.\n\nDate: " + s.bkDate + "\nWindow: " + s.bkWindow + "\n\nYour accreditation has been verified as " + v.acc + ". Please confirm attendance by return, and upload the satisfactory certificate on completion — it is ingested directly into our compliance record.\n\nThis instruction is issued under the existing framework agreement at contracted rates.\n\nKind regards,\nPlanum Technologies",
           fVendor: v.name
-        })
+        }, () => this.emCheckHistory())
       })),
       poolEmpty: VENDOR_POOL.concat(s.vendors).length === 0,
 
@@ -2305,11 +2307,18 @@ export const renderValsMethods = {
           emSubject: "Request for quotation — " + s.nvSpec.split(" — ")[0].toLowerCase() + " works",
           emBody: "Dear " + v.name + ",\n\nYou have been added to the Planum Technologies contractor register for " + s.nvSpec + ".\n\nWe would like to invite a quotation for statutory inspection and remedial works at the property named in the attached scope. Please confirm your accreditation reference and earliest available attendance date with your price.\n\nQuotations received within five working days will be considered for immediate award.\n\nKind regards,\nPlanum Technologies"
         }));
+        this.emCheckHistory();
         this.flash(v.name + " created — accreditation pending verification.");
       },
 
       em: {
         kicker: s.emKicker, to: s.emTo, subject: s.emSubject, body: s.emBody,
+        // Already sent: the note, and the switch between the reminder and a fresh request.
+        prevShow: s.flow === "email" && s.emPrev && s.emPrev.count ? "block" : "none",
+        prevNote: historyNote(s.emPrev),
+        prevIsReminder: !!s.emReminder,
+        prevSwitchLabel: s.emReminder ? "Send as a new request instead" : "Make it a reminder",
+        prevSwitch: () => (s.emReminder ? this.emUseOriginal() : this.emUseReminder()),
         setTo: (e) => this.setState({ emTo: e.target.value }),
         setSubject: (e) => this.setState({ emSubject: e.target.value }),
         setBody: (e) => this.setState({ emBody: e.target.value }),

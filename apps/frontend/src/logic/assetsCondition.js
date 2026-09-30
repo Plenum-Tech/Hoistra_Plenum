@@ -1422,10 +1422,12 @@ export const assetsConditionMethods = {
     const f = this.asCondFacts(x, o);
     const draft = mailDraft(kind, f, { scope: o.scope || null });
     if (o.fromInv) {
-      return this.setState(Object.assign({ flow: 'email', flowDone: '', fSpec: null, emFromInv: true, detail: null }, draft));
+      this.setState(Object.assign({ flow: 'email', flowDone: '', fSpec: null, emFromInv: true, detail: null }, draft));
+      return this.emCheckHistory();
     }
     this.orch(kind === 'wo' ? 'Raise work order' : kind === 'records' ? 'Request records' : 'Request inspection', actionCtx(f), actionSteps(kind, f));
     this.setState(Object.assign({ flow: 'email', flowDone: '', fSpec: null, emFromInv: false }, draft));
+    this.emCheckHistory();
   },
 
   // Investigate: the asset's own investigation from the sources, in the dock. The walk is

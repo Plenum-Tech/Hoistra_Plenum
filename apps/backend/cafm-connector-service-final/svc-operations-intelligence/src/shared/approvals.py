@@ -25,7 +25,8 @@ from ..models import (
     OpsEmailLog,
 )
 from ..models.base import SCHEMA
-from .email_graph import graph_configured, send_via_microsoft_graph
+from .email_graph import send_via_microsoft_graph
+from .email_transport import email_transport
 
 log = get_logger(__name__)
 
@@ -642,6 +643,48 @@ async def decide_queue_item(
     }
 
 
+REMINDER_PREFIX = "Reminder: "
+
+
+def base_subject(subject: str) -> str:
+    """The request a subject is about, without any number of "Reminder: " in front."""
+    s = (subject or "").strip()
+    while s.lower().startswith(REMINDER_PREFIX.lower()):
+        s = s[len(REMINDER_PREFIX):].strip()
+    return s
+
+
+async def sent_email_history(
+    session: AsyncSession, *, subject: str, organization_id: UUID | None, limit: int = 10,
+) -> dict[str, Any]:
+    """The emails this company actually sent for one request - the original and its reminders,
+    newest first. Only status "sent": a dry run or a handoff did not reach anyone, so it is not
+    something to remind about. No company, no history (a platform-wide answer would name
+    another company's recipients)."""
+    base = base_subject(subject)
+    out: dict[str, Any] = {"ok": True, "subject": base, "count": 0, "items": []}
+    if not organization_id or not base:
+        return out
+    rows = (await session.execute(
+        select(OpsEmailLog.to_address, OpsEmailLog.subject, OpsEmailLog.sent_at)
+        .where(OpsEmailLog.organization_id == organization_id,
+               OpsEmailLog.status == "sent",
+               func.lower(OpsEmailLog.subject).in_([base.lower(), (REMINDER_PREFIX + base).lower()]))
+        .order_by(OpsEmailLog.sent_at.desc().nullslast())
+        .limit(limit))).all()
+    items = [{"to": r[0], "subject": r[1], "sent_at": r[2].isoformat() if r[2] else None,
+              "reminder": base_subject(r[1]) != (r[1] or "").strip()} for r in rows]
+    originals = [i for i in items if not i["reminder"]]
+    out.update({
+        "count": len(items), "items": items,
+        "reminders": sum(1 for i in items if i["reminder"]),
+        "first_sent_at": (originals[-1] if originals else items[-1])["sent_at"] if items else None,
+        "last_sent_at": items[0]["sent_at"] if items else None,
+        "last_to": items[0]["to"] if items else None,
+    })
+    return out
+
+
 async def send_platform_email(
     session: AsyncSession,
     *,
@@ -684,8 +727,8 @@ async def send_platform_email(
     session.add(row)
     await session.flush()
 
-    use_graph = graph_configured()
-    use_smtp = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+    transport = email_transport()
+    use_graph, use_smtp = transport == "graph", transport == "smtp"
 
     async def _persist() -> None:
         if commit:
@@ -703,8 +746,8 @@ async def send_platform_email(
             cc=cc_address,
             subject=subject,
             email_id=str(row.id),
-            graph_configured=use_graph,
-            smtp_configured=use_smtp,
+            transport=transport,
+            email_provider=settings.email_provider,
             attachments=len(attachments or []),
         )
         return {

@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
-from ...shared.email_graph import graph_configured
+from ...shared.email_transport import email_transport
 from ...core.logging import get_logger
 from ...db import get_session
 from ...engines.auth import accounts as acc
@@ -459,10 +459,8 @@ async def auth_config(response: Response):
     secrets_state = secrets_store.configured()
     if not all(secrets_state.values()):
         response.headers["X-Auth-Config-Warning"] = "auth secrets not set"
-    graph = graph_configured()
-    smtp = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
-    transport = "graph" if graph else ("smtp" if smtp else "none")
-    live = bool(not settings.email_dry_run and (graph or smtp))
+    transport = email_transport()
+    live = bool(not settings.email_dry_run and transport != "none")
     if not live:
         response.headers["X-Auth-Config-Warning"] = (
             response.headers.get("X-Auth-Config-Warning", "") + "; codes are not delivered"

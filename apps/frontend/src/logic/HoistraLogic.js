@@ -6,6 +6,7 @@ import { complianceMethods } from './compliance.js';
 import { vendorsMethods } from './vendors.js';
 import { energyMethods } from './energy.js';
 import { assetsConditionMethods } from './assetsCondition.js';
+import { emailHistoryMethods } from './emailHistory.js';
 import { maintenanceMethods } from './maintenance.js';
 import { integrationsMethods } from './integrations.js';
 import { renderValsMethods } from './renderVals.js';
@@ -314,4 +315,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
