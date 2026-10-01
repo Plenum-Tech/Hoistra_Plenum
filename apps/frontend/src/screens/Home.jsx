@@ -95,14 +95,61 @@ export default function Home({ vals }) {
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {"Hoist Crons"}
                 </span>
-                <span title={vals.cronsTip} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
-                  <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: vals.cronsDot }}></span>
-                  <span>
-                    {vals.cronsLabel}
+                <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  {/* Schedule a job: opens the card in the chat (logic/crons.js). Admins only -
+                      a job runs company-wide scans; everyone sees the jobs below. */}
+                  {vals.cronCanManage ? (
+                    <span className="hv15" onClick={vals.cronSchedule} title="Schedule an engine job or a question on a cadence"
+                      style={{ fontSize: "9.5px", padding: "1px 7px", borderRadius: "5px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                      {"+ Schedule"}
+                    </span>
+                  ) : null}
+                  <span title={vals.cronsTip} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
+                    <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: vals.cronsDot }}></span>
+                    <span>
+                      {vals.cronsLabel}
+                    </span>
                   </span>
                 </span>
               </div>
               <div style={{ marginTop: "9px", height: "104px", overflowY: "auto", display: "flex", flexDirection: "column" }}>
+                {/* The company's scheduled jobs, above what the engines did. */}
+                {vals.cronHas ? (
+                  <div style={{ flex: "0 0 26px", height: "26px", minHeight: "26px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{"Scheduled"}</span>
+                    <span style={{ flex: "1", height: "1px", background: "var(--color-divider)" }}></span>
+                  </div>
+                ) : null}
+                {(vals.cronRows || []).map((j) => (
+                  <div key={j.id} title={j.name + " - " + j.cadence + " - scheduled by " + (j.by || "unknown") + " - last: " + j.last + (j.lastBy ? " (requested by " + j.lastBy + ")" : "")}
+                    style={{ flex: "0 0 26px", height: "26px", minHeight: "26px", boxSizing: "border-box", display: "grid", gridTemplateColumns: "5px minmax(0,1fr) auto auto", gap: "7px", alignItems: "center" }}>
+                    <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: j.tone }}></span>
+                    <span style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {j.name}
+                      <span style={{ color: "var(--color-neutral-500)" }}>{" · " + j.cadence + " · next " + j.next}</span>
+                      <span style={{ color: j.lastOk === false ? "var(--st-risk)" : "var(--color-neutral-600)" }}>{" · " + j.last}</span>
+                    </span>
+                    {vals.cronCanManage ? (
+                      <span style={{ display: "flex", gap: "4px" }}>
+                        <span className="hv15" onClick={j.run} style={{ fontSize: "9px", padding: "2px 6px", borderRadius: "5px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>{j.running ? "Running…" : "Run"}</span>
+                        <span className="hv15" onClick={j.pause} style={{ fontSize: "9px", padding: "2px 6px", borderRadius: "5px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer", whiteSpace: "nowrap" }}>{j.pauseLabel}</span>
+                        <span className="hv15" onClick={j.remove} title={j.removeArmed ? "Click again to remove" : "Remove this job"} style={{ fontSize: "9px", padding: "2px 6px", borderRadius: "5px", border: "1px solid " + (j.removeArmed ? "var(--st-risk)" : "var(--color-divider)"), color: j.removeArmed ? "var(--st-risk)" : "var(--color-neutral-500)", cursor: "pointer", whiteSpace: "nowrap" }}>{j.removeArmed ? "Remove?" : "×"}</span>
+                      </span>
+                    ) : <span></span>}
+                    {/* Status of each day: the last 14, oldest first. Hover for the day's runs. */}
+                    <span style={{ display: "flex", gap: "2px", alignItems: "center" }}>
+                      {(j.days || []).map((d) => (
+                        <span key={d.date} title={d.title} style={{ width: "5px", height: "10px", borderRadius: "1.5px", background: d.tone }}></span>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+                {vals.cronHas ? (
+                  <div style={{ flex: "0 0 26px", height: "26px", minHeight: "26px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "9px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{"Activity"}</span>
+                    <span style={{ flex: "1", height: "1px", background: "var(--color-divider)" }}></span>
+                  </div>
+                ) : null}
                 {(vals.crons || []).map((c, $index) => (
                   <React.Fragment key={$index}>
                     <div style={{ flex: "0 0 26px", height: "26px", minHeight: "26px", boxSizing: "border-box", display: c.isSep, alignItems: "center", gap: "8px" }}>

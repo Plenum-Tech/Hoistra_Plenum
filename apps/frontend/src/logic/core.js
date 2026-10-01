@@ -88,6 +88,8 @@ export const coreMethods = {
     this.queueBoot();
     this.ccLoad();
     this.homeLoad();
+    // The company's scheduled jobs, for the Hoist Crons panel (crons.js).
+    this.cronLoad();
     this.vpLoad();
     // What the server still holds. A document held in another browser — or before the chat
     // could answer one at all — is otherwise invisible: five were open on 21 Sep with

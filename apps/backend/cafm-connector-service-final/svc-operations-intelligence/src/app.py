@@ -18,6 +18,7 @@ from .api.routes import (
     auth_router,
     compliance_router,
     contract_performance_router,
+    crons_router,
     energy_router,
     ingestion_router,
     reports_router,
@@ -200,6 +201,7 @@ app.include_router(superadmin_router)
 app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
+app.include_router(crons_router)
 app.include_router(energy_router)
 app.include_router(ingestion_router)
 app.include_router(reports_router)

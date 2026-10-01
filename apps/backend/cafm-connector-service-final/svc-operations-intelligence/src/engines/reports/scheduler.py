@@ -114,6 +114,28 @@ async def tick(*, max_cards: int = 3) -> int:
                 break
             await card_engine.run_card(session, card_id, trigger="schedule", claimed=True)
             ran += 1
+    # Hoist crons: scheduled engine jobs, on the same clock (engines/crons/jobs.py).
+    try:
+        ran += await run_due_crons()
+    except Exception as exc:  # noqa: BLE001 - a failed job must not stop the cards
+        log.warning("hoist_cron.tick_failed", error=str(exc)[:300])
+    return ran
+
+
+async def run_due_crons(*, max_jobs: int = 3) -> int:
+    """Recover stale job runs, then run up to ``max_jobs`` due jobs, one claim at a time."""
+    from ..crons import jobs as cron_engine
+
+    ran = 0
+    async with AsyncSessionLocal() as session:
+        await cron_engine.recover_stale(session)
+    for _ in range(max_jobs):
+        async with AsyncSessionLocal() as session:
+            job_id = await cron_engine.claim_due(session)
+            if job_id is None:
+                break
+            await cron_engine.run_job(session, job_id, trigger="schedule", claimed=True)
+            ran += 1
     return ran
 
 

@@ -7,6 +7,7 @@
 // nothing is asserted without disclosure.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { isScheduleRequest } from './crons.js';
 import { investigationContext } from './assetsActions.js';
 import { MODULES, INGEST_ASK } from './constants.js';
 import { HOISTRA_CC } from '../data/hoistra-compliance.js';
@@ -1251,6 +1252,27 @@ export const complianceLiveMethods = {
         return;
       }
       this.bcOpenForm();
+      this.setState({ ccBusy: false });
+      return;
+    }
+
+    // SCHEDULING A JOB IS A CARD, NOT AN ANSWER.
+    //
+    // "Run an energy anomaly scan every hour" asks the platform to do something on a clock,
+    // and the clock is the service's (engines/crons). The card opens under the sentence, ticked
+    // from it; nothing goes to the orchestrator, which has no way to keep a cadence anyway.
+    if (!files.length && isScheduleRequest(q)) {
+      if (!['admin', 'superadmin'].includes(String(this.state.role || ''))) {
+        this.setState((p) => ({
+          ccBusy: false,
+          ccChat: (p.ccChat || []).concat([{
+            role: 'bot', isNote: true,
+            text: "Scheduling a job is an administrator action — a job runs company-wide scans on the company's data. An administrator can schedule it here; the jobs already scheduled are on the Hoist Crons panel on Home."
+          }])
+        }));
+        return;
+      }
+      this.cronOpenFromChat(q, { appendQuestion: false });
       this.setState({ ccBusy: false });
       return;
     }

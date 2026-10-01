@@ -1809,6 +1809,7 @@ export const renderValsMethods = {
       // Buildings table — live rows from svc-operations-intelligence, seed as fallback (buildingsLive.js).
       ...this.bldVals(),
       ...this.bcVals(),
+      ...this.cronVals(),
       ...this.dcVals(),
       ...this.oxVals(),
       ...this.drVals(),

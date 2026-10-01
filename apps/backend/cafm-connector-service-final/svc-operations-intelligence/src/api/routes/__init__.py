@@ -3,6 +3,7 @@ from .admin import router as admin_router
 from .auth import router as auth_router
 from .compliance import router as compliance_router
 from .contract_performance import router as contract_performance_router
+from .crons import router as crons_router
 from .energy import router as energy_router
 from .ingestion import router as ingestion_router
 from .reports import router as reports_router
@@ -15,6 +16,7 @@ __all__ = [
     "auth_router",
     "compliance_router",
     "contract_performance_router",
+    "crons_router",
     "energy_router",
     "ingestion_router",
     "reports_router",

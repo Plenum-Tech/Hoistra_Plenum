@@ -19,6 +19,7 @@ import RunTrace from '../components/shell/RunTrace.jsx';
 // CAFM Web's migration panel, vendored under src/cafm — the same screens, in Hoistra's colours.
 import HoistraMigrationWizard from '../cafm/hoistra-migration-wizard.tsx';
 import HoistBuildingCard from '../components/shell/HoistBuildingCard.jsx';
+import CronJobCard from '../components/shell/CronJobCard.jsx';
 import { useFollowBottom } from '../components/shell/useFollowBottom.js';
 import { useTraceSpy } from '../components/shell/useTraceSpy.js';
 
@@ -197,6 +198,8 @@ export default function Chat({ vals }) {
             {/* Hoisting a building is an instruction to the platform, so it is carried out
                 where the instruction was given rather than on a page of its own. */}
             {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
+            {/* Scheduling a job, from "run … every …" in the composer (logic/crons.js). */}
+            {vals.cronOpen ? <CronJobCard vals={vals} /> : null}
 
             {/* And the step that follows it. "Ingest documents now" on step 3 arms this
                 flow and closes the hoist card; the dock rendered it and the Orchestrator
