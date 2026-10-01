@@ -34,7 +34,7 @@ class TestTheMaintenanceToolsExist:
     def test_the_skill_declares_its_references(self):
         sk = skill_for_agent("wo_engine")
         assert sk is not None
-        assert sk.references == ("decisions", "work-orders", "dispatch")
+        assert sk.references == ("decisions", "work-orders", "dispatch", "cost-savings")
 
 
 class TestTheFourStatesAreKeptApart:

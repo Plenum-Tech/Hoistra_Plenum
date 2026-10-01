@@ -94,6 +94,17 @@ reaching for anything.
 | a BUILDING | `list_energy_buildings` then `get_building_cost_drivers` | quote an EUI without its reference |
 | an ANOMALY | `get_anomaly_rollup` then `list_energy_anomalies` | sum the detectors |
 
+## Every answer ends with cost-saving options
+
+Whatever the energy question - a building's consumption, an anomaly, a benchmark - finish with
+a short **Cost-saving options** section: two to four options, each naming the meter, asset or
+building, the action (fix the schedule, repair the asset, raise the work order), and the annual
+£ at stake from the anomaly or cost-driver figures you already read. If an open work order would
+capture it, name it - `get_cost_savings(building_name)` lists the open jobs with priced energy
+waste on their asset. Detected is not saved; never add overlapping findings together.
+
+---
+
 ## 0. A compound question takes several calls, not one
 
 The tables above route a SIMPLE question. A question with *why* or *how much of it can I act

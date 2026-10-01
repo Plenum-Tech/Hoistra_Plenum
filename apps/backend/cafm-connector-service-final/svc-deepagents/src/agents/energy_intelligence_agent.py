@@ -1328,7 +1328,10 @@ async def list_unscored_assets(building_id: str | None = None, limit: int = 200)
         return _err(exc, "list_unscored_assets")
 
 
+from .cost_savings_agent import get_cost_savings  # noqa: E402 - cost-saving options on every answer
+
 ENERGY_INTELLIGENCE_TOOLS = [
+    get_cost_savings,
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,
     # The Assets page — bands, scores, never scored.

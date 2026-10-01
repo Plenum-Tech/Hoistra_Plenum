@@ -1362,9 +1362,11 @@ async def get_maintenance_overview(building_id: str | None = None) -> dict:
 # checkpointer, so it must never hold a tool that interrupts for approval or writes a record:
 # a "raise me an order" reaching it would die on the first gate. READ tools only, here.
 from .ontology_qa import answer_from_records  # noqa: E402 - the record-question engine
+from .cost_savings_agent import get_cost_savings  # noqa: E402 - the cost-saving read
 
 MAINTENANCE_READ_TOOLS = [
     answer_from_records,
+    get_cost_savings,
     get_maintenance_overview,
     list_maintenance_decisions,
     get_inspection_intelligence,

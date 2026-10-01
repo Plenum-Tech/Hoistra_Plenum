@@ -1,12 +1,22 @@
 ---
 name: work-order-engine
 agent: wo_engine
-description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together as a corpus (recommendations never converted to orders, which earlier inspection reports confirm or corroborate an energy anomaly, findings under warranty, condition grades). A question about what the inspection REPORTS say about orders, anomalies or warranty is this agent's, not the document reader's. Only an asset CONDITION or HEALTH question also touches energy_intelligence (consumption and anomalies) — name it under also then; a work-order, decision, PPM, approval or inspection-report question is this agent's alone and has no also. Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
+description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together as a corpus (recommendations never converted to orders, which earlier inspection reports confirm or corroborate an energy anomaly, findings under warranty, condition grades). A question about what the inspection REPORTS say about orders, anomalies or warranty is this agent's, not the document reader's. Only an asset CONDITION or HEALTH question also touches energy_intelligence (consumption and anomalies) — name it under also then; a work-order, decision, PPM, approval or inspection-report question is this agent's alone and has no also. ALSO owns COST SAVING across modules — where the company or a building can save money and the work that captures it: open jobs that remove priced energy waste, repeat-failure assets whose reactive cost nears their replacement value, invoice lines over contract rates, reactive versus planned spend, a cost-saving corrective action plan. A cost-saving, "save money", "reduce cost", "overspend", "reactive spend" or "which work orders save cost" question is this agent's (an energy-only "where are we wasting energy" stays with energy_intelligence). Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
 references:
   - decisions
   - work-orders
   - dispatch
+  - cost-savings
 triggers:
+  - cost saving
+  - cost savings
+  - save money
+  - saving money
+  - reduce cost
+  - cost reduction
+  - overspend
+  - reactive spend
+  - overcharge
   - work order
   - workorder
   - wo
@@ -75,6 +85,21 @@ triggers:
 
 You own the work order from the moment someone describes a problem to the moment the job is
 closed, plus the PPM schedule that raises jobs on a timer.
+
+---
+
+## Every answer ends with cost-saving options
+
+Whatever the maintenance, work-order or asset question - a count, a status, a backlog, a PPM
+list - finish with a short **Cost-saving options** section: two to four options, each naming the
+work order or asset, the vendor, the cost to act and the money at stake. Take them from what
+you already read (open predictive or energy-fix jobs, an asset's open energy anomalies and their
+annual cost, its replacement value). When the answer is about a building or a set of jobs and
+nothing you read is priced, make one `get_cost_savings(building_name)` call for the same
+building and period and take the top items from `open_jobs`, `repeat_failures` and
+`overcharges`. Keep it to a few lines - the question asked comes first - and follow the same
+rules: detected is not saved, energy findings are never added together, nothing is invented.
+Skip the section only for a pure write (raising, approving, closing a job).
 
 ---
 

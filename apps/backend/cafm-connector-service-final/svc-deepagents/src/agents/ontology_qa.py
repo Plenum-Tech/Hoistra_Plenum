@@ -2123,7 +2123,11 @@ ANSWER_RULES = (
     "- Show codes and names, not raw ids (uuids), unless the id was asked for. Tables are welcome. When you call "
     "another tool about the same record, pass it the record's `id` from here, not its name.\n"
     "- A condition grade is quoted with its inspection's risk level and date when an inspection is given; never "
-    "call a grade good or poor from the number alone."
+    "call a grade good or poor from the number alone.\n"
+    "- Close with 'Cost-saving options' (two to four lines) for a maintenance, work-order, asset or energy answer: "
+    "the open energy anomalies' annual cost and the job or fix that removes them, a predictive job and the failure "
+    "it prevents (against the asset's replacement value), repeat repairs approaching replacement value. Name the "
+    "work order or asset and the £; detected is not saved; never add overlapping energy findings; invent nothing."
 )
 
 #: Added when the answer carries `pending` - a question about a set of work orders.
@@ -2150,6 +2154,9 @@ PENDING_RULES = """
   accreditation renewed; In progress and late -> chase the vendor for an attend/finish time; Draft ->
   approve and issue to the vendor; Scheduled -> confirm the booked date. When `open_items_note` says
   only some are shown, list those and say how many more are open.
+- Close with "Cost-saving options" (two to four lines): predictive and energy-fix jobs in `open_items`
+  (a bearing, a stuck actuator, a schedule or setback fault, a burner) and what each prevents; if a
+  `get_cost_savings` read is available, its priced open jobs, repeat failures and overcharges.
 - Then "Next actions by vendor": one line per vendor with open work - the vendor, its job numbers, and what
   to ask of them - most urgent vendor first. Every line names a WO number and a vendor someone can act on.
 - Keep it scannable: a one-line answer, the status counts, "What is still open" by trade (one line), the
