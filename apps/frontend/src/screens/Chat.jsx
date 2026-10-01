@@ -16,7 +16,8 @@ import React, { useRef } from 'react';
 import Markdown from '../components/shell/Markdown.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
-import MigrationRun from '../components/shell/MigrationRun.jsx';
+// CAFM Web's migration panel, vendored under src/cafm — the same screens, in Hoistra's colours.
+import HoistraMigrationWizard from '../cafm/hoistra-migration-wizard.tsx';
 import HoistBuildingCard from '../components/shell/HoistBuildingCard.jsx';
 import { useFollowBottom } from '../components/shell/useFollowBottom.js';
 import { useTraceSpy } from '../components/shell/useTraceSpy.js';
@@ -251,7 +252,7 @@ export default function Chat({ vals }) {
 
             {/* A migration started from this conversation is answered in it — every gate,
                 up to and including the write. */}
-            {vals.mgHasRun ? <MigrationRun vals={vals} /> : null}
+            {vals.mgHasRun ? <HoistraMigrationWizard migrationId={vals.mgId} fileName={vals.mgFile} sessionId={vals.mgSessionId} onDismiss={vals.mgNew} onMounted={vals.mgCafmMounted} /> : null}
 
             {/* The answer being written. Its route is in the rail, so this stays a place
                 for the answer's own zones to land as they arrive. */}

@@ -990,8 +990,9 @@ test('a refresh presents the token from storage, not a stale copy in memory', as
   handlers['POST ' + A + '/login'] = session(USER, 1);
   c.setState({ email: 'sam@example.com', password: 'x'.repeat(12) });
   await c.authSignIn();
-  // Another tab rotated to ref-7 and wrote it.
-  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { refreshToken: 'ref-7' }));
+  // Another tab rotated to ref-7 and wrote it — stamped later than this tab's own token, as
+  // every rotation is (auth.js issueStamp).
+  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { refreshToken: 'ref-7', refreshTokenAt: stored().refreshTokenAt + 1 }));
   handlers['POST ' + A + '/refresh'] = session(USER, 8);
   await c.authRefresh();
   assert.equal(requests(A + '/refresh')[0].body.refresh_token, 'ref-7');
@@ -1002,7 +1003,7 @@ test('another tab rotating the token is adopted; another tab signing out signs t
   handlers['POST ' + A + '/login'] = session(USER, 1);
   c.setState({ email: 'sam@example.com', password: 'x'.repeat(12) });
   await c.authSignIn();
-  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { refreshToken: 'ref-5', account: Object.assign({}, USER, { full_name: 'Sam Five' }) }));
+  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { refreshToken: 'ref-5', refreshTokenAt: stored().refreshTokenAt + 1, account: Object.assign({}, USER, { full_name: 'Sam Five' }) }));
   c.authStorageChanged({ key: SESSION_KEY });
   assert.equal(c.state.refreshToken, 'ref-5');
   assert.equal(c.state.account.full_name, 'Sam Five');
@@ -1223,4 +1224,440 @@ test('isUnallocated: only a signed-in non-admin with an explicitly empty allocat
   // No account at all, or an account with no id yet.
   assert.equal(isUnallocated(null), false);
   assert.equal(isUnallocated({ all_buildings: false, building_ids: [] }), false);
+});
+
+// ── the building the Ingest tray's picker offers (logic/chatBuilding.js reads
+//    account.buildings) is loaded ONCE, by authLoadScope, for whichever company was being
+//    acted as at sign-in. Reported on Azure, 30 Sep 2026: after a superadmin switched
+//    company, "Choose a building" opened on "No building matches that" over an EMPTY search
+//    box, and only a page reload — which re-runs authLoadScope as the restored company —
+//    brought the list back. Three faults, each enough on its own:
+//      1. viewAsCompany()/exitViewAsCompany() reload every register but this one.
+//      2. authEnter() on a silent token refresh replaces the whole account with the refresh
+//         reply's user, which never carries the scope — the list is gone until the
+//         follow-up GET /me answers, and for good if that read fails.
+//      3. authLoadScope() turns a failed GET /api/admin/buildings into [], overwriting a
+//         list that was fine a moment ago.
+//    ───────────────────────────────────────────────────────────────────────────────────
+
+const NB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';   // the company being viewed as
+const OWN_HQ = '99999999-9999-4999-8999-999999999999';
+const NB_ROWS = [
+  { id: BSB1, name: 'Harbour Point', building_code: 'B-101' },
+  { id: BSB2, name: 'Ashgrove Court', building_code: 'B-102' }
+];
+const names = () => (c.state.account.buildings || []).map((b) => b.name);
+// GET /api/admin/buildings answers for the company named on the query — the acting-as
+// override — or for the caller's own company when none is named.
+const buildingsByCompany = (u) => (u.searchParams.get('organization_id') === NB
+  ? [200, { ok: true, count: 2, buildings: NB_ROWS }]
+  : [200, { ok: true, count: 1, buildings: [{ id: OWN_HQ, name: "Sadie's HQ", building_code: 'HQ-1' }] }]);
+const superadminMe = (extra) => [200, { ok: true, user: Object.assign({}, SUPERADMIN, {
+  can_ingest: true, building_ids: null, all_buildings: true, selected_building_id: null, buildings: []
+}, extra || {}) }];
+const adminMe = () => [200, { ok: true, user: Object.assign({}, ADMIN, {
+  can_ingest: true, building_ids: null, all_buildings: true, selected_building_id: null, buildings: []
+}) }];
+const signInSuperadmin = async () => {
+  saMock();
+  handlers['POST ' + A + '/login'] = session(SUPERADMIN, 1);
+  handlers['GET ' + A + '/me'] = superadminMe();
+  handlers['GET ' + ADM + '/buildings'] = buildingsByCompany;
+  c.setState({ email: 'sadie@example.com', password: 'x'.repeat(12) });
+  await c.authSignIn();
+  await settle();
+};
+const signInAdminWithTwoBuildings = async () => {
+  saMock();
+  handlers['POST ' + A + '/login'] = session(ADMIN, 1);
+  handlers['GET ' + A + '/me'] = adminMe();
+  handlers['GET ' + ADM + '/buildings'] = [200, { ok: true, count: 2, buildings: NB_ROWS }];
+  c.setState({ email: 'ada@example.com', password: 'x'.repeat(12) });
+  await c.authSignIn();
+  await settle();
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court'], 'precondition: sign-in loaded the list');
+};
+
+test('viewAsCompany reloads the building scope as that company, so the filing picker lists ITS buildings without a page reload', async () => {
+  await signInSuperadmin();
+  assert.deepEqual(names(), ["Sadie's HQ"], 'precondition: sign-in loaded the own company');
+
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court']);
+  const v = c.renderVals();
+  assert.deepEqual(v.cbMatches.map((b) => b.name), ['Harbour Point', 'Ashgrove Court'], 'the Ingest tray picker offers the company being viewed');
+  assert.equal(v.cbEmpty, false, 'never "No building matches that" over an empty search for a company that has buildings');
+});
+
+test('viewAsCompany drops a filing choice made while viewing the previous company — its id names a building the new company does not have', async () => {
+  await signInSuperadmin();
+  c.cbPickBuilding(OWN_HQ, "Sadie's HQ");
+  assert.equal(c.renderVals().cbChosen, true, 'precondition');
+
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+
+  const v = c.renderVals();
+  assert.equal(v.cbChosen, false);
+  assert.equal(v.cbLabel, 'No building selected');
+  assert.equal(c.state.cbBuildingId, null);
+  assert.equal(c.state.declForId, null);
+  assert.equal(c.state.declFor, '');
+});
+
+test("exitViewAsCompany reloads the superadmin's own scope — a list loaded while viewing another company must not outlive the view", async () => {
+  await signInSuperadmin();
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court'], 'precondition');
+
+  c.exitViewAsCompany();
+  await settle();
+
+  assert.deepEqual(names(), ["Sadie's HQ"]);
+});
+
+test('the scope re-read waits for the clearing PATCH — issued alongside it, GET /me could hand the stale own-company selection straight back', async () => {
+  saMock();
+  handlers['POST ' + A + '/login'] = session(SUPERADMIN, 1);
+  handlers['GET ' + A + '/me'] = superadminMe({ selected_building_id: OWN_HQ });
+  handlers['GET ' + ADM + '/buildings'] = buildingsByCompany;
+  handlers['PATCH ' + A + '/me/selected-building'] = [200, { ok: true, selected_building_id: null }];
+  c.setState({ email: 'sadie@example.com', password: 'x'.repeat(12) });
+  await c.authSignIn();
+  await settle();
+  assert.equal(c.state.account.selected_building_id, OWN_HQ, 'precondition: a selection on the own company');
+
+  // The PATCH is held on the wire; GET /me keeps answering with the selection until it lands.
+  const realFetch = globalThis.fetch;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  globalThis.fetch = async (url, opts) => {
+    const out = await realFetch(url, opts);
+    if (String(url).includes('/me/selected-building')) { await held; handlers['GET ' + A + '/me'] = superadminMe(); }
+    return out;
+  };
+  try {
+    const meBefore = requests(A + '/me').length;
+    c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+    await settle();
+    assert.equal(requests(A + '/me').length, meBefore, 'no scope read goes out while the clearing PATCH is still on the wire');
+    assert.equal(c.state.account.selected_building_id, null);
+    release();
+    await settle();
+    assert.equal(requests(A + '/me').length, meBefore + 1, 'and exactly one goes out once it has landed');
+    assert.equal(c.state.account.selected_building_id, null, 'the re-read cannot hand the stale selection back');
+    assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a silent token refresh keeps the building scope and can_ingest already on the account — the refresh reply never carries them', async () => {
+  await signInAdminWithTwoBuildings();
+  // The re-read that follows a refresh is down for the whole test, so whatever the list
+  // holds afterwards is what the refresh itself left behind.
+  handlers['GET ' + A + '/me'] = [503, { detail: { ok: false, error: 'gateway timeout' } }];
+  handlers['POST ' + A + '/refresh'] = session(ADMIN, 2);
+  handlers['GET /backend/ops-intelligence/api/whatever'] = (u, o) => (o.headers.Authorization === 'Bearer acc-2' ? [200, { ok: true }] : fail(401, 'expired', 'Token expired'));
+
+  await apiFetch(BASES.opsIntelligence, '/api/whatever');
+
+  assert.equal(c.state.accessToken, 'acc-2', 'the refresh happened');
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court'], 'the picker still lists the company the moment the refresh lands');
+  assert.equal(c.state.account.can_ingest, true);
+  assert.equal(c.state.account.all_buildings, true);
+  assert.equal(c.state.account.email, 'ada@example.com', 'the refresh reply still refreshes what it does carry');
+  await settle();
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court'], 'and still once the failed re-read has settled');
+});
+
+test('a failed re-read of GET /api/admin/buildings keeps the list already loaded — a blip must not empty the picker until the next page reload', async () => {
+  await signInAdminWithTwoBuildings();
+  handlers['GET ' + ADM + '/buildings'] = [500, { detail: { ok: false, error: 'boom' } }];
+
+  await c.authLoadScope();
+  await settle();
+
+  assert.deepEqual(names(), ['Harbour Point', 'Ashgrove Court']);
+  assert.equal(c.renderVals().cbEmpty, false);
+});
+
+// ── a refresh token only ever moves forward (1 Oct 2026) ──────────────────────────────
+//
+// 20:04:39 UTC, 30 Sep: a tab on :5174 presented a refresh token its session had rotated
+// past 1802 s earlier. The server read that as theft and ended all nine of the account's
+// sessions (svc-operations-intelligence log: auth.session.replay matched=
+// stale_previous_token, then auth.sessions.revoked count=9), so every open tab lost its
+// data at once — "I have to reload multiple times". Three ways a tab came to hold such a
+// token, each reproduced below against a server with the real rotation rules.
+
+// rotate_session (engines/auth/tokens.py): the current token rotates; the one it replaced
+// is accepted for 30 s (a browser restore racing itself); anything else is a replay.
+const rotatingServer = (user) => {
+  const srv = { current: 'ref-1', prev: null, rotatedAt: 0, now: 0, n: 1, presented: [], replays: 0 };
+  handlers['POST ' + A + '/refresh'] = (u, opts) => {
+    const t = JSON.parse(opts.body).refresh_token;
+    srv.presented.push(t);
+    const ok = t === srv.current || (t === srv.prev && srv.now - srv.rotatedAt <= 30000);
+    if (!ok) {
+      srv.replays += 1;
+      return fail(401, 'replayed', 'That session was already used. Every session has been ended as a precaution — sign in again.');
+    }
+    srv.n += 1; srv.prev = srv.current; srv.current = 'ref-' + srv.n; srv.rotatedAt = srv.now;
+    return session(user, srv.n);
+  };
+  return srv;
+};
+const signInAs = async (user) => {
+  handlers['POST ' + A + '/login'] = session(user, 1);
+  c.setState({ email: user.email, password: 'x'.repeat(12) });
+  await c.authSignIn();
+};
+// A second tab of this origin: same localStorage, and — as a fresh tab does — it starts
+// from the stored session rather than signing in itself.
+const secondTab = () => new HoistraLogic();
+const THIRTY_ONE_MINUTES = 31 * 60 * 1000;
+
+test('a tab that has not yet heard of another tab\'s rotation never writes its old token back over the new one', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  const b = secondTab();
+  await b.authRefresh();                       // tab B rotates ref-1 → ref-2
+  assert.equal(b.state.refreshToken, 'ref-2');
+  // Tab A has not handled the storage event yet (a frozen background tab, or one busy
+  // settling a burst of reads) and its next state change lands first.
+  c.setState({ navOpen: !c.state.navOpen });
+  assert.equal(stored().refreshToken, 'ref-2', 'the shared slot keeps the newest token');
+  // Each tab now hears about the other's write.
+  c.authStorageChanged({ key: SESSION_KEY });
+  b.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-2', 'the tab that was behind catches up');
+  assert.equal(b.state.refreshToken, 'ref-2', 'the tab that rotated is never talked back into its old token');
+  // Thirty minutes on, an access token expires and a tab refreshes.
+  srv.now += THIRTY_ONE_MINUTES;
+  await b.authRefresh();
+  await c.authRefresh();
+  assert.equal(srv.replays, 0, 'no tab ever presents a superseded token');
+  assert.equal(c.state.signedIn && b.state.signedIn, true);
+  cleanup(b);
+});
+
+test('two tabs refreshing at the same moment never present the same token — the second uses the one the first was just issued', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  const b = secondTab();                        // both tabs hold ref-1; their access tokens expire together
+  await Promise.all([c.authRefresh(), b.authRefresh()]);
+  assert.deepEqual(srv.presented, ['ref-1', 'ref-2'], 'the second exchange waits for the first and presents what it stored');
+  // Whichever tab heard last, both end on the server's current token …
+  c.authStorageChanged({ key: SESSION_KEY });
+  b.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, srv.current);
+  assert.equal(b.state.refreshToken, srv.current);
+  // … so the next refresh from either, thirty minutes on, is not a replay.
+  srv.now += THIRTY_ONE_MINUTES;
+  await c.authRefresh();
+  await b.authRefresh();
+  assert.equal(srv.replays, 0);
+  cleanup(b);
+});
+
+test('a tab whose shared slot another company has since taken still refreshes with its own account\'s newest token', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  const b = secondTab();
+  await b.authRefresh();                        // same account, other tab: ref-1 → ref-2
+  // Before tab A hears of it, a third tab signs into a different company and takes the
+  // one shared slot — so the stored copy tab A would have caught up from is gone.
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-9', account: ADMIN, view: 'home', role: 'admin' });
+  c.authStorageChanged({ key: SESSION_KEY });
+  srv.now += THIRTY_ONE_MINUTES;
+  await c.authRefresh();
+  assert.equal(srv.presented[srv.presented.length - 1], 'ref-2', 'this account\'s newest token, not this tab\'s stale copy, and never the other company\'s');
+  assert.equal(srv.replays, 0);
+  assert.equal(c.state.signedIn, true);
+  cleanup(b);
+});
+
+test('the account\'s newest token is kept on its own while signed in, and nothing of it is left once signed out', async () => {
+  await signInAs(USER);
+  const holding = () => Object.keys(mem).filter((k) => k !== SESSION_KEY && String(mem[k]).includes('ref-'));
+  assert.equal(holding().length, 1, 'kept apart from the shared slot another company can take');
+  handlers['POST ' + A + '/logout'] = [200, { ok: true }];
+  c.authSignOut();
+  await settle();
+  assert.deepEqual(Object.values(mem).filter((v) => String(v).includes('ref-')), [], 'no refresh token outlives the session');
+});
+
+test('another tab viewing as a company never re-scopes this tab\'s requests — not on its writes, not on this tab\'s refresh', async () => {
+  saMock();
+  await signInAs(SUPERADMIN);
+  assert.equal(getActingOrg(), null, 'precondition: this tab reads its own company');
+  // Tab B, the same superadmin, is viewing as another company; its state saves write the
+  // one shared slot, company and all.
+  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { viewOrgId: 'org-bala', viewOrgName: 'Bala Ltd' }));
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(getActingOrg(), null, 'the other tab\'s company is not this tab\'s: every read here would carry it');
+  handlers['POST ' + A + '/refresh'] = session(SUPERADMIN, 2);
+  await c.authRefresh();
+  assert.equal(getActingOrg(), null, 'nor does a refresh here pick it up from the shared slot');
+  assert.equal(c.state.viewOrgId, null);
+});
+
+test('an older token another tab writes back from a stale view is never adopted or presented, and the newer one is put back', async () => {
+  await signInAs(USER);                          // tab A: ref-1
+  const srv = rotatingServer(USER);
+  const b = secondTab();                          // tab B, booting with ref-1 in its own copy
+  const staleView = mem[SESSION_KEY];             // the shared slot as tab B's process still sees it
+  await c.authRefresh();                          // tab A rotates: ref-1 → ref-2
+  assert.equal(stored().refreshToken, 'ref-2');
+  // Tab B saves state from a view of storage that has not yet received tab A's write and
+  // puts the old slot back — traced in Chrome on 1 Oct 2026, 9 ms after tab A's write; tab A
+  // then adopted it and tab B presented it (a grace fork, one step from a replay).
+  mem[SESSION_KEY] = staleView;
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-2', 'tab A never adopts a token older than its own');
+  c.setState({ navOpen: !c.state.navOpen });
+  assert.equal(stored().refreshToken, 'ref-2', 'and its next save puts the newer token back');
+  await b.authRefresh();
+  assert.deepEqual(srv.presented, ['ref-1', 'ref-2'], 'tab B presents the newest token, never the one it wrote back');
+  cleanup(b);
+});
+
+test('a tab still on the build before issue times keeps working beside this one: its rotation is followed', async () => {
+  await signInAs(USER);                          // this tab: ref-1, stamped
+  const srv = rotatingServer(USER);
+  srv.current = 'ref-4'; srv.prev = 'ref-1'; srv.rotatedAt = 0; srv.n = 4;   // the old tab rotated ref-1 → ref-4 on the server …
+  // … and wrote the slot the way that build does: no issue time.
+  const legacy = Object.assign(stored(), { refreshToken: 'ref-4' });
+  delete legacy.refreshTokenAt;
+  mem[SESSION_KEY] = JSON.stringify(legacy);
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-4', 'adopted, as that build\'s own tabs would');
+  srv.now += THIRTY_ONE_MINUTES;
+  await c.authRefresh();
+  assert.equal(srv.presented[0], 'ref-4');
+  assert.equal(srv.replays, 0);
+});
+
+// ── review, 1 Oct 2026: a stale copy reloaded after deploy, and sign-out reaching every tab ──
+const { issuedTokenKey } = await import('../src/logic/session.js');
+
+test('a tab reloaded from its own stale, unstamped copy can never push that token in as the newest', async () => {
+  await signInAs(USER);                          // tab A1: ref-1
+  const srv = rotatingServer(USER);
+  await c.authRefresh();                          // A1: ref-1 → ref-2, recorded and stamped
+  // Tab A2 was left behind on the old build; its own copy still holds ref-1, unstamped. Another
+  // company holds the shared slot. A2 reloads onto this build and saves state while it boots.
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-9', account: ADMIN, view: 'home', role: 'admin' });
+  tabMem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: USER, role: 'user', view: 'home' });
+  const a2 = new HoistraLogic();
+  a2.setState({ navOpen: !a2.state.navOpen });
+  assert.notEqual(stored().refreshToken, 'ref-1', 'the replaced token is not written back over the account\'s record');
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-2', 'and A1 is not talked into it');
+  srv.now += THIRTY_ONE_MINUTES;
+  await a2.authRefresh();
+  await c.authRefresh();
+  assert.equal(srv.replays, 0, 'nobody presents ref-1 again');
+  cleanup(a2);
+});
+
+test('a token the account has already moved past is never followed, even unstamped from an old-build tab', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  await c.authRefresh();                          // ref-1 → ref-2
+  // An old-build tab, never told, writes the shared slot with ref-1 and no stamp.
+  const legacy = Object.assign(stored(), { refreshToken: 'ref-1' });
+  delete legacy.refreshTokenAt;
+  mem[SESSION_KEY] = JSON.stringify(legacy);
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-2');
+  srv.now += THIRTY_ONE_MINUTES;
+  await c.authRefresh();
+  assert.equal(srv.presented[srv.presented.length - 1], 'ref-2');
+  assert.equal(srv.replays, 0);
+});
+
+test('signing out reaches a sibling tab even while another company holds the shared slot', async () => {
+  await signInAs(USER);
+  const b = secondTab();                          // same account, same token
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-9', account: ADMIN, view: 'home', role: 'admin' });
+  handlers['POST ' + A + '/logout'] = [200, { ok: true }];
+  const record = mem[issuedTokenKey(USER.id)];
+  c.authSignOut();
+  assert.equal(mem[issuedTokenKey(USER.id)], undefined, 'the account\'s record goes with the session');
+  b.authStorageChanged({ key: issuedTokenKey(USER.id), oldValue: record, newValue: null });
+  assert.equal(b.state.signedIn, false, 'the sibling follows: its session was the one just ended');
+  assert.ok(String(mem[SESSION_KEY]).includes('ref-9'), 'the other company\'s slot is left alone');
+  cleanup(b);
+});
+
+test('signing out from a tab one rotation behind still clears the slot and reaches its sibling', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  const b = secondTab();
+  await b.authRefresh();                          // B: ref-1 → ref-2; tab A still holds ref-1
+  handlers['POST ' + A + '/logout'] = [200, { ok: true }];
+  const oldShared = mem[SESSION_KEY];
+  c.authSignOut();
+  assert.equal(requests(A + '/logout')[0].body.refresh_token, 'ref-2', 'logout ends the session by its newest token');
+  assert.equal(mem[SESSION_KEY], undefined, 'the shared slot that held it is cleared');
+  b.authStorageChanged({ key: SESSION_KEY, oldValue: oldShared, newValue: null });
+  assert.equal(b.state.signedIn, false);
+  assert.equal(srv.replays, 0);
+  cleanup(b);
+});
+
+test('a refresh never waits forever behind a tab that stopped while holding the lock', async () => {
+  const { withRefreshLock } = await import('../src/logic/auth.js');
+  let release;
+  const stuck = navigator.locks.request('hoistra.refresh.u-stuck', () => new Promise((r) => { release = r; }));
+  const started = Date.now();
+  const out = await withRefreshLock('u-stuck', async () => 'exchanged', 150);
+  assert.equal(out, 'exchanged', 'the exchange goes ahead unlocked once the wait runs out');
+  assert.ok(Date.now() - started < 2000);
+  release(); await stuck;
+});
+
+test('a tab that waited for the lock and still sees the old token gives the other tab\'s write a moment to arrive', async () => {
+  await signInAs(USER);
+  const srv = rotatingServer(USER);
+  let release;
+  const other = navigator.locks.request('hoistra.refresh.' + USER.id, () => new Promise((r) => { release = r; }));
+  const mine = c.authRefresh();                   // queued behind the other tab, as at a browser restore
+  await settle(30);
+  // The other tab exchanged ref-1 (the server is on ref-2) and lets go; its write reaches this
+  // tab's view of storage 50 ms later — traced in Chrome at boot, 1 Oct 2026, as a grace fork.
+  srv.presented.push('ref-1'); srv.n = 2; srv.prev = 'ref-1'; srv.current = 'ref-2'; srv.rotatedAt = srv.now;
+  release(); await other;
+  const at = c.state.refreshTokenAt + 10;
+  setTimeout(() => {
+    mem[issuedTokenKey(USER.id)] = JSON.stringify({ token: 'ref-2', at, superseded: ['ref-1'] });
+    mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), { refreshToken: 'ref-2', refreshTokenAt: at }));
+  }, 50);
+  await mine;
+  assert.equal(srv.presented[1], 'ref-2', 'it presents the token the other tab was just issued');
+  assert.equal(srv.replays, 0);
+});
+
+test('the token a first refresh replaced is remembered too, so a tab still holding it cannot pass it off as a rotation', async () => {
+  cleanup();
+  Object.keys(tabMem).forEach((k) => { delete tabMem[k]; });
+  // The slot as the build before issue times left it: unstamped, and no record for the account.
+  const legacy = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: USER, role: 'user', view: 'home' });
+  mem[SESSION_KEY] = legacy;
+  c = new HoistraLogic();
+  const srv = rotatingServer(USER);
+  await c.authRefresh();                          // ref-1 → ref-2: the account's first record
+  // A second tab, booting from that same old slot, saves it back — traced in Chrome on a
+  // two-tab boot, 1 Oct 2026: the first tab adopted it as a rotation and the second presented it.
+  mem[SESSION_KEY] = legacy;
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-2', 'ref-1 is the token this account just replaced');
+  assert.equal(JSON.parse(mem[issuedTokenKey(USER.id)]).token, 'ref-2', 'and the record is not rewritten with it');
+  await c.authRefresh();
+  assert.deepEqual(srv.presented, ['ref-1', 'ref-2']);
 });

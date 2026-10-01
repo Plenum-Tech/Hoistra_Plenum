@@ -1277,7 +1277,12 @@ export const complianceLiveMethods = {
       // instead of appearing all at once when the turn ends.
       // The building this upload is being filed against, when the ingest panel set one.
       // Only sent with files: it is a filing instruction, not a property of the question.
-      const r = files.length
+      // A spreadsheet starts a migration: open it as soon as it exists, not when the reply
+      // comes back from its first gate (logic/migration.js, mgDiscoverDuringUpload).
+      const stopDiscovery = files.some(isSpreadsheet) ? this.mgDiscoverDuringUpload(sid) : () => {};
+      let r;
+      try {
+      r = files.length
         ? await deepAgentsApi.runStatefulWithFiles(
             q, sid, context, files, ctrl && ctrl.signal, this.cbFilingBuildingId(),
             // A spreadsheet is a migration with human gates. Interactive: the run stops at
@@ -1287,6 +1292,9 @@ export const complianceLiveMethods = {
               // Only meaningful alongside a spreadsheet, and only sent then.
               cmmsName: files.some(isSpreadsheet) ? cmmsName(this.state.mgCmms) : null })
         : await this.ccStreamTurn(q, context, ctrl);
+      } finally {
+        stopDiscovery();
+      }
 
       // A held upload comes back with validation_cases; the composer answers it next.
       this.ccCaseFromTurn(r);
@@ -1333,9 +1341,12 @@ export const complianceLiveMethods = {
           ms: Date.now() - t0
         }])
       }));
-      // The newest run this turn started opens under the answer, at whichever gate it
-      // stopped on. Opened after the turn lands so the card is below the reply, not above.
-      if (startedRuns.length) this.mgOpen(startedRuns[startedRuns.length - 1]);
+      // A run this turn started opens under the answer, at whichever gate it stopped on.
+      // Opened after the turn lands so the card is below the reply, not above. The first of
+      // several, and never switching away from one the card already shows: the discovery poll
+      // (migration.js mgDiscoverDuringUpload) usually opened it mid-upload, and re-opening —
+      // or opening a second file's run over it — would drop a half-answered gate.
+      if (startedRuns.length && !startedRuns.includes(this.state.mgId)) this.mgOpen(startedRuns[0]);
     } catch (e) {
       const msg = (e && e.message) || String(e);
       if (e && e.cancelled) {

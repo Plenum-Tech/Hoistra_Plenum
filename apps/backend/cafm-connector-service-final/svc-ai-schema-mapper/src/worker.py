@@ -78,12 +78,7 @@ async def _run_graph(
             GraphInterrupt = None
 
     try:
-        await graph.ainvoke(input_or_command, config=config)
-
-        # ── Graph ran to completion without interruption ──────────────
-        logger.info("migration_graph_complete", migration_id=migration_id)
-        return {"status": "complete"}
-
+        result = await graph.ainvoke(input_or_command, config=config)
     except Exception as exc:
         # Detect interrupt by type name for resilience across langgraph versions
         is_interrupt = (
@@ -122,28 +117,63 @@ async def _run_graph(
             error=str(exc),
             exc_info=True,
         )
-        async with session_factory() as session:
-            try:
-                await session.execute(
-                    update(MigrationJob)
-                    .where(MigrationJob.id == UUID(migration_id))
-                    .values(
-                        status="failed",
-                        error_message=str(exc)[:500],
-                        error_timestamp=datetime.utcnow(),
-                    )
-                )
-                await session.commit()
-            except Exception as db_err:
-                logger.error("migration_db_write_failed", migration_id=migration_id, error=str(db_err))
-        # Finalise the Activity Log card to "failed". This error path never reaches the Node-10
-        # emit, so without this the per-run card stays stuck at its last running/pending sync.
-        try:
-            from .graph.nodes.schema_db_writer import _sync_run_activity
-            await _sync_run_activity(migration_id, caller="worker_error")
-        except Exception as _act_err:
-            logger.warning("migration_error_activity_sync_failed", migration_id=migration_id, error=str(_act_err))
+        # Retried (db_writer.write_error): a failure that happens alongside a short database
+        # blip must still reach the row, or the run looks exactly like one still working.
+        await _mark_run_failed(migration_id, str(exc)[:500], None, status="failed")
         return {"status": "failed", "error": str(exc)}
+
+    # ── A node recorded an error in the state without raising ─────
+    # write_node on a rejected final gate and human_review_node on an invalid decision set
+    # error_message and return; the app's inline runners already end the run on that, while
+    # this path returned "complete" and left the row "running" with no gate — which nothing
+    # can resume (30 Sep 2026 review). Checked after the exception paths, so a cancel is
+    # always recognised before any failure write.
+    #
+    # A DDL rollback is the exception: write_node has already written status="ddl_failed"
+    # with the failing SQL, and /retry-ddl accepts only that status — rewriting it as
+    # "failed" took the retry away (review, 1 Oct 2026).
+    if isinstance(result, dict) and str(result.get("status") or "").lower() == "ddl_failed":
+        logger.info("migration_graph_ddl_failed", migration_id=migration_id)
+        return {"status": "ddl_failed", "error": result.get("error_message")}
+    err = _error_in_final_state(result)
+    if err:
+        logger.error("migration_graph_ended_with_error", migration_id=migration_id, error=err)
+        error_node = result.get("error_node") if isinstance(result, dict) else None
+        await _mark_run_failed(migration_id, err, error_node if isinstance(error_node, int) else None, status="failed")
+        return {"status": "failed", "error": err}
+
+    # ── Graph ran to completion without interruption ──────────────
+    logger.info("migration_graph_complete", migration_id=migration_id)
+    return {"status": "complete"}
+
+
+def _error_in_final_state(result) -> str | None:
+    """The error a graph run ended with, when its final state carries one and the run is not
+    at a healthy stop (complete, a step pause, a review gate)."""
+    if not isinstance(result, dict):
+        return None
+    message = result.get("error_message")
+    if not message:
+        return None
+    status = str(result.get("status") or "").lower()
+    if status in ("complete", "step_paused", "awaiting_review", "ddl_failed"):
+        return None
+    return str(message)[:500]
+
+
+async def _mark_run_failed(migration_id: str, error: str, error_node: int | None, status: str = "failed") -> None:
+    """Record a failed run on the job row (retried, as `status`) and finalise its Activity Log card."""
+    from .graph.nodes.db_writer import write_error
+
+    await write_error(migration_id, error, error_node, status=status)
+    # This error path never reaches the Node-10 emit, so without this the per-run card stays
+    # stuck at its last running/pending sync.
+    try:
+        from .graph.nodes.schema_db_writer import _sync_run_activity
+
+        await _sync_run_activity(migration_id, caller="worker_error")
+    except Exception as _act_err:
+        logger.warning("migration_error_activity_sync_failed", migration_id=migration_id, error=str(_act_err))
 
 
 async def _run_schema_graph(

@@ -116,8 +116,11 @@ const HIERARCHY = {
     { source_table: 'WorkOrders', source_column: 'asset_id', target_table: 'Assets', target_column: 'asset_code', relationship_type: 'REFERENCE', confidence: 1.0, data_match_rate: 1.0 },
     { source_table: 'Assets', source_column: 'building_id', target_table: 'buildings', target_column: 'id', relationship_type: 'CONTAINMENT', system_default: true }
   ],
+  // As verify_hierarchy_node builds them: one per relationship, then the code-shaped columns.
   review_items: [
-    { id: 'hierarchy_1', type: 'hierarchy', source_table: 'Assets', target_table: 'Sites' },
+    { id: 'hierarchy_0', type: 'hierarchy', source_table: 'Assets', source_column: 'site_id', target_table: 'Sites', target_column: 'site_id', relationship_type: 'CONTAINMENT', confidence: 1.0, data_match_rate: 1.0, system_default: false, mapping_note: false, read_only: false },
+    { id: 'hierarchy_1', type: 'hierarchy', source_table: 'WorkOrders', source_column: 'asset_id', target_table: 'Assets', target_column: 'asset_code', relationship_type: 'REFERENCE', confidence: 1.0, data_match_rate: 1.0, system_default: false, mapping_note: false, read_only: false },
+    { id: 'hierarchy_2', type: 'system_default', source_table: 'Assets', source_column: 'building_id', target_table: 'buildings', target_column: 'id', relationship_type: 'CONTAINMENT', system_default: true, mapping_note: false, read_only: true },
     { type: 'implicit_hierarchy', column: 'Assets.asset_code', levels: 2, separator: '-', examples: ['A-001', 'A-002'] }
   ]
 };
@@ -135,8 +138,8 @@ const doc = (over) => Object.assign({
 // ── the gate bodies ─────────────────────────────────────────────────────────────────
 
 test('pk_approval sends the detected key for every table, a surrogate where nothing qualified, and the reader\'s override', () => {
-  assert.deepEqual(defaultGateBody('pk_approval', PK_PAYLOAD, {}), { pk_overrides: { Assets: 'asset_code', Sites: 'site_id', Notes: '__surrogate__' } });
-  assert.deepEqual(defaultGateBody('pk_approval', PK_PAYLOAD, { Assets: 'model' }).pk_overrides.Assets, 'model');
+  assert.deepEqual(defaultGateBody('pk_approval', PK_PAYLOAD, {}), { pk_overrides: { Assets: ['asset_code'], Sites: ['site_id'], Notes: [] } });
+  assert.deepEqual(defaultGateBody('pk_approval', PK_PAYLOAD, { Assets: ['model'] }).pk_overrides.Assets, ['model']);
 });
 
 test('unique_table_approval is a plain confirm — the key was decided at the previous gate', () => {
@@ -144,12 +147,13 @@ test('unique_table_approval is a plain confirm — the key was decided at the pr
 });
 
 test('pre_semantic column pass approves every rule match unless a column was sent to semantic', () => {
-  const body = defaultGateBody('pre_semantic', PRE_SEMANTIC_COLUMNS, { 'Assets.site_ref': 'semantic' });
+  // An existing table's match is not echoed back: target_field is sent only for a rename.
+  const body = defaultGateBody('pre_semantic', PRE_SEMANTIC_COLUMNS, { 'ps:Assets.site_ref': 'semantic' });
   assert.deepEqual(body, {
     decisions: {
       Assets: [
-        { source_field: 'asset_code', decision: 'approve', target_field: 'asset_code', data_type: 'VARCHAR(255)' },
-        { source_field: 'site_ref', decision: 'semantic', target_field: 'site_id' }
+        { source_field: 'asset_code', decision: 'approve' },
+        { source_field: 'site_ref', decision: 'semantic' }
       ]
     }
   });
@@ -157,7 +161,7 @@ test('pre_semantic column pass approves every rule match unless a column was sen
 
 test('pre_semantic table pass sends only the destinations the reader changed, marking a name not in the catalogue as a new table', () => {
   assert.deepEqual(defaultGateBody('pre_semantic', PRE_SEMANTIC_TABLES, {}), { decisions: {}, table_overrides: {} });
-  const body = defaultGateBody('pre_semantic', PRE_SEMANTIC_TABLES, { 'table:WorkOrders': 'maintenance_history', 'table:Assets': 'equipment_register' });
+  const body = defaultGateBody('pre_semantic', PRE_SEMANTIC_TABLES, { 'rt:WorkOrders': { target: 'maintenance_history', isNew: false }, 'rt:Assets': { target: 'equipment_register', isNew: true } });
   assert.deepEqual(body.table_overrides, {
     WorkOrders: { target_table: 'maintenance_history', is_new_table: false },
     Assets: { target_table: 'equipment_register', is_new_table: true }
@@ -172,9 +176,10 @@ test('classification_approval: untouched groups send nothing; exclude rejects; a
 
 test('column_mapping_approval sends overrides only where the destination differs from the match, keyed source table → column', () => {
   assert.deepEqual(defaultGateBody('column_mapping_approval', COLUMN_MAPPING, {}), { overrides: {} });
-  const body = defaultGateBody('column_mapping_approval', COLUMN_MAPPING, { 'Assets.site_ref': 'barcode', 'Assets.asset_code': 'asset_code', 'Vendors.trade': '__new__' });
-  assert.deepEqual(body, { overrides: { Assets: { site_ref: 'barcode' } } });
-  assert.deepEqual(defaultGateBody('column_mapping_approval', COLUMN_MAPPING, { 'Vendors.trade': 'vendor_name' }), { overrides: { Vendors: { trade: 'vendor_name' } } });
+  // New column on a row with no match is sent too: it is what makes the service add the column.
+  const body = defaultGateBody('column_mapping_approval', COLUMN_MAPPING, { 'cm:assets.site_ref': 'barcode', 'cm:assets.asset_code': 'asset_code', 'cm:vendors.trade': '__new__' });
+  assert.deepEqual(body, { overrides: { Assets: { site_ref: 'barcode' }, Vendors: { trade: '__new__' } } });
+  assert.deepEqual(defaultGateBody('column_mapping_approval', COLUMN_MAPPING, { 'cm:vendors.trade': 'vendor_name' }), { overrides: { Vendors: { trade: 'vendor_name' } } });
 });
 
 test('field_mapping: flagged fields accept their suggestion by default, can be rejected or overridden; unmapped fields follow the suggested custom column unless told otherwise', () => {
@@ -186,28 +191,31 @@ test('field_mapping: flagged fields accept their suggestion by default, can be r
     ]
   });
   assert.deepEqual(dflt.unmapped, {
-    Sites: [{ action: 'custom', source_field: 'manager_email', target_table: 'sites', custom_column_name: 'manager_email', data_type: 'VARCHAR(255)', nullable: true }]
+    Sites: [{ action: 'custom', source_field: 'manager_email', target_table: 'sites', custom_column_name: 'manager_email', data_type: 'VARCHAR(255)', nullable: true, is_new_table: false, new_table_pk: null }]
   });
-  const edited = defaultGateBody('field_mapping', FIELD_MAPPING, { 'f:Assets.site_ref': 'location_id', 'f:Assets.install_date': 'reject', 'u:Sites.manager_email': 'skip' });
+  const edited = defaultGateBody('field_mapping', FIELD_MAPPING, { 'fm:Assets.site_ref': 'override', 'fm:Assets.site_ref#to': 'location_id', 'fm:Assets.install_date': 'reject', 'fu:Sites.manager_email': 'skip' });
   assert.deepEqual(edited.flagged.Assets, [
     { action: 'override', source_field: 'site_ref', target_field: 'location_id', rationale: null },
     { action: 'reject', source_field: 'install_date', target_field: null, rationale: null }
   ]);
-  assert.deepEqual(edited.unmapped.Sites, [{ action: 'skip', source_field: 'manager_email', target_table: null, custom_column_name: null, data_type: null, nullable: true }]);
+  assert.deepEqual(edited.unmapped.Sites, [{ action: 'skip', source_field: 'manager_email', target_table: null, custom_column_name: null, data_type: null }]);
 });
 
-test('hierarchy confirms every detected relationship except the ones rejected, skips platform defaults, and records a rejection as a correction', () => {
+test('hierarchy confirms every detected relationship except the ones rejected, and skips platform defaults', () => {
   const dflt = defaultGateBody('hierarchy', HIERARCHY, {});
   assert.equal(dflt.confirmed_hierarchies.length, 2, 'the system_default row is not the reader\'s to confirm');
-  assert.deepEqual(dflt.hierarchy_corrections, []);
+  assert.deepEqual(dflt.hierarchy_corrections, {});
+  // A rejection is simply not confirmed — the confirmed list replaces the detected one.
   const body = defaultGateBody('hierarchy', HIERARCHY, { 'WorkOrders>asset_id>Assets>asset_code': 'reject' });
   assert.deepEqual(body.confirmed_hierarchies.map((r) => r.source_table), ['Assets']);
-  assert.deepEqual(body.hierarchy_corrections, [{ type: 'rejected', source_table: 'WorkOrders', target_table: 'Assets', reason: 'Rejected by reviewer' }]);
+  assert.deepEqual(body.hierarchy_corrections, {});
 });
 
-test('hierarchy falls back to review_items of type hierarchy when hierarchies_to_review is absent', () => {
-  const body = defaultGateBody('hierarchy', { review_items: HIERARCHY.review_items }, {});
-  assert.deepEqual(body.confirmed_hierarchies.map((r) => r.id), ['hierarchy_1']);
+test('hierarchy reads review_items, and hierarchies_to_review when review_items is absent', () => {
+  const fromItems = defaultGateBody('hierarchy', { review_items: HIERARCHY.review_items }, {});
+  assert.deepEqual(fromItems.confirmed_hierarchies.map((r) => r.source_table), ['Assets', 'WorkOrders']);
+  const fromList = defaultGateBody('hierarchy', { hierarchies_to_review: HIERARCHY.hierarchies_to_review }, {});
+  assert.deepEqual(fromList.confirmed_hierarchies.map((r) => r.source_table), ['Assets', 'WorkOrders']);
 });
 
 test('the write gate never confirms by default', () => {
@@ -319,33 +327,131 @@ test('opening a run reads its status and shows the pk gate with the detected key
   const v = c.renderVals();
   assert.equal(v.mgKind, 'gate');
   assert.equal(v.mgGate, 'pk_approval');
-  assert.equal(v.mgGateTitle, 'Primary keys');
-  assert.deepEqual(v.pkRows.map((r) => [r.table, r.chosen]), [['Assets', 'asset_code'], ['Sites', 'site_id'], ['Notes', '__surrogate__']]);
+  assert.equal(v.mgGateTitle, 'Which column identifies each row?');
+  assert.deepEqual(v.pkRows.map((r) => [r.label, r.kind, r.chips.map((x) => x.column)]), [['Assets', 'natural', ['asset_code']], ['Sites', 'natural', ['site_id']], ['Notes', 'surrogate', []]]);
+  assert.equal(v.mgPrimary.label, 'Confirm ID columns');
   assert.equal(v.mgPill.label, 'Awaiting your review');
   assert.equal(v.mgNodes[0].status, 'complete');
   assert.ok(!calls.some((x) => x.key.endsWith('/advance')), 'a human gate is never advanced by the page');
 });
 
-test('a step pause is continued automatically — once per pause — and left alone when auto-continue is off', async () => {
-  // The service keeps answering step_paused for the same node after /advance (it does, for
-  // a moment). The page must not hit /advance again until the document moves.
-  handlers[STATUS] = doc({ status: 'step_paused', pending_gate_type: 'step_1_ingest', pending_gate_payload: { node: 1, label: 'File Ingestion', rows: 50, columns: 29 } });
+test('a step pause is never continued by the page: the card owns it before its mount effect and after it unmounts', async () => {
+  // CAFM Web's card (src/cafm) continues the ingest and deterministic pauses itself and shows a
+  // Continue button for the rest. The conversation's own read never calls /advance — not on open,
+  // before the card has declared itself mounted, and not from a timer that fires after the card
+  // has gone (leaving the chat must not continue a semantic pause behind the reader's back).
+  handlers[STATUS] = doc({ status: 'step_paused', current_step: 3, pending_gate_type: 'step_3_semantic_mapping', pending_gate_payload: { node: 3, label: 'Semantic Mapping' } });
   handlers['POST /backend/schema-mapper/api/migration/' + ID + '/advance'] = { ok: true };
+  const advances = () => calls.filter((x) => x.key.endsWith('/advance')).length;
+  const before = advances();
   c.mgOpen(ID);
   await settle();
-  assert.equal(calls.filter((x) => x.key.endsWith('/advance')).length, 1);
-  assert.ok(c._mgTimer, 'the page waits for the document to move instead of advancing again');
+  assert.equal(advances(), before, 'not on open');
+  c.mgCafmMounted(true);
+  c.mgCafmMounted(false);
   clearTimeout(c._mgTimer);
+  await c.mgPoll(true);
+  assert.equal(advances(), before, 'not after the card has unmounted');
+  assert.ok(c._mgTimer, 'the read keeps going on its own clock');
+  clearTimeout(c._mgTimer);
+});
 
-  calls = [];
+test('an ingest pause is shown as its report while the card, not the page, continues it', async () => {
+  handlers[STATUS] = doc({ status: 'step_paused', pending_gate_type: 'step_1_ingest', pending_gate_payload: { node: 1, label: 'File Ingestion', rows: 50, columns: 29 } });
+  handlers['POST /backend/schema-mapper/api/migration/' + ID + '/advance'] = { ok: true };
   c.setState({ mgAuto: false, mgStatus: null });
   c.mgOpen(ID);
   await settle();
   assert.equal(calls.filter((x) => x.key.endsWith('/advance')).length, 0);
+  assert.ok(c._mgTimer, 'the page keeps reading while the card continues the step');
+  clearTimeout(c._mgTimer);
   const v = c.renderVals();
   assert.equal(v.mgKind, 'step');
-  assert.equal(v.mgPrimary.label, 'Continue to the next node');
+  assert.equal(v.mgPrimary.label, 'Continue');
+  assert.equal(v.mgGateTitle, 'Your file has been read');
   assert.deepEqual(v.mgStepFacts.map((f) => f.label), ['rows', 'columns']);
+  assert.equal(v.mgIngestLive, true, 'the ingest pause is shown as its report');
+  assert.deepEqual(v.mgIngest.tiles.map((t) => t.value), ['50', '29', '—']);
+});
+
+test('while auto-continue runs, the step says so instead of offering a button', async () => {
+  handlers[STATUS] = doc({ status: 'step_paused', pending_gate_type: 'step_1_ingest', pending_gate_payload: { node: 1, label: 'Ingest & Configure', rows: 50, columns: 29 } });
+  // /advance is not mocked: the pause stays in view, as it does while the service resumes.
+  c.setState({ mgBusy: 'Continuing…' });
+  c.mgOpen(ID);
+  await settle();
+  c.setState({ mgBusy: '' });
+  const v = c.renderVals();
+  assert.equal(v.mgKind, 'step');
+  assert.equal(v.mgContinuing, true);
+  assert.equal(v.mgPrimary, null);
+  assert.equal(v.mgGateBlurb, 'Continuing to the next step on its own.');
+});
+
+test('the ingest report outlives its pause and stays readable above the gates that follow', async () => {
+  const pause = { node: 1, label: 'Ingest & Configure', rows: 289606, columns: 181, format: 'excel',
+    nan_report: { total_nan_cells: 718, total_rows_with_nan: 214, columns_with_nan: 29, tables: { Assets: { nan_cells: 60, rows_with_nan: 60, columns: { warranty_expiry: 60 } } } } };
+  handlers[STATUS] = doc({ status: 'step_paused', pending_gate_type: 'step_1_ingest', pending_gate_payload: pause });
+  c.mgOpen(ID);
+  await settle();
+  // The card continues the pause; the next read finds the run at the PK gate, and Node 1's
+  // output was too big for the poll to carry.
+  handlers[STATUS] = doc();
+  clearTimeout(c._mgTimer);
+  await c.mgPoll(true);
+  await settle();
+  const v = c.renderVals();
+  assert.equal(v.mgGate, 'pk_approval');
+  assert.equal(v.mgIngestLive, false);
+  assert.ok(v.mgIngest, 'the report seen at the pause is kept');
+  assert.equal(v.mgIngest.tiles[0].value, '289,606');
+  assert.equal(v.mgIngest.summary, '289,606 rows · 181 columns · excel · 718 null/NaN values');
+  assert.equal(v.mgIngestOpen, false, 'history sits collapsed so the gate stays in view');
+  v.mgToggleIngest();
+  assert.equal(c.renderVals().mgIngestOpen, true);
+
+  // Another run does not inherit it.
+  handlers['GET /backend/schema-mapper/api/migration/other/status'] = doc({ migration_id: 'other' });
+  c.mgOpen('other');
+  await settle();
+  assert.equal(c.renderVals().mgIngest, null);
+});
+
+test('reopened after the pause, the report comes from Node 1\'s output when the poll carries it', async () => {
+  handlers[STATUS] = doc({ nodes: [{ node_id: 1, node_name: 'File Ingestion', status: 'complete', outcome: '', duration_ms: 5412, logs: [],
+    output: { row_count: 50, column_count: 29, detected_format: 'excel', nan_report: { total_nan_cells: 0, tables: {} } } }] });
+  c.mgOpen(ID);
+  await settle();
+  const v = c.renderVals();
+  assert.deepEqual(v.mgIngest.tiles.map((t) => t.value), ['50', '29', 'excel']);
+  assert.equal(v.mgIngest.nan.clean, true);
+});
+
+test('the PK chips add, remove and fall back to a surrogate, and a group edits every member', async () => {
+  const payload = { ...PK_PAYLOAD, pk_confirmation: { ...PK_PAYLOAD.pk_confirmation,
+    Vendors: { kind: 'natural', detected_pk: ['vendor_code'], columns: [{ column: 'vendor_code', uniqueness: 1, null_rate: 0, qualifies: true }] },
+    Vendor_Contracts: { kind: 'natural', detected_pk: ['vendor_code'], columns: [{ column: 'vendor_code', uniqueness: 1, null_rate: 0, qualifies: true }, { column: 'contract_ref', uniqueness: 1, null_rate: 0, qualifies: true }] } },
+    table_resolution: { duplicate_tables: { groups: [{ tables: ['Vendor_Contracts', 'Vendors'], count: 2, label: 'Vendor' }] } } };
+  handlers[STATUS] = doc({ pending_gate_payload: payload });
+  handlers['POST /backend/schema-mapper/api/migration/' + ID + '/gate/pk-approval'] = { ok: true };
+  c.mgOpen(ID);
+  await settle();
+  const row = (label) => c.renderVals().pkRows.find((r) => r.label === label);
+  row('Assets').add('model');
+  assert.deepEqual(row('Assets').chips.map((x) => x.column), ['asset_code', 'model']);
+  assert.equal(row('Assets').kind, 'composite');
+  row('Assets').remove('asset_code');
+  assert.deepEqual(row('Assets').chips.map((x) => x.column), ['model']);
+  row('Sites').useSurrogate();
+  assert.equal(row('Sites').kind, 'surrogate');
+  row('Vendor').add('contract_ref');
+  c.renderVals().mgPrimary.run();
+  await settle();
+  const post = calls.find((x) => x.key.endsWith('/gate/pk-approval'));
+  assert.deepEqual(JSON.parse(post.body).pk_overrides, {
+    Assets: ['model'], Sites: [], Notes: [],
+    Vendors: ['vendor_code', 'contract_ref'], Vendor_Contracts: ['vendor_code', 'contract_ref']
+  });
 });
 
 test('approving a gate posts the default body to that gate\'s route, with the reader\'s decisions folded in', async () => {
@@ -354,15 +460,39 @@ test('approving a gate posts the default body to that gate\'s route, with the re
   c.mgOpen(ID);
   await settle();
   const v = c.renderVals();
-  assert.equal(v.clRows.length, 3);
-  v.clRows[2].seg.find((o) => o.value === 'exclude').pick();
-  assert.equal(c.renderVals().clExcluded, 1);
+  assert.deepEqual([v.clView.fk.length, v.clView.shared.length], [2, 1]);
+  v.mgSet(v.clView.shared[0].id, 'exclude');
+  assert.equal(c.renderVals().mgPrimary.label, 'Apply 1 change & continue');
   c.renderVals().mgPrimary.run();
   await settle();
   const post = calls.find((x) => x.key.endsWith('/gate/classification-approval'));
   assert.ok(post, 'the classification route was called');
   assert.deepEqual(JSON.parse(post.body), { rejected_groups: ['G3'], verdict_overrides: {} });
   assert.deepEqual(c.state.mgDec, {}, 'decisions are spent once the gate is answered');
+});
+
+test('Node 2\'s unmatched fields are kept from its pause and answered at the column pass', async () => {
+  handlers[STATUS] = doc({ status: 'step_paused', current_step: 2, pending_gate_type: 'step_2_deterministic_mapping',
+    pending_gate_payload: { node: 2, label: 'Deterministic Mapping', unresolved_by_table: { Assets: ['serial'] } } });
+  handlers['POST /backend/schema-mapper/api/migration/' + ID + '/gate/pre-semantic'] = { ok: true };
+  c.mgOpen(ID);
+  await settle();
+  // The card continues Node 2's pause; the next read finds the run at the column pass.
+  handlers[STATUS] = doc({ current_step: 3, pending_gate_type: 'pre_semantic', pending_gate_payload: Object.assign({}, PRE_SEMANTIC_COLUMNS, {
+    canonical_columns_by_table: { assets: ['asset_code', 'site_id', 'serial_number'] } }) });
+  clearTimeout(c._mgTimer);
+  await c.mgPoll(true);
+  await settle();
+  const v = c.renderVals();
+  assert.equal(v.mgGate, 'pre_semantic');
+  const assets = v.psView.tables.find((t) => t.key === 'Assets');
+  assert.deepEqual(assets.unresolved.map((u) => u.field), ['serial']);
+  v.mgSet(assets.unresolved[0].key, 'serial_number');
+  c.renderVals().mgPrimary.run();
+  await settle();
+  const post = JSON.parse(calls.find((x) => x.key.endsWith('/gate/pre-semantic')).body);
+  assert.deepEqual(post.decisions.Assets[2], { source_field: 'serial', decision: 'approve', target_field: 'serial_number' });
+  assert.ok(!('table_overrides' in post), 'the column pass never re-sends the routing');
 });
 
 test('the write gate needs two clicks and posts {confirmed: true}; Reject posts {confirmed: false}', async () => {
@@ -372,12 +502,14 @@ test('the write gate needs two clicks and posts {confirmed: true}; Reject posts 
   await settle();
   let v = c.renderVals();
   assert.equal(v.mgPrimary, null, 'no single-click approve on the gate that writes');
-  assert.equal(v.wrTotal, 20);
+  assert.equal(v.wrView.total, '20');
+  assert.equal(v.wrView.title, 'Ready to write 20 rows to Plenum');
+  assert.equal(v.mgGateTitle, 'Ready to write 20 rows to Plenum');
   assert.equal(v.wrArmed, false);
   v.mgArm();
   v = c.renderVals();
   assert.equal(v.wrArmed, true);
-  assert.equal(v.mgWriteLabel, 'Confirm — write 20 rows');
+  assert.equal(v.mgWriteLabel, 'Yes, write 20 rows');
   v.mgConfirmWrite();
   await settle();
   const post = calls.find((x) => x.key.endsWith('/gate/final'));

@@ -65,8 +65,23 @@ export function accessToken() { return hooks.getToken(); }
 // 401 reasons after which the credential is finished. Only `expired` is worth a retry.
 export const TERMINAL_401 = new Set(['invalid', 'wrong_type', 'session_revoked', 'password_changed', 'replayed', 'no_account', 'disabled']);
 
+// svc-work-order-management's envelope. That service wraps every HTTPException as
+// {success:false, errors:[{code, message, field}]} (its app.py http_exception_handler):
+// the {detail:{error, reason}} its principal.py builds never reaches the wire, so a 401
+// from it carried no reason here at all. On a reload the Assets and Maintenance reads go
+// out before authBoot()'s refresh has a token back, and with no reason to match the
+// missing_token retry below, both pages read "Unreachable — 401" until the loader's own
+// 30-second retry or a reload that happened to win the race (Azure, 30 Sep 2026). One
+// client for both services means reading both shapes.
+function envelopeError(data) {
+  const errs = data && Array.isArray(data.errors) ? data.errors : null;
+  const first = errs && errs[0];
+  return first && typeof first === 'object' ? first : null;
+}
+
 // The message a FastAPI failure body carries. The auth router nests {ok, error, reason}
-// under `detail`; a 422 puts an array of field errors there; older routers use a string.
+// under `detail`; a 422 puts an array of field errors there; older routers use a string;
+// the work-order service puts it in errors[0].message.
 export function errorMessage(data, res) {
   const d = data && data.detail;
   if (d && typeof d === 'object' && !Array.isArray(d)) {
@@ -80,6 +95,8 @@ export function errorMessage(data, res) {
   }
   const msg = data && (data.error || data.detail || data.message);
   if (typeof msg === 'string' && msg) return msg;
+  const env = envelopeError(data);
+  if (env && typeof env.message === 'string' && env.message) return env.message;
   return res.status + ' ' + res.statusText;
 }
 
@@ -90,7 +107,9 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
     const d = body && body.detail;
-    this.reason = d && typeof d === 'object' && !Array.isArray(d) && typeof d.reason === 'string' ? d.reason : '';
+    const env = envelopeError(body);
+    this.reason = d && typeof d === 'object' && !Array.isArray(d) && typeof d.reason === 'string' ? d.reason
+      : env && typeof env.code === 'string' ? env.code : '';
   }
 }
 
@@ -107,6 +126,15 @@ export async function apiFetch(base, path, opts) {
   const o = opts || {};
   const useAuth = o.auth !== false;
   const issuedUnder = orgEpoch;
+  // No token yet, and one on its way (authBoot's refresh at first paint): wait for it rather
+  // than go out bare. Every mount read used to be sent before that refresh landed, come back
+  // 401 missing_token, and ask for a second refresh of its own — each reload sent every read
+  // twice and rotated the refresh token twice (1 Oct 2026). A refresh that fails leaves the
+  // read to meet its 401 exactly as before.
+  if (useAuth && !hooks.getToken() && typeof hooks.pending === 'function') {
+    const inFlight = hooks.pending();
+    if (inFlight) await Promise.resolve(inFlight).then(() => {}, () => {});
+  }
   const out = await attempt(base, path, o, useAuth ? hooks.getToken() : null, useAuth);
   // Checked AFTER the await, on the way back — the company can change while this is in
   // flight, and this is the one place every register's reads pass through.
@@ -138,6 +166,10 @@ async function attempt(base, path, o, token, useAuth) {
   } catch (e) {
     if (!(e instanceof ApiError) || e.status !== 401 || !useAuth) throw e;
     if (RETRY_ONCE_401.has(e.reason) && hooks.refresh && !o._retried) {
+      // A refresh in this tab may already have replaced the token this request went out
+      // with — it only needs the newer one, not a refresh (and a rotation) of its own.
+      const now = hooks.getToken ? hooks.getToken() : null;
+      if (now && now !== token) return attempt(base, path, Object.assign({}, o, { _retried: true }), now, useAuth);
       let fresh;
       try { fresh = await hooks.refresh(); } catch (e2) { throw e; }
       return attempt(base, path, Object.assign({}, o, { _retried: true }), fresh, useAuth);

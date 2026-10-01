@@ -125,22 +125,63 @@ def build_structure_markdown(
     return "\n".join(lines)
 
 
+#: Text artefacts are sent gzip-encoded under their own names: Blob serves them with
+#: ``Content-Encoding: gzip`` and browsers (and every HTTP client) hand back the plain file. JSON,
+#: SQL and CSV shrink 8–12×, which is what makes the output step bytes-bound no more: a 280k-row
+#: workbook's ~185 MB of artefacts took nine minutes from a laptop uplink (runs ee83c4b4,
+#: 71151cfa, fcb2dd75 — 30 Sep / 1 Oct 2026). The workbook (a zip already) and the report go as
+#: they are. Only these types are encoded — anything read back with the Blob SDK gets raw bytes.
+_GZIP_CONTENT_TYPES = {
+    ".json": "application/json",
+    ".sql": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+}
+
+
+def encode_artefact(filename: str, content) -> "tuple[bytes, object | None, int]":
+    """The bytes to send for one artefact, its blob content settings (None = as-is) and its raw size."""
+    import gzip
+    import os
+
+    raw = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+    content_type = _GZIP_CONTENT_TYPES.get(os.path.splitext(filename)[1].lower())
+    if content_type is None:
+        return raw, None, len(raw)
+    from azure.storage.blob import ContentSettings
+
+    # Saved, not opened: typed as JSON or SQL text a 75 MB output.json would open in the
+    # browser tab the link targets; as octet-stream (before compression) it downloaded.
+    return (
+        gzip.compress(raw, compresslevel=6),
+        ContentSettings(content_type=content_type, content_encoding="gzip",
+                        content_disposition=f'attachment; filename="{os.path.basename(filename)}"'),
+        len(raw),
+    )
+
+
 async def upload_artefacts(svc, container: str, base_path: str, artefacts: dict,
                            beat, log) -> "tuple[dict[str, str], int]":
     """Upload each artefact to ``{base_path}/{filename}``; returns (urls by filename, count).
 
-    A large workbook's artefacts run to ~180 MB, minutes from a laptop, so every block sent
-    counts towards ``beat`` (a ProgressBeat) and the run card can tell working from stalled.
-    A file that fails is logged and skipped; the rest still go.
+    Text artefacts go gzip-encoded (encode_artefact); every block sent counts towards ``beat``
+    (a ProgressBeat), so the run card can tell working from stalled. A file that fails is logged
+    and skipped; the rest still go.
     """
-    # Encoded one at a time: the artefacts of a large run are ~180 MB, and a second encoded copy
-    # of all of them at once doubled the worker's peak. The total counts characters — the beat
-    # is a heartbeat, not a meter.
-    total = sum(len(c) for c in artefacts.values())
+    # Encoded one at a time — a raw copy of a large run's artefacts is ~185 MB, and holding a
+    # second one of all of them doubled the worker's peak. The gzip copies kept here are an
+    # order of magnitude smaller, and the total counts the bytes that actually go over the wire.
+    # Off the event loop: ~185 MB takes over a second to gzip, a second in which the worker
+    # would answer nothing, its progress beats included.
+    import asyncio
+
+    payloads = await asyncio.to_thread(
+        lambda: [(filename, *encode_artefact(filename, content)) for filename, content in artefacts.items()]
+    )
+    total = sum(len(data) for _, data, _, _ in payloads)
     sent = 0
     urls: dict[str, str] = {}
-    for filename, content in artefacts.items():
-        data = content.encode("utf-8") if isinstance(content, str) else content
+    for filename, data, settings, raw_len in payloads:
         before = sent
 
         async def _hook(current, _file_total, _before=before):
@@ -148,9 +189,10 @@ async def upload_artefacts(svc, container: str, base_path: str, artefacts: dict,
 
         try:
             client = svc.get_blob_client(container=container, blob=f"{base_path}/{filename}")
-            await client.upload_blob(data, overwrite=True, progress_hook=_hook)
+            await client.upload_blob(data, overwrite=True, progress_hook=_hook, content_settings=settings)
             urls[filename] = client.url
-            log(f"  ✅ Uploaded: {filename} ({len(data):,} bytes) → {client.url}")
+            size = f"{raw_len:,} bytes" + (f", sent {len(data):,} gzip" if settings is not None else "")
+            log(f"  ✅ Uploaded: {filename} ({size}) → {client.url}")
         except Exception as e:
             log(f"  ⚠️  Failed to upload {filename}: {e}")
         sent = before + len(data)

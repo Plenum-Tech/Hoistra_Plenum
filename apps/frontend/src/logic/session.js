@@ -93,6 +93,10 @@ function readSlice(storage) {
   // A session is only a session with the credential that can renew it. A slice from the
   // demo gate — signedIn with no token — restores nothing.
   if (isStr(d.refreshToken) && d.refreshToken) out.refreshToken = d.refreshToken;
+  // When this browser was issued that token (auth.js authEnter). Tabs compare it to tell a
+  // newer token from an older one written back by a tab that had not heard yet; a slot
+  // written by a build from before it has none.
+  if (out.refreshToken && typeof d.refreshTokenAt === 'number' && isFinite(d.refreshTokenAt) && d.refreshTokenAt > 0) out.refreshTokenAt = d.refreshTokenAt;
   const account = cleanAccount(d.account);
   if (account) out.account = account;
   if (d.signedIn === true && out.refreshToken) out.signedIn = true;
@@ -117,19 +121,11 @@ function readSlice(storage) {
     out.viewOrgId = d.viewOrgId;
     if (isStr(d.viewOrgName)) out.viewOrgName = d.viewOrgName;
   }
-  // The OTHER half of that restore, and the half that was missing. viewOrgId is only what
-  // the top bar reads; client.js's actingOrgId is what actually puts organization_id on a
-  // request, and it is the only thing svc-deepagents' _resolve_acting_org ever sees.
-  // Restoring the label alone produced the Azure report of 17 Sep 2026: the bar read
-  // "Plenum Tech LLC" while the chat answered out of TechCorp's register — the account's
-  // OWN company. Two halves of one fact disagreeing is worse than both being wrong: the
-  // screen looks right, so nobody checks it. Set unconditionally, so a slice with no
-  // view-as also CLEARS an override left over from before the reload.
-  // Only when it actually differs. setActingOrg bumps client.js's orgEpoch, which is how a
-  // request already in flight learns the company changed under it and discards its answer —
-  // so calling it on a restore that changes nothing aborts a token refresh that was already
-  // in the air. (Caught by auth.test.mjs's two refresh tests, which is what they are for.)
-  if ((getActingOrg() || null) !== (out.viewOrgId || null)) setActingOrg(out.viewOrgId || null);
+  // The OTHER half of that restore — client.js's acting company — is applied by loadSession()
+  // alone (restoreActingOrg below), never here: this function also serves as a plain peek at
+  // the shared slot, for the storage listener, the refresh-token pick and every save, and
+  // there it re-scoped THIS tab's reads to whichever company some other tab of the same
+  // superadmin was viewing as — while this tab's header still named its own (1 Oct 2026).
 
   // A session written by a build that still had the Migration page. The page is gone and
   // the run is answered in the Orchestrator, so the stored view is TRANSLATED rather than
@@ -196,11 +192,28 @@ export function loadSession() {
   // This tab's own last-known identity, if it has one, wins outright — a different
   // account being active in some other tab must never override it.
   const mine = readSlice(win.sessionStorage);
-  if (mine.signedIn) return mine;
   // A genuinely fresh tab (nothing of its own yet) inherits whichever account is
   // currently active elsewhere, same as it always has — a reasonable default for the
   // common case of one account across many tabs.
-  return readSlice(win.localStorage);
+  const slice = mine.signedIn ? mine : readSlice(win.localStorage);
+  restoreActingOrg(slice);
+  return slice;
+}
+
+// The OTHER half of a restored view-as, and the half that was once missing. viewOrgId is only
+// what the top bar reads; client.js's actingOrgId is what actually puts organization_id on a
+// request, and it is the only thing svc-deepagents' _resolve_acting_org ever sees. Restoring
+// the label alone produced the Azure report of 17 Sep 2026: the bar read "Plenum Tech LLC"
+// while the chat answered out of TechCorp's register — the account's OWN company. Two halves
+// of one fact disagreeing is worse than both being wrong: the screen looks right, so nobody
+// checks it. Set unconditionally, so a slice with no view-as also CLEARS an override left over
+// from before the reload. Only when it actually differs: setActingOrg bumps client.js's
+// orgEpoch, which is how a request already in flight learns the company changed under it and
+// discards its answer — so calling it on a restore that changes nothing aborts a token
+// refresh that was already in the air. (Caught by auth.test.mjs's two refresh tests.)
+function restoreActingOrg(slice) {
+  const want = (slice && slice.viewOrgId) || null;
+  if ((getActingOrg() || null) !== want) setActingOrg(want);
 }
 
 // The shared slot only, bypassing this tab's own sessionStorage copy — for
@@ -212,12 +225,87 @@ export function loadSharedSession() {
   return readSlice(win.localStorage);
 }
 
+// The newest refresh token the server has issued to each account in this browser, in a key
+// of its own, written only at the moment one is issued — sign-in and every rotation
+// (auth.js authEnter). The shared slot above cannot be that record: it holds one account at
+// a time, and whichever tab of whichever company saved last owns it. A tab that fell behind
+// — frozen in the background while another tab of its account rotated, then the slot taken
+// by a tab on another company — refreshed with its own stale copy, which the server treats
+// as a stolen token and answers by ending every session the account has (30 Sep 2026: nine
+// sessions, every open tab's data gone until a reload and a fresh sign-in).
+const ISSUED_PREFIX = 'hoistra.rt.v1.';
+export function issuedTokenKey(accountId) { return ISSUED_PREFIX + String(accountId || ''); }
+
+export function latestIssuedRecord(accountId) {
+  if (!accountId) return null;
+  try {
+    const raw = window.localStorage.getItem(issuedTokenKey(accountId));
+    const d = raw ? JSON.parse(raw) : null;
+    if (!d || !isStr(d.token) || !d.token) return null;
+    return {
+      token: d.token,
+      at: typeof d.at === 'number' && isFinite(d.at) ? d.at : 0,
+      superseded: Array.isArray(d.superseded) ? d.superseded.filter((t) => isStr(t) && t) : []
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+export function latestIssuedToken(accountId) {
+  const r = latestIssuedRecord(accountId);
+  return r ? r.token : null;
+}
+
+// The record also keeps the last few tokens it replaced: a token the account has moved past
+// is never followed again, whoever writes it back — a tab reloaded from its own stale copy,
+// or one still on the build before issue times (review, 1 Oct 2026).
+// `replaced`: the token this one was exchanged for, remembered even when there was no record
+// yet — the first refresh after this build arrives replaces a token no record ever held, and a
+// tab still booting from it saved it back as if it were a rotation (traced in Chrome, 1 Oct).
+export function recordIssuedToken(accountId, token, at, replaced) {
+  if (!accountId || !isStr(token) || !token) return;
+  const prev = latestIssuedRecord(accountId);
+  const superseded = [replaced].concat(prev ? [prev.token].concat(prev.superseded) : [])
+    .filter((t, i, all) => isStr(t) && t && t !== token && all.indexOf(t) === i).slice(0, 8);
+  try { window.localStorage.setItem(issuedTokenKey(accountId), JSON.stringify({ token, at: at || Date.now(), superseded })); } catch (e) { /* no storage: this tab alone still works */ }
+}
+
+export function isSupersededToken(accountId, token) {
+  const r = latestIssuedRecord(accountId);
+  return !!(r && token && r.token !== token && r.superseded.indexOf(token) >= 0);
+}
+
+// Clears the shared slot when it still holds one of `tokens` for this account — the session a
+// tab is ending. Compared by token, not by this tab's own copy, which can be a rotation behind
+// the slot (logout presents the newest), and never touching another company's slot.
+export function forgetSharedSession(accountId, tokens) {
+  if (!accountId) return;
+  try {
+    const shared = readSlice(window.localStorage);
+    if (shared.account && shared.account.id === accountId && shared.refreshToken && (tokens || []).indexOf(shared.refreshToken) >= 0) {
+      window.localStorage.removeItem(KEY);
+    }
+  } catch (e) { /* nothing stored, nothing to clear */ }
+}
+
+// Only while it still holds one of `tokens` — a token this tab never held belongs to a
+// session some other tab of the account signed into since, and is not this tab's to end.
+export function forgetIssuedToken(accountId, tokens) {
+  if (!accountId) return;
+  try {
+    const held = latestIssuedToken(accountId);
+    if (held && (tokens || []).indexOf(held) >= 0) window.localStorage.removeItem(issuedTokenKey(accountId));
+  } catch (e) { /* nothing stored, nothing to forget */ }
+}
+
 function buildSlice(state) {
   return {
     signedIn: true,
     email: state.email || '',
     role: state.role || 'user',
     refreshToken: state.refreshToken || null,
+    refreshTokenAt: (state.refreshToken && state.refreshTokenAt) || null,
     account: cleanAccount(state.account),
     navOpen: !!state.navOpen,
     saOn: !!state.saOn,
@@ -250,7 +338,18 @@ function buildSlice(state) {
 // clear — see below.
 export function saveSession(state, prevState) {
   if (!state) return;
-  const slice = state.signedIn ? buildSlice(state) : null;
+  let slice = state.signedIn ? buildSlice(state) : null;
+  // Never anything older than the account's record. The record holds the newest token this
+  // browser was issued; a tab whose own copy is behind it — reloaded from a stale, unstamped
+  // copy above all — would otherwise write the replaced token out, to its own copy and (with
+  // another company holding the shared slot) to the shared one, where an unstamped token reads
+  // as a legacy rotation and is followed (review, 1 Oct 2026).
+  if (slice && slice.account && slice.account.id && slice.refreshToken) {
+    const rec = latestIssuedRecord(slice.account.id);
+    if (rec && rec.token !== slice.refreshToken && (!slice.refreshTokenAt || slice.refreshTokenAt < rec.at)) {
+      slice = Object.assign({}, slice, { refreshToken: rec.token, refreshTokenAt: rec.at || null });
+    }
+  }
   // Always this tab's own copy: it is never read by anyone else, so there is no reason to
   // hold back writing or clearing it.
   try {
@@ -267,7 +366,31 @@ export function saveSession(state, prevState) {
   // is only cleared when it still matches the token this tab is actually signing out.
   try {
     if (slice) {
-      window.localStorage.setItem(KEY, JSON.stringify(slice));
+      // Never this tab's token back over a newer one. A tab's token changes only when it is
+      // issued one or adopts one; any OTHER state change that finds the shared slot holding
+      // a different token for the SAME account means another tab has rotated since and this
+      // tab has not heard yet. Writing its copy back handed every other tab — the one that
+      // rotated included — a token the server had already replaced, and thirty minutes
+      // later, when an access token expired, the refresh that presented it ended every
+      // session on the account (30 Sep 2026).
+      //
+      // Newer is decided by the issue time each token carries, not by who saved last: the
+      // shared slot as THIS tab's process sees it can itself be a few milliseconds behind, so
+      // a tab booting next to one that has just rotated saved the old token back from that
+      // stale view, and the tab that had rotated then adopted it (traced in Chrome, 1 Oct
+      // 2026). A slot written by a build from before issue times carries none; it is kept
+      // unless this tab's own token changed, as that build did.
+      const shared = readSlice(window.localStorage);
+      const sameAccount = !!(shared.account && slice.account && shared.account.id === slice.account.id);
+      const changedHere = !prevState || prevState.refreshToken !== state.refreshToken;
+      const differs = sameAccount && shared.refreshToken && shared.refreshToken !== slice.refreshToken;
+      const sharedIsNewer = differs && (shared.refreshTokenAt
+        ? !slice.refreshTokenAt || shared.refreshTokenAt > slice.refreshTokenAt
+        : !changedHere);
+      const out = sharedIsNewer
+        ? Object.assign({}, slice, { refreshToken: shared.refreshToken, refreshTokenAt: shared.refreshTokenAt || null })
+        : slice;
+      window.localStorage.setItem(KEY, JSON.stringify(out));
     } else {
       const shared = readSlice(window.localStorage);
       const mineToken = prevState && prevState.refreshToken;

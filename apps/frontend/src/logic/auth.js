@@ -7,7 +7,92 @@
 import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
 import { ApiError, configureAuth, setActingOrg } from '../api/client.js';
-import { loadSharedSession, SESSION_KEY } from './session.js';
+import { forgetIssuedToken, forgetSharedSession, isSupersededToken, issuedTokenKey, latestIssuedRecord, loadSharedSession, recordIssuedToken, SESSION_KEY } from './session.js';
+
+// Resolves on the next storage event for this account's session slot or token record, or
+// after `ms` — whichever is first. Never rejects; without a window it simply waits.
+function storageSettles(accountId, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    let timer = null;
+    const keys = [SESSION_KEY, issuedTokenKey(accountId)];
+    const onStorage = (e) => { if (!e || !e.key || keys.indexOf(e.key) >= 0) finish(); };
+    function finish() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { window.removeEventListener('storage', onStorage); } catch (e) { /* no window */ }
+      resolve();
+    }
+    try { window.addEventListener('storage', onStorage); } catch (e) { /* no window */ }
+    timer = setTimeout(finish, ms);
+  });
+}
+
+// One refresh at a time per account, across every tab of this origin (the Web Locks API:
+// every browser this ships to has it, and so does node 24). The server accepts the token a
+// rotation replaced for only 30 s and answers anything later by ending every session, so
+// two tabs whose access tokens expire together must not both exchange the same refresh
+// token: that forked the session, and whichever tab's copy was saved last left the other
+// holding the replaced one — the replay thirty minutes on (30 Sep 2026). The second tab
+// now waits, then reads the token the first was just issued. Where the lock machinery
+// itself is missing or refuses, the exchange runs as it always did.
+// The token a refresh (or a sign-out) presents: the NEWEST this browser holds for the tab's
+// account, by the time it was issued — among the account's own record (which no other
+// company's tab can overwrite), the shared slot while it is this account's, and the tab's own
+// copy. Newest, not "whichever is in the shared slot": a tab can save an older token back from
+// a view of storage a few milliseconds behind (traced in Chrome, 1 Oct 2026). A shared token
+// with no issue time was written by a build from before them; it is followed as that build
+// did, because it is how an old tab's legitimate rotation reaches this one.
+function newestRefresh(state) {
+  const mine = state && state.account && state.account.id;
+  const shared = loadSharedSession();
+  const sameAccount = !!(shared.account && mine && shared.account.id === mine);
+  const own = state && state.refreshToken ? { token: state.refreshToken, at: state.refreshTokenAt || 0 } : null;
+  const fromShared = sameAccount && shared.refreshToken ? { token: shared.refreshToken, at: shared.refreshTokenAt || 0 } : null;
+  if (fromShared && !fromShared.at && (!own || fromShared.token !== own.token) && !isSupersededToken(mine, fromShared.token)) return fromShared;
+  let best = null;
+  [latestIssuedRecord(mine), fromShared, own].forEach((x) => { if (x && x.token && (!best || x.at > best.at)) best = x; });
+  return best;
+}
+function newestRefreshToken(state) {
+  const n = newestRefresh(state);
+  return n ? n.token : null;
+}
+
+// The issue time a newly issued token is stamped with: now, and never earlier than any this
+// browser already knows for the account, so "newer" holds even inside one millisecond.
+function issueStamp(accountId, state) {
+  const rec = latestIssuedRecord(accountId);
+  const shared = loadSharedSession();
+  const sharedAt = shared.account && shared.account.id === accountId ? (shared.refreshTokenAt || 0) : 0;
+  const known = Math.max(rec ? rec.at : 0, sharedAt, (state && state.refreshTokenAt) || 0);
+  return Math.max(Date.now(), known + 1);
+}
+
+//
+// The wait is bounded: a tab that stopped while holding the lock (frozen, or its exchange hung
+// past the 20 s request timeout) must not leave every other tab of the account — and, through
+// client.js's wait for a refresh in flight, every read they make — waiting behind it.
+export const REFRESH_LOCK_WAIT_MS = 25000;
+export function withRefreshLock(accountId, fn, waitMs) {
+  let locks = null;
+  try { locks = typeof navigator !== 'undefined' && navigator ? navigator.locks : null; } catch (e) { locks = null; }
+  if (!locks || typeof locks.request !== 'function') return Promise.resolve().then(fn);
+  return new Promise((resolve, reject) => {
+    let ran = false;
+    let held;
+    try {
+      const opts = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? { signal: AbortSignal.timeout(waitMs || REFRESH_LOCK_WAIT_MS) } : {};
+      held = locks.request('hoistra.refresh.' + (accountId || 'signed-out'), opts, () => { ran = true; return fn(); });
+    } catch (e) {
+      resolve(Promise.resolve().then(fn));
+      return;
+    }
+    Promise.resolve(held).then(resolve, (e) => (ran ? reject(e) : resolve(Promise.resolve().then(fn))));
+  });
+}
 
 export const ADMIN_ROLES = new Set(['admin', 'superadmin']);
 export const canAdmin = (account) => !!account && ADMIN_ROLES.has(account.role);
@@ -37,7 +122,7 @@ export const normaliseCode = (s) => String(s || '').replace(/[\s-]/g, '');
 export const DEAD_CODE = new Set(['expired', 'too_many_attempts', 'no_code']);
 
 export const AUTH_DEFAULTS = {
-  account: null, accessToken: null, refreshToken: null, authBooting: false,
+  account: null, accessToken: null, refreshToken: null, refreshTokenAt: null, authBooting: false,
   authMode: 'signin', authBusy: false, authError: '', authNotice: '', authReason: '',
   authAttemptsLeft: null, authRetryAt: 0, authTick: 0, authConfig: null,
   password: '', fullName: '', phone: '', code: '', newPassword: '',
@@ -92,6 +177,8 @@ export const authMethods = {
     configureAuth({
       getToken: () => this.state.accessToken,
       refresh: () => this.authRefresh(),
+      // The refresh in flight, if any — a read with no token yet waits for it (client.js).
+      pending: () => this._refreshing || null,
       onTerminal: (reason, message) => this.authSignedOut(message)
     });
     this._authStorage = (e) => this.authStorageChanged(e);
@@ -127,10 +214,36 @@ export const authMethods = {
   // tab, and a tab reading a different account's token here silently adopted it — a live
   // hijack of an in-use session, worse than the same mix-up surfacing only on reload.
   authStorageChanged(e) {
-    if (e && e.key && e.key !== SESSION_KEY) return;
+    const mine = this.state.account && this.state.account.id;
+    const issuedHere = !!(mine && e && e.key === issuedTokenKey(mine));
+    if (e && e.key && e.key !== SESSION_KEY && !issuedHere) return;
     // Only a signed-in tab follows the store. A tab on the gate is not part of the session
     // another tab opened; adopting its token there would only leave a stale credential behind.
     if (!this.state.signedIn) return;
+    // Another tab of this account was issued a token: take it, whoever holds the shared
+    // slot now. That record going away is not a sign-out on its own — the shared slot
+    // clearing, below, is what says the session ended.
+    if (issuedHere) {
+      const rec = latestIssuedRecord(mine);
+      if (rec && rec.token !== this.state.refreshToken && rec.at > (this.state.refreshTokenAt || 0)) {
+        this.setState({ refreshToken: rec.token, refreshTokenAt: rec.at });
+        return;
+      }
+      // The record removed: a tab of this account signed out of the session it held. When
+      // that was this tab's session too — its own token, or one at least as new — follow it:
+      // a sibling left signed in would refresh on the ended session in a while, and the
+      // server answers that by ending every session the account has, on every device. This
+      // reaches the sibling even while another company holds the shared slot (review).
+      if (!rec) {
+        let old = null;
+        try { old = e && e.oldValue ? JSON.parse(e.oldValue) : null; } catch (err) { old = null; }
+        const oldAt = old && typeof old.at === 'number' ? old.at : 0;
+        if (old && old.token && (old.token === this.state.refreshToken || oldAt >= (this.state.refreshTokenAt || 0))) {
+          this.authSignedOut('');
+        }
+      }
+      return;
+    }
     // Read the shared slot directly — loadSession() now prefers this tab's own
     // sessionStorage copy, which is exactly the wrong thing to consult about a change to
     // the other, shared store this listener exists to react to.
@@ -147,8 +260,21 @@ export const authMethods = {
       if (!oldToken || oldToken === this.state.refreshToken) this.authSignedOut('');
       return;
     }
-    if (s.refreshToken !== this.state.refreshToken) {
-      this.setState({ refreshToken: s.refreshToken, account: s.account || this.state.account });
+    // Only a NEWER token: a tab saving from a view of storage a few milliseconds behind puts
+    // an older one here, and adopting it is what handed the tab that had just rotated its own
+    // replaced token back (1 Oct 2026). A slot from a build before issue times is followed.
+    const newer = s.refreshTokenAt
+      ? s.refreshTokenAt > (this.state.refreshTokenAt || 0)
+      : !isSupersededToken(mine, s.refreshToken);
+    if (s.refreshToken !== this.state.refreshToken && newer) {
+      // A token from a tab still on the build before issue times arrives unstamped. It is
+      // followed as that build's own tabs would follow it — the only way its rotations reach
+      // this tab — so it is stamped now and recorded for the account, or the record this tab
+      // stamped earlier would outrank it and the next refresh present the replaced token.
+      // Once every open tab runs this build, nothing unstamped is written any more.
+      const at = s.refreshTokenAt || issueStamp(mine, this.state);
+      if (!s.refreshTokenAt) recordIssuedToken(mine, s.refreshToken, at);
+      this.setState({ refreshToken: s.refreshToken, refreshTokenAt: at, account: s.account || this.state.account });
     }
   },
 
@@ -160,9 +286,7 @@ export const authMethods = {
   // entirely, in another tab) is irrelevant to this refresh and must never be presented.
   authRefresh() {
     if (this._refreshing) return this._refreshing;
-    const shared = loadSharedSession();
-    const sameAccount = shared.account && this.state.account && shared.account.id === this.state.account.id;
-    const token = (sameAccount && shared.refreshToken) || this.state.refreshToken;
+    const token = newestRefreshToken(this.state);
     if (!token) {
       // No refresh token and a signed-in shell is a session that cannot be repaired: there
       // is nothing to refresh with, so every read will 401 for as long as the tab is open.
@@ -191,8 +315,29 @@ export const authMethods = {
         detail: { ok: false, error: 'Your session has ended. Sign in again.', reason: 'invalid' }
       }));
     }
-    this._refreshing = authApi.refresh(token)
-      .then((resp) => { this.authEnter(resp, { keepView: true }); return resp.tokens.access_token; })
+    const accountId = this.state.account && this.state.account.id;
+    const askedAt = Date.now();
+    this._refreshing = withRefreshLock(accountId, async () => {
+      // Picked again once the lock is held: another tab of this account may have been
+      // issued a new token while this one waited, and the one it replaced is spent.
+      let current = newestRefreshToken(this.state);
+      // Waited behind another tab and still see the token from before? Its write may not
+      // have reached this tab's view of storage yet — traced in Chrome at a two-tab boot:
+      // the second tab presented the replaced token 40 ms later, a grace fork. A moment's
+      // wait for the storage event (never more than 300 ms) and a second look.
+      if (current && current === token && Date.now() - askedAt > 15) {
+        await storageSettles(accountId, 300);
+        current = newestRefreshToken(this.state) || current;
+      }
+      if (!current) {
+        return Promise.reject(new ApiError('no refresh token', 401, {
+          detail: { ok: false, error: 'Your session has ended. Sign in again.', reason: 'invalid' }
+        }));
+      }
+      // Entered before the lock is let go, so the next tab to take it reads this token —
+      // from the shared slot and from the account's own record alike.
+      return authApi.refresh(current).then((resp) => { this.authEnter(resp, { keepView: true, replaced: current }); return resp.tokens.access_token; });
+    })
       .catch((e) => {
         // Only a 401 means the token is finished. A 5xx from the gateway mid-deploy is the
         // network's problem, and the credential is kept for the next try.
@@ -207,6 +352,10 @@ export const authMethods = {
   // Apply a SessionResponse. `keepView` is the reload refresh, which must not move the page.
   authEnter(resp, opts) {
     const o = opts || {};
+    // Every token the server issues is recorded against its account first — the one record
+    // no other company's tab can overwrite (session.js latestIssuedRecord) — stamped with when.
+    const issuedAt = issueStamp(resp.user && resp.user.id, this.state);
+    recordIssuedToken(resp.user && resp.user.id, resp.tokens && resp.tokens.refresh_token, issuedAt, o.replaced);
     const admin = canAdmin(resp.user);
     const isSuperadmin = resp.user.role === 'superadmin';
     // Where each role lands, on a FRESH sign-in only (keepView is the reload refresh,
@@ -232,7 +381,17 @@ export const authMethods = {
       clearInterval(this._orchTick);
     }
     this.setState((p) => ({
-      account: resp.user, accessToken: resp.tokens.access_token, refreshToken: resp.tokens.refresh_token,
+      // The reply's user carries identity and role, never the building scope or can_ingest
+      // (public_user() in tokens.py — only GET /me adds those, via authLoadScope below). On
+      // the silent refresh, which keeps the same account, the scope already in state stays
+      // under it rather than being dropped: replacing the whole account emptied the Ingest
+      // tray's building picker on every token rotation until the follow-up /me answered,
+      // and for good when that read failed — "No building matches that" over an empty
+      // search box, gone on a page reload (Azure, 30 Sep 2026). What the reply does carry
+      // still wins. A fresh sign-in can be a different person, so it never inherits.
+      account: o.keepView && p.account && p.account.id === resp.user.id
+        ? Object.assign({}, p.account, resp.user) : resp.user,
+      accessToken: resp.tokens.access_token, refreshToken: resp.tokens.refresh_token, refreshTokenAt: issuedAt,
       signedIn: true,
       role: o.keepView ? p.role : (admin ? 'admin' : 'user'),
       saOn: o.keepView ? p.saOn : isSuperadmin,
@@ -304,8 +463,12 @@ export const authMethods = {
       // acting-as company, the invite form's chips already use.
       const unrestrictedNeedsCompanyList = (u.role === 'admin' || u.role === 'superadmin')
         && !(Array.isArray(u.buildings) && u.buildings.length);
+      // A refused company list resolves to null, not []: this re-runs on every token refresh
+      // and every company switch, and turning one failed read into an empty list replaced a
+      // picker that was fine a moment ago with "No building matches that" until the next
+      // page reload. null below means "keep what is already there".
       const buildings = unrestrictedNeedsCompanyList
-        ? adminApi.listBuildings().then((br) => (br && Array.isArray(br.buildings) ? br.buildings : [])).catch(() => [])
+        ? adminApi.listBuildings().then((br) => (br && Array.isArray(br.buildings) ? br.buildings : [])).catch(() => null)
         : Promise.resolve(Array.isArray(u.buildings) ? u.buildings : []);
       return buildings.then((list) => {
         // Guarded by id, not just "an account is signed in": this fires from authEnter and
@@ -324,7 +487,7 @@ export const authMethods = {
             building_ids: u.building_ids === undefined ? p.account.building_ids : u.building_ids,
             all_buildings: u.all_buildings === true,
             selected_building_id: u.selected_building_id || null,
-            buildings: list
+            buildings: list === null ? (Array.isArray(p.account.buildings) ? p.account.buildings : []) : list
           })
         } : {}));
       });
@@ -367,6 +530,17 @@ export const authMethods = {
   // Local sign-out. `notice` is what the gate shows — the server's own line when it ended
   // the session, nothing when the person chose to leave.
   authSignedOut(notice) {
+    // The account's own token record goes with the session, so no refresh token outlives it
+    // in storage — unless another tab of the account has since signed into a session of its
+    // own, whose token this tab never held.
+    const leaving = this.state.account && this.state.account.id;
+    if (leaving) {
+      const ending = [this.state.refreshToken, newestRefreshToken(this.state)];
+      forgetIssuedToken(leaving, ending);
+      // And the shared slot when it holds that session, so this account's other tabs hear of
+      // it — matched by token, since this tab's own copy may be a rotation behind the slot.
+      forgetSharedSession(leaving, ending);
+    }
     this._vdToken = (this._vdToken || 0) + 1;
     // A viewAsCompany() override belongs to the session that chose it — never left
     // armed for whoever signs into this tab next.
@@ -379,7 +553,7 @@ export const authMethods = {
     this._qTimer = null;
     this._qSeen = null;
     this.setState({
-      account: null, accessToken: null, refreshToken: null, signedIn: false, role: 'user',
+      account: null, accessToken: null, refreshToken: null, refreshTokenAt: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
       // The vendor drawer is a fixed overlay too; left open it showed a company's vendor,
       // contacts and change controls over the sign-in gate.
@@ -410,7 +584,9 @@ export const authMethods = {
   },
 
   authSignOut() {
-    const token = this.state.refreshToken;
+    // The newest token, not this tab's copy: logout ends only the session whose current or
+    // previous token it is shown, so a copy two rotations behind would leave it running.
+    const token = newestRefreshToken(this.state);
     if (token) authApi.logout(token).catch(() => {});
     this.authSignedOut('');
   },

@@ -75,7 +75,13 @@ export function makeSession(o) {
     domain: 'Orchestrator',
     spaceId: null,
     owner: typeof o.owner === 'string' && o.owner ? o.owner.trim().toLowerCase() : null,
-    viewOrgId: typeof o.viewOrgId === 'string' && o.viewOrgId ? o.viewOrgId : null
+    viewOrgId: typeof o.viewOrgId === 'string' && o.viewOrgId ? o.viewOrgId : null,
+    // The migration run this conversation started or opened (logic/migration.js). A run is
+    // answered in the conversation that started it — its card leaves with that conversation
+    // and comes back with it. Held on the record because mgId alone is one controller-wide
+    // field: left as that, "+ New query" after an ingestion put the next question up with
+    // the previous conversation's run still running beneath it (30 Sep 2026).
+    migrationId: typeof o.migrationId === 'string' && o.migrationId ? o.migrationId : null
   };
 }
 
@@ -142,7 +148,7 @@ export function loadSessions(storage) {
   const out = [];
   d.forEach((r) => {
     if (!r || typeof r !== 'object' || typeof r.id !== 'string' || typeof r.title !== 'string' || !r.title) return;
-    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps, owner: r.owner, viewOrgId: r.viewOrgId });
+    const rec = makeSession({ id: r.id, title: r.title, page: r.page, kind: r.kind, at: Number(r.at) || Date.now(), task: r.task, ctx: r.ctx, steps: r.steps, owner: r.owner, viewOrgId: r.viewOrgId, migrationId: r.migrationId });
     rec.createdAt = Number(r.createdAt) || rec.at;
     rec.turns = Array.isArray(r.turns) ? r.turns.filter((m) => m && typeof m === 'object' && typeof m.role === 'string') : [];
     rec.calls = Array.isArray(r.calls) ? r.calls.filter((x) => typeof x === 'string') : [];
@@ -241,8 +247,22 @@ export const sessionsMethods = {
     const rec = makeSession({ id: id, title: q, page: this.ctxLabel(), at: Date.now(), owner: s.account && s.account.email, viewOrgId: s.viewOrgId || null });
     // Asked from inside a saved space: the session is filed there from the start.
     if (s.view === 'space' && s.spaceKey && BUILTIN_SPACE_KEYS.indexOf(s.spaceKey) < 0) rec.spaceId = s.spaceKey;
+    // A run opened before any question was asked — from the recent list, or a Buildings
+    // card — is adopted by the conversation the first question creates: that is the
+    // conversation it is being answered in.
+    if (s.mgId) rec.migrationId = s.mgId;
     this.setState((p) => ({ sessionId: id, sessions: trimSessions([rec].concat((p.sessions || []).filter((x) => x.id !== id))) }));
     return id;
+  },
+
+  // Stamps the run on the active conversation's record (see makeSession's migrationId).
+  // No record yet — the first question has not been asked — means sessionEnsure adopts it.
+  sessionBindMigration(id) {
+    const sid = this.state.sessionId;
+    if (!sid || !id) return;
+    this.setState((p) => ({
+      sessions: (p.sessions || []).map((x) => (x.id === sid && x.migrationId !== id ? Object.assign({}, x, { migrationId: id }) : x))
+    }));
   },
 
   // Mirrors the transcript into the active record. Called from the controller's setState
@@ -289,12 +309,18 @@ export const sessionsMethods = {
       sessionId: id, ccChat: rec.turns || [], ccTraceIdx: null, ccStepsOpen: {}, ccEditIdx: null, ccEditText: '',
       ccStream: null, flow: null, flowDone: ''
     });
+    // The run this conversation started comes back with it; any other conversation's run
+    // does not come along. openChat() below reads the run it finds set.
+    if (rec.migrationId) { if (typeof this.mgAttach === 'function') this.mgAttach(rec.migrationId); }
+    else if (typeof this.mgDetach === 'function') this.mgDetach();
     this.openChat();
   },
 
   deleteSession(id) {
     const active = this.state.sessionId === id;
     if (active && this._ccAbort) this._ccAbort.abort();
+    // Its run's card goes with it; the run itself stays in the recent list.
+    if (active && typeof this.mgDetach === 'function') this.mgDetach();
     this.setState((p) => Object.assign(
       { sessions: (p.sessions || []).filter((x) => x.id !== id) },
       active ? { sessionId: null, ccChat: [], ccBusy: false, ccStream: null } : {}
@@ -321,6 +347,11 @@ export const sessionsMethods = {
   newQuery() {
     if (this._ccAbort) this._ccAbort.abort();
     clearInterval(this._orchTick);
+    // The migration card belongs to the conversation being left, same as the transcript.
+    // Without this the next question opened with the previous ingestion's run still
+    // running beneath it. The run stays in the recent list and on that conversation's
+    // record, so reopening the conversation brings it back.
+    if (typeof this.mgDetach === 'function') this.mgDetach();
     this.setState({
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, ccTraceIdx: null, ccStepsOpen: {},
       view: 'home', query: '', detail: null, flow: null, flowDone: '', queueOpen: false, paletteOpen: false,

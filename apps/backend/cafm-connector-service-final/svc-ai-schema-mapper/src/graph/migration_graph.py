@@ -158,6 +158,37 @@ BULK_IO: "dict[str, tuple[list[str], list[str]]]" = {
 }
 
 
+class NodeFailed(RuntimeError):
+    """A node reported failure in its state; the run must not carry on as if it had paused."""
+
+
+async def raise_if_node_failed(name: str, out: Any) -> None:
+    """End the run when a node hands back state with status="failed".
+
+    Every step node (ingest, deterministic, semantic, preprocess, hierarchy, output) catches
+    its own exceptions and returns state with status="failed" instead of raising. Nothing read
+    that: LangGraph went on to the node's interrupt_after pause, the worker logged the graph as
+    complete, and the job row kept its last status — "running", with no gate — which nothing
+    can resume (30 Sep 2026, migration bce6b4d2: one refused connection while recording the
+    ingest pause left the run "running" for half an hour). Record the failure on the row
+    (retried) and raise, so the worker ends the run as failed and it can be retried from the step.
+    """
+    if not isinstance(out, dict) or out.get("status") != "failed":
+        return
+    message = str(out.get("error_message") or f"{name} failed")
+    migration_id = out.get("migration_id")
+    if migration_id:
+        from .nodes.db_writer import write_error
+
+        error_node = out.get("error_node")
+        await write_error(
+            str(migration_id),
+            message,
+            error_node if isinstance(error_node, int) else None,
+        )
+    raise NodeFailed(f"{name}: {message}")
+
+
 def build_migration_graph(
     checkpointer: Any,
 ) -> Any:
@@ -203,6 +234,9 @@ def build_migration_graph(
                     result = await result
                 out = result if isinstance(result, dict) else state
                 await _bulk_dehydrate(out, mig, _o)
+                # A node that caught its own error and returned status="failed" must not be
+                # left to pause as if it had succeeded (see raise_if_node_failed).
+                await raise_if_node_failed(_name, out)
                 return out
             finally:
                 # Runs on success AND on GraphInterrupt/error, so the state LangGraph may

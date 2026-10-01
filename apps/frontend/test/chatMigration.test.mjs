@@ -28,14 +28,15 @@ globalThis.window = {
 globalThis.WebSocket = class { constructor() { throw new Error('no sockets in tests'); } };
 
 let calls, handlers;
+const WORKSPACE_PREFIX = 'GET /backend/deep-agents/api/workflow/workspace/';
 globalThis.fetch = async (url, opts) => {
   const u = new URL(String(url));
   const method = (opts && opts.method) || 'GET';
   const key = method + ' ' + u.pathname;
   calls.push({ key: key, body: opts && opts.body, query: u.search });
-  const h = handlers[key];
+  const h = handlers[key] || (key.startsWith(WORKSPACE_PREFIX) ? handlers.WORKSPACE : undefined);
   if (!h) return { ok: false, status: 404, statusText: '404', text: async () => '{"detail":"not mocked"}' };
-  const out = typeof h === 'function' ? h(opts) : h;
+  const out = typeof h === 'function' ? await h(opts) : h;
   return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify(out) };
 };
 
@@ -84,6 +85,33 @@ test('spreadsheets staged with nothing typed start a run through the route that 
   assert.ok(!calls.some((x) => x.key === START), 'not straight to the mapper, which cannot record a building');
   assert.equal(c.state.mgId, ID, 'the card opens at gate 1');
   assert.deepEqual(c.state.ccFiles, [], 'the tray is cleared');
+});
+
+// CAFM Web opens the run the moment the upload starts it (use-deep-agent-orchestrator.ts polls
+// the session's workspace every 1.5 s while the upload is in flight), so each step shows as it
+// happens. The reply only arrives once the run has reached its first gate — opening the card
+// then showed every step at once.
+test('a migration opens while its upload is still in flight, not when the reply arrives', async () => {
+  let done = false;
+  let probes = 0;
+  handlers.WORKSPACE = () => { probes += 1; return { migration_ids: probes > 1 ? ['older-run', ID] : ['older-run'] }; };
+  handlers[RUN_FILES] = () => new Promise((resolve) => setTimeout(() => {
+    done = true;
+    resolve({ session_id: 's1', answer: 'Paused at the primary-key gate.', tool_calls: [], success: true, ingested_migration_ids: [ID] });
+  }, 400));
+  handlers[STATUS] = doc({ status: 'running', pending_gate_type: null, pending_gate_payload: null });
+  c._mgDiscoverMs = 30;
+  c.ccAddFiles([new File(['a,b'], 'cmms_clean_test.xlsx')]);
+  const turn = c.orchSubmitNow();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(done, false, 'the upload has not answered yet');
+  assert.equal(c.state.mgId, ID, 'the new run is open already');
+  await turn;
+  await settle();
+  assert.equal(c.state.mgId, ID, 'and the reply re-affirms the same run');
+  const n = probes;
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(probes, n, 'discovery stops once the run is found and the upload is done');
 });
 
 // The building the composer has chosen must reach the route, because that is the whole
@@ -415,4 +443,76 @@ test('the head does not print the run id twice when the file name is unknown', (
   assert.equal(v.mgFile, '', 'no file name is known without a document');
   // MigrationRun renders mgFile only when there is one; the id chip carries the identity.
   assert.equal(v.mgIdShort, '2f9f3738');
+});
+
+// ── one run per conversation ─────────────────────────────────────────────────────────
+//
+// The open run (mgId) was one controller-wide field, and the chat rendered the wizard
+// whenever it was set — under whichever conversation was on screen. "+ New query" after
+// an ingestion reset the transcript but not the run, so the next question came up with the
+// previous conversation's migration card still running beneath it; opening an older
+// conversation showed it too, and reopening the ingestion conversation later could not
+// bring it back (reported 30 Sep 2026). A run belongs to the conversation that started
+// it: it leaves with that conversation and comes back with it.
+const { makeSession, loadSessions, saveSessions } = await import('../src/logic/sessions.js');
+const S1 = 'sess-ingest', S0 = 'sess-earlier';
+const withRunOpen = async () => {
+  handlers[STATUS] = doc();
+  const earlier = makeSession({ id: S0, title: 'Which vendors are blocked?', owner: 'a@b.c' });
+  earlier.turns = [{ role: 'you', text: 'Which vendors are blocked?' }];
+  c.setState({ sessions: [earlier], sessionId: S1 });
+  c.sessionEnsure('Validate and ingest this document.');
+  c.mgOpen(ID);
+  await settle();
+  assert.equal(c.mgVals(c.state).mgHasRun, true, 'precondition: the run is open in the ingestion conversation');
+};
+
+test('"+ New query" after an ingestion starts a conversation with no migration card in it', async () => {
+  await withRunOpen();
+  c.newQuery();
+  assert.equal(c.state.mgId, null);
+  assert.equal(c.mgVals(c.state).mgHasRun, false, 'the wizard is not rendered under the next question');
+});
+
+test('the run is remembered on the conversation that started it, and comes back when that conversation is reopened', async () => {
+  await withRunOpen();
+  assert.equal(c.state.sessions.find((x) => x.id === S1).migrationId, ID, 'stamped on the record');
+  c.newQuery();
+  c.openSession(S1);
+  await settle();
+  assert.equal(c.state.mgId, ID);
+  assert.equal(c.mgVals(c.state).mgHasRun, true);
+});
+
+test('opening an earlier conversation shows no run — the card is not carried across', async () => {
+  await withRunOpen();
+  c.openSession(S0);
+  assert.equal(c.state.sessionId, S0);
+  assert.equal(c.state.mgId, null);
+  assert.equal(c.mgVals(c.state).mgHasRun, false);
+});
+
+test('deleting the active ingestion conversation drops its card as well as its transcript', async () => {
+  await withRunOpen();
+  c.deleteSession(S1);
+  assert.equal(c.state.sessionId, null);
+  assert.equal(c.state.mgId, null);
+});
+
+test('a run opened before any question is adopted by the conversation the first question creates', async () => {
+  handlers[STATUS] = doc();
+  c.setState({ sessionId: null, sessions: [] });
+  c.mgOpen(ID);   // from the recent list — no conversation exists yet
+  await settle();
+  const id = c.sessionEnsure('What will that migration change?');
+  assert.equal(c.state.sessions.find((x) => x.id === id).migrationId, ID);
+  assert.equal(c.state.mgId, ID, 'and the card stays up for it');
+});
+
+test('the binding survives the session store round-trip', () => {
+  const rec = makeSession({ id: 'sess-9', title: 'Validate and ingest this document.', owner: 'a@b.c', migrationId: ID });
+  assert.equal(rec.migrationId, ID);
+  saveSessions([rec], window.localStorage);
+  assert.equal(loadSessions(window.localStorage)[0].migrationId, ID);
+  assert.equal(makeSession({ id: 'sess-8', title: 'x' }).migrationId, null, 'absent means none, never undefined');
 });

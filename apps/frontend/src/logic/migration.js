@@ -1,6 +1,6 @@
 // migration — a CSV / Excel migration, against svc-ai-schema-mapper's pipeline
 // (api/schemaMapper.js), answered in the Orchestrator conversation that started it
-// (components/shell/MigrationRun.jsx).
+// (cafm/hoistra-migration-wizard.tsx — CAFM Web's own migration panel).
 //
 // A migration is one upload walked through nine nodes with human gates between them.
 // This module owns: the upload (staged in the composer's tray → mgStartFromChat), the open
@@ -22,9 +22,17 @@
 // Pure helpers are named exports; the methods are mixed into HoistraLogic.prototype and
 // `this` is the controller.
 import { schemaMapperApi } from '../api/schemaMapper.js';
+import { deepAgentsApi } from '../api/deepAgents.js';
 import { opsApi } from '../api/opsIntelligence.js';
 import { extrasStatus } from './workbookExtras.js';
 import { currentOrgId, isStaleScope } from '../api/client.js';
+import {
+  relKey, uniqueTablesView, classificationView, classificationBody, columnMappingView, columnMappingBody,
+  hierarchyView, hierarchyBody, hierarchyExport, finalView, preSemanticPhase, tableRoutingView, tableRoutingBody,
+  columnMatchingView, columnMatchingBody, fieldMappingView, fieldMappingBody, fieldMappingProblems, PS_DATA_TYPES
+} from './migrationGates.js';
+
+export { relKey };
 
 // Statuses after which the run will not move again.
 export const TERMINAL = new Set(['complete', 'failed', 'ddl_failed', 'cancelled']);
@@ -160,7 +168,6 @@ export function safeColumn(raw) {
   return /^[a-z_][a-z0-9_]{0,62}$/.test(norm) ? norm : '';
 }
 
-const pct = (x) => (x === null || x === undefined || isNaN(x)) ? '—' : Math.round(Number(x) * 100) + '%';
 
 // "3 min ago" for the recent-runs list; absolute past a day, since the list spans weeks.
 export function whenLabel(iso, now) {
@@ -189,161 +196,206 @@ export function runKind(doc) {
   return 'running';
 }
 
-// Human labels for a gate, and one sentence on what deciding it does.
+// What each gate asks, in the reader's words, and one sentence on what deciding it does. The
+// card opens every gate with this question rather than the pipeline's step name: the person
+// answering is a property or FM data owner, not the engineer who built the pipeline, and
+// "B8.1 Primary-key detection" tells them nothing about what they are being asked. The codes
+// and the analysis behind each answer are still on the card, under "How we worked this out".
 export const GATE_TEXT = {
-  pk_approval: ['Primary keys', 'One key per source table. The detected key is pre-selected; change it where the detector picked a column that merely happens to be unique.'],
-  unique_table_approval: ['Unique tables', 'Each sheet routed to the plenum_cafm table it will land in, with its confirmed key. Approve to continue to column mapping.'],
-  pre_semantic: ['Rule-based matches', 'Every column the rules matched. Approve keeps the match; Semantic sends the column on to embedding matching instead.'],
-  classification_approval: ['Keys and relationships', 'Foreign keys and shared attributes found across the sheets. A foreign key is enforced; a shared attribute becomes a lookup table; Exclude drops the group.'],
-  column_mapping_approval: ['Destination columns', 'The destination column matched for every source column. Re-target one, or make it a new column on the destination table.'],
-  field_mapping: ['Flagged fields', 'Fields the semantic matcher was unsure about, and fields nothing matched. Unmapped fields become custom columns unless you say otherwise.'],
-  hierarchy: ['Hierarchy', 'The containment and reference relationships between the tables, from the keys you confirmed. Reject any that is wrong.'],
-  write: ['Write to database', 'The last gate. Confirm inserts the rows into plenum_cafm; Reject ends the run with nothing written.'],
-  final_confirmation: ['Write to database', 'The last gate. Confirm inserts the rows into plenum_cafm; Reject ends the run with nothing written.']
+  pk_approval: ['Which column identifies each row?', 'We picked an ID column (primary key) for every table. Change any pick that is wrong — combine columns when no single one is unique, or let Plenum generate an ID.'],
+  unique_table_approval: ['Are these the right tables?', 'Each table should hold one kind of record. Sheets with the same columns were merged into one table. Check nothing is missing or doubled before the tables are matched to Plenum.'],
+  pre_semantic: ['Where should each sheet go?', 'Each sheet is matched to a Plenum table. Check the guesses — a sheet with no match becomes a new table.'],
+  pre_semantic_columns: ['Check the column matches', 'Confident matches are approved already. Send any you doubt to AI matching, or pick a different target column.'],
+  classification_approval: ['How are your tables linked?', 'A column that points at another table’s ID becomes an enforced link. Repeated values, like trades, become a lookup list. Change or leave out any of them.'],
+  column_mapping_approval: ['Where does each column land?', 'Every column is matched to a column in Plenum. Keep the match, pick another, or add it as a new column.'],
+  field_mapping: ['Review the matches the AI wasn’t sure about', 'Accept a match, pick a better column, or reject the field. Fields nothing matched become new columns unless you choose otherwise.'],
+  hierarchy: ['How do your records nest?', 'These links say what belongs to what — assets in sites, work orders on assets. Confirm, change or reject each one.'],
+  write: ['Ready to write to Plenum', 'Nothing has been written yet. Writing adds these rows to the live database and cannot be undone.'],
+  final_confirmation: ['Ready to write to Plenum', 'Nothing has been written yet. Writing adds these rows to the live database and cannot be undone.']
 };
 
-const verdictKey = (v) => /foreign/i.test(v || '') ? 'fk' : /shared/i.test(v || '') ? 'shared' : 'pk';
-const firstTable = (m) => (Array.isArray(m.source_tables) && m.source_tables[0]) || String(m.source || '').split('.')[0] || '';
-export const relKey = (r) => [r.source_table, r.source_column, r.target_table, r.target_column].join('>');
+// The six stages the card's stepper shows. Ten pipeline nodes and eight gates are the
+// service's view; a person needs to know how far along the whole job is and what is left.
+export const STAGES = [
+  { key: 'read', label: 'Read file' },
+  { key: 'keys', label: 'Keys & tables' },
+  { key: 'match', label: 'Match columns' },
+  { key: 'review', label: 'Review fields' },
+  { key: 'links', label: 'Relationships' },
+  { key: 'write', label: 'Write' }
+];
+const STAGE_BY_NODE = { 1: 0, 2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4, 8: 4, 9: 5, 10: 5 };
+
+// Which stage the run is in, and how each stage reads.
+export function stagesFor(doc) {
+  const kind = runKind(doc);
+  const gate = String((doc && doc.pending_gate_type) || '').toLowerCase();
+  let at = !doc ? 0 : (gate === 'pk_approval' || gate === 'unique_table_approval') ? 1 : (STAGE_BY_NODE[currentNode(doc)] ?? 0);
+  // Past the file's own node with nothing asked yet, the keys are next.
+  const n1 = doc && Array.isArray(doc.nodes) ? doc.nodes.find((x) => x && x.node_id === 1) : null;
+  if (at === 0 && n1 && String(n1.status || '').toLowerCase() === 'complete' && kind !== 'step') at = 1;
+  return STAGES.map((st, i) => ({
+    key: st.key, label: st.label,
+    state: kind === 'done' || i < at ? 'done' : i > at ? 'todo' : kind === 'failed' ? 'failed' : kind === 'gate' ? 'needs' : 'working'
+  }));
+}
+
+// ── the primary-key gate ────────────────────────────────────────────────────────────
+//
+// A key is a LIST of columns. One column is a natural key, several a composite key, none a
+// surrogate (the service mints _udr_id). The gate takes {table: [cols]} and reads an empty list
+// as "surrogate approved" (pk_confirmation.normalize_pk_overrides); it used to be sent the
+// first detected column alone, which cut Asset_Readings' asset_code + reading_type +
+// recorded_at down to asset_code — a key that does not hold.
+
+// _udr_id is the surrogate the service adds itself; it is never a column the reader picks.
+export const detectedPk = (info) => ((info && info.detected_pk) || []).filter((c) => c && c !== '_udr_id');
+
+// A decision as the list the gate takes. A bare column (or the old surrogate sentinel) is
+// still read, so a decision held in either shape means the same key.
+const pkList = (v) => Array.isArray(v)
+  ? v.filter((c) => c && c !== '_udr_id')
+  : (v == null || v === '' || v === '__surrogate__' || v === '_udr_id') ? [] : [String(v)];
+
+export const chosenPk = (table, info, dec) =>
+  (dec && dec[table] !== undefined) ? pkList(dec[table]) : detectedPk(info);
+
+const two = (x) => (typeof x === 'number' && isFinite(x)) ? x.toFixed(2) : '—';
+
+// The rows of the primary-key table, as CAFM Web draws them (EditablePkDetection in
+// migration-metadata-view.tsx). Tables the service found to be duplicates of each other
+// (table_resolution.duplicate_tables — Vendors + Vendor_Contracts) are ONE row under the
+// group's label, and a key chosen on that row is the key of every member.
+export function pkRows(payload, dec) {
+  const conf = (payload && payload.pk_confirmation) || {};
+  const groups = (((payload && payload.table_resolution) || {}).duplicate_tables || {}).groups || [];
+  const groupOf = {};
+  groups.forEach((g) => { (Array.isArray(g && g.tables) ? g.tables : []).forEach((t) => { groupOf[t] = g; }); });
+  const seen = new Set();
+  const rows = [];
+  Object.keys(conf).forEach((t) => {
+    const g = groupOf[t];
+    if (!g) { rows.push({ key: t, label: t, members: [t] }); return; }
+    const gk = g.tables.join('|');
+    if (seen.has(gk)) return;
+    seen.add(gk);
+    const rep = g.tables.find((x) => conf[x]) || t;
+    rows.push({ key: rep, label: g.label || rep, members: g.tables.slice() });
+  });
+  return rows.map((r) => {
+    const info = conf[r.key] || {};
+    const cols = Array.isArray(info.columns) ? info.columns : [];
+    const stat = (c) => cols.find((x) => x.column === c) || {};
+    const detected = detectedPk(info);
+    const selected = chosenPk(r.key, info, dec);
+    const changed = selected.length !== detected.length || selected.some((c, i) => c !== detected[i]);
+    // The key is only as strong as its weakest column: the lowest uniqueness, the highest nulls.
+    const uniq = selected.length ? Math.min(...selected.map((c) => Number(stat(c).uniqueness) || 0)) : 1;
+    const nulls = selected.length ? Math.max(...selected.map((c) => Number(stat(c).null_rate) || 0)) : 0;
+    return {
+      key: r.key, label: r.label, members: r.members, isGroup: r.members.length > 1,
+      kind: selected.length === 0 ? 'surrogate' : selected.length > 1 ? 'composite' : 'natural',
+      selected: selected, changed: changed,
+      chips: selected.map((c) => ({ column: c, qualifies: !!stat(c).qualifies })),
+      available: cols.filter((c) => c && c.column && c.column !== '_udr_id' && selected.indexOf(c.column) < 0)
+        .map((c) => ({ column: c.column, qualifies: !!c.qualifies })),
+      uniqueness: two(uniq), nullRate: two(nulls),
+      invalid: selected.length > 0 && (uniq < 1 || nulls > 0)
+    };
+  });
+}
+
+// ── the ingest report ───────────────────────────────────────────────────────────────
+//
+// Node 1's step pause (ingest_node.write_step_pause: rows, columns, format, nan_report) or
+// Node 1's own output (row_count, column_count, detected_format, nan_report) — the same report
+// under two sets of names, read as CAFM Web's Node1Ingest reads it. A missing total is a dash,
+// never a zero, and a node output the poll left out (`_omitted`, over 16 KB) is no report.
+const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+const count = (n) => Number(n).toLocaleString('en-GB');
+const plural = (n, one) => count(n) + ' ' + one + (n === 1 ? '' : 's');
+
+export function ingestReport(src) {
+  if (!src || typeof src !== 'object' || src._omitted) return null;
+  const sum = (src.overall_summary && typeof src.overall_summary === 'object') ? src.overall_summary : {};
+  const rows = num(src.rows) ?? num(src.row_count) ?? num(sum.total_rows);
+  const cols = num(src.columns) ?? num(src.column_count) ?? num(sum.total_columns);
+  const fmtv = [src.format, src.detected_format, sum.detected_format].find((x) => typeof x === 'string' && x) || null;
+  const nr = (src.nan_report && typeof src.nan_report === 'object') ? src.nan_report : null;
+  if (rows === null && cols === null && !fmtv && !nr) return null;
+
+  let nan = null;
+  if (nr) {
+    const cells = num(nr.total_nan_cells) || 0;
+    const tables = (nr.tables && typeof nr.tables === 'object') ? nr.tables : {};
+    nan = {
+      clean: cells === 0,
+      summary: plural(cells, 'value') + ' · ' + plural(num(nr.total_rows_with_nan) || 0, 'row') + ' · ' + plural(num(nr.columns_with_nan) || 0, 'column'),
+      // Every table, the clean ones included — "no null/NaN (0)" says it was checked, not skipped.
+      tables: Object.entries(tables).filter(([, t]) => t && typeof t === 'object').map(([name, t]) => {
+        const clean = (num(t.nan_cells) || 0) === 0;
+        const withNan = num(t.rows_with_nan) || 0;
+        return {
+          name: name, clean: clean,
+          badge: clean ? 'no null/NaN (0)' : plural(withNan, 'row') + ' with null/NaN',
+          columns: clean ? [] : Object.entries(t.columns || {}).map(([c, k]) => ({ name: c, count: num(k) || 0 }))
+        };
+      })
+    };
+  }
+  return {
+    label: (typeof src.label === 'string' && src.label) || 'Ingest & Configure',
+    tiles: [
+      { label: 'Total rows', value: rows === null ? '—' : count(rows) },
+      { label: 'Total columns', value: cols === null ? '—' : count(cols) },
+      { label: 'Format', value: fmtv || '—' }
+    ],
+    nan: nan,
+    summary: [rows === null ? '' : plural(rows, 'row'), cols === null ? '' : plural(cols, 'column'), fmtv || '',
+      !nan ? '' : nan.clean ? 'no null/NaN values' : count(num(nr.total_nan_cells) || 0) + ' null/NaN values'].filter(Boolean).join(' · ')
+  };
+}
+
+// Node 2's unmatched fields for the open run: as kept from its step pause, else from Node 2's
+// own output when the poll carried it (it is left out over 16 KB).
+function unresolvedFor(s) {
+  if (s.mgUnresolved && s.mgUnresolved.id === s.mgId) return s.mgUnresolved.byTable;
+  const n2 = s.mgStatus && Array.isArray(s.mgStatus.nodes) ? s.mgStatus.nodes.find((n) => n && n.node_id === 2) : null;
+  const out = n2 && n2.output && !n2.output._omitted ? n2.output.unresolved_by_table : null;
+  return out && typeof out === 'object' ? out : null;
+}
+
+// The step a pause is at, as the service names it in pending_gate_type (step_1_ingest, …).
+const pauseKey = (doc) => String((doc && doc.pending_gate_type) || '').toLowerCase();
 
 // The body a gate is answered with, from what the gate showed plus the reader's decisions
 // (`dec`: {key: value}, keys as the view model below sets them). With no decisions at all
-// this is "accept everything the pipeline proposed", which is also what the auto-driven
-// flow sends.
-export function defaultGateBody(gateType, payload, dec) {
+// this is "accept everything the pipeline proposed". Every gate but the first and the last is
+// CAFM Web's answer, built in logic/migrationGates.js; `ctx.unresolved` is Node 2's list of
+// fields no rule matched, kept from its step pause for the second pre-semantic pass.
+export function defaultGateBody(gateType, payload, dec, ctx) {
   const p = payload || {};
   const d = dec || {};
   switch (String(gateType || '').toLowerCase()) {
     case 'pk_approval': {
       const out = {};
       Object.entries(p.pk_confirmation || {}).forEach(([table, info]) => {
-        const detected = Array.isArray(info.detected_pk) ? info.detected_pk : [];
-        const chosen = d[table] !== undefined ? d[table] : (info.surrogate || !detected.length ? '__surrogate__' : detected[0]);
-        out[table] = chosen;
+        out[table] = chosenPk(table, info, d);
       });
       return { pk_overrides: out };
     }
     case 'unique_table_approval':
       return { approved: true };
-    case 'pre_semantic': {
-      if (String(p.gate_step || '') === 'table_routing' || (!p.review_items_by_table && p.suggested_target_by_table)) {
-        const overrides = {};
-        Object.entries(p.suggested_target_by_table || {}).forEach(([table, suggested]) => {
-          const chosen = d['table:' + table];
-          if (chosen && chosen !== suggested) {
-            const existing = (p.existing_canonical_tables || []).indexOf(chosen) > -1;
-            overrides[table] = { target_table: chosen, is_new_table: !existing };
-          }
-        });
-        return { decisions: {}, table_overrides: overrides };
-      }
-      const decisions = {};
-      Object.entries(p.review_items_by_table || {}).forEach(([table, items]) => {
-        decisions[table] = (items || []).map((it) => {
-          const k = table + '.' + it.source_field;
-          const row = { source_field: it.source_field, decision: d[k] === 'semantic' ? 'semantic' : 'approve' };
-          if (it.target_field) row.target_field = it.target_field;
-          if (it.data_type) row.data_type = it.data_type;
-          return row;
-        });
-      });
-      return { decisions: decisions };
-    }
-    case 'classification_approval': {
-      const rejected = [];
-      const overrides = {};
-      (p.classification || []).forEach((g) => {
-        const detected = verdictKey(g.verdict);
-        if (detected === 'pk') return;
-        const chosen = d[g.group_id];
-        if (chosen === 'exclude') rejected.push(g.group_id);
-        else if ((chosen === 'fk' || chosen === 'shared') && chosen !== detected) overrides[g.group_id] = chosen;
-      });
-      return { rejected_groups: rejected, verdict_overrides: overrides };
-    }
-    case 'column_mapping_approval': {
-      const overrides = {};
-      (p.dest_mapping || []).forEach((m) => {
-        const table = firstTable(m);
-        const k = table + '.' + m.source_column;
-        const current = m.matched_column || '__new__';
-        const chosen = d[k];
-        if (chosen && chosen !== current) {
-          overrides[table] = overrides[table] || {};
-          overrides[table][m.source_column] = chosen;
-        }
-      });
-      return { overrides: overrides };
-    }
-    case 'field_mapping': {
-      // The value the "New column…" option stores. A sentinel, not a column name, so it can
-      // never collide with a real target and be mistaken for one.
-      const NEWCOL = '__new__';
-      const flagged = {};
-      Object.entries(p.review_items_by_table || {}).forEach(([table, items]) => {
-        flagged[table] = (items || []).map((it) => {
-          const k = 'f:' + table + '.' + it.source_field;
-          const v = d[k];
-          if (v === 'reject') return { action: 'reject', source_field: it.source_field, target_field: null, rationale: null };
-          // Override to a column that does not exist yet. The gate already understands this —
-          // human_review_node turns is_new_column into an ALTER TABLE — but nothing could ask
-          // for it, so a field whose real home was a new column had to be rejected or forced
-          // into a column that meant something else.
-          if (v === NEWCOL) {
-            // The table the column lands on. Blank means the routed destination, which is what
-            // an override has always meant; a name here sends the field somewhere of its own,
-            // and is_new_table says whether that place has to be made. The writer checks the
-            // claim — a table that already exists is altered rather than created again.
-            const tbl = safeColumn(d[k + '#table'] || '');
-            const known = (p.canonical_columns_by_table || {});
-            return {
-              action: 'override', source_field: it.source_field,
-              target_field: safeColumn(d[k + '#name'] || it.source_field),
-              is_new_column: true,
-              target_table: tbl || null,
-              is_new_table: !!tbl && !Object.prototype.hasOwnProperty.call(known, tbl),
-              new_table_pk: 'id',
-              data_type: d[k + '#type'] || 'VARCHAR(255)',
-              nullable: true, rationale: 'New column created at the review gate'
-            };
-          }
-          if (v && v !== 'accept' && v !== it.suggested_target) return { action: 'override', source_field: it.source_field, target_field: v, rationale: null };
-          return { action: 'accept', source_field: it.source_field, target_field: it.suggested_target || null, rationale: null };
-        });
-      });
-      const unmapped = {};
-      Object.entries(p.unmappable_items_by_table || {}).forEach(([table, items]) => {
-        unmapped[table] = (items || []).map((it) => {
-          const sa = it.suggested_action || {};
-          const action = d['u:' + table + '.' + it.source_field] || sa.action || 'custom';
-          return {
-            action: action,
-            source_field: it.source_field,
-            target_table: action === 'custom' ? (sa.target_table || table) : null,
-            custom_column_name: action === 'custom' ? (sa.custom_column_name || it.source_field) : null,
-            data_type: action === 'custom' ? (sa.data_type || 'VARCHAR(255)') : null,
-            nullable: true
-          };
-        });
-      });
-      return { flagged: flagged, unmapped: unmapped };
-    }
-    case 'hierarchy': {
-      const rels = Array.isArray(p.hierarchies_to_review) && p.hierarchies_to_review.length
-        ? p.hierarchies_to_review
-        : (p.review_items || []).filter((r) => r.type === 'hierarchy');
-      const confirmed = [];
-      const corrections = [];
-      rels.forEach((r) => {
-        if (r.system_default || r.mapping_note) return;
-        if (d[relKey(r)] === 'reject') {
-          corrections.push({ type: 'rejected', source_table: r.source_table, target_table: r.target_table, reason: 'Rejected by reviewer' });
-        } else {
-          confirmed.push(r);
-        }
-      });
-      return { confirmed_hierarchies: confirmed, hierarchy_corrections: corrections };
-    }
+    case 'pre_semantic':
+      return preSemanticPhase(p) === 'tables' ? tableRoutingBody(p, d) : columnMatchingBody(p, d, ctx && ctx.unresolved);
+    case 'classification_approval':
+      return classificationBody(p, d);
+    case 'column_mapping_approval':
+      return columnMappingBody(p, d);
+    case 'field_mapping':
+      return fieldMappingBody(p, d);
+    case 'hierarchy':
+      return hierarchyBody(p, d);
     case 'write':
     case 'final_confirmation':
       return { confirmed: d.confirm === true };
@@ -385,11 +437,60 @@ export function scalarFacts(payload) {
     .map(([k, v]) => ({ label: k.replace(/_/g, ' '), value: typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v) }));
 }
 
+// What needs a look at the open gate, in a few words each — the line under the question.
+// Only counts the views already made; says nothing where there is nothing to say.
+export function gateAttention(gate, g) {
+  const n = (x, one, many) => x + ' ' + (x === 1 ? one : many);
+  const out = [];
+  const add = (count, label, tone) => { if (count) out.push({ label: label, tone: tone }); };
+  if (gate === 'pk_approval' && g.pkRows) {
+    const bad = g.pkRows.filter((r) => r.invalid).length;
+    add(bad, n(bad, 'key won’t hold', 'keys won’t hold') + ' — not unique or has blanks', 'warn');
+    add(g.pkRows.length - bad, n(g.pkRows.length - bad, 'table looks right', 'tables look right'), 'ok');
+  } else if (gate === 'unique_table_approval' && g.utView) {
+    add(g.utView.unique.length, n(g.utView.unique.length, 'table', 'tables'), 'neutral');
+    add(g.utView.dupGroups.length, n(g.utView.dupGroups.length, 'set of duplicate sheets merged', 'sets of duplicate sheets merged'), 'warn');
+    add(g.utView.merges.length, n(g.utView.merges.length, 'repeated column removed', 'repeated columns removed'), 'neutral');
+  } else if (gate === 'pre_semantic' && g.psView && g.psPhase === 'tables') {
+    const by = (m) => g.psView.rows.filter((r) => r.match === m).length;
+    add(by('none'), n(by('none'), 'sheet needs a destination', 'sheets need a destination'), 'risk');
+    add(by('semantic'), n(by('semantic'), 'best guess to check', 'best guesses to check'), 'warn');
+    add(by('new'), n(by('new'), 'new table', 'new tables'), 'accent');
+    add(by('exact'), n(by('exact'), 'exact match', 'exact matches'), 'ok');
+  } else if (gate === 'pre_semantic' && g.psView) {
+    const st = Object.fromEntries(g.psView.stats.map((x) => [x.label, x.value]));
+    add(st['Auto → Semantic'], n(st['Auto → Semantic'], 'field had no match — goes to AI matching', 'fields had no match — go to AI matching'), 'warn');
+    add(st['→ Semantic (you)'], n(st['→ Semantic (you)'], 'sent to AI matching by you', 'sent to AI matching by you'), 'accent');
+    add(st['T1 Approved'], n(st['T1 Approved'], 'match approved', 'matches approved'), 'ok');
+  } else if (gate === 'classification_approval' && g.clView) {
+    add(g.clView.fk.length, n(g.clView.fk.length, 'link between tables', 'links between tables'), 'neutral');
+    add(g.clView.shared.length, n(g.clView.shared.length, 'lookup list', 'lookup lists'), 'neutral');
+  } else if (gate === 'column_mapping_approval' && g.cmView) {
+    const rows = [].concat(...g.cmView.tables.map((t) => t.rows));
+    const sug = rows.filter((r) => /suggest/i.test(r.outcome)).length;
+    const fresh = rows.filter((r) => !r.target).length;
+    add(sug, n(sug, 'suggestion to confirm', 'suggestions to confirm'), 'warn');
+    add(fresh, n(fresh, 'new column', 'new columns'), 'accent');
+    add(rows.length - sug - fresh, n(rows.length - sug - fresh, 'column matched', 'columns matched'), 'ok');
+  } else if (gate === 'field_mapping' && g.fmView) {
+    const c = Object.fromEntries(g.fmView.counters.map((x) => [x.label, x.value]));
+    add(c.Flagged, n(c.Flagged, 'uncertain match', 'uncertain matches'), 'warn');
+    add(c.Unmappable, n(c.Unmappable, 'field with no match', 'fields with no match'), 'risk');
+    add(c['Auto accepted'], n(c['Auto accepted'], 'accepted already', 'accepted already'), 'ok');
+  } else if (gate === 'hierarchy' && g.hiView) {
+    add(g.hiView.loops.length, n(g.hiView.loops.length, 'loop to break', 'loops to break'), 'risk');
+    add(g.hiView.review.length, n(g.hiView.review.length, 'link to confirm', 'links to confirm'), 'neutral');
+    const orphans = (g.hiView.stats.find((x) => x.label === 'Orphaned records') || {}).value || 0;
+    add(orphans, n(orphans, 'record with no parent', 'records with no parent'), 'warn');
+  }
+  return out;
+}
+
 export const migrationMethods = {
   // ── navigation ────────────────────────────────────────────────────────────────────
   //
   // There is no page. A migration is answered in the conversation that started it:
-  // openChat() puts the transcript up and MigrationRun.jsx renders the open gate under it.
+  // openChat() puts the transcript up and CAFM Web's panel (src/cafm) renders the open gate under it.
   mgShow() {
     this.openChat();
     this.mgListLoad();
@@ -401,28 +502,49 @@ export const migrationMethods = {
   // and decisions. A run already open is NOT re-opened into a fresh chat: mgPoll alone
   // refreshes it, so answering a gate never scrolls the transcript back to the top.
   mgOpen(id) {
-    const same = this.state.mgId === id;
     // The card renders in the Orchestrator's transcript and nowhere else, so a run opened
     // from a page that merely keeps a dock (Buildings, Home, the console) must land on the
     // chat — chatView() is true on those and would have left the gates rendered nowhere.
     // Already on the chat: only the state changes, so answering a gate never scrolls the
     // transcript back to the top or drops a form the dock was showing.
     if (this.state.view !== 'chat') this.openChat();
+    this.mgAttach(id);
+    this.mgPoll(true);
+  },
+
+  // Makes `id` the open run without reading it — mgOpen() and openSession() both go through
+  // here, one to poll straight away, the other to let openChat() read it. Stamps the run on
+  // the active conversation's record (sessions.js), which is what lets "+ New query" drop
+  // the card and reopening the conversation bring it back.
+  mgAttach(id) {
+    const same = this.state.mgId === id;
     this.setState({
       mgId: id, mgError: '', mgArmed: false,
       mgStatus: same ? this.state.mgStatus : null,
       mgDec: same ? this.state.mgDec : {},
-      mgOpenNodes: same ? this.state.mgOpenNodes : {}
+      mgOpenNodes: same ? this.state.mgOpenNodes : {},
+      mgIngestOpen: same ? this.state.mgIngestOpen : false
     });
-    if (!same) { this._mgAdvanced = null; this._mgProgressKey = null; this._mgMovedAt = Date.now(); }
-    this.mgPoll(true);
+    if (!same) { clearTimeout(this._mgTimer); this._mgAdvanced = null; this._mgProgressKey = null; this._mgMovedAt = Date.now(); }
+    // The card (cafm/hoistra-migration-wizard.tsx) owns every open run from this moment, not
+    // from its mount effect a tick later: a step_paused answer that lands in between must not
+    // have this poll continue the step alongside the card's own advance.
+    this._mgExternal = true;
+    if (typeof this.sessionBindMigration === 'function') this.sessionBindMigration(id);
   },
 
-  // Back to the upload panel. The run itself is untouched — it stays in the recent list.
-  mgNew() {
+  // Drops the card and its poll. The run itself is untouched — it stays in the recent list
+  // and on the record of the conversation that started it.
+  mgDetach() {
     clearTimeout(this._mgTimer);
     this._mgAdvanced = null;
+    if (!this.state.mgId && !this.state.mgStatus) return;
     this.setState({ mgId: null, mgStatus: null, mgError: '', mgDec: {}, mgArmed: false, mgOpenNodes: {} });
+  },
+
+  // Back to the upload panel.
+  mgNew() {
+    this.mgDetach();
     this.mgListLoad();
   },
 
@@ -605,10 +727,19 @@ export const migrationMethods = {
     // tell "still working" from "nothing is coming".
     const moved = progressKey(doc);
     if (moved !== this._mgProgressKey) { this._mgProgressKey = moved; this._mgMovedAt = Date.now(); }
+    // The ingest report is on screen only while its pause lasts — under a second once
+    // auto-continue has advanced it — and Node 1's output is usually too big for the poll to
+    // carry afterwards. So it is kept here, the moment it is seen, for the gates after it.
+    const ingest = runKind(doc) === 'step' && pauseKey(doc) === 'step_1_ingest' ? ingestReport(doc.pending_gate_payload) : null;
+    // Node 2's fields no rule matched — the second pre-semantic pass lists them, and they are in
+    // the gate payload only as far as the rules had a suggestion. The pause carries them all.
+    const n2 = runKind(doc) === 'step' && /^step_2_deterministic/.test(pauseKey(doc)) && doc.pending_gate_payload ? doc.pending_gate_payload.unresolved_by_table : null;
     this.setState({
       mgStatus: doc, mgLoading: false, mgError: '', mgLoadedAt: Date.now(),
       mgDec: gateChanged ? {} : this.state.mgDec,
-      mgArmed: gateChanged ? false : this.state.mgArmed
+      mgArmed: gateChanged ? false : this.state.mgArmed,
+      ...(ingest ? { mgIngest: { id: id, report: ingest } } : {}),
+      ...(n2 && typeof n2 === 'object' ? { mgUnresolved: { id: id, byTable: n2 } } : {})
     });
     if (this._mgRepoll) { this._mgRepoll = false; return this.mgPoll(true); }
     // A finished run: once per run, show what the platform did with its contract terms,
@@ -618,16 +749,12 @@ export const migrationMethods = {
       this.setState({ mgExtras: null });
       this.mgLoadExtras(id);
     }
-    // A step pause is continued once. Until the document changes, the same pause is not
-    // advanced again — a service still reporting step_paused right after /advance would
-    // otherwise be hit in a loop, and (with an answer that arrives without I/O) one that
-    // never yields to the timer queue at all.
-    const stepKey = String(doc.current_step) + ':' + String(doc.pending_gate_type || '');
-    if (runKind(doc) === 'step' && this.state.mgAuto && !this.state.mgBusy && this._mgAdvanced !== stepKey) {
-      this._mgAdvanced = stepKey;
-      return this.mgAdvance();
-    }
-    const delay = pollDelay(doc.status);
+    // A step pause is the card's to continue (cafm/hoistra-migration-wizard.tsx): it moves the
+    // ingest and deterministic pauses on itself and offers Continue for the rest, exactly as
+    // CAFM Web does. This read never calls /advance — not before the card's mount effect has
+    // run, and not from a timer that fires after the card has gone — it only keeps the
+    // conversation's own view of the run current, slowly while the card polls for itself.
+    const delay = this._mgExternal ? (isTerminal(doc.status) ? 0 : 20000) : pollDelay(doc.status);
     if (delay && this.state.view === 'chat') this._mgTimer = setTimeout(() => this.mgPoll(), delay);
   },
 
@@ -684,7 +811,7 @@ export const migrationMethods = {
     const doc = this.state.mgStatus;
     if (!id || !doc || runKind(doc) !== 'gate' || this.state.mgBusy) return;
     const gate = doc.pending_gate_type;
-    const sent = body || defaultGateBody(gate, doc.pending_gate_payload, this.state.mgDec);
+    const sent = body || defaultGateBody(gate, doc.pending_gate_payload, this.state.mgDec, { unresolved: unresolvedFor(this.state) });
     this.setState({ mgBusy: 'Submitting…', mgError: '' });
     try {
       await schemaMapperApi.gate(id, gate, sent);
@@ -702,6 +829,57 @@ export const migrationMethods = {
       if (value === undefined || value === null) delete next[key]; else next[key] = value;
       return { mgDec: next };
     });
+  },
+
+  // One of the hierarchy gate's "Download metadata JSON" files, saved from the page.
+  mgDownloadJson(file) {
+    if (!file || typeof document === 'undefined' || typeof window === 'undefined' || !window.URL || !window.URL.createObjectURL) {
+      return this.flash('Download needs a browser.');
+    }
+    const url = window.URL.createObjectURL(new Blob([file.text], { type: 'application/json;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+  },
+
+  // CAFM Web's migration panel mounting and unmounting (cafm/hoistra-migration-wizard.tsx).
+  mgCafmMounted(on) { this._mgExternal = !!on; },
+
+  // Opens a migration the moment an upload starts it, as CAFM Web's orchestrator does
+  // (use-deep-agent-orchestrator.ts): while the upload request is open, the session's
+  // workspace is read every 1.5 s — one read in flight at a time, never a fixed interval — and
+  // the first migration it lists that was not there when the upload began is opened. The upload
+  // only answers once the run has reached its first gate, so waiting for the reply opened the
+  // card with every step already done; opened now, the card shows each step as it happens.
+  // Returns the stop function; the reply still opens the run if nothing was found.
+  mgDiscoverDuringUpload(sessionId) {
+    if (!sessionId) return () => {};
+    let stopped = false;
+    let timer = null;
+    let baseline = null;
+    const every = this._mgDiscoverMs || 1500;
+    const idsOf = (ws) => (ws && Array.isArray(ws.migration_ids) ? ws.migration_ids.filter(Boolean).map(String) : []);
+    const probe = async () => {
+      if (stopped) return;
+      try {
+        const ids = idsOf(await deepAgentsApi.workspace(sessionId));
+        if (stopped) return;
+        if (baseline === null) {
+          baseline = new Set(ids.concat(this.state.mgId ? [this.state.mgId] : []));
+        } else {
+          const fresh = ids.find((id) => !baseline.has(id));
+          if (fresh) { stopped = true; this.mgOpen(fresh); return; }
+        }
+      } catch (e) {
+        // Best effort — the reply still opens the run.
+        if (baseline === null) baseline = new Set(this.state.mgId ? [this.state.mgId] : []);
+      }
+      if (!stopped) timer = setTimeout(probe, every);
+    };
+    probe();
+    return () => { stopped = true; clearTimeout(timer); };
   },
 
   mgToggleNode(id) {
@@ -739,7 +917,8 @@ export const migrationMethods = {
     const nodes = shapeNodes(doc);
     const done = nodes.filter((n) => n.status === 'complete').length;
     const progress = kind === 'done' ? 100 : doc ? Math.round((done / nodes.length) * 100) : 0;
-    const text = GATE_TEXT[gate] || [gate.replace(/_/g, ' '), payload.instructions || ''];
+    const text = (gate === 'pre_semantic' && preSemanticPhase(payload) === 'columns' ? GATE_TEXT.pre_semantic_columns : GATE_TEXT[gate])
+      || [gate.replace(/_/g, ' '), payload.instructions || ''];
 
     const pill = !doc ? { label: s.mgLoading ? 'Reading…' : 'Not loaded', tone: 'var(--color-neutral-500)', bg: 'var(--color-neutral-900)' }
       : kind === 'done' ? { label: 'Complete', tone: 'var(--st-ok)', bg: 'var(--st-ok-bg)' }
@@ -757,180 +936,56 @@ export const migrationMethods = {
     // Gate-specific rows. Each row carries its own controls so the screen stays markup only.
     let g = {};
     if (gate === 'pk_approval') {
-      g.pkRows = Object.entries(payload.pk_confirmation || {}).map(([table, info]) => {
-        const detected = Array.isArray(info.detected_pk) ? info.detected_pk : [];
-        const chosen = dec[table] !== undefined ? dec[table] : (info.surrogate || !detected.length ? '__surrogate__' : detected[0]);
-        const cols = Array.isArray(info.columns) ? info.columns : [];
+      g.pkRows = pkRows(payload, dec).map((r) => {
+        // A duplicate group's row is every member's key.
+        const set = (cols) => r.members.forEach((m) => this.mgDecide(m, cols));
         return {
-          table: table, detected: detected.join(', ') || (info.surrogate ? 'surrogate' : '—'),
-          kind: info.kind || (info.surrogate ? 'surrogate' : 'natural'), confidence: pct(info.confidence),
-          chosen: chosen, changed: chosen !== (detected[0] || '__surrogate__'),
-          options: [{ value: '__surrogate__', label: 'Generate a surrogate key' }].concat(cols.map((c) => ({
-            value: c.column,
-            label: c.column + '  ·  unique ' + pct(c.uniqueness) + ', null ' + pct(c.null_rate) + (c.qualifies ? '' : '  (does not qualify)')
-          }))),
-          pick: (e) => this.mgDecide(table, e.target.value)
+          ...r,
+          add: (c) => { if (c) set(r.selected.concat([c])); },
+          pickAdd: (e) => { const c = e.target.value; if (c) set(r.selected.concat([c])); },
+          remove: (c) => set(r.selected.filter((x) => x !== c)),
+          useSurrogate: () => set([])
         };
       });
     } else if (gate === 'unique_table_approval') {
-      const tr = payload.table_resolution || {};
-      const pks = payload.pk_confirmed_by_table || {};
-      g.utRows = (tr.final_decisions || []).map((d) => ({
-        source: d.source, destination: d.destination, method: d.method, confidence: pct(d.confidence),
-        pk: (pks[d.source] || []).join(', ') || '—'
-      }));
-      const dup = (tr.duplicate_tables || {});
-      g.utDuplicates = (dup.groups || []).map((grp) => Array.isArray(grp) ? grp.join(' = ') : JSON.stringify(grp));
-      g.utNote = dup.checked ? dup.checked + ' tables checked · ' + (dup.duplicate_count || 0) + ' duplicate' + (dup.duplicate_count === 1 ? '' : 's') : '';
+      g.utView = uniqueTablesView(payload);
     } else if (gate === 'pre_semantic') {
-      const routing = String(payload.gate_step || '') === 'table_routing' || (!payload.review_items_by_table && payload.suggested_target_by_table);
-      g.psRouting = !!routing;
-      if (routing) {
-        const existing = payload.existing_canonical_tables || [];
-        g.psTables = Object.entries(payload.suggested_target_by_table || {}).map(([table, suggested]) => {
-          const chosen = dec['table:' + table] || suggested;
-          return {
-            table: table, suggested: suggested, chosen: chosen, changed: chosen !== suggested,
-            options: (existing.indexOf(chosen) > -1 ? existing : existing.concat([chosen])).map((t) => ({ value: t, label: t })),
-            pick: (e) => this.mgDecide('table:' + table, e.target.value),
-            setNew: (e) => this.mgDecide('table:' + table, e.target.value.trim() || undefined)
-          };
+      g.psPhase = preSemanticPhase(payload);
+      if (g.psPhase === 'tables') {
+        const v = tableRoutingView(payload, dec);
+        g.psView = Object.assign({}, v, {
+          rows: v.rows.map((r) => Object.assign({}, r, {
+            // "+ New table…" keeps a name already typed; switching from an existing table starts blank.
+            pick: (e) => {
+              const val = e.target.value;
+              this.mgDecide('rt:' + r.key, val === '__new_table__' ? { target: r.isNew ? r.target : '', isNew: true } : { target: val, isNew: false });
+            },
+            setName: (e) => this.mgDecide('rt:' + r.key, { target: e.target.value, isNew: true }),
+            useSuggestion: r.suggestion ? () => this.mgDecide('rt:' + r.key, { target: r.suggestion.target, isNew: r.suggestion.isNew }) : null,
+            pickTop: (table) => this.mgDecide('rt:' + r.key, { target: table, isNew: false })
+          }))
         });
       } else {
-        g.psTables = Object.entries(payload.review_items_by_table || {}).map(([table, items]) => ({
-          table: table, target: (payload.suggested_target_by_table || {})[table] || (items[0] && items[0].dest_table) || '',
-          rows: (items || []).map((it) => {
-            const k = table + '.' + it.source_field;
-            const chosen = dec[k] === 'semantic' ? 'semantic' : 'approve';
-            return {
-              field: it.source_field, target: it.target_field || '—', confidence: pct(it.confidence),
-              tier: String(it.tier || '').replace(/^T1_/, '').replace(/_/g, ' '), samples: (it.sample_values || []).slice(0, 3).join(', '),
-              pk: !!it.is_primary_key, chosen: chosen,
-              seg: seg([{ value: 'approve', label: 'Approve' }, { value: 'semantic', label: 'Semantic' }], chosen, k)
-            };
-          })
-        }));
+        g.psView = columnMatchingView(payload, dec, unresolvedFor(s));
+        g.psApproveAll = () => g.psView.tables.forEach((t) => t.rows.forEach((r) => this.mgDecide(r.key, 'approve')));
       }
-      g.psSemanticCount = Object.values(dec).filter((v) => v === 'semantic').length;
     } else if (gate === 'classification_approval') {
-      const groups = payload.classification || [];
-      const shared = payload.shared_attribute_tables || [];
-      g.clPk = groups.filter((x) => verdictKey(x.verdict) === 'pk').map((x) => ({ id: x.group_id, members: (x.members || []).join(', '), canonical: x.canonical_name || '' }));
-      g.clRows = groups.filter((x) => verdictKey(x.verdict) !== 'pk').map((x) => {
-        const detected = verdictKey(x.verdict);
-        const chosen = dec[x.group_id] || detected;
-        const lookup = shared.find((t) => t.from_group === x.group_id);
-        return {
-          id: x.group_id, detected: detected, chosen: chosen, changed: chosen !== detected,
-          members: (x.members || []).join('  →  '), ri: x.ri === null || x.ri === undefined ? '' : 'RI ' + pct(x.ri),
-          pk: x.has_pk || '', fk: x.fk_column || '',
-          lookup: lookup ? 'lookup table ' + lookup.table_name + ' · ' + (lookup.distinct_count || (lookup.sample_values || []).length) + ' values: ' + (lookup.sample_values || []).slice(0, 5).join(', ') : '',
-          seg: seg([{ value: 'fk', label: 'Foreign key' }, { value: 'shared', label: 'Shared attribute' }, { value: 'exclude', label: 'Exclude', tone: 'var(--st-risk)' }], chosen, x.group_id)
-        };
-      });
-      g.clExcluded = g.clRows.filter((r) => r.chosen === 'exclude').length;
+      g.clView = classificationView(payload, dec);
     } else if (gate === 'column_mapping_approval') {
-      const byTable = payload.dest_columns_by_table || {};
-      g.cmRows = (payload.dest_mapping || []).map((m) => {
-        const table = firstTable(m);
-        const k = table + '.' + m.source_column;
-        const current = m.matched_column || '__new__';
-        const chosen = dec[k] || current;
-        const cols = byTable[m.dest_table] || [];
-        return {
-          key: k, source: m.source || (table + '.' + m.source_column), dest: m.dest_table || '', outcome: m.outcome || '',
-          confidence: pct(m.confidence), samples: (m.samples || []).slice(0, 3).join(', '), pk: !!m.is_primary_key,
-          chosen: chosen, changed: chosen !== current, suggested: m.outcome === 'suggested — confirm' || /suggest/i.test(m.outcome || ''),
-          options: [{ value: '__new__', label: 'New column on ' + (m.dest_table || 'the table') }].concat((cols.indexOf(chosen) > -1 || chosen === '__new__' ? cols : cols.concat([chosen])).map((c) => ({ value: c, label: c }))),
-          pick: (e) => this.mgDecide(k, e.target.value)
-        };
-      });
-      g.cmChanged = g.cmRows.filter((r) => r.changed).length;
-      g.cmNew = g.cmRows.filter((r) => r.chosen === '__new__').length;
+      g.cmView = columnMappingView(payload, dec);
     } else if (gate === 'field_mapping') {
-      const canon = payload.canonical_columns_by_table || {};
-      const routing = payload.table_routing || {};
-      g.fmFlagged = Object.entries(payload.review_items_by_table || {}).map(([table, items]) => ({
-        table: table,
-        rows: (items || []).map((it) => {
-          const k = 'f:' + table + '.' + it.source_field;
-          const v = dec[k];
-          const mode = v === 'reject' ? 'reject' : (v && v !== 'accept' && v !== it.suggested_target) ? 'override' : 'accept';
-          const dest = routing[table] || table;
-          const cols = canon[dest] || [];
-          const alts = (it.suggestions || []).map((x) => typeof x === 'string' ? x : (x && (x.target_field || x.field))).filter(Boolean);
-          return {
-            field: it.source_field, suggested: it.suggested_target || '—', confidence: pct(it.confidence), rationale: it.rationale || '',
-            samples: (it.sample_values || []).slice(0, 3).join(', '), mode: mode, target: mode === 'override' ? v : (it.suggested_target || ''),
-            seg: seg([{ value: 'accept', label: 'Accept' }, { value: 'reject', label: 'Reject', tone: 'var(--st-risk)' }], mode === 'override' ? 'override' : mode, k),
-            options: [{ value: '', label: 'Override with…' }]
-              .concat(alts.concat(cols.filter((c) => alts.indexOf(c) < 0)).map((c) => ({ value: c, label: c })))
-              .concat([{ value: '__new__', label: 'New column…' }]),
-            pickTarget: (e) => this.mgDecide(k, e.target.value || undefined),
-            // Set when "New column…" is chosen: the row then asks for a name and a type.
-            isNew: v === '__new__',
-            newName: dec[k + '#name'] == null ? it.source_field : dec[k + '#name'],
-            // What will be created, which is not always what was typed.
-            newNameSafe: safeColumn(dec[k + '#name'] == null ? it.source_field : dec[k + '#name']),
-            newType: dec[k + '#type'] || 'VARCHAR(255)',
-            // Blank keeps the routed destination. Typing a name that is not already a table
-            // creates it; typing one that is adds the column to it.
-            newTable: dec[k + '#table'] == null ? '' : dec[k + '#table'],
-            newTableSafe: safeColumn(dec[k + '#table'] || ''),
-            newTableIsNew: !!safeColumn(dec[k + '#table'] || '')
-              && !Object.prototype.hasOwnProperty.call(canon, safeColumn(dec[k + '#table'] || '')),
-            setNewTable: (e) => this.mgDecide(k + '#table', e.target.value),
-            // Shown as the placeholder, so the box says where the field goes if left blank.
-            routedTable: (routing[table] || table),
-            newTypes: ['VARCHAR(255)', 'TEXT', 'INTEGER', 'BIGINT', 'NUMERIC(12,2)',
-                       'BOOLEAN', 'DATE', 'TIMESTAMPTZ', 'UUID', 'JSONB'],
-            setNewName: (e) => this.mgDecide(k + '#name', e.target.value),
-            setNewType: (e) => this.mgDecide(k + '#type', e.target.value),
-            newTarget: safeColumn(dec[k + '#table'] || '') || (routing[table] || table)
-          };
-        })
-      }));
-      g.fmUnmapped = Object.entries(payload.unmappable_items_by_table || {}).map(([table, items]) => ({
-        table: table,
-        rows: (items || []).map((it) => {
-          const sa = it.suggested_action || {};
-          const k = 'u:' + table + '.' + it.source_field;
-          const chosen = dec[k] || sa.action || 'custom';
-          return {
-            field: it.source_field, target: sa.target_table || table, column: sa.custom_column_name || it.source_field, type: sa.data_type || 'VARCHAR(255)',
-            chosen: chosen,
-            seg: seg([{ value: 'custom', label: 'New column' }, { value: 'raw_metadata', label: 'Raw metadata' }, { value: 'skip', label: 'Skip', tone: 'var(--st-risk)' }], chosen, k)
-          };
-        })
-      }));
-      g.fmCounts = (payload.total_flagged || 0) + ' flagged · ' + (payload.total_unmappable || 0) + ' unmapped · overall confidence ' + pct(payload.overall_confidence);
-      g.fmAlert = payload.confidence_alert && payload.confidence_alert.message ? payload.confidence_alert.message : '';
+      g.fmView = fieldMappingView(payload, dec);
+      g.fmProblems = fieldMappingProblems(payload, dec);
+      g.fmAcceptAll = () => g.fmView.tables.forEach((t) => t.flagged.forEach((r) => this.mgDecide(r.key, 'accept')));
     } else if (gate === 'hierarchy') {
-      const rels = Array.isArray(payload.hierarchies_to_review) && payload.hierarchies_to_review.length
-        ? payload.hierarchies_to_review
-        : (payload.review_items || []).filter((r) => r.type === 'hierarchy');
-      g.hiRows = rels.map((r) => {
-        const k = relKey(r);
-        const chosen = dec[k] === 'reject' ? 'reject' : 'keep';
-        return {
-          key: k, from: r.source_table + '.' + r.source_column, to: r.target_table + '.' + r.target_column,
-          type: String(r.relationship_type || '').toLowerCase(), confidence: pct(r.confidence), match: r.data_match_rate === undefined ? '' : 'rows matched ' + pct(r.data_match_rate),
-          fixed: !!(r.system_default || r.mapping_note), chosen: chosen,
-          seg: seg([{ value: 'keep', label: 'Keep' }, { value: 'reject', label: 'Reject', tone: 'var(--st-risk)' }], chosen, k)
-        };
-      });
-      g.hiImplicit = (payload.review_items || []).filter((r) => r.type === 'implicit_hierarchy').map((r) => ({
-        column: r.column, levels: r.levels, examples: (r.examples || []).slice(0, 4).join(', '), separator: r.separator
-      }));
-      g.hiTree = payload.hierarchy_tree || '';
-      g.hiNote = (payload.total_cycles || 0) + ' cycle' + (payload.total_cycles === 1 ? '' : 's') + ' · ' + (payload.total_orphans || 0) + ' orphan' + (payload.total_orphans === 1 ? '' : 's');
-      g.hiRejected = g.hiRows.filter((r) => r.chosen === 'reject').length;
+      g.hiView = hierarchyView(payload, dec);
+      g.hiTab = s.mgHierView || 'tree';
+      g.hiSetTab = (v) => this.setState({ mgHierView: v });
+      g.hiTreeOpen = s.mgHierOpen !== false;
+      g.hiToggleTree = () => this.setState((q) => ({ mgHierOpen: q.mgHierOpen === false }));
+      g.hiDownload = (kind) => this.mgDownloadJson(hierarchyExport(kind, payload, dec, s.mgId, new Date().toISOString()));
     } else if (gate === 'write' || gate === 'final_confirmation') {
-      const sm = payload.summary || {};
-      g.wrCounts = Object.entries(sm.entity_counts || {}).map(([t, n]) => ({ table: t, n: n }));
-      g.wrTotal = sm.total_entities || g.wrCounts.reduce((a, x) => a + (Number(x.n) || 0), 0);
-      g.wrConfidence = pct(sm.overall_confidence);
-      g.wrFile = sm.source_filename || (doc && doc.source_filename) || '';
+      g.wrView = finalView(payload, doc);
       g.wrArmed = !!s.mgArmed;
     }
 
@@ -943,13 +998,44 @@ export const migrationMethods = {
     // What the step pause produced, for the "continue" card when auto-continue is off.
     const stepFacts = kind === 'step' ? scalarFacts(payload) : [];
 
+    // The ingest report: live while its pause is open, then as kept at that pause, then from
+    // Node 1's output when the poll carried it (a run reopened after the pause).
+    const ingestLive = kind === 'step' && pauseKey(doc) === 'step_1_ingest' ? ingestReport(payload) : null;
+    const node1 = doc && Array.isArray(doc.nodes) ? doc.nodes.find((n) => n && n.node_id === 1) : null;
+    const ingest = ingestLive
+      || (s.mgIngest && s.mgIngest.id === s.mgId ? s.mgIngest.report : null)
+      || (doc ? ingestReport(node1 && node1.output) : null);
+
+    // A step pause auto-continues, as CAFM Web's does: while it does, the step says so rather
+    // than offering a button. A continue that failed hands the button back.
+    const continuing = kind === 'step' && !!s.mgAuto && !s.mgError;
+
     // One primary action per state.
+    // Each gate's own button, in CAFM Web's words. A routing with a sheet left untargeted cannot
+    // be sent, and a field-mapping answer the service would refuse is stopped here with the
+    // reason — human_review_node applies none of the decisions when one of them is bad.
+    const gateLabel = {
+      pk_approval: 'Confirm ID columns',
+      unique_table_approval: 'Tables look right — continue',
+      pre_semantic: g.psPhase === 'tables' ? 'Confirm destinations' : (g.psView && g.psView.submitLabel),
+      classification_approval: g.clView && g.clView.submitLabel,
+      column_mapping_approval: g.cmView && g.cmView.submitLabel,
+      field_mapping: g.fmView && g.fmView.submitLabel,
+      hierarchy: g.hiView && g.hiView.submitLabel
+    }[gate] || 'Approve decisions and continue';
+    const blocked = gate === 'pre_semantic' && g.psPhase === 'tables' && g.psView && !g.psView.complete;
+    const submit = () => {
+      if (gate === 'field_mapping' && g.fmProblems && g.fmProblems.length) {
+        return this.setState({ mgError: 'Not sent — ' + g.fmProblems.slice(0, 3).join('; ') + (g.fmProblems.length > 3 ? '; …' : '') });
+      }
+      return this.mgSubmitGate();
+    };
     const primary = kind === 'gate'
       ? (gate === 'write' || gate === 'final_confirmation'
           ? null
-          : { label: busy ? s.mgBusy : (gate === 'unique_table_approval' ? 'Approve and continue' : 'Approve decisions and continue'), run: busy ? () => {} : () => this.mgSubmitGate() })
-      : kind === 'step'
-        ? { label: busy ? s.mgBusy : 'Continue to the next node', run: busy ? () => {} : () => this.mgAdvance() }
+          : { label: busy ? s.mgBusy : gateLabel, icon: 'ph-check-circle', disabled: busy || blocked, run: busy || blocked ? () => {} : submit })
+      : kind === 'step' && !continuing
+        ? { label: busy ? s.mgBusy : 'Continue', trail: 'ph-arrow-right', run: busy ? () => {} : () => this.mgAdvance() }
         : null;
 
     const list = Array.isArray(s.mgList) ? s.mgList : [];
@@ -1031,13 +1117,16 @@ export const migrationMethods = {
 
       // the open gate / step
       mgGate: gate,
-      mgGateTitle: kind === 'gate' ? text[0] : kind === 'step' ? (payload.label || 'Step finished') : kind === 'done' ? 'Migration complete' : kind === 'failed' ? 'Migration stopped' : 'Working…',
-      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? 'This node has finished. It continues on its own unless you switch auto-continue off to read each result first.' : kind === 'done' ? 'Every gate was answered and the rows are in plenum_cafm. The artefacts are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
+      mgGateTitle: kind === 'gate' ? (g.wrView ? 'Ready to write ' + g.wrView.rowsLabel + ' to Plenum' : text[0])
+        : kind === 'step' ? (pauseKey(doc) === 'step_1_ingest' ? 'Your file has been read' : (payload.label || payload.title || 'Step') + ' — done')
+        : kind === 'done' ? 'Migration complete' : kind === 'failed' ? 'Migration stopped'
+        : 'Working on ' + String((nodes.find((n) => n.status === 'running' || n.status === 'paused') || nodes.find((n) => n.status === 'pending') || { name: 'the next step' }).name).toLowerCase() + '…',
+      mgGateBlurb: kind === 'gate' ? text[1] : kind === 'step' ? (continuing ? 'Continuing to the next step on its own.' : 'Check the result, then continue.') : kind === 'done' ? 'Every question was answered and the rows are in Plenum. The files the run produced are below.' : kind === 'failed' ? ((doc && doc.error_message) || 'The service reported a failure and gave no reason.')
         // No document at all is not "working" — it is "nobody has looked". Saying the
         // pipeline is busy when nothing has been read is how a restored run sat at
         // "Not loaded" for ever and read as progress.
         : !doc ? (s.mgLoading ? 'Reading the migration…' : 'This run has not been read yet — Refresh reads it.')
-        : 'The pipeline is working on the current node; this page follows it.',
+        : 'Nothing to decide yet — the next question appears here as soon as it is ready.',
       mgGateCount: payload.total_reviewable ? payload.total_reviewable + ' item' + (payload.total_reviewable === 1 ? '' : 's') + ' to review' : '',
       // A run that has stopped moving. Only ever said of a run that claims to be WORKING:
       // a gate waits for a person and may wait all day, and a finished or failed run is
@@ -1046,7 +1135,27 @@ export const migrationMethods = {
         ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. Steps that upload files or write rows report progress as they go, so a run this quiet is probably not being processed: answering a gate hands the run to the migration worker (arq src.worker.WorkerSettings), and if that worker is not running the job waits in the queue and nothing here will change.'
         : '',
       mgPrimary: primary,
+      mgStages: stagesFor(doc),
+      mgStageText: (() => { const st = stagesFor(doc); const i = st.findIndex((x) => x.state !== 'done'); return i < 0 ? 'All stages done' : 'Stage ' + (i + 1) + ' of ' + st.length + ' · ' + st[i].label; })(),
+      mgAttention: kind === 'gate' ? gateAttention(gate, g) : [],
+      mgContinuing: continuing,
+      // The CAFM-shaped gates draw their own head (code, title, badges, counts).
+      mgOwnHead: kind === 'gate' && ['pre_semantic', 'classification_approval', 'column_mapping_approval', 'field_mapping', 'hierarchy', 'write', 'final_confirmation'].indexOf(gate) > -1,
+      mgSet: (k, v) => this.mgDecide(k, v),
+      mgCafmMounted: (on) => this.mgCafmMounted(on),
+      mgSessionId: s.sessionId || '',
+      mgPsTypes: PS_DATA_TYPES,
+      mgCardOpen: (k, dflt) => { const o = (s.mgCards || {})[k]; return o === undefined ? !!dflt : !!o; },
+      mgToggleCard: (k, dflt) => this.setState((q) => {
+        const c = Object.assign({}, q.mgCards || {});
+        c[k] = !(c[k] === undefined ? !!dflt : !!c[k]);
+        return { mgCards: c };
+      }),
       mgStepFacts: stepFacts,
+      mgIngest: ingest,
+      mgIngestLive: !!ingestLive,
+      mgIngestOpen: !!s.mgIngestOpen,
+      mgToggleIngest: () => this.setState((p) => ({ mgIngestOpen: !p.mgIngestOpen })),
       mgOutputs: outputs,
       mgDecided: Object.keys(dec).length,
       mgResetDecisions: () => this.setState({ mgDec: {} }),
@@ -1057,7 +1166,7 @@ export const migrationMethods = {
       mgDisarm: () => this.setState({ mgArmed: false }),
       mgConfirmWrite: busy ? () => {} : () => this.mgSubmitGate({ confirmed: true }),
       mgRejectWrite: busy ? () => {} : () => this.mgSubmitGate({ confirmed: false }),
-      mgWriteLabel: busy ? s.mgBusy : 'Confirm — write ' + (g.wrTotal || 0) + ' rows'
+      mgWriteLabel: busy ? s.mgBusy : (g.wrView ? g.wrView.writeLabel : 'Confirm — write')
     };
   }
 };

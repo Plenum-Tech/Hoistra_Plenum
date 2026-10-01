@@ -11,7 +11,7 @@
 //
 // The bodies each gate accepts are read from the handlers, not guessed — see
 // logic/migration.js's defaultGateBody for what is sent and why:
-//   pk_approval               {pk_overrides: {SourceTable: "column"}}
+//   pk_approval               {pk_overrides: {SourceTable: ["column", …]}}  ([] = surrogate)
 //   unique_table_approval     {approved: true}
 //   pre_semantic              {decisions: {SourceTable: [{source_field, decision}]}}
 //   classification_approval   {rejected_groups: [G..], verdict_overrides: {G..: "fk"|"shared"}}

@@ -1,5 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import { fileURLToPath } from 'node:url';
 
 // `npm run dev` serves on :5173 and proxies /backend/* to the running gateway
 // (docker compose -f docker-compose.single-url.local.yml up → http://localhost:3000),
@@ -10,7 +12,13 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   return ({
-  plugins: [react()],
+  // Tailwind serves only CAFM Web's vendored migration screens (src/cafm, see
+  // src/cafm/cafm.css) — the rest of Hoistra is untouched by it.
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    // CAFM Web's own absolute imports ("@/features/…", "@/utils/cn") resolve inside src/cafm.
+    alias: { '@': fileURLToPath(new URL('./src/cafm', import.meta.url)) }
+  },
   server: {
     port: Number(process.env.PORT) || 5173,
     // Binds every interface, not just localhost — harmless for a host-run `npm run dev`

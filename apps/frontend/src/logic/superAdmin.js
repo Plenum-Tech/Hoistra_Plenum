@@ -155,12 +155,14 @@ export const superAdminMethods = {
     // hand. That read as the navigator's own report cards (Buildings, Compliance, Vendors,
     // Energy, Assets, Maintenance) having silently disappeared, since Admin view shows a
     // different set (Integrations, Users & access, Audit trail) — see auth.js's renderVals.
+    // Settled before the scope re-read at the end goes out — see there.
+    let cleared = Promise.resolve();
     if (!this.state.viewOrgId) {
       const ownSelection = this.state.account && this.state.account.selected_building_id;
       this._ownSelectionBeforeViewAs = ownSelection || null;
       this._ownRoleBeforeViewAs = this.state.role;
       if (ownSelection) {
-        authApi.selectBuilding(null).catch(() => {});
+        cleared = authApi.selectBuilding(null).catch(() => {});
         this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: null }) } : {}));
       }
     }
@@ -177,12 +179,27 @@ export const superAdminMethods = {
     this.setState({
       viewOrgId: orgId, viewOrgName: name || null,
       saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null,
-      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
+      // The building a staged attachment was to be filed against belongs to the company it
+      // was chosen under — the same reset newQuery() makes when a conversation ends, made
+      // here because the conversation (sessionId, ccChat) ends here too. Carried across, the
+      // Ingest tray read "Filing against Bishopsgate Tower" over a picker that could not
+      // list it, and would have bound the upload to another company's building.
+      cbBuildingId: null, cbBuildingName: "", cbPickerOpen: false, cbQuery: "", declForId: null, declFor: ""
     });
     if (typeof this.resetLiveData === "function") this.resetLiveData();
     if (typeof this.loadLiveData === "function") this.loadLiveData();
     if (typeof this.usLiveLoad === "function") this.usLiveLoad();
     if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    // The building scope — account.buildings, which the Ingest tray's picker and the account
+    // menu's switcher both read — was the one register this switch did NOT reload. It is
+    // filled by authLoadScope for whichever company was being acted as at sign-in, so the
+    // picker went on offering that company's buildings (or nothing, for a superadmin whose
+    // own company has none) until a page reload re-ran it as this one. Chained after the
+    // clearing PATCH above has settled: GET /me answers with whatever selection is stored
+    // at the time, and issued alongside the PATCH it could hand the stale own-company
+    // selection straight back, undoing the clear this method exists to make.
+    if (typeof this.authLoadScope === "function") cleared.then(() => this.authLoadScope());
     this.flash("Viewing as " + (name || "the selected company") + " — every report now reads its data.");
   },
 
@@ -202,8 +219,9 @@ export const superAdminMethods = {
     this._ownSelectionBeforeViewAs = null;
     const restoreRole = this._ownRoleBeforeViewAs || "admin";
     this._ownRoleBeforeViewAs = null;
+    let restored = Promise.resolve();
     if (restore) {
-      authApi.selectBuilding(restore).catch(() => {});
+      restored = authApi.selectBuilding(restore).catch(() => {});
       this.setState((p) => (p.account ? { account: Object.assign({}, p.account, { selected_building_id: restore }) } : {}));
     }
     // Same reset as entering a view-as, and the same reason: leaving one company's
@@ -215,12 +233,17 @@ export const superAdminMethods = {
     this.setState({
       viewOrgId: null, viewOrgName: null,
       role: restoreRole, view: "home", navOpen: true, acctOpen: false, detail: null,
-      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null
+      sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
+      // Same as on the way in: a filing choice made under the company just left is dropped.
+      cbBuildingId: null, cbBuildingName: "", cbPickerOpen: false, cbQuery: "", declForId: null, declFor: ""
     });
     if (typeof this.resetLiveData === "function") this.resetLiveData();
     if (typeof this.loadLiveData === "function") this.loadLiveData();
     if (typeof this.usLiveLoad === "function") this.usLiveLoad();
     if (typeof this.auLiveLoad === "function") this.auLiveLoad();
+    // The own company's list back, for the same reason viewAsCompany() re-reads it on the
+    // way in — and after the restoring PATCH, so GET /me reports the selection just restored.
+    if (typeof this.authLoadScope === "function") restored.then(() => this.authLoadScope());
     this.flash("Back to your own account" + (was ? " — no longer viewing " + was : "") + ".");
   }
 };

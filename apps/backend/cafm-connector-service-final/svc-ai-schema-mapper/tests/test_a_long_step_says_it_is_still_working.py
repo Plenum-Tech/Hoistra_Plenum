@@ -91,7 +91,7 @@ class _Client:
         self.url = "https://blob.example/" + path
         self.fail = fail
 
-    async def upload_blob(self, data, overwrite=False, progress_hook=None):
+    async def upload_blob(self, data, overwrite=False, progress_hook=None, content_settings=None):
         if self.fail:
             raise RuntimeError("403 from Blob")
         if progress_hook:
@@ -114,11 +114,13 @@ def test_every_uploaded_byte_counts_towards_the_beat():
     clock_ticks = iter(range(10_000))
     beat._clock = lambda: float(next(clock_ticks))
     lines: list[str] = []
-    artefacts = {"output.json": "x" * 300, "output.sql": b"y" * 100}
+    # Binary artefacts go as they are, so the byte arithmetic below is exact (text artefacts
+    # are gzip-encoded first — tests/test_the_output_step_sends_its_text_artefacts_compressed.py).
+    artefacts = {"output.xlsx": b"x" * 300, "migration_report.pdf": b"y" * 100}
     urls, n = asyncio.run(upload_artefacts(_Svc(), "c", "migrations/m-1", artefacts, beat, lines.append))
-    assert n == 2 and set(urls) == {"output.json", "output.sql"}
+    assert n == 2 and set(urls) == {"output.xlsx", "migration_report.pdf"}
     assert written == sorted(written) and written[-1] == 88.0
-    assert 83.0 in written  # half of output.json: 150 of 400 bytes
+    assert 83.0 in written  # half of output.xlsx: 150 of 400 bytes
 
 
 def test_a_file_that_fails_to_upload_is_said_and_the_rest_still_go():
