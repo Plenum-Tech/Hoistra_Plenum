@@ -22,6 +22,23 @@ Skipping LOCATE is how you get `undefined column` and report "no data" for data 
 
 ---
 
+## Step 0 — PLAN: decide the steps before the first tool call
+
+Before any tool, write yourself a short plan: which entities the question names, which tables
+could hold the answer, how they join, and the fewest calls that get there. Then:
+
+- **Explore before you query.** Confirm every table and column name you will use; never assume one.
+- **Validate before the final run.** Check join keys, the date column the question means
+  (raised / due / completed), and how status values are spelt. Probe an uncertain query with a
+  COUNT or LIMIT 5 first.
+- **Anchor relative dates on today.** "This month", "last month", "overdue", "next 14 days" are
+  computed from today's date, not guessed.
+- **Spend calls wisely.** Do not re-describe a table or re-run a query whose result you have.
+- **Say why.** When a tool takes a `reasoning` parameter (svc-udr's do), fill it with the plan
+  step the call is and what you expect it to show.
+
+---
+
 ## Step 1 — RESOLVE: turn the nouns into keys
 
 The user says "the Daresbury chiller", "AIB Solutions", "Tower A". None of those is a key.

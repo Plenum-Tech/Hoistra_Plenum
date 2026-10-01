@@ -307,7 +307,7 @@ export function cronsPageVals(c) {
       { value: nextJob ? fmtWhen(nextJob.next_run_at, now).replace(/^today /, '') : '—', label: 'Next run', hint: nextJob ? nextJob.name : 'nothing scheduled', tone: 'var(--color-text)' },
       { value: String(st.emails_week || 0), label: 'Emailed this week', hint: 'from admin@hoistra.ai', tone: 'var(--color-text)' }
     ],
-    cpFilters: ['All', 'Energy', 'Compliance', 'Assets', 'Vendors', 'Orchestrator', 'Paused'].map((x) => ({ label: x, on: filter === x, pick: () => c.cpSetFilter(x) })),
+    cpFilters: ['All', 'Energy', 'Compliance', 'Assets', 'Vendors', 'Maintenance', 'Orchestrator', 'Paused'].map((x) => ({ label: x, on: filter === x, pick: () => c.cpSetFilter(x) })),
     cpSearch: s.cpSearch || '', cpSetSearch: (e) => c.cpSetSearch(e),
     cpRows: jobs.filter(keep).map(row),
     cpEmpty: !jobs.length,

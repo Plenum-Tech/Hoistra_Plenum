@@ -88,6 +88,12 @@ names loosely, then every other kind of record), reads only what the caller may 
 the record, its latest inspection, its open work orders and the rest of what the question asked
 for. Write the answer from its `records`, following its `answer_rules`.
 
+- PPM visits are records too: "PPM visits missed or deferred this year, with the asset and the
+  vendor" goes to `answer_from_records`, which returns each visit, its asset and its vendor.
+  `get_ppm_contracts` is per contract (visits against plan, reports on file) and cannot name a visit.
+- When it returns `pending` (a question about a set of work orders), the answer is not finished
+  at the count: say what is still open by trade, what is late or blocked and why, and the next
+  actions - its `answer_rules` say how.
 - `found: false` → pass its `answer_hint` on. Do not search again with a shorter name and
   report the first thing that comes back.
 - `ok: false` → fall back to `search_assets` / `get_asset_details` / `list_work_orders`.

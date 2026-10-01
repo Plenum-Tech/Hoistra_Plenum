@@ -114,3 +114,17 @@ test('monthly scorecards and building jobs: cadence, preview, chat guess, compan
     params: { building_id: 'b-1', building_name: 'Bishopsgate Tower' } });
   assert.equal(f.freq, 'monthly'); assert.equal(f.monthDay, 1); assert.equal(f.buildingId, 'b-1');
 });
+
+test('the maintenance jobs: guessed from the chat, Maintenance filter, parts are company-wide', async () => {
+  const { guessJobs, companyWideOnly } = await import('../src/logic/crons.js');
+  assert.deepEqual(guessJobs('check work orders past SLA every hour'), ['maintenance_sla_watch']);
+  assert.deepEqual(guessJobs('send me the PPM due list every morning'), ['maintenance_ppm_due']);
+  assert.deepEqual(guessJobs('follow up missed PPM visits daily'), ['maintenance_ppm_missed']);
+  assert.deepEqual(guessJobs('check spare parts reorder levels on Mondays'), ['maintenance_parts_reorder']);
+  assert.deepEqual(guessJobs('monthly maintenance summary on the 1st'), ['maintenance_monthly_summary']);
+  assert.deepEqual(companyWideOnly({ buildingId: 'b', jobs: ['maintenance_parts_reorder', 'maintenance_sla_watch'] }), ['Spare parts reorder']);
+  const v = cronsPageVals({ state: { cronJobs: [{ id: 'j', name: 'PPM due list', module: 'Maintenance', enabled: true, status: 'ready', runs: [] }],
+    cpFilter: 'Maintenance' } });
+  assert.ok(v.cpFilters.some((f) => f.label === 'Maintenance' && f.on));
+  assert.equal(v.cpRows.length, 1);
+});

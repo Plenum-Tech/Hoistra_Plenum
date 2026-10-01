@@ -291,3 +291,103 @@ def test_both_compliance_answer_paths_hand_the_analyst_what_certificates_reach(m
     # and both paths call it
     src = inspect.getsource(orch.DeepAgentOrchestrator)
     assert src.count("await self._certificate_reach_call(") == 2
+
+
+def _vendor_onto():
+    d = json.loads(json.dumps(ONTO))
+    d["concepts"]["Vendor"] = {"table": "vendors", "key": "id", "label": "vendor_name", "synonyms": ["contractor", "supplier"],
+                               "attributes": {"id": "id", "vendor_name": "vendor_name"}}
+    # Two links from work orders to vendors, the empty one listed first - as on hoistra_test.
+    d["relations"]["WORK_ORDER_ASSIGNED_VENDOR"] = {"from": "WorkOrder", "to": "Vendor", "cardinality": "many_to_one",
+                                                    "join": ["from.assigned_vendor = to.id"], "fill": 0.0}
+    d["relations"]["WORK_ORDER_VENDOR"] = {"from": "WorkOrder", "to": "Vendor", "cardinality": "many_to_one",
+                                           "join": ["from.vendor_id = to.id"], "fill": 1.0}
+    d["relations"]["WORK_ORDER_BUILDING"] = {"from": "WorkOrder", "to": "Building", "cardinality": "many_to_one",
+                                             "join": ["from.building_id = to.building_id"], "fill": 1.0}
+    return oq.Ontology(d)
+
+
+def test_a_join_takes_the_link_that_is_filled_not_the_first_listed():
+    o = _vendor_onto()
+    hops, _ = o.auto_path("WorkOrder", "Vendor")
+    assert [h[0].name for h in hops] == ["WORK_ORDER_VENDOR"]
+
+
+def test_a_ranking_or_a_breakdown_is_counted_never_listed():
+    o = _vendor_onto()
+
+    def plan():
+        return oq.normalise_plan({"question_type": "list", "focus": {"concept": "WorkOrder"},
+                                  "constraints": [{"concept": "Building", "match": "Bishopsgate Tower"}],
+                                  "include": [], "aggregate": None})
+    p = plan()
+    notes = oq.ensure_grouping(o, p, "List the vendors with the most work orders at Bishopsgate Tower, with the count for each.")
+    assert p["aggregate"] == {"count_by": [{"concept": "Vendor", "attribute": "vendor_name"}]} and notes
+    assert any(c["concept"] == "Vendor" for c in p["constraints"]) and p["question_type"] == "count"
+    p = plan()
+    oq.ensure_grouping(o, p, "How many work orders per contractor?")
+    assert p["aggregate"]["count_by"][0]["concept"] == "Vendor"
+    for q in ("Which assets at Bishopsgate Tower have open work orders, and who is the vendor on each?",
+              "What is the most recent work order at Bishopsgate Tower?", "Show the open work orders at Bishopsgate Tower"):
+        p = plan()
+        assert oq.ensure_grouping(o, p, q) == [] and p["aggregate"] is None, q
+    # A named record is explained, not counted.
+    p = oq.normalise_plan({"focus": {"concept": "Vendor", "match": "Apex Mechanical"}, "constraints": [], "include": []})
+    assert oq.ensure_grouping(o, p, "Which building has the most work orders for Apex Mechanical?") == []
+
+
+def test_a_calendar_period_is_a_half_open_range_never_a_word_in_the_sql():
+    o, p = onto(), oq.Params()
+    o.col_types[("work_orders", "raised_at")] = "timestamp with time zone"
+    wo = o.concepts["WorkOrder"]
+    for cond in ({"attribute": "raised_at", "within": "last_month"}, {"attribute": "raised_at", "eq": "Last month"},
+                 {"attribute": "raised_at", "between": ["last_month", "last_month"]}):
+        sql = oq.compile_condition(o, wo, "f", cond, p)
+        assert ">= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')" in sql
+        assert "< date_trunc('month', CURRENT_DATE)" in sql and "last" not in str(p.d).lower()
+    sql = oq.compile_condition(o, wo, "f", {"attribute": "raised_at", "between": ["last_month_start", "last_month_end"]}, p)
+    assert "INTERVAL '1 microsecond'" in sql and "last_month" not in str(p.d)
+    with pytest.raises(oq.OntologyError):
+        oq.compile_condition(o, wo, "f", {"attribute": "raised_at", "within": "the other day"}, p)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_date_column_is_swapped_for_the_one_that_holds_the_dates(monkeypatch):
+    d = json.loads(json.dumps(ONTO))
+    d["concepts"]["WorkOrder"]["attributes"]["reported_at"] = "reported_at"
+    o = oq.Ontology(d)
+    filled = {("work_orders", "raised_at"): False, ("work_orders", "reported_at"): True}
+
+    async def fake_filled(r, onto_, table, col):
+        return filled.get((table, col), True)
+    monkeypatch.setattr(oq, "_filled", fake_filled)
+    plan = oq.normalise_plan({"focus": {"concept": "WorkOrder", "filters": [
+        {"attribute": "raised_at", "op": "within", "value": "last_month"}]}, "constraints": [], "include": [],
+        "aggregate": {"count_by": [{"concept": "WorkOrder", "attribute": "status"}]}})
+    notes = await oq.fill_date_filters(None, o, plan)
+    assert plan["focus"]["filters"][0]["attribute"] == "reported_at" and "reported_at" in notes[0]
+    assert "Completed" in oq.finished_states_note(o, plan)[0]
+
+
+def test_a_trade_is_the_category_before_its_separator():
+    assert oq._trade("HVAC \u00b7 Terminal Units") == "HVAC"
+    assert oq._trade("Life Safety \u2014 Fire Detection") == "Life Safety"
+    assert oq._trade("Water Hygiene") == "Water Hygiene" and oq._trade(None) == "Unclassified"
+
+
+def test_pending_rules_ask_for_the_open_work_by_trade_and_next_actions():
+    assert "by trade" in oq.PENDING_RULES and "Next actions by vendor" in oq.PENDING_RULES and "| WO number | What | Trade | Vendor |" in oq.PENDING_RULES
+
+
+def test_open_work_that_can_endanger_people_is_flagged_with_its_reason():
+    def r(**kw):
+        return oq.life_risk(kw)
+    assert "fire" in r(category="Life Safety \u00b7 Fire Detection", title="Loop 2 earth fault")
+    assert "carbon monoxide" in r(category="HVAC \u00b7 Boilers", title="Boiler 1 - flue gas CO up 30% to 150 ppm")
+    assert "LOLER" in r(category="Vertical Transport", title="LOLER thorough examination for Lift Asset-4471")
+    assert "Legionella" in r(category="Water Hygiene", title="Calorifier descale and TMV cartridge replacement")
+    assert "standby" in r(category="Electrical \u00b7 Standby Power", title="monthly run test")
+    # Filed under Water Hygiene, but a sealed heating loop: no Legionella or scald risk.
+    assert r(category="Water Hygiene", title="Closed-system inhibitor top-up and dosing pot valve replacement") is None
+    assert r(category="HVAC \u00b7 Terminal Units", title="FCU L4-12 not holding set point") is None
+    assert "Risk to life" in oq.PENDING_RULES

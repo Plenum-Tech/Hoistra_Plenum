@@ -159,7 +159,7 @@ DUE_RE = re.compile(r"(^|_)due", re.I)
 DONE_RE = re.compile(r"complet|done|closed_at|closed_on|performed|actual_end|finished", re.I)
 SORT_RE = re.compile(r"created|raised|reported|detected|reading_at|read_at|recorded|logged|timestamp|_date$|_at$", re.I)
 
-OPS = {"eq", "ne", "in", "not_in", "lt", "lte", "gt", "gte", "between", "contains", "is_null"}
+OPS = {"eq", "ne", "in", "not_in", "lt", "lte", "gt", "gte", "between", "within", "contains", "is_null"}
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+")
 RELATIVE_DATE_RE = re.compile(r"^today(?:\s*([+-])\s*(\d+)\s*([dwmy]))?$", re.IGNORECASE)
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -937,7 +937,11 @@ class Ontology:
         if a == b:
             return [], []
         edges = defaultdict(list)
-        for r in self.relations.values():
+        # Fullest link first. Two relations can join the same pair - work_orders reaches vendors
+        # by assigned_vendor and by vendor_id - and the search takes the first it meets, so it
+        # took assigned_vendor, empty on every row, and every work-order-by-vendor question
+        # answered nothing (1 Oct 2026). An empty link is used only where it is the only one.
+        for r in sorted(self.relations.values(), key=lambda r: -r.fill):
             edges[r.from_].append(([r.name], r.to, [self._direction((r, True))]))
             edges[r.to].append(([r.name], r.from_, [self._direction((r, False))]))
         for dr in self.derived.values():
@@ -1147,7 +1151,51 @@ async def get_ontology() -> Ontology:
 # ---------------------------------------------------------------------------
 # SQL compilation
 # ---------------------------------------------------------------------------
+#: Calendar periods a filter may name: (start, end) as SQL, end exclusive. "last month" asked on
+#: 1 Oct is 1 Sep 00:00 up to 1 Oct 00:00 - every timestamp in September, whatever the column type.
+_M, _W, _Q, _Y = ("date_trunc('month', CURRENT_DATE)", "date_trunc('week', CURRENT_DATE)",
+                  "date_trunc('quarter', CURRENT_DATE)", "date_trunc('year', CURRENT_DATE)")
+PERIODS = {
+    "today": ("CURRENT_DATE", "(CURRENT_DATE + INTERVAL '1 day')"),
+    "yesterday": ("(CURRENT_DATE - INTERVAL '1 day')", "CURRENT_DATE"),
+    "this_week": (_W, "(" + _W + " + INTERVAL '1 week')"),
+    "last_week": ("(" + _W + " - INTERVAL '1 week')", _W),
+    "this_month": (_M, "(" + _M + " + INTERVAL '1 month')"),
+    "last_month": ("(" + _M + " - INTERVAL '1 month')", _M),
+    "next_month": ("(" + _M + " + INTERVAL '1 month')", "(" + _M + " + INTERVAL '2 month')"),
+    "this_quarter": (_Q, "(" + _Q + " + INTERVAL '3 month')"),
+    "last_quarter": ("(" + _Q + " - INTERVAL '3 month')", _Q),
+    "this_year": (_Y, "(" + _Y + " + INTERVAL '1 year')"),
+    "last_year": ("(" + _Y + " - INTERVAL '1 year')", _Y),
+    "last_7_days": ("(CURRENT_DATE - INTERVAL '7 day')", "(CURRENT_DATE + INTERVAL '1 day')"),
+    "last_30_days": ("(CURRENT_DATE - INTERVAL '30 day')", "(CURRENT_DATE + INTERVAL '1 day')"),
+    "last_90_days": ("(CURRENT_DATE - INTERVAL '90 day')", "(CURRENT_DATE + INTERVAL '1 day')"),
+    "year_to_date": (_Y, "(CURRENT_DATE + INTERVAL '1 day')"),
+}
+
+
+def period_of(value):
+    """'last_month', 'Last month', 'last-month', 'start_of_last_month', 'last_month_end' -> (name, edge).
+    edge is None for the whole period, 'start' or 'end' for one of its bounds."""
+    if not isinstance(value, str):
+        return None
+    v = re.sub(r"[\s\-]+", "_", value.strip().lower())
+    edge = None
+    for pre, e in (("start_of_", "start"), ("beginning_of_", "start"), ("end_of_", "end")):
+        if v.startswith(pre):
+            v, edge = v[len(pre):], e
+    for suf, e in (("_start", "start"), ("_begin", "start"), ("_end", "end")):
+        if v.endswith(suf):
+            v, edge = v[: -len(suf)], e
+    return (v, edge) if v in PERIODS else None
+
+
 def date_expr(value):
+    per = period_of(value)
+    if per:
+        start, end = PERIODS[per[0]]
+        # An inclusive end (lte, BETWEEN) stops just before the next period begins.
+        return start if per[1] != "end" else "(" + end + " - INTERVAL '1 microsecond')"
     m = RELATIVE_DATE_RE.match(str(value).strip())
     if not m:
         return None
@@ -1183,6 +1231,8 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
     col = concept.col(cond["attribute"])
     op = next(k for k in cond if k in OPS)
     v = cond[op]
+    if op == "eq" and period_of(v) and not period_of(v)[1]:
+        op = "within"                         # "raised_at eq last_month" means within it
     e = qi(alias) + "." + qi(col)
     et = "lower(" + e + "::text)"
     ctype = onto.col_types.get((concept.table, col), "")
@@ -1200,9 +1250,19 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
     if op in ("lt", "lte", "gt", "gte"):
         sym = {"lt": "<", "lte": "<=", "gt": ">", "gte": ">="}[op]
         return e + " " + sym + " " + value_expr(v, p, ctype)
+    if op == "within":
+        per = period_of(v)
+        if not per:
+            raise OntologyError("within needs a period: " + ", ".join(PERIODS))
+        start, end = PERIODS[per[0]]
+        return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
     if op == "between":
         if not isinstance(v, list) or len(v) != 2:
             raise OntologyError("between needs [low, high]")
+        a, b = period_of(v[0]), period_of(v[1])
+        if a and b and a[0] == b[0] and not a[1] and not b[1]:      # ["last_month", "last_month"]
+            start, end = PERIODS[a[0]]
+            return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
         return e + " BETWEEN " + value_expr(v[0], p, ctype) + " AND " + value_expr(v[1], p, ctype)
     if op == "contains":
         return e + "::text ~* " + p.add(loose_pattern(str(v)))
@@ -1290,7 +1350,7 @@ PLAN_SCHEMA = """{
                    "sort": {"attribute": A, "dir": "asc" | "desc"} or null, "limit": N}],
   "aggregate":   null | {"count_by": [{"concept": C, "attribute": A}]}
 }
-F = {"attribute": A, "op": "eq|ne|in|not_in|lt|lte|gt|gte|between|contains|is_null", "value": V}"""
+F = {"attribute": A, "op": "eq|ne|in|not_in|lt|lte|gt|gte|between|within|contains|is_null", "value": V}"""
 
 PLAN_GUIDE = """How to plan:
 - focus = the records the user wants listed, counted or explained.
@@ -1306,6 +1366,9 @@ PLAN_GUIDE = """How to plan:
 - Codes such as PT-B-301-A-BOILER-01 or WO-123 go in "match" of the concept that owns them. A name such as
   "Lift Asset-4471" goes in "match" whole.
 - Dates in filters may be "today", "today+30d", "today-7d" or YYYY-MM-DD.
+- For a calendar period use op "within" with a period name - never invent a date word:
+  {"attribute": "raised_at", "op": "within", "value": "last_month"}. Periods: today, yesterday, this_week, last_week, this_month, last_month, next_month, this_quarter, last_quarter, this_year, last_year, last_7_days, last_30_days, last_90_days, year_to_date.
+  "How many raised last month and how many are closed" = the work orders raised within last_month, counted by status.
 - Use only concept, attribute, state and relation names that exist in the ontology.
 
 Illustrative examples (concept/relation names may differ - always use the names listed in the ontology above):
@@ -1317,7 +1380,81 @@ Q: In Bishopsgate Tower which compliance certificates are blocked and which work
 Q: How many open work orders does each building have?
 {"question_type":"count","focus":{"concept":"WorkOrder","match":null,"states":["open"],"filters":[]},
  "constraints":[{"concept":"Building","match":null,"via":[],"states":[],"filters":[]}],"include":[],
- "aggregate":{"count_by":[{"concept":"Building","attribute":"name"}]}}"""
+ "aggregate":{"count_by":[{"concept":"Building","attribute":"name"}]}}
+Q: List the vendors with the most work orders at Bishopsgate Tower, with the count for each.
+(A ranking or a "per X" breakdown is ALWAYS an aggregate counted by X - never a list of rows to count.)
+{"question_type":"count","focus":{"concept":"WorkOrder","match":null,"states":[],"filters":[]},
+ "constraints":[{"concept":"Building","match":"Bishopsgate Tower","via":[],"states":[],"filters":[]},
+                {"concept":"Vendor","match":null,"via":[],"states":[],"filters":[]}],"include":[],
+ "aggregate":{"count_by":[{"concept":"Vendor","attribute":"name"}]}}"""
+
+
+#: "vendors with the most work orders", "top 5 buildings", "how many … per vendor" - a ranking or a
+#: breakdown, answered by counting in SQL, never by counting a capped list of rows.
+_RANK_RE = re.compile(r"\b(most(?!\s+(?:recent\w*|latest|current|up)\b)|fewest|least(?!\s+recent\w*\b)"
+                      r"|top\s+\d+|rank\w*|busiest)\b", re.I)
+_GROUP_RE = re.compile(r"\b(?:per|by|for\s+each|each|every|across\s+(?:all\s+)?(?:the\s+)?)\s+([a-z][a-z ]{1,30}?)s?\b"
+                       r"(?=[\s,.?!]|$)", re.I)
+
+
+def _concept_words(onto) -> dict[str, str]:
+    """Words a question uses for each concept: its name split ("WorkOrder" -> "work order") and synonyms."""
+    out: dict[str, str] = {}
+    for name, c in onto.concepts.items():
+        words = [re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower(), *[str(s).lower() for s in c.synonyms]]
+        for w in words:
+            w = w.strip()
+            if w:
+                out.setdefault(w, name)
+                out.setdefault(w + "s", name)
+    return out
+
+
+def ensure_grouping(onto, plan, question: str) -> list[str]:
+    """Turn a ranking or a breakdown into a count grouped by the concept it ranks.
+
+    The planner read "List the vendors with the most work orders at Bishopsgate Tower" as a list of work
+    orders with Building and Vendor constraints and no aggregate, so the answer was written from the first
+    page of rows (1 Oct 2026). When the question ranks ("most", "top", "busiest") or breaks down ("per
+    vendor", "by building", "for each asset") by a concept other than the focus, and the plan counts
+    nothing, it counts by that concept's label - one SQL GROUP BY, exact. Returns notes for the answer."""
+    if plan.get("aggregate") and plan["aggregate"].get("count_by"):
+        return []
+    if plan["focus"].get("match"):              # one named record is explained, not counted
+        return []
+    q = question or ""
+    words = _concept_words(onto)
+    focus = plan["focus"]["concept"]
+    target = None
+    for m in _GROUP_RE.finditer(q):
+        phrase = m.group(1).strip().lower()
+        for n in range(len(phrase.split()), 0, -1):        # the longest concept name the phrase starts with
+            head = " ".join(phrase.split()[:n])
+            if head in words and words[head] != focus:
+                target = words[head]
+                break
+        if target:
+            break
+    rank = _RANK_RE.search(q)
+    after = q[rank.end():].lower() if rank else ""
+    counted = any(name == focus and re.search(r"\b" + re.escape(w) + r"\b", after) for w, name in words.items())
+    if target is None and rank and counted:
+        # "the vendors with the most work orders": the concept named before the ranking word,
+        # ranked by how many of the focus records (named after it) each one has.
+        before = q[: rank.start()].lower()
+        best = -1
+        for w, name in words.items():
+            i = before.rfind(w)
+            if name != focus and i > best and re.search(r"\b" + re.escape(w) + r"\b", before):
+                best, target = i, name
+    if target is None or target not in onto.concepts:
+        return []
+    c = onto.concepts[target]
+    if target != focus and not any(cn["concept"] == target for cn in plan["constraints"]):
+        plan["constraints"].append(normalise_node({"concept": target}))
+    plan["aggregate"] = {"count_by": [{"concept": target, "attribute": c.label}]}
+    plan["question_type"] = "count"
+    return ["Counted " + focus + " records by " + target + " (" + c.label + "), largest first."]
 
 
 def normalise_node(n, include=False):
@@ -1502,6 +1639,75 @@ class ScopedReader:
         except Exception as e:  # noqa: BLE001 - one failed lookup must not end the read
             log.warning("ontology.lookup_failed", label=label, error=str(e).splitlines()[0][:200])
             return []
+
+
+#: Dates that name the same moment under another column. On hoistra_test work_orders.raised_at and
+#: closed_at are empty on every row while reported_at and completed_at carry the dates, so "raised
+#: last month" counted nothing (1 Oct 2026). created_at is last: it is often the import time.
+DATE_STANDINS = {
+    "raised_at": ["reported_at", "requested_at", "logged_at", "created_at"],
+    "reported_at": ["raised_at", "requested_at", "created_at"],
+    "closed_at": ["completed_at", "resolved_at", "finished_at"],
+    "completed_at": ["closed_at", "resolved_at", "finished_at"],
+    "completed_date": ["completed_at", "closed_at"],
+}
+_FILLED: dict[tuple[str, str, str], bool] = {}
+
+
+async def _filled(r: ScopedReader, onto, table: str, col: str) -> bool:
+    # Per scope: a column empty for one company can be filled for another.
+    key = (table, col, repr(getattr(r, "settings", None)))
+    if key not in _FILLED:
+        rows = await r.try_fetch("SELECT EXISTS (SELECT 1 FROM " + qi(onto.schema) + "." + qi(table) + " WHERE "
+                                 + qi(col) + " IS NOT NULL) AS f", None, "filled " + table + "." + col)
+        _FILLED[key] = bool(rows and rows[0].get("f"))
+    return _FILLED[key]
+
+
+def finished_states_note(onto, plan) -> list[str]:
+    """When records are counted by status, say which statuses mean finished - the focus's "open"
+    state lists them - so "how many are closed" counts Completed too, not the word Closed alone."""
+    agg = plan.get("aggregate") or {}
+    c = onto.concepts.get(plan["focus"]["concept"])
+    if not c or not any(g.get("concept") == c.name and str(g.get("attribute")) in ("status", c.attributes.get("status", ""))
+                        for g in agg.get("count_by") or []):
+        return []
+    done = (c.states.get("open") or {}).get("not_in")
+    if not done:
+        return []
+    return ["Finished (closed) " + c.name + " statuses here are: " + ", ".join(done)
+            + ". 'Closed' in a question means any of them."]
+
+
+async def fill_date_filters(r: ScopedReader, onto, plan) -> list[str]:
+    """Point a date filter at a column that holds dates: an empty one swaps for its stand-in."""
+    notes = []
+    nodes = [plan["focus"], *plan["constraints"], *plan["include"]]
+
+    def walk(conds):
+        for f in conds or []:
+            if isinstance(f, dict) and ("all" in f or "any" in f):
+                yield from walk(f.get("all") or f.get("any"))
+            elif isinstance(f, dict) and f.get("attribute"):
+                yield f
+    for node in nodes:
+        c = onto.concepts.get(node.get("concept"))
+        if c is None:
+            continue
+        for f in walk(node.get("filters")):
+            try:
+                col = c.col(f["attribute"])
+            except OntologyError:
+                continue
+            if col not in DATE_STANDINS or await _filled(r, onto, c.table, col):
+                continue
+            for alt in DATE_STANDINS[col]:
+                attr = next((a for a, v in c.attributes.items() if v == alt), None)
+                if attr and await _filled(r, onto, c.table, alt):
+                    notes.append(c.name + "." + col + " is empty in these records; dated by " + alt + " instead.")
+                    f["attribute"] = attr
+                    break
+    return notes
 
 
 async def _lookup(r: ScopedReader, onto, concept, text_, mode):
@@ -1920,6 +2126,180 @@ ANSWER_RULES = (
     "call a grade good or poor from the number alone."
 )
 
+#: Added when the answer carries `pending` - a question about a set of work orders.
+PENDING_RULES = """
+- `pending` is what is still open in the set the question asked about. After the direct answer, say what
+  that open work IS - do not stop at a status table:
+  * group it by trade (`open_by_trade`, e.g. "4 HVAC, 2 fire detection, 2 lifts"), naming the jobs in each
+    from `open_items` (code, what it is, its vendor);
+  * say what is late (`hours_past_sla`, `overdue_open`) and what is blocked and why (`blocked_open`, a title
+    that says "Blocked", status Held) - a blocked job usually waits on a lapsed vendor accreditation;
+  * point out patterns: one vendor holding several late jobs, predictive drafts not yet raised, a statutory
+    inspection (LOLER, gas, fire) due before its certificate lapses.
+- `risk_to_life` on an open item is a reason it can endanger people (fire alarm, gas / CO, lifts, Legionella,
+  emergency power). When the question asks about risk to life, safety, danger or harm, lead with a
+  "Risk to life" section: every flagged job, its WO number, vendor, status, SLA and the reason in plain
+  words, worst first (blocked or furthest past SLA first), and say which open jobs carry no such risk.
+  Otherwise mark those rows in the table with "(life safety)". It is a judgement aid: give the reason,
+  do not overstate it, and never flag a job the records do not support.
+- When `open_items` holds every open job (no `open_items_note`), list EVERY one in an "Open work orders"
+  table, most urgent first (blocked, then most hours past SLA, then priority), one row per job:
+  | WO number | What | Trade | Vendor | Status | SLA | Action |
+  SLA is "N h late" from `hours_past_sla`, else "due <date>". Action is the next step for that vendor on
+  that job, from its status and title: Held/blocked -> reassign to an accredited vendor or get the
+  accreditation renewed; In progress and late -> chase the vendor for an attend/finish time; Draft ->
+  approve and issue to the vendor; Scheduled -> confirm the booked date. When `open_items_note` says
+  only some are shown, list those and say how many more are open.
+- Then "Next actions by vendor": one line per vendor with open work - the vendor, its job numbers, and what
+  to ask of them - most urgent vendor first. Every line names a WO number and a vendor someone can act on.
+- Keep it scannable: a one-line answer, the status counts, "What is still open" by trade (one line), the
+  open work orders table, then next actions by vendor. Never invent a reason the records do not give.
+"""
+
+
+#: Open items handed to the answer with the counts: enough to say what they are, never a dump.
+PENDING_ITEMS = 25
+
+#: Open work that can endanger people, and why - read from the job's trade and its own words.
+#: A judgement aid for the answer, stated with its reason, never a verdict on its own.
+LIFE_RISK_RULES: list[tuple[str, str]] = [
+    (r"fire|smoke|sprinkler|alarm|detection|bafe|evacuat|refuge|dry riser|fire door",
+     "fire detection / alarm - people may not be warned of a fire"),
+    (r"\bco\b|carbon monoxide|flue|gas\b|combustion|burner",
+     "gas / combustion - carbon monoxide or gas-escape risk"),
+    (r"\blift\b|lifts|vertical transport|loler|escalator|hoist|entrap|levelling",
+     "lift / lifting equipment - entrapment, trip or fall risk; LOLER is a statutory safety examination"),
+    # The job, not the category: a closed-system inhibitor top-up is filed under Water Hygiene and
+    # carries no Legionella or scald risk; a calorifier, TMV or outlet job does.
+    (r"legionella|calorifier|\btmv\b|cooling tower|scald|hot water outlet|shower|dead.?leg",
+     "water hygiene - Legionella or scalding risk"),
+    (r"standby power|generator|emergency light|ups\b|life safety",
+     "emergency / standby power - life-safety systems may fail in an outage"),
+    (r"electric shock|exposed (live|conductor)|arc flash|\bshock\b",
+     "electrical - shock risk"),
+]
+
+
+def life_risk(item: dict) -> str | None:
+    text_ = " ".join(str(item.get(k) or "") for k in ("category", "trade", "title", "type")).lower()
+    for pattern, reason in LIFE_RISK_RULES:
+        if re.search(pattern, text_):
+            return reason
+    return None
+
+
+def _trade(category: str | None) -> str:
+    """'HVAC · Boilers' -> 'HVAC'; the register's categories carry the trade before the separator."""
+    if not category:
+        return "Unclassified"
+    return re.split(r"\s+[—–·|/-]\s+|\s*:\s+", str(category), maxsplit=1)[0].strip() or "Unclassified"
+
+
+async def pending_context(r: ScopedReader, onto, plan) -> dict | None:
+    """What is still open within a question about a set of work orders - by trade, vendor and type,
+    how much is past its SLA or blocked, and the open items themselves.
+
+    "How many work orders were raised at Bishopsgate last month and how many are closed?" was
+    answered 794 / 781 and a status table (1 Oct 2026): right, and no use to an FM, who wants to
+    know that the 13 still open are four HVAC jobs, two fire jobs held on a lapsed BAFE, a lift
+    LOLER... The question's own constraints and filters are kept; its status is replaced by open."""
+    import copy
+
+    wo = onto.concepts.get(plan["focus"]["concept"])
+    if wo is None or wo.name != "WorkOrder" or "open" not in wo.states:
+        return None
+    if plan["focus"].get("match") or len(plan["focus"].get("keys") or []) == 1:
+        return None
+    status_col = wo.attributes.get("status")
+
+    def variant(states=("open",), aggregate=None, include=()):
+        p = copy.deepcopy(plan)
+        p["focus"]["states"] = list(states)
+        p["focus"]["filters"] = [f for f in p["focus"].get("filters") or []
+                                 if not (isinstance(f, dict) and wo.attributes.get(f.get("attribute")) == status_col)]
+        p["include"] = [normalise_node(i, include=True) for i in include]
+        p["aggregate"] = aggregate
+        p["question_type"] = "count" if aggregate else "list"
+        return p
+
+    async def run(p):
+        try:
+            async with r.s.begin_nested():
+                p, _, unresolved = await resolve_plan(r, onto, p)
+                if unresolved or validate_plan(onto, p):
+                    return None
+                return await execute_plan(r, onto, p)
+        except Exception as e:  # noqa: BLE001 - the context is extra; the answer stands without it
+            log.warning("ontology.pending_context_failed", error=str(e).splitlines()[0][:200])
+            return None
+
+    def counts(res, key):
+        return [{"name": row.get(key) or "Unassigned", "count": row["count"]} for row in (res or {}).get("rows") or []]
+
+    out: dict[str, Any] = {}
+    items = await run(variant(include=[
+        *([{"name": "vendor", "concept": "Vendor", "limit": 1}] if "Vendor" in onto.concepts else []),
+        *([{"name": "trade", "concept": "AssetCategory", "limit": 1}] if "AssetCategory" in onto.concepts else [])]))
+    if items is None:
+        return None
+    out["open_total"] = items["total"]
+    if not items["total"]:
+        return out
+    if "AssetCategory" in onto.concepts:
+        p = variant(aggregate={"count_by": [{"concept": "AssetCategory", "attribute": onto.concepts["AssetCategory"].label}]})
+        p["constraints"].append(normalise_node({"concept": "AssetCategory"}))
+        cats = counts(await run(p), "AssetCategory_" + onto.concepts["AssetCategory"].label)
+        trades: dict[str, int] = {}
+        for c in cats:
+            trades[_trade(c["name"])] = trades.get(_trade(c["name"]), 0) + c["count"]
+        out["open_by_trade"] = dict(sorted(trades.items(), key=lambda x: -x[1]))
+        out["open_by_category"] = cats
+    if "Vendor" in onto.concepts and not any(c["concept"] == "Vendor" and c.get("keys") for c in plan["constraints"]):
+        p = variant(aggregate={"count_by": [{"concept": "Vendor", "attribute": onto.concepts["Vendor"].label}]})
+        p["constraints"].append(normalise_node({"concept": "Vendor"}))
+        out["open_by_vendor"] = counts(await run(p), "Vendor_" + onto.concepts["Vendor"].label)
+    for attr in ("wo_type", "priority"):
+        if attr in wo.attributes:
+            out["open_by_" + attr] = counts(await run(variant(aggregate={"count_by": [{"concept": wo.name, "attribute": attr}]})),
+                                            wo.name + "_" + attr)
+    for state in ("overdue", "blocked"):
+        if state in wo.states:
+            res = await run(variant(states=[state]))
+            out[state + "_open"] = (res or {}).get("total")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    rows = []
+    for rec in items["records"][:PENDING_ITEMS]:
+        a = rec["attributes"]
+        rel = rec["related"]
+        vendor = next((x.get(onto.concepts["Vendor"].label) for k, v in rel.items() if k.startswith("vendor") for x in v), None) \
+            if "Vendor" in onto.concepts else None
+        cat = next((x.get(onto.concepts["AssetCategory"].label) for k, v in rel.items() if k.startswith("trade") for x in v), None) \
+            if "AssetCategory" in onto.concepts else None
+        due = a.get("sla_due_at")
+        late = None
+        if isinstance(due, datetime.datetime):
+            due_utc = due if due.tzinfo else due.replace(tzinfo=datetime.timezone.utc)
+            late = int((now - due_utc).total_seconds() // 3600) if due_utc < now else None
+        rows.append(strip_nulls({"wo_code": a.get("wo_code"), "title": a.get("title"), "status": a.get("status"),
+                                 "priority": a.get("priority"), "type": a.get("wo_type"), "trade": _trade(cat) if cat else None,
+                                 "category": cat, "vendor": vendor, "reported": a.get("reported_at"),
+                                 "sla_due": due, "hours_past_sla": late}))
+    for x in rows:
+        why = life_risk(x)
+        if why:
+            x["risk_to_life"] = why
+    risky = [x for x in rows if x.get("risk_to_life")]
+    if risky:
+        out["risk_to_life_open"] = len(risky)
+    # Most urgent first: blocked (held), then the longest past SLA, then priority (P1 before P2).
+    rows.sort(key=lambda x: (0 if str(x.get("status", "")).lower() in ("held", "blocked")
+                             or str(x.get("title", "")).lower().startswith("blocked") else 1,
+                             -(x.get("hours_past_sla") or -1), str(x.get("priority") or "zz")))
+    out["open_items"] = rows
+    if items["total"] > len(rows):
+        out["open_items_note"] = "showing " + str(len(rows)) + " of " + str(items["total"]) + " open"
+    return out
+
 
 def evidence(onto, question, plan, result, notes):
     if result["kind"] == "aggregate":
@@ -2267,6 +2647,7 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
         return {"ok": False, "error": "Nothing can be read: " + str(e) + "."}
     onto = await get_ontology()
     plan, attempts = await plan_question(onto, question, llm=llm)
+    grouped = ensure_grouping(onto, plan, question)
     async with ScopedReader(principal) as r:
         plan = await add_missing_codes(r, onto, plan, question)
         plan, notes, unresolved = await resolve_plan(r, onto, plan)
@@ -2276,7 +2657,11 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
                                    + " in the records you can see. Ask for the exact code (asset code, work order "
                                      "number, site code) or check the spelling.",
                     "notes": notes, "queries": r.queries}
-        added = ensure_status_includes(onto, plan) + ensure_compliance_includes(onto, plan)
+        notes.extend(grouped)
+        notes.extend(await fill_date_filters(r, onto, plan))
+        notes.extend(finished_states_note(onto, plan))
+        added =[] if plan.get("aggregate") else (ensure_status_includes(onto, plan)
+                                                  + ensure_compliance_includes(onto, plan))
         if added:
             notes.append("Also read, as always for this kind of record: " + ", ".join(added))
         log.info("ontology.plan", focus=plan["focus"]["concept"], match=plan["focus"]["match"],
@@ -2288,6 +2673,10 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
             raise OntologyError("Plan invalid after resolution: " + "; ".join(errors))
         result = await execute_plan(r, onto, plan)
         out = evidence(onto, question, plan, result, notes)
+        pending = await pending_context(r, onto, plan)
+        if pending:
+            out["pending"] = pending
+            out["answer_rules"] = ANSWER_RULES + PENDING_RULES
         out["queries"] = r.queries
         out["plan_attempts"] = attempts
         return out

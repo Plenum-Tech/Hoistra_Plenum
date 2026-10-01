@@ -24,6 +24,11 @@ export const CRON_JOBS = [
   { key: 'compliance_expiry_scan', label: 'Compliance expiry scan', module: 'Compliance', perBuilding: true, words: /compliance|certificate|expir|lapse/ },
   { key: 'compliance_reverify', label: 'Certificate re-verification', module: 'Compliance', words: /re-?verif|verify|register check/ },
   { key: 'vendor_scorecards_monthly', label: 'Monthly vendor scorecards', module: 'Vendors', perBuilding: true, words: /scorecard|vendor score|vendor performance/ },
+  { key: 'maintenance_sla_watch', label: 'Work-order SLA watch', module: 'Maintenance', perBuilding: true, words: /\bsla\b|work orders? (past|over|breach)|overdue work order/ },
+  { key: 'maintenance_ppm_due', label: 'PPM due list', module: 'Maintenance', perBuilding: true, words: /ppm due|due ppm|planned (preventive )?maintenance|maintenance plans? due/ },
+  { key: 'maintenance_ppm_missed', label: 'Missed PPM follow-up', module: 'Maintenance', perBuilding: true, words: /missed ppm|missed visit|deferred ppm|rebook/ },
+  { key: 'maintenance_parts_reorder', label: 'Spare parts reorder', module: 'Maintenance', words: /spare part|reorder|low stock|stock level/ },
+  { key: 'maintenance_monthly_summary', label: 'Monthly maintenance summary', module: 'Maintenance', perBuilding: true, words: /maintenance summary|monthly maintenance|maintenance kpi/ },
   { key: 'question', label: 'Ask a question', module: 'Orchestrator', perBuilding: true, words: /ask|report on|summar|brief me|send me/ }
 ];
 

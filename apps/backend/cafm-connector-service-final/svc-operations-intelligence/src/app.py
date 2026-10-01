@@ -19,6 +19,7 @@ from .api.routes import (
     compliance_router,
     contract_performance_router,
     crons_router,
+    maintenance_watch_router,
     energy_router,
     ingestion_router,
     reports_router,
@@ -204,5 +205,6 @@ app.include_router(contract_performance_router)
 app.include_router(crons_router)
 app.include_router(energy_router)
 app.include_router(ingestion_router)
+app.include_router(maintenance_watch_router)
 app.include_router(reports_router)
 app.include_router(value_router)

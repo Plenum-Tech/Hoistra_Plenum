@@ -199,6 +199,10 @@ def create_chat_model(
     extra: dict[str, Any] = {
         "api_key": key,
         "temperature": 0 if _supports_temperature(model_name) else 1,
+        # Sub-agents run streamed (astream), and a streamed OpenAI reply carries no token usage
+        # unless asked for, so the run's cost line showed the model that wrote the answer at
+        # 0 tokens / $0 (1 Oct 2026).
+        "stream_usage": True,
     }
     if _needs_explicit_no_reasoning(model_name):
         extra["reasoning_effort"] = "none"

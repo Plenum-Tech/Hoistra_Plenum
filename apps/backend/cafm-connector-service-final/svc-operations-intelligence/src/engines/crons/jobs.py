@@ -91,6 +91,42 @@ CATALOGUE: dict[str, dict[str, Any]] = {
         "call": ("POST", "/api/contract-performance/scorecards/monthly-all", {}, None),
         "suggest": {"monthly_day": 1, "time": "06:00"}, "building": "query",
     },
+    # Maintenance watch (engines/maintenance/watch.py): each reports, and raises each finding
+    # in the Approvals queue once - never a work order or purchase order of its own.
+    "maintenance_sla_watch": {
+        "label": "Work-order SLA watch", "module": "Maintenance",
+        "description": "Open work orders past their SLA or due within 24 hours, by vendor and priority. "
+                       "Each breach goes to Approvals to chase.",
+        "call": ("POST", "/api/maintenance/sla-watch", {}, None), "suggest": {"every_minutes": 60},
+        "building": "query",
+    },
+    "maintenance_ppm_due": {
+        "label": "PPM due list", "module": "Maintenance",
+        "description": "Maintenance plans overdue or due in the next 14 days. Each overdue plan with no "
+                       "open work order goes to Approvals to raise.",
+        "call": ("POST", "/api/maintenance/ppm-due", {}, None), "suggest": {"daily_at": "07:00"},
+        "building": "query",
+    },
+    "maintenance_ppm_missed": {
+        "label": "Missed PPM follow-up", "module": "Maintenance",
+        "description": "PPM visits marked Missed, or Deferred past their new date, and not rebooked - per "
+                       "vendor. Each goes to Approvals to rebook.",
+        "call": ("POST", "/api/maintenance/ppm-missed", {}, None), "suggest": {"daily_at": "08:00"},
+        "building": "query",
+    },
+    "maintenance_parts_reorder": {
+        "label": "Spare parts reorder", "module": "Maintenance",
+        "description": "Parts at or below their reorder level, with how many to order and from whom. "
+                       "Each goes to Approvals to order. Stock is company-wide.",
+        "call": ("POST", "/api/maintenance/parts-reorder", {}, None), "suggest": {"days": [1, 4], "time": "07:00"},
+    },
+    "maintenance_monthly_summary": {
+        "label": "Monthly maintenance summary", "module": "Maintenance",
+        "description": "Last month's work orders raised and closed, SLA hit rate and PPM completion, by "
+                       "building and vendor. A vendor below target goes to Approvals for review.",
+        "call": ("POST", "/api/maintenance/monthly-summary", {}, None),
+        "suggest": {"monthly_day": 1, "time": "06:00"}, "building": "query",
+    },
     "question": {
         "label": "Ask a question", "module": "Orchestrator",
         "description": "Asks the orchestrator your question on the schedule and keeps each answer.",
@@ -543,7 +579,8 @@ def summarise(body: Any) -> dict[str, Any]:
         sources.insert(0, body["summary"])
     for src in sources:
         for k, v in src.items():
-            if len(out) >= 8 or k in out:
+            # report_lines are the run's report, not a figure.
+            if len(out) >= 8 or k in out or k == "report_lines":
                 continue
             if isinstance(v, bool) or isinstance(v, (int, float)):
                 out[k] = v
@@ -598,9 +635,16 @@ async def _call(job: dict[str, Any], token: str, organization_id: Any = None, *,
         detail = resp.text[:300]
         raise RuntimeError(f"{path} answered {resp.status_code}: {detail}")
     try:
-        return summarise(resp.json()), None
+        body = resp.json()
     except ValueError:
         return {}, None
+    summary = summarise(body)
+    # A route that writes its own report (the maintenance watch) has it kept on the run and
+    # mailed under the figures.
+    lines = body.get("report_lines") if isinstance(body, dict) else None
+    if isinstance(lines, list) and lines:
+        return summary, (result_text(summary) + "\n\nDetails:\n" + "\n".join(str(x) for x in lines[:60]))[:6000]
+    return summary, None
 
 
 def result_text(summary: dict[str, Any]) -> str:
@@ -660,12 +704,18 @@ def report_email(job: dict[str, Any], result: str, *, failed: bool, when: dateti
         "Pause, change or remove it under Administration › Hoist Crons.",
     ] if x is not None).replace("\n\n\n", "\n\n")
     tone = "#c0392b" if failed else "#1f7a4d"
+    # The figures ("Name: value") as a table; a report's detail lines, under "Details:", as a list.
+    figures, _, details = result.strip().partition("\n\nDetails:\n")
     rows = "".join(
         f"<tr><td style='padding:6px 12px 6px 0;color:#6b6b66'>{_esc(k)}</td>"
         f"<td style='padding:6px 0;font-weight:600'>{_esc(v)}</td></tr>"
-        for k, v in (line.split(": ", 1) for line in result.strip().splitlines() if ": " in line))
+        for k, v in (line.split(": ", 1) for line in figures.splitlines() if ": " in line))
     found = (f"<table style='border-collapse:collapse;font-size:14px'>{rows}</table>" if rows and not failed
-             else f"<div style='white-space:pre-wrap;font-size:14px;line-height:1.55'>{_esc(result.strip())}</div>")
+             else f"<div style='white-space:pre-wrap;font-size:14px;line-height:1.55'>{_esc(figures)}</div>")
+    if details.strip():
+        found += ("<h3 style='font-size:13px;margin:18px 0 8px;color:#6b6b66;text-transform:uppercase;letter-spacing:.08em'>"
+                  "Details</h3><ul style='margin:0;padding-left:18px;font-size:13px;line-height:1.6'>"
+                  + "".join(f"<li>{_esc(x.strip())}</li>" for x in details.splitlines() if x.strip()) + "</ul>")
     button = (f"<p style='margin:22px 0'><a href='{_esc(url)}' style='background:#f05a28;color:#fff;padding:10px 18px;"
               f"border-radius:7px;text-decoration:none;font-weight:600'>See the full report</a></p>" if url else "")
     html = (

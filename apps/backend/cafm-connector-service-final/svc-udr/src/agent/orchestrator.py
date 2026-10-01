@@ -15,7 +15,7 @@ from ..services.database_service import DatabaseService
 from ..services.principal import Principal
 from ..agent.tools.definitions import TOOL_DEFINITIONS
 from ..agent.tools.executor import ToolExecutor
-from ..agent.prompts import SYSTEM_PROMPT
+from ..agent.prompts import build_system_prompt
 from ..core.logging import get_logger
 
 log = get_logger(__name__)
@@ -40,6 +40,7 @@ class UDROrchestrator:
         executor = ToolExecutor(svc)
 
         messages: list[dict] = [{"role": "user", "content": message}]
+        system = build_system_prompt()          # today's date, for "this month" and "overdue"
         tool_calls_made = 0
 
         log.info("udr.query.start", message_preview=message[:120])
@@ -48,7 +49,7 @@ class UDROrchestrator:
             response = await self._client.messages.create(
                 model=self._model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                system=system,
                 tools=TOOL_DEFINITIONS,  # type: ignore[arg-type]
                 messages=messages,
             )
@@ -94,9 +95,13 @@ class UDROrchestrator:
                         continue
 
                     tool_calls_made += 1
-                    log.info("udr.tool.call", tool=block.name, input_keys=list(block.input.keys()))
+                    # The plan step the agent says this call is - kept in the log, never run.
+                    tool_input = dict(block.input or {})
+                    reasoning = str(tool_input.pop("reasoning", "") or "")[:500]
+                    log.info("udr.tool.call", tool=block.name, input_keys=list(tool_input.keys()),
+                             reasoning=reasoning)
 
-                    result = await executor.execute(block.name, block.input)
+                    result = await executor.execute(block.name, tool_input)
 
                     log.info(
                         "udr.tool.result",

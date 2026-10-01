@@ -21,7 +21,7 @@ import { isStaleScope } from '../api/client.js';
 
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
-const AGENT = { A: "Compliance", B: "Vendors", C: "Energy" };
+const AGENT = { A: "Compliance", B: "Vendors", C: "Energy", M: "Maintenance" };
 const ICON = { Compliance: "ph-shield-check", Vendors: "ph-chart-line-up", Energy: "ph-lightning", Maintenance: "ph-wrench" };
 const TONE_RANK = { risk: 0, warn: 1, ok: 2, none: 2 };
 

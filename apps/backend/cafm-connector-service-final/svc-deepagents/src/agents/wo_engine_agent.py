@@ -1315,8 +1315,11 @@ async def get_ppm_contracts(building_id: str | None = None) -> dict:
     """D — Planned maintenance against plan, per contract.
 
     Visits done against visits planned, missed, late, reports on file, deferrals, the next
-    visit and a state (behind plan / watch / to plan). Use for "which PPM contracts are behind
-    plan", "which vendor files the fewest reports", "what is missed".
+    visit and a state (behind plan / watch / to plan). Use for CONTRACT-level questions: "which
+    PPM contracts are behind plan", "which vendor files the fewest reports", "how is Apex doing
+    against its PPM plan". It has no per-visit rows: for WHICH visits were missed or deferred,
+    on which asset, when - "show the PPM visits missed this year with the asset and vendor" -
+    use answer_from_records, which reads the visits themselves.
 
     **A visit without a report counts as done but UNVERIFIED.** That distinction is the point of
     the reports column: 12 of 12 visits with 10 of 12 reports is not a contract in good standing,

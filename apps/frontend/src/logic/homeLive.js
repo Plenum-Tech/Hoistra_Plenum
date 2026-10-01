@@ -65,7 +65,7 @@ export function bandOf(value) {
 const barTone = (pct) => (pct === null ? "none" : pct >= 80 ? "ok" : pct >= 60 ? "warn" : "risk");
 
 // Approvals carry the engine that raised them as a feature letter.
-const AGENT = { A: "Compliance", B: "Vendor", C: "Energy" };
+const AGENT = { A: "Compliance", B: "Vendor", C: "Energy", M: "Maintenance" };
 export function severityTone(sev) {
   const s = String(sev || "");
   if (/critical|lapsed|blocked/i.test(s)) return "risk";
