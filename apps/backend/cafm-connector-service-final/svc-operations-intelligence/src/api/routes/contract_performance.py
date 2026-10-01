@@ -440,6 +440,31 @@ async def monthly_scorecard(
     )
 
 
+@router.post("/scorecards/monthly-all")
+async def monthly_scorecards_all(
+    organization_id: UUID | None = None,
+    score_month: date | None = Query(None, description="The month to cut (any day in it); default last month."),
+    building_id: UUID | None = Query(None, description="Only the vendors with a footprint on this building."),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Every vendor's monthly card for the company - the month-end job, run on demand or on a
+    Hoist Crons schedule. A caller allocated to some buildings cuts the cards of the vendors on
+    those buildings only; a building names one."""
+    org_id = access.organization_for(s, organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
+    if org_id is None:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_organization", "error": "Choose a company to score."})
+    ids = (access.assert_building(s, building_id, action="score"),) if building_id else s.building_ids
+    month = score_month.replace(day=1) if score_month else None
+    out = await score_svc.generate_scorecards_for_month(session, organization_id=org_id,
+                                                       score_month=month, building_ids=ids)
+    if building_id:
+        out["building_id"] = str(building_id)
+    return out
+
+
 @router.get("/scorecards")
 async def list_scorecards(
     vendor_id: UUID | None = None,

@@ -48,6 +48,7 @@ CATALOGUE: dict[str, dict[str, Any]] = {
         "label": "Energy anomaly scan", "module": "Energy",
         "description": "Runs every anomaly rule over the latest meter readings and raises what it finds for review.",
         "call": ("POST", "/api/energy/anomalies/scan-all", {}, None), "suggest": {"every_minutes": 60},
+        "building": "query",
     },
     "energy_chiller_scan": {
         "label": "Chiller efficiency scan", "module": "Energy",
@@ -58,33 +59,48 @@ CATALOGUE: dict[str, dict[str, Any]] = {
         "label": "Asset condition scan", "module": "Assets",
         "description": "Bands every asset Threat / Watch / In control from its section's energy and open anomalies.",
         "call": ("POST", "/api/energy/condition/scan", {}, None), "suggest": {"daily_at": "06:30"},
+        "building": "query",
     },
     "energy_meter_gaps": {
         "label": "Meter gap check", "module": "Energy",
         "description": "Finds meters whose readings have stopped or have holes in the series.",
         "call": ("POST", "/api/energy/gaps/detect", {}, None), "suggest": {"every_minutes": 360},
+        "building": "query",
     },
     "energy_benchmarks": {
         "label": "Benchmark validation", "module": "Energy",
         "description": "Re-derives each building's EUI from its readings and positions it against its benchmark.",
         "call": ("POST", "/api/energy/benchmarks/validate", {}, None), "suggest": {"daily_at": "02:00"},
+        "building": "query",
     },
     "compliance_expiry_scan": {
         "label": "Compliance expiry scan", "module": "Compliance",
         "description": "Re-reads every certificate's status against today - lapsed, expiring in 30/60/90 days, blocked vendors.",
         "call": ("POST", "/api/compliance/scan", None, {"scope": "all"}), "suggest": {"daily_at": "07:00"},
+        "building": "body",
     },
     "compliance_reverify": {
         "label": "Certificate re-verification", "module": "Compliance",
         "description": "Checks certificates that are due a check against their public registers again.",
         "call": ("POST", "/api/compliance/reverify", None, {"limit": 50}), "suggest": {"days": [1], "time": "07:00"},
     },
+    "vendor_scorecards_monthly": {
+        "label": "Monthly vendor scorecards", "module": "Vendors",
+        "description": "Cuts last month's scorecard for every vendor with scored work orders - SLA, quality, "
+                       "cost - the month-end job. For one building: the vendors working there.",
+        "call": ("POST", "/api/contract-performance/scorecards/monthly-all", {}, None),
+        "suggest": {"monthly_day": 1, "time": "06:00"}, "building": "query",
+    },
     "question": {
         "label": "Ask a question", "module": "Orchestrator",
         "description": "Asks the orchestrator your question on the schedule and keeps each answer.",
-        "call": "question", "suggest": {"daily_at": "08:00"}, "needs_prompt": True,
+        "call": "question", "suggest": {"daily_at": "08:00"}, "needs_prompt": True, "building": "prompt",
     },
 }
+
+
+#: "Not given" for a PATCH field whose None means something (building: None = company-wide).
+UNSET: Any = object()
 
 
 class CronError(ValueError):
@@ -130,7 +146,25 @@ def catalogue() -> list[dict[str, Any]]:
     """What a client may offer: the jobs, and the cadences (the report cards' presets)."""
     return [{"key": k, "label": v["label"], "module": v["module"], "description": v["description"],
              "suggested_refresh": v["suggest"], "suggested_label": card_engine.refresh_label(v["suggest"]),
-             "needs_prompt": bool(v.get("needs_prompt"))} for k, v in CATALOGUE.items()]
+             "needs_prompt": bool(v.get("needs_prompt")),
+             # Whether the job can be scheduled for one building, not only company-wide.
+             "per_building": bool(v.get("building"))} for k, v in CATALOGUE.items()]
+
+
+async def resolve_building(session: AsyncSession, organization_id: UUID, building_id: Any) -> dict[str, str]:
+    """A job's building: one of the company's own, by id. Returns {building_id, building_name}."""
+    try:
+        bid = UUID(str(building_id))
+    except (TypeError, ValueError):
+        raise CronError("bad_building", "building_id is not a building's id.") from None
+    r = (await session.execute(text("""
+        SELECT building_id, COALESCE(NULLIF(name, ''), building_code, building_id::text) AS name
+          FROM plenum_cafm.buildings
+         WHERE building_id = :b AND (organization_id IS NULL OR organization_id::text = :o)"""),
+        {"b": bid, "o": str(organization_id)})).mappings().first()
+    if r is None:
+        raise CronError("unknown_building", "That building is not one of this company's.")
+    return {"building_id": str(r["building_id"]), "building_name": str(r["name"])}
 
 
 def _row(r: dict) -> dict[str, Any]:
@@ -327,6 +361,13 @@ async def recent_runs(session: AsyncSession, organization_id: UUID, *, limit: in
     return out
 
 
+def default_name(job_key: str, params: dict[str, Any]) -> str:
+    """A job's name when none was given: the catalogue label, or the question, and its building."""
+    spec = CATALOGUE.get(job_key, {})
+    base = ("Ask: " + str(params.get("prompt") or "")[:80]) if spec.get("needs_prompt") else spec.get("label", job_key)
+    return base + (" · " + params["building_name"] if params.get("building_name") else "")
+
+
 async def create_job(session: AsyncSession, *, organization_id: UUID, owner_user_id: UUID, job_key: str,
                      refresh: Any, tz: str | None = None, name: str | None = None,
                      params: dict[str, Any] | None = None, run_now: bool = False,
@@ -340,6 +381,9 @@ async def create_job(session: AsyncSession, *, organization_id: UUID, owner_user
     except card_engine.RefreshError as exc:
         raise CronError(exc.reason, str(exc)) from None
     params = dict(params or {})
+    raw_building = params.get("building_id")
+    if raw_building and not spec.get("building"):
+        raise CronError("company_wide_only", f"{spec['label']} runs company-wide; it cannot be scheduled for one building.")
     # recipients: other people each run's result is mailed to, on any job.
     recipients = clean_recipients(params.get("recipients"))
     if spec.get("needs_prompt"):
@@ -351,6 +395,9 @@ async def create_job(session: AsyncSession, *, organization_id: UUID, owner_user
         params = {"prompt": prompt[:4000], "email": bool(params.get("email")), "recipients": recipients}
     else:
         params = {"recipients": recipients}
+    if raw_building:
+        # building_id: the job covers this one building - its meters, certificates, vendors.
+        params.update(await resolve_building(session, organization_id, raw_building))
     n = (await session.execute(text("""SELECT count(*) FROM plenum_cafm.hoist_cron_jobs
                                          WHERE organization_id = :o AND removed_at IS NULL"""),
                                {"o": organization_id})).scalar_one()
@@ -358,8 +405,7 @@ async def create_job(session: AsyncSession, *, organization_id: UUID, owner_user
         raise CronError("too_many_jobs", f"A company can have at most {MAX_JOBS_PER_ORG} scheduled jobs.")
     jid, now = uuid4(), _now()
     creator_email = await _email(session, owner_user_id)
-    label =(name or "").strip() or (spec["label"] if not spec.get("needs_prompt")
-                                     else "Ask: " + params["prompt"][:80])
+    label = (name or "").strip() or default_name(job_key, params)
     await session.execute(text("""
         INSERT INTO plenum_cafm.hoist_cron_jobs
                (id, organization_id, owner_user_id, job_key, name, params, refresh, timezone, enabled,
@@ -391,17 +437,27 @@ async def get_job(session: AsyncSession, organization_id: UUID, job_id: UUID) ->
 async def update_job(session: AsyncSession, organization_id: UUID, job_id: UUID, *, refresh: Any = None,
                      tz: str | None = None, enabled: bool | None = None, name: str | None = None,
                      user_id: UUID | None = None, prompt: str | None = None,
-                     email: bool | None = None, recipients: Any = None) -> dict[str, Any] | None:
+                     email: bool | None = None, recipients: Any = None,
+                     building: Any = UNSET) -> dict[str, Any] | None:
     job = await get_job(session, organization_id, job_id)
     if job is None:
         return None
+    was_default = str(job["name"] or "") == default_name(job["job_key"], job["params"] or {})
     # A question job's question and its email setting are editable too; an engine job has neither.
     # Any job's recipients are.
     params = dict(job["params"] or {})
     if recipients is not None:
         recipients = clean_recipients(recipients)
         params["recipients"] = recipients
-    if prompt is not None or email is not None:
+    building_changed = False
+    if building is not UNSET:
+        params.pop("building_id", None)
+        params.pop("building_name", None)
+        if building:
+            if not CATALOGUE.get(job["job_key"], {}).get("building"):
+                raise CronError("company_wide_only", "This job runs company-wide; it cannot be limited to one building.")
+            params.update(await resolve_building(session, organization_id, building))
+        building_changed = (params.get("building_id") != (job["params"] or {}).get("building_id"))
         if not CATALOGUE.get(job["job_key"], {}).get("needs_prompt"):
             raise CronError("not_a_question", "Only a question job has a question or an email setting.")
         if prompt is not None:
@@ -409,11 +465,12 @@ async def update_job(session: AsyncSession, organization_id: UUID, job_id: UUID,
             if not p:
                 raise CronError("no_prompt", "A question job needs the question to ask.")
             params["prompt"] = p[:4000]
-            if name is None and str(job["name"] or "").startswith("Ask: "):
-                name = "Ask: " + p[:80]          # the default name follows the question
         if email is not None:
             params["email"] = bool(email)
-    if recipients is not None or prompt is not None or email is not None:
+    # A name nobody chose follows the question and the building.
+    if name is None and was_default and (prompt is not None or building_changed):
+        name = default_name(job["job_key"], params)
+    if recipients is not None or prompt is not None or email is not None or building_changed:
         await session.execute(text("UPDATE plenum_cafm.hoist_cron_jobs SET params = CAST(:p AS jsonb) WHERE id = :i"),
                               {"p": json.dumps(params), "i": job_id})
     ref, zone = job["refresh"], job["timezone"]
@@ -444,7 +501,9 @@ async def update_job(session: AsyncSession, organization_id: UUID, job_id: UUID,
     await record_event(session, job_id=job_id, organization_id=organization_id, action=action, user_id=user_id,
                        details={k: v for k, v in {"refresh": ref if refresh is not None else None, "timezone": tz,
                                                   "enabled": enabled, "name": name, "prompt": prompt,
-                                                  "email": email, "recipients": recipients}.items()
+                                                  "email": email, "recipients": recipients,
+                                                  "building": (params.get("building_name") or "all buildings")
+                                                  if building_changed else None}.items()
                                  if v is not None})
     await session.commit()
     return await get_job(session, organization_id, job_id)
@@ -501,8 +560,13 @@ async def _call(job: dict[str, Any], token: str, organization_id: Any = None, *,
     spec = CATALOGUE[job["job_key"]]
     headers = {"Authorization": f"Bearer {token}"}
     timeout = float(getattr(settings, "report_run_timeout_seconds", 180))
+    building = (job.get("params") or {}).get("building_id")
     if spec["call"] == "question":
-        card = type("C", (), {"prompt": job["params"].get("prompt") or "", "id": UUID(job["id"]), "name": job["name"],
+        prompt = job["params"].get("prompt") or ""
+        if building:
+            prompt = (f"About the building {job['params'].get('building_name') or building} only "
+                      f"(building_id {building}): {prompt}")
+        card = type("C", (), {"prompt": prompt, "id": UUID(job["id"]), "name": job["name"],
                               "refresh": job["refresh"], "timezone": job["timezone"],
                               "source_page": "Hoist Crons (a scheduled job)"})()
         body = await card_engine._ask_orchestrator(card, token, http=http)  # noqa: SLF001 - the card engine's own call
@@ -519,6 +583,11 @@ async def _call(job: dict[str, Any], token: str, organization_id: Any = None, *,
         query = {**(query or {}), "organization_id": str(organization_id)}
         if isinstance(payload, dict):
             payload = {**payload, "organization_id": str(organization_id)}
+    # A building's job names its building the way its route takes one.
+    if building and spec.get("building") == "query":
+        query = {**(query or {}), "building_id": str(building)}
+    elif building and spec.get("building") == "body":
+        payload = {**(payload or {}), "building_id": str(building)}
     client = http or httpx.AsyncClient(base_url=_self_base(), timeout=timeout)
     try:
         resp = await client.request(method, path, params=query or None, json=payload, headers=headers, timeout=timeout)

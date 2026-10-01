@@ -964,11 +964,14 @@ async def backfill_all_active_meters(
     organization_id: UUID | None = None,
     history_days: int = 365,
     limit: int = 200,
+    building_id: UUID | None = None,
 ) -> dict[str, Any]:
     """The sweep above, for every active meter. What a first ingest of a year should run."""
     q = select(EnergyMeter).where(EnergyMeter.active.is_(True)).limit(limit)
     if organization_id:
         q = q.where(EnergyMeter.organization_id == organization_id)
+    if building_id:
+        q = q.where(EnergyMeter.building_id == building_id)
     meters = list((await session.execute(q)).scalars().all())
     results, total = [], 0
     for m in meters:
@@ -992,11 +995,14 @@ async def scan_all_active_meters(
     *,
     organization_id: UUID | None = None,
     limit: int = 200,
+    building_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Daily cron — scan active meters for weekend/baseline/asset anomalies."""
     q = select(EnergyMeter).where(EnergyMeter.active.is_(True)).limit(limit)
     if organization_id:
         q = q.where(EnergyMeter.organization_id == organization_id)
+    if building_id:
+        q = q.where(EnergyMeter.building_id == building_id)
     meters = list((await session.execute(q)).scalars().all())
     results = []
     for m in meters:

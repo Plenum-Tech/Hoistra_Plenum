@@ -1035,6 +1035,7 @@ async def scan_all_anomalies(
                     "rules the same question at weekly intervals across the year, and dates "
                     "each finding to the window it was found in.",
     ),
+    building_id: UUID | None = Query(None, description="Only this building's meters (and its EUI)."),
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ):
@@ -1053,15 +1054,18 @@ async def scan_all_anomalies(
     as failed because the second half did would lose that.
     """
     organization_id = access.organization_for(s, organization_id)
+    if building_id:
+        access.assert_building(s, building_id, action="scan")
     if history_days:
         out = await anom_svc.backfill_all_active_meters(
-            session, organization_id=organization_id, history_days=history_days
+            session, organization_id=organization_id, history_days=history_days, building_id=building_id
         )
     else:
-        out = await anom_svc.scan_all_active_meters(session, organization_id=organization_id)
+        out = await anom_svc.scan_all_active_meters(session, organization_id=organization_id,
+                                                    building_id=building_id)
 
     try:
-        ids = await position_svc.building_ids_for(session, s, None)
+        ids = await position_svc.building_ids_for(session, s, building_id)
         bench = await bench_svc.validate(
             session, building_ids=ids, organization_id=organization_id, persist=True
         )

@@ -137,3 +137,64 @@ def test_the_run_email_is_a_report_with_a_link_to_the_jobs_page(monkeypatch):
     s2, t2, h2 = cron.report_email(job, "register <down>", failed=True, url="")
     assert s2.startswith("Hoistra · Compliance expiry scan failed") and "What went wrong" in t2
     assert "&lt;down&gt;" in h2 and "See the full report" not in h2
+
+
+def test_a_monthly_cadence_lands_on_its_day_in_the_owners_zone():
+    from datetime import datetime, timezone
+    from src.engines.reports import cards
+    assert cards.parse_refresh({"monthly_day": 1, "time": "6:00"}) == {"monthly_day": 1, "time": "06:00"}
+    for bad in ({"monthly_day": 29}, {"monthly_day": 0}, {"monthly_day": 1, "daily_at": "06:00"}):
+        with pytest.raises(cards.RefreshError):
+            cards.parse_refresh(bad)
+    r = {"monthly_day": 1, "time": "06:00"}
+    # 1 Oct 2026 10:00 Dubai has passed 06:00 -> 1 Nov 06:00 Dubai = 02:00 UTC.
+    assert cards.next_run_at(r, "Asia/Dubai", datetime(2026, 10, 1, 6, 0, tzinfo=timezone.utc)) == \
+        datetime(2026, 11, 1, 2, 0, tzinfo=timezone.utc)
+    assert cards.next_run_at(r, "UTC", datetime(2026, 12, 15, tzinfo=timezone.utc)).date().isoformat() == "2027-01-01"
+    assert cards.refresh_label(r) == "monthly on the 1st at 06:00"
+    assert cards.refresh_label({"monthly_day": 22, "time": "07:00"}).startswith("monthly on the 22nd")
+
+
+def test_scorecards_are_in_the_catalogue_and_jobs_say_whether_they_take_a_building():
+    by = {j["key"]: j for j in cron.catalogue()}
+    sc = by["vendor_scorecards_monthly"]
+    assert sc["module"] == "Vendors" and sc["suggested_refresh"] == {"monthly_day": 1, "time": "06:00"}
+    assert sc["per_building"] and by["compliance_expiry_scan"]["per_building"] and by["question"]["per_building"]
+    assert not by["energy_chiller_scan"]["per_building"] and not by["compliance_reverify"]["per_building"]
+    assert cron.default_name("energy_meter_gaps", {"building_name": "Bishopsgate Tower"}) == \
+        "Meter gap check · Bishopsgate Tower"
+    assert cron.default_name("question", {"prompt": "What lapsed?"}) == "Ask: What lapsed?"
+
+
+@pytest.mark.asyncio
+async def test_a_company_wide_job_refuses_a_building():
+    with pytest.raises(cron.CronError) as e:
+        await cron.create_job(None, organization_id=None, owner_user_id=None, job_key="energy_chiller_scan",
+                              refresh="1h", params={"building_id": "93b8800f-754c-5805-9bd6-f65c8d263fe8"})
+    assert e.value.reason == "company_wide_only"
+
+
+@pytest.mark.asyncio
+async def test_a_building_job_names_its_building_the_way_its_route_takes_one():
+    import uuid
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"ok": True, "vendors_scored": 3}
+
+    class FakeHttp:
+        async def request(self, method, path, params=None, json=None, headers=None, timeout=None):
+            calls.append((path, params, json))
+            return FakeResp()
+
+    org, b = uuid.uuid4(), "93b8800f-754c-5805-9bd6-f65c8d263fe8"
+    for key in ("vendor_scorecards_monthly", "compliance_expiry_scan"):
+        job = {"job_key": key, "params": {"building_id": b, "building_name": "B-301"}}
+        await cron._call(job, "tok", org, http=FakeHttp())
+    (p1, q1, j1), (p2, q2, j2) = calls
+    assert p1.endswith("/scorecards/monthly-all") and q1["building_id"] == b and q1["organization_id"] == str(org)
+    assert p2 == "/api/compliance/scan" and j2["building_id"] == b and j2["scope"] == "all"

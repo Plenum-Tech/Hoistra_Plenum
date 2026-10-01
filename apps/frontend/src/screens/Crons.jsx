@@ -62,7 +62,8 @@ function Dialog({ vals }) {
                   border: "1px solid " + (j.on ? "var(--color-accent)" : "var(--color-divider)"), background: j.on ? "var(--color-accent-900)" : "transparent" }}>
                   <input type="checkbox" checked={j.on} onChange={j.toggle} style={{ marginTop: "3px" }} />
                   <span style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" }}>
-                    <span style={{ fontSize: "12.5px" }}>{j.label}<span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginLeft: "6px" }}>{j.module}</span></span>
+                    <span style={{ fontSize: "12.5px" }}>{j.label}<span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginLeft: "6px" }}>{j.module}</span>
+                      {j.wideOnly ? <span style={{ fontSize: "10px", color: "var(--st-warn)", marginLeft: "6px" }}>{"company-wide only"}</span> : null}</span>
                     {j.desc ? <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{j.desc}</span> : null}
                   </span>
                 </label>
@@ -70,6 +71,19 @@ function Dialog({ vals }) {
             </div>
           </>
         )}
+
+        <div style={{ ...KICK, marginTop: "16px" }}>{"For which building"}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "8px", flexWrap: "wrap" }}>
+          <select aria-label="Building" className="input" value={vals.cronBuildingId} onChange={vals.cronSetBuilding}
+            style={{ fontSize: "12.5px", padding: "7px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", minWidth: "280px" }}>
+            {(vals.cronBuildings || []).map((b) => <option key={b.id || "all"} value={b.id}>{b.name}</option>)}
+          </select>
+          <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>
+            {vals.cronBuildingsLoading ? "Reading the buildings…" : vals.cronBuildingId
+              ? "Only this building's meters, certificates, vendors — or the question about it."
+              : "Every building the company has."}
+          </span>
+        </div>
 
         {vals.cronNeedsPrompt ? (
           <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -95,6 +109,16 @@ function Dialog({ vals }) {
             {vals.cronShowDays ? (vals.cronDays || []).map((d) => (
               <button key={d.label} type="button" aria-pressed={d.on} onClick={d.toggle} style={chip(d.on)}>{d.label}</button>
             )) : null}
+            {vals.cronShowMonthDay ? (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)" }}>
+                {"on day"}
+                <select aria-label="Day of the month" className="input" value={vals.cronMonthDay} onChange={vals.cronSetMonthDay}
+                  style={{ fontSize: "12.5px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)" }}>
+                  {(vals.cronMonthDays || []).map((d) => <option key={d} value={String(d)}>{String(d)}</option>)}
+                </select>
+                {"of each month"}
+              </label>
+            ) : null}
             {vals.cronShowTime ? (
               <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)", marginLeft: "4px" }}>
                 {"at"}
@@ -166,10 +190,10 @@ function JobDetail({ vals }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: "11px", marginTop: "22px" }}>
-        {[["When", d.cadence, d.zone], ["Next run", d.next, ""], ["Runs as", d.runsAs, "Created by " + d.createdBy], ["Last 30 days", d.okLine, d.avg]].map(([k, v, h], i) => (
+        {[["When", d.cadence, d.zone], ["Next run", d.next, ""], ["Building", d.building, ""], ["Runs as", d.runsAs, "Created by " + d.createdBy], ["Last 30 days", d.okLine, d.avg]].map(([k, v, h], i) => (
           <div key={k} style={{ padding: "13px 15px", ...CARD }}>
             <div style={KICK}>{k}</div>
-            <div style={{ fontSize: "14px", marginTop: "6px", color: i === 3 ? d.okTone : "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</div>
+            <div style={{ fontSize: "14px", marginTop: "6px", color: k === "Last 30 days" ? d.okTone : "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v}>{v}</div>
             {h ? <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={h}>{h}</div> : null}
           </div>
         ))}

@@ -82,10 +82,19 @@ def parse_refresh(value: Any) -> dict[str, Any]:
         raise RefreshError("bad_refresh", f"Unknown refresh preset {value!r}.")
     if not isinstance(value, dict):
         raise RefreshError("bad_refresh", "refresh must be an object.")
-    keys = {k for k in ("every_minutes", "daily_at", "days") if value.get(k) is not None}
+    keys = {k for k in ("every_minutes", "daily_at", "days", "monthly_day") if value.get(k) is not None}
     if len(keys) != 1:
-        raise RefreshError("bad_refresh",
-                           "refresh must be exactly one of every_minutes, daily_at, or days+time.")
+        raise RefreshError("bad_refresh", "refresh must be exactly one of every_minutes, daily_at, "
+                                          "days+time, or monthly_day+time.")
+    if "monthly_day" in keys:
+        # A day of the month, 1-28, so it falls in every month - February included.
+        try:
+            d = int(value["monthly_day"])
+        except (TypeError, ValueError):
+            raise RefreshError("bad_refresh", "monthly_day must be a whole number 1-28.") from None
+        if not 1 <= d <= 28:
+            raise RefreshError("bad_refresh", "monthly_day must be between 1 and 28, so it falls in every month.")
+        return {"monthly_day": d, "time": _hhmm(value.get("time") or "06:00", field="time")}
     if "every_minutes" in keys:
         try:
             n = int(value["every_minutes"])
@@ -135,6 +144,14 @@ def next_run_at(refresh: dict[str, Any], tz: str, after: datetime | None = None)
         if cand <= local:
             cand = (cand + timedelta(days=1)).replace(hour=h, minute=m)
         return cand.astimezone(timezone.utc)
+    if refresh.get("monthly_day"):
+        d = int(refresh["monthly_day"])
+        h, m = (int(x) for x in str(refresh.get("time") or "06:00").split(":"))
+        cand = local.replace(day=d, hour=h, minute=m, second=0, microsecond=0)
+        if cand <= local:
+            y, mo = (local.year + 1, 1) if local.month == 12 else (local.year, local.month + 1)
+            cand = cand.replace(year=y, month=mo)
+        return cand.astimezone(timezone.utc)
     days = set(refresh.get("days") or [])
     h, m = (int(x) for x in str(refresh.get("time") or "14:00").split(":"))
     for offset in range(0, 8):
@@ -156,6 +173,10 @@ def refresh_label(refresh: dict[str, Any]) -> str:
         return f"every {n} minutes"
     if refresh.get("daily_at"):
         return f"daily at {refresh['daily_at']}"
+    if refresh.get("monthly_day"):
+        d = int(refresh["monthly_day"])
+        suffix = "th" if 11 <= d <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(d % 10, "th")
+        return f"monthly on the {d}{suffix} at {refresh.get('time', '06:00')}"
     days = refresh.get("days") or []
     names = "every day" if len(days) == 7 else ", ".join(DAYS[d] for d in days)
     return f"{names} at {refresh.get('time', '14:00')}"

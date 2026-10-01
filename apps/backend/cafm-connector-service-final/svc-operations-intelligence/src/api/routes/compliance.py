@@ -559,11 +559,14 @@ async def run_scan(
     s: access.Scope = Depends(scope),
 ):
     org_id = access.organization_for(s, body.organization_id)
+    if body.building_id:
+        access.assert_building(s, body.building_id, action="scan")
     return await scan_svc.run_compliance_scan(
         session,
         organization_id=org_id,
         scope=body.scope,
         site_id=body.site_id,
+        building_id=body.building_id,
         certificate_type_code=body.certificate_type_code,
     )
 

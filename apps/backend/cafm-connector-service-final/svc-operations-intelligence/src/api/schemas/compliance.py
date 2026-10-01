@@ -143,6 +143,8 @@ class ScanRequest(BaseModel):
     organization_id: UUID | None = None
     scope: str = "all"
     site_id: UUID | None = None
+    # One building's certificates, and the vendor certificates of the vendors working there.
+    building_id: UUID | None = None
     certificate_type_code: str | None = None
 
 

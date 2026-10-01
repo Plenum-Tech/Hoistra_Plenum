@@ -964,6 +964,7 @@ async def run_compliance_scan(
     site_id: UUID | None = None,
     certificate_type_code: str | None = None,
     reverify: bool = True,
+    building_id: UUID | None = None,
     reverify_limit: int = 100,
 ) -> dict[str, Any]:
     """
@@ -983,6 +984,7 @@ async def run_compliance_scan(
         scope=scope,
         scope_filter={
             "site_id": str(site_id) if site_id else None,
+            "building_id": str(building_id) if building_id else None,
             "certificate_type_code": certificate_type_code,
             "planner_packet_id": packet.packet_id,
         },
@@ -999,6 +1001,17 @@ async def run_compliance_scan(
         )
     if site_id:
         q = q.where(ComplianceCertificate.site_id == site_id)
+    if building_id:
+        # The building's own certificates, and those of the vendors working on it.
+        from ..auth import access as _access
+        works_there = text(
+            "plenum_cafm.compliance_certificates.vendor_id IN "
+            + _access.VENDORS_ON_BUILDINGS_SQL.format(key="scan_bids")
+        ).bindparams(scan_bids=[str(building_id)])
+        q = q.where(
+            (ComplianceCertificate.building_id == building_id)
+            | ((ComplianceCertificate.cert_scope == "Vendor") & works_there)
+        )
     if certificate_type_code:
         q = q.where(ComplianceCertificate.certificate_type_code == certificate_type_code)
     if scope == "building":

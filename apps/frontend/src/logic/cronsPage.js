@@ -9,7 +9,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { cronsApi } from '../api/crons.js';
 import { isStaleScope } from '../api/client.js';
-import { CRON_FREQS, DAY_NAMES, recipientsOf, refreshFor, summaryLine } from './crons.js';
+import { CRON_FREQS, DAY_NAMES, companyWideOnly, recipientsOf, refreshFor, summaryLine } from './crons.js';
 
 const zone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; }
@@ -28,6 +28,14 @@ export function nextRuns(refresh, n, now) {
     return out;
   }
   const [h, m] = String(refresh.daily_at || refresh.time || '00:00').split(':').map(Number);
+  if (refresh.monthly_day) {
+    const d = new Date(at.getFullYear(), at.getMonth(), refresh.monthly_day, h, m, 0, 0);
+    for (let i = 0; i < 24 && out.length < n; i++) {
+      if (d > at) out.push(new Date(d));
+      d.setMonth(d.getMonth() + 1);
+    }
+    return out;
+  }
   const days = refresh.daily_at ? [0, 1, 2, 3, 4, 5, 6] : (refresh.days || []);
   if (!days.length) return out;
   const d = new Date(at);
@@ -60,10 +68,12 @@ export function formFromJob(job) {
   if (r.every_minutes) freq = byMinutes[r.every_minutes] || '1h';
   else if (r.daily_at) freq = 'daily';
   else if (r.days) freq = 'days';
+  else if (r.monthly_day) freq = 'monthly';
   return {
     jobs: [job.job_key], freq: freq, time: r.daily_at || r.time || '07:00', days: r.days || [1],
     prompt: p.prompt || '', email: !!p.email,
-    recipients: Array.isArray(p.recipients) ? p.recipients.slice() : [], recipientDraft: '', runNow: false
+    recipients: Array.isArray(p.recipients) ? p.recipients.slice() : [], recipientDraft: '',
+    monthDay: r.monthly_day || 1, buildingId: p.building_id || '', runNow: false
   };
 }
 
@@ -128,7 +138,7 @@ export const cronsPageMethods = {
   // New job: the chat card's form, opened as the page's dialog.
   cpNew() {
     this.setState({ cpModal: 'new', cronMsg: '', cronBusy: false,
-      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], prompt: '', email: false,
+      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], monthDay: 1, buildingId: '', prompt: '', email: false,
         recipients: [], recipientDraft: '', runNow: false } });
     this.cronLoadCatalogue();
   },
@@ -148,6 +158,7 @@ export const cronsPageMethods = {
     if (isQuestion && !String(f.prompt || '').trim()) return this.setState({ cronMsg: 'Write the question to ask.' });
     const to = recipientsOf(f);
     if (to.error) return this.setState({ cronMsg: to.error });
+    if (companyWideOnly(f).length) return this.setState({ cronMsg: 'This job runs company-wide only — choose All buildings.' });
     // Only a changed list is sent, so the job's history says "recipients changed" only when they did.
     const job = (this.state.cronJobs || []).find((j) => j.id === id) || {};
     const had = ((job.params && job.params.recipients) || []).join(',');
@@ -155,6 +166,8 @@ export const cronsPageMethods = {
     try {
       await cronsApi.update(id, Object.assign({ refresh: r.refresh, timezone: zone() },
         to.recipients.join(',') !== had ? { recipients: to.recipients } : {},
+        // null puts the job back to company-wide; unchanged, nothing is sent.
+        (f.buildingId || '') !== ((job.params && job.params.building_id) || '') ? { building_id: f.buildingId || null } : {},
         isQuestion ? { prompt: f.prompt, email: !!f.email } : {}));
       this.setState({ cronBusy: false, cpModal: null });
       this.flash('Schedule saved.');
@@ -237,6 +250,7 @@ export function cronsPageVals(c) {
       name: dj.name, label: dj.label, module: dj.module, status: stt.label, statusTone: stt.tone,
       cadence: dj.refresh_label, zone: dj.timezone,
       next: dj.enabled && dj.next_run_at ? fmtWhen(dj.next_run_at, now) : '—',
+      building: (dj.params && dj.params.building_name) || 'All buildings (company-wide)',
       runsAs: dj.owner_email || (dj.created_by && dj.created_by.email) || '—',
       createdBy: ((dj.created_by && dj.created_by.email) || '—') + (dj.created_at ? ' · ' + fmtWhen(dj.created_at, now) : ''),
       question: (dj.params && dj.params.prompt) || '', emails: !!(dj.params && dj.params.email),
@@ -293,7 +307,7 @@ export function cronsPageVals(c) {
       { value: nextJob ? fmtWhen(nextJob.next_run_at, now).replace(/^today /, '') : '—', label: 'Next run', hint: nextJob ? nextJob.name : 'nothing scheduled', tone: 'var(--color-text)' },
       { value: String(st.emails_week || 0), label: 'Emailed this week', hint: 'from admin@hoistra.ai', tone: 'var(--color-text)' }
     ],
-    cpFilters: ['All', 'Energy', 'Compliance', 'Assets', 'Orchestrator', 'Paused'].map((x) => ({ label: x, on: filter === x, pick: () => c.cpSetFilter(x) })),
+    cpFilters: ['All', 'Energy', 'Compliance', 'Assets', 'Vendors', 'Orchestrator', 'Paused'].map((x) => ({ label: x, on: filter === x, pick: () => c.cpSetFilter(x) })),
     cpSearch: s.cpSearch || '', cpSetSearch: (e) => c.cpSetSearch(e),
     cpRows: jobs.filter(keep).map(row),
     cpEmpty: !jobs.length,

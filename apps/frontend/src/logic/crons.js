@@ -14,15 +14,17 @@ import { isStaleScope } from '../api/client.js';
 
 // The catalogue as the service names it; read from GET /api/crons/catalogue when it answers,
 // this copy only labels the card until then.
+// perBuilding: the job can be scheduled for one building, not only company-wide.
 export const CRON_JOBS = [
-  { key: 'energy_anomaly_scan', label: 'Energy anomaly scan', module: 'Energy', words: /anomal|energy scan|consumption spike|baseline drift/ },
+  { key: 'energy_anomaly_scan', label: 'Energy anomaly scan', module: 'Energy', perBuilding: true, words: /anomal|energy scan|consumption spike|baseline drift/ },
   { key: 'energy_chiller_scan', label: 'Chiller efficiency scan', module: 'Energy', words: /chiller/ },
-  { key: 'energy_condition_scan', label: 'Asset condition scan', module: 'Assets', words: /condition|asset health|threat|watch/ },
-  { key: 'energy_meter_gaps', label: 'Meter gap check', module: 'Energy', words: /meter gap|gaps|missing reading|readings stopped/ },
-  { key: 'energy_benchmarks', label: 'Benchmark validation', module: 'Energy', words: /benchmark|eui|tm46/ },
-  { key: 'compliance_expiry_scan', label: 'Compliance expiry scan', module: 'Compliance', words: /compliance|certificate|expir|lapse/ },
+  { key: 'energy_condition_scan', label: 'Asset condition scan', module: 'Assets', perBuilding: true, words: /condition|asset health|threat|watch/ },
+  { key: 'energy_meter_gaps', label: 'Meter gap check', module: 'Energy', perBuilding: true, words: /meter gap|gaps|missing reading|readings stopped/ },
+  { key: 'energy_benchmarks', label: 'Benchmark validation', module: 'Energy', perBuilding: true, words: /benchmark|eui|tm46/ },
+  { key: 'compliance_expiry_scan', label: 'Compliance expiry scan', module: 'Compliance', perBuilding: true, words: /compliance|certificate|expir|lapse/ },
   { key: 'compliance_reverify', label: 'Certificate re-verification', module: 'Compliance', words: /re-?verif|verify|register check/ },
-  { key: 'question', label: 'Ask a question', module: 'Orchestrator', words: /ask|report on|summar|brief me|send me/ }
+  { key: 'vendor_scorecards_monthly', label: 'Monthly vendor scorecards', module: 'Vendors', perBuilding: true, words: /scorecard|vendor score|vendor performance/ },
+  { key: 'question', label: 'Ask a question', module: 'Orchestrator', perBuilding: true, words: /ask|report on|summar|brief me|send me/ }
 ];
 
 // How often, as the card offers it. `refresh` is the service's own shape.
@@ -33,8 +35,11 @@ export const CRON_FREQS = [
   { key: '6h', label: 'Every 6 hours', refresh: { every_minutes: 360 } },
   { key: '12h', label: 'Every 12 hours', refresh: { every_minutes: 720 } },
   { key: 'daily', label: 'Every day at…', time: true },
-  { key: 'days', label: 'On chosen days at…', time: true, days: true }
+  { key: 'days', label: 'On chosen days at…', time: true, days: true },
+  { key: 'monthly', label: 'Monthly on day…', time: true, monthly: true }
 ];
+// A day of the month that falls in every month, February included.
+export const MONTH_DAYS = Array.from({ length: 28 }, (_, i) => i + 1);
 export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // Is this a request to schedule something, rather than a question? Deliberately narrow: a
@@ -72,6 +77,11 @@ export function guessCadence(q) {
   const s = String(q || '').toLowerCase();
   const time = guessTime(s);
   const days = DAY_NAMES.map((d, i) => (new RegExp('\\b' + d.toLowerCase() + '(day|nesday|sday|urday|rsday)?s?\\b').test(s) ? i : -1)).filter((i) => i >= 0);
+  if (/\bmonthly\b|\bevery month\b|\beach month\b|\bmonth[- ]end\b/.test(s)) {
+    const md = /\b(\d{1,2})(?:st|nd|rd|th)\b/.exec(s);
+    const day = md && Number(md[1]) >= 1 && Number(md[1]) <= 28 ? Number(md[1]) : 1;
+    return { freq: 'monthly', time: time || '06:00', monthDay: day };
+  }
   if (/\bweekdays?\b/.test(s)) return { freq: 'days', time: time || '07:00', days: [1, 2, 3, 4, 5] };
   if (days.length) return { freq: 'days', time: time || '07:00', days: days };
   if (/\bweekly\b|\bevery week\b/.test(s)) return { freq: 'days', time: time || '07:00', days: [1] };
@@ -92,6 +102,11 @@ export function refreshFor(form) {
   const t = /^(\d{1,2}):(\d{2})$/.exec(String(form.time || '').trim());
   if (!t || Number(t[1]) > 23 || Number(t[2]) > 59) return { error: 'Choose a time, HH:MM.' };
   const time = pad(Number(t[1])) + ':' + t[2];
+  if (f.monthly) {
+    const d = Number(form.monthDay || 1);
+    if (!(d >= 1 && d <= 28)) return { error: 'Choose a day of the month, 1 to 28.' };
+    return { refresh: { monthly_day: d, time: time } };
+  }
   if (!f.days) return { refresh: { daily_at: time } };
   const days = (form.days || []).slice().sort();
   if (!days.length) return { error: 'Pick at least one day.' };
@@ -114,6 +129,21 @@ export function promptFrom(q) {
 const zone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; }
 };
+
+// The ticked jobs that cannot run for one building, when one is chosen.
+export function companyWideOnly(f) {
+  if (!f || !f.buildingId) return [];
+  return CRON_JOBS.filter((j) => (f.jobs || []).includes(j.key) && !j.perBuilding).map((j) => j.label);
+}
+
+// The building a chat request names, by its name in the register; '' for company-wide.
+export function buildingFrom(q, buildings) {
+  const s = String(q || '').toLowerCase();
+  const hit = (buildings || [])
+    .filter((b) => b && b.buildingId && b.name && b.name.length >= 3 && s.includes(String(b.name).toLowerCase()))
+    .sort((a, b) => b.name.length - a.name.length)[0];
+  return hit ? hit.buildingId : '';
+}
 
 // A job's extra recipients. The service holds the same limit and the same check.
 export const MAX_RECIPIENTS = 10;
@@ -171,6 +201,9 @@ export const cronMethods = {
         // "Send me …" / "email me …" asks for delivery, not only a record on the panel.
         email: asks && /\b(send|e-?mail|mail)\s+me\b/i.test(q),
         recipients: recipientsFrom(q), recipientDraft: '',
+        monthDay: cad.monthDay || 1,
+        // "… for Bishopsgate Tower" names one building; only jobs that take one keep it.
+        buildingId: buildingFrom(q, this.state.bldLive),
         runNow: false
       }
     }));
@@ -182,13 +215,16 @@ export const cronMethods = {
   cronOpenBlank() {
     this.setState({
       cronOpen: true, cronMsg: '', cronBusy: false,
-      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], prompt: '', recipients: [], recipientDraft: '', runNow: false }
+      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], monthDay: 1, prompt: '', recipients: [], recipientDraft: '',
+        buildingId: '', runNow: false }
     });
     this.openChat();
     this.cronLoadCatalogue();
   },
 
   async cronLoadCatalogue() {
+    // The building picker reads the Buildings register.
+    if (!this.state.bldLive && typeof this.bldLoad === 'function') this.bldLoad();
     if (this.state.cronCatalogue) return;
     try {
       const c = await cronsApi.catalogue();
@@ -239,8 +275,13 @@ export const cronMethods = {
     this.setState((p) => {
       const f = Object.assign({}, p.cronForm || {});
       const set = new Set(f.jobs || []);
+      const adding = !set.has(key);
       if (set.has(key)) set.delete(key); else set.add(key);
       f.jobs = CRON_JOBS.map((j) => j.key).filter((k) => set.has(k));
+      // The scorecards are a month-end job: ticked on their own, they start on the 1st at 06:00.
+      if (adding && key === 'vendor_scorecards_monthly' && f.jobs.length === 1) {
+        f.freq = 'monthly'; f.monthDay = 1; f.time = '06:00';
+      }
       return { cronForm: f, cronMsg: '' };
     });
   },
@@ -266,11 +307,14 @@ export const cronMethods = {
     if (r.error) return this.setState({ cronMsg: r.error });
     const to = recipientsOf(f);
     if (to.error) return this.setState({ cronMsg: to.error });
+    const wide = companyWideOnly(f);
+    if (wide.length) return this.setState({ cronMsg: wide.join(', ') + (wide.length === 1 ? ' runs' : ' run') + ' company-wide only — untick it or choose All buildings.' });
     this.setState({ cronBusy: true, cronMsg: '' });
     try {
       const out = await cronsApi.create({
         job_keys: f.jobs, refresh: r.refresh, timezone: zone(), prompt: f.prompt || undefined,
         email: (f.jobs || []).includes('question') && !!f.email, recipients: to.recipients,
+        building_id: f.buildingId || undefined,
         run_now: !!f.runNow, source_session_id: this.state.sessionId || undefined
       });
       const made = (out && out.jobs) || [];
@@ -381,8 +425,20 @@ export function cronVals(c) {
     cronJobOpts: CRON_JOBS.map((j) => ({
       key: j.key, label: (byKey[j.key] && byKey[j.key].label) || j.label, module: j.module,
       desc: (byKey[j.key] && byKey[j.key].description) || '',
+      // With a building chosen, a company-wide-only job says so instead of being ticked.
+      wideOnly: !!f.buildingId && !j.perBuilding,
       on: (f.jobs || []).includes(j.key), toggle: () => c.cronToggleJob(j.key)
     })),
+    // Which building: every building, or one of the company's.
+    cronBuildings: [{ id: '', name: 'All buildings (company-wide)' }].concat(
+      (s.bldLive || []).filter((b) => b && b.buildingId).map((b) => ({ id: b.buildingId, name: b.name + (b.code ? ' · ' + b.code : '') }))),
+    cronBuildingId: f.buildingId || '',
+    cronSetBuilding: (e) => c.cronSet('buildingId', e.target.value),
+    cronBuildingsLoading: !s.bldLive && !!s.bldLoading,
+    cronShowMonthDay: !!(CRON_FREQS.find((x) => x.key === f.freq) || {}).monthly,
+    cronMonthDays: MONTH_DAYS,
+    cronMonthDay: String(f.monthDay || 1),
+    cronSetMonthDay: (e) => c.cronSet('monthDay', Number(e.target.value)),
     cronFreqOpts: CRON_FREQS.map((x) => ({ key: x.key, label: x.label, on: f.freq === x.key, pick: () => c.cronSet('freq', x.key) })),
     cronShowTime: !!(CRON_FREQS.find((x) => x.key === f.freq) || {}).time,
     cronShowDays: !!(CRON_FREQS.find((x) => x.key === f.freq) || {}).days,

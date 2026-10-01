@@ -60,6 +60,7 @@ class CronBody(BaseModel):
     email: bool = Field(False, description="For the 'question' job: email each answer to you, from the platform's sender.")
     recipients: list[str] = Field(default_factory=list, max_length=cron_svc.MAX_RECIPIENTS,
                                   description="Other addresses each run's result is emailed to (any job).")
+    building_id: UUID | None = Field(None, description="Run for this one building; omit for company-wide.")
     run_now: bool = False
     source_session_id: str | None = Field(None, max_length=120)
     organization_id: UUID | None = None
@@ -74,6 +75,7 @@ class CronPatch(BaseModel):
     email: bool | None = Field(None, description="A question job: email each answer to its creator.")
     recipients: list[str] | None = Field(None, max_length=cron_svc.MAX_RECIPIENTS,
                                          description="Replaces the job's extra recipients; [] clears them.")
+    building_id: UUID | None = Field(None, description="Limit the job to this building; null = company-wide.")
 
 
 @router.get("/catalogue")
@@ -135,8 +137,9 @@ async def create_jobs(body: CronBody, session: AsyncSession = Depends(get_sessio
             created.append(await cron_svc.create_job(
                 session, organization_id=org, owner_user_id=s.user_id, job_key=k, refresh=body.refresh,
                 tz=body.timezone,
-                params={"prompt": body.prompt, "email": body.email, "recipients": body.recipients}
-                if k == "question" else {"recipients": body.recipients},
+                params={"prompt": body.prompt, "email": body.email, "recipients": body.recipients,
+                        "building_id": body.building_id}
+                if k == "question" else {"recipients": body.recipients, "building_id": body.building_id},
                 run_now=body.run_now, source_session_id=body.source_session_id))
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
@@ -150,7 +153,10 @@ async def update_job(job_id: UUID, body: CronPatch, organization_id: UUID | None
     try:
         job = await cron_svc.update_job(session, _org(s, organization_id), job_id, refresh=body.refresh,
                                         tz=body.timezone, enabled=body.enabled, name=body.name, user_id=s.user_id,
-                                        prompt=body.prompt, email=body.email, recipients=body.recipients)
+                                        prompt=body.prompt, email=body.email, recipients=body.recipients,
+                                        # Sent as null, the job goes back to company-wide; not sent, it keeps its building.
+                                        building=body.building_id if "building_id" in body.model_fields_set
+                                        else cron_svc.UNSET)
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
     if job is None:

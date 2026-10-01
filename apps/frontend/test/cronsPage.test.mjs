@@ -16,7 +16,7 @@ test('the preview lands on the cadence the service keeps', () => {
 
 test('Edit schedule opens on the job as it is', () => {
   assert.deepEqual(formFromJob({ job_key: 'question', refresh: { days: [1, 4], time: '09:00' }, params: { prompt: 'Give me a summary.', email: true } }),
-    { jobs: ['question'], freq: 'days', time: '09:00', days: [1, 4], prompt: 'Give me a summary.', email: true, recipients: [], recipientDraft: '', runNow: false });
+    { jobs: ['question'], freq: 'days', time: '09:00', days: [1, 4], prompt: 'Give me a summary.', email: true, recipients: [], recipientDraft: '', monthDay: 1, buildingId: '', runNow: false });
   assert.equal(formFromJob({ job_key: 'energy_anomaly_scan', refresh: { every_minutes: 360 } }).freq, '6h');
   assert.equal(formFromJob({ job_key: 'energy_benchmarks', refresh: { daily_at: '02:00' } }).time, '02:00');
 });
@@ -94,4 +94,23 @@ test('recipients: typed text becomes addresses, a typo is kept for fixing, the d
   assert.match(summaryLine({ alerts_created: 25, emailed_to: 'a@x.com, b@y.com, c@z.com', email_status: 'sent' }), /emailed to 3 people/);
   assert.match(summaryLine({ emailed_to: 'a@x.com, b@y.com', email_status: 'partial', email_failed: 'b@y.com' }), /emailed 1 of 2/);
   assert.match(summaryLine({ emailed_to: 'a@x.com', email_status: 'sent' }), /emailed to a@x.com/);
+});
+
+test('monthly scorecards and building jobs: cadence, preview, chat guess, company-wide check', async () => {
+  const { refreshFor, guessCadence, guessJobs, buildingFrom, companyWideOnly } = await import('../src/logic/crons.js');
+  assert.deepEqual(refreshFor({ freq: 'monthly', monthDay: 1, time: '6:00' }).refresh, { monthly_day: 1, time: '06:00' });
+  assert.match(refreshFor({ freq: 'monthly', monthDay: 30, time: '06:00' }).error, /1 to 28/);
+  const now = new Date(2026, 9, 1, 10, 40);            // Thu 1 Oct 2026 10:40
+  assert.deepEqual(nextRuns({ monthly_day: 1, time: '06:00' }, 3, now).map((d) => d.getDate() + '/' + (d.getMonth() + 1)),
+    ['1/11', '1/12', '1/1'], '1 Oct 06:00 has passed; December rolls into January');
+  assert.deepEqual(guessCadence('Run the vendor scorecards every month on the 3rd at 7am'), { freq: 'monthly', time: '07:00', monthDay: 3 });
+  assert.deepEqual(guessJobs('cut the vendor scorecards monthly'), ['vendor_scorecards_monthly']);
+  const blds = [{ buildingId: 'b-1', name: 'Bishopsgate Tower' }, { buildingId: 'b-2', name: 'Tower' }];
+  assert.equal(buildingFrom('scan compliance for Bishopsgate Tower every day', blds), 'b-1', 'the longest name wins');
+  assert.equal(buildingFrom('scan compliance every day', blds), '');
+  assert.deepEqual(companyWideOnly({ buildingId: 'b-1', jobs: ['energy_chiller_scan', 'energy_meter_gaps'] }), ['Chiller efficiency scan']);
+  assert.deepEqual(companyWideOnly({ buildingId: '', jobs: ['energy_chiller_scan'] }), []);
+  const f = formFromJob({ job_key: 'vendor_scorecards_monthly', refresh: { monthly_day: 1, time: '06:00' },
+    params: { building_id: 'b-1', building_name: 'Bishopsgate Tower' } });
+  assert.equal(f.freq, 'monthly'); assert.equal(f.monthDay, 1); assert.equal(f.buildingId, 'b-1');
 });

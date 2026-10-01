@@ -31,7 +31,8 @@ export default function CronJobCard({ vals }) {
             border: "1px solid " + (j.on ? "var(--color-accent)" : "var(--color-divider)") }}>
             <input type="checkbox" checked={j.on} onChange={j.toggle} style={{ marginTop: "2px" }} />
             <span style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" }}>
-              <span style={{ fontSize: "11.5px" }}>{j.label}<span style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginLeft: "6px" }}>{j.module}</span></span>
+              <span style={{ fontSize: "11.5px" }}>{j.label}<span style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginLeft: "6px" }}>{j.module}</span>
+                {j.wideOnly ? <span style={{ fontSize: "9.5px", color: "var(--st-warn)", marginLeft: "6px" }}>{"company-wide only"}</span> : null}</span>
               {j.desc ? <span style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.4" }}>{j.desc}</span> : null}
             </span>
           </label>
@@ -50,6 +51,12 @@ export default function CronJobCard({ vals }) {
         </div>
       ) : null}
 
+      <div style={{ ...LABEL, marginTop: "11px" }}>{"For which building"}</div>
+      <select aria-label="Building" className="input" value={vals.cronBuildingId} onChange={vals.cronSetBuilding}
+        style={{ ...INPUT, width: "100%", marginTop: "6px" }}>
+        {(vals.cronBuildings || []).map((b) => <option key={b.id || "all"} value={b.id}>{b.name}</option>)}
+      </select>
+
       <div style={{ ...LABEL, marginTop: "11px" }}>{"How often"}</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
         {(vals.cronFreqOpts || []).map((x) => (
@@ -61,6 +68,15 @@ export default function CronJobCard({ vals }) {
           {vals.cronShowDays ? (vals.cronDays || []).map((d) => (
             <button key={d.label} type="button" onClick={d.toggle} style={CHIP(d.on)}>{d.label}</button>
           )) : null}
+          {vals.cronShowMonthDay ? (
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-neutral-400)" }}>
+              {"on day"}
+              <select aria-label="Day of the month" className="input" value={vals.cronMonthDay} onChange={vals.cronSetMonthDay} style={{ ...INPUT, width: "64px" }}>
+                {(vals.cronMonthDays || []).map((d) => <option key={d} value={String(d)}>{String(d)}</option>)}
+              </select>
+              {"of each month"}
+            </label>
+          ) : null}
           {vals.cronShowTime ? (
             <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-neutral-400)" }}>
               {"at"}

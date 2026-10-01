@@ -1380,6 +1380,51 @@ async def generate_monthly_scorecard(
     }
 
 
+def previous_month(today: date | None = None) -> date:
+    today = today or date.today()
+    return (date(today.year, today.month, 1) - timedelta(days=1)).replace(day=1)
+
+
+async def generate_scorecards_for_month(
+    session: AsyncSession,
+    *,
+    organization_id: UUID,
+    score_month: date | None = None,
+    building_ids: tuple[UUID, ...] | None = None,
+) -> dict[str, Any]:
+    """Every vendor's card for one company and month - the month-end job, for one company.
+
+    The vendors are those with scored work orders that month. ``building_ids`` narrows them
+    to the vendors with a footprint on those buildings (a building's own scheduled job, or a
+    caller allocated to some buildings only); each card still covers the vendor's whole month
+    for the company, because the card is one per vendor-month."""
+    from ..auth import access as _access
+
+    month = score_month or previous_month()
+    pred, params = _access.vendor_predicate(building_ids, "s.vendor_id", prefix="sc")
+    rows = (await session.execute(text(
+        "SELECT DISTINCT s.vendor_id FROM plenum_cafm.vendor_wo_scores s"
+        " WHERE s.score_month = :m AND s.vendor_id IS NOT NULL AND s.organization_id = :o" + pred),
+        {"m": month, "o": organization_id, **params})).scalars().all()
+    made, skipped, failed = [], [], []
+    for vid in rows:
+        try:
+            r = await generate_monthly_scorecard(session, vendor_id=vid, score_month=month,
+                                                 organization_id=organization_id)
+            (made if r.get("ok") else skipped).append(
+                {"vendor_id": str(vid), **({} if r.get("ok") else {"reason": r.get("error")})})
+        except Exception as exc:  # noqa: BLE001 - one vendor's failure is that vendor's line
+            await session.rollback()
+            log.warning("scorecards.month.vendor_failed", vendor_id=str(vid), error=str(exc)[:200])
+            failed.append({"vendor_id": str(vid), "error": str(exc)[:200]})
+    log.info("scorecards.month.done", org=str(organization_id), month=month.isoformat(),
+             vendors=len(rows), made=len(made), failed=len(failed))
+    return {"ok": not failed or bool(made), "score_month": month.isoformat(), "vendors_scored": len(rows),
+            "scorecards_generated": len(made), "scorecards_skipped": len(skipped),
+            "scorecards_failed": len(failed),
+            "details": {"generated": made, "skipped": skipped, "failed": failed}}
+
+
 async def list_scorecards(
     session: AsyncSession,
     *,
