@@ -1810,6 +1810,7 @@ export const renderValsMethods = {
       ...this.bldVals(),
       ...this.bcVals(),
       ...this.cronVals(),
+      ...this.cronsPageVals(),
       ...this.dcVals(),
       ...this.oxVals(),
       ...this.drVals(),

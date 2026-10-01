@@ -19,6 +19,7 @@ import ConnectModal from './components/shell/ConnectModal.jsx';
 import PasswordModal from './components/shell/PasswordModal.jsx';
 import Buildings from './screens/Buildings.jsx';
 import Users from './screens/Users.jsx';
+import Crons from './screens/Crons.jsx';
 import AuditTrail from './screens/AuditTrail.jsx';
 import IngestionAgentModal from './components/shell/IngestionAgentModal.jsx';
 import SuperAdminOverlay from './components/shell/SuperAdminOverlay.jsx';
@@ -65,6 +66,7 @@ export default function App() {
       {vals.pwOpen ? <PasswordModal vals={vals} /> : null}
       {vals.isBuildings ? <Buildings vals={vals} /> : null}
       {vals.isUsers ? <Users vals={vals} /> : null}
+      {vals.isCrons ? <Crons vals={vals} /> : null}
       {vals.isAudit ? <AuditTrail vals={vals} /> : null}
       {vals.ingOn ? <IngestionAgentModal vals={vals} /> : null}
       {vals.saOn ? <SuperAdminOverlay vals={vals} /> : null}

@@ -174,6 +174,7 @@ export const authMethods = {
     // An invitation link opened in this tab takes precedence over any stored session:
     // it is for setting up the invited account, so the gate shows that form first.
     this.authInviteFromUrl();
+    if (typeof this.cpLinkFromUrl === 'function') this.cpLinkFromUrl();
     configureAuth({
       getToken: () => this.state.accessToken,
       refresh: () => this.authRefresh(),
@@ -436,6 +437,8 @@ export const authMethods = {
     // admin reads above refresh on every entry, not just the first one.
     if (this.state.saOn && typeof this.saLiveLoad === 'function') this.saLiveLoad();
     if (resp.message && !o.keepView) this.flash(resp.message);
+    // A Hoist Crons email's "see the report" link (?cron=<job>) opens that job once signed in.
+    if (typeof this.cpOpenLinked === 'function') this.cpOpenLinked();
     // Building scope (docs/api/building-scope-api.md) is not in resp.user at all — login
     // and refresh never carry it, only GET /me does — so both a fresh sign-in and a silent
     // reload refresh fetch it separately here. Fire-and-forget: a failure leaves whatever

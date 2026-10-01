@@ -108,6 +108,13 @@ export const integrationsMethods = {
         chip: s.view === "users" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "users", role: "admin", navOpen: true, detail: null }); }
       }, {
+        // Scheduled engine jobs and questions (logic/cronsPage.js). The badge is the company's
+        // job count once the list has been read, "…" before.
+        label: "Hoist Crons", icon: "ph-clock-clockwise", badge: s.cronLoadedAt || s.cronLoadErr ? String((s.cronJobs || []).length) : "…",
+        color: s.view === "crons" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "crons" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.cpOpen()
+      }, {
         label: "Audit trail", icon: "ph-scroll", badge: s.auLiveLoadedAt || s.auLiveError ? String(s.audit.length) : "…",
         color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",

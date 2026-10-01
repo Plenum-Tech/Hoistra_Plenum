@@ -314,7 +314,7 @@ afterEach(() => {
 // a nav item that merely opened the chat would be a second door onto the same room.
 test('Migration has no nav entry of its own — a run is reached through the conversation', () => {
   const admin = c.renderVals().navAdmin.map((a) => a.label);
-  assert.deepEqual(admin, ['Integrations', 'Users & access', 'Audit trail']);
+  assert.deepEqual(admin, ['Integrations', 'Users & access', 'Hoist Crons', 'Audit trail']);
   c.setState({ role: 'user' });
   assert.deepEqual(c.renderVals().navAdmin, []);
   assert.ok(!c.renderVals().navSections.some((n) => n.label === 'Migration'), 'the user nav is reports only');

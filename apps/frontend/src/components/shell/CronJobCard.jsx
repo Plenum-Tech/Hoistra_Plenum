@@ -5,6 +5,7 @@
 // the cadence, so the job runs whether or not anyone has the page open, and each run shows on
 // the Hoist Crons panel on Home.
 import React from 'react';
+import RecipientsField from './RecipientsField.jsx';
 
 const LABEL = { fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" };
 const INPUT = { boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" };
@@ -68,6 +69,8 @@ export default function CronJobCard({ vals }) {
           ) : null}
         </div>
       ) : null}
+
+      <div style={{ marginTop: "10px" }}><RecipientsField vals={vals} id="cron-card-recipients" /></div>
 
       <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--color-neutral-400)", marginTop: "10px", cursor: "pointer" }}>
         <input type="checkbox" checked={vals.cronRunNow} onChange={vals.cronToggleRunNow} />

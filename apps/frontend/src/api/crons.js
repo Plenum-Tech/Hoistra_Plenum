@@ -10,9 +10,12 @@ const withOrg = (q) => { const o = currentOrgId(); return o ? Object.assign({ or
 
 export const cronsApi = {
   catalogue: () => apiFetch(B, '/api/crons/catalogue'),
-  list: () => apiFetch(B, '/api/crons', { query: withOrg({ runs: 3 }) }),
+  // tz: the reader's zone, for the "runs today" tile.
+  list: (tz) => apiFetch(B, '/api/crons', { query: withOrg({ runs: 3, tz: tz || 'UTC' }) }),
+  // One job's run history, newest first (30 days are kept).
+  runs: (id, limit) => apiFetch(B, '/api/crons/' + encodeURIComponent(id) + '/runs', { query: withOrg({ limit: limit || 100 }) }),
   // Each job day by day in the reader's zone: runs, failures, the last result.
-  daily: (days, tz) => apiFetch(B, '/api/crons/daily', { query: withOrg({ days: days || 14, tz: tz || 'UTC' }) }),
+  daily: (days, tz, jobId) => apiFetch(B, '/api/crons/daily', { query: withOrg(Object.assign({ days: days || 14, tz: tz || 'UTC' }, jobId ? { job_id: jobId } : {})) }),
   // Who created, changed, paused, ran or removed a job, and when.
   events: (id) => apiFetch(B, '/api/crons/' + encodeURIComponent(id) + '/events', { query: withOrg({}) }),
   // body: {job_keys: [..], refresh, timezone, prompt?, run_now?, source_session_id?}

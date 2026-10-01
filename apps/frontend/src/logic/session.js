@@ -38,7 +38,7 @@ const KEY = SESSION_KEY;
 // failed this allow-list and fell back to view: 'home' below, same as landing on an
 // unrecognised value would. They take no companion id (same as 'home'/'cc'/'vp'), so
 // nothing else needs restoring alongside them.
-const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'audit', 'insp'];
+const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'crons', 'audit', 'insp'];
 
 const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isStr = (v) => typeof v === 'string';

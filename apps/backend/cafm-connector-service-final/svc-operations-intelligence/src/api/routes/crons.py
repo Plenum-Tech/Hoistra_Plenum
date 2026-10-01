@@ -4,6 +4,7 @@
     GET    /api/crons                    the company's jobs, each with its latest runs, and the recent runs
     GET    /api/crons/daily              each job's status day by day (runs, failures, last result)
     GET    /api/crons/{job_id}/events    who created, changed, paused, ran or removed the job, and when
+    GET    /api/crons/{job_id}/runs      the job's run history, newest first (30 days kept)
     POST   /api/crons                    schedule one or more jobs on one cadence
     PATCH  /api/crons/{job_id}           re-cadence, rename, pause / resume
     DELETE /api/crons/{job_id}           remove the job (its runs go with it from the panel)
@@ -57,6 +58,8 @@ class CronBody(BaseModel):
     timezone: str | None = None
     prompt: str | None = Field(None, max_length=4000, description="The question, for the 'question' job.")
     email: bool = Field(False, description="For the 'question' job: email each answer to you, from the platform's sender.")
+    recipients: list[str] = Field(default_factory=list, max_length=cron_svc.MAX_RECIPIENTS,
+                                  description="Other addresses each run's result is emailed to (any job).")
     run_now: bool = False
     source_session_id: str | None = Field(None, max_length=120)
     organization_id: UUID | None = None
@@ -67,6 +70,10 @@ class CronPatch(BaseModel):
     timezone: str | None = None
     enabled: bool | None = None
     name: str | None = Field(None, max_length=200)
+    prompt: str | None = Field(None, max_length=4000, description="A question job's question.")
+    email: bool | None = Field(None, description="A question job: email each answer to its creator.")
+    recipients: list[str] | None = Field(None, max_length=cron_svc.MAX_RECIPIENTS,
+                                         description="Replaces the job's extra recipients; [] clears them.")
 
 
 @router.get("/catalogue")
@@ -78,21 +85,32 @@ async def catalogue() -> dict[str, Any]:
 
 @router.get("")
 async def list_jobs(organization_id: UUID | None = None, runs: int = Query(3, ge=0, le=10),
+                    tz: str = Query("UTC", max_length=64),
                     session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
     org = _org(s, organization_id)
     jobs = await cron_svc.list_jobs(session, org, runs=runs)
     return {"jobs": jobs, "recent_runs": await cron_svc.recent_runs(session, org, limit=20),
-            "can_manage": s.is_admin}
+            "stats": await cron_svc.stats(session, org, tz=tz), "can_manage": s.is_admin}
 
 
 @router.get("/daily")
 async def daily(organization_id: UUID | None = None, days: int = Query(14, ge=1, le=cron_svc.RUN_HISTORY_DAYS),
-                tz: str = Query("UTC", max_length=64), session: AsyncSession = Depends(get_session),
-                s: access.Scope = Depends(scope)) -> dict[str, Any]:
+                tz: str = Query("UTC", max_length=64), job_id: UUID | None = None,
+                session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
     try:
-        return await cron_svc.daily_status(session, _org(s, organization_id), days=days, tz=tz)
+        return await cron_svc.daily_status(session, _org(s, organization_id), days=days, tz=tz, job_id=job_id)
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
+
+
+@router.get("/{job_id}/runs")
+async def runs(job_id: UUID, organization_id: UUID | None = None, limit: int = Query(100, ge=1, le=500),
+               session: AsyncSession = Depends(get_session), s: access.Scope = Depends(scope)) -> dict[str, Any]:
+    org = _org(s, organization_id)
+    job = await cron_svc.get_job(session, org, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "No such job.", "reason": "job_not_found"})
+    return {"job": job, "runs": await cron_svc.job_runs(session, org, job_id, limit=limit)}
 
 
 @router.get("/{job_id}/events")
@@ -116,7 +134,9 @@ async def create_jobs(body: CronBody, session: AsyncSession = Depends(get_sessio
         for k in keys:
             created.append(await cron_svc.create_job(
                 session, organization_id=org, owner_user_id=s.user_id, job_key=k, refresh=body.refresh,
-                tz=body.timezone, params={"prompt": body.prompt, "email": body.email} if k == "question" else None,
+                tz=body.timezone,
+                params={"prompt": body.prompt, "email": body.email, "recipients": body.recipients}
+                if k == "question" else {"recipients": body.recipients},
                 run_now=body.run_now, source_session_id=body.source_session_id))
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
@@ -129,7 +149,8 @@ async def update_job(job_id: UUID, body: CronPatch, organization_id: UUID | None
     _admin_only(s)
     try:
         job = await cron_svc.update_job(session, _org(s, organization_id), job_id, refresh=body.refresh,
-                                        tz=body.timezone, enabled=body.enabled, name=body.name, user_id=s.user_id)
+                                        tz=body.timezone, enabled=body.enabled, name=body.name, user_id=s.user_id,
+                                        prompt=body.prompt, email=body.email, recipients=body.recipients)
     except cron_svc.CronError as exc:
         raise _bad(exc) from None
     if job is None:

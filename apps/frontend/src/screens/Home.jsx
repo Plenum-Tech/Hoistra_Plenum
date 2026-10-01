@@ -104,6 +104,12 @@ export default function Home({ vals }) {
                       {"+ Schedule"}
                     </span>
                   ) : null}
+                  {vals.cronCanManage ? (
+                    <span className="hv15" onClick={vals.cronAllJobs} title="Every job, its runs and who did what — Administration › Hoist Crons"
+                      style={{ fontSize: "9.5px", color: "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap", textDecoration: "underline" }}>
+                      {"All jobs"}
+                    </span>
+                  ) : null}
                   <span title={vals.cronsTip} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
                     <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: vals.cronsDot }}></span>
                     <span>

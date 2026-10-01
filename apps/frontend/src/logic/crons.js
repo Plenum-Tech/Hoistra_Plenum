@@ -115,6 +115,36 @@ const zone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; }
 };
 
+// A job's extra recipients. The service holds the same limit and the same check.
+export const MAX_RECIPIENTS = 10;
+const EMAIL_RE = /^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$/;
+
+// Typed text → addresses: split on commas, semicolons and spaces, lower-cased. Returns
+// { add: [...], bad: [...] } so a typo stays in the box for fixing instead of vanishing.
+export function parseRecipients(text) {
+  const add = [], bad = [];
+  String(text || '').split(/[,;\s]+/).map((a) => a.trim().toLowerCase()).filter(Boolean).forEach((a) => {
+    if (!EMAIL_RE.test(a) || a.length > 254) bad.push(a);
+    else if (!add.includes(a)) add.push(a);
+  });
+  return { add, bad };
+}
+
+// Addresses written into a chat request: "… every Monday to fm@x.com and ops@y.com".
+export function recipientsFrom(q) {
+  return parseRecipients((String(q || '').match(/[^@\s,;<>()]+@[^@\s,;<>()]+\.[a-z]{2,}/gi) || []).join(' ')).add;
+}
+
+// The form's recipients with whatever is still typed in the box, or the reason it cannot be sent.
+export function recipientsOf(f) {
+  const { add, bad } = parseRecipients(f.recipientDraft);
+  if (bad.length) return { error: '“' + bad[0] + '” is not an email address.' };
+  const all = (f.recipients || []).slice();
+  add.forEach((a) => { if (!all.includes(a)) all.push(a); });
+  if (all.length > MAX_RECIPIENTS) return { error: 'A job can email at most ' + MAX_RECIPIENTS + ' addresses.' };
+  return { recipients: all };
+}
+
 export const cronMethods = {
   cronVals() { return cronVals(this); },
 
@@ -140,6 +170,7 @@ export const cronMethods = {
         prompt: asks ? promptFrom(q) : '',
         // "Send me …" / "email me …" asks for delivery, not only a record on the panel.
         email: asks && /\b(send|e-?mail|mail)\s+me\b/i.test(q),
+        recipients: recipientsFrom(q), recipientDraft: '',
         runNow: false
       }
     }));
@@ -151,7 +182,7 @@ export const cronMethods = {
   cronOpenBlank() {
     this.setState({
       cronOpen: true, cronMsg: '', cronBusy: false,
-      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], prompt: '', runNow: false }
+      cronForm: { jobs: [], freq: '1h', time: '07:00', days: [1], prompt: '', recipients: [], recipientDraft: '', runNow: false }
     });
     this.openChat();
     this.cronLoadCatalogue();
@@ -168,6 +199,42 @@ export const cronMethods = {
   cronSet(field, value) {
     this.setState((p) => ({ cronForm: Object.assign({}, p.cronForm || {}, { [field]: value }), cronMsg: '' }));
   },
+  // The recipients box: a comma, semicolon, space or Enter turns what is typed into an address;
+  // a typo stays in the box with the reason under it.
+  cronSetRecipientDraft(value) {
+    const v = String(value || '');
+    if (/[,;\s]$/.test(v)) return this.cronAddRecipients(v);
+    this.cronSet('recipientDraft', v);
+  },
+  cronAddRecipients(text) {
+    const { add, bad } = parseRecipients(text !== undefined ? text : (this.state.cronForm || {}).recipientDraft);
+    this.setState((p) => {
+      const f = Object.assign({}, p.cronForm || {});
+      const all = (f.recipients || []).slice();
+      add.forEach((a) => { if (!all.includes(a)) all.push(a); });
+      if (all.length > MAX_RECIPIENTS) {
+        return { cronMsg: 'A job can email at most ' + MAX_RECIPIENTS + ' addresses.' };
+      }
+      f.recipients = all;
+      f.recipientDraft = bad.join(' ');
+      return { cronForm: f, cronMsg: bad.length ? '“' + bad[0] + '” is not an email address.' : '' };
+    });
+  },
+  cronRemoveRecipient(addr) {
+    this.setState((p) => {
+      const f = Object.assign({}, p.cronForm || {});
+      f.recipients = (f.recipients || []).filter((a) => a !== addr);
+      return { cronForm: f, cronMsg: '' };
+    });
+  },
+  cronRecipientKey(e) {
+    const f = this.state.cronForm || {};
+    if (e.key === 'Enter') { e.preventDefault(); this.cronAddRecipients(); }
+    else if (e.key === 'Backspace' && !f.recipientDraft && (f.recipients || []).length) {
+      this.cronRemoveRecipient(f.recipients[f.recipients.length - 1]);
+    }
+  },
+
   cronToggleJob(key) {
     this.setState((p) => {
       const f = Object.assign({}, p.cronForm || {});
@@ -197,21 +264,32 @@ export const cronMethods = {
     }
     const r = refreshFor(f);
     if (r.error) return this.setState({ cronMsg: r.error });
+    const to = recipientsOf(f);
+    if (to.error) return this.setState({ cronMsg: to.error });
     this.setState({ cronBusy: true, cronMsg: '' });
     try {
       const out = await cronsApi.create({
         job_keys: f.jobs, refresh: r.refresh, timezone: zone(), prompt: f.prompt || undefined,
-        email: (f.jobs || []).includes('question') && !!f.email,
+        email: (f.jobs || []).includes('question') && !!f.email, recipients: to.recipients,
         run_now: !!f.runNow, source_session_id: this.state.sessionId || undefined
       });
       const made = (out && out.jobs) || [];
       const line = made.map((j) => j.label + ' — ' + j.refresh_label).join('; ');
+      // From the Hoist Crons page the dialog closes and the list shows the new jobs; the
+      // conversation is not where it was asked, so nothing is added to it.
+      if (this.state.cpModal === 'new') {
+        this.setState({ cronBusy: false, cpModal: null });
+        this.flash('Scheduled ' + made.length + (made.length === 1 ? ' job: ' : ' jobs: ') + line + '.');
+        this.cronLoad();
+        return;
+      }
       this.setState((p) => ({
         cronBusy: false, cronOpen: false,
         ccChat: (p.ccChat || []).concat([{ role: 'bot', isNote: true,
           text: 'Scheduled ' + made.length + (made.length === 1 ? ' job: ' : ' jobs: ') + line +
             '. ' + (f.runNow ? 'The first run starts now. ' : '') +
             ((f.jobs || []).includes('question') && f.email ? 'Each answer is emailed to you from admin@hoistra.ai. ' : '') +
+            (to.recipients.length ? 'Each result is also emailed to ' + to.recipients.join(', ') + '. ' : '') +
             'They are on the Hoist Crons panel on Home, with each run and what it found.' }])
       }));
       this.cronLoad();
@@ -226,11 +304,13 @@ export const cronMethods = {
     if (!this.state.signedIn || this._cronLoading) return;
     this._cronLoading = true;
     try {
-      const [d, daily] = await Promise.all([cronsApi.list(), cronsApi.daily(14, zone()).catch(() => null)]);
+      const [d, daily] = await Promise.all([cronsApi.list(zone()), cronsApi.daily(14, zone()).catch(() => null)]);
       const byJob = {};
       ((daily && daily.jobs) || []).forEach((j) => { byJob[j.job_id] = j.days || []; });
       this.setState({ cronJobs: (d && d.jobs) || [], cronRuns: (d && d.recent_runs) || [], cronDaily: byJob,
-        cronCanManage: !!(d && d.can_manage), cronLoadErr: '' });
+        cronStats: (d && d.stats) || null, cronCanManage: !!(d && d.can_manage), cronLoadErr: '', cronLoadedAt: Date.now() });
+      // The Hoist Crons page's open job follows the same read.
+      if (this.state.cpJobId && typeof this.cpLoadDetail === 'function') this.cpLoadDetail(this.state.cpJobId);
     } catch (e) {
       if (!isStaleScope(e)) this.setState({ cronLoadErr: (e && e.message) || String(e) });
     } finally {
@@ -315,6 +395,12 @@ export function cronVals(c) {
     cronEmail: !!f.email,
     cronToggleEmail: () => c.cronSet('email', !f.email),
     cronEmailTo: (s.account && s.account.email) || 'your address',
+    cronRecipients: (f.recipients || []).map((a) => ({ addr: a, remove: () => c.cronRemoveRecipient(a) })),
+    cronRecipientDraft: f.recipientDraft || '',
+    cronSetRecipientDraft: (e) => c.cronSetRecipientDraft(e.target.value),
+    cronRecipientKey: (e) => c.cronRecipientKey(e),
+    cronRecipientBlur: () => { if (f.recipientDraft) c.cronAddRecipients(); },
+    cronRecipientsFull: (f.recipients || []).length >= MAX_RECIPIENTS,
     cronRunNow: !!f.runNow,
     cronToggleRunNow: () => c.cronSet('runNow', !f.runNow),
     cronCreate: () => c.cronCreate(),
@@ -325,6 +411,7 @@ export function cronVals(c) {
     cronHas: jobs.length > 0,
     cronCanManage: !!s.cronCanManage,
     cronSchedule: () => c.cronOpenBlank(),
+    cronAllJobs: () => c.cpOpen(),
     cronRows: jobs.map((j) => {
       const last = (j.runs || [])[0];
       return {
@@ -355,11 +442,14 @@ export function cronVals(c) {
 // One line for a run's figures: {meters_scanned: 58, alerts_created: 3} → "58 meters scanned · 3 alerts created".
 export function summaryLine(summary) {
   if (!summary || typeof summary !== 'object') return '';
-  const mail = summary.emailed_to
-    ? (summary.email_status === 'failed' ? 'email to ' + summary.emailed_to + ' failed' : 'emailed to ' + summary.emailed_to)
-    : '';
+  const to = summary.emailed_to ? String(summary.emailed_to).split(/,\s*/) : [];
+  const who = to.length > 1 ? to.length + ' people' : to[0];
+  const mail = !to.length ? ''
+    : summary.email_status === 'failed' ? 'email to ' + who + ' failed'
+    : summary.email_status === 'partial' ? 'emailed ' + (to.length - String(summary.email_failed || '').split(/,\s*/).filter(Boolean).length) + ' of ' + to.length
+    : 'emailed to ' + who;
   const rest = Object.entries(summary)
-    .filter(([k, v]) => !['ok', 'tools', 'emailed_to', 'email_status', 'email_error'].includes(k) &&
+    .filter(([k, v]) => !['ok', 'tools', 'emailed_to', 'email_status', 'email_error', 'email_failed'].includes(k) &&
       (typeof v === 'number' || (typeof v === 'string' && v.length < 40)))
     .slice(0, 4)
     .map(([k, v]) => (typeof v === 'number' ? v.toLocaleString('en-GB') + ' ' : v + ' ') + k.replace(/_/g, ' '));

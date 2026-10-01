@@ -78,3 +78,62 @@ async def test_a_question_job_mails_its_answer_to_its_creator_and_a_failed_send_
     monkeypatch.setattr(approvals, "send_platform_email", boom)
     out = await cron._email_answer(None, job, uuid.uuid4(), uuid.uuid4(), "x")
     assert out["email_status"] == "failed" and "smtp down" in out["email_error"]
+
+
+@pytest.mark.asyncio
+async def test_a_job_mails_every_recipient_once_and_one_bad_address_is_a_partial_send(monkeypatch):
+    import uuid
+    from src.shared import approvals
+
+    sent = []
+
+    async def fake_email(session, user_id):
+        return "Owner@Example.com"
+
+    async def fake_send(session, **kw):
+        if kw["to_address"] == "down@example.com":
+            raise RuntimeError("mailbox unavailable")
+        sent.append(kw["to_address"])
+        return {"ok": True, "status": "sent"}
+    monkeypatch.setattr(cron, "_email", fake_email)
+    monkeypatch.setattr(approvals, "send_platform_email", fake_send)
+    job = {"id": str(uuid.uuid4()), "name": "Compliance expiry scan", "refresh_label": "Mon, Thu at 15:45",
+           "timezone": "Asia/Dubai", "params": {"recipients": ["owner@example.com", "fm@example.com"]}}
+    out = await cron._email_answer(None, job, uuid.uuid4(), uuid.uuid4(), "Alerts created: 25")
+    assert sent == ["owner@example.com", "fm@example.com"] and out["email_status"] == "sent"
+    # Recipients only: the creator did not tick "email me".
+    sent.clear()
+    job["params"]["recipients"] = ["fm@example.com", "down@example.com"]
+    out = await cron._email_answer(None, job, uuid.uuid4(), uuid.uuid4(), "x", to_owner=False)
+    assert sent == ["fm@example.com"]
+    assert out["email_status"] == "partial" and out["email_failed"] == "down@example.com"
+
+
+def test_recipients_are_cleaned_and_a_typo_is_refused():
+    assert cron.clean_recipients("A@x.com; b@y.org, a@x.com  c@z.io") == ["a@x.com", "b@y.org", "c@z.io"]
+    assert cron.clean_recipients(None) == []
+    with pytest.raises(cron.CronError) as e:
+        cron.clean_recipients(["ok@x.com", "not-an-address"])
+    assert e.value.reason == "bad_recipient"
+    with pytest.raises(cron.CronError) as e:
+        cron.clean_recipients([f"u{i}@x.com" for i in range(cron.MAX_RECIPIENTS + 1)])
+    assert e.value.reason == "too_many_recipients"
+    assert "Alerts created: 25" in cron.result_text({"alerts_created": 25, "ok": True, "email_status": "sent"})
+
+
+def test_the_run_email_is_a_report_with_a_link_to_the_jobs_page(monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(cron.settings, "public_app_url", "https://app.example.com/", raising=False)
+    url = cron.report_url("6f1c0d1e-0000-4000-8000-000000000001")
+    assert url == "https://app.example.com/?cron=6f1c0d1e-0000-4000-8000-000000000001"
+    job = {"id": "x", "name": "Compliance expiry scan", "refresh_label": "Mon, Thu at 15:45", "timezone": "Asia/Dubai"}
+    subject, text, html = cron.report_email(job, "Blocks set: 6\nAlerts created: 25", failed=False, took_ms=1200,
+                                            when=datetime(2026, 10, 1, 11, 45, tzinfo=timezone.utc),
+                                            week={"runs": 2, "failed": 0}, url=url)
+    assert subject == "Hoistra · Compliance expiry scan · 01 Oct 2026"
+    assert "ran 01 Oct 2026 15:45 (Asia/Dubai), took 1.2 s" in text and "Alerts created: 25" in text
+    assert "Last 7 days: 3 runs, 0 failed" in text and url in text
+    assert "See the full report" in html and url in html and "<td" in html
+    s2, t2, h2 = cron.report_email(job, "register <down>", failed=True, url="")
+    assert s2.startswith("Hoistra · Compliance expiry scan failed") and "What went wrong" in t2
+    assert "&lt;down&gt;" in h2 and "See the full report" not in h2

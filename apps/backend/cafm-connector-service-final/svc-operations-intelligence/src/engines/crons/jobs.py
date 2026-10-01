@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -94,6 +95,29 @@ class CronError(ValueError):
         self.reason = reason
 
 
+#: Addresses a job may mail its result to, besides its creator.
+MAX_RECIPIENTS = 10
+_EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+
+
+def clean_recipients(value: Any) -> list[str]:
+    """A job's extra recipients: a list, or one string split on commas, semicolons or spaces.
+    Lower-cased, de-duplicated, every one a plausible address - a typo is refused, never dropped."""
+    items = re.split(r"[,;\s]+", value) if isinstance(value, str) else list(value or [])
+    out: list[str] = []
+    for a in items:
+        a = str(a or "").strip().lower()
+        if not a:
+            continue
+        if len(a) > 254 or not _EMAIL_RE.match(a):
+            raise CronError("bad_recipient", f"{a!r} is not an email address.")
+        if a not in out:
+            out.append(a)
+    if len(out) > MAX_RECIPIENTS:
+        raise CronError("too_many_recipients", f"A job can email at most {MAX_RECIPIENTS} addresses.")
+    return out
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -167,7 +191,35 @@ async def job_events(session: AsyncSession, organization_id: UUID, job_id: UUID,
              "at": _iso(r["at"])} for r in rows]
 
 
-async def daily_status(session: AsyncSession, organization_id: UUID, *, days: int = 14, tz: str = "UTC") -> dict:
+async def job_runs(session: AsyncSession, organization_id: UUID, job_id: UUID, *, limit: int = 100) -> list[dict]:
+    """One job's runs, newest first - the detail page's history."""
+    n = max(1, min(int(limit), 500))
+    rows = (await session.execute(text("""
+        SELECT * FROM plenum_cafm.hoist_cron_runs WHERE job_id = :j AND organization_id = :o
+         ORDER BY finished_at DESC LIMIT :n"""), {"j": job_id, "o": organization_id, "n": n})).mappings().all()
+    return [_run_row(dict(r)) for r in rows]
+
+
+async def stats(session: AsyncSession, organization_id: UUID, *, tz: str = "UTC") -> dict:
+    """The page's tiles: runs today (in the reader's zone), failures among them, emails this week."""
+    try:
+        zone = card_engine.parse_timezone(tz)
+    except card_engine.RefreshError:
+        zone = "UTC"
+    r = (await session.execute(text("""
+        SELECT count(*) FILTER (WHERE (r.finished_at AT TIME ZONE :tz)::date = (now() AT TIME ZONE :tz)::date) AS runs_today,
+               count(*) FILTER (WHERE (r.finished_at AT TIME ZONE :tz)::date = (now() AT TIME ZONE :tz)::date AND NOT r.ok) AS failed_today,
+               count(*) FILTER (WHERE r.finished_at >= now() - interval '7 days' AND r.summary ? 'emailed_to'
+                                  AND coalesce(r.summary->>'email_status', '') <> 'failed') AS emails_week
+          FROM plenum_cafm.hoist_cron_runs r
+          JOIN plenum_cafm.hoist_cron_jobs j ON j.id = r.job_id AND j.removed_at IS NULL
+         WHERE r.organization_id = :o"""), {"o": organization_id, "tz": zone})).mappings().first()
+    return {"runs_today": int(r["runs_today"] or 0), "failed_today": int(r["failed_today"] or 0),
+            "emails_week": int(r["emails_week"] or 0), "timezone": zone}
+
+
+async def daily_status(session: AsyncSession, organization_id: UUID, *, days: int = 14, tz: str = "UTC",
+                       job_id: UUID | None = None) -> dict:
     """Each job's runs rolled up by day in ``tz``: how many ran, how many failed, the last result.
 
     A day with no run is listed too (runs 0) - for a job that should have run, an empty day is
@@ -204,6 +256,8 @@ async def daily_status(session: AsyncSession, organization_id: UUID, *, days: in
             "status": status, "last_summary": summary, "last_error": r["last_error"], "last_at": _iso(r["last_at"])}
     out = []
     for j in await list_jobs(session, organization_id, runs=0):
+        if job_id is not None and j["id"] != str(job_id):
+            continue
         per_day = by_job.get(j["id"], {})
         out.append({"job_id": j["id"], "name": j["name"], "refresh_label": j["refresh_label"],
                     "enabled": j["enabled"], "created_by": j["created_by"],
@@ -286,15 +340,17 @@ async def create_job(session: AsyncSession, *, organization_id: UUID, owner_user
     except card_engine.RefreshError as exc:
         raise CronError(exc.reason, str(exc)) from None
     params = dict(params or {})
+    # recipients: other people each run's result is mailed to, on any job.
+    recipients = clean_recipients(params.get("recipients"))
     if spec.get("needs_prompt"):
         prompt = str(params.get("prompt") or "").strip()
         if not prompt:
             raise CronError("no_prompt", "A question job needs the question to ask.")
         # email: send each answer to the job's creator ("send me a compliance summary every
         # Monday") over the platform's own mail transport, from its own sender address.
-        params = {"prompt": prompt[:4000], "email": bool(params.get("email"))}
+        params = {"prompt": prompt[:4000], "email": bool(params.get("email")), "recipients": recipients}
     else:
-        params = {}
+        params = {"recipients": recipients}
     n = (await session.execute(text("""SELECT count(*) FROM plenum_cafm.hoist_cron_jobs
                                          WHERE organization_id = :o AND removed_at IS NULL"""),
                                {"o": organization_id})).scalar_one()
@@ -334,10 +390,32 @@ async def get_job(session: AsyncSession, organization_id: UUID, job_id: UUID) ->
 
 async def update_job(session: AsyncSession, organization_id: UUID, job_id: UUID, *, refresh: Any = None,
                      tz: str | None = None, enabled: bool | None = None, name: str | None = None,
-                     user_id: UUID | None = None) -> dict[str, Any] | None:
+                     user_id: UUID | None = None, prompt: str | None = None,
+                     email: bool | None = None, recipients: Any = None) -> dict[str, Any] | None:
     job = await get_job(session, organization_id, job_id)
     if job is None:
         return None
+    # A question job's question and its email setting are editable too; an engine job has neither.
+    # Any job's recipients are.
+    params = dict(job["params"] or {})
+    if recipients is not None:
+        recipients = clean_recipients(recipients)
+        params["recipients"] = recipients
+    if prompt is not None or email is not None:
+        if not CATALOGUE.get(job["job_key"], {}).get("needs_prompt"):
+            raise CronError("not_a_question", "Only a question job has a question or an email setting.")
+        if prompt is not None:
+            p = prompt.strip()
+            if not p:
+                raise CronError("no_prompt", "A question job needs the question to ask.")
+            params["prompt"] = p[:4000]
+            if name is None and str(job["name"] or "").startswith("Ask: "):
+                name = "Ask: " + p[:80]          # the default name follows the question
+        if email is not None:
+            params["email"] = bool(email)
+    if recipients is not None or prompt is not None or email is not None:
+        await session.execute(text("UPDATE plenum_cafm.hoist_cron_jobs SET params = CAST(:p AS jsonb) WHERE id = :i"),
+                              {"p": json.dumps(params), "i": job_id})
     ref, zone = job["refresh"], job["timezone"]
     try:
         if refresh is not None:
@@ -365,7 +443,9 @@ async def update_job(session: AsyncSession, organization_id: UUID, job_id: UUID,
               else "resumed" if enabled is True and not job["enabled"] else "changed")
     await record_event(session, job_id=job_id, organization_id=organization_id, action=action, user_id=user_id,
                        details={k: v for k, v in {"refresh": ref if refresh is not None else None, "timezone": tz,
-                                                  "enabled": enabled, "name": name}.items() if v is not None})
+                                                  "enabled": enabled, "name": name, "prompt": prompt,
+                                                  "email": email, "recipients": recipients}.items()
+                                 if v is not None})
     await session.commit()
     return await get_job(session, organization_id, job_id)
 
@@ -454,27 +534,126 @@ async def _call(job: dict[str, Any], token: str, organization_id: Any = None, *,
         return {}, None
 
 
+def result_text(summary: dict[str, Any]) -> str:
+    """An engine job's figures as lines a person reads: ``alerts_created: 25`` → ``Alerts created: 25``."""
+    lines = [f"{str(k).replace('_', ' ').capitalize()}: {v}" for k, v in (summary or {}).items()
+             if k not in ("ok", "tools") and not str(k).startswith("email")]
+    return "\n".join(lines) or "The job ran and reported no figures."
+
+
+def report_url(job_id: Any) -> str:
+    """Where the job's own page is: Administration › Hoist Crons › the job, after sign-in."""
+    base = (getattr(settings, "public_app_url", None) or getattr(settings, "frontend_public_url", None) or "").rstrip("/")
+    return f"{base}/?cron={job_id}" if base else ""
+
+
+async def _week(session: AsyncSession | None, job_id: Any) -> dict[str, int] | None:
+    """The job's last 7 days before this run: runs and failures."""
+    if session is None:
+        return None
+    try:
+        r = (await session.execute(text("""
+            SELECT count(*) AS runs, count(*) FILTER (WHERE NOT ok) AS failed FROM plenum_cafm.hoist_cron_runs
+             WHERE job_id = :j AND finished_at >= now() - interval '7 days'"""), {"j": UUID(str(job_id))})).mappings().first()
+        return {"runs": int(r["runs"] or 0), "failed": int(r["failed"] or 0)} if r else None
+    except Exception:  # noqa: BLE001 - the email goes without the line
+        return None
+
+
+def _esc(s: Any) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def report_email(job: dict[str, Any], result: str, *, failed: bool, when: datetime | None = None,
+                 took_ms: int | None = None, week: dict[str, int] | None = None,
+                 url: str = "") -> tuple[str, str, str]:
+    """Subject, plain text and HTML for one run's report: what ran, what it found, how the
+    last week went, and the link to the job's page with every run."""
+    when = when or datetime.now(timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        local = when.astimezone(ZoneInfo(job.get("timezone") or "UTC"))
+    except Exception:  # noqa: BLE001
+        local = when
+    stamp = local.strftime("%d %b %Y %H:%M")
+    subject = f"Hoistra · {job['name']}{' failed' if failed else ''} · {local.strftime('%d %b %Y')}"
+    took = f", took {took_ms / 1000:.1f} s" if took_ms is not None else ""
+    head = f"{job['name']} — {'FAILED' if failed else 'ran'} {stamp} ({job.get('timezone') or 'UTC'}){took}"
+    if week is not None:
+        n, f = week["runs"] + 1, week["failed"] + (1 if failed else 0)
+        week_line = f"Last 7 days: {n} run{'s' if n != 1 else ''}, {f} failed"
+    else:
+        week_line = ""
+    sched = f"Scheduled on Hoist Crons: {job.get('refresh_label') or ''} ({job.get('timezone') or 'UTC'})."
+    text_body = "\n".join(x for x in [
+        head, "", "What it found:" if not failed else "What went wrong:", result.strip(), "",
+        week_line, "", (f"See the full report and every run: {url}" if url else ""), "—", sched,
+        "Pause, change or remove it under Administration › Hoist Crons.",
+    ] if x is not None).replace("\n\n\n", "\n\n")
+    tone = "#c0392b" if failed else "#1f7a4d"
+    rows = "".join(
+        f"<tr><td style='padding:6px 12px 6px 0;color:#6b6b66'>{_esc(k)}</td>"
+        f"<td style='padding:6px 0;font-weight:600'>{_esc(v)}</td></tr>"
+        for k, v in (line.split(": ", 1) for line in result.strip().splitlines() if ": " in line))
+    found = (f"<table style='border-collapse:collapse;font-size:14px'>{rows}</table>" if rows and not failed
+             else f"<div style='white-space:pre-wrap;font-size:14px;line-height:1.55'>{_esc(result.strip())}</div>")
+    button = (f"<p style='margin:22px 0'><a href='{_esc(url)}' style='background:#f05a28;color:#fff;padding:10px 18px;"
+              f"border-radius:7px;text-decoration:none;font-weight:600'>See the full report</a></p>" if url else "")
+    html = (
+        "<div style='font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1a1a18;max-width:620px'>"
+        f"<div style='font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#f05a28'>Hoist Crons · run report</div>"
+        f"<h2 style='margin:6px 0 4px;font-size:20px'>{_esc(job['name'])}</h2>"
+        f"<div style='font-size:13px;color:#6b6b66'><span style='color:{tone};font-weight:600'>"
+        f"{'Failed' if failed else 'Ran'}</span> {_esc(stamp)} ({_esc(job.get('timezone') or 'UTC')}){_esc(took)}</div>"
+        f"<h3 style='font-size:13px;margin:18px 0 8px;color:#6b6b66;text-transform:uppercase;letter-spacing:.08em'>"
+        f"{'What went wrong' if failed else 'What it found'}</h3>{found}"
+        + (f"<p style='font-size:13px;color:#6b6b66;margin:16px 0 0'>{_esc(week_line)}</p>" if week_line else "")
+        + button
+        + f"<hr style='border:none;border-top:1px solid #e6e4df;margin:20px 0 10px'>"
+        f"<div style='font-size:12px;color:#8a8a84'>{_esc(sched)} Pause, change or remove it under "
+        "Administration › Hoist Crons. Sent from admin@hoistra.ai.</div></div>")
+    return subject, text_body, html
+
+
 async def _email_answer(session: AsyncSession, job: dict[str, Any], organization_id: UUID, owner_id: UUID,
-                        answer: str) -> dict[str, Any]:
-    """Mail a question job's answer to its creator. Never fails the run: a send that does not
-    go is written on the run's summary, and the answer is on the panel either way."""
+                        answer: str, *, to_owner: bool = True, failed: bool = False,
+                        took_ms: int | None = None) -> dict[str, Any]:
+    """Mail a run's report - a question's answer, an engine job's figures, or why it failed,
+    with a link to the job's page - to the creator (when they asked) and to every one of the
+    job's recipients. Never fails the run: a send that does not go is written on the run's
+    summary, and the result is on the panel either way."""
     from ...shared.approvals import send_platform_email
 
-    to = await _email(session, owner_id)
+    to: list[str] = []
+    if to_owner:
+        own = await _email(session, owner_id)
+        if own:
+            to.append(own.lower())
+    for a in (job.get("params") or {}).get("recipients") or []:
+        if a not in to:
+            to.append(a)
     if not to:
         return {"email_status": "no_address"}
-    day = datetime.now(timezone.utc).strftime("%d %b %Y")
-    subject = f"Hoistra · {job['name']} · {day}"
-    body = (answer.strip() + "\n\n—\n"
-            f"Scheduled on Hoist Crons: {job['name']}, {job['refresh_label']} ({job['timezone']}).\n"
-            "Pause or remove it from the Hoist Crons panel on Home.")
-    try:
-        res = await send_platform_email(session, to_address=to, subject=subject[:200], body=body,
-                                        organization_id=organization_id, commit=True)
-        return {"emailed_to": to, "email_status": str(res.get("status") or ("sent" if res.get("ok") else "failed"))}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("hoist_cron.email_failed", job_id=job["id"], error=str(exc)[:200])
-        return {"emailed_to": to, "email_status": "failed", "email_error": str(exc)[:200]}
+    subject, body, html = report_email(job, answer, failed=failed, took_ms=took_ms,
+                                       week=await _week(session, job["id"]), url=report_url(job["id"]))
+    sent, bad, errors = [], [], []
+    for addr in to:
+        try:
+            res = await send_platform_email(session, to_address=addr, subject=subject[:200], body=body,
+                                            html_body=html, organization_id=organization_id, commit=True)
+            st = str(res.get("status") or ("sent" if res.get("ok") else "failed"))
+            (bad if st == "failed" else sent).append(addr)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("hoist_cron.email_failed", job_id=job["id"], to=addr, error=str(exc)[:200])
+            bad.append(addr)
+            errors.append(str(exc)[:200])
+    out: dict[str, Any] = {"emailed_to": ", ".join(to),
+                           "email_status": "sent" if not bad else ("failed" if not sent else "partial")}
+    if bad:
+        out["email_failed"] = ", ".join(bad)
+    if errors:
+        out["email_error"] = errors[0]
+    return out
 
 
 async def run_job(session: AsyncSession, job_id: UUID, *, trigger: str = "schedule", claimed: bool = False,
@@ -512,8 +691,16 @@ async def run_job(session: AsyncSession, job_id: UUID, *, trigger: str = "schedu
         error = f"The job's creator can no longer be acted for ({exc}); the job is paused."
     except Exception as exc:  # noqa: BLE001 - every failure is a run row, never a lost run
         error = str(exc)[:1000]
-    if error is None and answer and job["params"].get("email"):
-        summary = {**summary, **(await _email_answer(session, job, org, r["owner_user_id"], answer))}
+    to_owner = bool(job["params"].get("email"))
+    if to_owner or job["params"].get("recipients"):
+        took = int((_now() - t0).total_seconds() * 1000)
+        if error is not None:
+            mail = await _email_answer(session, job, org, r["owner_user_id"], error,
+                                       to_owner=to_owner, failed=True, took_ms=took)
+        else:
+            mail = await _email_answer(session, job, org, r["owner_user_id"], answer or result_text(summary),
+                                       to_owner=to_owner, took_ms=took)
+        summary = {**summary, **mail}
     finished = _now()
     run_id = uuid4()
     enabled = bool(r["enabled"]) and "paused" not in (error or "")
