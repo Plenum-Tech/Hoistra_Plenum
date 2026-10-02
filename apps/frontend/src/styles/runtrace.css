@@ -325,3 +325,21 @@
   .rt.is-idle { display: none; }
 }
 
+
+
+/* Teach from the rail (logic/corrections.js): a Correct button on a call, the queries beneath
+   a tool as rows of their own. */
+.rt-fix { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 1px 7px; border-radius: 6px;
+  border: 1px solid transparent; background: transparent; color: var(--color-neutral-500); cursor: pointer; white-space: nowrap; }
+.rt-row:hover .rt-fix, .rt-fix:focus-visible { border-color: var(--color-divider); color: var(--color-accent); }
+.rt-queries { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.rt-query { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; font-size: 10.5px; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid transparent; background: transparent; color: var(--color-neutral-400); cursor: pointer; }
+.rt-query:hover, .rt-query:focus-visible { border-color: var(--color-divider); background: var(--color-bg); color: var(--color-text); }
+.rt-query.is-bad { color: var(--st-risk); }
+.rt-query-name { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-query-meta { color: var(--color-neutral-500); white-space: nowrap; }
+.rt-query-go { margin-left: auto; color: var(--color-accent); opacity: 0; white-space: nowrap; }
+.rt-query:hover .rt-query-go, .rt-query:focus-visible .rt-query-go { opacity: 1; }
+
+.rt-row.is-bad .rt-label, .rt-row.is-bad .rt-mark { color: var(--st-risk); }

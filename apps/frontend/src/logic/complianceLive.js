@@ -1360,9 +1360,12 @@ export const complianceLiveMethods = {
           // The run's sequence of thoughts, kept per turn so the trace rail can show an
           // older answer's route. Empty on the POST path, which reports no events.
           trace: (r && r._trace) || [],
+          // The run in the trace store, so the rail can load its queries and offer corrections.
+          turnId: (r && r.turn_id) || null,
           ms: Date.now() - t0
         }])
       }));
+      if (r && r.turn_id && typeof this.crLoadRun === 'function') setTimeout(() => this.crLoadRun(r.turn_id), 800);
       // A run this turn started opens under the answer, at whichever gate it stopped on.
       // Opened after the turn lands so the card is below the reply, not above. The first of
       // several, and never switching away from one the card already shows: the discovery poll

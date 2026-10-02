@@ -1027,10 +1027,15 @@ def workflow_stream_completion_payload(
         s = str(sid).strip()
         if s and s not in schema_ids:
             schema_ids.append(s)
+    # The turn's id in the trace store (agents/trace.py), so the chat's rail can load the run -
+    # its spans, queries and rows - and offer corrections against it.
+    from . import activity_log as _activity
+
     return {
         "type": "workflow_completed",
         "answer": answer,
         "session_id": session_id,
+        "turn_id": _activity.current_turn(),
         "tool_calls": tcs,
         "workspace_status": ws,
         "ingested_schema_mapping_ids": schema_ids,

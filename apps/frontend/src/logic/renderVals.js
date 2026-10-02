@@ -13,6 +13,7 @@ import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { memoriesPageVals } from './memoriesPage.js';
 import { tracesPageVals } from './tracesPage.js';
+import { correctionVals } from './corrections.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { openDocument } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
@@ -1817,6 +1818,7 @@ export const renderValsMethods = {
       ...this.cronsPageVals(),
       ...memoriesPageVals(this),
       ...tracesPageVals(this),
+      ...correctionVals(this),
       ...this.dmVals(),
       ...this.dcVals(),
       ...this.oxVals(),
@@ -1968,7 +1970,15 @@ export const renderValsMethods = {
         // Send this turn's run to the rail. Offered only where there is one to send.
         traceShow: (m.trace || []).length && !s.ccBusy ? "inline-flex" : "none",
         traceSelected: s.ccTraceIdx === i,
-        selectTrace: () => this.setState({ ccTraceIdx: i })
+        selectTrace: () => { this.setState({ ccTraceIdx: i }); if (m.turnId && typeof this.crLoadRun === "function") this.crLoadRun(m.turnId); },
+        // Teach from this answer (logic/corrections.js): a rating, and a suggestion that opens
+        // the drawer. Only once the turn is on record, which the completion's turn_id says.
+        turnId: m.turnId || null,
+        teachShow: m.role !== "you" && m.turnId && !s.ccBusy ? "flex" : "none",
+        rating: (s.crRatings || {})[m.turnId] || null,
+        rateUp: () => this.crRate(m.turnId, "up"),
+        rateDown: () => this.crRate(m.turnId, "down"),
+        suggest: () => { this.setState({ ccTraceIdx: i }); this.crLoadRun(m.turnId); this.crOpen(m.turnId, null, "suggestion"); }
       })),
       ccEditText: s.ccEditText,
       ccEditSet: (e) => this.ccEditSet(e.target.value),
@@ -2044,6 +2054,9 @@ export const renderValsMethods = {
             };
           });
 
+        // Once a turn is on record, its queries hang under the tool rows and each row can be
+        // corrected (logic/corrections.js). Unchanged while the turn runs or when unknown.
+        const railRows = busy ? rows : this.crAugmentRows(rows, picked >= 0 ? chat[picked] : null);
         const elapsed = busy
           ? (s.ccTick ? s.ccTick + " s" : "")
           : (picked >= 0 && typeof chat[picked].ms === "number" ? secs(chat[picked].ms) : "");
@@ -2054,7 +2067,7 @@ export const renderValsMethods = {
 
         return {
           orchTraceShow: chatView && (busy || rows.length > 0),
-          orchTraceRows: rows,
+          orchTraceRows: railRows,
           orchTraceLive: busy,
           orchTraceLiveLabel: (s.ccStream && s.ccStream.reasoning) || "Reading the graph…",
           orchTraceElapsed: elapsed,

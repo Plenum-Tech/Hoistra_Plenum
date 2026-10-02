@@ -77,6 +77,8 @@ export const deepAgentsApi = {
   traceStats: (q) => apiFetch(B, '/api/traces/stats', { query: Object.assign({}, q || {}, orgOverride()), timeoutMs: 15000 }),
   traceFeedback: (id, rating, comment) => apiFetch(B, '/api/traces/turns/' + encodeURIComponent(id) + '/feedback',
     { method: 'POST', body: { rating: rating || null, comment: comment || null }, query: orgOverride(), timeoutMs: 8000 }),
+  // A teaching from the chat's correction drawer: remembered as a company correction.
+  addMemory: (body) => apiFetch(B, '/api/memories', { method: 'POST', body: body, query: orgOverride(), timeoutMs: 12000 }),
   traceExport: async (q) => {
     const params = new URLSearchParams(Object.assign({}, q || {}, orgOverride()));
     const res = await fetch(B + '/api/traces/export?' + params.toString(), { headers: { Authorization: 'Bearer ' + (accessToken() || '') } });

@@ -69,7 +69,7 @@ export default function RunTrace({ vals }) {
           <div className="rt-scroll" ref={scrollRef}>
             <ol className={live ? 'rt-list is-live' : 'rt-list'} ref={listRef} style={{ '--rt-travelled': travelled + 'px' }}>
               {rows.map((r) => (
-                <li key={r.key} className={r.mono ? 'rt-row is-tool' : 'rt-row'}>
+                <li key={r.key} className={(r.mono ? 'rt-row is-tool' : 'rt-row') + (r.ok === false ? ' is-bad' : '')} style={r.depth ? { marginLeft: (r.depth * 14) + 'px' } : undefined}>
                   <span className="rt-mark" aria-hidden="true">
                     <i className={`ph ${r.icon}`}></i>
                   </span>
@@ -77,7 +77,21 @@ export default function RunTrace({ vals }) {
                     <div className="rt-line">
                       <span className="rt-label">{r.title}</span>
                       {r.meta ? <span className="rt-meta">{r.meta}</span> : null}
+                      {r.correct ? <button type="button" className="rt-fix" onClick={r.correct} title="Correct this call"><i className="ph ph-pencil-simple"></i>{'Correct'}</button> : null}
+                      {r.editPlan ? <button type="button" className="rt-fix" onClick={r.editPlan} title="Edit the plan"><i className="ph ph-pencil-simple"></i>{'Edit plan'}</button> : null}
                     </div>
+                    {(r.children || []).length ? (
+                      <div className="rt-queries">
+                        {r.children.map((q) => (
+                          <button key={q.key} type="button" className={q.ok ? 'rt-query' : 'rt-query is-bad'} onClick={q.pick} title="Correct this query">
+                            <i className="ph ph-database"></i>
+                            <span className="rt-query-name">{q.name}</span>
+                            {q.meta ? <span className="rt-query-meta">{q.meta}</span> : null}
+                            <span className="rt-query-go">{'Correct ›'}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {r.detail ? <div className="rt-detail">{r.detail}</div> : null}
                     {r.parts.length ? (
                       <div className="rt-parts">

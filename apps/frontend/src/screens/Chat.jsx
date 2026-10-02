@@ -16,6 +16,7 @@ import React, { useRef } from 'react';
 import Markdown from '../components/shell/Markdown.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
+import CorrectionDrawer from '../components/shell/CorrectionDrawer.jsx';
 // CAFM Web's migration panel, vendored under src/cafm — the same screens, in Hoistra's colours.
 import HoistraMigrationWizard from '../cafm/hoistra-migration-wizard.tsx';
 import HoistBuildingCard from '../components/shell/HoistBuildingCard.jsx';
@@ -145,6 +146,14 @@ export default function Chat({ vals }) {
                               </div>
                             : <Markdown text={m.text} />}
                         <div style={{ display: m.interruptShow, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
+                        {/* Teach from this answer: was it right, and if not, what should change
+                            (logic/corrections.js). Shown once the turn is on record. */}
+                        <div style={{ display: m.teachShow, alignItems: "center", gap: "8px", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid var(--color-divider)", flexWrap: "wrap" }}>
+                          <span style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{"Was this right?"}</span>
+                          <button type="button" aria-label="Rate up" onClick={m.rateUp} style={{ ...BARE, fontSize: "12px", padding: "3px 8px", borderRadius: "6px", border: "1px solid " + (m.rating === "up" ? "var(--st-ok)" : "var(--color-divider)"), color: m.rating === "up" ? "var(--st-ok)" : "var(--color-neutral-400)", cursor: "pointer" }}><i className="ph ph-thumbs-up"></i></button>
+                          <button type="button" aria-label="Rate down" onClick={m.rateDown} style={{ ...BARE, fontSize: "12px", padding: "3px 8px", borderRadius: "6px", border: "1px solid " + (m.rating === "down" ? "var(--st-risk)" : "var(--color-divider)"), color: m.rating === "down" ? "var(--st-risk)" : "var(--color-neutral-400)", cursor: "pointer" }}><i className="ph ph-thumbs-down"></i></button>
+                          <button type="button" onClick={m.suggest} style={{ ...BARE, fontSize: "11.5px", padding: "3px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "5px" }}><i className="ph ph-chalkboard-teacher"></i>{"Suggest a correction"}</button>
+                        </div>
                         <div style={{ display: m.migShow, gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
                           {(m.migIds || []).map((g) => (
                             <button key={g.id} type="button" className="hv13" onClick={g.open} title={g.id} style={{ ...BARE, fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
@@ -399,6 +408,7 @@ export default function Chat({ vals }) {
 
         {/* ── right: the sequence of thoughts ────────────────────────────── */}
         <RunTrace vals={vals} />
+        <CorrectionDrawer vals={vals} />
       </div>
     </div>
   );

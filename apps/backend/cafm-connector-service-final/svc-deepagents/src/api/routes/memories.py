@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from ...http_client import caller_organization_id
 from ...services import chat_memories
@@ -45,3 +46,25 @@ async def forget_memory(memory_id: str, organization_id: str | None = Query(None
     if not await chat_memories.forget(memory_id):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Memory not found, or not yours to remove."})
     return {"ok": True}
+
+
+class Teaching(BaseModel):
+    """A correction a reader makes from a trace: what to remember, about what, and why."""
+    kind: str = Field("correction", pattern="^(fact|correction|preference)$")
+    text: str = Field(..., min_length=8, max_length=600)
+    subject: str | None = Field(None, max_length=80)
+    source_thread: str | None = Field(None, max_length=120)
+
+
+@router.post("")
+async def add_memory(body: Teaching, organization_id: str | None = Query(None),
+                     principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """Remember something the reader states - from the chat's correction drawer. A correction
+    or fact is the company's; a preference the person's (the same rule as learned memories)."""
+    _act(principal, organization_id)
+    if chat_memories.looks_personal(body.text):
+        raise HTTPException(status_code=422, detail={"ok": False, "error": "That looks like a personal identifier; it is not kept."})
+    org = str(organization_id) if organization_id else (str(principal.organization_id) if principal.organization_id else None)
+    n = await chat_memories.store([{"kind": body.kind, "text": " ".join(body.text.split()), "subject": body.subject}],
+                                  principal=principal, org=org, source_thread=body.source_thread)
+    return {"ok": True, "stored": n, "refreshed": n == 0}
