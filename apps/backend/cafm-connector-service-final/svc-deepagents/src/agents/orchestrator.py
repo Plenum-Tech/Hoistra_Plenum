@@ -123,6 +123,8 @@ from .udr_hybrid_tools import (
     answer_with_graph_context,
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
+from ..services import chat_memories, chat_threads
+from . import thread_scope, trace
 from .session_workspace import (
     ROUTE_UDR_INGEST,
     ROUTE_UDR_MAP,
@@ -879,9 +881,10 @@ class DeepAgentOrchestrator:
         session_id: str,
         user_message: str,
         extra_context: str | None,
+        conversation: str | None = None,
     ) -> str:
         """Prefix workspace + recent chat so every turn retains solution context."""
-        runtime = build_session_runtime_context(session_id)
+        runtime = build_session_runtime_context(session_id, conversation)
         parts: list[str] = []
         if extra_context and extra_context.strip():
             parts.append(extra_context.strip())
@@ -909,8 +912,25 @@ class DeepAgentOrchestrator:
         user_message: str,
         extra_context: str | None,
     ) -> dict[str, Any]:
-        wrapped = self._wrap_stateful_user_message(session_id, user_message, extra_context)
+        # The thread as the server keeps it - summary plus recent turns - so a reopened
+        # conversation continues after a restart or on another replica. None = store unavailable.
+        conversation = await chat_threads.conversation_context(session_id)
+        wrapped = self._wrap_stateful_user_message(session_id, user_message, extra_context, conversation)
+        # A follow-up ("out of those...") carries the thread's working set as a hard filter: told to
+        # the model, and set for the tools so one called without a building or period fills them
+        # from it instead of reading the whole estate (agents/thread_scope.py).
+        ws = await chat_threads.working_set(session_id) if thread_scope.is_followup(user_message) else None
+        thread_scope.active_scope.set(ws or None)
+        scope_text = thread_scope.scope_block(ws) if ws else ""
+        # What earlier conversations taught us that bears on this question (services/chat_memories.py).
+        memories_text = chat_memories.format_recall(await chat_memories.recall(user_message))
+        for block in [b for b in (scope_text, memories_text) if b]:
+            wrapped = wrapped.replace("\n\n---\n\n**Current user message:**", "\n\n" + block + "\n\n---\n\n**Current user message:**", 1) \
+                if "**Current user message:**" in wrapped else block + "\n\n---\n\n**Current user message:**\n" + wrapped
         system_prompt = build_system_prompt(extra_context)
+        # The trace keeps what shaped this turn's first model call (agents/trace.py).
+        trace.on_prompt(system_prompt=system_prompt, user_message=user_message, conversation=conversation, working_set=ws,
+                        memories=memories_text, extra_context=extra_context, scope_block=scope_text)
         if await self._thread_has_prior_messages(session_id):
             return {"messages": [HumanMessage(content=wrapped)]}
         return {
@@ -980,6 +1000,11 @@ class DeepAgentOrchestrator:
         so the WebSocket path can paint the answer while the model is still writing it. The
         REST path leaves it unset and behaves exactly as before.
         """
+        # "What do you remember about us?" / "forget ...": answered from the memory store, no model.
+        memory_out = await chat_memories.shortcut(user_message, session_id)
+        if memory_out is not None:
+            return memory_out
+
         creds_out = await self._maybe_apply_fiix_credentials_from_message(
             session_id, user_message, session_state, route_intent
         )
@@ -6686,6 +6711,7 @@ class DeepAgentOrchestrator:
         """
         set_session_context(session_id)
         record_conversation_turn(session_id, "user", user_message)
+        await chat_threads.record_question(session_id, user_message)
         session_state = get_session_state(session_id)
         msg_l = " ".join((user_message or "").strip().lower().split())
         route_intent = resolve_route_intent(msg_l, session_state, extra_context)
@@ -7004,6 +7030,7 @@ class DeepAgentOrchestrator:
         )
         set_session_context(sid)
         record_conversation_turn(sid, "user", user_message)
+        await chat_threads.record_question(sid, user_message)
 
         session_state = get_session_state(sid)
         msg_l = " ".join((user_message or "").strip().lower().split())
@@ -7269,6 +7296,18 @@ class DeepAgentOrchestrator:
                     if event.get("name") == "processing_step":
                         yield {"type": "processing_step", **(event.get("data") or {})}
 
+                elif kind == "on_chat_model_start":
+                    # The general loop's model calls are in no activity row; the trace keeps them.
+                    _msgs = ((event.get("data") or {}).get("input") or {}).get("messages") or []
+                    _flat = [m for grp in _msgs for m in (grp if isinstance(grp, list) else [grp])]
+                    _last = next((m for m in reversed(_flat) if getattr(m, "type", "") == "human"), None)
+                    trace.on_model_start(str(event.get("run_id") or ""),
+                                         (event.get("metadata") or {}).get("ls_model_name"),
+                                         len(event.get("parent_ids") or []),
+                                         {"messages": len(_flat),
+                                          "last_human_message": getattr(_last, "content", None) if _last is not None else None,
+                                          "tool_results_since_last_human": sum(1 for m in _flat if getattr(m, "type", "") == "tool")})
+
                 elif kind == "on_chat_model_stream":
                     # The orchestrator's own words as it writes them. Only the top-level model
                     # run: a sub-agent a `task` call spawned inherits this run as its parent
@@ -7283,6 +7322,7 @@ class DeepAgentOrchestrator:
 
                 elif kind == "on_chat_model_end":
                     output_msg = event.get("data", {}).get("output")
+                    trace.on_model_end(str(event.get("run_id") or ""), output_msg)
                     if output_msg and not getattr(output_msg, "tool_calls", None):
                         content = getattr(output_msg, "content", "")
                         if isinstance(content, str) and content:
@@ -7326,6 +7366,7 @@ class DeepAgentOrchestrator:
         )
         if final_answer.strip():
             record_conversation_turn(sid, "assistant", final_answer)
+            await chat_threads.record_answer(sid, final_answer, tools=streamed_tool_calls)
         if routing_note:
             panel = self._general_loop_panel(user_message, streamed_tool_calls)
             if panel:

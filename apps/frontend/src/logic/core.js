@@ -107,6 +107,9 @@ export const coreMethods = {
     // sign-in that swaps accounts in this tab has to re-read them here, not wait up to
     // POLL_MS for rpStart's timer to come round and correct the navigator.
     this.rpLoad();
+    // The conversations kept on the server for this account and company (sessions.js):
+    // what another device or browser asked, and what this one asked before a clear.
+    if (typeof this.sessionsSyncFromServer === 'function') this.sessionsSyncFromServer();
     // The refresh-cadence menu. Not company-scoped, but it needs a token, and rpStart no
     // longer reads it from the sign-in gate — this is where a fresh sign-in picks it up.
     if (typeof this.rpLoadPresets === 'function') this.rpLoadPresets();

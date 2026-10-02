@@ -1330,7 +1330,10 @@ async def list_unscored_assets(building_id: str | None = None, limit: int = 200)
 
 from .cost_savings_agent import get_cost_savings  # noqa: E402 - cost-saving options on every answer
 
+from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
+
 ENERGY_INTELLIGENCE_TOOLS = [
+    search_documents,
     get_cost_savings,
     # Portfolio and market views - what the Energy page renders.
     summarise_anomalies,

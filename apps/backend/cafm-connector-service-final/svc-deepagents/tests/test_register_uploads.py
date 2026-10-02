@@ -130,7 +130,7 @@ def test_registration_runs_even_when_no_building_was_chosen(monkeypatch):
     # The file still arrived. Binding is what needs a building; having a row is not.
     called: list[tuple] = []
 
-    async def spy(session_id, file_paths, tool_calls=None):
+    async def spy(session_id, file_paths, tool_calls=None, doc_type=None):
         called.append((session_id, tuple(file_paths or [])))
         return 1
 
@@ -139,3 +139,9 @@ def test_registration_runs_even_when_no_building_was_chosen(monkeypatch):
         bb.bind_and_log(None, [], where="test", session_id="s1", file_paths=["/x/s1_a.csv"])
     )
     assert called == [("s1", ("/x/s1_a.csv",))]
+
+
+def test_identity_papers_are_a_personal_upload_type():
+    from src.services import building_binding as bb2
+    assert bb2.PERSONAL_DOC_TYPES == {"visa", "emirates_id", "passport", "labour_card"}
+    assert bb2.PERSONAL_DOC_TYPES <= bb2.UPLOAD_DOC_TYPES and {"staff_list", "access_pass"} <= bb2.UPLOAD_DOC_TYPES

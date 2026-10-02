@@ -414,6 +414,7 @@ async def ingest_contract_parameters(
                 doc_type="service_contract",
                 title=effective_ref,
                 file_name=file_name,
+                organization_id=getattr(target, "organization_id", None),
             )
             sources = dict(target.field_sources or {})
             sources["building_link"] = out.get("building_link_reason") or "unresolved"

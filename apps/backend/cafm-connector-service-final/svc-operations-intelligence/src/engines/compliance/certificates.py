@@ -1705,6 +1705,7 @@ async def upsert_certificate(
                 doc_type="compliance_certificate",
                 title=cert.certificate_type_code,
                 file_name=meta.get("source_file_name"),
+                organization_id=cert.organization_id or cert.org_id,
             )
             if graph.get("building_id"):
                 cert.building_id = graph["building_id"]

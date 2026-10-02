@@ -37,6 +37,34 @@ could hold the answer, how they join, and the fewest calls that get there. Then:
 - **Say why.** When a tool takes a `reasoning` parameter (svc-udr's do), fill it with the plan
   step the call is and what you expect it to show.
 
+### Records or documents — decide for each fact before the first call
+
+Every fact the answer needs lives in one of two places. Sort them in the plan:
+
+| The fact is… | It lives in | Read it with |
+|---|---|---|
+| a count, date, status, amount, who/what/where | the **records** (tables) | your engine's record tools / `answer_from_records` |
+| what a **contract** says: an SLA, penalty, service-credit, cap, notice or recall clause | the **contract document** | `search_documents(question, vendor=… or contract_ref=…)` |
+| what a **report** found or recommends: inspection, service, condition, FRA, survey | the **report** | `search_documents(question, asset=… or building_name=…, doc_type="report")` |
+| what a **warranty** covers, excludes, or how to claim | the **warranty document** | `search_documents(question, asset=…, doc_type="warranty")` |
+| a certificate's conditions or limitations, an O&M procedure, a manual's instruction | that **document** | `search_documents(question, asset=… / vendor=… / building_name=…)` |
+
+Many questions need both: "claim from the vendor for SLA breaches **based on the contract clause**"
+= the breaching work orders (records) + the service-credit clause (contract) + the fee it applies to
+(records). Plan both reads, then join them in the answer.
+
+- **Search only the linked documents.** Always name what the document is about (vendor, contract,
+  asset, building) — never search the whole corpus. The documents are found through the record:
+  a contract through its parameters, a certificate through its asset or vendor, a work order's job
+  sheet through the work order, all inside the caller's company.
+- **Quote with the citation:** document title and page, the clause wording in quotes. Keep document
+  facts and record facts visibly apart ("The contract says… / The records show…").
+- **When `not_indexed` lists the document**, it is on file but its text cannot be searched. Say so,
+  name it, and answer from what the records extracted from it (a contract parameter carries its
+  clause number and page). Never invent the clause wording.
+- **When the document and the records disagree** (a date, an SLA hour), show both, say which is
+  newer or which was extracted from which, and do not pick one silently.
+
 ---
 
 ## Step 1 — RESOLVE: turn the nouns into keys

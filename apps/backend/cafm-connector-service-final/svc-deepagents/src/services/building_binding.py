@@ -73,8 +73,19 @@ def _file_name(path: Any) -> str:
     return _PATH_SEPARATORS.split(str(path).strip())[-1]
 
 
+#: The types an uploader may choose (svc-operations-intelligence engines/document_register.py is
+#: the authority; this mirrors its keys). Identity papers are personal: never indexed for search.
+UPLOAD_DOC_TYPES = {
+    "contract", "invoice", "compliance_certificate", "inspection_report", "warranty", "om_manual",
+    "drawing", "risk_assessment", "staff_list", "access_pass", "visa", "emirates_id", "passport",
+    "labour_card", "other",
+}
+PERSONAL_DOC_TYPES = {"visa", "emirates_id", "passport", "labour_card"}
+
+
 async def register_uploads(
-    session_id: str, file_paths: list[str] | None, tool_calls: Any = None
+    session_id: str, file_paths: list[str] | None, tool_calls: Any = None,
+    doc_type: str | None = None,
 ) -> int:
     """Give every uploaded file a row, for the engines that do not write one.
 
@@ -119,7 +130,7 @@ async def register_uploads(
                                WHERE original_filename = CAST(:n AS varchar)
                                  AND uploaded_at > now() - interval '1 hour')"""
                 ),
-                {"n": name, "dt": types.get(name)},
+                {"n": name, "dt": doc_type or types.get(name)},
             )
             made += res.rowcount or 0
         await session.commit()
@@ -200,8 +211,25 @@ async def building_exists(building_id: str) -> bool:
         return row.first() is not None
 
 
+_DOC_SENSITIVITY: dict[str, bool] = {}
+
+
+async def _documents_have(session, column: str) -> bool:
+    """Whether this database's register has the column - they differ by deployment and migration."""
+    if column not in _DOC_SENSITIVITY:
+        try:
+            async with session.begin_nested():
+                _DOC_SENSITIVITY[column] = bool((await session.execute(text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'plenum_cafm' "
+                    "AND table_name = 'documents' AND column_name = :c"), {"c": column})).first())
+        except Exception:  # noqa: BLE001
+            _DOC_SENSITIVITY[column] = False
+    return _DOC_SENSITIVITY[column]
+
+
 async def bind_documents_to_building(
-    building_id: str, document_ids: list[str],
+    building_id: str, document_ids: list[str], *, doc_type: str | None = None,
+    sensitivity: str | None = None,
 ) -> dict[str, int]:
     """Set building_id on those documents, and on any certificate read off one of them.
 
@@ -211,10 +239,19 @@ async def bind_documents_to_building(
 
     Rows already pointing at this building are not counted as bound — re-running an ingest
     should report nothing new rather than the same number twice.
+
+    The company comes with the building - a company owns its buildings, so a document filed on
+    one is that company's. Until 2 Oct 2026 no company was written here, and a company-scoped
+    search could not see these documents. ``doc_type`` / ``sensitivity`` are what the uploader
+    chose; an explicit choice outranks the classifier's guess.
     """
     if not document_ids:
         return {"documents": 0, "certificates": 0, "created": 0}
     async with database.AsyncSessionLocal() as session:
+        has_org = await _documents_have(session, "organization_id")
+        has_sens = await _documents_have(session, "sensitivity")
+        building_org = ("(SELECT bl.organization_id FROM plenum_cafm.buildings bl "
+                        "WHERE bl.building_id = CAST(:b AS uuid))")
         # The row is created if the engine that owns this file has not written it yet.
         # It runs after the ingest sequence returns, so on a first upload there is nothing
         # to update and the link would be lost to a race — while the endpoint, right here,
@@ -224,17 +261,18 @@ async def bind_documents_to_building(
         # replacing it, and cannot blank the building.
         created = await session.execute(
             text(
-                """INSERT INTO plenum_cafm.documents
-                       (document_id, building_id, doc_type, file_name, uploaded_at)
+                f"""INSERT INTO plenum_cafm.documents
+                       (document_id, building_id, doc_type, file_name, uploaded_at{", organization_id" if has_org else ""})
                    SELECT i.id, CAST(:b AS uuid),
-                          NULLIF(i.document_type, ''), i.original_filename, now()
+                          COALESCE(CAST(:dt AS text), NULLIF(i.document_type, '')),
+                          i.original_filename, now(){", " + building_org if has_org else ""}
                      FROM plenum_cafm.ingestion_documents i
                     WHERE i.id::text = ANY(:ids)
                       AND NOT EXISTS (SELECT 1 FROM plenum_cafm.documents d
                                        WHERE d.document_id = i.id)
                    ON CONFLICT (document_id) DO NOTHING"""
             ),
-            {"b": building_id, "ids": document_ids},
+            {"b": building_id, "ids": document_ids, "dt": doc_type},
         )
         docs = await session.execute(
             # CAST(:b AS uuid), not :b::uuid. SQLAlchemy's text() mis-parses a bind
@@ -246,6 +284,15 @@ async def bind_documents_to_building(
                      WHERE document_id::text = ANY(:ids)
                        AND (building_id IS NULL OR building_id::text <> :b)"""),
             {"b": building_id, "ids": document_ids},
+        )
+        sets = ["doc_type = COALESCE(CAST(:dt AS text), doc_type)"]
+        if has_org:
+            sets.append(f"organization_id = COALESCE(organization_id, {building_org})")
+        if has_sens:
+            sets.append("sensitivity = COALESCE(CAST(:sens AS text), sensitivity)")
+        await session.execute(
+            text("UPDATE plenum_cafm.documents SET " + ", ".join(sets) + " WHERE document_id::text = ANY(:ids)"),
+            {"b": building_id, "ids": document_ids, "dt": doc_type, **({"sens": sensitivity} if has_sens else {})},
         )
         certs = await session.execute(
             text("""UPDATE plenum_cafm.compliance_certificates
@@ -468,7 +515,8 @@ async def collapse_duplicate_documents(building_id: str) -> dict[str, Any]:
 
 async def bind_and_log(
     building_id: str | None, tool_calls: Any, *, where: str, session_id: str = "",
-    file_paths: list[str] | None = None,
+    file_paths: list[str] | None = None, doc_type: str | None = None,
+    sensitivity: str | None = None,
 ) -> dict[str, Any]:
     """Bind, and never let a binding failure take the ingest down with it.
 
@@ -480,7 +528,7 @@ async def bind_and_log(
     # nothing here to bind — which is how a half-hourly CSV wrote 48 readings while the
     # building it was filed against showed no document at all.
     try:
-        made = await register_uploads(session_id, file_paths, tool_calls)
+        made = await register_uploads(session_id, file_paths, tool_calls, doc_type=doc_type)
         if made:
             log.info("ingest.registered_uploads", where=where, session_id=session_id,
                      created=made)
@@ -512,7 +560,8 @@ async def bind_and_log(
                     building_id=building_id)
         return {"documents": 0, "certificates": 0, "candidates": 0}
     try:
-        bound = await bind_documents_to_building(building_id, ids)
+        bound = await bind_documents_to_building(building_id, ids, doc_type=doc_type,
+                                                 sensitivity=sensitivity)
     except Exception as exc:  # noqa: BLE001 — see the docstring
         log.warning("ingest.bind_failed", where=where, session_id=session_id,
                     building_id=building_id, error=str(exc)[:200])

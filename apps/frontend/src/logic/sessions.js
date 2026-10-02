@@ -2,10 +2,13 @@
 //
 // Not to be confused with session.js, which is the reload slice (signed in, current view).
 // A *session* here is what the Plenum AI shell calls one: a thread with svc-deepagents, keyed
-// by the `session_id` the server keeps its LangGraph state under. The server has no route
-// that lists threads, so — like the Plenum shell — the list and the transcripts live in this
-// browser's localStorage. Reopening a session restores its transcript and continues the same
-// server thread; the orchestrator sees the earlier turns through its checkpointer.
+// by the `session_id` the server keeps its LangGraph state under. Since 2 Oct 2026 the server
+// keeps every thread too (GET /api/threads: title, turns, a running summary - the chat's
+// memory phase A), so this browser's localStorage is a cache of it: the list is merged from
+// the server on each sign-in (mergeServerThreads), a thread this browser never saw is
+// hydrated from the server when opened, and a delete here hides it there. Reopening a
+// session restores its transcript and continues the same server thread; the orchestrator
+// sees the earlier turns through its checkpointer and the server's own record.
 //
 // Orchestrator tasks (`orch()` in core.js) are sessions too, of kind "task": they reopen the
 // dock on the step chain they played.
@@ -14,6 +17,7 @@
 // into HoistraLogic.prototype and `this` is the controller.
 import { domainOf } from './chat.js';
 import { dayLabel } from './homeLive.js';
+import { deepAgentsApi } from '../api/deepAgents.js';
 
 export const SESSIONS_KEY = 'hoistra.sessions.v1';
 export const MAX_SESSIONS = 60;
@@ -129,6 +133,57 @@ export function syncTurns(rec, turns, now) {
 
 export function trimSessions(list) {
   return (list || []).filter(Boolean).slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, MAX_SESSIONS);
+}
+
+// ── the server's copy ────────────────────────────────────────────────────────
+const isoMs = (s) => { const t = s ? Date.parse(s) : NaN; return isNaN(t) ? null : t; };
+
+// The server's list folded into this browser's: a thread this browser has no record of is
+// added (turns empty, `remote` - hydrated when opened); one it has keeps its transcript and
+// takes the later time. Only the caller's own records in the current company scope are
+// touched: every server row belongs to that owner and scope by construction (the route
+// filters on both), so they are stamped the same way. Records of other owners/scopes in the
+// same browser array pass through untouched.
+export function mergeServerThreads(local, threads, opts) {
+  const o = opts || {};
+  const owner = o.owner ? String(o.owner).trim().toLowerCase() : null;
+  if (!owner) return local || [];
+  const scope = o.viewOrgId || null;
+  const byId = {};
+  (local || []).forEach((r) => { if (r) byId[r.id] = r; });
+  const out = (local || []).slice();
+  (threads || []).forEach((t) => {
+    if (!t || typeof t.id !== 'string' || !t.id) return;
+    const at = isoMs(t.last_message_at) || isoMs(t.created_at) || Date.now();
+    const have = byId[t.id];
+    if (have) {
+      if (have.owner !== owner || (have.viewOrgId || null) !== scope) return;
+      const patch = {};
+      if ((have.at || 0) < at) patch.at = at;
+      if (!have.title && t.title) { patch.title = t.title; patch.label = t.title; patch.task = t.title; }
+      if (Object.keys(patch).length) out[out.indexOf(have)] = Object.assign({}, have, patch);
+      return;
+    }
+    const rec = makeSession({ id: t.id, title: t.title || 'Conversation', page: 'Home', at: at, owner: owner, viewOrgId: scope });
+    rec.createdAt = isoMs(t.created_at) || at;
+    rec.remote = true;
+    rec.serverTurns = Number(t.turn_count) || 0;
+    out.push(rec);
+  });
+  return trimSessions(out);
+}
+
+// A server thread's turns in the chat's own message shape, so a conversation asked on another
+// device reads here as it did there. Structured (rich) compliance answers come back as their
+// markdown; the tools behind each reply are kept so the engine badge is right.
+export function turnsFromThread(thread) {
+  const out = [];
+  ((thread && thread.turns) || []).forEach((t) => {
+    if (!t) return;
+    if (t.question) out.push({ role: 'you', text: String(t.question) });
+    if (t.answer) out.push({ role: 'bot', text: String(t.answer), calls: Array.isArray(t.tools) ? t.tools.filter((x) => typeof x === 'string') : [] });
+  });
+  return out.slice(-MAX_TURNS);
 }
 
 // ── storage ──────────────────────────────────────────────────────────────────
@@ -283,6 +338,38 @@ export const sessionsMethods = {
     this.setState({ sessions: trimSessions([next].concat(rest)) });
   },
 
+  // The server's list for this account and company, folded into the browser's (see the
+  // header). Quiet on failure: the browser's own cache still lists what it saw.
+  async sessionsSyncFromServer() {
+    const s = this.state;
+    const owner = s.account && s.account.email;
+    if (!s.signedIn || !owner) return;
+    const scope = s.viewOrgId || null;
+    let out = null;
+    try { out = await deepAgentsApi.threads(); } catch (e) { return; }
+    const threads = out && Array.isArray(out.threads) ? out.threads : null;
+    if (!threads) return;
+    // The account or scope may have changed while the read was out: stamp with what was asked for.
+    this.setState((p) => ({ sessions: mergeServerThreads(p.sessions || [], threads, { owner: owner, viewOrgId: scope }) }));
+  },
+
+  // A thread this browser never saw (or whose transcript was shed to make room): its turns
+  // come from the server once, then it is a record like any other.
+  async sessionHydrate(id) {
+    let out = null;
+    try { out = await deepAgentsApi.thread(id); } catch (e) { return; }
+    const thread = out && out.thread;
+    if (!thread) return;
+    const turns = turnsFromThread(thread);
+    this.setState((p) => {
+      const list = (p.sessions || []).map((x) => (x.id === id ? Object.assign(syncTurns(x, turns, x.at), { remote: false, title: x.title || thread.title || '' }) : x));
+      // Still the open conversation and nothing typed since: show what came back.
+      const patch = { sessions: list };
+      if (p.sessionId === id && !(p.ccChat || []).length) patch.ccChat = turns;
+      return patch;
+    });
+  },
+
   openSession(id) {
     const rec = (this.state.sessions || []).find((x) => x.id === id);
     if (!rec) return;
@@ -313,12 +400,17 @@ export const sessionsMethods = {
     // does not come along. openChat() below reads the run it finds set.
     if (rec.migrationId) { if (typeof this.mgAttach === 'function') this.mgAttach(rec.migrationId); }
     else if (typeof this.mgDetach === 'function') this.mgDetach();
+    if (!(rec.turns || []).length && (rec.remote || rec.serverTurns)) this.sessionHydrate(id);
     this.openChat();
   },
 
   deleteSession(id) {
     const active = this.state.sessionId === id;
     if (active && this._ccAbort) this._ccAbort.abort();
+    // Hidden on the server too, or the next sign-in would bring it straight back. A task
+    // (an orchestrator run) was never a server thread.
+    const rec = (this.state.sessions || []).find((x) => x.id === id);
+    if (rec && rec.kind !== 'task' && this.state.signedIn) deepAgentsApi.deleteThread(id).catch(() => {});
     // Its run's card goes with it; the run itself stays in the recent list.
     if (active && typeof this.mgDetach === 'function') this.mgDetach();
     this.setState((p) => Object.assign(

@@ -224,11 +224,21 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
                 where_clause = (where_clause + bsql) if where_clause else "WHERE " + bsql[len(" AND "):]
                 params.update(bparams)
             sql = f"SELECT * FROM plenum_cafm.{table_name} {where_clause} LIMIT {_MAX_ROWS}"
+            import time as _time
+
+            from . import trace as _trace
+
+            t0 = _time.perf_counter()
             result = await session.execute(text(sql), params)
-            rows = result.mappings().all()
-            return [dict(r) for r in rows]
+            rows = [dict(r) for r in result.mappings().all()]
+            _trace.on_sql(sql, params, rows, (_time.perf_counter() - t0) * 1000, label="query_table " + table_name)
+            return rows
         except Exception as exc:
             log.error("udr.query_table.error", table=table_name, error=str(exc))
+            from . import trace as _trace
+
+            _trace.on_sql(f"SELECT * FROM plenum_cafm.{table_name} ...", params, None, None, label="query_table " + table_name,
+                          error=str(exc).splitlines()[0][:300])
             return [{"error": str(exc)}]
 
 

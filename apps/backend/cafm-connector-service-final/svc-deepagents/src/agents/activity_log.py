@@ -355,6 +355,9 @@ def fire(**kwargs: Any) -> None:
         kwargs.pop(k)
     if dropped:
         log.warning("activity_log.unknown_kwargs_dropped", keys=dropped)
+    # The trace (agents/trace.py) builds the turn's span tree from these same rows.
+    from . import trace as _trace
+    _trace.on_activity(kwargs)
     task = loop.create_task(record(**kwargs))
     _pending.add(task)
     task.add_done_callback(_pending.discard)

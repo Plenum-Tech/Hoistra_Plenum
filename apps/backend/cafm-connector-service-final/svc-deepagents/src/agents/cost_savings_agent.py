@@ -45,7 +45,13 @@ async def get_cost_savings(building_name: str | None = None, building_id: str | 
     check before quoting. Pass the building the user named as `building_name`.
     """
     from .energy_intelligence_agent import _resolve_building
+    from .thread_scope import scope_building, scope_period_key
 
+    # A follow-up ("out of those, which save cost?") with no building named: the thread's working set.
+    if not (building_name or building_id):
+        building_name, building_id = scope_building()
+    if not period:
+        period = scope_period_key()
     bid = None
     if building_name or building_id:
         bid, problem = await _resolve_building(building_name, building_id)

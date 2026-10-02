@@ -20,6 +20,8 @@ import PasswordModal from './components/shell/PasswordModal.jsx';
 import Buildings from './screens/Buildings.jsx';
 import Users from './screens/Users.jsx';
 import Crons from './screens/Crons.jsx';
+import Memories from './screens/Memories.jsx';
+import Traces from './screens/Traces.jsx';
 import AuditTrail from './screens/AuditTrail.jsx';
 import IngestionAgentModal from './components/shell/IngestionAgentModal.jsx';
 import SuperAdminOverlay from './components/shell/SuperAdminOverlay.jsx';
@@ -67,6 +69,8 @@ export default function App() {
       {vals.isBuildings ? <Buildings vals={vals} /> : null}
       {vals.isUsers ? <Users vals={vals} /> : null}
       {vals.isCrons ? <Crons vals={vals} /> : null}
+      {vals.isMemories ? <Memories vals={vals} /> : null}
+      {vals.isTraces ? <Traces vals={vals} /> : null}
       {vals.isAudit ? <AuditTrail vals={vals} /> : null}
       {vals.ingOn ? <IngestionAgentModal vals={vals} /> : null}
       {vals.saOn ? <SuperAdminOverlay vals={vals} /> : null}

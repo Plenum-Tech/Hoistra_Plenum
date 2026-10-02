@@ -34,6 +34,9 @@ from .routes.health import router as health_router
 from .routes.ingest_batch import router as ingest_batch_router
 from .routes.migration import router as migration_router
 from .routes.workflow import router as workflow_router
+from .routes.threads import router as threads_router
+from .routes.memories import router as memories_router
+from .routes.traces import router as traces_router
 
 log = structlog.get_logger(__name__)
 
@@ -102,6 +105,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await activity_log.ensure_table()
     except Exception as exc:  # noqa: BLE001
         log.warning("svc-deepagents.activity_log.failed", error=str(exc)[:300])
+    # The server-side record of every conversation (memory phase A); best-effort like the log.
+    from ..services import chat_memories, chat_threads
+
+    await chat_threads.ensure_tables()
+    await chat_memories.ensure_tables()
+    # Hoist Traces: every turn's span tree with cost (agents/trace.py); old span payloads purged.
+    from ..agents import trace as _trace
+
+    if await _trace.ensure_tables():
+        try:
+            await _trace.purge()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("svc-deepagents.trace.purge_failed", error=str(exc)[:200])
 
     # Initialise HITL Postgres checkpointer (optional)
     checkpointer = None
@@ -233,6 +249,9 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 # Routers
 app.include_router(health_router)
 app.include_router(workflow_router)
+app.include_router(threads_router)
+app.include_router(memories_router)
+app.include_router(traces_router)
 app.include_router(ingest_batch_router)
 app.include_router(migration_router)
 app.include_router(documents_router)

@@ -194,6 +194,33 @@ async def _ingested_filename(session: AsyncSession, document_id: str) -> str | N
     return str(name).strip() or None if name else None
 
 
+_DOC_ORG: dict[str, bool] = {}
+
+
+async def _documents_have_org(session: AsyncSession) -> bool:
+    """Whether this database's register has organization_id (it does not on every deployment)."""
+    if "v" not in _DOC_ORG:
+        try:
+            async with session.begin_nested():
+                _DOC_ORG["v"] = bool((await session.execute(text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'plenum_cafm' "
+                    "AND table_name = 'documents' AND column_name = 'organization_id'"))).first())
+        except Exception:  # noqa: BLE001
+            _DOC_ORG["v"] = False
+    return _DOC_ORG["v"]
+
+
+async def _building_org(session: AsyncSession, building_id: Any) -> str | None:
+    try:
+        async with session.begin_nested():
+            v = (await session.execute(text(
+                "SELECT organization_id::text FROM plenum_cafm.buildings WHERE building_id::text = :b"),
+                {"b": str(building_id)})).scalar()
+        return v or None
+    except Exception:  # noqa: BLE001 - a building without a company leaves the document's company unset
+        return None
+
+
 async def record_document(
     session: AsyncSession,
     *,
@@ -203,8 +230,15 @@ async def record_document(
     title: str | None = None,
     file_name: str | None = None,
     blob_url: str | None = None,
+    organization_id: Any = None,
 ) -> dict[str, Any]:
     """Upsert the file's row in plenum_cafm.documents. Returns {document_id, created}.
+
+    ``organization_id`` is the company the document belongs to. Without it, the building's own
+    company (buildings.organization_id) is used - a company owns its buildings and its users see
+    them through their allocation, so a document on a building is that company's. Until 2 Oct
+    2026 no company was written at all: 134 of 194 register rows, every contract among them, had
+    none, and a company-scoped document search could not see a single contract.
 
     ``document_id`` is reused when the caller already has one — the ingestion pipeline
     assigns an id per file before extraction, and the graph must point at that same file
@@ -216,6 +250,10 @@ async def record_document(
 
     did = str(document_id).strip() if document_id else str(uuid.uuid4())
     key = shape["documents"]["key"]
+    has_org = await _documents_have_org(session)
+    org = str(organization_id) if organization_id else None
+    if has_org and not org and building_id:
+        org = await _building_org(session, building_id)
     if not file_name:
         file_name = await _ingested_filename(session, did)
     params = {
@@ -226,7 +264,11 @@ async def record_document(
         "fn": (file_name or None),
         "url": (blob_url or None),
         "now": datetime.now(timezone.utc),
+        "org": org,
     }
+    org_set = (",\n                                organization_id = COALESCE(organization_id, CAST(:org AS UUID))"
+               if has_org else "")
+    org_col, org_val = (", organization_id", ", CAST(:org AS UUID)") if has_org else ("", "")
     try:
         async with session.begin_nested():
             existing = (
@@ -245,7 +287,7 @@ async def record_document(
                                 doc_type    = COALESCE(doc_type, :dt),
                                 title       = COALESCE(title, :t),
                                 file_name   = COALESCE(file_name, :fn),
-                                blob_url    = COALESCE(blob_url, :url)
+                                blob_url    = COALESCE(blob_url, :url){org_set}
                             WHERE {key}::text = :did"""
                     ),
                     params,
@@ -256,8 +298,8 @@ async def record_document(
             await session.execute(
                 text(
                     f"""INSERT INTO plenum_cafm.documents
-                            ({key}, building_id, doc_type, title, file_name, blob_url, uploaded_at)
-                        VALUES (CAST(:did AS UUID), CAST(:bid AS UUID), :dt, :t, :fn, :url, :now)"""
+                            ({key}, building_id, doc_type, title, file_name, blob_url, uploaded_at{org_col})
+                        VALUES (CAST(:did AS UUID), CAST(:bid AS UUID), :dt, :t, :fn, :url, :now{org_val})"""
                 ),
                 params,
             )
@@ -281,6 +323,7 @@ async def attach_to_graph(
     title: str | None = None,
     file_name: str | None = None,
     blob_url: str | None = None,
+    organization_id: Any = None,
 ) -> dict[str, Any]:
     """Resolve the building, then record the document against it. One call per ingested file.
 
@@ -327,6 +370,7 @@ async def attach_to_graph(
         title=title,
         file_name=file_name,
         blob_url=blob_url,
+        organization_id=organization_id,
     )
     return {
         "building_id": resolved["building_id"],

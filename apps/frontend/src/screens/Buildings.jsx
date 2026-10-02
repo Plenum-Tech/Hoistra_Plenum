@@ -1,6 +1,7 @@
 // Buildings — Hoist Graph, role-driven
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import DocumentsManager from '../components/DocumentsManager.jsx';
 
 export default function Buildings({ vals }) {
   return (
@@ -878,6 +879,10 @@ export default function Buildings({ vals }) {
                                   <span style={{ fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                                     {"Documents — filed against this building"}
                                   </span>
+                                  <span className="hv11" onClick={b.manageDocs} title="Type, personal, links to other buildings, Index now, upload"
+                                    style={{ marginLeft: "auto", fontSize: "11.5px", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                    <i className="ph ph-sliders-horizontal" style={{ marginRight: "5px" }}></i>{"Manage documents"}
+                                  </span>
                                 </div>
                                 {(b.structured || []).map((d, $index) => (
                                   <React.Fragment key={$index}>
@@ -1029,8 +1034,9 @@ export default function Buildings({ vals }) {
             <div className="btn" onClick={vals.dcDelConfirm} style={{ fontSize: "12.5px", padding: "8px 16px", cursor: vals.dcDelWorking ? "default" : "pointer", color: "var(--st-warn)", border: "1px solid var(--st-warn)", borderRadius: "8px", opacity: vals.dcDelWorking ? "0.6" : "1" }}>{vals.dcDelBusyLabel}</div>
           </div>
         </div>
-      </div>
+            </div>
 
+      <DocumentsManager vals={vals} />
       </div>
   );
 }

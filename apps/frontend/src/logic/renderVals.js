@@ -11,8 +11,10 @@ import { historyNote } from './emailHistory.js';
 import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
 import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
+import { memoriesPageVals } from './memoriesPage.js';
+import { tracesPageVals } from './tracesPage.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
-import { documentUrl } from '../api/docRag.js';
+import { openDocument } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
 import { isSpreadsheet } from './migration.js';
 import { accountCanIngest } from './auth.js';
@@ -1463,7 +1465,7 @@ export const renderValsMethods = {
           // existence, so only "is there anything to serve" is left to ask.
           const a = fileAffordance(r.has_file, true);
           const open = a.held
-            ? () => window.open(documentUrl(r.document_id || r.id), "_blank", "noopener")
+            ? () => openDocument(r.document_id || r.id, (e) => this.flash("Could not open the document: " + ((e && e.message) || e)))
             : null;
           return {
             ...a,
@@ -1497,6 +1499,8 @@ export const renderValsMethods = {
           };
         });
         return {
+          // Manage documents: type, personal, links, Index now, upload with a type (documentsRegister.js).
+          manageDocs: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.dmOpen(key, b.name); },
           name: b.name, id: b.code || b.id, state: b.state,
           arrow: open ? "▾" : "▸",
           headBg: open ? "var(--color-accent-900)" : "transparent",
@@ -1541,7 +1545,7 @@ export const renderValsMethods = {
             // Only built where the row says there is something to serve, so the link is
             // never offered on a row that would answer 404.
             const open = a.held
-              ? () => window.open(documentUrl(r.document_id), "_blank", "noopener")
+              ? () => openDocument(r.document_id, (e) => this.flash("Could not open the document: " + ((e && e.message) || e)))
               : () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
                   + r.id + (r.detail ? ", " + r.detail : "")
                   + (a.evidenced
@@ -1620,7 +1624,7 @@ export const renderValsMethods = {
             // One file needs no stagger and no popup allowance — the common case stays a
             // single, ordinary click-to-open.
             if (ids.length === 1) {
-              window.open(documentUrl(ids[0]), "_blank", "noopener");
+              openDocument(ids[0], (e) => this.flash("Could not open the document: " + ((e && e.message) || e)));
               return this.flash("Downloading 1 file from " + b.name + ".");
             }
             if (!ids.length) {
@@ -1633,7 +1637,7 @@ export const renderValsMethods = {
                   : "Nothing filed against " + b.name + " to download.");
             }
             ids.forEach((id, i) => setTimeout(
-              () => window.open(documentUrl(id), "_blank", "noopener"), i * 350
+              () => openDocument(id), i * 350
             ));
             return this.flash(
               "Downloading " + ids.length + " files from " + b.name
@@ -1811,6 +1815,9 @@ export const renderValsMethods = {
       ...this.bcVals(),
       ...this.cronVals(),
       ...this.cronsPageVals(),
+      ...memoriesPageVals(this),
+      ...tracesPageVals(this),
+      ...this.dmVals(),
       ...this.dcVals(),
       ...this.oxVals(),
       ...this.drVals(),
@@ -2591,7 +2598,7 @@ export const renderValsMethods = {
           .concat(spm.builtin.map((b) => ({ key: b.key, label: b.name })))
           .concat(spm.custom.map((c) => ({ key: c.id, label: c.name })));
         return {
-          count: mySessions.length + (mySessions.length === 1 ? " session" : " sessions") + " · stored in this browser, threads on svc-deepagents",
+          count: mySessions.length + (mySessions.length === 1 ? " session" : " sessions") + " · kept on the server, cached in this browser",
           query: s.sessionsQuery || "",
           setQuery: (e) => this.setState({ sessionsQuery: e.target.value }),
           chips: chips.map((c) => ({ label: c.label, on: filter === c.key, pick: () => this.setState({ sessionsFilter: c.key }) })),

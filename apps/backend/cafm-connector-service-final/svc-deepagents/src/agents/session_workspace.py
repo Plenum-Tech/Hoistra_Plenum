@@ -285,8 +285,12 @@ def build_conversation_context(session_id: str, *, max_turns: int = CONVERSATION
     return "\n".join(lines)
 
 
-def build_session_runtime_context(session_id: str) -> str:
-    """Inject into every stateful turn so the LLM retains session facts."""
+def build_session_runtime_context(session_id: str, conversation: str | None = None) -> str:
+    """Inject into every stateful turn so the LLM retains session facts.
+
+    `conversation` is the thread as the server keeps it (services/chat_threads.py: summary of the
+    older turns plus the last few verbatim); when given it replaces the process-local block,
+    which only knows the turns this replica saw since it started."""
     s = get_session_state(session_id)
     ws_lines: list[str] = []
     sid = resolve_active_schema_mapping_id(session_id)
@@ -311,7 +315,7 @@ def build_session_runtime_context(session_id: str) -> str:
     mig_ids = resolve_session_migration_ids(session_id)
     if mig_ids:
         ws_lines.append(f"- **migration_ids (session):** {', '.join(mig_ids)}")
-    conv = build_conversation_context(session_id)
+    conv = conversation if conversation is not None else build_conversation_context(session_id)
     if not conv and not ws_lines:
         return ""
     parts: list[str] = []
@@ -1091,4 +1095,7 @@ def attach_route_to_result(
     answer = str(result.get("answer") or "").strip()
     if answer:
         record_conversation_turn(session_id, "assistant", answer)
+        # The durable copy (every run_stateful path ends here; the stream path records its own).
+        from ..services import chat_threads
+        chat_threads.record_answer_soon(session_id, answer, tools=tool_calls)
     return result

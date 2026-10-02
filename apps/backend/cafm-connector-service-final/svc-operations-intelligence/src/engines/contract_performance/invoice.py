@@ -565,6 +565,7 @@ async def verify_invoice(
             doc_type="vendor_invoice",
             title=invoice_ref,
             file_name=file_name,
+            organization_id=organization_id,
         )
         insights["building_link"] = {
             "building_id": graph.get("building_id"),

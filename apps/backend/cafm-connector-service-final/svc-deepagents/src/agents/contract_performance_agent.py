@@ -1053,7 +1053,12 @@ async def propose_asset_criticality_from_udr(
         return _err(exc, "propose_asset_criticality_from_udr")
 
 
+from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
+from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+
 CONTRACT_PERFORMANCE_TOOLS = [
+    search_documents,
+    work_order_blockers,
     list_invoices,
     extract_contract_from_document,
     ingest_contract_parameters,

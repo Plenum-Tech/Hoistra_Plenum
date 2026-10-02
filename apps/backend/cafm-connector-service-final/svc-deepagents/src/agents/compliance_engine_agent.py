@@ -1285,7 +1285,12 @@ async def list_regulatory_filings(building_id: str | None = None, scheme: str | 
         return _err(exc, "list_regulatory_filings")
 
 
+from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
+from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+
 COMPLIANCE_ENGINE_TOOLS = [
+    search_documents,
+    work_order_blockers,
     get_mees_summary,
     record_regulatory_filing,
     list_regulatory_filings,

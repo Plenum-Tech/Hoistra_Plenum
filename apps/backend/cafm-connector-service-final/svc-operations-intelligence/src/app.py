@@ -19,12 +19,14 @@ from .api.routes import (
     compliance_router,
     contract_performance_router,
     crons_router,
+    document_search_router,
     maintenance_watch_router,
     energy_router,
     ingestion_router,
     reports_router,
     superadmin_router,
     value_router,
+    work_order_blockers_router,
 )
 from .config import settings
 from .engines.auth import keys as auth_keys
@@ -203,8 +205,10 @@ app.include_router(admin_router)
 app.include_router(compliance_router)
 app.include_router(contract_performance_router)
 app.include_router(crons_router)
+app.include_router(document_search_router)
 app.include_router(energy_router)
 app.include_router(ingestion_router)
 app.include_router(maintenance_watch_router)
 app.include_router(reports_router)
 app.include_router(value_router)
+app.include_router(work_order_blockers_router)

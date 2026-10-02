@@ -55,6 +55,40 @@ function orgOverride() { const o = getActingOrg(); return o ? { organization_id:
 export const deepAgentsApi = {
   health: () => apiFetch(B, '/health', { timeoutMs: 6000 }),
 
+  // The caller's conversations, kept on the server (svc-deepagents services/chat_threads.py):
+  // the list the navigator shows, a thread's turns to reopen it, rename, and hide. Each is the
+  // signed-in account's own, in the company it is acting for - the same two keys the browser
+  // list has always filtered on - so the override rides as a query parameter.
+  threads: (q) => apiFetch(B, '/api/threads', { query: Object.assign({ limit: 60 }, q ? { q: q } : {}, orgOverride()), timeoutMs: 12000 }),
+  thread: (id) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { query: orgOverride(), timeoutMs: 12000 }),
+  renameThread: (id, title) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { method: 'PATCH', body: { title: title }, query: orgOverride(), timeoutMs: 8000 }),
+  deleteThread: (id) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { method: 'DELETE', query: orgOverride(), timeoutMs: 8000 }),
+
+  // What the chat remembers for the caller's company (services/chat_memories.py): the company's
+  // shared facts and corrections plus the caller's own preferences; forget removes one.
+  memories: () => apiFetch(B, '/api/memories', { query: Object.assign({ limit: 500 }, orgOverride()), timeoutMs: 12000 }),
+  forgetMemory: (id) => apiFetch(B, '/api/memories/' + encodeURIComponent(id), { method: 'DELETE', query: orgOverride(), timeoutMs: 8000 }),
+
+  // Hoist Traces (agents/trace.py): the runs, one run's span tree, the aggregates, a rating,
+  // and the JSONL dataset. The export is a file, so it goes through fetch with the token and
+  // is handed to the browser as a download rather than parsed.
+  traceTurns: (q) => apiFetch(B, '/api/traces/turns', { query: Object.assign({}, q || {}, orgOverride()), timeoutMs: 15000 }),
+  traceTurn: (id) => apiFetch(B, '/api/traces/turns/' + encodeURIComponent(id), { query: orgOverride(), timeoutMs: 15000 }),
+  traceStats: (q) => apiFetch(B, '/api/traces/stats', { query: Object.assign({}, q || {}, orgOverride()), timeoutMs: 15000 }),
+  traceFeedback: (id, rating, comment) => apiFetch(B, '/api/traces/turns/' + encodeURIComponent(id) + '/feedback',
+    { method: 'POST', body: { rating: rating || null, comment: comment || null }, query: orgOverride(), timeoutMs: 8000 }),
+  traceExport: async (q) => {
+    const params = new URLSearchParams(Object.assign({}, q || {}, orgOverride()));
+    const res = await fetch(B + '/api/traces/export?' + params.toString(), { headers: { Authorization: 'Bearer ' + (accessToken() || '') } });
+    if (!res.ok) throw new Error('Export failed: ' + res.status);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = ((res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'hoist-traces.jsonl';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  },
+
   // GET /api/workflow/tools → [{ name, description, domain }] — every tool the
   // orchestrator can route to. The chat page shows the count as its connection line.
   tools: () => apiFetch(B, '/api/workflow/tools', { timeoutMs: 8000 }),
@@ -113,6 +147,9 @@ export const deepAgentsApi = {
     // every run started from the chat was labelled Custom however the composer was filled
     // in. It picks the mapper's alias pack, so it is not just a caption.
     if (opts && opts.cmmsName) form.append('cmms_name', opts.cmmsName);
+    // The type the uploader chose; it outranks the classifier, and an identity type
+    // (visa, Emirates ID, passport, labour card) is filed personal and never indexed.
+    if (opts && opts.docType) form.append('doc_type', opts.docType);
     const org = getActingOrg();
     if (org) form.append('organization_id', org);
     (files || []).forEach((f) => form.append('files', f, f.name));

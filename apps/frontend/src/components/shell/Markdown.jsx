@@ -10,6 +10,7 @@
 // tables, fenced code, blockquotes, --- rules. Anything else falls through as text.
 import React from 'react';
 import { isSafeHref } from './markdownSafety.js';
+import { documentIdFromHref, openDocument } from '../../api/docRag.js';
 
 // ── inline ────────────────────────────────────────────────────────────────────
 // Ordered so the greedier tokens (**, ``) are tried before the single-char ones.
@@ -59,10 +60,15 @@ function inline(text, keyBase) {
       // The target came from the orchestrator's answer, not from a trusted author — see
       // markdownSafety.js. Anything other than a confirmed safe scheme renders as its own
       // link text rather than a clickable href.
+      // A document link - doc:<id> or a /download URL, in an answer old or new - opens through a
+      // signed link (api/docRag.js); the bare URL alone is refused by the server.
+      const docId = documentIdFromHref(g[2]);
       out.push(
-        isSafeHref(g[2])
-          ? <a key={k} href={g[2]} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--color-accent)' }}>{g[1]}</a>
-          : g[1]
+        docId
+          ? <a key={k} href="#" onClick={(e) => { e.preventDefault(); openDocument(docId); }} style={{ color: 'var(--color-accent)' }}>{g[1]}</a>
+          : isSafeHref(g[2])
+            ? <a key={k} href={g[2]} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--color-accent)' }}>{g[1]}</a>
+            : g[1]
       );
     }
 

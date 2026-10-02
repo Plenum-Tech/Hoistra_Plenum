@@ -115,6 +115,20 @@ export const integrationsMethods = {
         chip: s.view === "crons" ? "var(--color-accent-900)" : "transparent",
         click: () => this.cpOpen()
       }, {
+        // What the chat has learned for this company (logic/memoriesPage.js). The badge is the
+        // count once the page has read it, "…" before.
+        label: "Chat memory", icon: "ph-brain", badge: s.mpLoadedAt || s.mpErr ? String((s.mpRows || []).length) : "…",
+        color: s.view === "memories" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "memories" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.mpOpen()
+      }, {
+        // Every turn as a span tree with cost (logic/tracesPage.js). The badge is the turns in
+        // the range once read, "…" before.
+        label: "Hoist Traces", icon: "ph-flow-arrow", badge: s.tpLoadedAt || s.tpErr ? String((s.tpTurns || []).length) : "…",
+        color: s.view === "traces" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "traces" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.tpOpen()
+      }, {
         label: "Audit trail", icon: "ph-scroll", badge: s.auLiveLoadedAt || s.auLiveError ? String(s.audit.length) : "…",
         color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",

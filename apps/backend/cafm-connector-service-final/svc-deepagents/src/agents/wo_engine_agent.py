@@ -1272,6 +1272,13 @@ async def list_maintenance_decisions(
     fold its estimate into a figure for committed spend.
     """
     try:
+        if not building_id:
+            # A follow-up with no building named: the thread's working set (agents/thread_scope.py).
+            from .energy_intelligence_agent import _resolve_building
+            from .thread_scope import scope_building
+            name, bid = scope_building()
+            if name or bid:
+                building_id, _problem = await _resolve_building(name, bid)
         params: dict[str, Any] = {"limit": limit}
         for k, v in (("building_id", building_id), ("state", state),
                      ("source", source), ("group_by", group_by)):
@@ -1364,9 +1371,14 @@ async def get_maintenance_overview(building_id: str | None = None) -> dict:
 from .ontology_qa import answer_from_records  # noqa: E402 - the record-question engine
 from .cost_savings_agent import get_cost_savings  # noqa: E402 - the cost-saving read
 
+from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
+from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+
 MAINTENANCE_READ_TOOLS = [
+    search_documents,
     answer_from_records,
     get_cost_savings,
+    work_order_blockers,
     get_maintenance_overview,
     list_maintenance_decisions,
     get_inspection_intelligence,

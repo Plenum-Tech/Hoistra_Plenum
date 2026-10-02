@@ -432,6 +432,7 @@ async def run_stateful_workflow_with_files(
     context: str | None = Form(None),
     organization_id: str | None = Form(None),
     building_id: str | None = Form(None),
+    doc_type: str | None = Form(None),
     cmms_name: str = Form("Custom"),
     ingest_source: str = Form("files"),
     schema_mapping_id: str | None = Form(None),
@@ -594,6 +595,40 @@ async def run_stateful_workflow_with_files(
                         out.write(chunk)
                 saved_paths.append(str(dest))
 
+            # ── a type the uploader chose ────────────────────────────────────────────────────
+            # It outranks the classifier. An identity paper (visa, Emirates ID, passport,
+            # labour card) is personal: it is registered and filed on its building but never
+            # chunked into the search index - nothing reads it but an admin, through the
+            # register, with its numbers masked.
+            chosen_type = (doc_type or "").strip().lower() or None
+            if chosen_type and chosen_type not in building_binding.UPLOAD_DOC_TYPES:
+                raise HTTPException(status_code=400, detail={
+                    "ok": False, "reason": "bad_doc_type",
+                    "error": "Choose a document type from: " + ", ".join(sorted(building_binding.UPLOAD_DOC_TYPES))})
+            if chosen_type in building_binding.PERSONAL_DOC_TYPES:
+                if not building:
+                    raise HTTPException(status_code=400, detail={
+                        "ok": False, "reason": "building_required",
+                        "error": "An identity document is filed on the building it concerns - choose the building first."})
+                bound = await building_binding.bind_and_log(
+                    building, [], where="personal", session_id=session_id, file_paths=saved_paths,
+                    doc_type=chosen_type, sensitivity="personal")
+                names = ", ".join(Path(p).name for p in saved_paths)
+                ws = await orchestrator.get_workspace_status(session_id)
+                return WorkflowResponse(
+                    session_id=session_id,
+                    answer=(f"Filed {len(saved_paths)} {chosen_type.replace('_', ' ')} document(s) on the building "
+                            f"as personal: {names}. They are not added to search; an admin can open them from the "
+                            "building's documents, with numbers masked, and every read is logged."),
+                    tool_calls=[ToolCallRecord(tool="file_personal_document",
+                                               input={"doc_type": chosen_type, "files": len(saved_paths)},
+                                               output={"bound": bound, "indexed": False})],
+                    success=True, error=None, interrupted=False, interrupt_payload=None,
+                    route_metadata=RouteMetadata(route_intent="personal_document", selected_domain="documents",
+                                                 selected_tool="file_personal_document"),
+                    workspace_status=WorkspaceStatusResponse(**ws),
+                )
+
             if use_bulk:
                 from ...services.ingest_batch_service import create_ingest_batch
                 from ...workers.ingest_batch_worker import schedule_ingest_batch
@@ -709,13 +744,13 @@ async def run_stateful_workflow_with_files(
             # document is recoverable while a lost upload is not.
             bound = {} if held else await building_binding.bind_and_log(
                 building, flow.tool_calls, where="inline", session_id=session_id,
-                file_paths=saved_paths)
+                file_paths=saved_paths, doc_type=chosen_type)
             if held:
                 # Registration and hashing still happen — the rows must exist for the
                 # release to find them — but no building_id is written.
                 await building_binding.bind_and_log(
                     None, flow.tool_calls, where="inline-held", session_id=session_id,
-                    file_paths=saved_paths)
+                    file_paths=saved_paths, doc_type=chosen_type)
             # The receipt. One ingest event for the turn and one audit row per file, so the
             # trail can answer "who put this here" and the bill "what did it cost".
             await usage_events.record_usage(

@@ -1629,8 +1629,20 @@ class ScopedReader:
     async def fetch(self, sql: str, p: Params | dict | None, label: str = "") -> list[dict]:
         params = p.d if isinstance(p, Params) else (p or {})
         self.queries.append((label + ": " if label else "") + sql)
-        res = await self.s.execute(text(sql), params)
-        return [dict(r) for r in res.mappings().all()]
+        # The statement and its rows go to the turn's trace too (agents/trace.py on_sql).
+        import time as _time
+
+        from . import trace as _trace
+
+        t0 = _time.perf_counter()
+        try:
+            res = await self.s.execute(text(sql), params)
+        except Exception as exc:
+            _trace.on_sql(sql, params, None, (_time.perf_counter() - t0) * 1000, label=label, error=str(exc).splitlines()[0][:300])
+            raise
+        rows = [dict(r) for r in res.mappings().all()]
+        _trace.on_sql(sql, params, rows, (_time.perf_counter() - t0) * 1000, label=label)
+        return rows
 
     async def try_fetch(self, sql, p, label=""):
         try:
@@ -2708,6 +2720,11 @@ async def answer_from_records(question: str) -> dict:
     energy benchmarks and anomalies) - hand those to their agent.
     """
     try:
+        from .thread_scope import scope_hint
+        # A follow-up that names no building or period reads the thread's (agents/thread_scope.py).
+        hint = scope_hint()
+        if hint and not re.search(r"\bB-\d{3}\b|\bat [A-Z]", question or ""):
+            question = question.rstrip(" ?.") + hint
         return await answer_question(question)
     except OntologyError as e:
         return {"ok": False, "error": "Could not plan this question against the ontology: " + str(e)[:800]}
