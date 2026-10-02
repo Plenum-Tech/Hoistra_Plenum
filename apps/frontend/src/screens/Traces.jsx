@@ -14,7 +14,7 @@ const chip = (on) => ({ fontSize: "12px", padding: "6px 12px", borderRadius: "99
 const KIND = {
   turn: ["ph-chat-circle-text", "var(--color-text)"], agent: ["ph-tree-structure", "var(--color-neutral-300)"], router: ["ph-signpost", "var(--st-warn)"],
   llm: ["ph-brain", "var(--color-accent)"], tool: ["ph-wrench", "var(--st-ok)"], stage: ["ph-steps", "var(--color-neutral-400)"],
-  db: ["ph-database", "var(--color-neutral-300)"]
+  db: ["ph-database", "var(--color-neutral-300)"], plan: ["ph-list-checks", "var(--color-accent)"], step: ["ph-arrow-elbow-down-right", "var(--color-neutral-300)"]
 };
 
 // The rows a query answered, as a table: the columns of the first row, up to the kept rows.
@@ -111,7 +111,7 @@ function Run({ vals }) {
           {sp ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                <i className={"ph " + (KIND[sp.kindLabel === "Model" ? "llm" : sp.kindLabel === "Query" ? "db" : sp.kindLabel.toLowerCase()] || KIND.stage)[0]} style={{ fontSize: "20px", color: "var(--color-accent)" }}></i>
+                <i className={"ph " + (KIND[sp.kindLabel === "Model" ? "llm" : sp.kindLabel === "Query" ? "db" : sp.kindLabel === "Plan step" ? "step" : sp.kindLabel.toLowerCase()] || KIND.stage)[0]} style={{ fontSize: "20px", color: "var(--color-accent)" }}></i>
                 <h3 style={{ margin: "0", fontSize: "19px" }}>{sp.name}</h3>
                 {sp.model ? <span style={{ ...MONO, fontSize: "11.5px", padding: "2px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)" }}>{sp.model}</span> : null}
                 <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>{sp.kindLabel + (sp.agent ? " · " + sp.agent : "")}</span>

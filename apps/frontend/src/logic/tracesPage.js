@@ -11,7 +11,7 @@ import { deepAgentsApi } from '../api/deepAgents.js';
 import { isStaleScope } from '../api/client.js';
 
 export const RANGES = [{ key: 'today', label: 'Today', days: 1 }, { key: '7d', label: '7 days', days: 7 }, { key: '30d', label: '30 days', days: 30 }, { key: '90d', label: '90 days', days: 90 }];
-const KIND_LABEL = { turn: 'Turn', agent: 'Agent', router: 'Router', llm: 'Model', tool: 'Tool', stage: 'Step', db: 'Query' };
+const KIND_LABEL = { turn: 'Turn', agent: 'Agent', router: 'Router', llm: 'Model', tool: 'Tool', stage: 'Stage', db: 'Query', plan: 'Plan', step: 'Plan step' };
 
 export const fmtUsd = (v) => {
   const n = Number(v);

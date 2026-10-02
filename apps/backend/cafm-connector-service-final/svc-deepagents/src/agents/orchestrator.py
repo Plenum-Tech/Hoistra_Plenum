@@ -124,7 +124,7 @@ from .udr_hybrid_tools import (
 )
 from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
 from ..services import chat_memories, chat_threads
-from . import thread_scope, trace
+from . import planner, thread_scope, trace
 from .session_workspace import (
     ROUTE_UDR_INGEST,
     ROUTE_UDR_MAP,
@@ -4235,6 +4235,69 @@ class DeepAgentOrchestrator:
             for sq in subs
         )
 
+    #: The analyst's output budget. 16000 let it write 7-8k tokens of prose per pass (80 s for
+    #: the first draft of turn-aff1e9826ca44ec1, 75 s for its revision); the answer schema does
+    #: not need it, and the counts it got wrong there are now handed to it as facts.
+    _ANALYST_MAX_TOKENS = 6000
+    #: Lapsed ids listed in the facts block before the rest are counted.
+    _FACTS_MAX_IDS = 80
+
+    @classmethod
+    def _compliance_facts(cls, rows: list[dict[str, Any]] | None) -> str:
+        """Counts the analyst must not do itself, computed from the rows it is about to read.
+
+        The reviewer's most common finding was an undercount - the first draft of "expired
+        certificates by vendor and building" said eight where the rows held nine, and the
+        75-second revision existed only to fix that. Code can assert the counts; the model's job
+        is the judgement. Returns a text block for the prompt, or "" with no rows."""
+        if not rows:
+            return ""
+
+        def scope(r: dict[str, Any]) -> str:
+            return "vendor" if str(r.get("cert_scope") or "").lower() == "vendor" else "building"
+
+        def ident(r: dict[str, Any]) -> str:
+            typ = r.get("certificate_type_code") or r.get("cert_type") or "certificate"
+            owner = (r.get("vendor_name") if scope(r) == "vendor" else (r.get("building_name") or r.get("site_name"))) or "?"
+            exp = str(r.get("expiry_date") or "")[:10]
+            return f"{r.get('id')} · {typ} · {owner}" + (f" · expiry {exp}" if exp else "")
+
+        total = len(rows)
+        lapsed = [r for r in rows if r.get("is_lapsed")]
+        expiring = [r for r in rows if r.get("is_expiring_soon")]
+        blocked = [r for r in rows if r.get("is_blocked")]
+        by_status: dict[str, int] = {}
+        for r in rows:
+            by_status[str(r.get("status") or "unknown")] = by_status.get(str(r.get("status") or "unknown"), 0) + 1
+
+        def tally(items: list[dict[str, Any]], key) -> list[str]:
+            out: dict[str, int] = {}
+            for r in items:
+                out[key(r)] = out.get(key(r), 0) + 1
+            return [f"{k}: {v}" for k, v in sorted(out.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+        lines = [
+            "FACTS (computed by code from the register rows below - authoritative; every count and every id in "
+            "your kpis, groups and certificates MUST agree with these; do not recount the rows yourself):",
+            f"- rows: {total} ({sum(1 for r in rows if scope(r) == 'building')} building-scope, "
+            f"{sum(1 for r in rows if scope(r) == 'vendor')} vendor-scope)",
+            "- by status: " + ", ".join(f"{k} {v}" for k, v in sorted(by_status.items(), key=lambda kv: -kv[1])),
+            f"- lapsed/expired: {len(lapsed)} total = {sum(1 for r in lapsed if scope(r) == 'vendor')} vendor accreditation(s) "
+            f"+ {sum(1 for r in lapsed if scope(r) == 'building')} building certificate(s)",
+        ]
+        if lapsed:
+            lines.append("  lapsed by vendor: " + ("; ".join(tally([r for r in lapsed if scope(r) == "vendor"], lambda r: str(r.get("vendor_name") or "?"))) or "none"))
+            lines.append("  lapsed by building: " + ("; ".join(tally([r for r in lapsed if scope(r) == "building"], lambda r: str(r.get("building_name") or r.get("site_name") or "?"))) or "none"))
+            lines.append("  lapsed ids (" + str(len(lapsed)) + "):")
+            lines.extend("    " + ident(r) for r in lapsed[: cls._FACTS_MAX_IDS])
+            if len(lapsed) > cls._FACTS_MAX_IDS:
+                lines.append(f"    … and {len(lapsed) - cls._FACTS_MAX_IDS} more (all in the rows)")
+        lines.append(f"- expiring within 90 days (not yet lapsed): {len(expiring)}"
+                     + (" - " + "; ".join(ident(r) for r in expiring[:20]) if expiring else ""))
+        lines.append(f"- on a blocked vendor: {len(blocked)}"
+                     + (" - " + "; ".join(sorted({str(r.get('vendor_name') or '?') for r in blocked})) if blocked else ""))
+        return "\n".join(lines) + "\n\n"
+
     async def _claude_analyse_compliance(
         self,
         user_message: str,
@@ -4244,6 +4307,7 @@ class DeepAgentOrchestrator:
         query_notes: str = "",
         taxonomy: bool = False,
         role: str = "analyst",
+        facts: str = "",
     ) -> dict[str, Any] | None:
         """Reasoning pass: returns the typed compliance response object, or None.
 
@@ -4280,15 +4344,16 @@ class DeepAgentOrchestrator:
                         "question": user_message,
                         "sub_questions": self._sub_question_brief(sub_questions, user_message),
                         "query_notes": query_notes,
+                        "facts": facts,
                         "data_json": data_json,
                     },
-                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": 16000,
+                    "params": {"effort": effort, "taxonomy": taxonomy, "max_tokens": self._ANALYST_MAX_TOKENS,
                                "thinking": "adaptive", "schema": "compliance_response"},
                 },
             )
             async with client.messages.stream(
                 model=model,
-                max_tokens=16000,
+                max_tokens=self._ANALYST_MAX_TOKENS,
                 thinking={"type": "adaptive"},
                 output_config={
                     "effort": effort,
@@ -4306,6 +4371,7 @@ class DeepAgentOrchestrator:
                             f"PARTS OF THE QUESTION (use these ids verbatim):\n"
                             f"{self._sub_question_brief(sub_questions, user_message)}\n\n"
                             f"{query_notes}"
+                            f"{facts}"
                             f"CERTIFICATE REGISTER (JSON):\n{data_json}"
                         ),
                     }
@@ -4903,6 +4969,7 @@ class DeepAgentOrchestrator:
         analysis = await self._claude_analyse_compliance(
             user_message,
             self._compliance_data_json(tool_calls, taxonomy=is_taxonomy),
+            facts=self._compliance_facts(fetched_rows),
             on_zone=on_zone,
             sub_questions=plan.get("sub_questions"),
             query_notes=query_notes,
@@ -5050,6 +5117,7 @@ class DeepAgentOrchestrator:
                     revised = await self._claude_analyse_compliance(
                         user_message,
                         self._compliance_data_json(tool_calls, taxonomy=True),
+                        facts=self._compliance_facts(fetched_rows),
                         on_zone=on_zone,
                         sub_questions=plan.get("sub_questions"),
                         query_notes=self._revision_brief(code_findings, review, pack_facts)
@@ -5863,6 +5931,106 @@ class DeepAgentOrchestrator:
             tool_calls=list(shortcut.get("tool_calls") or []),
         )
 
+    async def _planner_llm(self, system: str, user: str, role: str) -> str:
+        """One model call for the planner or the synthesis: recorded as an activity exchange and
+        on the cost ledger, so it is a span with prompt, output, tokens and dollars."""
+        from langchain_core.messages import HumanMessage as _H, SystemMessage as _S
+
+        t0 = time.perf_counter()
+        try:
+            msg = await self._llm.ainvoke([_S(content=system), _H(content=user)])
+        except Exception as exc:
+            activity_log.fire_exchange(agent="orchestrator", stage=role, system=system, user=user, error=str(exc)[:300],
+                                       latency_ms=(time.perf_counter() - t0) * 1000)
+            raise
+        ms = (time.perf_counter() - t0) * 1000
+        text_out = msg.content if isinstance(msg.content, str) else " ".join(
+            str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in (msg.content or []))
+        usage, _steps = llm_cost.usage_from_langchain_messages([msg])
+        model = (getattr(msg, "response_metadata", None) or {}).get("model_name") or settings.openai_model
+        activity_log.fire_exchange(agent="orchestrator", stage=role, system=system, user=user, output=text_out, model=model,
+                                   latency_ms=ms, usage={"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")})
+        llm_cost.record(role, model, usage, ms)
+        return text_out
+
+    def _planner_tools(self) -> dict[str, str]:
+        """The tools a plan step may name: every engine's read tools, one line each."""
+        out: dict[str, str] = {}
+        for tools in PHASE2_ENGINE_TOOLS.values():
+            for t in tools:
+                if t.name not in out:
+                    out[t.name] = (t.description or "").strip().splitlines()[0][:160]
+        return out
+
+    async def _run_planned_tool(self, name: str, args: dict[str, Any]) -> Any:
+        for tools in PHASE2_ENGINE_TOOLS.values():
+            for t in tools:
+                if t.name == name:
+                    return await t.ainvoke(args)
+        raise ValueError(f"unknown tool {name}")
+
+    async def _stream_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], t0: float):
+        """plan -> act -> verify, streamed: the plan first, then each step's tool events as they
+        happen, then the answer. Every stage is a span (agents/planner.py, agents/trace.py)."""
+        yield {"type": "reasoning", "label": "Plan", "text": planner.describe(plan), "domain": "orchestrator"}
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def on_event(ev: dict[str, Any]) -> None:
+            await queue.put(ev)
+
+        async def run_engine(engine: str, ask: str, on_ev: Any) -> tuple[str, list]:
+            return await run_phase2_engine_verbose(engine, ask, on_event=on_ev)
+
+        ws = thread_scope.active_scope.get()
+        exec_task = asyncio.create_task(planner.execute(
+            plan, run_engine=run_engine, run_tool=self._run_planned_tool,
+            scope_hint=thread_scope.describe(ws) if ws else "", on_event=on_event))
+        pending_get = asyncio.create_task(queue.get())
+        try:
+            while not exec_task.done():
+                done, _ = await asyncio.wait({exec_task, pending_get}, return_when=asyncio.FIRST_COMPLETED)
+                if pending_get in done:
+                    yield pending_get.result()
+                    pending_get = asyncio.create_task(queue.get())
+            while not queue.empty():
+                yield queue.get_nowait()
+        finally:
+            pending_get.cancel()
+        results = await exec_task
+        tool_calls = [tc for r in results.values() for tc in (r.get("tool_calls") or [])]
+        try:
+            answer = await planner.synthesise(user_message, plan, results, self._planner_llm)
+        except Exception as exc:  # noqa: BLE001
+            answer = "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200]
+        check = planner.verify(answer, results)
+        trace_rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
+        trace.on_step_close(trace_rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
+        if not check["ok"]:
+            answer += ("\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8])
+                       + (" could not be traced to a step result." if len(check["unmatched"]) == 1 else " could not be traced to the step results."))
+        result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
+                  "route_metadata": {"intent": "planned", "domain": "orchestrator", "steps": [s["target"] for s in plan["steps"]]}}
+        attach_route_to_result(result, sid, intent="planned", domain="orchestrator")
+        await self._close_streamed_turn(sid, result, t0)
+        yield workflow_stream_completion_payload(sid, answer=answer, tool_calls=tool_calls)
+
+    async def _close_streamed_turn(self, sid: str, result: dict[str, Any], t0: float) -> None:
+        """The turn's closing activity row for the early exits of stream() - a preflight shortcut,
+        a progressive compliance answer, a phase-2 engine. The main loop writes its own at the end;
+        these three returned without one, so the trace never flushed and the thread's answer was
+        recorded only when attach_route_to_result happened to run (found 2 Oct 2026: a whole
+        energy answer with no run on the Hoist Traces page)."""
+        answer = str((result or {}).get("answer") or "")
+        tool_calls = list((result or {}).get("tool_calls") or [])
+        activity_log.fire(
+            agent="orchestrator", stage="turn", direction="output", summary=answer[:300],
+            payload={"answer": answer, "tool_calls": tool_calls, "mode": "stream",
+                     "route": ((result or {}).get("route_metadata") or {}).get("intent")},
+            latency_ms=(time.perf_counter() - t0) * 1000,
+        )
+        if answer.strip():
+            await chat_threads.record_answer(sid, answer, tools=tool_calls)
+
     async def _stream_shortcut_events(
         self, shortcut: dict[str, Any], session_id: str
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -6009,7 +6177,8 @@ class DeepAgentOrchestrator:
             data_calls.append(reach_call)
         data_json = self._compliance_data_json(data_calls, taxonomy=is_taxonomy)
         analysis = await self._claude_analyse_compliance(
-            user_message, data_json, on_zone=on_zone, query_notes=notes, taxonomy=is_taxonomy
+            user_message, data_json, on_zone=on_zone, query_notes=notes, taxonomy=is_taxonomy,
+            facts=self._compliance_facts(rows),
         )
         if not analysis or not str(analysis.get("narrative") or "").strip():
             log.info("compliance.compose.unavailable", session_id=session_id)
@@ -6119,6 +6288,7 @@ class DeepAgentOrchestrator:
                 query_notes=self._revision_brief(code_findings, review, pack_facts) + notes,
                 taxonomy=is_taxonomy,
                 role="analyst_revision",
+                facts=self._compliance_facts(rows),
             )
             if revised and str(revised.get("narrative") or "").strip():
                 if rows:
@@ -6566,7 +6736,9 @@ class DeepAgentOrchestrator:
             }},
         )
         try:
-            result = await self._agent.ainvoke(input_, config)
+            # Outside the event stream, the trace learns the loop's model and tool calls this way.
+            _h = trace.callback_handler("orchestrator loop")
+            result = await self._agent.ainvoke(input_, {**config, **({"callbacks": [_h]} if _h else {})})
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
@@ -7106,9 +7278,11 @@ class DeepAgentOrchestrator:
                     shortcut, sid, streamed_zones
                 ):
                     yield ev
+                await self._close_streamed_turn(sid, shortcut, _stream_t0)
                 return
             async for ev in self._stream_shortcut_events(shortcut, sid):
                 yield ev
+            await self._close_streamed_turn(sid, shortcut, _stream_t0)
             return
 
         # Phase 2 engine routing — mirror run_stateful so the STREAMING UI path also honours the
@@ -7138,6 +7312,25 @@ class DeepAgentOrchestrator:
             routing = await select_agent(user_message, extra_context)
             phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
             self._claim_turn_for_page_engines(routing)
+            # A question that needs decomposition is planned, run step by step and verified
+            # (agents/planner.py); a single-engine question keeps the direct path but records
+            # the one-step plan, so every run says why it went where it went.
+            if planner.is_multi_part(user_message):
+                ws_now = thread_scope.active_scope.get()
+                plan_ctx = ("WORKING SET (hard filter): " + thread_scope.describe(ws_now) + "\n") if ws_now else ""
+                if extra_context:
+                    plan_ctx += "PAGE CONTEXT: " + str(extra_context)[:600] + "\n"
+                plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm)
+                if plan is not None:
+                    trace.on_plan(plan, source="planner")
+                    async for ev in self._stream_planned_turn(sid, user_message, plan, _stream_t0):
+                        yield ev
+                    return
+                trace.on_plan(None, source="planner", rejected=why)
+                yield {"type": "reasoning", "label": "Plan", "text": "No valid plan (" + str(why) + "); answering by direct routing instead.",
+                       "domain": "orchestrator"}
+            trace.on_plan(planner.one_step_plan(phase2_engine or "orchestrator loop", routing.get("reason") if routing else None,
+                                                source=(routing or {}).get("source") or "router"), source="router")
             if phase2_engine is not None:
                 yield {
                     "type": "reasoning",
@@ -7202,6 +7395,7 @@ class DeepAgentOrchestrator:
                     for key in self._ZONE_KEYS:
                         yield self._compliance_zone_event(key, analysis.get(key) if key in analysis else ("" if key == "narrative" else []))
                 log.info("orchestrator.stream.phase2_live", session_id=sid, engine=phase2_engine)
+                await self._close_streamed_turn(sid, phase2_result, _stream_t0)
                 yield workflow_stream_completion_payload(
                     sid,
                     answer=str(phase2_result.get("answer") or ""),

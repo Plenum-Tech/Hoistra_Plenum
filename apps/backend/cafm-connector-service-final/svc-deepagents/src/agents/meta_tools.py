@@ -39,6 +39,15 @@ from langgraph.prebuilt import create_react_agent
 
 log = structlog.get_logger(__name__)
 
+
+def _trace_callbacks(agent: str) -> dict:
+    """The trace's callback handler for a graph run outside the orchestrator's event stream, so
+    an engine's model and tool calls land on Hoist Traces under the engine's name."""
+    from . import trace as _trace
+
+    h = _trace.callback_handler(agent)
+    return {"callbacks": [h]} if h is not None else {}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Compliance sub-agent behavioural contract (tool routing).
 # Attached as the system prompt on create_react_agent for agent="compliance".
@@ -482,7 +491,7 @@ class _TaskRunner:
             if on_event is None:
                 result = await runner.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
-                    config={"recursion_limit": 45},
+                    config={"recursion_limit": 45, **_trace_callbacks(agent)},
                 )
             else:
                 # Same graph, observed step by step: each state carries the messages so far,
@@ -500,7 +509,7 @@ class _TaskRunner:
                 # vendor composer and the compliance analyst rewrite what the sub-agent wrote.
                 async for mode, payload in runner.astream(
                     {"messages": [HumanMessage(content=prompt)]},
-                    config={"recursion_limit": 45},
+                    config={"recursion_limit": 45, **_trace_callbacks(agent)},
                     stream_mode=["values", "messages"],
                 ):
                     if mode == "messages":

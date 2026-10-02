@@ -178,7 +178,8 @@ def _bound(v: Any) -> Any:
 
 class Span:
     __slots__ = ("id", "parent_id", "seq", "kind", "name", "agent", "model", "t0", "t1", "started_at", "ended_at",
-                 "input", "output", "input_tokens", "output_tokens", "cache_read", "cost_usd", "ok", "error", "role")
+                 "input", "output", "input_tokens", "output_tokens", "cache_read", "cost_usd", "ok", "error", "role",
+                 "from_ledger")
 
     def __init__(self, *, kind: str, name: str, agent: str | None, parent_id: str | None, seq: int,
                  model: str | None = None, input: Any = None, role: str | None = None) -> None:
@@ -190,6 +191,7 @@ class Span:
         self.input, self.output = input, None
         self.input_tokens = self.output_tokens = self.cache_read = None
         self.cost_usd, self.ok, self.error = None, True, None
+        self.from_ledger = False
 
     @property
     def open(self) -> bool:
@@ -224,7 +226,8 @@ class Turn:
         self.route: str | None = None
         self.spans: list[Span] = []
         self.groups: dict[str, Span] = {}
-        self.runs: dict[str, Span] = {}      # model runs by run_id (stream events)
+        self.runs: dict[str, Span] = {}      # model runs by run_id (stream events / callbacks)
+        self.tool_runs: dict[str, Span] = {} # tool runs by run_id (callbacks)
         self.flushed = False
         from ..http_client import caller_organization_id
         from ..services.principal import caller_principal
@@ -334,8 +337,47 @@ def on_activity(kw: dict[str, Any]) -> None:
         s.close(output=_bound(payload.get("model_output") if "model_output" in payload else (payload or kw.get("summary"))),
                 ok=bool(kw.get("ok", True)), error=kw.get("error"), latency_ms=kw.get("latency_ms"), model=model,
                 input_tokens=kw.get("input_tokens"), output_tokens=kw.get("output_tokens"))
+        _absorb_ledger_span(t, s, agent, stage)
     except Exception as exc:  # noqa: BLE001 - never the turn's problem
         log.warning("trace.on_activity_failed", error=str(exc)[:200])
+
+
+#: Ledger roles that are the same call as an activity stage under another name.
+_ROLE_ALIASES = {"reviewer": "review", "doc_router": "compliance_router", "planner": "plan", "sub_agent": "task"}
+
+
+def _same_call(role: str | None, agent: str, stage: str) -> bool:
+    r = str(role or "")
+    names = {agent, stage, agent.split(":")[-1]}
+    return bool(r) and (r in names or _ROLE_ALIASES.get(r) in names or any(n.startswith(r) or r.startswith(n) for n in names if len(n) > 3))
+
+
+def _absorb_ledger_span(t: Turn, s: Span, agent: str, stage: str) -> None:
+    """A router records its cost BEFORE its activity rows arrive, so the ledger had made a span
+    of its own; once the real span closes, its dollars move over and the orphan (and the group
+    of one it sat in) go. Found 2 Oct 2026 as a router shown twice."""
+    for o in list(t.spans):
+        if not getattr(o, "from_ledger", False) or o is s:
+            continue
+        if _same_call(o.role, agent, stage) or _same_call(o.agent, agent, stage) or _same_call(o.name, agent, stage):
+            s.cost_usd = o.cost_usd if s.cost_usd is None else s.cost_usd
+            s.model = s.model or o.model
+            s.input_tokens = s.input_tokens if s.input_tokens is not None else o.input_tokens
+            s.output_tokens = s.output_tokens if s.output_tokens is not None else o.output_tokens
+            s.cache_read = s.cache_read if s.cache_read is not None else o.cache_read
+            s.kind = "llm" if s.kind == "stage" else s.kind
+            # The call happened when the ledger saw it, not when its rows arrived: keep the
+            # earlier place in the sequence, or a router that ran first is listed last.
+            if o.seq < s.seq:
+                s.seq = o.seq
+                if o.started_at and (s.started_at is None or o.started_at < s.started_at):
+                    s.started_at, s.t0 = o.started_at, o.t0
+            t.spans.remove(o)
+            group = next((g for g in t.spans if g.id == o.parent_id and g.kind == "agent"), None)
+            if group is not None and not any(x.parent_id == group.id for x in t.spans):
+                t.spans.remove(group)
+                t.groups.pop(group.name, None)
+            break
 
 
 def on_llm_cost(entry: dict[str, Any]) -> None:
@@ -345,20 +387,35 @@ def on_llm_cost(entry: dict[str, Any]) -> None:
         if t is None or t.flushed:
             return
         role = str(entry.get("role") or "llm")
+        # A sub-agent's ledger entry is the WHOLE engine run (its model calls were traced one by
+        # one through the callback handler): the dollars go on the engine's group span.
+        if role == "sub_agent" or entry.get("tools") is not None:
+            name = str(entry.get("agent") or "")
+            group = t.groups.get(name) or next((g for g in reversed(t.spans) if g.kind == "agent" and g.cost_usd is None), None)
+            if group is not None:
+                group.cost_usd = entry.get("usd")
+                group.model = entry.get("model") or group.model
+                group.input_tokens, group.output_tokens, group.cache_read = (entry.get("input_tokens"), entry.get("output_tokens"),
+                                                                           entry.get("cache_read"))
+                if group.open:
+                    group.close(latency_ms=entry.get("ms"))
+                return
         # The span this call belongs to: the newest llm/router span of that role or agent still
         # without a cost. The compliance stages name their role as the stage; routers as the agent.
         target = None
         for s in reversed(t.spans):
-            if s.kind in ("llm", "router", "stage") and s.cost_usd is None and (s.role == role or s.agent == role or s.name == role
-                                                                                  or (s.agent or "").endswith(role)):
+            if s.kind in ("llm", "router", "stage") and s.cost_usd is None and (
+                    s.role == role or s.agent == role or s.name == role or (s.agent or "").endswith(role)
+                    or _same_call(role, s.agent or "", s.name)):
                 target = s
                 break
         if target is None:
             # A model call no activity row announced: inside the tool running now (the record
             # engine's planner, a sub-agent) it hangs under that tool; otherwise under its role.
-            tool = t.last_open(lambda x: x.kind == "tool")
+            tool = t.last_open(lambda x: x.kind in ("tool", "step"))
             parent = tool.id if tool else t.group(role).id
             target = t.new(kind="llm", name=role, agent=(tool.agent if tool else role), parent_id=parent, model=entry.get("model"), role=role)
+            target.from_ledger = True
             target.close(latency_ms=entry.get("ms"))
         target.kind = "llm" if target.kind == "stage" else target.kind
         target.model = entry.get("model") or target.model
@@ -404,7 +461,7 @@ def on_sql(sql: str, params: Any, rows: list | None, ms: float | None, *, label:
         t = _turn.get()
         if t is None or t.flushed or not sql:
             return
-        parent = t.last_open(lambda x: x.kind == "tool") or t.root
+        parent = t.last_open(lambda x: x.kind in ("tool", "step")) or t.root
         name = (label or "").strip() or (sql.strip().split(None, 4)[:4] and " ".join(sql.strip().split()[:4]))
         s = t.new(kind="db", name=str(name)[:120], agent=parent.agent, parent_id=parent.id,
                   input=_bound({"sql": sql, "params": params if isinstance(params, dict) else {}, "label": label or None}))
@@ -418,14 +475,22 @@ def on_sql(sql: str, params: Any, rows: list | None, ms: float | None, *, label:
         log.warning("trace.on_sql_failed", error=str(exc)[:200])
 
 
-def on_model_start(run_id: str, model: str | None, depth: int, messages_summary: dict | None = None) -> None:
-    """A model run inside the LangGraph loop (stream events): the orchestrator's own thinking,
-    or a sub-agent's when nested deeper."""
+def on_model_start(run_id: str, model: str | None, depth: int, messages_summary: dict | None = None,
+                   group: str | None = None) -> None:
+    """A model run inside a LangGraph loop (stream events or the callback handler): the
+    orchestrator's own thinking, or an engine's / sub-agent's under its own group."""
     try:
         t = _turn.get()
         if t is None or t.flushed or not run_id:
             return
-        parent = t.group("orchestrator loop") if depth <= 2 else t.group("sub-agent")
+        if group:
+            parent = t.groups.get(group)
+            if parent is None:
+                # An engine runs inside the tool or turn that called it.
+                tool = t.last_open(lambda x: x.kind in ("tool", "step"))
+                parent = t.groups[group] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
+        else:
+            parent = t.group("orchestrator loop") if depth <= 2 else t.group("sub-agent")
         t.runs[run_id] = t.new(kind="llm", name="model", agent=parent.name, parent_id=parent.id, model=model, role="agent",
                                input=_bound(messages_summary) if messages_summary else None)
     except Exception as exc:  # noqa: BLE001
@@ -460,6 +525,133 @@ def on_model_end(run_id: str, output_msg: Any) -> None:
         log.warning("trace.on_model_end_failed", error=str(exc)[:200])
 
 
+def on_plan(plan: dict | None, *, source: str, rejected: str | None = None) -> None:
+    """The plan the turn runs on - one step chosen by the router, or the planner's steps - as the
+    span right after `prompt assembled`, so every run says why it went where it went."""
+    try:
+        t = _turn.get()
+        if t is None or t.flushed:
+            return
+        steps = (plan or {}).get("steps") or []
+        name = "plan" if not plan else (f"plan: {len(steps)} step" + ("s" if len(steps) != 1 else ""))
+        s = t.new(kind="plan", name=name, agent="orchestrator", parent_id=t.root.id,
+                  input=_bound({"source": source, "question": t.question}))
+        s.close(output=_bound({"plan": plan, "rejected": rejected}), ok=rejected is None, error=rejected)
+        if plan:
+            t.route = (plan.get("mode") or "") + ":" + ",".join(str(x.get("target")) for x in steps)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_plan_failed", error=str(exc)[:200])
+
+
+def on_step_open(step_id: str, name: str, inputs: Any) -> str | None:
+    """A plan step starts: what runs inside it (an engine's model and tool calls, a tool's queries)
+    hangs under this span. Returns the run id to close it with."""
+    try:
+        t = _turn.get()
+        if t is None or t.flushed:
+            return None
+        plan = next((x for x in reversed(t.spans) if x.kind == "plan"), None)
+        s = t.new(kind="step", name=str(name)[:120], agent="orchestrator", parent_id=(plan or t.root).id, input=_bound(inputs))
+        rid = "step:" + step_id + ":" + s.id
+        t.tool_runs[rid] = s
+        return rid
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_step_open_failed", error=str(exc)[:200])
+        return None
+
+
+def on_step_close(run_id: str | None, output: Any, *, ok: bool = True, error: str | None = None) -> None:
+    try:
+        t = _turn.get()
+        if t is None or t.flushed or not run_id:
+            return
+        s = t.tool_runs.pop(run_id, None)
+        if s is not None:
+            s.close(output=_bound(output), ok=ok, error=error)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_step_close_failed", error=str(exc)[:200])
+
+
+def on_tool_open(run_id: str, name: str, inputs: Any, group: str | None = None) -> None:
+    """A tool call announced by the callback handler (engines and sub-agents run outside the
+    stream loop, so no activity row says they happened)."""
+    try:
+        t = _turn.get()
+        if t is None or t.flushed or not run_id:
+            return
+        parent = t.groups.get(group) if group else None
+        if parent is None and group:
+            tool = t.last_open(lambda x: x.kind in ("tool", "step"))
+            parent = t.groups[group] = t.new(kind="agent", name=group, agent=group, parent_id=(tool.id if tool else t.root.id))
+        t.tool_runs[run_id] = t.new(kind="tool", name=str(name)[:120], agent=group or "tool", parent_id=(parent or t.root).id,
+                                    input=_bound(inputs))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_tool_open_failed", error=str(exc)[:200])
+
+
+def on_tool_close(run_id: str, output: Any, error: str | None = None) -> None:
+    try:
+        t = _turn.get()
+        if t is None or t.flushed:
+            return
+        s = t.tool_runs.pop(run_id, None)
+        if s is None:
+            return
+        out = getattr(output, "content", output)
+        if isinstance(out, str):
+            try:
+                out = json.loads(out)
+            except ValueError:
+                pass
+        s.close(output=_bound(out), ok=not error, error=error)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace.on_tool_close_failed", error=str(exc)[:200])
+
+
+def callback_handler(group: str | None = None):
+    """A LangChain callback handler to pass in `config={"callbacks": [...]}` wherever a graph is
+    run outside the orchestrator's own event stream: every model and tool call inside it then
+    lands in the trace with real timings, under `group`. None when LangChain is unavailable."""
+    try:
+        from langchain_core.callbacks import AsyncCallbackHandler
+    except Exception:  # noqa: BLE001
+        return None
+
+    class _Handler(AsyncCallbackHandler):
+        run_inline = True
+
+        async def on_chat_model_start(self, serialized, messages, *, run_id, parent_run_id=None, tags=None, metadata=None, **kw):
+            flat = [m for grp in (messages or []) for m in (grp if isinstance(grp, list) else [grp])]
+            last = next((m for m in reversed(flat) if getattr(m, "type", "") == "human"), None)
+            on_model_start(str(run_id), (metadata or {}).get("ls_model_name") or (serialized or {}).get("name"), 2,
+                           {"messages": len(flat), "last_human_message": getattr(last, "content", None) if last is not None else None,
+                            "tool_results_since_last_human": sum(1 for m in flat if getattr(m, "type", "") == "tool")}, group=group)
+
+        async def on_llm_end(self, response, *, run_id, parent_run_id=None, **kw):
+            gens = getattr(response, "generations", None) or []
+            msg = getattr(gens[0][0], "message", None) if gens and gens[0] else None
+            if msg is None and gens and gens[0]:
+                msg = gens[0][0]
+            on_model_end(str(run_id), msg)
+
+        async def on_llm_error(self, error, *, run_id, parent_run_id=None, **kw):
+            t = _turn.get()
+            s = t.runs.pop(str(run_id), None) if t else None
+            if s is not None:
+                s.close(ok=False, error=str(error).splitlines()[0][:300])
+
+        async def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kw):
+            on_tool_open(str(run_id), (serialized or {}).get("name") or "tool", inputs if inputs is not None else input_str, group=group)
+
+        async def on_tool_end(self, output, *, run_id, parent_run_id=None, **kw):
+            on_tool_close(str(run_id), output)
+
+        async def on_tool_error(self, error, *, run_id, parent_run_id=None, **kw):
+            on_tool_close(str(run_id), None, error=str(error).splitlines()[0][:300])
+
+    return _Handler()
+
+
 # ── flush ─────────────────────────────────────────────────────────────────────────────
 
 def totals(t: Turn, ledger_summary: dict[str, Any] | None) -> dict[str, Any]:
@@ -489,10 +681,21 @@ def _flush(t: Turn, *, answer: str, tool_calls: list) -> None:
     if t.flushed:
         return
     t.flushed = True
-    # Anything still open closes with the turn.
+    # A group opened for its children (an engine, a ledger role) ends when its last child ends,
+    # not when the turn does - or a 2 s router shows as a 193 s block. Anything else still open
+    # closes with the turn; the tree is written in sequence order.
+    for g in t.spans:
+        if g.open and g.kind == "agent":
+            kids = [x for x in t.spans if x.parent_id == g.id and x.t1 is not None]
+            if kids:
+                last = max(kids, key=lambda x: x.t1)
+                g.t1, g.ended_at = last.t1, last.ended_at
+                g.t0 = min([g.t0] + [x.t0 for x in kids])
+                g.started_at = min([g.started_at] + [x.started_at for x in kids if x.started_at])
     for s in t.spans:
         if s.open:
             s.close()
+    t.spans.sort(key=lambda x: x.seq)
     from . import llm_cost
 
     ledger = llm_cost.current()

@@ -242,3 +242,135 @@ def test_what_shaped_the_turn_is_one_span_under_the_root(ready):
     assert p.output["memories"] is True and p.output["system_prompt_chars"] == 70
     m = next(s for s in t.spans if s.kind == "llm")
     assert m.input["messages"] == 7
+
+
+def test_streams_early_exits_close_the_turn_so_the_trace_flushes(ready, monkeypatch):
+    """A preflight shortcut, a progressive compliance answer and a phase-2 engine all returned from
+    stream() without the turn's closing row (2 Oct 2026: an energy answer with no run on the page)."""
+    from types import SimpleNamespace
+
+    from src.agents import activity_log
+    from src.agents.orchestrator import DeepAgentOrchestrator
+    from src.services import chat_threads
+
+    fired, recorded = [], []
+    monkeypatch.setattr(activity_log, "fire", lambda **kw: fired.append(kw))
+
+    async def rec(sid, answer, tools=None, citations=None):
+        recorded.append((sid, answer, tools))
+
+    monkeypatch.setattr(chat_threads, "record_answer", rec)
+    result = {"answer": "CHILLER-101 is the largest energy waster.", "tool_calls": [{"tool": "list_energy_anomalies"}],
+              "route_metadata": {"intent": "general_query"}}
+    asyncio.run(DeepAgentOrchestrator._close_streamed_turn(SimpleNamespace(), "s1", result, 0.0))
+    assert fired[0]["agent"] == "orchestrator" and fired[0]["stage"] == "turn" and fired[0]["direction"] == "output"
+    assert fired[0]["payload"]["answer"].startswith("CHILLER-101") and fired[0]["payload"]["route"] == "general_query"
+    assert fired[0]["latency_ms"] > 0
+    assert recorded == [("s1", "CHILLER-101 is the largest energy waster.", [{"tool": "list_energy_anomalies"}])]
+
+
+def test_an_engine_run_outside_the_stream_is_traced_through_the_callback_handler(ready):
+    """The energy answer of 2 Oct 2026 showed 0 tool calls and one opaque sub_agent block: the
+    engine ran through ainvoke, outside the event stream. The handler announces its calls."""
+    import uuid as _uuid
+    from types import SimpleNamespace
+
+    h = trace.callback_handler("energy_intelligence")
+    assert h is not None
+
+    async def run():
+        llm_cost.begin_turn("s1")
+        _turn_input("Which asset wastes the most energy?")
+        trace.on_activity({"agent": "tool:meta", "stage": "tool", "direction": "input", "summary": "task",
+                           "payload": {"tool": "task", "input": {"agent": "energy_intelligence"}}})
+        m1, t1 = _uuid.uuid4(), _uuid.uuid4()
+        await h.on_chat_model_start({"name": "ChatOpenAI"}, [[SimpleNamespace(type="human", content="which asset")]], run_id=m1,
+                                    metadata={"ls_model_name": "gpt-5.6-terra"})
+        msg = SimpleNamespace(usage_metadata={"input_tokens": 9000, "output_tokens": 40, "input_token_details": {"cache_read": 8000}},
+                              response_metadata={"model_name": "gpt-5.6-terra"},
+                              tool_calls=[{"name": "list_energy_anomalies", "args": {"building_id": "b"}}], content="")
+        await h.on_llm_end(SimpleNamespace(generations=[[SimpleNamespace(message=msg)]]), run_id=m1)
+        await h.on_tool_start({"name": "list_energy_anomalies"}, '{"building_id": "b"}', run_id=t1, inputs={"building_id": "b"})
+        await h.on_tool_end(SimpleNamespace(content='{"anomalies": 3}'), run_id=t1)
+        t2 = _uuid.uuid4()
+        await h.on_tool_start({"name": "investigate_asset"}, "x", run_id=t2, inputs={"asset": "CHILLER-101"})
+        await h.on_tool_error(RuntimeError("timeout talking to ops-intel"), run_id=t2)
+        # the sub-agent's ledger entry is the whole run: it lands on the engine's group, not a new span
+        llm_cost.record("sub_agent", "gpt-5.6-terra", {"input_tokens": 9000, "output_tokens": 40, "cache_read": 8000}, 12800,
+                        agent="energy_intelligence", tools=["list_energy_anomalies"])
+        trace.on_activity({"agent": "tool:meta", "stage": "tool", "direction": "output", "summary": "task", "payload": {"tool": "task", "output": {}}})
+        t = trace.current()
+        trace.on_activity({"agent": "orchestrator", "stage": "turn", "direction": "output", "summary": "ok", "payload": {"answer": "CHILLER-101."}})
+        await asyncio.sleep(0)
+        return t
+
+    t = asyncio.run(run())
+    task = next(s for s in t.spans if s.kind == "tool" and s.name == "task")
+    group = next(s for s in t.spans if s.kind == "agent" and s.name == "energy_intelligence")
+    assert group.parent_id == task.id and group.cost_usd is not None and group.input_tokens == 9000
+    model = next(s for s in t.spans if s.kind == "llm" and s.parent_id == group.id)
+    assert model.model == "gpt-5.6-terra" and model.input_tokens == 1000 and model.output["tool_calls"][0]["name"] == "list_energy_anomalies"
+    tools = [s for s in t.spans if s.kind == "tool" and s.parent_id == group.id]
+    assert [x.name for x in tools] == ["list_energy_anomalies", "investigate_asset"]
+    assert tools[0].output == {"anomalies": 3} and tools[0].ok
+    assert not tools[1].ok and "timeout" in tools[1].error
+    assert not any(s.kind == "llm" and s.name == "sub_agent" for s in t.spans)
+    tot = trace.totals(t, None)
+    assert tot["tool_calls"] == 3 and tot["llm_calls"] == 1
+
+
+def test_a_routers_early_ledger_entry_is_absorbed_by_its_activity_span(ready):
+    """agent_router records its cost before its activity rows: shown twice on 2 Oct 2026."""
+    async def run():
+        llm_cost.begin_turn("s1")
+        _turn_input()
+        llm_cost.record("agent_router", "claude-sonnet-5", {"input_tokens": 2800, "output_tokens": 68, "cache_read": 0}, 2110)
+        trace.on_activity({"agent": "agent_router", "stage": "router", "direction": "input", "summary": "route", "payload": {"user_message": "q"}})
+        trace.on_activity({"agent": "agent_router", "stage": "router", "direction": "output", "summary": "energy", "model": "claude-sonnet-5",
+                           "latency_ms": 2110, "payload": {"model_output": {"agent": "energy_intelligence"}}})
+        t = trace.current()
+        trace.on_activity({"agent": "orchestrator", "stage": "turn", "direction": "output", "summary": "ok", "payload": {"answer": "x"}})
+        await asyncio.sleep(0)
+        return t
+
+    t = asyncio.run(run())
+    routers = [s for s in t.spans if s.kind in ("router", "llm")]
+    assert len(routers) == 1 and routers[0].kind == "router" and routers[0].cost_usd is not None and routers[0].input_tokens == 2800
+    assert routers[0].input == {"user_message": "q"} and routers[0].output == {"agent": "energy_intelligence"}
+    assert not any(s.kind == "agent" for s in t.spans)   # no group of one left behind
+    # It ran first, so it is listed first (after the root), not where its rows arrived.
+    assert t.spans[1] is routers[0]
+
+
+def test_a_ledger_role_under_another_name_is_the_same_call_and_a_role_group_ends_with_its_children(ready):
+    """turn-aff1e9826ca44ec1 (2 Oct 2026): 'review' (activity) and 'reviewer' (ledger) showed as two
+    spans, and the doc_router group - one 2 s call - spanned 193 s because groups closed with the turn."""
+    async def run():
+        llm_cost.begin_turn("s1")
+        _turn_input("show me the expired certificates by vendor and building")
+        # the compliance router: ledger role doc_router, activity agent compliance_router
+        llm_cost.record("doc_router", "claude-sonnet-5", {"input_tokens": 658, "output_tokens": 62, "cache_read": 0}, 2259)
+        trace.on_activity({"agent": "compliance_router", "stage": "router", "direction": "input", "summary": "route", "payload": {"q": 1}})
+        trace.on_activity({"agent": "compliance_router", "stage": "router", "direction": "output", "summary": "compliance", "model": "claude-sonnet-5",
+                           "latency_ms": 2260, "input_tokens": 658, "output_tokens": 62, "payload": {"model_output": "compliance"}})
+        # the review stage: activity 'review', ledger 'reviewer' recorded AFTER the rows (so no orphan to absorb at close time)
+        trace.on_activity({"agent": "compliance", "stage": "review", "direction": "input", "summary": "review", "payload": {"system_prompt": "You review"}})
+        trace.on_activity({"agent": "compliance", "stage": "review", "direction": "output", "summary": "revise", "model": "claude-sonnet-5",
+                           "latency_ms": 32075, "input_tokens": 17363, "output_tokens": 3114, "payload": {"model_output": {"verdict": "revise"}}})
+        llm_cost.record("reviewer", "claude-sonnet-5", {"input_tokens": 17363, "output_tokens": 3114, "cache_read": 0}, 32075)
+        await asyncio.sleep(0.05)
+        t = trace.current()
+        trace.on_activity({"agent": "orchestrator", "stage": "turn", "direction": "output", "summary": "ok", "payload": {"answer": "x"}})
+        await asyncio.sleep(0)
+        return t
+
+    t = asyncio.run(run())
+    routers = [s for s in t.spans if s.kind == "router"]
+    assert len(routers) == 1 and routers[0].cost_usd is not None and routers[0].agent == "compliance_router"
+    assert not any(s.kind == "agent" and s.name == "doc_router" for s in t.spans)
+    reviews = [s for s in t.spans if s.name in ("review", "reviewer") and s.kind != "agent"]
+    assert len(reviews) == 1 and reviews[0].name == "review" and reviews[0].cost_usd is not None
+    assert not any(s.kind == "agent" and s.name == "reviewer" for s in t.spans)
+    # the engine group ends with its last child, not with the turn
+    comp = next(s for s in t.spans if s.kind == "agent" and s.name == "compliance")
+    assert comp.ended_at == reviews[0].ended_at
