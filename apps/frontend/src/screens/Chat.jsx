@@ -129,6 +129,7 @@ export default function Chat({ vals }) {
                         {typeof m.ms === "number" ? (
                           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>{(m.ms / 1000).toFixed(m.ms < 10000 ? 1 : 0) + " s"}</span>
                         ) : null}
+                        <span style={{ display: m.rerunShow, alignItems: "center", gap: "4px", fontSize: "10px", padding: "1px 7px", borderRadius: "999px", background: "var(--st-ok-bg, transparent)", color: "var(--st-ok)", border: "1px solid currentColor" }}><i className="ph ph-arrows-clockwise"></i>{"Re-run with your correction"}</span>
                         {/* Sends this turn's route to the rail, so an answer read later can
                             still be checked against how it was reached. */}
                         <button type="button" className={m.traceSelected ? "rt-pick is-on" : "rt-pick"} style={{ display: m.traceShow, marginLeft: "auto" }} onClick={m.selectTrace}>

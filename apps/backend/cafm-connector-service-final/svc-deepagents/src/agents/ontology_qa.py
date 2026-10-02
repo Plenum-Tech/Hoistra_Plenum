@@ -45,6 +45,7 @@ import hashlib
 import json
 import os
 import re
+from contextvars import ContextVar
 import tempfile
 from collections import defaultdict
 from typing import Any
@@ -2655,6 +2656,122 @@ def shape_certificate_reach(records: list[dict], budget: int = MAX_EVIDENCE_CHAR
             "records": data if not truncated else data[:budget] + " ...(truncated)"}
 
 
+#: Filters a reader pinned from a trace correction (agents/rerun.py), applied to the compiled plan
+#: deterministically - the model's planner is not asked to honour them, the plan is edited:
+#:   {"exclude_statuses": [...], "period": "last_month", "date_field": "raised_at"}
+pinned_filters: ContextVar[dict | None] = ContextVar("ontology_pinned_filters", default=None)
+
+
+def apply_pinned(onto, plan: dict, pinned: dict | None) -> list[str]:
+    """Edit the plan's focus filters as pinned. Each pin is applied only where the focus concept has
+    the attribute, so a pin never makes the plan invalid; what was applied is returned as notes."""
+    if not pinned:
+        return []
+    notes: list[str] = []
+    focus = plan.get("focus") or {}
+    c = onto.concepts.get(focus.get("concept"))
+    if c is None:
+        return notes
+    filters = focus.setdefault("filters", [])
+
+    def has(attr: str) -> bool:
+        try:
+            c.col(attr)
+            return True
+        except OntologyError:
+            return False
+
+    ex = [str(x) for x in (pinned.get("exclude_statuses") or []) if str(x).strip()]
+    if ex and has("status"):
+        filters[:] = [f for f in filters if not (isinstance(f, dict) and f.get("attribute") == "status" and f.get("op") == "not_in")]
+        filters.append({"attribute": "status", "op": "not_in", "value": ex, "pinned": True})
+        notes.append("Pinned by the reader: exclude status " + ", ".join(ex) + ".")
+    period = (pinned.get("period") or "").strip() or None
+    field = (pinned.get("date_field") or "").strip() or None
+    within = [f for f in filters if isinstance(f, dict) and f.get("op") == "within"]
+    if field and has(field):
+        for f in within:
+            if f.get("attribute") != field:
+                notes.append("Pinned by the reader: dated by " + field + " instead of " + str(f.get("attribute")) + ".")
+                f["attribute"] = field
+                f["pinned"] = True
+        if not within and period:
+            filters.append({"attribute": field, "op": "within", "value": period, "pinned": True})
+            within = filters[-1:]
+            notes.append("Pinned by the reader: " + field + " within " + period + ".")
+    if period:
+        for f in within:
+            if f.get("value") != period:
+                notes.append("Pinned by the reader: period " + period + " instead of " + str(f.get("value")) + ".")
+                f["value"] = period
+                f["pinned"] = True
+        if not within and not field:
+            for attr in ("raised_at", "reported_at", "created_at", "expiry_date", "due_date"):
+                if has(attr):
+                    filters.append({"attribute": attr, "op": "within", "value": period, "pinned": True})
+                    notes.append("Pinned by the reader: " + attr + " within " + period + ".")
+                    break
+    return notes
+
+
+#: Filters a reader pinned from a trace correction (agents/rerun.py), applied to the compiled plan
+#: deterministically - the model's planner is not asked to honour them, the plan is edited:
+#:   {"exclude_statuses": [...], "period": "last_month", "date_field": "raised_at"}
+pinned_filters: ContextVar[dict | None] = ContextVar("ontology_pinned_filters", default=None)
+
+
+def apply_pinned(onto, plan: dict, pinned: dict | None) -> list[str]:
+    """Edit the plan's focus filters as pinned. Each pin is applied only where the focus concept has
+    the attribute, so a pin never makes the plan invalid; what was applied is returned as notes."""
+    if not pinned:
+        return []
+    notes: list[str] = []
+    focus = plan.get("focus") or {}
+    c = onto.concepts.get(focus.get("concept"))
+    if c is None:
+        return notes
+    filters = focus.setdefault("filters", [])
+
+    def has(attr: str) -> bool:
+        try:
+            c.col(attr)
+            return True
+        except OntologyError:
+            return False
+
+    ex = [str(x) for x in (pinned.get("exclude_statuses") or []) if str(x).strip()]
+    if ex and has("status"):
+        filters[:] = [f for f in filters if not (isinstance(f, dict) and f.get("attribute") == "status" and f.get("op") == "not_in")]
+        filters.append({"attribute": "status", "op": "not_in", "value": ex, "pinned": True})
+        notes.append("Pinned by the reader: exclude status " + ", ".join(ex) + ".")
+    period = (pinned.get("period") or "").strip() or None
+    field = (pinned.get("date_field") or "").strip() or None
+    within = [f for f in filters if isinstance(f, dict) and f.get("op") == "within"]
+    if field and has(field):
+        for f in within:
+            if f.get("attribute") != field:
+                notes.append("Pinned by the reader: dated by " + field + " instead of " + str(f.get("attribute")) + ".")
+                f["attribute"] = field
+                f["pinned"] = True
+        if not within and period:
+            filters.append({"attribute": field, "op": "within", "value": period, "pinned": True})
+            within = filters[-1:]
+            notes.append("Pinned by the reader: " + field + " within " + period + ".")
+    if period:
+        for f in within:
+            if f.get("value") != period:
+                notes.append("Pinned by the reader: period " + period + " instead of " + str(f.get("value")) + ".")
+                f["value"] = period
+                f["pinned"] = True
+        if not within and not field:
+            for attr in ("raised_at", "reported_at", "created_at", "expiry_date", "due_date"):
+                if has(attr):
+                    filters.append({"attribute": attr, "op": "within", "value": period, "pinned": True})
+                    notes.append("Pinned by the reader: " + attr + " within " + period + ".")
+                    break
+    return notes
+
+
 async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     """The whole pipeline for one question, read inside the caller's scope."""
     if principal is None:
@@ -2667,6 +2784,8 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     onto = await get_ontology()
     plan, attempts = await plan_question(onto, question, llm=llm)
     grouped = ensure_grouping(onto, plan, question)
+    grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
+    grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     async with ScopedReader(principal) as r:
         plan = await add_missing_codes(r, onto, plan, question)
         plan, notes, unresolved = await resolve_plan(r, onto, plan)

@@ -15,12 +15,13 @@ import json
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...agents import trace
-from ...http_client import caller_organization_id
+from ...http_client import caller_authorization, caller_organization_id
+from ..deps import get_orchestrator
 from ...services.principal import Principal, caller_principal, current_principal
 
 router = APIRouter(prefix="/api/traces", tags=["Traces"])
@@ -78,6 +79,41 @@ async def set_feedback(turn_id: str, body: Feedback, organization_id: str | None
     if not await trace.set_feedback(principal, org, turn_id, body.rating, body.comment):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     return {"ok": True}
+
+
+class Correction(BaseModel):
+    span_id: str | None = None
+    mode: str = Field("suggestion", pattern="^(query|tool|plan|route|agent|model|suggestion)$")
+    text: str | None = Field(None, max_length=1200)
+    route: str | None = Field(None, max_length=60)
+    args: dict[str, Any] | None = None
+    # structured, so the record engine compiles them rather than reading them in prose
+    exclude: list[str] | None = Field(None, max_length=20)
+    period: str | None = Field(None, max_length=40)
+    field: str | None = Field(None, max_length=60)
+
+
+class RerunBody(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=120)
+    corrections: list[Correction] = Field(default_factory=list, max_length=12)
+
+
+@router.post("/turns/{turn_id}/rerun")
+async def rerun_turn(turn_id: str, body: RerunBody, request: Request, organization_id: str | None = Query(None),
+                     principal: Principal = Depends(current_principal), orchestrator=Depends(get_orchestrator)) -> dict[str, Any]:
+    """Replay a recorded turn with the reader's corrections applied at the steps they were raised
+    on (agents/rerun.py). The result is a new turn in the same thread, traced and linked back."""
+    org = _act(principal, organization_id)
+    caller_authorization.set(request.headers.get("authorization"))
+    turn = await trace.get_turn(principal, org, turn_id)
+    if turn is None:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
+    if not body.corrections:
+        raise HTTPException(status_code=422, detail={"ok": False, "error": "Say what to correct first."})
+    out = await orchestrator.rerun_turn(turn, [c.model_dump() for c in body.corrections], session_id=body.session_id)
+    if not out.get("ok"):
+        raise HTTPException(status_code=422, detail={"ok": False, "error": out.get("error") or "Could not re-run this turn."})
+    return out
 
 
 @router.get("/export")

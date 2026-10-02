@@ -6014,6 +6014,75 @@ class DeepAgentOrchestrator:
         await self._close_streamed_turn(sid, result, t0)
         yield workflow_stream_completion_payload(sid, answer=answer, tool_calls=tool_calls)
 
+    async def rerun_turn(self, turn: dict[str, Any], corrections: list[dict[str, Any]], *, session_id: str) -> dict[str, Any]:
+        """Replay a recorded turn with corrections applied (agents/rerun.py): the corrected plan is
+        executed step by step, synthesised and verified, and recorded as a new turn in the same
+        thread, linked to the original. Returns what the chat shows."""
+        from . import rerun as _rerun
+
+        plan = _rerun.plan_of(turn)
+        if plan is None:
+            return {"ok": False, "error": "This run recorded no route to replay."}
+        plan, notes, replan = _rerun.apply_corrections(turn, plan, corrections)
+        question = turn.get("question") or ""
+        rules = "\n".join("- " + " ".join(str(c.get("text") or "").split()) for c in corrections if c.get("text"))
+        if replan:
+            ctx = "CORRECTIONS (constraints on the plan):\n" + rules + "\n"
+            new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm)
+            if new_plan is not None:
+                plan = new_plan
+                plan["source"] = "rerun"
+            else:
+                notes.append("replan rejected: " + str(why))
+        # The new turn: its own ids in the activity log and the trace, in the same thread.
+        set_session_context(session_id)
+        activity_log.set_current_session(session_id, session_id)
+        activity_log.start_turn()
+        llm_cost.begin_turn(session_id)
+        t0 = time.perf_counter()
+        rq = _rerun.rerun_question(turn, notes)
+        activity_log.fire(agent="orchestrator", stage="turn", direction="input", summary=rq[:300],
+                          payload={"message": rq, "mode": "rerun", "rerun_of": turn.get("turn_id"), "corrections": corrections})
+        await chat_threads.record_question(session_id, rq, route="rerun")
+        trace.on_plan(plan, source="rerun")
+        ws = thread_scope.active_scope.get()
+
+        async def run_engine(engine: str, ask: str, on_ev: Any) -> tuple[str, list]:
+            return await run_phase2_engine_verbose(engine, ask, on_event=on_ev)
+
+        # Structured corrections (a status to exclude, a period, a date field) are compiled into the
+        # record engine's plan for every read of this re-run, not asked for in prose.
+        from . import ontology_qa as _oq
+        pins = _rerun.pins_from(corrections)
+        if pins:
+            notes.append("pinned: " + json.dumps(pins))
+        _tok = _oq.pinned_filters.set(pins)
+        try:
+            results = await planner.execute(plan, run_engine=run_engine, run_tool=self._run_planned_tool,
+                                            scope_hint=thread_scope.describe(ws) if ws else "")
+        finally:
+            _oq.pinned_filters.reset(_tok)
+        tool_calls = [tc for r in results.values() for tc in (r.get("tool_calls") or [])]
+        try:
+            answer = await planner.synthesise(
+                question + ("\n\nApply these corrections exactly; where a correction changes a figure, state the corrected figure:\n" + rules if rules else ""),
+                plan, results, self._planner_llm)
+        except Exception as exc:  # noqa: BLE001
+            answer = "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200]
+        check = planner.verify(answer, results)
+        rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
+        trace.on_step_close(rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
+        if not check["ok"]:
+            answer += "\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8]) + " could not be traced to the step results._"
+        new_turn_id = activity_log.current_turn()
+        result = {"session_id": session_id, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
+                  "route_metadata": {"intent": "rerun", "domain": "orchestrator", "rerun_of": turn.get("turn_id"), "steps": [s["target"] for s in plan["steps"]]}}
+        attach_route_to_result(result, session_id, intent="rerun", domain="orchestrator")
+        await self._close_streamed_turn(session_id, result, t0)
+        return {"ok": True, "turn_id": new_turn_id, "rerun_of": turn.get("turn_id"), "question": rq, "answer": answer,
+                "tool_calls": tool_calls, "plan": plan, "applied": notes, "verify": check,
+                "latency_ms": int((time.perf_counter() - t0) * 1000)}
+
     async def _close_streamed_turn(self, sid: str, result: dict[str, Any], t0: float) -> None:
         """The turn's closing activity row for the early exits of stream() - a preflight shortcut,
         a progressive compliance answer, a phase-2 engine. The main loop writes its own at the end;

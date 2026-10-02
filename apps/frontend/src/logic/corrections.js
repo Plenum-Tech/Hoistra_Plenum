@@ -182,6 +182,33 @@ export const correctionMethods = {
     this.setState({ crOpen: null });
     this.ccAsk('Re-answer the previous question with this correction: ' + text + ' Keep the same building and period unless the correction changes them.');
   },
+  // The same run, replayed with the correction applied at the step it was raised on: the steps
+  // run again, the answer is rewritten and checked, and it lands as a new turn in this thread.
+  async crRerun() {
+    const o = this.state.crOpen;
+    const text = correctionText(this.crEdits(), this.crContext());
+    if (!o || !text) { this.setState({ crMsg: 'Choose or write a correction first.' }); return; }
+    if (this.state.ccBusy) { this.setState({ crMsg: 'Still answering — wait for it to finish.' }); return; }
+    const edits = this.crEdits();
+    const body = { session_id: this.state.sessionId || 'rerun', corrections: [{ span_id: o.spanId || null, mode: o.mode, text: text, route: edits.route || null, args: null,
+      exclude: edits.exclude.length ? edits.exclude : null, period: edits.period || null, field: edits.field || null }] };
+    this.setState({ crOpen: null, ccBusy: true, ccStream: { steps: [], zones: {}, reasoning: 'Re-running the steps with your correction…', trace: [], answer: '' } });
+    this.setState((p) => ({ ccChat: (p.ccChat || []).concat([{ role: 'you', text: 'Re-run with correction: ' + text, rerun: true }]) }));
+    const t0 = Date.now();
+    try {
+      const out = await deepAgentsApi.traceRerun(o.turnId, body);
+      this.setState((p) => ({
+        ccBusy: false, ccStream: null,
+        ccChat: (p.ccChat || []).concat([{ role: 'bot', text: out.answer || '', calls: (out.tool_calls || []).map((t) => t.tool).filter(Boolean),
+          trace: [{ at: 0, kind: 'reasoning', label: 'Re-run', text: 'Steps replayed with your correction: ' + (out.applied || []).join('; ') }],
+          ms: Date.now() - t0, turnId: out.turn_id || null, rerunOf: out.rerun_of || o.turnId }])
+      }));
+      if (out.turn_id) setTimeout(() => this.crLoadRun(out.turn_id), 800);
+      this.setState((p) => ({ ccTraceIdx: (p.ccChat || []).length - 1 }));
+    } catch (e) {
+      this.setState((p) => ({ ccBusy: false, ccStream: null, ccChat: (p.ccChat || []).concat([{ role: 'bot', error: true, note: true, text: 'Could not re-run: ' + ((e && e.message) || e) }]) }));
+    }
+  },
   // The correction becomes a company memory, recalled on similar questions from now on.
   async crTeach() {
     const edits = this.crEdits(); const ctx = this.crContext();
@@ -280,6 +307,6 @@ export function correctionVals(c) {
     crNote: s.crNote || '', crSetNote: (e) => c.crSetNote(e),
     crText: correctionText(edits, ctx),
     crBusy: !!s.crBusy, crMsg: s.crMsg || '',
-    crReanswer: () => c.crReanswer(), crTeach: () => c.crTeach(), crClose: () => c.crClose()
+    crReanswer: () => c.crReanswer(), crRerun: () => c.crRerun(), crTeach: () => c.crTeach(), crClose: () => c.crClose()
   };
 }

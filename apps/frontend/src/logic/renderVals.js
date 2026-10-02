@@ -1974,6 +1974,7 @@ export const renderValsMethods = {
         // Teach from this answer (logic/corrections.js): a rating, and a suggestion that opens
         // the drawer. Only once the turn is on record, which the completion's turn_id says.
         turnId: m.turnId || null,
+        rerunShow: m.rerunOf ? "inline-flex" : "none",
         teachShow: m.role !== "you" && m.turnId && !s.ccBusy ? "flex" : "none",
         rating: (s.crRatings || {})[m.turnId] || null,
         rateUp: () => this.crRate(m.turnId, "up"),
