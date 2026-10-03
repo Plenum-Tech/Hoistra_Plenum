@@ -48,3 +48,7 @@
 # still returned 200. The eight files are:
 #   compliance · contract-performance · doc-rag · energy-intelligence
 #   migration · query-builder · udr · wo-engine
+
+# hoist-engine binaries built on a laptop (engine/scripts/dev.sh build-linux): the image builds
+# its own in the engine stage.
+**/engine/bin/

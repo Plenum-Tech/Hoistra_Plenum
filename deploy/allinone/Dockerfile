@@ -46,6 +46,17 @@ ENV VITE_OPS_INTELLIGENCE_BASE_URL=$VITE_OPS_INTELLIGENCE_BASE_URL \
     VITE_ORGANIZATION_ID=$VITE_ORGANIZATION_ID
 RUN npm run build
 
+# ── hoist-engine: the Go engine a migration's row-heavy steps run on ──────────────────────
+# Its unit tests run here; the ones that need Postgres skip (svc-ai-schema-mapper/Dockerfile says
+# where they run before an engine change ships).
+FROM golang:1.25-bookworm AS engine
+WORKDIR /src
+COPY apps/backend/cafm-connector-service-final/svc-ai-schema-mapper/engine/go.mod apps/backend/cafm-connector-service-final/svc-ai-schema-mapper/engine/go.sum ./
+RUN go mod download
+COPY apps/backend/cafm-connector-service-final/svc-ai-schema-mapper/engine/ ./
+RUN CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./... \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/hoist-engine ./cmd/hoist-engine
+
 # ── the platform ─────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
@@ -80,6 +91,8 @@ COPY ${BE}/svc-work-order-management/ svc-work-order-management/
 COPY ${BE}/svc-ai-schema-mapper/pyproject.toml svc-ai-schema-mapper/
 RUN pip install --no-cache-dir -e "svc-ai-schema-mapper"
 COPY ${BE}/svc-ai-schema-mapper/ svc-ai-schema-mapper/
+COPY --from=engine /out/hoist-engine /usr/local/bin/hoist-engine
+RUN mkdir -p /var/hoist-engine
 
 COPY ${BE}/svc-udr/pyproject.toml svc-udr/
 RUN pip install --no-cache-dir -e "svc-udr"

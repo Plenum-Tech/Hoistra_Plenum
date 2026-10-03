@@ -113,6 +113,10 @@ services:
       PLENUM_CMMS_SCHEMA: plenum_cafm
       DEBUG: "true"
       ENVIRONMENT: development
+      # No HOIST_DB_POOL here: the page's concurrent requests (status polls, draft saves, state
+      # reads) queued behind a small pool (3 Oct 2026); the API keeps a connection per request.
+      # Blob copies go up without the run waiting (the worker reads the shared volume; src/engine/store.py).
+      HOIST_BACKGROUND_UPLOADS: "1"
       LANGSMITH_TRACING: "false"
       # No Tempo/OTLP collector in this local stack — skip trace export.
       OTEL_SDK_DISABLED: "true"
@@ -125,6 +129,9 @@ services:
       - "8003"
       - --root-path
       - /backend/schema-mapper
+    volumes:
+      # hoist-engine's data sets for each run (src/engine/store.py), shared with the worker.
+      - hoist-engine-cache:/var/hoist-engine
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,9 +157,17 @@ services:
       PLENUM_CMMS_SCHEMA: plenum_cafm
       DEBUG: "true"
       ENVIRONMENT: development
+      # A pool of database connections, not a new TLS connection to Azure per session (src/db.py);
+      # the worker runs one job at a time, so a modest pool covers it.
+      HOIST_DB_POOL: "1"
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "10"
+      HOIST_BACKGROUND_UPLOADS: "1"
       LANGSMITH_TRACING: "false"
       OTEL_SDK_DISABLED: "true"
     command: ["arq", "src.worker.WorkerSettings"]
+    volumes:
+      - hoist-engine-cache:/var/hoist-engine
     depends_on:
       postgres:
         condition: service_healthy
@@ -381,4 +396,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  hoist-engine-cache:
   frontend_dev_node_modules:
