@@ -34,6 +34,8 @@ state no button recovers, and the card polled "running" for half an hour.
 """
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -150,6 +152,63 @@ async def report_progress_pct(migration_id: str, pct: float) -> None:
         logger.warning(f"[db_writer] report_progress_pct failed (non-fatal): {e}")
 
 
+#: The gate a resume_migration job is answering, until its node takes the answer (resuming_gate).
+_RESUMING: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("hoist_resuming_gate", default=None)
+
+
+@contextlib.contextmanager
+def resuming_gate(gate_type: str):
+    """While a job applies the answer to ``gate_type``: that gate's node, run again from the top by
+    LangGraph, does not re-announce a pass whose answer it already holds (write_gate_payload)."""
+    token = _RESUMING.set({"gate": gate_type})
+    try:
+        yield
+    finally:
+        _RESUMING.reset(token)
+
+
+def _interrupts_called(scratchpad) -> "int | None":
+    """How many interrupt() calls this task has made so far, read without counting one more
+    (LangGraph's LazyAtomicCounter wraps an itertools.count). None when it cannot be read."""
+    import re
+
+    counter = scratchpad.interrupt_counter
+    if not hasattr(counter, "_counter"):
+        return None
+    inner = counter._counter
+    if inner is None:
+        return 0
+    m = re.fullmatch(r"count\((\d+)\)", repr(getattr(inner, "__self__", None)))
+    return int(m.group(1)) if m else None
+
+
+def _answer_in_hand(gate_type: str) -> bool:
+    """True when the gate this job answers is announced again by its node and LangGraph already
+    holds the answer the very next interrupt() will return (an earlier pass's answer, or the one
+    this job brings). A pass with no answer yet — the gate the user still has to see — is
+    announced as always, and so is everything outside resume_migration."""
+    pending = _RESUMING.get()
+    if not pending or pending["gate"] != gate_type:
+        return False
+    try:
+        from langgraph.constants import CONFIG_KEY_SCRATCHPAD
+        from langgraph.utils.config import get_config
+
+        scratchpad = get_config()["configurable"][CONFIG_KEY_SCRATCHPAD]
+        idx = _interrupts_called(scratchpad)
+        if idx is None:
+            return False
+        resume = list(scratchpad.resume or [])
+        if idx < len(resume):
+            return True                      # an earlier pass, answered in an earlier job
+        waiting = scratchpad.get_null_resume(False)
+        # The answer this job brings, unless an earlier interrupt() of this run already took it
+        # (taking it appends that same object to the scratchpad's resume list).
+        return idx == len(resume) and waiting is not None and not (resume and resume[-1] is waiting)
+    except Exception:  # noqa: BLE001 — not inside a graph task: announce as always
+        return False
+
+
 async def write_gate_payload(
     migration_id: str,
     gate_type: str,
@@ -169,7 +228,15 @@ async def write_gate_payload(
 
     Must land: without it the graph waits for an answer nobody can give.
     Raises StatusWriteFailed when the database stays away.
+
+    Not written when the node is re-run to take the answer this job is applying: LangGraph runs a
+    gate node again from the top on resume, and the page saw the gate it had just answered reopen
+    for the moment before interrupt() returned the answer (3 Oct 2026).
     """
+    if _answer_in_hand(gate_type):
+        logger.info(f"[db_writer] Gate {gate_type} already answered — taking the answer, not reopening it "
+                    f"migration={migration_id}")
+        return
     await _write_with_retries(
         f"write_gate_payload({gate_type})",
         migration_id,

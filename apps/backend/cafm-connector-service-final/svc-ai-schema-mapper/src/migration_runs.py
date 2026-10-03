@@ -112,7 +112,7 @@ async def _arq_holder_gate(pool, job_id: str):
 
 
 async def enqueue_resume(pool, *, migration_id, gate_type, decisions, wait: float = 60.0,
-                         interval: float = 1.0, holder_gate=_arq_holder_gate) -> str:
+                         interval: float = 0.2, holder_gate=_arq_holder_gate) -> str:
     """Enqueue resume_migration once no other resume of this migration is queued or running.
 
     "queued" when enqueued. While another holds the id, wait for it (up to ``wait`` s): some

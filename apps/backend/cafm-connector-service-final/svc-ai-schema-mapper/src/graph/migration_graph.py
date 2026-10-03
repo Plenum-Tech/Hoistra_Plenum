@@ -5,6 +5,7 @@
 
 import inspect
 import logging
+import weakref
 from typing import Any, Callable
 
 from langgraph.graph import StateGraph, START, END
@@ -39,7 +40,7 @@ from .nodes.hierarchy_node import hierarchy_node
 from .nodes.verify_hierarchy_node import verify_hierarchy_node
 from .nodes.output_generator_node import output_generator_node
 from .nodes.write_node import write_node
-from .nodes.udr_node import udr_node
+from .nodes.udr_node import udr_node_and_release
 from .nodes.udr_tests import test_2_node, tests_enabled
 
 from cafm_shared.logging import get_logger
@@ -158,11 +159,59 @@ BULK_IO: "dict[str, tuple[list[str], list[str]]]" = {
 }
 
 
+#: What a node reads when the engine does its step instead: the rows stay in the engine's files.
+GO_BULK_IO: "dict[str, tuple[str, tuple[list[str], list[str]]]]" = {
+    "preprocess_node": ("preprocess", ([], [])),
+    "output_generator_node": ("outputs", ([], ["intermediate_schema", "output_sql_script"])),
+    "write_node": ("write", (["intermediate_schema"], [])),
+}
+
+
+def bulk_io_for(name: str, state: Any, engine_steps: "frozenset[str] | None" = None) -> "tuple[list[str], list[str]]":
+    """(hydrate before, offload after) for this node in this run."""
+    from ..engine import selection
+
+    if name in GO_BULK_IO and isinstance(state, dict):
+        step, io = GO_BULK_IO[name]
+        steps = selection.ENGINE_STEPS if engine_steps is None else engine_steps
+        if state.get("engine") == selection.ENGINE_GO and step in steps:
+            return io
+    return BULK_IO.get(name, ([], []))
+
+
+#: Step nodes that pause after they finish so a person can look before the run moves on. Gate
+#: nodes (pk/unique/pre-semantic/human/verify/write) interrupt() themselves and are not listed.
+#: A Go-engine run drops the pauses of the steps the engine does (engine/graph_proxy.py).
+STEP_NODES = [
+    "ingest_node",
+    "deterministic_mapper_node",
+    "semantic_mapper_node",
+    "preprocess_node",
+    "hierarchy_node",
+    "output_generator_node",
+]
+
+
 class NodeFailed(RuntimeError):
     """A node reported failure in its state; the run must not carry on as if it had paused."""
 
 
-async def raise_if_node_failed(name: str, out: Any) -> None:
+def _error_ends_go_step(name: str, out: dict, before: dict) -> bool:
+    """A Go run has no pause after the steps the engine does (ingest, preprocess, output). The pause
+    is what ended a Python run whose step recorded an error without status="failed" (a file that
+    cannot be parsed, no rows, data lost in dedup): the worker failed it there with that error. On
+    a run that started the step on the engine, the error the step records ends the run itself."""
+    from ..engine import selection
+
+    if name not in selection.go_auto_continue_nodes():
+        return False
+    if selection.ENGINE_GO not in (before.get("engine"), out.get("engine")):
+        return False
+    message = out.get("error_message")
+    return bool(message) and message != before.get("error_message")
+
+
+async def raise_if_node_failed(name: str, out: Any, before: "dict | None" = None) -> None:
     """End the run when a node hands back state with status="failed".
 
     Every step node (ingest, deterministic, semantic, preprocess, hierarchy, output) catches
@@ -173,7 +222,9 @@ async def raise_if_node_failed(name: str, out: Any) -> None:
     ingest pause left the run "running" for half an hour). Record the failure on the row
     (retried) and raise, so the worker ends the run as failed and it can be retried from the step.
     """
-    if not isinstance(out, dict) or out.get("status") != "failed":
+    if not isinstance(out, dict):
+        return
+    if out.get("status") != "failed" and not (before is not None and _error_ends_go_step(name, out, before)):
         return
     message = str(out.get("error_message") or f"{name} failed")
     migration_id = out.get("migration_id")
@@ -216,9 +267,8 @@ def build_migration_graph(
     from .bulk_tables import hydrate as _bulk_hydrate, dehydrate as _bulk_dehydrate
 
     def _add_node(name: str, fn: Callable) -> None:
-        _hydrate_ch, _offload_ch = BULK_IO.get(name, ([], []))
-
-        async def _wrapped(state, _fn=fn, _h=_hydrate_ch, _o=_offload_ch, _name=name):
+        async def _wrapped(state, _fn=fn, _name=name):
+            _h, _o = bulk_io_for(_name, state)
             mig = state.get("migration_id") if isinstance(state, dict) else None
             # A cancelled run stops here, before its next step, instead of running to the end
             # and writing tables for a migration the user stopped. The step already running
@@ -228,6 +278,8 @@ def build_migration_graph(
                 raise MigrationCancelled(f"Migration {mig} was cancelled before {_name}")
             if _h:
                 await _bulk_hydrate(state, _h)
+            before = ({"engine": state.get("engine"), "error_message": state.get("error_message")}
+                      if isinstance(state, dict) else None)
             try:
                 result = _fn(state)
                 if inspect.isawaitable(result):
@@ -236,7 +288,7 @@ def build_migration_graph(
                 await _bulk_dehydrate(out, mig, _o)
                 # A node that caught its own error and returned status="failed" must not be
                 # left to pause as if it had succeeded (see raise_if_node_failed).
-                await raise_if_node_failed(_name, out)
+                await raise_if_node_failed(_name, out, before)
                 return out
             finally:
                 # Runs on success AND on GraphInterrupt/error, so the state LangGraph may
@@ -245,8 +297,9 @@ def build_migration_graph(
                 if isinstance(state, dict):
                     await _bulk_dehydrate(state, mig, _o)
 
-        # Register under the SAME node name so interrupt_after / edges are unchanged.
-        graph.add_node(name, _wrapped)
+        # Register under the SAME node name so interrupt_after / edges are unchanged; the update
+        # carries only the keys the step changed (only_changed).
+        graph.add_node(name, only_changed(_wrapped))
 
     # ── Register all nodes ────────────────────────────────────────────
     _add_node("ingest_node", ingest_node)
@@ -263,11 +316,12 @@ def build_migration_graph(
     _add_node("verify_hierarchy_node", verify_hierarchy_node)
     _add_node("output_generator_node", output_generator_node)
     _add_node("write_node", write_node)
-    _add_node("udr_node", udr_node)  # Node 10: Feature 7 UDR run + Feature 4 AL.6 emit
+    # Node 10: Feature 7 UDR run + Feature 4 AL.6 emit; a completed Go run then frees its engine files
+    _add_node("udr_node", udr_node_and_release)
 
     # Feature 7.10 — Test 2 (column overlap must be explained by a FK). Wired
     # only when UDR_TESTS_ENABLED is set, so the default pipeline is unchanged.
-    # Not in _STEP_NODES → it computes + records to state without pausing.
+    # Not in STEP_NODES → it computes + records to state without pausing.
     _udr_tests_on = tests_enabled()
     if _udr_tests_on:
         _add_node("test_2_node", test_2_node)
@@ -331,31 +385,73 @@ def build_migration_graph(
     graph.add_edge("write_node", "udr_node")
     graph.add_edge("udr_node", END)
 
-    # Nodes that should pause after completion so the user can review output
-    # before the pipeline advances.  Gate nodes (pre_semantic_review_node,
-    # human_review_node, verify_hierarchy_node, write_node) already use
-    # interrupt() internally — they are NOT listed here to avoid double-pausing.
-    _STEP_NODES = [
-        "ingest_node",
-        "deterministic_mapper_node",
-        "semantic_mapper_node",
-        "preprocess_node",
-        "hierarchy_node",
-        "output_generator_node",
-    ]
-
     # Compile with checkpointer (or None for memory-only)
     if checkpointer:
         logger.info("Compiling StateGraph with PostgreSQL checkpointer (interrupt_after=step nodes)")
     else:
         logger.warning("Compiling StateGraph WITHOUT checkpointer (memory-only)")
     compiled_graph = (
-        graph.compile(checkpointer=checkpointer, interrupt_after=_STEP_NODES)
+        graph.compile(checkpointer=checkpointer, interrupt_after=STEP_NODES)
         if checkpointer
-        else graph.compile(interrupt_after=_STEP_NODES)
+        else graph.compile(interrupt_after=STEP_NODES)
     )
 
     return compiled_graph
+
+
+from .checkpoint_serde import CompressedJsonPlus  # noqa: E402
+
+import hashlib as _hashlib  # noqa: E402
+
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer as _JsonPlus  # noqa: E402
+
+_FINGERPRINT_SERDE = _JsonPlus()
+
+
+def _fingerprint(key: str, value: Any) -> Any:
+    """What tells whether a step changed a state key: the value itself for a primitive; for
+    anything else the object (a replaced value is a change) and its serialized bytes (a value
+    changed in place is a change). Bulk rows held inline, and anything that will not serialize,
+    always count as changed — written as they always were."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return (type(value), value)
+    from .bulk_tables import BULK_CHANNELS
+
+    if key in BULK_CHANNELS and value:
+        return object()
+    try:
+        data = _FINGERPRINT_SERDE.dumps_typed(value)[1] or b""
+        return (type(value), id(value), _hashlib.blake2b(data, digest_size=16).digest())
+    except Exception:  # noqa: BLE001
+        return object()
+
+
+def only_changed(fn: Callable) -> Callable:
+    """Wrap a node so its update carries only the state keys it changed.
+
+    Nodes return the whole state dict, and LangGraph writes every key of a node's update to the
+    checkpoint — the whole state, twice, at every superstep (30 MB of checkpoint for one workbook
+    before the write, 2 Oct 2026). A key the node neither replaced nor changed in place keeps its
+    value in its channel unwritten, so every later node, every route and every resume reads exactly
+    what it read before. A node that returns an update rather than its state is passed through."""
+    async def _changed_only(state):
+        before = {k: _fingerprint(k, v) for k, v in state.items()} if isinstance(state, dict) else None
+        out = fn(state)
+        if inspect.isawaitable(out):
+            out = await out
+        if before is None or out is not state or not isinstance(out, dict):
+            return out
+        return {k: v for k, v in out.items() if k not in before or _fingerprint(k, v) != before[k]}
+
+    return _changed_only
+
+
+
+
+#: The checkpoint pool each event loop opened (its tables set up), and the lock its first build
+#: holds: a pool is bound to its loop, and jobs starting together must not each open one.
+_POOLS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
+_POOL_LOCKS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 
 
 async def get_migration_graph() -> Any:
@@ -369,7 +465,30 @@ async def get_migration_graph() -> Any:
 
     Called once at app startup via the lifespan context manager (async).
     """
+    import asyncio as _asyncio
     import sys as _sys
+
+    # The pool is opened (and setup() run) once per event loop: a worker job used to open a new pool
+    # of Azure connections every time and never closed it (2 Oct 2026). Each call still gets its
+    # own saver — a saver runs its operations one at a time behind its lock, so jobs sharing one
+    # would wait for each other's checkpoints.
+    _loop = _asyncio.get_running_loop()
+    _lock = _POOL_LOCKS.get(_loop)
+    if _lock is None:
+        _lock = _POOL_LOCKS[_loop] = _asyncio.Lock()
+    async with _lock:
+        _pool = _POOLS.get(_loop)
+        if _pool is not None:
+            graph = build_migration_graph(_AsyncPostgresSaver(_pool, serde=CompressedJsonPlus()))
+            from ..engine.graph_proxy import MigrationGraphProxy
+
+            return MigrationGraphProxy(graph, STEP_NODES)
+        return await _build_migration_graph(_loop)
+
+
+async def _build_migration_graph(_loop) -> Any:
+    import sys as _sys
+
     checkpointer = None
     sync_db_url = get_sync_db_url()
 
@@ -383,7 +502,8 @@ async def get_migration_graph() -> Any:
         try:
             pool = _AsyncConnectionPool(
                 conninfo=sync_db_url,
-                max_size=4,
+                min_size=1,
+                max_size=10,  # one per job ARQ may run at once (max_jobs), sharing this pool
                 max_lifetime=300,
                 # TCP keepalives keep the checkpointer's connection alive through the long,
                 # LLM-heavy nodes. Without them a cloud DB / firewall silently drops the idle
@@ -401,8 +521,14 @@ async def get_migration_graph() -> Any:
                 open=False,
             )
             await pool.open()
-            checkpointer = _AsyncPostgresSaver(pool)
-            await checkpointer.setup()
+            try:
+                checkpointer = _AsyncPostgresSaver(pool, serde=CompressedJsonPlus())
+                await checkpointer.setup()
+            except Exception:
+                checkpointer = None
+                await pool.close()  # a pool whose setup failed is not left open
+                raise
+            _POOLS[_loop] = pool
             logger.info("AsyncPostgresSaver initialised and tables set up")
         except Exception as e:
             logger.warning(f"AsyncPostgresSaver init failed: {e}")
@@ -412,6 +538,7 @@ async def get_migration_graph() -> Any:
         logger.info(f"Trying SyncPostgresSaver with DB: {sync_db_url[:50]}...")
         try:
             cp = _SyncPostgresSaver.from_conn_string(sync_db_url)
+            cp.serde = CompressedJsonPlus()
             cp.setup()
             checkpointer = cp
             logger.info("SyncPostgresSaver initialised and tables set up")
@@ -425,8 +552,10 @@ async def get_migration_graph() -> Any:
             "Falling back to MemorySaver — checkpoint state will be LOST on process restart. "
             "Install langgraph-checkpoint-postgres and psycopg[binary] for persistence."
         )
-        checkpointer = MemorySaver()
+        checkpointer = MemorySaver(serde=CompressedJsonPlus())
 
     graph = build_migration_graph(checkpointer)
     logger.info("Migration graph compiled and ready")
-    return graph
+    from ..engine.graph_proxy import MigrationGraphProxy
+
+    return MigrationGraphProxy(graph, STEP_NODES)

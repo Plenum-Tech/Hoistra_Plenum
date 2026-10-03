@@ -27,6 +27,7 @@ from typing import Callable
 
 from .primitives import primary_key_report
 from .unique_tables import metadata_similarity, table_name_similarity
+from .memo import memo_scoped
 
 # Gate thresholds (mirror unique_tables + the B9/B10/B11 spec).
 DETERMINISTIC_AUTO = 0.95
@@ -333,6 +334,7 @@ def _apply_pk_override(cards: list[dict], pk_rows: list[dict], pk_override: dict
             row["confirmed"] = True
 
 
+@memo_scoped
 def build_table_resolution(
     tables: dict[str, list[dict]],
     *,

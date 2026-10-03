@@ -304,3 +304,15 @@ class MigrationState(TypedDict, total=False):
     udr_blocked: bool
     udr_status: Optional[str]  # completed | pending_human_input | failed | skipped
     udr_activity_id: Optional[str]
+
+    # ── hoist-engine (src/engine/) ───────────────────────────────────────
+    #: "go" | "python": decided once at run start (engine/selection.py) and kept for the whole run,
+    #: so every resume takes the same path. Must be declared: undeclared keys are dropped on checkpoint.
+    engine: str
+    #: Where each engine data set lives, per kind ("full", "cleaned", "outputs", "write"):
+    #: {"dir": local path, "version": str, "blobs": {relative file: blob path}} (engine/store.py).
+    engine_refs: dict[str, Any]
+    #: Small per-step summaries the engine returned (counts, rename maps, link stats, timings).
+    engine_reports: dict[str, Any]
+    #: The write the engine planned before the write gate (EL-4.0 + what is already on file).
+    write_plan: Optional[dict[str, Any]]

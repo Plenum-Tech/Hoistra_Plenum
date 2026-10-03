@@ -221,8 +221,10 @@ class TestWhereverItSurfaces:
 
     @staticmethod
     def _handler_source():
+        # The handler builds its message with _connection_lost_message (shared with the engine's
+        # write step), so the wording is read from both.
         import inspect
-        return inspect.getsource(wn.write_node)
+        return inspect.getsource(wn.write_node) + inspect.getsource(wn._connection_lost_message)
 
     def test_the_generic_handler_also_recognises_a_lost_connection(self):
         src = self._handler_source()

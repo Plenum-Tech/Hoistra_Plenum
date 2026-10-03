@@ -169,7 +169,7 @@ class _WorkerSession(AsyncSession):
 
     async def execute(self, *args, **kwargs):
         job = SimpleNamespace(status="awaiting_review", started_at=None)
-        return SimpleNamespace(scalar_one_or_none=lambda: job)
+        return SimpleNamespace(scalar_one_or_none=lambda: job, first=lambda: (job.status,))
 
     async def commit(self):
         return None

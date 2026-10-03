@@ -138,9 +138,28 @@ async def _load_tables(ref: str) -> dict:
     return tables
 
 
+#: The two row channels a Go-engine run keeps in the engine's Arrow files instead (engine/store.py).
+_ENGINE_KIND = {"full_tables": "full", "cleaned_tables": "cleaned"}
+
+
 async def hydrate(state: dict, channels: "list[str]") -> None:
     """Load the requested bulk channels from Blob into the in-memory ``state`` (only when
-    they're not already inline). Called before a node that reads them."""
+    they're not already inline). Called before a node that reads them.
+
+    Rows the engine holds (``engine_refs``) are read from its Arrow files — whatever the run's
+    engine is now, so a run that fell back to Python mid-way still finds them. A newer gzip-JSON
+    offload of the same channel wins."""
+    rest = []
+    for ch in channels:
+        kind = _ENGINE_KIND.get(ch)
+        engine_ref = (state.get("engine_refs") or {}).get(kind) if kind else None
+        if engine_ref and not state.get(ch) and not state.get(BULK_CHANNELS[ch]):
+            from ..engine.store import load_tables
+
+            state[ch] = await load_tables(state, kind)
+        else:
+            rest.append(ch)
+    channels = rest
     for ch in channels:
         ref_key = BULK_CHANNELS.get(ch)
         if not ref_key:
@@ -161,7 +180,30 @@ async def dehydrate(state: dict, migration_id: Optional[str], offload_channels: 
       read-only): just clear the inline dict — the Blob copy is still authoritative.
     - A channel that is inline WITHOUT a ref and isn't a setter channel is left untouched
       (no safe place to put it — preserves the pre-fix inline behaviour).
+
+    In a Go-engine run the rows a node SET go to the engine's files (the bridge) — all of them or
+    none: should the bridge refuse a single value, nothing is cleared, the run continues on the
+    Python path (``engine`` = "python") and the offload below handles every channel, so no row is
+    ever dropped. A reader's hydrated copy is simply cleared.
     """
+    if state.get("engine") == "go":
+        from ..engine.store import BridgeTypeError, save_tables
+
+        setters = [ch for ch in _ENGINE_KIND if ch in offload_channels and state.get(ch)]
+        refs: dict = {}
+        try:
+            for ch in setters:
+                refs[_ENGINE_KIND[ch]] = await save_tables(state, _ENGINE_KIND[ch], state[ch])
+        except BridgeTypeError as exc:
+            logger.warning("[bulk] rows cannot go through the engine bridge (%s); this run continues "
+                           "on the Python path", exc)
+            state["engine"] = "python"
+        else:
+            state["engine_refs"] = {**(state.get("engine_refs") or {}), **refs}
+            for ch, kind in _ENGINE_KIND.items():
+                if state.get(ch) and (state.get("engine_refs") or {}).get(kind):
+                    state[ch] = {}
+            offload_channels = [c for c in offload_channels if c not in _ENGINE_KIND]
     for ch, ref_key in BULK_CHANNELS.items():
         if not state.get(ch):
             continue

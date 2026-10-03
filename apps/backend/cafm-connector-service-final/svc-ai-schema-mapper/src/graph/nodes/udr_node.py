@@ -82,11 +82,24 @@ async def udr_node(state) -> dict:
         # longest: prefix_columns alone took 69.5s on a 17-sheet workbook, and while it held
         # the loop this process served no request, so the page polling for the status Node 9
         # had already written timed out at 60s and kept saying "Running · Node 8 of 9".
+        # A Go run's card shows the UDR pass's live stage (engine/progress.py); the pipeline runs
+        # on a thread, so each stage is handed back to this loop.
+        _on_stage = None
+        if state.get("engine") == "go" and migration_id:
+            from ...engine.progress import EngineProgress
+
+            _udr_progress = EngineProgress(str(migration_id), "udr")
+            _loop = asyncio.get_running_loop()
+
+            def _on_stage(stage: str, index: int, total: int) -> None:
+                asyncio.run_coroutine_threadsafe(_udr_progress.stage(stage, index, total), _loop)
+
         result = await asyncio.to_thread(
             partial(
                 run_udr_pipeline,
                 full_tables,
                 run_id=run_id,
+                on_stage=_on_stage,
                 dest_table_by_source=state.get("cafm_table_matches") or {},
                 # count of ingested source datasets (sheets/tables) — the available proxy for
                 # "documents ingested" in the structured migration flow (no separate file count).
@@ -322,3 +335,22 @@ async def udr_node(state) -> dict:
         "udr_status": result.status,
         "udr_activity_id": str(activity_id) if activity_id else None,
     }
+
+
+async def udr_node_and_release(state) -> dict:
+    """udr_node, then — for a Go run whose write completed — the run's local engine files go:
+    nothing after this node reads them, and Blob keeps every data set should the run be re-run
+    from a step. A run that stopped short keeps them for its retry (store.sweep_stale clears the
+    ones nobody comes back to)."""
+    try:
+        return await udr_node(state)
+    finally:
+        if state.get("engine") == "go" and state.get("status") == "complete" and state.get("migration_id"):
+            try:
+                from ...engine.store import discard_run, published
+
+                # A data set may still be going up to Blob; its files go once the upload has them.
+                await published(str(state["migration_id"]), timeout=600)
+                await asyncio.to_thread(discard_run, str(state["migration_id"]))
+            except Exception as exc:  # noqa: BLE001 — housekeeping never fails a written migration
+                logger.warning("[Node 10/UDR] could not remove the run's engine files: %s", exc)

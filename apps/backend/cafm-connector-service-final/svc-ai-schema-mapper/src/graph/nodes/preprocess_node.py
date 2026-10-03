@@ -14,6 +14,7 @@ EL-M.5: row_count_post_dedup ≥ 80% of original
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
@@ -35,6 +36,54 @@ DATE_FORMATS = [
 ]
 
 
+def _snake(s: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+
+
+def _apply_column_dest_overrides(state: dict) -> dict:
+    """The B14.1 column-mapping gate's answers, applied where the data is renamed.
+
+    The gate stores {source_table: {source_field: "<dest column>" | "__new__"}}. They used to be
+    applied in output_generator_node to tier1_mappings / tier2_auto_accepted /
+    human_approved_mappings — keys MigrationState does not declare, which LangGraph drops at the
+    first checkpoint — so every "map this column to X" answer was silently ignored (found 1 Oct
+    2026). Each override now re-targets the tier mapping of that source field (marked
+    ``column_mapping_override`` so the type guard leaves an explicit choice alone) and is returned
+    as a rename for the field, which also covers a field no tier mapping named. "__new__" lands
+    under the snake_cased field name, the name _collect_approved_new_columns allows to be created.
+    Matched on (table, field) exactly, then case-insensitively."""
+    overrides = state.get("column_dest_overrides") or {}
+    renames: dict[str, dict[str, str]] = {}
+    if not isinstance(overrides, dict) or not overrides:
+        return renames
+    by_lower = {str(t).lower(): {str(f).lower(): v for f, v in (cols or {}).items()}
+                for t, cols in overrides.items() if isinstance(cols, dict)}
+    for table, cols in overrides.items():
+        if not isinstance(cols, dict):
+            continue
+        for field, choice in cols.items():
+            if not choice:
+                continue
+            target = _snake(field) if str(choice) == "__new__" else str(choice)
+            renames.setdefault(str(table), {})[str(field)] = target
+    for bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
+        for table, maps in (state.get(bucket) or {}).items():
+            for m in maps or []:
+                if not isinstance(m, dict) or not m.get("source_field"):
+                    continue
+                sf = str(m["source_field"])
+                target = (renames.get(str(table)) or {}).get(sf)
+                if target is None:
+                    choice = (by_lower.get(str(table).lower()) or {}).get(sf.lower())
+                    if choice:
+                        target = _snake(sf) if str(choice) == "__new__" else str(choice)
+                        renames.setdefault(str(table), {})[sf] = target
+                if target and target != m.get("target_field"):
+                    m["target_field"] = target
+                    m["column_mapping_override"] = True
+    return renames
+
+
 async def preprocess_node(state: MigrationState) -> MigrationState:
     """
     Node 5: Clean and validate data before hierarchy detection — MULTI-TABLE.
@@ -50,8 +99,16 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
 
     _node_started_at = datetime.utcnow()
     migration_id = state.get("migration_id")
-    # Use full tables if available (from Node 1), otherwise fall back to parsed_tables (5-row sample)
-    parsed_tables = state.get("full_tables") or state.get("parsed_tables", {})
+    from ...engine.selection import uses_go
+    on_engine = uses_go(state, "preprocess")
+    # Use full tables if available (from Node 1), otherwise fall back to parsed_tables (5-row sample).
+    # A Go run's rows are in the engine's data set: the type guard below samples only the first 300
+    # rows of each table, so those are all it reads.
+    if on_engine:
+        from ...engine.steps import full_heads
+        parsed_tables = await full_heads(state, 300) or state.get("parsed_tables", {})
+    else:
+        parsed_tables = state.get("full_tables") or state.get("parsed_tables", {})
     tier1_mappings_by_table = state.get("tier1_mappings_by_table", {})
     tier2_auto_by_table = state.get("tier2_auto_by_table", {})
     tier2_human_by_table = state.get("tier2_human_decisions_by_table", {})
@@ -66,6 +123,9 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
         return state
 
     try:
+        # The person's column-mapping answers first, so the guard below and the rename map see them.
+        _override_renames = _apply_column_dest_overrides(state)
+
         # ── Type-aware guard: never rename a text / categorical / date source column onto a
         # NUMERIC (or boolean / temporal) destination column (frequency='Quarterly' →
         # frequency_value INTEGER), which the DB rejects and drops every row. This is THE rename
@@ -115,6 +175,8 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
                         for _m in _maps or []:
                             if not isinstance(_m, dict):
                                 continue
+                            if _m.get("column_mapping_override"):
+                                continue  # the person chose this column at the column-mapping gate
                             _tf, _sf = _m.get("target_field"), _m.get("source_field")
                             if not _tf or not _sf:
                                 continue
@@ -203,127 +265,25 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
         if _custom_renames:
             logger.info(f"[Node 5] New-column custom renames added to rename map: {_custom_renames}")
 
-        cleaned_tables = {}
-        row_count_post_dedup_by_table = {}
-        dedup_drop_count_by_table = {}
-        warnings = []
-        total_original_rows = 0
-        total_cleaned_rows = 0
+        for _st, _cols in _override_renames.items():
+            for _sf, _tgt in _cols.items():
+                mapping_dict_by_table.setdefault(_st, {})[_sf] = _tgt
+        if _override_renames:
+            logger.info(
+                f"[Node 5] Column-mapping gate re-targets applied: "
+                f"{sum(len(c) for c in _override_renames.values())} column(s)"
+            )
 
-        # MULTI-TABLE: Process each source table independently
-        for table_name, records in parsed_tables.items():
-            if not records:
-                continue
+        if on_engine:
+            return await _preprocess_on_engine(state, mapping_dict_by_table, skip_fields_by_table, _node_started_at)
 
-            df = pd.DataFrame(records)
-            original_count = len(df)
-            total_original_rows += original_count
-
-            _tbl_started_at = datetime.utcnow()
-            logger.info(f"[Node 5] ► Table '{table_name}': {original_count} rows, {len(df.columns)} columns")
-
-            # ── Step 1: Dedup (exact-duplicate rows) ────────────────
-            df_dedup = df.drop_duplicates()
-            dedup_drop = len(df) - len(df_dedup)
-            dedup_drop_count_by_table[table_name] = dedup_drop
-            if dedup_drop > 0:
-                logger.info(f"[Node 5]   Dedup: dropped {dedup_drop} duplicate rows")
-                warnings.append(f"{table_name}: Dropped {dedup_drop} duplicate rows")
-
-            # ── Step 2: Drop 100%-null columns ───────────────────────
-            # A column with zero non-null values carries no mapping signal.
-            # Partially-null columns are kept — nulls are filled in Step 3.
-            null_only_cols = [col for col in df_dedup.columns if df_dedup[col].isna().all()]
-            if null_only_cols:
-                df_dedup = df_dedup.drop(columns=null_only_cols)
-                logger.info(
-                    f"[Node 5]   Dropped {len(null_only_cols)} fully-null columns "
-                    f"from {table_name}: {null_only_cols}"
-                )
-                warnings.append(
-                    f"{table_name}: Dropped {len(null_only_cols)} fully-null column(s): "
-                    f"{null_only_cols}"
-                )
-
-            # ── Step 3: Null handling (partially-null columns kept) ──
-            for col in df_dedup.columns:
-                col_type = _infer_column_type(df_dedup[col])
-
-                if col_type == "numeric":
-                    # Numeric: null → 0
-                    df_dedup[col] = df_dedup[col].fillna(0)
-                elif col_type == "text":
-                    # Text: null → ""
-                    df_dedup[col] = df_dedup[col].fillna("")
-                elif col_type == "date":
-                    # Dates: left as-is (NaT represents null date)
-                    pass
-
-            # ── Step 4: Date coercion ────────────────────────────────
-            date_columns = []
-            for col in df_dedup.columns:
-                # Check if column name suggests it's a date
-                if any(date_hint in col.lower() for date_hint in ["date", "time", "created", "due", "completed"]):
-                    if _coerce_dates(df_dedup, col):
-                        date_columns.append(col)
-                        logger.info(f"[Node 5] Coerced {col} to ISO 8601")
-
-            if date_columns:
-                warnings.append(f"{table_name}: Coerced {len(date_columns)} date columns to ISO 8601")
-
-            # ── Step 5: JSON Schema validation (warnings only) ────────
-            # For now, just validate that data is serializable
-            for col in df_dedup.columns:
-                try:
-                    df_dedup[col].to_json()
-                except Exception as e:
-                    logger.warning(f"[Node 5] Column {col} may have serialization issues: {e}")
-                    warnings.append(f"{table_name}.{col}: Potential serialization issue")
-
-            # ── Step 6: FK pre-check ─────────────────────────────────
-            # Scan for columns that look like FKs (values present in other tables)
-            # This is a rough heuristic; formal FK detection happens in Node 6
-            for col in df_dedup.columns:
-                if any(fk_hint in col.lower() for fk_hint in ["code", "id", "num"]):
-                    # This column might be a foreign key
-                    logger.debug(f"[Node 5] Potential FK column detected: {col}")
-
-            # ── Step 7: Column rename (source_field → target_field) ──────
-            table_col_map = mapping_dict_by_table.get(table_name, {})
-            if table_col_map:
-                rename_map = {k: v for k, v in table_col_map.items() if k in df_dedup.columns}
-                if rename_map:
-                    df_dedup = df_dedup.rename(columns=rename_map)
-                    renames_str = ", ".join(f"{k}→{v}" for k, v in list(rename_map.items())[:10])
-                    suffix = f" (+{len(rename_map)-10} more)" if len(rename_map) > 10 else ""
-                    logger.info(f"[Node 5]   Renamed {len(rename_map)} columns: {renames_str}{suffix}")
-                unmapped = [k for k in table_col_map if k not in df_dedup.columns and k not in rename_map]
-                if unmapped:
-                    logger.info(f"[Node 5]   {len(unmapped)} mapped source fields not in data (already renamed or absent): {unmapped[:5]}")
-
-            # ── Step 8: Drop "skip" fields (user-discarded unmapped fields)
-            skip_fields = skip_fields_by_table.get(table_name, set())
-            # skip_fields uses source column names; after rename, they stay as-is
-            # (skip fields are unmapped, so they were never in rename_map)
-            cols_to_drop = [c for c in skip_fields if c in df_dedup.columns]
-            if cols_to_drop:
-                df_dedup = df_dedup.drop(columns=cols_to_drop)
-                logger.info(f"[Node 5]   Dropped {len(cols_to_drop)} skipped fields from {table_name}: {cols_to_drop}")
-
-            cleaned_count = len(df_dedup)
-            total_cleaned_rows += cleaned_count
-            row_count_post_dedup_by_table[table_name] = cleaned_count
-
-            # ── EL-M.5 Validation (per table) ────────────────────────
-            dedup_ratio = cleaned_count / original_count if original_count > 0 else 1.0
-            if dedup_ratio < 0.80:
-                logger.warning(f"[Node 5]   Dedup ratio {dedup_ratio:.1%} < 0.80")
-                warnings.append(
-                    f"{table_name}: High duplication ({100 * (1 - dedup_ratio):.1f}% dropped)"
-                )
-
-            cleaned_tables[table_name] = _sanitize_records(df_dedup.to_dict(orient="records"))
-            logger.info(f"[Node 5] ✓ Table {table_name}: {cleaned_count} rows after cleaning")
+        _pre = preprocess_tables(parsed_tables, mapping_dict_by_table, skip_fields_by_table)
+        cleaned_tables = _pre.cleaned_tables
+        row_count_post_dedup_by_table = _pre.row_count_post_dedup_by_table
+        dedup_drop_count_by_table = _pre.dedup_drop_count_by_table
+        warnings = _pre.warnings
+        total_original_rows = _pre.total_original_rows
+        total_cleaned_rows = _pre.total_cleaned_rows
 
         # ── Overall EL-M.5 Validation ────────────────────────────────
         if total_original_rows > 0:
@@ -352,19 +312,10 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
         # export while the mapped data lands under the correct target columns.
         _raw_full = state.get("full_tables")
         if isinstance(_raw_full, dict):
-            _renamed_full: dict = {}
-            for _tbl, _records in _raw_full.items():
-                _col_map = mapping_dict_by_table.get(_tbl, {})
-                if _col_map and isinstance(_records, list):
-                    _renamed_full[_tbl] = [
-                        {_col_map.get(_k, _k): _v for _k, _v in _row.items()}
-                        if isinstance(_row, dict)
-                        else _row
-                        for _row in _records
-                    ]
-                else:
-                    _renamed_full[_tbl] = _records
-            state["full_tables"] = _renamed_full
+            state["full_tables"] = (
+                _pre.renamed_full if _raw_full is parsed_tables
+                else rename_full_tables(_raw_full, mapping_dict_by_table)
+            )
 
         state["row_count_post_dedup_by_table"] = row_count_post_dedup_by_table
         state["dedup_drop_count_by_table"] = dedup_drop_count_by_table
@@ -440,6 +391,248 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
         state["error_timestamp"] = datetime.utcnow()
         state["status"] = "failed"
         return state
+
+
+async def _preprocess_on_engine(state: dict, mapping_dict_by_table: dict, skip_fields_by_table: dict,
+                                _node_started_at: datetime) -> dict:
+    """preprocess_node's Go branch: the engine cleans every table (steps.go_preprocess), and the
+    node sets what the Python branch sets — the counts, the warnings, EL-M.5, the event and the
+    node log — with no rows on the state (engine_refs points at the cleaned and renamed full data
+    sets). A Go run does not pause here, so the node log carries what the step pause carried."""
+    from ...engine.steps import go_preprocess
+
+    res, table_previews = await go_preprocess(state, mapping_dict_by_table, skip_fields_by_table)
+    warnings = res.warnings
+    total_original_rows, total_cleaned_rows = res.total_original_rows, res.total_cleaned_rows
+    if total_original_rows > 0:
+        overall_ratio = total_cleaned_rows / total_original_rows
+        logger.info(f"[Node 5] Overall dedup ratio: {overall_ratio:.1%}")
+        if overall_ratio < 0.80:
+            logger.error(f"[Node 5] EL-M.5 FAILED: ratio {overall_ratio:.1%} < 0.80")
+            state["error_message"] = f"Data loss during dedup: {overall_ratio:.1%} remaining"
+            state["el_m5_passed"] = False
+            return state
+    state["el_m5_passed"] = True
+    logger.info("[Node 5] EL-M.5 PASSED: dedup ratio ≥ 0.80")
+    state["cleaned_tables"] = {}
+    state["full_tables"] = {}
+    state["row_count_post_dedup_by_table"] = res.row_count_post_dedup_by_table
+    state["dedup_drop_count_by_table"] = res.dedup_drop_count_by_table
+    state["data_quality_warnings"] = warnings
+    logger.info(f"[Node 5] Complete: {total_cleaned_rows} rows after dedup across all tables (engine)")
+    state["current_step"] = 5
+    state["event_log"].append(
+        {
+            "timestamp": datetime.utcnow().isoformat(),
+            "event": "node_complete",
+            "node": 5,
+            "detail": f"Cleaned {total_cleaned_rows} rows, {len(warnings)} warnings",
+        }
+    )
+    migration_id = state.get("migration_id")
+    if migration_id:
+        from .db_writer import update_node_progress
+        from .schema_db_writer import migration_append_node_log_auto
+
+        await update_node_progress(migration_id, "5_preprocess")
+        tables = list(res.row_count_post_dedup_by_table)
+        total_original = sum(res.row_count_post_dedup_by_table.get(t, 0) + res.dedup_drop_count_by_table.get(t, 0)
+                             for t in tables)
+        prewrite = (state.get("engine_reports") or {}).get("preprocess", {}).get("prewrite") or []
+        await migration_append_node_log_auto(
+            migration_id, 6, "Preprocess & Validate", _node_started_at, datetime.utcnow(),
+            output={"total_original_rows": total_original,
+                    "total_cleaned_rows": total_cleaned_rows,
+                    "dedup_ratio": round(total_cleaned_rows / total_original, 3) if total_original else 1.0,
+                    "table_count": len(tables),
+                    "warning_count": len(warnings),
+                    # what the step pause used to carry (a Go run moves on by itself)
+                    "engine": "go",
+                    "rows_cleaned": total_cleaned_rows,
+                    "warnings": len(warnings),
+                    "warning_messages": warnings,
+                    "tables": tables,
+                    "table_previews": table_previews,
+                    "prewrite": prewrite},
+            logs=[f"Cleaned {total_cleaned_rows} rows across {len(tables)} tables (engine)",
+                  f"Dedup: {total_original - total_cleaned_rows} duplicate rows removed",
+                  f"{len(warnings)} data quality warnings",
+                  f"EL-M.5: {'PASSED' if state.get('el_m5_passed') else 'FAILED'}"],
+        )
+    return state
+
+
+@dataclass
+class PreprocessResult:
+    """What preprocess makes of the tables (preprocess_tables)."""
+
+    cleaned_tables: dict
+    renamed_full: dict
+    row_count_post_dedup_by_table: dict
+    dedup_drop_count_by_table: dict
+    warnings: list
+    total_original_rows: int
+    total_cleaned_rows: int
+
+
+def rename_full_tables(full_tables: dict, mapping_dict_by_table: dict) -> dict:
+    """full_tables with each table's columns renamed source → target, every row kept."""
+    _renamed_full: dict = {}
+    for _tbl, _records in full_tables.items():
+        _col_map = mapping_dict_by_table.get(_tbl, {})
+        if _col_map and isinstance(_records, list):
+            _renamed_full[_tbl] = [
+                {_col_map.get(_k, _k): _v for _k, _v in _row.items()}
+                if isinstance(_row, dict)
+                else _row
+                for _row in _records
+            ]
+        else:
+            _renamed_full[_tbl] = _records
+    return _renamed_full
+
+
+def preprocess_tables(
+    parsed_tables: dict,
+    mapping_dict_by_table: dict,
+    skip_fields_by_table: dict,
+) -> PreprocessResult:
+    """Node 5's cleaning, table by table — steps 1–8 and the per-table EL-M.5 warning: dedup,
+    drop fully-null columns, null handling, date coercion, the serialisation check, the rename
+    and the skip-field drop. Pure: the node builds the rename and skip maps and does everything
+    after (the overall EL-M.5, the state, the step pause). hoist-engine preprocess reproduces it
+    (tests/test_engine_preprocess_oracle.py holds the engine to it)."""
+    cleaned_tables = {}
+    row_count_post_dedup_by_table = {}
+    dedup_drop_count_by_table = {}
+    warnings = []
+    total_original_rows = 0
+    total_cleaned_rows = 0
+
+    # MULTI-TABLE: Process each source table independently
+    for table_name, records in parsed_tables.items():
+        if not records:
+            continue
+
+        df = pd.DataFrame(records)
+        original_count = len(df)
+        total_original_rows += original_count
+
+        _tbl_started_at = datetime.utcnow()
+        logger.info(f"[Node 5] ► Table '{table_name}': {original_count} rows, {len(df.columns)} columns")
+
+        # ── Step 1: Dedup (exact-duplicate rows) ────────────────
+        df_dedup = df.drop_duplicates()
+        dedup_drop = len(df) - len(df_dedup)
+        dedup_drop_count_by_table[table_name] = dedup_drop
+        if dedup_drop > 0:
+            logger.info(f"[Node 5]   Dedup: dropped {dedup_drop} duplicate rows")
+            warnings.append(f"{table_name}: Dropped {dedup_drop} duplicate rows")
+
+        # ── Step 2: Drop 100%-null columns ───────────────────────
+        # A column with zero non-null values carries no mapping signal.
+        # Partially-null columns are kept — nulls are filled in Step 3.
+        null_only_cols = [col for col in df_dedup.columns if df_dedup[col].isna().all()]
+        if null_only_cols:
+            df_dedup = df_dedup.drop(columns=null_only_cols)
+            logger.info(
+                f"[Node 5]   Dropped {len(null_only_cols)} fully-null columns "
+                f"from {table_name}: {null_only_cols}"
+            )
+            warnings.append(
+                f"{table_name}: Dropped {len(null_only_cols)} fully-null column(s): "
+                f"{null_only_cols}"
+            )
+
+        # ── Step 3: Null handling (partially-null columns kept) ──
+        for col in df_dedup.columns:
+            col_type = _infer_column_type(df_dedup[col])
+
+            if col_type == "numeric":
+                # Numeric: null → 0
+                df_dedup[col] = df_dedup[col].fillna(0)
+            elif col_type == "text":
+                # Text: null → ""
+                df_dedup[col] = df_dedup[col].fillna("")
+            elif col_type == "date":
+                # Dates: left as-is (NaT represents null date)
+                pass
+
+        # ── Step 4: Date coercion ────────────────────────────────
+        date_columns = []
+        for col in df_dedup.columns:
+            # Check if column name suggests it's a date
+            if any(date_hint in col.lower() for date_hint in ["date", "time", "created", "due", "completed"]):
+                if _coerce_dates(df_dedup, col):
+                    date_columns.append(col)
+                    logger.info(f"[Node 5] Coerced {col} to ISO 8601")
+
+        if date_columns:
+            warnings.append(f"{table_name}: Coerced {len(date_columns)} date columns to ISO 8601")
+
+        # ── Step 5: JSON Schema validation (warnings only) ────────
+        # For now, just validate that data is serializable
+        for col in df_dedup.columns:
+            try:
+                df_dedup[col].to_json()
+            except Exception as e:
+                logger.warning(f"[Node 5] Column {col} may have serialization issues: {e}")
+                warnings.append(f"{table_name}.{col}: Potential serialization issue")
+
+        # ── Step 6: FK pre-check ─────────────────────────────────
+        # Scan for columns that look like FKs (values present in other tables)
+        # This is a rough heuristic; formal FK detection happens in Node 6
+        for col in df_dedup.columns:
+            if any(fk_hint in col.lower() for fk_hint in ["code", "id", "num"]):
+                # This column might be a foreign key
+                logger.debug(f"[Node 5] Potential FK column detected: {col}")
+
+        # ── Step 7: Column rename (source_field → target_field) ──────
+        table_col_map = mapping_dict_by_table.get(table_name, {})
+        if table_col_map:
+            rename_map = {k: v for k, v in table_col_map.items() if k in df_dedup.columns}
+            if rename_map:
+                df_dedup = df_dedup.rename(columns=rename_map)
+                renames_str = ", ".join(f"{k}→{v}" for k, v in list(rename_map.items())[:10])
+                suffix = f" (+{len(rename_map)-10} more)" if len(rename_map) > 10 else ""
+                logger.info(f"[Node 5]   Renamed {len(rename_map)} columns: {renames_str}{suffix}")
+            unmapped = [k for k in table_col_map if k not in df_dedup.columns and k not in rename_map]
+            if unmapped:
+                logger.info(f"[Node 5]   {len(unmapped)} mapped source fields not in data (already renamed or absent): {unmapped[:5]}")
+
+        # ── Step 8: Drop "skip" fields (user-discarded unmapped fields)
+        skip_fields = skip_fields_by_table.get(table_name, set())
+        # skip_fields uses source column names; after rename, they stay as-is
+        # (skip fields are unmapped, so they were never in rename_map)
+        cols_to_drop = [c for c in skip_fields if c in df_dedup.columns]
+        if cols_to_drop:
+            df_dedup = df_dedup.drop(columns=cols_to_drop)
+            logger.info(f"[Node 5]   Dropped {len(cols_to_drop)} skipped fields from {table_name}: {cols_to_drop}")
+
+        cleaned_count = len(df_dedup)
+        total_cleaned_rows += cleaned_count
+        row_count_post_dedup_by_table[table_name] = cleaned_count
+
+        # ── EL-M.5 Validation (per table) ────────────────────────
+        dedup_ratio = cleaned_count / original_count if original_count > 0 else 1.0
+        if dedup_ratio < 0.80:
+            logger.warning(f"[Node 5]   Dedup ratio {dedup_ratio:.1%} < 0.80")
+            warnings.append(
+                f"{table_name}: High duplication ({100 * (1 - dedup_ratio):.1f}% dropped)"
+            )
+
+        cleaned_tables[table_name] = _sanitize_records(df_dedup.to_dict(orient="records"))
+        logger.info(f"[Node 5] ✓ Table {table_name}: {cleaned_count} rows after cleaning")
+
+    return PreprocessResult(
+        cleaned_tables=cleaned_tables,
+        renamed_full=rename_full_tables(parsed_tables, mapping_dict_by_table),
+        row_count_post_dedup_by_table=row_count_post_dedup_by_table,
+        dedup_drop_count_by_table=dedup_drop_count_by_table,
+        warnings=warnings,
+        total_original_rows=total_original_rows,
+        total_cleaned_rows=total_cleaned_rows,
+    )
 
 
 def _infer_column_type(series: pd.Series) -> str:

@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 1024
     max_rows_per_table: int = 5_000_000
     max_unresolved_fields_before_error: int = 20
+    # Which code runs a new csv/tsv/xlsx/xlsm migration (src/engine/selection.py): "python" is the
+    # kill switch for hoist-engine. Read here as well as from the environment, because the
+    # all-in-one image carries the deployment's .env, which only Settings reads.
+    migration_engine: str = ""
 
 
 @lru_cache

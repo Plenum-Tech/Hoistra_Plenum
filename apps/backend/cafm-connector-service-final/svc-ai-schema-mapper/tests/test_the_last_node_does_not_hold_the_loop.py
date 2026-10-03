@@ -87,6 +87,8 @@ class TestNothingElseChanged:
             "run_id", "dest_table_by_source", "documents_ingested", "mapping_decisions",
             "confidence_by_source", "pk_override_by_table", "classification_decisions",
             "alias_resolver", "field_resolver",
+            # a Go run's live stage listener (engine/progress.py): it reads nothing and changes nothing
+            "on_stage",
         }
         # full_tables stays positional, as the pipeline declares it.
         assert len(partial_call.args) == 2

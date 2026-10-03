@@ -177,3 +177,11 @@ def test_an_unreadable_holder_is_waited_on_like_any_other():
     ok = asyncio.run(enqueue_resume(pool, migration_id=MIG, gate_type="write", decisions={},
                                     wait=5, interval=0.001, holder_gate=unreadable))
     assert ok == "queued"
+
+
+def test_an_answer_waiting_for_the_resume_before_it_asks_again_every_fifth_of_a_second():
+    # Back-to-back gates (PK → unique table, classification → column mapping) wait for the resume
+    # still finishing; asking once a second added up to a second to each.
+    import inspect
+
+    assert inspect.signature(enqueue_resume).parameters["interval"].default <= 0.2

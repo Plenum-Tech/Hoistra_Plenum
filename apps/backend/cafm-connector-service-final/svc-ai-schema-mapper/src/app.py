@@ -207,10 +207,29 @@ async def _store_migration_source(
         blob_path = f"migrations/{migration_id}/{subdir}/{safe_name}"
         from azure.storage.blob.aio import BlobServiceClient as _BSC
 
-        async with _BSC.from_connection_string(conn) as svc:
-            bc = svc.get_blob_client(container=container, blob=blob_path)
-            await bc.upload_blob(data, overwrite=True)
-        logger.info(f"[source-store] {migration_id}: stored {safe_name} → {blob_path}")
+        async def _upload() -> None:
+            async with _BSC.from_connection_string(conn) as svc:
+                bc = svc.get_blob_client(container=container, blob=blob_path)
+                await bc.upload_blob(data, overwrite=True)
+            logger.info(f"[source-store] {migration_id}: stored {safe_name} → {blob_path}")
+
+        if subdir == "source":
+            from .engine import store as _engine_store
+
+            # With HOIST_BACKGROUND_UPLOADS=1 (a machine whose worker shares this volume, on a slow
+            # uplink) the worker reads the file from the volume (Node 1), so the run need not wait
+            # for Blob: the durable copy, for re-runs and downloads, goes up in the background
+            # (2 Oct 2026: ~25 s for an 8.7 MB workbook). Otherwise it is in Blob before the run is
+            # queued, as before — another replica's worker may run it, and a restart wipes disk.
+            if _engine_store.background_uploads() and await _engine_store.keep_source(migration_id, safe_name, data):
+                async def _upload_logged() -> None:
+                    try:
+                        await _upload()
+                    except Exception as exc:  # noqa: BLE001 — the run reads the local copy
+                        logger.warning(f"[source-store] {migration_id}: upload failed for {filename}: {str(exc)[:200]}")
+                _engine_store.in_background(migration_id, _upload_logged())
+                return blob_path
+        await _upload()
         return blob_path
     except Exception as exc:
         logger.warning(f"[source-store] {migration_id}: upload failed for {filename}: {str(exc)[:200]}")
@@ -1347,73 +1366,25 @@ def create_app() -> FastAPI:
             # persist blobs, then drive the graph. Node 1 reads the top-10-row preview (matching)
             # + the full data (full_tables) — all in the background, in parallel, so the run began
             # the moment the endpoint returned. A bad file now fails THIS migration (was a 400).
-            used_sheets: set[str] = set()
-
-            def _safe_sheet(base: str) -> str:
-                invalid = set(r":\/?*[]")
-                cleaned = "".join("_" if c in invalid else c for c in base).strip() or "sheet"
-                cleaned = cleaned[:31]
-                name = cleaned
-                i = 2
-                while name.lower() in used_sheets:
-                    suffix = f"_{i}"
-                    name = cleaned[: 31 - len(suffix)] + suffix
-                    i += 1
-                used_sheets.add(name.lower())
-                return name
-
             # Parse + combine is CPU-bound (pandas / calamine / openpyxl over potentially 100k+ rows).
             # Run it in a THREAD so it NEVER blocks the event loop: a large bulk upload otherwise
             # starves the async loop for minutes, and every concurrent status / activity-log / actions
             # poll hits the ingress timeout (504) even though the DB is idle. Mirrors the to_thread
             # offload used for the other blocking calls in this module. Parse errors carry the
-            # offending filename back out to _fail_job.
-            class _ParseError(Exception):
-                pass
-
-            def _parse_and_combine() -> tuple[bytes, list[str]]:
-                sheets: dict[str, _pd.DataFrame] = {}
-                for filename, data in raw_files:
-                    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
-                    stem = _Path(filename).stem
-                    try:
-                        if ext in {".csv", ".tsv"}:
-                            sep = "\t" if ext == ".tsv" else None
-                            df = _pd.read_csv(_io.BytesIO(data), dtype=str, sep=sep, engine="python")
-                            df = _sanitize_column_names_helper(df)
-                            sheets[_safe_sheet(stem)] = df.fillna("")
-                        else:
-                            wb = ExcelWorkbook(_io.BytesIO(data))  # calamine, workbook opened once
-                            sheet_names = wb.sheet_names
-                            for sh in sheet_names:
-                                # Skip banner / title rows so source column names survive
-                                # instead of degrading to "Unnamed: N" placeholders.
-                                header_row = wb.header_row(sh)
-                                df = wb.read(sh, header=header_row, dtype=str)
-                                df = _sanitize_column_names_helper(df)
-                                # Source table = the Excel SHEET name; fall back to the file name
-                                # only for a lone generic sheet (Sheet1).
-                                sheet_label = (str(sh) or "").strip()
-                                is_generic = len(sheet_names) == 1 and re.match(
-                                    r"^sheet\s*\d*$", sheet_label, re.IGNORECASE
-                                )
-                                base = stem if is_generic else (sheet_label or stem)
-                                sheets[_safe_sheet(base)] = df.fillna("")
-                            wb.close()
-                    except Exception as exc:
-                        raise _ParseError(f"Could not parse '{filename}': {exc}") from exc
-                if not sheets:
-                    raise _ParseError("No parseable structured data found in uploads")
-                combined = _io.BytesIO()
-                with _pd.ExcelWriter(combined, engine="openpyxl") as writer:
-                    for name, df in sheets.items():
-                        df.to_excel(writer, sheet_name=name, index=False)
-                return combined.getvalue(), list(sheets.keys())
+            # offending filename back out to _fail_job. On a Go build the engine reads the workbooks
+            # and writes the combined workbook (multi_upload.combine_with_engine); a missing or
+            # crashed engine leaves it to the Python combine.
+            from .multi_upload import CombineError, combine_in_python, combine_with_engine, engine_can_combine
 
             try:
                 try:
-                    file_bytes, sheet_names_out = await asyncio.to_thread(_parse_and_combine)
-                except _ParseError as exc:
+                    combined = None
+                    if engine_can_combine(raw_files):
+                        combined = await combine_with_engine(raw_files, mid_str)
+                    if combined is None:
+                        combined = await asyncio.to_thread(combine_in_python, raw_files)
+                    file_bytes, sheet_names_out = combined
+                except CombineError as exc:
                     await _fail_job(str(exc))
                     return
 
@@ -1905,6 +1876,10 @@ def create_app() -> FastAPI:
             # also expose detailed terminal-style logs in nodes[].logs.
             _merge_runtime_logs_into_nodes(migration_nodes, str(migration_job.id))
 
+            # A Go run: which engine, and the running step's live progress (best effort).
+            from .engine.progress import engine_status_fields
+            _engine, _engine_progress = await engine_status_fields(migration_nodes, str(migration_job.id))
+
             return MigrationStatusResponse(
                 migration_id=migration_job.id,
                 status=migration_job.status,
@@ -1939,6 +1914,8 @@ def create_app() -> FastAPI:
                     _udr_column_intelligence_from_job(migration_job), include_output,
                     "the UDR column intelligence"),
                 error_message=migration_job.error_message,
+                engine=_engine,
+                engine_progress=_engine_progress,
                 nodes=_lighten_node_outputs(migration_nodes, include_output),
             )
 

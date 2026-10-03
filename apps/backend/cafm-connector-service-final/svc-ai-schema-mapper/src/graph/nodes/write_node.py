@@ -43,6 +43,7 @@ from .meter_link import (
 from .reference_link import REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
+from ...engine.selection import uses_go
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
@@ -274,6 +275,11 @@ async def write_node(state: MigrationState) -> MigrationState:
     5. EL-M.9: Validate response from svc-ingestion
     """
 
+    if uses_go(state, "write"):
+        from ...engine.steps import go_write_node
+
+        return await go_write_node(state)
+
     migration_id = state.get("migration_id")
     intermediate_schema = state.get("intermediate_schema")
     db_session = state.get("db_session")
@@ -284,71 +290,7 @@ async def write_node(state: MigrationState) -> MigrationState:
     # ── Phase 0: DDL Execution (before GATE 3) ───────────────────────────
     # Execute DDL for any custom fields decided at Node 4 (GATE 1).
     # All statements run in a single transaction — full rollback on ANY failure.
-
-    # Build all confirmed mappings keyed by source table so CREATE TABLE DDL
-    # can include every T1+T2+human-mapped column for new tables.
-    all_mappings_by_source_table: dict[str, list[dict]] = {}
-    for tbl, mappings in state.get("tier1_mappings_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-    for tbl, mappings in state.get("tier2_auto_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-    for tbl, mappings in state.get("tier2_human_decisions_by_table", {}).items():
-        all_mappings_by_source_table.setdefault(tbl, []).extend(
-            [m if isinstance(m, dict) else dict(m) for m in mappings]
-        )
-
-    # ── Safety net: a custom new-column name that collides with an existing column ──────────
-    # An unmapped field offered as a "new column" can be submitted with a name that already
-    # exists on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK).
-    # ADD COLUMN IF NOT EXISTS then no-ops and the data is silently dropped. When that happens,
-    # fall back to the field's canonical name (column_intelligence) so the column is actually
-    # created — and move the values in the cleaned records to the canonical key so they land in
-    # it. Best-effort; skipped on any error. Belt-and-suspenders on top of the gate defaulting
-    # the new-column name to the canonical.
-    try:
-        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
-        _custom_existing = [
-            e for e in extra_fields_config
-            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
-        ]
-        if _col_canon and _custom_existing:
-            from ...db import get_plenum_cafm_columns_by_table
-            _cols_by_tbl = await get_plenum_cafm_columns_by_table()
-            _cleaned = state.get("cleaned_tables")
-            for _e in _custom_existing:
-                _tgt = str(_e.get("target_table") or "").strip()
-                _name = str(_e.get("custom_column_name") or "").strip()
-                if not _tgt or not _name:
-                    continue
-                _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
-                if _name.lower() not in _existing_lower:
-                    continue  # no collision — the ADD COLUMN will create it fine
-                _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
-                _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
-                _canon_safe = _to_safe_identifier(_canon) if _canon else ""
-                if (not _canon_safe or _canon_safe.lower() == _name.lower()
-                        or _canon_safe.lower() in _existing_lower):
-                    continue  # no usable canonical alternative
-                logger.warning(
-                    f"[Node 9] new-column '{_name}' already exists on '{_tgt}'; using canonical "
-                    f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
-                )
-                _e["custom_column_name"] = _canon_safe
-                if isinstance(_cleaned, dict) and isinstance(_cleaned.get(_src_t), list):
-                    for _row in _cleaned[_src_t]:
-                        if isinstance(_row, dict) and _name in _row and _canon_safe not in _row:
-                            _row[_canon_safe] = _row.pop(_name)
-    except Exception as _safety_exc:  # pragma: no cover — best-effort
-        logger.warning(f"[Node 9] new-column collision safety net skipped: {_safety_exc}")
-
-    ddl_statements = _build_migration_ddl_statements(
-        extra_fields_config,
-        all_mappings_by_source_table=all_mappings_by_source_table,
-    )
+    ddl_statements, _column_renames = await _ddl_statements_for(state)
 
     custom_count = sum(1 for e in extra_fields_config if e.get("storage_strategy") == "custom")
     new_table_count = sum(1 for e in extra_fields_config if e.get("is_new_table"))
@@ -420,102 +362,14 @@ async def write_node(state: MigrationState) -> MigrationState:
         return state
 
     # ── Write all confirmed field mappings to migration_field_mappings ───────
-    # This is the ONLY place mappings are persisted. Gates 0/1/2 only update
-    # in-memory state; the DB write happens here once, after everything is confirmed.
-    if migration_id:
-        try:
-            from ...models.migration import MigrationFieldMapping
-
-            session_factory = get_async_session_factory()
-            mapping_rows: list[MigrationFieldMapping] = []
-
-            # Tier 1 mappings (all tables)
-            for table_name, mappings in state.get("tier1_mappings_by_table", {}).items():
-                for m in mappings:
-                    mapping_rows.append(MigrationFieldMapping(
-                        migration_id=migration_id,
-                        source_field=m.get("source_field", ""),
-                        target_field=m.get("target_field", ""),
-                        confidence=m.get("confidence", 0.0),
-                        tier=m.get("tier", "T1"),
-                        rationale=m.get("rationale", ""),
-                        sample_values=m.get("sample_values", {}),
-                        transformation=m.get("transformation"),
-                    ))
-
-            # Tier 2 auto-accepted mappings
-            for table_name, mappings in state.get("tier2_auto_by_table", {}).items():
-                for m in mappings:
-                    mapping_rows.append(MigrationFieldMapping(
-                        migration_id=migration_id,
-                        source_field=m.get("source_field", ""),
-                        target_field=m.get("target_field", ""),
-                        confidence=m.get("confidence", 0.0),
-                        tier=m.get("tier", "T2_semantic"),
-                        rationale=m.get("rationale", ""),
-                        sample_values=m.get("sample_values", {}),
-                        transformation=m.get("transformation"),
-                    ))
-
-            # Tier 2 human-confirmed mappings (Gate 1 decisions — in-memory only until now)
-            for table_name, mappings in state.get("tier2_human_decisions_by_table", {}).items():
-                for m in mappings:
-                    sf = m.get("source_field") if isinstance(m, dict) else getattr(m, "source_field", "")
-                    tf = m.get("target_field") if isinstance(m, dict) else getattr(m, "target_field", "")
-                    conf = m.get("confidence", 0.0) if isinstance(m, dict) else getattr(m, "confidence", 0.0)
-                    rat = m.get("rationale", "") if isinstance(m, dict) else getattr(m, "rationale", "")
-                    rev_id = m.get("reviewer_id") if isinstance(m, dict) else getattr(m, "reviewer_id", None)
-                    if rev_id and not isinstance(rev_id, _UUID):
-                        try:
-                            rev_id = _UUID(str(rev_id))
-                        except Exception:
-                            rev_id = None
-                    mapping_rows.append(MigrationFieldMapping(
-                        migration_id=migration_id,
-                        source_field=sf,
-                        target_field=tf,
-                        confidence=conf,
-                        tier="T2_human",
-                        rationale=rat,
-                        sample_values={},
-                        reviewer_id=rev_id,
-                    ))
-
-            if mapping_rows:
-                async with session_factory() as session:
-                    session.add_all(mapping_rows)
-                    await session.commit()
-                logger.info(f"[Node 9] ✓ Wrote {len(mapping_rows)} field mappings to DB")
-            else:
-                logger.info("[Node 9] No field mappings to write")
-
-        except Exception as map_err:
-            logger.error(f"[Node 9] Failed to write field mappings (non-fatal): {map_err}")
-            # Non-fatal — handoff can still proceed
+    await _persist_field_mappings(state)
 
     try:
         # ── Prepare GATE 3 approval payload ──────────────────────────────
-        entity_counts = {}
-        for entity_type, records in intermediate_schema.get("entities", {}).items():
-            if records:
-                entity_counts[entity_type] = len(records)
-
-        gate3_payload = {
-            "migration_id": migration_id,
-            "summary": {
-                "source_type": intermediate_schema.get("source_type"),
-                "source_filename": intermediate_schema.get("source_filename"),
-                "overall_confidence": intermediate_schema.get("confidence", {}).get("eval_score", 0),
-                "entity_counts": entity_counts,
-                "total_entities": sum(entity_counts.values()),
-            },
-            "instructions": (
-                "Review the migration summary. Click CONFIRM to send to svc-ingestion or REJECT to return for corrections."
-            ),
-        }
+        gate3_payload = _gate3_payload(state)
 
         logger.info(f"[Node 9] Interrupting for GATE 3 final approval")
-        for entity_type, count in entity_counts.items():
+        for entity_type, count in gate3_payload["summary"]["entity_counts"].items():
             logger.info(f"[Node 9]   {entity_type}: {count}")
 
         state["write_review_payload"] = gate3_payload
@@ -534,24 +388,8 @@ async def write_node(state: MigrationState) -> MigrationState:
             await clear_gate_payload(migration_id)
 
         # ── Process GATE 3 decision ──────────────────────────────────
-        # Frontend sends { confirmed: true/false }; legacy format uses { action: "confirm" }
-        if "confirmed" in gate3_decision:
-            action = "confirm" if gate3_decision.get("confirmed") else "reject"
-        else:
-            action = gate3_decision.get("action", "reject")
-
-        if action != "confirm":
-            logger.warning(f"[Node 9] GATE 3 REJECTED by customer")
-            state["handoff_status"] = "rejected"
-            state["error_message"] = "Customer rejected handoff at GATE 3"
-            state["current_step"] = 9
-            state["event_log"].append({
-                "timestamp": datetime.utcnow().isoformat(),
-                "event": "gate3_rejected",
-                "node": 9,
-                "detail": "Customer rejected IntermediateSchema"
-            })
-            return state
+        if _gate3_action(gate3_decision) != "confirm":
+            return _gate3_rejected(state)
 
         logger.info(f"[Node 9] GATE 3 CONFIRMED - proceeding with handoff")
 
@@ -613,11 +451,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                     logger.error(
                         f"[Node 9] The database connection closed mid-write: {aligned_exc}"
                     )
-                    state["error_message"] = (
-                        "The database connection closed part way through the write, so the run "
-                        "stopped. Nothing partial was kept. This is the connection, not the "
-                        f"file — try the same upload again. ({str(aligned_exc)[:160]})"
-                    )
+                    state["error_message"] = _connection_lost_message(str(aligned_exc))
                     state["error_node"] = 9
                     state["el_m9_passed"] = False
                     return state
@@ -715,83 +549,7 @@ async def write_node(state: MigrationState) -> MigrationState:
                 state["el_m9_passed"] = False
                 return state
 
-        # ── EL-M.9 Validation ────────────────────────────────────────
-        if state.get("handoff_status") not in [
-            "sent",
-            "acknowledged",
-            "applied_sql",
-            "applied_sql_aligned",
-        ]:
-            logger.error("[Node 9] EL-M.9 FAILED: svc-ingestion did not acknowledge")
-            state["el_m9_passed"] = False
-            return state
-
-        state["el_m9_passed"] = True
-        logger.info("[Node 9] EL-M.9 PASSED: IntermediateSchema sent and acknowledged")
-
-        # ── Update migration_jobs database record ──────────────────────
-        try:
-            session_factory = get_async_session_factory()
-            async with session_factory() as session:
-                db_migration = await session.get(MigrationJob, migration_id)
-                if db_migration:
-                    db_migration.status = "complete"
-                    db_migration.completed_at = datetime.utcnow()
-                    db_migration.output_json_url = state.get("output_json_url")
-                    db_migration.output_csv_url = state.get("output_csv_url")
-                    db_migration.output_sql_url = state.get("output_sql_url")
-                    db_migration.output_structure_md_url = state.get("output_structure_md_url")
-                    db_migration.migration_report_url = state.get("migration_report_url")
-                    db_migration.progress_pct = 100.0
-                    await session.commit()
-                    logger.info(f"[Node 9] Updated migration_jobs: status=complete")
-                else:
-                    logger.warning(f"[Node 9] Migration record {migration_id} not found in DB")
-
-        except Exception as e:
-            logger.exception(f"[Node 9] Failed to update migration_jobs: {e}")
-            # Continue anyway — state is already updated
-            state["error_message"] = f"DB update failed (handoff sent): {str(e)}"
-
-        # ── Mark migration complete ──────────────────────────────────
-        state["status"] = "complete"
-        state["current_step"] = 9
-        append_event(
-            state,
-            node_id=9,
-            node_name="write_node",
-            event="node_complete",
-            status="completed",
-            outcome=f"Migration written — handoff {state.get('handoff_status')}",
-            detail=f"Handoff to svc-ingestion: {state.get('handoff_status')}",
-        )
-
-        logger.info(f"[Node 9] ═══════════════════════════════════════════")
-        logger.info(f"[Node 9] ✓ MIGRATION COMPLETE")
-        logger.info(f"[Node 9] Status: {state.get('handoff_status')}")
-
-        if migration_id:
-            from .db_writer import update_node_progress
-            await update_node_progress(
-                migration_id, "9_complete",
-                status="complete",
-            )
-
-        # ── Save updated registry snapshot to DB ─────────────────────────────
-        # Persists any newly learned aliases from this migration run so that
-        # future startups load them from the DB cache instead of introspecting.
-        try:
-            from ...services.registry_cache import save_new_version, compute_schema_hash
-            from ...config import get_settings as _get_settings
-            _db_url = _get_settings().db_url
-            _mapper = state.get("mapper_config", {})
-            _hash = compute_schema_hash(_mapper.get("canonical_fields", {}))
-            _ver = await save_new_version(_db_url, _mapper, _hash)
-            logger.info(f"[Node 9] Registry snapshot saved as v{_ver}")
-        except Exception as _reg_exc:
-            logger.warning(f"[Node 9] Registry snapshot save failed (non-fatal): {_reg_exc}")
-
-        return state
+        return await _finish_successful_write(state)
 
     except GraphInterrupt:
         raise
@@ -804,6 +562,302 @@ async def write_node(state: MigrationState) -> MigrationState:
         state["status"] = "failed"
         state["el_m9_passed"] = False
         return state
+
+
+async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True) -> "tuple[list[dict], list[dict]]":
+    """The extra-field DDL the review gates asked for, and the new-column renames behind it.
+
+    Returns ``(ddl_statements, column_renames)``; each rename is ``{"table", "from", "to"}`` in the
+    order it was decided. ``rename_rows`` moves the values in ``state["cleaned_tables"]`` as well
+    (the Python writer reads them from there); the engine applies the renames itself.
+    """
+    extra_fields_config: list[ExtraFieldConfig] = state.get("extra_fields_config", [])
+    column_renames: list[dict] = []
+    # Build all confirmed mappings keyed by source table so CREATE TABLE DDL
+    # can include every T1+T2+human-mapped column for new tables.
+    all_mappings_by_source_table: dict[str, list[dict]] = {}
+    for tbl, mappings in state.get("tier1_mappings_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+    for tbl, mappings in state.get("tier2_auto_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+    for tbl, mappings in state.get("tier2_human_decisions_by_table", {}).items():
+        all_mappings_by_source_table.setdefault(tbl, []).extend(
+            [m if isinstance(m, dict) else dict(m) for m in mappings]
+        )
+
+    # ── Safety net: a custom new-column name that collides with an existing column ──────────
+    # An unmapped field offered as a "new column" can be submitted with a name that already
+    # exists on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK).
+    # ADD COLUMN IF NOT EXISTS then no-ops and the data is silently dropped. When that happens,
+    # fall back to the field's canonical name (column_intelligence) so the column is actually
+    # created — and move the values in the cleaned records to the canonical key so they land in
+    # it. Best-effort; skipped on any error. Belt-and-suspenders on top of the gate defaulting
+    # the new-column name to the canonical.
+    try:
+        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
+        _custom_existing = [
+            e for e in extra_fields_config
+            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
+        ]
+        if _col_canon and _custom_existing:
+            from ...db import get_plenum_cafm_columns_by_table
+            _cols_by_tbl = await get_plenum_cafm_columns_by_table()
+            _cleaned = state.get("cleaned_tables")
+            for _e in _custom_existing:
+                _tgt = str(_e.get("target_table") or "").strip()
+                _name = str(_e.get("custom_column_name") or "").strip()
+                if not _tgt or not _name:
+                    continue
+                _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
+                if _name.lower() not in _existing_lower:
+                    continue  # no collision — the ADD COLUMN will create it fine
+                _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
+                _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
+                _canon_safe = _to_safe_identifier(_canon) if _canon else ""
+                if (not _canon_safe or _canon_safe.lower() == _name.lower()
+                        or _canon_safe.lower() in _existing_lower):
+                    continue  # no usable canonical alternative
+                logger.warning(
+                    f"[Node 9] new-column '{_name}' already exists on '{_tgt}'; using canonical "
+                    f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
+                )
+                _e["custom_column_name"] = _canon_safe
+                column_renames.append({"table": str(_src_t), "from": _name, "to": _canon_safe})
+                if rename_rows and isinstance(_cleaned, dict) and isinstance(_cleaned.get(_src_t), list):
+                    for _row in _cleaned[_src_t]:
+                        if isinstance(_row, dict) and _name in _row and _canon_safe not in _row:
+                            _row[_canon_safe] = _row.pop(_name)
+    except Exception as _safety_exc:  # pragma: no cover — best-effort
+        logger.warning(f"[Node 9] new-column collision safety net skipped: {_safety_exc}")
+
+    ddl_statements = _build_migration_ddl_statements(
+        extra_fields_config,
+        all_mappings_by_source_table=all_mappings_by_source_table,
+    )
+    return ddl_statements, column_renames
+
+
+
+async def _persist_field_mappings(state: MigrationState) -> None:
+    """Write every confirmed field mapping to migration_field_mappings (non-fatal on failure).
+
+    This is the ONLY place mappings are persisted. Gates 0/1/2 only update in-memory state.
+    """
+    migration_id = state.get("migration_id")
+    # This is the ONLY place mappings are persisted. Gates 0/1/2 only update
+    # in-memory state; the DB write happens here once, after everything is confirmed.
+    if migration_id:
+        try:
+            from ...models.migration import MigrationFieldMapping
+
+            session_factory = get_async_session_factory()
+            mapping_rows: list[MigrationFieldMapping] = []
+
+            # Tier 1 mappings (all tables)
+            for table_name, mappings in state.get("tier1_mappings_by_table", {}).items():
+                for m in mappings:
+                    mapping_rows.append(MigrationFieldMapping(
+                        migration_id=migration_id,
+                        source_field=m.get("source_field", ""),
+                        target_field=m.get("target_field", ""),
+                        confidence=m.get("confidence", 0.0),
+                        tier=m.get("tier", "T1"),
+                        rationale=m.get("rationale", ""),
+                        sample_values=m.get("sample_values", {}),
+                        transformation=m.get("transformation"),
+                    ))
+
+            # Tier 2 auto-accepted mappings
+            for table_name, mappings in state.get("tier2_auto_by_table", {}).items():
+                for m in mappings:
+                    mapping_rows.append(MigrationFieldMapping(
+                        migration_id=migration_id,
+                        source_field=m.get("source_field", ""),
+                        target_field=m.get("target_field", ""),
+                        confidence=m.get("confidence", 0.0),
+                        tier=m.get("tier", "T2_semantic"),
+                        rationale=m.get("rationale", ""),
+                        sample_values=m.get("sample_values", {}),
+                        transformation=m.get("transformation"),
+                    ))
+
+            # Tier 2 human-confirmed mappings (Gate 1 decisions — in-memory only until now)
+            for table_name, mappings in state.get("tier2_human_decisions_by_table", {}).items():
+                for m in mappings:
+                    sf = m.get("source_field") if isinstance(m, dict) else getattr(m, "source_field", "")
+                    tf = m.get("target_field") if isinstance(m, dict) else getattr(m, "target_field", "")
+                    conf = m.get("confidence", 0.0) if isinstance(m, dict) else getattr(m, "confidence", 0.0)
+                    rat = m.get("rationale", "") if isinstance(m, dict) else getattr(m, "rationale", "")
+                    rev_id = m.get("reviewer_id") if isinstance(m, dict) else getattr(m, "reviewer_id", None)
+                    if rev_id and not isinstance(rev_id, _UUID):
+                        try:
+                            rev_id = _UUID(str(rev_id))
+                        except Exception:
+                            rev_id = None
+                    mapping_rows.append(MigrationFieldMapping(
+                        migration_id=migration_id,
+                        source_field=sf,
+                        target_field=tf,
+                        confidence=conf,
+                        tier="T2_human",
+                        rationale=rat,
+                        sample_values={},
+                        reviewer_id=rev_id,
+                    ))
+
+            if mapping_rows:
+                async with session_factory() as session:
+                    session.add_all(mapping_rows)
+                    await session.commit()
+                logger.info(f"[Node 9] ✓ Wrote {len(mapping_rows)} field mappings to DB")
+            else:
+                logger.info("[Node 9] No field mappings to write")
+
+        except Exception as map_err:
+            logger.error(f"[Node 9] Failed to write field mappings (non-fatal): {map_err}")
+            # Non-fatal — handoff can still proceed
+
+
+
+def _gate3_payload(state: MigrationState, entity_counts: "dict | None" = None) -> dict:
+    """The write gate's payload: what the run is about to write. ``entity_counts`` overrides the
+    counts read from the intermediate schema (the engine reports its own)."""
+    intermediate_schema = state.get("intermediate_schema") or {}
+    if entity_counts is None:
+        entity_counts = {}
+        for entity_type, records in (intermediate_schema.get("entities") or {}).items():
+            if records:
+                entity_counts[entity_type] = len(records)
+    return {
+        "migration_id": state.get("migration_id"),
+        "summary": {
+            "source_type": intermediate_schema.get("source_type"),
+            "source_filename": intermediate_schema.get("source_filename"),
+            "overall_confidence": (intermediate_schema.get("confidence") or {}).get("eval_score", 0),
+            "entity_counts": entity_counts,
+            "total_entities": sum(entity_counts.values()),
+        },
+        "instructions": (
+            "Review the migration summary. Click CONFIRM to send to svc-ingestion or REJECT to return for corrections."
+        ),
+    }
+
+
+def _gate3_action(decision) -> str:
+    """Frontend sends { confirmed: true/false }; legacy format uses { action: "confirm" }."""
+    decision = decision or {}
+    if "confirmed" in decision:
+        return "confirm" if decision.get("confirmed") else "reject"
+    return decision.get("action", "reject")
+
+
+def _gate3_rejected(state: MigrationState) -> MigrationState:
+    logger.warning(f"[Node 9] GATE 3 REJECTED by customer")
+    state["handoff_status"] = "rejected"
+    state["error_message"] = "Customer rejected handoff at GATE 3"
+    state["current_step"] = 9
+    state.setdefault("event_log", []).append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "event": "gate3_rejected",
+        "node": 9,
+        "detail": "Customer rejected IntermediateSchema"
+    })
+    return state
+
+
+def _connection_lost_message(detail: str) -> str:
+    return (
+        "The database connection closed part way through the write, so the run "
+        "stopped. Nothing partial was kept. This is the connection, not the "
+        f"file — try the same upload again. ({str(detail)[:160]})"
+    )
+
+
+async def _finish_successful_write(state: MigrationState) -> MigrationState:
+    """After the rows are written: EL-M.9, the migration_jobs row, status complete, the closing
+    event and progress, and the registry snapshot."""
+    migration_id = state.get("migration_id")
+    # ── EL-M.9 Validation ────────────────────────────────────────
+    if state.get("handoff_status") not in [
+        "sent",
+        "acknowledged",
+        "applied_sql",
+        "applied_sql_aligned",
+    ]:
+        logger.error("[Node 9] EL-M.9 FAILED: svc-ingestion did not acknowledge")
+        state["el_m9_passed"] = False
+        return state
+
+    state["el_m9_passed"] = True
+    logger.info("[Node 9] EL-M.9 PASSED: IntermediateSchema sent and acknowledged")
+
+    # ── Update migration_jobs database record ──────────────────────
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            db_migration = await session.get(MigrationJob, migration_id)
+            if db_migration:
+                db_migration.status = "complete"
+                db_migration.completed_at = datetime.utcnow()
+                db_migration.output_json_url = state.get("output_json_url")
+                db_migration.output_csv_url = state.get("output_csv_url")
+                db_migration.output_sql_url = state.get("output_sql_url")
+                db_migration.output_structure_md_url = state.get("output_structure_md_url")
+                db_migration.migration_report_url = state.get("migration_report_url")
+                db_migration.progress_pct = 100.0
+                await session.commit()
+                logger.info(f"[Node 9] Updated migration_jobs: status=complete")
+            else:
+                logger.warning(f"[Node 9] Migration record {migration_id} not found in DB")
+
+    except Exception as e:
+        logger.exception(f"[Node 9] Failed to update migration_jobs: {e}")
+        # Continue anyway — state is already updated
+        state["error_message"] = f"DB update failed (handoff sent): {str(e)}"
+
+    # ── Mark migration complete ──────────────────────────────────
+    state["status"] = "complete"
+    state["current_step"] = 9
+    append_event(
+        state,
+        node_id=9,
+        node_name="write_node",
+        event="node_complete",
+        status="completed",
+        outcome=f"Migration written — handoff {state.get('handoff_status')}",
+        detail=f"Handoff to svc-ingestion: {state.get('handoff_status')}",
+    )
+
+    logger.info(f"[Node 9] ═══════════════════════════════════════════")
+    logger.info(f"[Node 9] ✓ MIGRATION COMPLETE")
+    logger.info(f"[Node 9] Status: {state.get('handoff_status')}")
+
+    if migration_id:
+        from .db_writer import update_node_progress
+        await update_node_progress(
+            migration_id, "9_complete",
+            status="complete",
+        )
+
+    # ── Save updated registry snapshot to DB ─────────────────────────────
+    # Persists any newly learned aliases from this migration run so that
+    # future startups load them from the DB cache instead of introspecting.
+    try:
+        from ...services.registry_cache import save_new_version, compute_schema_hash
+        from ...config import get_settings as _get_settings
+        _db_url = _get_settings().db_url
+        _mapper = state.get("mapper_config", {})
+        _hash = compute_schema_hash(_mapper.get("canonical_fields", {}))
+        _ver = await save_new_version(_db_url, _mapper, _hash)
+        logger.info(f"[Node 9] Registry snapshot saved as v{_ver}")
+    except Exception as _reg_exc:
+        logger.warning(f"[Node 9] Registry snapshot save failed (non-fatal): {_reg_exc}")
+
+    return state
 
 
 async def _get_svc_ingestion_url() -> str:
@@ -1491,6 +1545,16 @@ _NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
     "building_sections": (("building_id", "name"), ("building_code", "name")),
     # No reference column of its own, so a finding is identified by what it is a finding ABOUT.
     "inspections": (("asset_code", "inspection_date", "finding_type"),),
+    # These four had no key, so every re-upload of a workbook added them again (3 Oct 2026: three
+    # Bishopsgate uploads, three copies of its contracts, bands, asset readings and plans).
+    # A contract is its vendor, its name and its start: a renewal starting later is its own
+    # contract. vendor_id / asset_id are resolved before the key is read.
+    "vendor_contracts": (("vendor_id", "contract_name", "contract_start"),),
+    # A band carries no reference of its own (none, in the workbooks seen): the same band is the
+    # same reading type and unit with the same limits.
+    "asset_reading_bands": (("reading_type", "unit", "lo", "hi"),),
+    "asset_readings": (("asset_id", "reading_type", "recorded_at"),),
+    "maintenance_plans": (("sm_code",),),
 }
 
 
@@ -1608,6 +1672,86 @@ def _snake_ident(s: object) -> str:
     """snake_case a source field the same way output_generator names a '__new__' column."""
     import re as _re
     return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+
+
+# What the detector cannot be relied on to notice. Hierarchy detection reads the
+# FILE, so it finds what the file happens to make obvious; these are facts about
+# plenum_cafm that hold whatever the file looks like. Without them the write order
+# stayed as the sheets happened to be arranged, and a child was loaded before its
+# parent existed: work_orders before vendors, ppm_visits before vendor_contracts.
+# Every one of those references resolved to null, and the pages showed "Unassigned".
+_CORE_PARENTS: dict[str, tuple[str, ...]] = {
+    "building_sections": ("buildings",),
+    "assets": ("buildings", "building_sections"),
+    "energy_meters": ("buildings", "building_sections"),
+    "meter_readings": ("energy_meters",),
+    "asset_readings": ("assets",),
+    "vendor_contracts": ("vendors",),
+    "work_orders": ("buildings", "assets", "vendors"),
+    "ppm_visits": ("assets", "vendors", "vendor_contracts"),
+    "maintenance_plans": ("assets", "buildings"),
+    "inspections": ("assets",),
+    "spare_parts": ("vendors",),
+    "compliance_certificates": ("buildings", "assets", "vendors"),
+    "work_order_parts": ("work_orders", "spare_parts"),
+}
+
+
+def _ordered_source_tables(cleaned_tables: dict, table_routing: dict | None,
+                           confirmed_hierarchies: list | None) -> list[str]:
+    """Source tables in write order: every parent destination's sources before its children."""
+    # ── Parent-before-child write order ─────────────────────────────────────────────────
+    # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
+    # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
+    # listed before assets fails every row with "asset_id not present in assets". Order the
+    # source tables by a topological sort of their DESTINATION tables, using the confirmed
+    # hierarchy (child.source_table references parent.target_table). Ties + unknowns keep the
+    # original order; a cycle falls back to original order. Additive + best-effort.
+    def _dest_of(_src: str) -> str:
+        return (table_routing or {}).get(_src, _src)
+
+    _parents_of_dest: dict[str, set] = {}  # dest table -> set(parent dest tables)
+    # Passed in by the caller. This read `state`, which is not in scope here,
+    # so the moment this fallback was reached it raised NameError instead of
+    # inserting anything — and it is only ever reached when the primary write
+    # has already failed. The recovery path could not recover.
+    for _h in (confirmed_hierarchies or []):
+        _hd = _h if isinstance(_h, dict) else (getattr(_h, "__dict__", {}) or {})
+        _child = _dest_of(str(_hd.get("source_table") or ""))
+        _parent = _dest_of(str(_hd.get("target_table") or ""))
+        if _child and _parent and _child != _parent:
+            _parents_of_dest.setdefault(_child, set()).add(_parent)
+    for _c, _ps in _CORE_PARENTS.items():
+        _parents_of_dest.setdefault(_c, set()).update(_ps)
+
+    _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
+    _orig_idx = {s: i for i, s in enumerate(_srcs)}
+    _emitted: list[str] = []
+    _seen: set[str] = set()
+
+    def _visit(_s: str, _stack: set):
+        if _s in _seen or _s in _stack:
+            return  # already placed, or a cycle → break it
+        _stack.add(_s)
+        _sd = _dest_of(_s)
+        # place every parent-destination's source table(s) first
+        for _ps in sorted(
+            (x for x in _srcs if _dest_of(x) in _parents_of_dest.get(_sd, set())),
+            key=lambda x: _orig_idx[x],
+        ):
+            _visit(_ps, _stack)
+        _stack.discard(_s)
+        if _s not in _seen:
+            _seen.add(_s); _emitted.append(_s)
+
+    for _s in _srcs:
+        _visit(_s, set())
+    return _emitted
+
+
+#: How many normalised rows the numeric → TEXT widening reads before it decides (it stops at the
+#: first non-numeric value).
+_WIDEN_SCAN_CAP = 5000
 
 
 async def _apply_records_with_schema_alignment(
@@ -1828,78 +1972,7 @@ async def _apply_records_with_schema_alignment(
                     _asset_building_cache[_ref] = str(_hit[0][0]) if _hit and _hit[0] and _hit[0][0] else ""
                 return _asset_building_cache[_ref]
 
-            # ── Parent-before-child write order ─────────────────────────────────────────────────
-            # A child's FK (work_orders.asset_id → assets) can only be satisfied if the parent rows
-            # were inserted first. Dict/source order doesn't guarantee that, so a work_orders sheet
-            # listed before assets fails every row with "asset_id not present in assets". Order the
-            # source tables by a topological sort of their DESTINATION tables, using the confirmed
-            # hierarchy (child.source_table references parent.target_table). Ties + unknowns keep the
-            # original order; a cycle falls back to original order. Additive + best-effort.
-            def _dest_of(_src: str) -> str:
-                return (table_routing or {}).get(_src, _src)
-
-            _parents_of_dest: dict[str, set] = {}  # dest table -> set(parent dest tables)
-            # Passed in by the caller. This read `state`, which is not in scope here,
-            # so the moment this fallback was reached it raised NameError instead of
-            # inserting anything — and it is only ever reached when the primary write
-            # has already failed. The recovery path could not recover.
-            for _h in (confirmed_hierarchies or []):
-                _hd = _h if isinstance(_h, dict) else (getattr(_h, "__dict__", {}) or {})
-                _child = _dest_of(str(_hd.get("source_table") or ""))
-                _parent = _dest_of(str(_hd.get("target_table") or ""))
-                if _child and _parent and _child != _parent:
-                    _parents_of_dest.setdefault(_child, set()).add(_parent)
-
-            # What the detector cannot be relied on to notice. Hierarchy detection reads the
-            # FILE, so it finds what the file happens to make obvious; these are facts about
-            # plenum_cafm that hold whatever the file looks like. Without them the write order
-            # stayed as the sheets happened to be arranged, and a child was loaded before its
-            # parent existed: work_orders before vendors, ppm_visits before vendor_contracts.
-            # Every one of those references resolved to null, and the pages showed "Unassigned".
-            _CORE_PARENTS: dict[str, tuple[str, ...]] = {
-                "building_sections": ("buildings",),
-                "assets": ("buildings", "building_sections"),
-                "energy_meters": ("buildings", "building_sections"),
-                "meter_readings": ("energy_meters",),
-                "asset_readings": ("assets",),
-                "vendor_contracts": ("vendors",),
-                "work_orders": ("buildings", "assets", "vendors"),
-                "ppm_visits": ("assets", "vendors", "vendor_contracts"),
-                "maintenance_plans": ("assets", "buildings"),
-                "inspections": ("assets",),
-                "spare_parts": ("vendors",),
-                "compliance_certificates": ("buildings", "assets", "vendors"),
-                "work_order_parts": ("work_orders", "spare_parts"),
-            }
-            for _c, _ps in _CORE_PARENTS.items():
-                _parents_of_dest.setdefault(_c, set()).update(_ps)
-
-            def _ordered_source_tables() -> list[str]:
-                _srcs = [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]
-                _orig_idx = {s: i for i, s in enumerate(_srcs)}
-                _emitted: list[str] = []
-                _seen: set[str] = set()
-
-                def _visit(_s: str, _stack: set):
-                    if _s in _seen or _s in _stack:
-                        return  # already placed, or a cycle → break it
-                    _stack.add(_s)
-                    _sd = _dest_of(_s)
-                    # place every parent-destination's source table(s) first
-                    for _ps in sorted(
-                        (x for x in _srcs if _dest_of(x) in _parents_of_dest.get(_sd, set())),
-                        key=lambda x: _orig_idx[x],
-                    ):
-                        _visit(_ps, _stack)
-                    _stack.discard(_s)
-                    if _s not in _seen:
-                        _seen.add(_s); _emitted.append(_s)
-
-                for _s in _srcs:
-                    _visit(_s, set())
-                return _emitted
-
-            _write_order = _ordered_source_tables()
+            _write_order = _ordered_source_tables(cleaned_tables, table_routing, confirmed_hierarchies)
             if _write_order != [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]:
                 logger.info(f"[Node 9] Write order (parents first): {_write_order}")
             _ordered_tables = [(s, cleaned_tables[s]) for s in _write_order]
@@ -2269,14 +2342,13 @@ async def _apply_records_with_schema_alignment(
                 # to the RECEIVED datatype: ALTER it to text so all rows land. Only ever WIDENS
                 # (int → text), never narrows. Scans a sample for a fast early-exit.
                 _num_types = ("int", "bigint", "smallint", "numeric", "decimal", "double", "real", "serial")
-                _SCAN_CAP = 5000
                 _widened = False
                 for _col, _dbt in list(db_col_type_map.items()):
                     if (_col == "id" and _id_is_serial) or not any(t in _dbt.lower() for t in _num_types):
                         continue
                     _needs_text = False
                     for _i, _rec in enumerate(normalized_records):
-                        if _i >= _SCAN_CAP:
+                        if _i >= _WIDEN_SCAN_CAP:
                             break
                         _v = _rec.get(_col)
                         if _v is None or str(_v).strip() == "":

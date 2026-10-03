@@ -80,6 +80,16 @@ async def hierarchy_node(state: MigrationState) -> MigrationState:
                 "sample_row": {k: str(v)[:50] for k, v in records[0].items()},
             }
 
+        # A Go run's preprocess measured, for each pair of related columns, how much of one the
+        # other holds; the hierarchy model gets those numbers next to the names.
+        _links = ((state.get("engine_reports") or {}).get("preprocess") or {}).get("links") or []
+        for _l in _links:
+            _t = schema_summary.get(str(_l.get("table")))
+            if _t is not None:
+                _t.setdefault("measured_links", []).append(
+                    {"column": _l.get("column"), "references": _l.get("references"),
+                     "containment": round(float(_l.get("containment") or 0), 3)})
+
         table_names = list(column_names_per_table.keys())
         log(f"Schema summary: {len(schema_summary)} tables")
 
@@ -531,21 +541,27 @@ Return ONLY JSON:
       "target_column": "id",
       "relationship_type": "CONTAINMENT",
       "confidence": 0.9,
-      "reasoning": "column site_id references sites"
+      "reasoning": "site_id references sites"
     }}
   ],
   "hierarchy_levels": {{ "sites": 0, "data": 1 }}
-}}"""
+}}
+
+Keep each "reasoning" to at most 8 words, and output compact JSON (no indentation)."""
 
     from ...matchers.fm_ontology import fm_skill_preamble
 
     response = await client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2000,
+        # A workbook's relationships did not fit in 2,000: the JSON stopped mid-string on every run
+        # and the step fell back to column names (2–3 Oct 2026).
+        max_tokens=8000,
         # FM Skill Context so hierarchy inference reasons in FM containment terms.
         system=fm_skill_preamble(),
         messages=[{"role": "user", "content": prompt}],
     )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise ValueError("the answer was cut off at the token limit")
     response_text = response.content[0].text.strip()
     if response_text.startswith("```"):
         response_text = response_text.split("```")[1]

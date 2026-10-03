@@ -16,6 +16,7 @@ Interrupt handling:
   checkpointer restores the graph from where it paused.
 """
 
+import logging
 import os
 from datetime import datetime
 from uuid import UUID
@@ -50,6 +51,7 @@ class WorkerSettings:
     functions: list = []          # filled in at bottom of module
     allow_abort_jobs = True
     job_timeout = 3600            # 1 hour max per migration
+    poll_delay = 0.1              # seconds between queue polls (arq default 0.5): a gate answer starts sooner
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -290,16 +292,18 @@ async def run_migration(
     )
 
     # ── Mark as running ───────────────────────────────────────────────
+    # The status column only: the row also carries node_logs and the gate payload (MBs late in a run).
     async with session_factory() as session:
-        result = await session.execute(
-            select(MigrationJob).where(MigrationJob.id == UUID(migration_id))
-        )
-        job = result.scalar_one_or_none()
-        if not job:
+        found = (await session.execute(
+            select(MigrationJob.status).where(MigrationJob.id == UUID(migration_id))
+        )).first()
+        if found is None:
             logger.error("run_migration_job_not_found", migration_id=migration_id)
             return {"status": "failed", "error": "Job not found"}
-        job.status = "running"
-        job.started_at = datetime.utcnow()
+        await session.execute(
+            update(MigrationJob).where(MigrationJob.id == UUID(migration_id))
+            .values(status="running", started_at=datetime.utcnow())
+        )
         await session.commit()
 
     # Create the Activity Log card immediately at run start. Previously the card only appeared
@@ -391,25 +395,28 @@ async def resume_migration(
     )
 
     # ── Mark as running again ─────────────────────────────────────────
+    # The status column only: the row also carries node_logs and the gate payload (MBs late in a run).
     async with session_factory() as session:
-        result = await session.execute(
-            select(MigrationJob).where(MigrationJob.id == UUID(migration_id))
-        )
-        job = result.scalar_one_or_none()
-        if not job:
+        found = (await session.execute(
+            select(MigrationJob.status).where(MigrationJob.id == UUID(migration_id))
+        )).first()
+        if found is None:
             logger.error("resume_migration_job_not_found", migration_id=migration_id, gate_type=gate_type)
             return {"status": "failed", "error": "Job not found"}
-        if job.status not in ["awaiting_review", "running"]:
+        status = found[0]
+        if status not in ["awaiting_review", "running"]:
             logger.error(
                 "resume_migration_not_resumable",
                 migration_id=migration_id,
                 gate_type=gate_type,
-                current_status=job.status,
+                current_status=status,
             )
-            return {"status": "failed", "error": f"Job not resumable: {job.status}"}
+            return {"status": "failed", "error": f"Job not resumable: {status}"}
         # Keep pending_gate fields — the gate node's clear_gate_payload() will
         # wipe them once the graph actually resumes past the interrupt.
-        job.status = "running"
+        await session.execute(
+            update(MigrationJob).where(MigrationJob.id == UUID(migration_id)).values(status="running")
+        )
         await session.commit()
 
     graph = await get_migration_graph()  # async factory — MUST be awaited (else `graph` is a coroutine)
@@ -459,9 +466,12 @@ async def resume_migration(
     else:
         resume_command = Command(resume=decisions)
 
-    return await _run_graph(
-        graph, resume_command, config, migration_id, session_factory
-    )
+    from .graph.nodes.db_writer import resuming_gate
+
+    with resuming_gate(gate_type):
+        return await _run_graph(
+            graph, resume_command, config, migration_id, session_factory
+        )
 
 
 async def run_schema_mapping(
@@ -783,11 +793,52 @@ async def run_fiix_data_ingestion(
             return {"status": "failed", "error": str(exc)}
 
 
+def _sweep_engine_files() -> int:
+    """Remove the engine files of runs nothing has touched for a week (engine/store.py)."""
+    try:
+        from .engine.store import sweep_stale
+
+        removed = sweep_stale()
+        if removed:
+            logger.info(f"[cleanup] removed the engine files of {removed} run(s) untouched for a week")
+        return removed
+    except Exception as exc:  # noqa: BLE001 — housekeeping never stops the worker
+        logger.warning(f"[cleanup] engine file sweep failed: {exc}")
+        return 0
+
+
 async def cleanup_expired_migrations(ctx) -> dict:
-    """Periodic cleanup: archive migrations older than 7 days."""
+    """Periodic cleanup (daily, WorkerSettings.cron_jobs): the engine files of runs that never
+    reached an end. Archiving migrations older than 7 days is still to do."""
     logger.info("[cleanup] Running cleanup_expired_migrations")
-    # TODO: implement if needed
-    return {"status": "ok"}
+    return {"status": "ok", "engine_runs_swept": _sweep_engine_files()}
+
+
+def _engine_logs_to_stdout() -> None:
+    """Print the engine glue's log lines (src.engine, plain `logging`) in the worker log.
+
+    Only the API's lifespan calls configure_logging; in this process `logging` has no handler, so
+    its INFO lines — the engine's per-table write timings among them — were dropped and its
+    warnings came out bare. A process that configured logging already prints them itself."""
+    import sys
+
+    eng = logging.getLogger("src.engine")
+    if logging.getLogger().handlers or eng.handlers:
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_EngineLogFormat())
+    eng.addHandler(handler)
+    eng.setLevel(logging.INFO)
+
+
+class _EngineLogFormat(logging.Formatter):
+    """'2026-10-02 09:14:52 [info     ] message', as the structlog lines around them read."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = f"{self.formatTime(record, '%Y-%m-%d %H:%M:%S')} [{record.levelname.lower():<9}] {record.getMessage()}"
+        if record.exc_info:
+            line += "\n" + self.formatException(record.exc_info)
+        return line
 
 
 async def on_startup(ctx: dict) -> None:
@@ -799,6 +850,8 @@ async def on_startup(ctx: dict) -> None:
     The FastAPI lifespan does the same for the API process, but the
     ARQ worker is a separate process and never runs that lifespan.
     """
+    _engine_logs_to_stdout()
+    _sweep_engine_files()
     settings = get_settings()
 
     if not settings.openai_api_key:
@@ -887,3 +940,6 @@ WorkerSettings.functions = [
     run_fiix_data_ingestion,
     cleanup_expired_migrations,
 ]
+from arq.cron import cron as _arq_cron  # noqa: E402
+
+WorkerSettings.cron_jobs = [_arq_cron(cleanup_expired_migrations, hour={3}, minute={17}, run_at_startup=False)]

@@ -20,6 +20,7 @@ import logging
 from typing import Any
 
 from ...udr.primitives import redundant_column_groups
+from ...udr.memo import memo_scoped
 
 try:  # the mapper's own picture of the destination; absent only in stripped-down test rigs
     from ...matchers.plenum_cafm_schema import TABLES as _PLENUM_TABLES
@@ -87,6 +88,7 @@ def _representative(group: list[str], order: dict[str, int]) -> str:
     return min(group, key=lambda c: (-len(c), order.get(c, 0)))
 
 
+@memo_scoped
 def merge_duplicate_columns(
     tables: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
