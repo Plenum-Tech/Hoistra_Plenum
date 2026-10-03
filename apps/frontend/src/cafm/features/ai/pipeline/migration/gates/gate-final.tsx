@@ -8,6 +8,7 @@ import {
   type MigrationStatus,
 } from "../../../chat-api";
 import { useRef, useState } from "react";
+import GateFinalPlan from "./gate-final-plan";
 
 interface Props {
   migrationId: string;
@@ -221,6 +222,8 @@ export default function GateFinal({ migrationId, payload, onSubmitted, onReset, 
           )}
         </div>
       </div>
+
+      <GateFinalPlan plan={payload.plan} />
 
       {error && (
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">

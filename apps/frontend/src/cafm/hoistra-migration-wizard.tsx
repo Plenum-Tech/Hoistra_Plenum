@@ -16,7 +16,7 @@ import { MigrationStepSnapshot } from "@/features/ai/pipeline/migration/step-pau
 import { ColumnIntelligencePanels, TableResolutionPanels } from "@/features/ai/pipeline/migration/migration-metadata-view";
 import { SkeletonPanel } from "@/components/ui";
 import { cn } from "@/utils/cn";
-import { fmtDuration, settleActive, wizardModel } from "./hoistra-wizard-steps.js";
+import { fmtDuration, progressLine, settleActive, wizardModel } from "./hoistra-wizard-steps.js";
 import type { WizardActions, WizardActive, WizardBridge, WizardContentState } from "./hoistra-wizard-bridge";
 // Cancel goes through Hoistra's own client: DELETE /api/migration/{id} (signed in, own company).
 import { schemaMapperApi } from "../api/schemaMapper.js";
@@ -306,6 +306,14 @@ function Wizard({ migrationId, fileName, sessionId, onDismiss, onMounted }: Prop
             ) : null}
             {model.context}
           </p>
+          {(() => {
+            const line = running ? progressLine(migration?.engine_progress, now) : null;
+            return line ? (
+              <p className="mt-0.5 truncate text-[11.5px] tabular-nums text-slate-500" title={line} data-testid="engine-progress">
+                {line}
+              </p>
+            ) : null;
+          })()}
           {cancelError ? (
             <p role="alert" className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11.5px] text-red-700">
               {cancelError}
@@ -382,6 +390,7 @@ function Wizard({ migrationId, fileName, sessionId, onDismiss, onMounted }: Prop
             ) : null}
           </div>
         </div>
+        <RunDetails engine={migration?.engine ?? null} steps={model.steps} />
       </section>
     </div>
   );
@@ -464,6 +473,30 @@ function StepRail({ steps, viewing, onPick }: { steps: WizardStep[]; viewing: nu
         );
       })}
     </ol>
+  );
+}
+
+/** Run details: which engine did the row work, and how long each finished step took. */
+function RunDetails({ engine, steps }: { engine: string | null; steps: WizardStep[] }) {
+  const timed = steps.filter((s) => s.durationMs != null);
+  return (
+    <details className="border-t border-slate-200 px-4 py-2.5 text-[12px] text-slate-600">
+      <summary className="cursor-pointer select-none text-[11.5px] font-medium text-slate-500 hover:text-slate-700">
+        Run details
+      </summary>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+        <dt className="text-slate-500">Engine</dt>
+        <dd className="text-slate-800">{engine === "go" ? "hoist-engine (Go)" : "Python"}</dd>
+        {timed.map((s) => (
+          <div key={s.n} className="contents">
+            <dt className="text-slate-500">
+              {s.n}. {s.title}
+            </dt>
+            <dd className="tabular-nums text-slate-800">{fmtDuration(s.durationMs)}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

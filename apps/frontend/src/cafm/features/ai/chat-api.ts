@@ -449,7 +449,33 @@ export type MigrationHierarchyGatePayload = {
   review_items?: unknown[];
 };
 
+/** One destination of the engine's dry run of the write (a Go-engine run's write gate). */
+export type MigrationWritePlanTable = {
+  source: string;
+  dest: string;
+  rows: number;
+  merge_existing_assets: number;
+  /** Rows already in the database: the write skips them. */
+  already_present: number;
+  /** Values the destination column cannot hold: written empty. */
+  invalid_values: { column: string; count: number; dest_type: string; sample: string }[];
+  rows_cannot_write: { reason: string; count: number }[];
+  new_columns: string[];
+  dropped_columns?: string[];
+  widen_to_text?: string[];
+  references_to_resolve?: Record<string, number>;
+  creates_table?: boolean;
+};
+
+export type MigrationWritePlan = {
+  tables: MigrationWritePlanTable[];
+  ddl_statements?: number;
+  input_hash?: string;
+};
+
 export type MigrationFinalGatePayload = {
+  /** The engine's dry run of the write; absent on a Python-engine run. */
+  plan?: MigrationWritePlan;
   summary: {
     total_fields: number;
     t1_mapped: number;
@@ -1131,7 +1157,23 @@ export type MigrationStatusResponse = {
   /** B13.1→B21.1 — Column-Intelligence Pipeline (prefixing · grouping · unified names · classification · dest map). */
   udr_column_intelligence?: UdrColumnIntelligence | null;
   error_message: string | null;
+  /** "go" when hoist-engine does the run's row-heavy steps; null on a Python-engine run. */
+  engine?: string | null;
+  /** While a Go step runs: where it is (written at most every half second, kept 120 s). */
+  engine_progress?: MigrationEngineProgress | null;
   nodes: NodeInfo[];
+};
+
+export type MigrationEngineProgress = {
+  engine: string;
+  step: "parse" | "combine" | "preprocess" | "outputs" | "write_plan" | "write" | "udr" | string;
+  stage?: string | null;
+  table?: string | null;
+  done: number;
+  total: number;
+  rate_per_s?: number;
+  /** UTC, ISO 8601, no zone. */
+  at: string;
 };
 
 // ── B7.1 → B12.1 — Migration-Analysis table-resolution report ──────────────────

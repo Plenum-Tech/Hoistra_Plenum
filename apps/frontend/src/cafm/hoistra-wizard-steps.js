@@ -178,3 +178,53 @@ export function wizardModel(active, reviewable, nodes) {
 
   return { activeNode, steps, status, context, subTitle, subIndex };
 }
+
+// ── Live engine progress ──────────────────────────────────────────────────────────────────────
+// A Go-engine run reports where its running step is (the status poll's engine_progress, written
+// by the service at most every half second, UTC with no zone). progressLine puts it in words for
+// the one line under the step's context; a report older than 30 s says nothing — the step has
+// moved on, or the worker has gone and the card's stall check speaks instead.
+
+const STALE_MS = 30000;
+
+function reportTime(at) {
+  if (typeof at !== 'string' || !at) return NaN;
+  const zoned = /(Z|[+-]\d{2}:?\d{2})$/.test(at) ? at : at + 'Z';
+  return Date.parse(zoned);
+}
+
+const count = (n) => Number(n).toLocaleString('en-GB');
+
+/**
+ * @param {{step?: string, stage?: string|null, table?: string|null, done?: number, total?: number, at?: string}|null|undefined} p
+ * @param {number} nowMs
+ * @returns {string|null}
+ */
+export function progressLine(p, nowMs) {
+  if (!p || typeof p !== 'object') return null;
+  const at = reportTime(p.at);
+  if (!Number.isFinite(at) || nowMs - at > STALE_MS) return null;
+  const table = typeof p.table === 'string' && p.table ? p.table : null;
+  const done = Number(p.done) || 0;
+  const total = Number(p.total) || 0;
+  const of = (unit) => (total > 0 ? ' — ' + count(done) + ' of ' + count(total) + (unit ? ' ' + unit : '') : '');
+  switch (p.step) {
+    case 'parse':
+      return table ? 'Reading the workbook — ' + table : 'Reading the file';
+    case 'combine':
+      return table ? 'Combining the uploads — ' + table : 'Combining the uploads';
+    case 'preprocess':
+      return table ? 'Cleaning ' + table + (total > 1 ? of('tables') : '') : 'Cleaning the tables';
+    case 'outputs':
+      return table ? 'Writing the output files — ' + table : 'Writing the output files';
+    case 'write_plan':
+      return 'Checking what the write will do' + (table ? ' — ' + table : '');
+    case 'write':
+      if (!table) return 'Writing to the database';
+      return (p.stage === 'resolve' ? 'Matching references in ' : 'Writing ') + table + of('rows');
+    case 'udr':
+      return 'Checking relationships' + of('');
+    default:
+      return null;
+  }
+}
