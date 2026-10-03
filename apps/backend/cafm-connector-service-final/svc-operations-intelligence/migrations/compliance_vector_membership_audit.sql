@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.compliance_vector_membership_audit
     CONSTRAINT compliance_vector_membership_audit_pkey PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_cvma_document_id
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cvma_document_id
     ON plenum_cafm.compliance_vector_membership_audit (document_id);
 
-CREATE INDEX IF NOT EXISTS ix_cvma_created_at
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_cvma_created_at
     ON plenum_cafm.compliance_vector_membership_audit (created_at DESC);

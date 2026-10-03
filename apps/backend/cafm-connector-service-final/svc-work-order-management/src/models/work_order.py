@@ -1,5 +1,6 @@
 import uuid as _uuid_mod
 from sqlalchemy import Column, String, DateTime, Text, Boolean, Float, JSON, Integer, Numeric, func, Index
+from sqlalchemy.dialects.postgresql import UUID
 from .base import Base
 
 
@@ -13,10 +14,23 @@ class WorkOrder(Base):
         {"schema": "plenum_cafm"},
     )
 
-    work_order_id       = Column(String(50),  primary_key=True)
+    # plenum_cafm.work_orders.id IS the primary key on both databases and is set and
+    # distinct on every row. The service used to key on a column called work_order_id, which
+    # does not exist on one of them at all — so every ORM read raised there. wo_code is not a
+    # candidate either: 1,728 of 2,775 rows set and only 948 distinct.
+    #
+    # The Python attribute keeps its name so the three hundred-odd references to it, and the
+    # {work_order_id} in every route path, go on meaning the same thing. Deliberately
+    # untyped: the column is uuid on one database and integer on the other.
+    work_order_id       = Column("id", String, primary_key=True)
+    #: The human reference people read and quote. Present on both, not unique on one, and
+    #: never used as a key.
+    wo_code             = Column(String(50))
 
     # Real plenum_cafm.work_orders columns (NOT NULL — must be supplied on insert)
     organization_id     = Column(Integer)                     # set from DEFAULT_ORGANIZATION_ID
+    # The building this work order is on — what a user's access is allocated by.
+    building_id         = Column(UUID(as_uuid=True))
     title               = Column(String(255))                 # mapped from issue_description
 
     source              = Column(String(50))
@@ -24,6 +38,10 @@ class WorkOrder(Base):
 
     # Asset & location (string names, added as service-specific columns)
     asset               = Column(String(255))
+    # The real foreign key. Counting a building's open orders per asset by lower-casing the
+    # name is wrong the moment two assets share one or the text drifts from the register.
+    # Deliberately untyped: uuid on one database, varchar on the other.
+    asset_id            = Column(String)
     location            = Column(String(255))
 
     # Description

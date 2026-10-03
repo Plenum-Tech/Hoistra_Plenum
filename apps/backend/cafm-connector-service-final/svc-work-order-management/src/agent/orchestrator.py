@@ -17,6 +17,7 @@ from .tools.definitions import TOOL_DEFINITIONS
 from .tools.executor import ToolExecutor
 from ..config import settings
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -109,8 +110,8 @@ class WOOrchestrator:
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
-                temperature=0.2,    # low temp for consistent, factual responses
-                max_tokens=1024,
+                # low temp for consistent, factual responses, where the model takes one
+                **completion_kwargs(self._model, 1024, temperature=0.2),
             )
 
             choice = response.choices[0]

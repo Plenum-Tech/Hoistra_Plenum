@@ -14,6 +14,8 @@ from collections import Counter
 from itertools import combinations
 from typing import Any, Iterable
 
+from .memo import memoized
+
 # ── Thresholds (mirror the spec) ───────────────────────────────────────────────
 THRESHOLDS = {
     "format_similarity_min": 0.80,          # 7.6 AC2
@@ -36,12 +38,25 @@ def _nonnull(values: Iterable[Any]) -> list[str]:
     return [s for s in (_norm(v) for v in values) if s != ""]
 
 
+def _values(rows: Records, col: str) -> list[Any]:
+    """Every row's value for ``col`` — shared and read-only inside a memo scope (udr/memo.py)."""
+    return memoized("values", rows, col, lambda: [r.get(col) for r in (rows or []) if isinstance(r, dict)])
+
+
+def _nonnull_values(rows: Records, col: str) -> list[str]:
+    return memoized("nonnull", rows, col, lambda: _nonnull(_values(rows, col)))
+
+
 def column_values(rows: Records, col: str) -> list[Any]:
-    return [r.get(col) for r in (rows or []) if isinstance(r, dict)]
+    return list(_values(rows, col))  # a fresh list: callers may keep or change it
 
 
 def distinct_values(rows: Records, col: str) -> set[str]:
-    return set(_nonnull(column_values(rows, col)))
+    return memoized("distinct", rows, col, lambda: set(_nonnull_values(rows, col)))
+
+
+def _lower_distinct(rows: Records, col: str) -> set[str]:
+    return memoized("distinct_lower", rows, col, lambda: {v.lower() for v in distinct_values(rows, col)})
 
 
 # ── Stage 2: primary-key detection (7.3 AC4-6) ─────────────────────────────────
@@ -49,10 +64,10 @@ def null_rate(rows: Records, col: str) -> float:
     """Fraction of rows whose value is null/empty (0.0 = no nulls)."""
     if not rows:
         return 1.0
-    vals = column_values(rows, col)
+    vals = _values(rows, col)
     if not vals:
         return 1.0
-    return 1.0 - (len(_nonnull(vals)) / len(vals))
+    return 1.0 - (len(_nonnull_values(rows, col)) / len(vals))
 
 
 def uniqueness(rows: Records, col: str) -> float:
@@ -213,13 +228,17 @@ _LABEL_NAME_RE = re.compile(
 
 
 def column_format(rows: Records, col: str, sample: int = 200) -> str:
+    return memoized(("format", sample), rows, col, lambda: _column_format_uncached(rows, col, sample))
+
+
+def _column_format_uncached(rows: Records, col: str, sample: int = 200) -> str:
     """Dominant cell format across (a sample of) a column's non-null values.
 
     A column whose *name* marks it as a human label (``*_name``, ``title``, ``description`` …)
     is never reported as ``id_code`` — that class is reserved for identifier columns, so a
     ``site_name`` cannot be grouped with ``site_id``. Such a column is reported as ``categorical``
     (short, single-token labels) or ``free_text`` (contains spaces) instead."""
-    vals = _nonnull(column_values(rows, col))[:sample]
+    vals = _nonnull_values(rows, col)[:sample]
     if not vals:
         return "empty"
     counts: dict[str, int] = {}
@@ -245,7 +264,12 @@ def column_format(rows: Records, col: str, sample: int = 200) -> str:
 
 
 def format_distribution(rows: Records, col: str, sample: int = 200) -> dict[str, float]:
-    vals = _nonnull(column_values(rows, col))[:sample]
+    return dict(memoized(("format_dist", sample), rows, col,
+                         lambda: _format_distribution_uncached(rows, col, sample)))
+
+
+def _format_distribution_uncached(rows: Records, col: str, sample: int = 200) -> dict[str, float]:
+    vals = _nonnull_values(rows, col)[:sample]
     if not vals:
         return {"empty": 1.0}
     counts: dict[str, int] = {}
@@ -301,7 +325,7 @@ def referential_integrity(
     parent PK column. Per-row (not distinct): standard FK validity — every FK
     value must resolve to a real PK. Distinct overlap is Test 2's metric instead.
     """
-    child_vals = _nonnull(column_values(child_rows, child_col))
+    child_vals = _nonnull_values(child_rows, child_col)
     if not child_vals:
         return 0.0
     parent = distinct_values(parent_rows, parent_col)
@@ -357,7 +381,12 @@ def value_shape(value: Any, max_len: int = 60) -> str:
 
 def value_shape_distribution(rows: Records, col: str, sample: int = 200) -> dict[str, float]:
     """Empirical distribution of value-shape skeletons over a column's non-null values."""
-    vals = _nonnull(column_values(rows, col))[:sample]
+    return dict(memoized(("shape_dist", sample), rows, col,
+                         lambda: _value_shape_distribution_uncached(rows, col, sample)))
+
+
+def _value_shape_distribution_uncached(rows: Records, col: str, sample: int = 200) -> dict[str, float]:
+    vals = _nonnull_values(rows, col)[:sample]
     if not vals:
         return {"": 1.0}
     counts = Counter(value_shape(v) for v in vals)
@@ -408,8 +437,8 @@ def _jaccard_value_overlap(rows_a: Records, col_a: str, rows_b: Records, col_b: 
     columns only group if they share enough actual values (e.g. 'trade' columns
     both containing {Lift, Mechanical, Fire}), not just a similar shape.
     """
-    sa = {v.lower() for v in distinct_values(rows_a, col_a)}
-    sb = {v.lower() for v in distinct_values(rows_b, col_b)}
+    sa = _lower_distinct(rows_a, col_a)
+    sb = _lower_distinct(rows_b, col_b)
     if not sa or not sb:
         return 0.0
     inter = sa & sb
@@ -425,8 +454,8 @@ def _containment_overlap(rows_a: Records, col_a: str, rows_b: Records, col_b: st
     PK gets containment 1.0 even when Jaccard is low (because the PK has
     many extra rows the FK doesn't reference).
     """
-    sa = {v.lower() for v in distinct_values(rows_a, col_a)}
-    sb = {v.lower() for v in distinct_values(rows_b, col_b)}
+    sa = _lower_distinct(rows_a, col_a)
+    sb = _lower_distinct(rows_b, col_b)
     if not sa or not sb:
         return 0.0
     inter = sa & sb
@@ -636,7 +665,8 @@ def redundant_column_groups(
     if len(cols) < 2:
         return []
 
-    vals = {c: [_norm(v).casefold() for v in column_values(rows, c)] for c in cols}
+    vals = {c: memoized("casefold", rows, c, lambda c=c: [_norm(v).casefold() for v in _values(rows, c)])
+            for c in cols}
     order = {c: i for i, c in enumerate(cols)}
     parent = {c: c for c in cols}
 
@@ -781,7 +811,7 @@ def build_table_metadata(name: str, rows: Records, columns: list[str], pk: dict 
      samples_by_column (3 each)}.
     """
     pk = pk or detect_primary_key(rows, columns)
-    samples = {c: _nonnull(column_values(rows, c))[:3] for c in columns}
+    samples = {c: _nonnull_values(rows, c)[:3] for c in columns}
     return {
         "table": name,
         "primary_key": pk["columns"],
@@ -811,5 +841,5 @@ def build_column_metadata(
         "dest_udr_table": dest_table,
         "classification": classification,
         "cell_format": column_format(rows, col),
-        "sample_values": _nonnull(column_values(rows, col))[:5],
+        "sample_values": _nonnull_values(rows, col)[:5],
     }

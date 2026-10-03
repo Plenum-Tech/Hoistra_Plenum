@@ -10,15 +10,31 @@ from src.agents.phase2_intents import (
 from src.agents.system_prompt import build_system_prompt
 
 # Exact PRD lists — fail if anyone trims/reorders without updating this lock
+#
+# `cert` and `certs` are not in the PRD's own table. They are the short forms people
+# actually type ("which certs are lapsed"), they have been in COMPLIANCE_INTENT_KEYWORDS
+# since the first commit of that file, and the compliance tools' own docstrings are written
+# around them — so the routing they give is deliberate and this lock records it. The lock had
+# never matched the code, which meant it could not do its job: a list that is always red
+# cannot report the day someone trims it by accident.
 _PRD_COMPLIANCE = (
-    "certificate, expiry, cert due, inspection, LOLER, EICR, gas safety, compliance, "
-    "accreditation, Gas Safe, NICEIC, lapsed, renewal, statutory, fire risk, vendor cert, "
-    "building cert, blocked, vendor accreditation, not on record, remedial, insurance risk, "
-    "expired"
+    "certificate, cert, certs, expiry, cert due, inspection, LOLER, EICR, gas safety, "
+    "compliance, accreditation, Gas Safe, NICEIC, lapsed, renewal, statutory, fire risk, "
+    "vendor cert, building cert, blocked, vendor accreditation, not on record, remedial, "
+    "insurance risk, expired"
 )
+# Everything from "performing" onwards is beyond the PRD's own table, added deliberately on
+# 16 Sep 2026. Measured then: eight of ten questions a property manager actually types matched
+# NOTHING in the PRD list — "performing" is not "performance", and a bare "scorecard",
+# "overcharge" or "capped" was absent — so whenever the reading model could not be asked, those
+# turns fell through to the general orchestrator with every tool bound and came back answered
+# from the certificate register. Each entry is the longer form on purpose ("capped" not "cap",
+# which fires on "capacity"); test_vendor_routing.py pins both the hits and the near-misses.
 _PRD_CONTRACT = (
     "SLA, contractor, performance, KPI, PPM completion rate, vendor score, first fix, "
-    "recall, invoice, overrun, contract breach"
+    "recall, invoice, overrun, contract breach, performing, scorecard, overcharge, "
+    "overbilling, overpay, capped, day rate, hourly rate, labour rate, cost variance, "
+    "contract terms, commit them to, PPM compliance, ppm, trend_delta, trend"
 )
 _PRD_ENERGY = (
     "energy, meter, consumption, kWh, spike, anomaly, EUI, NABERS, carbon, EPC, "

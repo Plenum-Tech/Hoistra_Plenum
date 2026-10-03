@@ -1,0 +1,374 @@
+{
+ "building_hint_keys": [
+  "building_id",
+  "building",
+  "building_name",
+  "building_code",
+  "site_ref",
+  "site_id",
+  "site",
+  "site_name",
+  "site_code",
+  "location_site"
+ ],
+ "building_hint_tables": [
+  "assets",
+  "work_orders",
+  "energy_meters",
+  "meter_readings",
+  "building_sections",
+  "compliance_certificates"
+ ],
+ "building_linked_tables": [
+  "assets",
+  "work_orders",
+  "energy_meters",
+  "building_sections",
+  "compliance_certificates"
+ ],
+ "building_via_asset_tables": [
+  "work_orders",
+  "energy_meters"
+ ],
+ "core_parents": {
+  "asset_readings": [
+   "assets"
+  ],
+  "assets": [
+   "buildings",
+   "building_sections"
+  ],
+  "building_sections": [
+   "buildings"
+  ],
+  "compliance_certificates": [
+   "buildings",
+   "assets",
+   "vendors"
+  ],
+  "energy_meters": [
+   "buildings",
+   "building_sections"
+  ],
+  "inspections": [
+   "assets"
+  ],
+  "maintenance_plans": [
+   "assets",
+   "buildings"
+  ],
+  "meter_readings": [
+   "energy_meters"
+  ],
+  "ppm_visits": [
+   "assets",
+   "vendors",
+   "vendor_contracts"
+  ],
+  "spare_parts": [
+   "vendors"
+  ],
+  "vendor_contracts": [
+   "vendors"
+  ],
+  "work_order_parts": [
+   "work_orders",
+   "spare_parts"
+  ],
+  "work_orders": [
+   "buildings",
+   "assets",
+   "vendors"
+  ]
+ },
+ "either_keys": [
+  "mpan_mprn",
+  "meter_ref",
+  "meter_reference",
+  "meter_point",
+  "supply_number",
+  "meter_number",
+  "meter_serial",
+  "msn",
+  "serial_number",
+  "meter",
+  "meter_id"
+ ],
+ "elec_words": [
+  "electric",
+  "elec",
+  "power",
+  "mpan",
+  "kva"
+ ],
+ "floor_keys": [
+  "floor_name",
+  "floor",
+  "level",
+  "storey",
+  "story"
+ ],
+ "fuel_keys": [
+  "meter_type",
+  "fuel",
+  "fuel_type",
+  "supply_type",
+  "utility",
+  "commodity",
+  "energy_type"
+ ],
+ "gas_words": [
+  "gas",
+  "mprn",
+  "therm"
+ ],
+ "known_core_tables": [
+  "asset_categories",
+  "asset_documents",
+  "asset_readings",
+  "assets",
+  "inventory_transactions",
+  "locations",
+  "maintenance_plans",
+  "organizations",
+  "scheduled_maintenance",
+  "spare_parts",
+  "technicians",
+  "users",
+  "vendors",
+  "work_order_comments",
+  "work_order_tasks",
+  "work_orders"
+ ],
+ "max_consecutive_row_failures": 100,
+ "merge_keep": [
+  "created_at",
+  "id",
+  "organization_id"
+ ],
+ "meter_hint_keys": [
+  "meter_id",
+  "mpan",
+  "mprn",
+  "mpan_mprn",
+  "meter_ref",
+  "meter_reference",
+  "meter_point",
+  "supply_number",
+  "meter_number",
+  "meter_serial",
+  "msn",
+  "serial_number",
+  "meter"
+ ],
+ "mpan_keys": [
+  "mpan",
+  "mpan_core",
+  "mpan_number",
+  "electricity_supply_number"
+ ],
+ "mprn_keys": [
+  "mprn",
+  "mprn_number",
+  "gas_supply_number"
+ ],
+ "natural_keys": {
+  "asset_reading_bands": [
+   [
+    "reading_type",
+    "?unit",
+    "?lo",
+    "?hi",
+    "?asset_id",
+    "?asset_category"
+   ]
+  ],
+  "asset_readings": [
+   [
+    "asset_id",
+    "reading_type",
+    "recorded_at",
+    "value"
+   ]
+  ],
+  "building_sections": [
+   [
+    "building_id",
+    "name"
+   ],
+   [
+    "building_code",
+    "name"
+   ]
+  ],
+  "buildings": [
+   [
+    "building_code"
+   ]
+  ],
+  "compliance_certificates": [
+   [
+    "certificate_number"
+   ]
+  ],
+  "inspections": [
+   [
+    "asset_code",
+    "inspection_date",
+    "finding_type"
+   ]
+  ],
+  "maintenance_plans": [
+   [
+    "sm_code",
+    "asset_id"
+   ]
+  ],
+  "ppm_visits": [
+   [
+    "ppm_ref"
+   ]
+  ],
+  "resources": [
+   [
+    "engineer_id"
+   ],
+   [
+    "resource_code"
+   ]
+  ],
+  "sites": [
+   [
+    "site_id"
+   ]
+  ],
+  "spare_parts": [
+   [
+    "part_code"
+   ]
+  ],
+  "vendor_contracts": [
+   [
+    "vendor_id",
+    "contract_name",
+    "contract_start"
+   ]
+  ],
+  "vendors": [
+   [
+    "vendor_code"
+   ],
+   [
+    "vendor_name"
+   ]
+  ],
+  "work_orders": [
+   [
+    "wo_code"
+   ]
+  ]
+ },
+ "references": [
+  {
+   "column": "asset_id",
+   "hint_keys": [
+    "asset_id",
+    "asset_code",
+    "asset_ref",
+    "asset_tag",
+    "equipment_code",
+    "equipment_id",
+    "plant_ref",
+    "asset"
+   ],
+   "match_columns": [
+    "asset_code",
+    "serial_number",
+    "inventory_code"
+   ],
+   "table": "assets"
+  },
+  {
+   "column": "vendor_id",
+   "hint_keys": [
+    "vendor_id",
+    "vendor_code",
+    "vendor_name",
+    "vendor",
+    "supplier",
+    "contractor",
+    "supplier_name"
+   ],
+   "match_columns": [
+    "vendor_code",
+    "vendor_name"
+   ],
+   "table": "vendors"
+  },
+  {
+   "column": "contract_id",
+   "hint_keys": [
+    "contract_id",
+    "contract_ref",
+    "contract_number",
+    "contract_name",
+    "contract"
+   ],
+   "match_columns": [
+    "contract_name"
+   ],
+   "table": "vendor_contracts"
+  },
+  {
+   "column": "part_id",
+   "hint_keys": [
+    "part_id",
+    "part_code",
+    "part_number",
+    "part_name",
+    "part"
+   ],
+   "match_columns": [
+    "part_code",
+    "part_name"
+   ],
+   "table": "spare_parts"
+  }
+ ],
+ "section_keys": [
+  "section",
+  "section_name",
+  "floor",
+  "floor_name",
+  "level",
+  "storey",
+  "story",
+  "zone",
+  "area",
+  "location",
+  "sub_location",
+  "space",
+  "demise",
+  "unit"
+ ],
+ "site_tables": [
+  "building",
+  "buildings",
+  "locations",
+  "site",
+  "sites"
+ ],
+ "sub_meter_keys": [
+  "is_sub_meter",
+  "sub_meter",
+  "submeter",
+  "meter_level",
+  "meter_role"
+ ],
+ "system_supplied_columns": [
+  "org_id",
+  "organization_id"
+ ],
+ "widen_scan_cap": 5000,
+ "write_chunk": 500
+}

@@ -48,6 +48,10 @@ class Skill:
     shared: bool = False
     body: str = ""
     path: str = ""
+    #: Sibling .md files in this skill's directory, appended after the body in this order.
+    #: Opt-in per skill: a SKILL.md with no `references:` key loads exactly as before, which is
+    #: why adding this does not change compliance — it routes its own documents separately.
+    references: tuple[str, ...] = ()
 
     @property
     def is_routable(self) -> bool:
@@ -137,6 +141,9 @@ def _load_one(path: Path) -> Skill | None:
     triggers = meta.get("triggers") or []
     if isinstance(triggers, str):
         triggers = [t.strip() for t in triggers.split(",") if t.strip()]
+    references = meta.get("references") or []
+    if isinstance(references, str):
+        references = [r.strip() for r in references.split(",") if r.strip()]
     return Skill(
         slug=path.parent.name,
         name=name,
@@ -146,6 +153,7 @@ def _load_one(path: Path) -> Skill | None:
         shared=_as_bool(meta.get("shared")) or agent == "shared",
         body=body.strip(),
         path=str(path),
+        references=tuple(str(r).strip() for r in references if str(r).strip()),
     )
 
 
@@ -298,6 +306,25 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
     own = skill_for_agent(agent)
     if own:
         parts.append(own.body)
+        # Reference documents named in the skill's front matter, in the order given. SKILL.md
+        # is the contract — what to do and what never to do — and stays short enough to be
+        # read. These carry the detail one kind of question needs: the anomaly rules and what
+        # each one means, the asset-level readings, how excess becomes money. Splitting them
+        # is what keeps the contract readable while the detail stays available.
+        #
+        # A named file that is missing is a warning, not a failure. A reference is depth; the
+        # agent answers less well without it but still correctly, and refusing to start over a
+        # renamed file would take the whole domain down to lose a paragraph. That is the
+        # opposite trade from prompt_doc(), where the missing file IS the contract.
+        # Addressed by SLUG, not by agent id — the directory is the skill's folder name.
+        # Compliance is the one place those two strings are identical ("compliance"), which is
+        # exactly why passing the agent id looked correct until a skill whose folder is
+        # `energy-intelligence` and whose agent is `energy_intelligence` tried to load a file.
+        for name in own.references:
+            try:
+                parts.append(prompt_doc(own.slug, name))
+            except RuntimeError as exc:
+                log.warning("skills.reference_missing", skill=own.slug, doc=name, error=str(exc))
     if not parts:
         return None
     return "\n\n---\n\n".join(parts)

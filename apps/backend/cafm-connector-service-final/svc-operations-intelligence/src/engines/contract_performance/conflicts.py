@@ -61,6 +61,34 @@ def _differs(stored: Any, incoming: Any) -> bool:
     return str(stored) != str(incoming)
 
 
+#: Each conflict field and the alias columns it may live under, widest first. Kept beside
+#: `_CONFLICT_FIELDS` so the two cannot drift: a field added there with no entry here is
+#: still selected, just from its own column only.
+_CONFLICT_ALIASES: dict[str, tuple[tuple[str, ...], str]] = {
+    "actual_cost": (("actual_cost", "cost_actual"), "numeric"),
+    "estimated_cost": (("estimated_cost", "cost_estimated"), "numeric"),
+    "attended_at": (("attended_at", "responded_at", "response_at"), "timestamptz"),
+    "completed_at": (("completed_at",), "timestamptz"),
+}
+
+
+def _conflict_select_parts(cols: dict[str, str]) -> list[str]:
+    """The SELECT list for the stored side of a conflict comparison.
+
+    Pure so the alias coverage can be tested against a real `information_schema` shape with
+    no database. Mirrors `scoring._udr_select_parts`: same aliases, same per-branch cast, so
+    the two sides of the comparison are always reading the same value.
+    """
+    from .scoring import _coalesce
+
+    parts: list[str] = []
+    for field in _CONFLICT_FIELDS:
+        candidates, cast = _CONFLICT_ALIASES.get(field, ((field,), ""))
+        found = _coalesce(cols, *candidates, cast=cast)
+        parts.append(f"{found} AS {field}" if found else f"NULL AS {field}")
+    return parts
+
+
 async def detect_and_flag_wo_conflict(
     session: AsyncSession,
     *,
@@ -76,13 +104,22 @@ async def detect_and_flag_wo_conflict(
 
     Returns {"conflict": True/False, "wo_code": wo_code}.
     """
+    # Read the same columns the scoring fetch reads. This selected only the canonical
+    # `actual_cost` / `estimated_cost`, while `_udr_select_parts` COALESCEs those with the
+    # `cost_actual` / `cost_estimated` aliases — so on a tenant that filled the aliases and
+    # left the canonical columns null, every comparison was null-against-a-number and
+    # `_differs` flags the moment one side is null. Both of a vendor's completed work orders
+    # were flagged and excluded, and because the fetch also filters on
+    # `conflict_flag IS NOT TRUE` they stayed invisible to every run after that.
+    from .scoring import _work_order_columns
+
+    cols = await _work_order_columns(session)
     row = (
         await session.execute(
             text(
-                "SELECT actual_cost, estimated_cost, attended_at, completed_at "
-                "FROM plenum_cafm.work_orders "
-                "WHERE wo_code = :wc "
-                "LIMIT 1"
+                # `wo` alias is required: _coalesce prefixes every column with it.
+                "SELECT " + ", ".join(_conflict_select_parts(cols))
+                + " FROM plenum_cafm.work_orders wo WHERE wo.wo_code = :wc LIMIT 1"
             ),
             {"wc": wo_code},
         )

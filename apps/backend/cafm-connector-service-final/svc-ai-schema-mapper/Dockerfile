@@ -1,3 +1,16 @@
+# ── hoist-engine: the Go engine a migration's row-heavy steps run on (src/engine/) ─────────
+# Its unit tests run here, so a red one fails the image. The tests that need Postgres (the writer,
+# the resolvers, the schema reads, EL-4.0) skip here: before an engine change ships, run them
+# against the throwaway parity database (engine/scripts/parity_db.sh up; engine/scripts/dev.sh
+# test-db; HOIST_PARITY=1 scripts/test_offline.sh tests/engine_parity). Go 1.25: pgx v5.11 needs it.
+FROM golang:1.25-bookworm AS engine
+WORKDIR /src
+COPY svc-ai-schema-mapper/engine/go.mod svc-ai-schema-mapper/engine/go.sum ./
+RUN go mod download
+COPY svc-ai-schema-mapper/engine/ ./
+RUN CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./... \
+ && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/hoist-engine ./cmd/hoist-engine
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -46,6 +59,11 @@ RUN pip install --no-cache-dir \
 
 # Layer 5: doc-rag source (mounted as volume in dev, copied here for prod)
 COPY doc-rag-main /app/doc_rag
+
+# hoist-engine and its data sets (the hoist-engine-cache volume in compose, shared by the app
+# and the worker so a run's files are where either process looks).
+COPY --from=engine /out/hoist-engine /usr/local/bin/hoist-engine
+RUN mkdir -p /var/hoist-engine
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 EXPOSE 8003

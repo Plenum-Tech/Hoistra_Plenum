@@ -91,3 +91,101 @@ async def test_verify_now_does_not_prefill_bpca():
         assert "BPCA-999" not in result["verification_url"]
     finally:
         ver.get_pack_type = original
+
+GOVUK_SEARCH = (
+    "https://find-energy-certificate.service.gov.uk"
+    "/find-a-certificate/search-by-reference-number"
+)
+
+
+def test_govuk_energy_register_is_in_the_table_for_all_three_energy_types():
+    """EPC, DEC and air-conditioning reports are the only documents on a public register
+    that lists the DOCUMENT rather than the contractor, so all three must reach it."""
+    reg = resolve_verification_register(certificate_type_code="EPC")
+    assert reg is not None and "GOV.UK" in (reg["register"] or "")
+    assert reg["verification_url"] == GOVUK_SEARCH
+    for code in ("DEC", "TM44"):
+        assert resolve_verification_register(certificate_type_code=code) == reg
+
+
+@pytest.mark.asyncio
+async def test_verify_now_opens_the_certificate_itself_for_a_lodged_reference():
+    """A lodgement reference addresses its own public page, so the link opens the
+    certificate rather than a search form the person still has to fill in."""
+    import src.engines.compliance.verification as ver
+
+    row = SimpleNamespace(
+        certificate_type_name="Display Energy Certificate (DEC)",
+        issuing_body="Accredited Energy Assessor",
+        trade_category="Energy",
+        verification_url=GOVUK_SEARCH,
+    )
+    original = ver.get_pack_type
+    ver.get_pack_type = AsyncMock(return_value=row)
+    try:
+        result = await build_verify_now_link(
+            MagicMock(),
+            certificate_type_code="DEC",
+            certificate_number="9920-1010-0626-0890-2091",
+        )
+    finally:
+        ver.get_pack_type = original
+    assert result["verification_url"] == (
+        "https://find-energy-certificate.service.gov.uk"
+        "/energy-certificate/9920-1010-0626-0890-2091"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_now_falls_back_to_the_registers_own_search_field():
+    """Without a lodgement reference the link must still be usable, and the GOV.UK form
+    reads `reference_number` - the generic `q` this builder uses elsewhere is ignored."""
+    import src.engines.compliance.verification as ver
+
+    row = SimpleNamespace(
+        certificate_type_name="Energy Performance Certificate (EPC)",
+        issuing_body="Accredited Energy Assessor",
+        trade_category="Energy",
+        verification_url=GOVUK_SEARCH,
+    )
+    original = ver.get_pack_type
+    ver.get_pack_type = AsyncMock(return_value=row)
+    try:
+        not_a_reference = await build_verify_now_link(
+            MagicMock(), certificate_type_code="EPC", certificate_number="EPC-SYN-16FA8CA4"
+        )
+        nothing_at_all = await build_verify_now_link(
+            MagicMock(), certificate_type_code="EPC"
+        )
+    finally:
+        ver.get_pack_type = original
+    # GOV.UK validates the field as a 20-digit number and answers anything else with
+    # "Enter a 20-digit certificate number" (seen live on 25 Sep 2026 with EPC-SYN-FA96128A),
+    # so a number that is not a lodgement reference opens the empty form, not an error page.
+    assert not_a_reference["verification_url"] == GOVUK_SEARCH
+    assert "q=" not in not_a_reference["verification_url"]
+    assert nothing_at_all["verification_url"] == GOVUK_SEARCH
+
+
+@pytest.mark.asyncio
+async def test_a_twenty_digit_reference_without_dashes_still_opens_the_certificate():
+    import src.engines.compliance.verification as ver
+
+    row = SimpleNamespace(
+        certificate_type_name="Energy Performance Certificate (EPC)",
+        issuing_body="Accredited Energy Assessor",
+        trade_category="Energy",
+        verification_url=GOVUK_SEARCH,
+    )
+    original = ver.get_pack_type
+    ver.get_pack_type = AsyncMock(return_value=row)
+    try:
+        r = await build_verify_now_link(
+            MagicMock(), certificate_type_code="EPC", certificate_number="99201010062608902091"
+        )
+    finally:
+        ver.get_pack_type = original
+    assert r["verification_url"] == (
+        "https://find-energy-certificate.service.gov.uk"
+        "/energy-certificate/9920-1010-0626-0890-2091"
+    )

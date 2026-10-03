@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -10,13 +11,22 @@ from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import String, and_, cast, column, exists, func, or_, select, table
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..core.logging import get_logger
-from ..models import ApprovalsQueueItem, OpsAuditLog, OpsEmailLog
-from .email_graph import graph_configured, send_via_microsoft_graph
+from ..models import (
+    ApprovalsQueueItem,
+    ComplianceCertificate,
+    ContractSlaParameters,
+    EnergyAnomaly,
+    OpsAuditLog,
+    OpsEmailLog,
+)
+from ..models.base import SCHEMA
+from .email_graph import send_via_microsoft_graph
+from .email_transport import email_transport
 
 log = get_logger(__name__)
 
@@ -130,6 +140,12 @@ def _hash_payload(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+#: ops_audit_log.source_feature is CHAR(1): A/B/C are the three product features. Platform
+#: administration (companies, invitations, allocation) is none of them, so it gets its own
+#: letter. Anything longer than one character is rejected by the database, not stored.
+PLATFORM_FEATURE = "P"
+
+
 async def write_audit(
     session: AsyncSession,
     *,
@@ -196,6 +212,50 @@ async def enqueue_approval(
     return item
 
 
+#: The subjects a queue item can name that this service can look up. vendors has no model
+#: here, and its id is varchar (about half are legacy non-uuid ids), so the uuid is cast.
+_VENDORS = table("vendors", column("id", String), schema=SCHEMA)
+_CHECKED_SUBJECTS = ("compliance_certificate", "vendor", "energy_anomaly", "contract_sla_parameters")
+#: The flags list_certificates() hides a certificate for: an item about a certificate the
+#: register does not show is not one anybody can open.
+_HIDDEN_CERTIFICATE_FLAGS = ("archived", "superseded_duplicate", "a1_test_fixture")
+
+
+def _subject_on_record() -> Any:
+    """The item is decided history, names nothing this can check, or its subject is still
+    there to act on.
+
+    related_entity_id is a loose uuid, not a foreign key, and nothing that removes a subject
+    closes the items about it: deleting a document takes its certificates, a data reset
+    empties a company's Compliance and Contracts tables, archiving hides a certificate. Each
+    left its lapse alert or vendor block pending — on 28 Sep 2026 the top bar read
+    "7 Pending", all Compliance, over a register holding no certificates. Applied in SQL, so
+    the LIMIT counts only items a person can act on and orphans cannot crowd live ones out.
+    A site, a document or no subject at all cannot be proved gone, so those stay listed.
+    """
+    q, c = ApprovalsQueueItem, ComplianceCertificate
+    hidden = or_(*[
+        func.coalesce(c.raw_metadata[flag].astext, "").notin_(["", "false", "0"])
+        for flag in _HIDDEN_CERTIFICATE_FLAGS
+    ])
+    return or_(
+        q.status != "pending",
+        q.related_entity_id.is_(None),
+        q.related_entity_type.is_(None),
+        q.related_entity_type.notin_(_CHECKED_SUBJECTS),
+        and_(q.related_entity_type == "compliance_certificate",
+             exists().where(c.id == q.related_entity_id, ~hidden)),
+        # Both sides as text: vendors.id is varchar on production and uuid on hoistra_test,
+        # and casting only the item's side raised "uuid = character varying" there.
+        and_(q.related_entity_type == "vendor",
+             exists().where(cast(_VENDORS.c.id, String) == cast(q.related_entity_id, String))),
+        and_(q.related_entity_type == "energy_anomaly",
+             exists().where(EnergyAnomaly.id == q.related_entity_id)),
+        and_(q.related_entity_type == "contract_sla_parameters",
+             exists().where(ContractSlaParameters.id == q.related_entity_id)),
+    )
+
+
 async def list_queue(
     session: AsyncSession,
     *,
@@ -203,15 +263,81 @@ async def list_queue(
     status: str | None = "pending",
     source_feature: str | None = None,
     limit: int = 100,
+    scope: Any | None = None,
 ) -> list[ApprovalsQueueItem]:
-    q = select(ApprovalsQueueItem).order_by(ApprovalsQueueItem.created_at.desc()).limit(limit)
+    q = (select(ApprovalsQueueItem).where(_subject_on_record())
+         .order_by(ApprovalsQueueItem.created_at.desc()).limit(limit))
     if organization_id:
         q = q.where(ApprovalsQueueItem.organization_id == organization_id)
     if status:
         q = q.where(ApprovalsQueueItem.status == status)
     if source_feature:
         q = q.where(ApprovalsQueueItem.source_feature == source_feature)
-    return list((await session.execute(q)).scalars().all())
+    items = list((await session.execute(q)).scalars().all())
+    if scope is not None and getattr(scope, "restricted", False):
+        items = await _restrict_queue_by_building(session, items, scope)
+    return items
+
+
+async def _restrict_queue_by_building(
+    session: AsyncSession, items: list[ApprovalsQueueItem], scope: Any
+) -> list[ApprovalsQueueItem]:
+    """Narrows the unified queue to a building-restricted caller's allocation.
+
+    ``related_entity_type`` names what a queue item is about, and only two of the values
+    it takes are ever building- or site-specific: ``compliance_certificate`` (resolved via
+    the certificate's own building_id, same rule list_certificates() applies) and
+    ``energy_anomaly`` (which names its building directly — the column was called site_id
+    until Sep 2026 and never held a site id, and reading it as one dropped every energy
+    anomaly from a restricted queue). Every other type this queue carries today —
+    vendor, contract_sla_parameters, asset_criticality, invoice, document, site,
+    meter_reading_gap, energy_recommendation — is not building-scoped data in this schema
+    (the same reason vendor accreditation coverage is not narrowed either), so those items
+    are left as they are rather than hidden on a guess.
+    """
+    from ..models import ComplianceCertificate, EnergyAnomaly
+
+    cert_ids = [i.related_entity_id for i in items if i.related_entity_type == "compliance_certificate" and i.related_entity_id]
+    anomaly_ids = [i.related_entity_id for i in items if i.related_entity_type == "energy_anomaly" and i.related_entity_id]
+
+    cert_building: dict[str, str | None] = {}
+    if cert_ids:
+        rows = (
+            await session.execute(
+                select(ComplianceCertificate.id, ComplianceCertificate.building_id).where(
+                    ComplianceCertificate.id.in_(cert_ids)
+                )
+            )
+        ).all()
+        cert_building = {str(cid): (str(bid) if bid else None) for cid, bid in rows}
+
+    # An energy anomaly names its building directly. The column was called site_id until
+    # Sep 2026 and never held a site id, and this code took the name at its word: it looked
+    # the value up in a site-to-buildings map, matched nothing, and so dropped every energy
+    # anomaly from a restricted caller's queue. The building is the answer already.
+    anomaly_building: dict[str, str | None] = {}
+    if anomaly_ids:
+        rows = (
+            await session.execute(
+                select(EnergyAnomaly.id, EnergyAnomaly.building_id).where(EnergyAnomaly.id.in_(anomaly_ids))
+            )
+        ).all()
+        anomaly_building = {str(aid): (str(bid) if bid else None) for aid, bid in rows}
+
+    out: list[ApprovalsQueueItem] = []
+    for item in items:
+        if item.related_entity_type == "compliance_certificate":
+            bid = cert_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        if item.related_entity_type == "energy_anomaly":
+            bid = anomaly_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        out.append(item)
+    return out
 
 
 async def decide_queue_item(
@@ -517,6 +643,48 @@ async def decide_queue_item(
     }
 
 
+REMINDER_PREFIX = "Reminder: "
+
+
+def base_subject(subject: str) -> str:
+    """The request a subject is about, without any number of "Reminder: " in front."""
+    s = (subject or "").strip()
+    while s.lower().startswith(REMINDER_PREFIX.lower()):
+        s = s[len(REMINDER_PREFIX):].strip()
+    return s
+
+
+async def sent_email_history(
+    session: AsyncSession, *, subject: str, organization_id: UUID | None, limit: int = 10,
+) -> dict[str, Any]:
+    """The emails this company actually sent for one request - the original and its reminders,
+    newest first. Only status "sent": a dry run or a handoff did not reach anyone, so it is not
+    something to remind about. No company, no history (a platform-wide answer would name
+    another company's recipients)."""
+    base = base_subject(subject)
+    out: dict[str, Any] = {"ok": True, "subject": base, "count": 0, "items": []}
+    if not organization_id or not base:
+        return out
+    rows = (await session.execute(
+        select(OpsEmailLog.to_address, OpsEmailLog.subject, OpsEmailLog.sent_at)
+        .where(OpsEmailLog.organization_id == organization_id,
+               OpsEmailLog.status == "sent",
+               func.lower(OpsEmailLog.subject).in_([base.lower(), (REMINDER_PREFIX + base).lower()]))
+        .order_by(OpsEmailLog.sent_at.desc().nullslast())
+        .limit(limit))).all()
+    items = [{"to": r[0], "subject": r[1], "sent_at": r[2].isoformat() if r[2] else None,
+              "reminder": base_subject(r[1]) != (r[1] or "").strip()} for r in rows]
+    originals = [i for i in items if not i["reminder"]]
+    out.update({
+        "count": len(items), "items": items,
+        "reminders": sum(1 for i in items if i["reminder"]),
+        "first_sent_at": (originals[-1] if originals else items[-1])["sent_at"] if items else None,
+        "last_sent_at": items[0]["sent_at"] if items else None,
+        "last_to": items[0]["to"] if items else None,
+    })
+    return out
+
+
 async def send_platform_email(
     session: AsyncSession,
     *,
@@ -528,22 +696,39 @@ async def send_platform_email(
     cc_address: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     commit: bool = True,
+    log_body: str | None = None,
+    html_body: str | None = None,
 ) -> dict[str, Any]:
-    """Platform sends email — Microsoft Graph (preferred) or SMTP."""
+    """Platform sends email — Microsoft Graph (preferred) or SMTP.
+
+    ``log_body`` is what gets written to ops_email_log in place of the message itself.
+    Every email is recorded here, which is right for an audit trail and wrong for a
+    message whose entire content is a live credential: a one-time code stored in a table
+    anyone with read access can query is not one-time in any useful sense, and it outlives
+    the ten minutes it was supposed to exist for. Callers sending a secret pass a redacted
+    stand-in, so the record still proves an email went out and no longer contains the
+    thing it was carrying.
+
+    ``html_body`` is optional: when given, ``body`` is still sent as the plain-text
+    alternative (SMTP's multipart/alternative, and what ``log_body`` redacts) and
+    ``html_body`` is what a client capable of rendering it shows instead. Every account
+    email that used to be a bare block of plain text with a raw link — the exact shape a
+    spam filter is tuned to flag — now has a real, branded HTML part.
+    """
     row = OpsEmailLog(
         id=uuid4(),
         organization_id=organization_id,
         queue_item_id=queue_item_id,
         to_address=to_address,
         subject=subject,
-        body=body,
+        body=log_body if log_body is not None else body,
         status="queued",
     )
     session.add(row)
     await session.flush()
 
-    use_graph = graph_configured()
-    use_smtp = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+    transport = email_transport()
+    use_graph, use_smtp = transport == "graph", transport == "smtp"
 
     async def _persist() -> None:
         if commit:
@@ -561,8 +746,8 @@ async def send_platform_email(
             cc=cc_address,
             subject=subject,
             email_id=str(row.id),
-            graph_configured=use_graph,
-            smtp_configured=use_smtp,
+            transport=transport,
+            email_provider=settings.email_provider,
             attachments=len(attachments or []),
         )
         return {
@@ -583,9 +768,10 @@ async def send_platform_email(
             result = await send_via_microsoft_graph(
                 to_address=to_address,
                 subject=subject,
-                body=body,
+                body=html_body if html_body else body,
                 cc_address=cc_address,
                 attachments=attachments,
+                html=bool(html_body),
             )
             from_addr = str(result.get("from") or settings.outlook_user_mail)
         else:
@@ -603,6 +789,8 @@ async def send_platform_email(
                 msg["Cc"] = cc_address
             msg["Subject"] = subject
             msg.set_content(body)
+            if html_body:
+                msg.add_alternative(html_body, subtype="html")
             for att in attachments or []:
                 raw = att.get("content_base64") or ""
                 if not raw:
@@ -622,22 +810,28 @@ async def send_platform_email(
                     [p.strip() for p in cc_address.split(",") if p.strip()]
                 )
             use_ssl = bool(settings.smtp_use_ssl) or int(settings.smtp_port) == 465
-            if use_ssl:
-                with smtplib.SMTP_SSL(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
-            else:
-                with smtplib.SMTP(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    if settings.smtp_use_tls:
-                        smtp.ehlo()
-                        smtp.starttls()
-                        smtp.ehlo()
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
+
+            # smtplib is blocking: run inline it would hold the event loop — and every
+            # other request on this worker — for the whole exchange, up to the 30s timeout.
+            def _smtp_send() -> None:
+                if use_ssl:
+                    with smtplib.SMTP_SSL(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+                else:
+                    with smtplib.SMTP(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        if settings.smtp_use_tls:
+                            smtp.ehlo()
+                            smtp.starttls()
+                            smtp.ehlo()
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+
+            await asyncio.to_thread(_smtp_send)
             result = {"ok": True, "provider": "smtp", "from": from_addr}
 
         row.status = "sent"
@@ -709,9 +903,70 @@ async def send_approval_email_draft(
             draft["to"] = to_addr
             if cc_address:
                 draft["cc_senior"] = cc_address
-            draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
             item.email_draft = draft
             item.updated_at = datetime.now(timezone.utc)
+
+    mode = (settings.email_delivery_mode or "handoff").lower()
+    if mode != "platform_send":
+        # PRD Q1: the platform drafts, the PM sends from their own client. decide_queue_item()
+        # has honoured that since Phase 2; this path — what the dock's "Approve & send" posts
+        # to — went straight to the platform sender whatever the mode said, so a deployment
+        # that had chosen handoff still sent vendor mail from the shared mailbox the moment
+        # someone pressed the button. The handoff is on the record exactly as a send would
+        # be: one ops_email_log row, one audit row, then the mailto for the reader's client.
+        handoff = build_email_handoff({
+            "to": to_addr,
+            "subject": subject.strip(),
+            "body": body,
+            "cc": (cc_address or "").strip() or None,
+        })
+        if item is not None:
+            # Not last_sent_at: queue_item_to_dict() reads that as email_sent_at, and the
+            # Approvals rail would show a sent timestamp for mail that never left here.
+            draft = dict(item.email_draft or {})
+            draft["last_handoff_at"] = datetime.now(timezone.utc).isoformat()
+            item.email_draft = draft
+        session.add(
+            OpsEmailLog(
+                id=uuid4(),
+                organization_id=org_id,
+                queue_item_id=queue_item_id,
+                to_address=to_addr,
+                subject=subject.strip(),
+                body=body,
+                status="handoff",
+                sent_at=datetime.now(timezone.utc),
+            )
+        )
+        await write_audit(
+            session,
+            actor="user:pm",
+            action_type="approvals_queue.email_handoff",
+            source_feature=item.source_feature if item else "A",
+            organization_id=org_id,
+            output_payload={
+                "queue_item_id": str(queue_item_id) if queue_item_id else None,
+                "to": to_addr,
+                "cc": cc_address,
+                "status": "handoff",
+            },
+            detail={"subject": subject[:200]},
+        )
+        await session.commit()
+        return {
+            "ok": True,
+            "status": "handoff",
+            "handoff": handoff,
+            "pm_action_status": None,
+            "email_sent_to": None,
+        }
+
+    if item is not None:
+        # Stamped on the road that sends, and only there: this is what the Approvals rail
+        # shows as the sent time.
+        draft = dict(item.email_draft or {})
+        draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
+        item.email_draft = draft
 
     result = await send_platform_email(
         session,

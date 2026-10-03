@@ -41,6 +41,7 @@ from redis import asyncio as aioredis
 from openai import AsyncOpenAI
 from fastapi import FastAPI, Request, WebSocket, HTTPException, Query, Path, Depends, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
+from .services.principal import Principal, current_principal, may_cancel
 from fastapi.responses import Response, JSONResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from sqlalchemy import select, update, func, text
@@ -101,6 +102,14 @@ from .graph.nodes.ingest_node import (
 )
 from .api.mappings import router as mappings_router
 from .runtime_logs import bind_runtime_log_context, get_runtime_logs, install_runtime_log_capture
+
+from .migration_runs import await_migration_run as _await_migration_run
+from .migration_runs import await_checkpoint_past as _await_checkpoint_past
+from .migration_runs import paused_node_for as _paused_node_for
+from .migration_runs import claim_awaiting_gate as _claim_awaiting_gate
+from .migration_runs import enqueue_resume as _enqueue_resume
+from .migration_runs import release_gate as _release_gate
+from .migration_runs import track_migration_run as _track_migration_run
 
 logger = get_logger(__name__)
 
@@ -198,10 +207,29 @@ async def _store_migration_source(
         blob_path = f"migrations/{migration_id}/{subdir}/{safe_name}"
         from azure.storage.blob.aio import BlobServiceClient as _BSC
 
-        async with _BSC.from_connection_string(conn) as svc:
-            bc = svc.get_blob_client(container=container, blob=blob_path)
-            await bc.upload_blob(data, overwrite=True)
-        logger.info(f"[source-store] {migration_id}: stored {safe_name} → {blob_path}")
+        async def _upload() -> None:
+            async with _BSC.from_connection_string(conn) as svc:
+                bc = svc.get_blob_client(container=container, blob=blob_path)
+                await bc.upload_blob(data, overwrite=True)
+            logger.info(f"[source-store] {migration_id}: stored {safe_name} → {blob_path}")
+
+        if subdir == "source":
+            from .engine import store as _engine_store
+
+            # With HOIST_BACKGROUND_UPLOADS=1 (a machine whose worker shares this volume, on a slow
+            # uplink) the worker reads the file from the volume (Node 1), so the run need not wait
+            # for Blob: the durable copy, for re-runs and downloads, goes up in the background
+            # (2 Oct 2026: ~25 s for an 8.7 MB workbook). Otherwise it is in Blob before the run is
+            # queued, as before — another replica's worker may run it, and a restart wipes disk.
+            if _engine_store.background_uploads() and await _engine_store.keep_source(migration_id, safe_name, data):
+                async def _upload_logged() -> None:
+                    try:
+                        await _upload()
+                    except Exception as exc:  # noqa: BLE001 — the run reads the local copy
+                        logger.warning(f"[source-store] {migration_id}: upload failed for {filename}: {str(exc)[:200]}")
+                _engine_store.in_background(migration_id, _upload_logged())
+                return blob_path
+        await _upload()
         return blob_path
     except Exception as exc:
         logger.warning(f"[source-store] {migration_id}: upload failed for {filename}: {str(exc)[:200]}")
@@ -983,6 +1011,11 @@ def create_app() -> FastAPI:
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
         ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
         """
@@ -1087,6 +1120,7 @@ def create_app() -> FastAPI:
             initial_state: dict = {
                 "migration_id": mid_str,
                 "organization_id": organization_id,
+                "building_id": building_id,
                 "cmms_name": cmms_name,
                 "source_filename": filename,
                 "source_system": cmms_name,
@@ -1152,6 +1186,10 @@ def create_app() -> FastAPI:
                     uploaded_by="streamlit_ui",
                     source_blob_path=source_blob_path,
                     source_filename=filename,
+                    # The inline state above carries it; without it here a worker run loses the
+                    # building the uploader selected (28 Sep 2026) and a meter export that names
+                    # no site has every reading skipped.
+                    building_id=building_id,
                 )
                 await _pool.aclose()
                 _enqueued = True
@@ -1159,7 +1197,7 @@ def create_app() -> FastAPI:
             except Exception as _arq_err:
                 logger.warning(f"[start-with-upload] ARQ enqueue failed ({_arq_err}); running inline")
         if not _enqueued:
-            asyncio.create_task(_run_inline())
+            _track_migration_run(mid_str, _run_inline())
 
         logger.info(f"[start-with-upload] Migration {migration_id} started, file={filename}")
 
@@ -1183,6 +1221,11 @@ def create_app() -> FastAPI:
         organization_id: str = Form(
             "00000000-0000-0000-0000-000000000001",
             description="Organization UUID",
+        ),
+        building_id: str | None = Form(
+            None,
+            description="The building the uploader had selected. Used only for rows that "
+                        "name no site of their own; a Sites sheet in the file always wins.",
         ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStartResponse:
@@ -1323,73 +1366,25 @@ def create_app() -> FastAPI:
             # persist blobs, then drive the graph. Node 1 reads the top-10-row preview (matching)
             # + the full data (full_tables) — all in the background, in parallel, so the run began
             # the moment the endpoint returned. A bad file now fails THIS migration (was a 400).
-            used_sheets: set[str] = set()
-
-            def _safe_sheet(base: str) -> str:
-                invalid = set(r":\/?*[]")
-                cleaned = "".join("_" if c in invalid else c for c in base).strip() or "sheet"
-                cleaned = cleaned[:31]
-                name = cleaned
-                i = 2
-                while name.lower() in used_sheets:
-                    suffix = f"_{i}"
-                    name = cleaned[: 31 - len(suffix)] + suffix
-                    i += 1
-                used_sheets.add(name.lower())
-                return name
-
             # Parse + combine is CPU-bound (pandas / calamine / openpyxl over potentially 100k+ rows).
             # Run it in a THREAD so it NEVER blocks the event loop: a large bulk upload otherwise
             # starves the async loop for minutes, and every concurrent status / activity-log / actions
             # poll hits the ingress timeout (504) even though the DB is idle. Mirrors the to_thread
             # offload used for the other blocking calls in this module. Parse errors carry the
-            # offending filename back out to _fail_job.
-            class _ParseError(Exception):
-                pass
-
-            def _parse_and_combine() -> tuple[bytes, list[str]]:
-                sheets: dict[str, _pd.DataFrame] = {}
-                for filename, data in raw_files:
-                    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
-                    stem = _Path(filename).stem
-                    try:
-                        if ext in {".csv", ".tsv"}:
-                            sep = "\t" if ext == ".tsv" else None
-                            df = _pd.read_csv(_io.BytesIO(data), dtype=str, sep=sep, engine="python")
-                            df = _sanitize_column_names_helper(df)
-                            sheets[_safe_sheet(stem)] = df.fillna("")
-                        else:
-                            wb = ExcelWorkbook(_io.BytesIO(data))  # calamine, workbook opened once
-                            sheet_names = wb.sheet_names
-                            for sh in sheet_names:
-                                # Skip banner / title rows so source column names survive
-                                # instead of degrading to "Unnamed: N" placeholders.
-                                header_row = wb.header_row(sh)
-                                df = wb.read(sh, header=header_row, dtype=str)
-                                df = _sanitize_column_names_helper(df)
-                                # Source table = the Excel SHEET name; fall back to the file name
-                                # only for a lone generic sheet (Sheet1).
-                                sheet_label = (str(sh) or "").strip()
-                                is_generic = len(sheet_names) == 1 and re.match(
-                                    r"^sheet\s*\d*$", sheet_label, re.IGNORECASE
-                                )
-                                base = stem if is_generic else (sheet_label or stem)
-                                sheets[_safe_sheet(base)] = df.fillna("")
-                            wb.close()
-                    except Exception as exc:
-                        raise _ParseError(f"Could not parse '{filename}': {exc}") from exc
-                if not sheets:
-                    raise _ParseError("No parseable structured data found in uploads")
-                combined = _io.BytesIO()
-                with _pd.ExcelWriter(combined, engine="openpyxl") as writer:
-                    for name, df in sheets.items():
-                        df.to_excel(writer, sheet_name=name, index=False)
-                return combined.getvalue(), list(sheets.keys())
+            # offending filename back out to _fail_job. On a Go build the engine reads the workbooks
+            # and writes the combined workbook (multi_upload.combine_with_engine); a missing or
+            # crashed engine leaves it to the Python combine.
+            from .multi_upload import CombineError, combine_in_python, combine_with_engine, engine_can_combine
 
             try:
                 try:
-                    file_bytes, sheet_names_out = await asyncio.to_thread(_parse_and_combine)
-                except _ParseError as exc:
+                    combined = None
+                    if engine_can_combine(raw_files):
+                        combined = await combine_with_engine(raw_files, mid_str)
+                    if combined is None:
+                        combined = await asyncio.to_thread(combine_in_python, raw_files)
+                    file_bytes, sheet_names_out = combined
+                except CombineError as exc:
                     await _fail_job(str(exc))
                     return
 
@@ -1429,6 +1424,7 @@ def create_app() -> FastAPI:
                 initial_state: dict = {
                     "migration_id": mid_str,
                     "organization_id": organization_id,
+                    "building_id": building_id,
                     "cmms_name": cmms_name,
                     "source_filename": combined_filename,
                     "source_system": cmms_name,
@@ -1465,6 +1461,9 @@ def create_app() -> FastAPI:
                             uploaded_by="single_door_multi",
                             source_blob_path=source_blob_path,
                             source_filename=combined_filename,
+                            # Same as start-with-upload: the inline state carries the selected
+                            # building, so the worker run must too (28 Sep 2026).
+                            building_id=building_id,
                         )
                         await _pool.aclose()
                         _enqueued = True
@@ -1487,7 +1486,7 @@ def create_app() -> FastAPI:
                 logger.exception(f"[start-with-upload-multi] Prepare failed for {mid_str}: {exc}")
                 await _fail_job(exc)
 
-        asyncio.create_task(_prepare_and_run_multi())
+        _track_migration_run(mid_str, _prepare_and_run_multi())
 
         logger.info(
             f"[start-with-upload-multi] Migration {migration_id} accepted — "
@@ -1504,6 +1503,64 @@ def create_app() -> FastAPI:
             ),
         )
 
+    #: An output bigger than this is summarised in the progress poll rather than sent. Chosen
+    #: so every node's real result still travels — the largest that is not a bulk dump is Gate
+    #: 2's 5.9 KB — while the three that are (Pre-Semantic's mapping table at 715 KB, UDR's
+    #: report at 678 KB, File Ingestion's parse at 57 KB) do not.
+    _MAX_POLLED_OUTPUT_BYTES = 16_384
+
+    def _lighten_record(value, include_output: bool, what: str):
+        """A record field as the poll should carry it: a note of its size, not its contents.
+
+        The UDR report is the same kind of thing as a node's output — the pipeline's record of
+        what it found, not where the run is — and it is the larger half of it: 651 KB of
+        per-column intelligence over 174 columns, sent every three seconds to a page that does
+        not read it. GET /api/migration/{id} still returns all of it, which is the route that
+        exists to.
+        """
+        if include_output or value in (None, {}, []):
+            return value
+        try:
+            size = len(json.dumps(value, default=str))
+        except (TypeError, ValueError):
+            return value
+        if size <= _MAX_POLLED_OUTPUT_BYTES:
+            return value
+        return {"_omitted": True, "_bytes": size,
+                "_hint": f"{what} is not sent with the progress poll — "
+                         f"GET /api/migration/{{id}} returns it, or add ?include_output=true"}
+
+    def _lighten_node_outputs(nodes: list[dict], include_output: bool) -> list[dict]:
+        """The nodes as the poll should carry them: progress, logs, and small outputs.
+
+        A poll is asked "where is this run", every few seconds, and answered with the pipeline's
+        entire record. Returning the record is right for a caller that asks for it and wrong for
+        one counting nodes — the difference is a megabyte a second, and it timed the page out
+        while the migration underneath had already finished.
+        """
+        if include_output:
+            return nodes
+        out = []
+        for n in nodes:
+            if not isinstance(n, dict) or n.get("output") in (None, {}, []):
+                out.append(n)
+                continue
+            try:
+                size = len(json.dumps(n["output"], default=str))
+            except (TypeError, ValueError):
+                size = _MAX_POLLED_OUTPUT_BYTES + 1
+            if size <= _MAX_POLLED_OUTPUT_BYTES:
+                out.append(n)
+                continue
+            # Said, not dropped: a reader who wants it is told it exists and how to ask.
+            out.append({**n, "output": {
+                "_omitted": True,
+                "_bytes": size,
+                "_hint": "large node output is not sent with the progress poll — "
+                         "add ?include_output=true to this request for the full record",
+            }})
+        return out
+
     @app.get(
         "/api/migration/{migration_id}/status",
         response_model=MigrationStatusResponse,
@@ -1512,6 +1569,11 @@ def create_app() -> FastAPI:
     )
     async def get_migration_status(
         migration_id: str = Path(..., description="Migration UUID"),
+        include_output: bool = Query(
+            False,
+            description="Send every node's full output. Off by default: the progress poll runs "
+                        "every few seconds and the outputs run to a megabyte.",
+        ),
         session: AsyncSession = Depends(get_db_session),
     ) -> MigrationStatusResponse:
         """Get current status, progress, and statistics for a migration."""
@@ -1814,6 +1876,10 @@ def create_app() -> FastAPI:
             # also expose detailed terminal-style logs in nodes[].logs.
             _merge_runtime_logs_into_nodes(migration_nodes, str(migration_job.id))
 
+            # A Go run: which engine, and the running step's live progress (best effort).
+            from .engine.progress import engine_status_fields
+            _engine, _engine_progress = await engine_status_fields(migration_nodes, str(migration_job.id))
+
             return MigrationStatusResponse(
                 migration_id=migration_job.id,
                 status=migration_job.status,
@@ -1838,11 +1904,19 @@ def create_app() -> FastAPI:
                 pending_gate_payload=migration_job.pending_gate_payload,
                 field_mapping_draft=getattr(migration_job, "field_mapping_draft", None),
                 udr_test_results=_udr_test_results_from_job(migration_job),
-                udr_relationship_report=_udr_relationship_report_from_job(migration_job),
-                udr_table_resolution=_udr_table_resolution_from_job(migration_job),
-                udr_column_intelligence=_udr_column_intelligence_from_job(migration_job),
+                udr_relationship_report=_lighten_record(
+                    _udr_relationship_report_from_job(migration_job), include_output,
+                    "the UDR relationship report"),
+                udr_table_resolution=_lighten_record(
+                    _udr_table_resolution_from_job(migration_job), include_output,
+                    "the UDR table resolution"),
+                udr_column_intelligence=_lighten_record(
+                    _udr_column_intelligence_from_job(migration_job), include_output,
+                    "the UDR column intelligence"),
                 error_message=migration_job.error_message,
-                nodes=migration_nodes,
+                engine=_engine,
+                engine_progress=_engine_progress,
+                nodes=_lighten_node_outputs(migration_nodes, include_output),
             )
 
         except HTTPException:
@@ -2211,15 +2285,21 @@ def create_app() -> FastAPI:
         # burning time. With the flip, run_migration keeps polling "running" and waits for the
         # resume to reach the next gate. Guarded on awaiting_review (a no-op if already running),
         # which also blocks a second concurrent resume from double-invoking the graph on the thread.
-        await session.execute(
-            update(MigrationJob)
-            .where(
-                MigrationJob.id == migration_id_uuid,
-                MigrationJob.status == "awaiting_review",
+        # The swap is checked: an answer that finds the gate no longer waiting — the page's
+        # second Confirm while the first is applied (f87078d7, 29 Sep 2026) — is not applied.
+        # Read before the claim commits: the gate to hand back if the answer cannot be queued.
+        _prev_gate = migration_job.pending_gate_type or gate_type
+        _prev_payload = migration_job.pending_gate_payload
+        if not await _claim_awaiting_gate(session, migration_id_uuid):
+            logger.info(
+                f"[{migration_id}] Gate '{gate_type}' already answered — not resuming again"
             )
-            .values(status="running", pending_gate_type=None, pending_gate_payload=None)
-        )
-        await session.commit()
+            return MigrationApprovalResponse(
+                migration_id=migration_id_uuid,
+                status="running",
+                message=f"Gate '{gate_type}' was already answered; that answer is being applied.",
+                decisions_processed=0,
+            )
 
         # The job is now RUNNING again (the gate is answered). Re-sync the per-run Activity entry
         # NOW so its status flips pending_human_input → running and the Section-3 "Awaiting your
@@ -2282,13 +2362,46 @@ def create_app() -> FastAPI:
             if settings.redis_url:
                 redis_settings = RedisSettings.from_dsn(settings.redis_url)
                 pool = await create_pool(redis_settings)
-                await pool.enqueue_job(
-                    "resume_migration",
-                    migration_id=migration_id,
-                    gate_type=gate_type,
-                    decisions=decisions,
-                )
-                await pool.aclose()
+                try:
+                    _new = await _enqueue_resume(
+                        pool, migration_id=migration_id, gate_type=gate_type,
+                        decisions=decisions,
+                    )
+                except Exception as _enq_err:
+                    # The queue failed mid-wait while a resume of this migration may still be
+                    # running: resuming inline beside it would be two runs on one thread.
+                    logger.warning(f"[{migration_id}] resume enqueue failed mid-wait: {_enq_err}")
+                    _new = "busy"
+                finally:
+                    await pool.aclose()
+                if _new == "duplicate":
+                    # The answer the running resume is applying already — this is its echo.
+                    logger.info(f"[{migration_id}] gate '{gate_type}' answer is the one being applied")
+                    return MigrationApprovalResponse(
+                        migration_id=migration_id_uuid,
+                        status="running",
+                        message=f"Gate '{gate_type}' was already answered; that answer is being applied.",
+                        decisions_processed=0,
+                    )
+                if _new != "queued":
+                    # The resume before it is still running after the wait. Hand the gate back
+                    # so this answer can be given again, rather than report it applied.
+                    await _release_gate(session, migration_id_uuid, _prev_gate, _prev_payload)
+                    try:
+                        from .graph.nodes.schema_db_writer import _sync_run_activity
+
+                        await _sync_run_activity(migration_id, caller="gate_released")
+                    except Exception:  # pragma: no cover - non-fatal audit sync
+                        pass
+                    logger.warning(
+                        f"[{migration_id}] gate '{gate_type}' answered while the previous resume "
+                        f"is still running — handed back, not queued"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(f"The previous answer is still being applied; answer "
+                                f"'{gate_type}' again in a moment."),
+                    )
                 logger.info(f"[{migration_id}] resume_migration enqueued via ARQ")
                 arq_enqueued = True
         except HTTPException:
@@ -2347,7 +2460,7 @@ def create_app() -> FastAPI:
                     except Exception:
                         pass
 
-            asyncio.create_task(_inline_resume())
+            _track_migration_run(migration_id, _inline_resume())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3268,6 +3381,47 @@ def create_app() -> FastAPI:
             )
 
         step_key = migration_job.pending_gate_type or "unknown_step"
+
+        # The pause may belong to a run that has not finished yet (migration_runs.py). Let it
+        # finish first, with no transaction held open while waiting, then decide on what the
+        # database says once it has.
+        await session.rollback()
+        if not await _await_migration_run(migration_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step '{step_key}' is still finishing; advance again in a moment.",
+            )
+        # ...and a run in the ARQ worker, which that wait cannot see: resume only once the
+        # SAVED checkpoint is past the step that paused, or the graph restarts that step.
+        # 60 s: inside the page's 90 s advance timeout, so it hears the 409 and asks again.
+        _paused_node = _paused_node_for(step_key)
+        if _paused_node and not await _await_checkpoint_past(
+            get_migration_graph_instance(),
+            {"configurable": {"thread_id": migration_id}},
+            _paused_node,
+            timeout=60.0,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step '{step_key}' is still being saved; advance again in a moment.",
+            )
+        _now = (
+            await session.execute(
+                select(MigrationJob.status, MigrationJob.pending_gate_type)
+                .where(MigrationJob.id == migration_id_uuid)
+            )
+        ).one()
+        if _now.status != "step_paused":
+            return MigrationApprovalResponse(
+                migration_id=migration_id_uuid,
+                status=_now.status,
+                message=(
+                    f"The run moved on from '{step_key}' while it finished; now "
+                    f"{_now.status}{' at ' + _now.pending_gate_type if _now.pending_gate_type else ''}."
+                ),
+                decisions_processed=0,
+            )
+        step_key = _now.pending_gate_type or step_key
         logger.info(f"[{migration_id}] Advancing past step '{step_key}'")
 
         # Clear step pause and flip status back to running — as an ATOMIC compare-and-swap
@@ -3370,7 +3524,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_advance())
+        _track_migration_run(migration_id, _inline_advance())
 
         return MigrationApprovalResponse(
             migration_id=migration_id_uuid,
@@ -3510,7 +3664,7 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
-        asyncio.create_task(_inline_rerun())
+        _track_migration_run(migration_id, _inline_rerun())
 
         logger.info(f"[{migration_id}] Re-running from node {node_num} ({target_node})")
         return MigrationApprovalResponse(
@@ -3600,15 +3754,24 @@ def create_app() -> FastAPI:
                 settings = get_settings()
                 if settings.redis_url:
                     redis_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-                    await redis_pool.enqueue_job(
-                        "resume_migration",
-                        migration_id=migration_id,
-                        gate_type="ddl_retry",
-                        decisions={"extra_fields_config": corrected_config},
-                    )
-                    await redis_pool.aclose()
+                    try:
+                        _new = await _enqueue_resume(
+                            redis_pool, migration_id=migration_id, gate_type="ddl_retry",
+                            decisions={"extra_fields_config": corrected_config},
+                        )
+                    finally:
+                        await redis_pool.aclose()
+                    if _new == "busy":
+                        # A resume of this migration is still running: running this one inline
+                        # beside it would be two runs on one thread. Status stays ddl_failed.
+                        raise HTTPException(
+                            status_code=409,
+                            detail="A previous step is still being applied; retry the DDL in a moment.",
+                        )
                     enqueued = True
                     logger.info(f"[{migration_id}] DDL retry enqueued via ARQ")
+            except HTTPException:
+                raise
             except Exception as arq_err:
                 logger.warning(f"[{migration_id}] ARQ enqueue failed, running inline: {arq_err}")
 
@@ -3616,7 +3779,7 @@ def create_app() -> FastAPI:
                 try:
                     import asyncio
                     from .worker import resume_migration
-                    asyncio.create_task(
+                    _track_migration_run(migration_id,
                         resume_migration(
                             {},
                             migration_id=migration_id,
@@ -4652,8 +4815,28 @@ def create_app() -> FastAPI:
                 except (ValueError, TypeError):
                     raise HTTPException(status_code=400, detail=f"Invalid organization_id UUID: {organization_id}")
 
-            # Build query
-            query = select(MigrationJob).where(MigrationJob.organization_id == org_id)
+            # NINE COLUMNS, NOT THE WHOLE ROW.
+            #
+            # MigrationJob carries pending_gate_payload, field_mapping_draft and node_logs,
+            # all JSONB — a single gate payload runs to hundreds of kilobytes and node_logs
+            # is append-only, so a row is megabytes. select(MigrationJob) fetched every one
+            # of them to render nine small fields per run: listing 12 took ~3.6s against a
+            # 829-row organization and limit=50 did not return at all.
+            #
+            # MigrationListItem needs exactly these, so exactly these are read. The
+            # response is unchanged; only the bytes crossing the wire are.
+            cols = (
+                MigrationJob.id,
+                MigrationJob.cmms_name,
+                MigrationJob.status,
+                MigrationJob.progress_pct,
+                MigrationJob.t1_mapped_count,
+                MigrationJob.t2_auto_count,
+                MigrationJob.t2_human_count,
+                MigrationJob.started_at,
+                MigrationJob.completed_at,
+            )
+            query = select(*cols).where(MigrationJob.organization_id == org_id)
 
             if status:
                 query = query.where(MigrationJob.status == status)
@@ -4669,7 +4852,7 @@ def create_app() -> FastAPI:
             # Fetch paginated results
             query = query.order_by(MigrationJob.started_at.desc()).limit(limit).offset(offset)
             result = await session.execute(query)
-            jobs = result.scalars().all()
+            jobs = result.all()
 
             items = [
                 MigrationListItem(
@@ -4678,7 +4861,9 @@ def create_app() -> FastAPI:
                     status=j.status,
                     progress_pct=j.progress_pct,
                     t1_count=j.t1_mapped_count,
-                    t2_count=j.t2_auto_count + j.t2_human_count,
+                    # A count column is nullable on a run that has not mapped anything yet,
+                    # and None + None raises rather than reading as nothing mapped.
+                    t2_count=(j.t2_auto_count or 0) + (j.t2_human_count or 0),
                     started_at=j.started_at,
                     completed_at=j.completed_at,
                 )
@@ -4702,8 +4887,16 @@ def create_app() -> FastAPI:
     async def cancel_migration(
         migration_id: str = Path(..., description="Migration UUID"),
         session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(current_principal),
     ) -> MigrationCancelResponse:
-        """Cancel a running migration and clean up resources."""
+        """Cancel a migration - running, paused at a step, or waiting at a review gate.
+
+        The caller must be signed in and allowed to run migrations for the run's company
+        (services/principal.may_cancel): this route took no token until 30 Sep 2026, and it
+        is now a button. A run that is mid-step stops at the next step boundary - the pipeline
+        checks the status before every node (graph/migration_graph.py) - and "cancelled" is
+        final: a trigger keeps any later write from replacing it (schema_patches.py).
+        """
         try:
             migration_id_uuid = UUID(migration_id)
 
@@ -4715,7 +4908,12 @@ def create_app() -> FastAPI:
             if not migration_job:
                 raise HTTPException(status_code=404, detail="Migration not found")
 
-            if migration_job.status in ["complete", "cancelled", "failed"]:
+            allowed, why = may_cancel(principal, migration_job.organization_id)
+            if not allowed:
+                logger.warning(f"cancel refused for {migration_id}: {why} (caller {principal.email})")
+                raise HTTPException(status_code=403, detail=why)
+
+            if migration_job.status in ["complete", "cancelled", "failed", "ddl_failed"]:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot cancel migration with status: {migration_job.status}",
@@ -4728,9 +4926,11 @@ def create_app() -> FastAPI:
             migration_job.completed_at = datetime.utcnow()
             migration_job.pending_gate_type = None
             migration_job.pending_gate_payload = None
+            if not migration_job.error_message:
+                migration_job.error_message = "Cancelled by " + (principal.email or "a user")
             await session.commit()
 
-            logger.info(f"Cancelled migration: {migration_id}")
+            logger.info(f"Cancelled migration: {migration_id} by {principal.email}")
 
             # Finalise the Activity Log card to "cancelled" — cancelling never runs the Node-10
             # emit, so without this the per-run card stays stuck at its last running/pending sync.
@@ -7286,6 +7486,9 @@ def create_app() -> FastAPI:
     )
     async def get_schema_mapping_status(
         schema_mapping_id: str = Path(..., description="Schema Mapping UUID"),
+        include_output: bool = Query(
+            False, description="Send every node's full output (see the migration poll)."
+        ),
         session: AsyncSession = Depends(get_db_session),
     ):
         """Get current status and progress of a schema mapping session."""
@@ -7554,7 +7757,7 @@ def create_app() -> FastAPI:
                 job_total_tables=int(job.total_tables or 0),
                 job_total_fields=int(job.total_fields or 0),
                 final_summary=job.final_summary if isinstance(job.final_summary, dict) else None,
-                nodes=schema_nodes,
+                nodes=_lighten_node_outputs(schema_nodes, include_output),
                 pending_gate_payload=_gate_payload if isinstance(_gate_payload, dict) else None,
                 external_cmms_name=str(job.external_cmms_name or "Fiix"),
             )

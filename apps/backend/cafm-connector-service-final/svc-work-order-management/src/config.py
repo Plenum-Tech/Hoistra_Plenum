@@ -28,6 +28,18 @@ class Settings(BaseSettings):
             "outlook_user_email",
         ),
     )
+    # Outgoing mail. "auto" sends through Graph (the only path this service had); "smtp" sends
+    # every email - notifications, approval requests, replies - through the mailbox below,
+    # while reading the inbox stays on Graph (SMTP cannot read). Same variable names as
+    # svc-operations-intelligence, so one set of container settings drives both.
+    email_provider: str = Field("auto", validation_alias=AliasChoices("EMAIL_PROVIDER", "email_provider"))
+    smtp_host: str = Field("", validation_alias=AliasChoices("SMTP_HOST", "smtp_host"))
+    smtp_port: int = Field(587, validation_alias=AliasChoices("SMTP_PORT", "smtp_port"))
+    smtp_user: str = Field("", validation_alias=AliasChoices("SMTP_USER", "SMTP_USERNAME", "smtp_user"))
+    smtp_password: str = Field("", validation_alias=AliasChoices("SMTP_PASSWORD", "smtp_password"))
+    smtp_from: str = Field("", validation_alias=AliasChoices("SMTP_FROM", "smtp_from"))
+    smtp_use_tls: bool = Field(True, validation_alias=AliasChoices("SMTP_USE_TLS", "smtp_use_tls"))
+    smtp_use_ssl: bool = Field(False, validation_alias=AliasChoices("SMTP_USE_SSL", "smtp_use_ssl"))
     # Background inbox poll for WO approval replies (Graph + OpenAI per unread mail).
     # Keep false in dev unless actively testing email approvals; use POST /api/email/poll manually.
     approval_email_poll_enabled: bool = Field(

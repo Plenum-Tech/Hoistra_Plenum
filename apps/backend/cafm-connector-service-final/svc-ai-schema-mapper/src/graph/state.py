@@ -80,6 +80,11 @@ class MigrationState(TypedDict, total=False):
     # ── Session & Metadata ────────────────────────────────────────────────
     migration_id: str
     organization_id: str
+    #: The building the uploader had selected when they attached the file. A CMMS export
+    #: names its site in a column; a half-hourly meter export names an MPAN and nothing else,
+    #: so without this there is nothing to place its meter against and every reading is
+    #: skipped. Used only where a row names no site of its own — a Sites sheet always wins.
+    building_id: Optional[str]
     cmms_name: str  # "Maximo", "Fiix", "SAP PM", "Archibus", "Custom"
     source_filename: str  # original uploaded filename (for #10 document inventory)
     source_system: str  # source CMMS identifier from customer
@@ -88,6 +93,10 @@ class MigrationState(TypedDict, total=False):
 
     # ── Node 1: Ingest ────────────────────────────────────────────────────
     source_blob_url: str  # Azure Blob URL (NOT file bytes)
+    #: The upload's path inside the container ("migrations/<id>/source/<file>"), which Node 1
+    #: re-pulls with the connection string. Undeclared, LangGraph drops it from the input and
+    #: Node 1 reads the relative path in source_blob_url as a URL whose host is "migrations".
+    source_blob_path: Optional[str]
     source_file_bytes: Optional[bytes]  # Transient; cleared before checkpoint
     source_encoding: str  # e.g., "utf-8", "iso-8859-1"
     source_delimiter: str  # "," or "\t" or ";"
@@ -247,11 +256,13 @@ class MigrationState(TypedDict, total=False):
     output_csv_url: str  # Azure Blob URL
     output_sql_url: str  # Azure Blob URL
     output_sql_script: str  # Generated SQL statements (used by Node 9 direct DB apply)
+    output_sql_script_ref: Optional[str]  # Blob-offload ref for output_sql_script (bulk_tables)
     migration_report_url: str  # PDF report
     mapping_flow_url: str  # Optional flow diagram
 
     # IntermediateSchema Pydantic object (serialized as dict for checkpoint)
     intermediate_schema: Optional[dict[str, Any]]
+    intermediate_schema_ref: Optional[str]  # Blob-offload ref for intermediate_schema (bulk_tables)
 
     # ── Node 9: Write to Platform ─────────────────────────────────────────
     write_review_payload: Optional[dict[str, Any]]  # Interrupt payload for GATE 3
@@ -293,3 +304,15 @@ class MigrationState(TypedDict, total=False):
     udr_blocked: bool
     udr_status: Optional[str]  # completed | pending_human_input | failed | skipped
     udr_activity_id: Optional[str]
+
+    # ── hoist-engine (src/engine/) ───────────────────────────────────────
+    #: "go" | "python": decided once at run start (engine/selection.py) and kept for the whole run,
+    #: so every resume takes the same path. Must be declared: undeclared keys are dropped on checkpoint.
+    engine: str
+    #: Where each engine data set lives, per kind ("full", "cleaned", "outputs", "write"):
+    #: {"dir": local path, "version": str, "blobs": {relative file: blob path}} (engine/store.py).
+    engine_refs: dict[str, Any]
+    #: Small per-step summaries the engine returned (counts, rename maps, link stats, timings).
+    engine_reports: dict[str, Any]
+    #: The write the engine planned before the write gate (EL-4.0 + what is already on file).
+    write_plan: Optional[dict[str, Any]]

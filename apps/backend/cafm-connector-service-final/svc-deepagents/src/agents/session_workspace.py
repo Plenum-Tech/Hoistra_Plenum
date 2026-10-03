@@ -285,8 +285,12 @@ def build_conversation_context(session_id: str, *, max_turns: int = CONVERSATION
     return "\n".join(lines)
 
 
-def build_session_runtime_context(session_id: str) -> str:
-    """Inject into every stateful turn so the LLM retains session facts."""
+def build_session_runtime_context(session_id: str, conversation: str | None = None) -> str:
+    """Inject into every stateful turn so the LLM retains session facts.
+
+    `conversation` is the thread as the server keeps it (services/chat_threads.py: summary of the
+    older turns plus the last few verbatim); when given it replaces the process-local block,
+    which only knows the turns this replica saw since it started."""
     s = get_session_state(session_id)
     ws_lines: list[str] = []
     sid = resolve_active_schema_mapping_id(session_id)
@@ -311,7 +315,7 @@ def build_session_runtime_context(session_id: str) -> str:
     mig_ids = resolve_session_migration_ids(session_id)
     if mig_ids:
         ws_lines.append(f"- **migration_ids (session):** {', '.join(mig_ids)}")
-    conv = build_conversation_context(session_id)
+    conv = conversation if conversation is not None else build_conversation_context(session_id)
     if not conv and not ws_lines:
         return ""
     parts: list[str] = []
@@ -840,6 +844,28 @@ def score_udr_intent(msg_l: str) -> float:
     return min(score, 1.0)
 
 
+#: Openers that make a message a QUESTION about work orders rather than a request to raise one.
+#: The bare noun used to be enough for intake, and an intake route short-circuits phase-2 engine
+#: selection — so on 16 Sep 2026 "how many work orders were scored for SafeLift, and what's the
+#: average?" was classified as "create/triage a maintenance work order", never reached the
+#: scoring engine, and was answered from vendor scorecard rows: "7 work orders" that were seven
+#: monthly scorecards belonging to a different vendor.
+#:
+#: A read cue wins outright. Nobody reporting a fault opens with "how many" or "compare", and a
+#: misrouted question is silent — it returns a confident answer built from the wrong table —
+#: while a misrouted fault report is visible the moment the reply comes back.
+_WO_READ_CUES = (
+    "how many", "how much", "how long", "what is the", "what's the", "what are the",
+    "which ", "show me", "list ", "compare", "average", "total ", "breakdown", "count of",
+    "report on", "summarise", "summarize",
+)
+
+
+def _asks_about_work_orders(msg_l: str) -> bool:
+    """True when the message is asking about work orders, not asking for one."""
+    return any(cue in msg_l for cue in _WO_READ_CUES)
+
+
 def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
     if any(
         t in msg_l
@@ -894,7 +920,7 @@ def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
         return ROUTE_FIIX_SYNC
     if sum(1 for k in ("subdomain", "app key", "access key", "secret key") if k in msg_l) >= 2:
         return ROUTE_FIIX_SYNC
-    if "work order" in msg_l or "create wo" in msg_l:
+    if ("work order" in msg_l or "create wo" in msg_l) and not _asks_about_work_orders(msg_l):
         return ROUTE_WO_INTAKE
     if session_state.get("pending_wo_clarification"):
         return ROUTE_WO_CLARIFY
@@ -1001,10 +1027,15 @@ def workflow_stream_completion_payload(
         s = str(sid).strip()
         if s and s not in schema_ids:
             schema_ids.append(s)
+    # The turn's id in the trace store (agents/trace.py), so the chat's rail can load the run -
+    # its spans, queries and rows - and offer corrections against it.
+    from . import activity_log as _activity
+
     return {
         "type": "workflow_completed",
         "answer": answer,
         "session_id": session_id,
+        "turn_id": _activity.current_turn(),
         "tool_calls": tcs,
         "workspace_status": ws,
         "ingested_schema_mapping_ids": schema_ids,
@@ -1069,4 +1100,7 @@ def attach_route_to_result(
     answer = str(result.get("answer") or "").strip()
     if answer:
         record_conversation_turn(session_id, "assistant", answer)
+        # The durable copy (every run_stateful path ends here; the stream path records its own).
+        from ..services import chat_threads
+        chat_threads.record_answer_soon(session_id, answer, tools=tool_calls)
     return result

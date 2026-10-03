@@ -6,12 +6,14 @@ Used when pypdf/pdfplumber return little/no text (scanned certificates).
 from __future__ import annotations
 
 import base64
+import time
 from pathlib import Path
 from typing import Any
 
 import structlog
 
 from ..config import settings
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
@@ -111,6 +113,7 @@ async def _extract_via_claude_pdf(path: Path, *, max_chars: int) -> str | None:
             "Return plain text only (no markdown fences). Use lines like "
             "'Label: value' when labels are visible."
         )
+        _t0 = time.perf_counter()
         resp = await client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -138,9 +141,22 @@ async def _extract_via_claude_pdf(path: Path, *, max_chars: int) -> str | None:
                 parts.append(t)
         text = "\n".join(parts).strip()
         log.info("pdf_vision.claude_pdf_ok", chars=len(text), file=path.name)
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="extract_document", system=None,
+            user={"prompt": prompt, "file": path.name, "pdf_bytes": len(raw)},
+            output={"text": text[:max_chars], "chars": len(text)},
+            model="claude-sonnet-4-20250514", usage=resp.usage,
+            latency_ms=(time.perf_counter() - _t0) * 1000,
+            summary_in=f"extract {path.name}", summary_out=f"{len(text)} chars extracted",
+        )
         return text[:max_chars] if text else None
     except Exception as exc:  # noqa: BLE001
         log.warning("pdf_vision.claude_pdf_failed", error=str(exc)[:300], file=path.name)
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="extract_document", system=None,
+            user={"file": path.name}, error=str(exc), model="claude-sonnet-4-20250514",
+            summary_in=f"extract {path.name}",
+        )
         return None
 
 

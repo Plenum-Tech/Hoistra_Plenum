@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
 from ...core.logging import get_logger
-from .parameters import ingest_contract_parameters, merge_extraction_with_defaults
+from .parameters import ingest_contract_parameters, merge_extraction_with_defaults, _read_any_terms
 from .invoice import verify_invoice
 
 log = get_logger(__name__)
@@ -24,6 +25,11 @@ CONTRACT_FIELDS = [
     "sla_completion_p3_hours",
     "sla_completion_p4_hours",
     "labour_day_rate",
+    # An hourly rate, and the per-trade card when the contract carries one. WKU prices
+    # twelve trades by the hour in Appendix B; the model was never asked for any of it, so
+    # the panel showed a £350/day platform default and called the contract silent on rates.
+    "labour_hour_rate",
+    "rate_card_json",
     "overtime_rate",
     "call_out_rate",
     "payment_terms",
@@ -106,6 +112,48 @@ def _heuristic_contract_extract(text: str) -> dict[str, Any]:
         if m:
             out[key] = float(m.group(1))
             conf[key] = "medium"
+
+    # Both patterns above need the column word within reach of the priority code, which a
+    # TABLE never provides: it names its columns once, in a header above the rows, so after
+    # "P1" comes the priority's definition and then two bare durations. The Meridian contract
+    # for Harbour Point states all eight of its SLA times that way and ingested with all eight
+    # null, and the row was then confirmed against eight platform defaults — P1 completion
+    # recorded as 4 hours where the contract says 8, P4 as 168 where it says 336.
+    #
+    # Positionally, inside one priority's block, the first duration is the response and the
+    # second is the completion. That is the column order of every SLA table in this pack, and
+    # of the prose form too ("P1 response within 1 hour and completion within 4 hours" — which
+    # the completion pattern above also misses, because the digit in "1 hour" stops its \D
+    # run from reaching the word "completion").
+    #
+    # Only fills what the word-anchored patterns left empty, so where a document does name its
+    # columns next to the value, that more precise reading still wins and keeps its confidence.
+    _priority_mark = re.compile(r"\bp([1-4])\b|\bpriority\s*([1-4])\b")
+    _duration = re.compile(r"(\d+(?:\.\d+)?)\s*(?:h\b|hr\b|hours?\b)")
+    marks = [
+        (mk.start(), int(mk.group(1) or mk.group(2)))
+        for mk in _priority_mark.finditer(lower)
+    ]
+    # A table row is short: the priority code, its definition, then the durations. Reading
+    # further than that is reading a different clause. Without this bound the UKRI FM contract
+    # (214k characters, priorities in one schedule and durations pages later) paired P4's
+    # response with an unrelated 48 hours and its completion with a 24 that came after it —
+    # a completion shorter than its own response. A wrong number is worse than a null here,
+    # because the null is visibly a gap and the PM fills it.
+    _ROW_REACH = 160
+    for idx, (start, pri_n) in enumerate(marks):
+        end = marks[idx + 1][0] if idx + 1 < len(marks) else len(lower)
+        end = min(end, start + _ROW_REACH)
+        durations = [float(d) for d in _duration.findall(lower[start:end])]
+        for key, value in zip(
+            (f"sla_response_p{pri_n}_hours", f"sla_completion_p{pri_n}_hours"),
+            durations,
+        ):
+            if out.get(key) is None:
+                out[key] = value
+                # Lower than the word-anchored reading: position is a weaker claim than a
+                # column the document actually labelled, and the PM confirms either way.
+                conf[key] = "low"
 
     # An hourly rate is read first and kept as one. Folding it into labour_day_rate would
     # make the invoice check divide it by eight and compare a £62/h contract against £7.75/h.
@@ -214,6 +262,34 @@ def _relevant_excerpt(text: str, budget: int = _TEXT_BUDGET_TEXT_ONLY) -> tuple[
     return out, len(text) - len(out)
 
 
+def _fill_gaps_from_text(
+    extracted: dict[str, Any], source_text: str | None
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Read from the text what the model left unset. Never overwrites what it did read.
+
+    `_extract_contract_fields` picks ONE reader — Claude when an API key is set, the regex only
+    when there is none — so on every real ingest the regex never ran. The Meridian contract for
+    Harbour Point ingested with four fields read and its eight SLA times null, while the regex
+    that can read that exact table sat unused behind an `elif`. One reader's blind spot became
+    the whole extraction's blind spot.
+
+    The model stays authoritative: a value it returned is kept even where the regex disagrees,
+    because it read the document and the regex only pattern-matched a string. This fills holes,
+    it does not arbitrate. Everything it adds is marked low confidence and a PM confirms it.
+    """
+    if not source_text:
+        return dict(extracted), {}
+    guessed = _heuristic_contract_extract(source_text)
+    added: dict[str, str] = {}
+    out = dict(extracted)
+    for key, value in (guessed.get("extracted") or {}).items():
+        if value is None or out.get(key) is not None:
+            continue
+        out[key] = value
+        added[key] = "low"
+    return out, added
+
+
 async def _claude_contract_extract(
     source_text: str, pdf_base64: str | None = None
 ) -> dict[str, Any]:
@@ -241,9 +317,21 @@ async def _claude_contract_extract(
         "parts_pricing_json as {part_code: price}. "
         "kpi_clauses_json and ppm_obligations_json as objects. "
         "task_criticality_json as {L1,L2,L3: description} if defined.\n"
+        "rate_card_json is the labour RATE CARD when the contract prices work by trade: "
+        "{\"currency\": \"USD\", \"basis\": \"hour\", \"source\": \"Appendix B\", "
+        "\"lines\": [{\"trade\": \"HVAC\", \"straight\": 51.40, \"overtime\": 77.10}]}. "
+        "Read every row of a charge-rate schedule, not just the first. Give the currency the "
+        "document uses — do not convert. Null when the contract states no rates.\n"
+        "SLA hours are usually a TABLE with one row per priority, headed something like "
+        "'Service levels', 'SLA parameters', 'Response and completion times' or 'Priority "
+        "matrix', with columns for response and completion. Read every row of it. A row "
+        "reading 'P1 | Life safety | 2 hours | 8 hours' is sla_response_p1_hours 2 and "
+        "sla_completion_p1_hours 8 — the column headers are stated once, above the rows, not "
+        "beside each value.\n"
         "Use null where the contract does not STATE a value — never guess. A contract often "
         "references 'specified priority timescales' without stating the hours; that is still "
-        "null. Look hardest at schedules titled Charges and Key Performance Indicators.\n"
+        "null. Look hardest at schedules titled Service Levels, Charges and Key Performance "
+        "Indicators.\n"
         "vendor_name is the SERVICE PROVIDER / SUPPLIER / CONTRACTOR — the party being "
         "engaged to perform the work. It is NOT the client, customer, authority or buyer who "
         "is awarding the contract. In an award letter reading 'we are pleased to award this "
@@ -300,26 +388,24 @@ async def _claude_contract_extract(
 
 
 async def _default_org_for_vendor_create(session: AsyncSession) -> Any:
-    """The platform organization, in whatever type the column actually uses.
+    """There is no default. An ingest with no company registers no vendor.
 
-    Not compliance's resolve_default_org, deliberately. That one casts the row to UUID
-    because its caller assigns the result to a UUID column — but plenum_cafm.organizations.id
-    is an INTEGER, so the cast always throws and the function always returns None. Vendor
-    creation needs a truthy organization_id and writes it to vendors.organization_id, itself
-    a legacy INTEGER, so the value is used here exactly as the database stores it.
+    This used to run ``SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1`` and
+    hand back whichever tenant sorted first — on this database, always
+    00000000-…-000000000001. A contract that arrived without an organization therefore
+    registered its supplier inside an unrelated company's register, where that company's
+    staff could then see it. Guessing a tenant is a disclosure, not a fallback.
+
+    Every route that reaches here already resolves the caller's organization and passes it
+    (see api/routes/contract_performance.py), so this path is the exception rather than the
+    rule. When it is taken, the contract is still ingested — it simply keeps no vendor, and
+    ``_resolve_contract_vendor`` reports ``could_not_create`` so the reply says so.
     """
-    try:
-        from sqlalchemy import text as _sql
-
-        row = (
-            await session.execute(
-                _sql("SELECT id FROM plenum_cafm.organizations ORDER BY id LIMIT 1")
-            )
-        ).mappings().first()
-        return row["id"] if row else None
-    except Exception as exc:  # noqa: BLE001
-        log.warning("contract_performance.default_org_lookup_failed", error=str(exc)[:200])
-        return None
+    log.warning(
+        "contract_performance.vendor_create_without_organization",
+        detail="no organization on this ingest; refusing to register the supplier under a guess",
+    )
+    return None
 
 
 async def _resolve_contract_vendor(
@@ -348,9 +434,31 @@ async def _resolve_contract_vendor(
         return {"vendor_id": None, "vendor_name": None, "status": "not_named_in_contract"}
 
     try:
+        from ...shared.vendor_identity import find_vendor_id
         from ..compliance.contractors import resolve_or_create_vendor
 
         org = organization_id or await _default_org_for_vendor_create(session)
+
+        # Half the register carries legacy ids ("V-01"), which a uuid vendor_id column
+        # cannot hold. That is not "we could not create the vendor" — the vendor is right
+        # there — so it gets its own status, and the reply says what actually needs doing.
+        raw_match = await find_vendor_id(session, name, organization_id=org)
+        if raw_match is not None:
+            try:
+                UUID(str(raw_match))
+            except (TypeError, ValueError):
+                log.warning(
+                    "contract_performance.vendor_legacy_id_unlinkable",
+                    vendor_name=name[:80],
+                    legacy_vendor_id=str(raw_match)[:40],
+                )
+                return {
+                    "vendor_id": None,
+                    "vendor_name": name,
+                    "status": "legacy_id_unlinkable",
+                    "legacy_vendor_id": str(raw_match),
+                }
+
         existing = await resolve_or_create_vendor(
             session, company_name=name, organization_id=org, create_if_missing=False
         )
@@ -395,13 +503,42 @@ async def extract_contract_parameters(
     field_confidence: dict[str, str] = {}
     extracted = dict(extracted_fields or {})
 
-    if not extracted and source_text:
+    # A PDF ON ITS OWN IS A DOCUMENT. This read `if not extracted and source_text:`, so an
+    # upload with a PDF and no accompanying text — which is what an uploaded PDF IS — skipped
+    # extraction entirely and returned ok: True with nothing in it. The contract was then
+    # ingested with every value a platform default, indistinguishable from a document that
+    # genuinely states none. Found 21 Sep 2026 re-ingesting the WKU contract: the same file
+    # yields 21 fields including its twelve-trade rate card the moment the model is actually
+    # asked. Nothing was wrong with the extraction; it was never invoked.
+    #
+    # The heuristic fallback still needs text — it is regex over a string and has no way to
+    # read a PDF — so a PDF with no API key is a genuine "cannot read this", not a silence.
+    if not extracted and (source_text or pdf_base64):
         if settings.anthropic_api_key:
             result = await _claude_contract_extract(source_text, pdf_base64)
-        else:
+        elif source_text:
             result = _heuristic_contract_extract(source_text)
+        else:
+            log.warning(
+                "contract_performance.pdf_without_extractor",
+                detail="a PDF was uploaded but no ANTHROPIC_API_KEY is set; there is no way "
+                       "to read it, and the parameters would otherwise be all defaults",
+            )
+            result = {"extracted": {}, "field_confidence": {}}
         extracted = {k: v for k, v in (result.get("extracted") or {}).items() if v is not None}
         field_confidence = result.get("field_confidence") or {}
+        # The two readers are complementary, not alternatives. Whichever ran, let the other
+        # fill what it left empty: a model that cannot see a table and a regex that cannot see
+        # a PDF miss different things, and running only one made its blind spot the whole
+        # extraction's. Additions never overwrite, and arrive at low confidence.
+        extracted, _added = _fill_gaps_from_text(extracted, source_text)
+        if _added:
+            field_confidence = {**_added, **field_confidence}
+            log.info(
+                "contract_performance.gaps_filled_from_text",
+                fields=sorted(_added),
+                count=len(_added),
+            )
 
     # A contract is with somebody. Ingesting the parameters against no vendor leaves them
     # unreachable: scoring loads a vendor's confirmed contract, so an unlinked contract can
@@ -431,6 +568,29 @@ async def extract_contract_parameters(
             "table, then confirm (POST /contracts/{id}/confirm)."
         ),
     }
+
+    # A contract row states what a vendor agreed to. When the document stated nothing, every
+    # value in it is the platform's own — and writing that row makes a phantom contract that
+    # outranks the vendor's real one on the Vendors page. The confirm step already refuses
+    # such a row ("Confirming would make them binding on the vendor"); refuse it a step
+    # earlier, where it costs nothing, instead of leaving it to be found.
+    if auto_ingest and not _read_any_terms(field_sources):
+        response["ingest"] = {
+            "ok": False,
+            "reason": "no_contract_terms_found",
+            "error": (
+                "No contract terms were read from this document — every value would be a "
+                "platform default, so no contract was recorded. If this is a contract, "
+                "check the file; if it is an invoice or a certificate, this is expected."
+            ),
+        }
+        response["requires_pm_confirmation"] = False
+        log.warning(
+            "contract.ingest_refused_no_terms",
+            document_id=str(document_id) if document_id else None,
+            vendor_id=str(vendor_id) if vendor_id else None,
+        )
+        return response
 
     if auto_ingest:
         # Prefer caller-supplied signed_date; fall back to extracted value.
@@ -479,6 +639,34 @@ def _heuristic_invoice_lines(text: str) -> list[dict[str, Any]]:
     return lines
 
 
+#: "Invoice no.", "Invoice Number:", "Tax Invoice #" and the rest, followed by the value.
+#: The label word is REQUIRED — a bare "INVOICE" heading sits above the supplier's name on
+#: most layouts, and matching that would key the register on "Halden". \s* spans the
+#: newline because a PDF header block routinely prints the label and its value on separate
+#: lines, which is exactly how the invoice that prompted this is laid out.
+_INVOICE_NUMBER = re.compile(
+    r"\b(?:tax\s+|vat\s+)?invoice\s*"
+    r"(?:number|no\.?|num\.?|ref(?:erence)?|#)\s*[:#.\-]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9/\-]{2,31})\b",
+    re.I,
+)
+
+
+def invoice_number_in(source_text: str | None) -> str | None:
+    """The invoice number printed on the document, or None.
+
+    None is an answer, not a failure: a document that does not print its number has none to
+    record, and the caller falls back to a label rather than inventing one.
+    """
+    for m in _INVOICE_NUMBER.finditer(source_text or ""):
+        found = (m.group(1) or "").strip(" .,;:-/")
+        # A real invoice number carries at least one digit. Without this the pattern reads
+        # "Invoice number is not shown" as the number "is".
+        if len(found) >= 3 and any(ch.isdigit() for ch in found):
+            return found
+    return None
+
+
 async def extract_and_verify_invoice(
     session: AsyncSession,
     *,
@@ -486,6 +674,7 @@ async def extract_and_verify_invoice(
     lines: list[dict[str, Any]] | None = None,
     work_orders: list[dict[str, Any]] | None = None,
     invoice_ref: str | None = None,
+    invoice_ref_fallback: str | None = None,
     vendor_id=None,
     organization_id=None,
     document_id=None,
@@ -494,6 +683,16 @@ async def extract_and_verify_invoice(
     parts_pricing_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Orchestrator invoice upload path: parse lines then verify against ingested WOs."""
+    # What this invoice is called. An explicit ref from the caller is a person's answer and
+    # wins; otherwise the document's own number, which is what a supplier, a PM and an
+    # accounts system all quote; and only failing both, a label the caller supplied — the
+    # uploaded filename — which identifies nothing and is never used as a key.
+    ref_from_document = invoice_number_in(source_text)
+    invoice_ref = invoice_ref or ref_from_document or invoice_ref_fallback
+    if ref_from_document:
+        log.info("invoice.ref_read_from_document", invoice_ref=ref_from_document)
+    elif invoice_ref_fallback:
+        log.warning("invoice.ref_not_printed_on_document", fallback=invoice_ref_fallback)
     parsed = list(lines or [])
     if not parsed and source_text:
         if settings.anthropic_api_key:
@@ -635,6 +834,21 @@ async def extract_and_verify_invoice(
             organization_id=organization_id,
         )
         vendor_id = vendor_link.get("vendor_id")
+    if vendor_id is None and source_text:
+        # _invoice_vendor_name reads a CSV-shaped pattern and finds nothing in a PDF, so an
+        # uploaded invoice was attributed to no vendor at all — which also means no contract
+        # is found, and the rate and parts checks are skipped on an invoice that reads as
+        # fully verified. Ask the register instead: which vendor we already have is named
+        # here. It cannot invent one.
+        from ...shared.vendor_identity import vendor_named_in
+
+        # Only this company's register may answer. An invoice matched against every
+        # tenant's vendor names attributes spend to a supplier the reader cannot see.
+        vendor_id = await vendor_named_in(
+            session, source_text, organization_id=organization_id
+        )
+        if vendor_id:
+            log.info("invoice.vendor_matched_from_document", vendor_id=str(vendor_id))
 
     # Contract-derived thresholds. Work orders already auto-load when the caller does not
     # supply them; these did not, and the chat upload path supplies neither — so the
@@ -671,6 +885,9 @@ async def extract_and_verify_invoice(
     verification = await verify_invoice(
         session,
         invoice_ref=invoice_ref,
+        # Only a number the document printed identifies the invoice well enough to say
+        # "this one again". A filename does not.
+        invoice_ref_identifies=bool(ref_from_document),
         lines=parsed,
         work_orders=wos,
         vendor_id=vendor_id,

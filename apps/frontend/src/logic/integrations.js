@@ -100,6 +100,44 @@ export const integrationsMethods = {
         color: s.view === "integ" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "integ" ? "var(--color-accent-900)" : "transparent",
         click: () => { window.scrollTo(0, 0); this.setState({ view: "integ", role: "admin", navOpen: true, detail: null }); }
+      }, {
+        // "0" is a finding nobody has established while the read is still out; the count
+        // appears once a read has answered (or failed and filled the labelled samples).
+        label: "Users & access", icon: "ph-users-three", badge: s.usLiveLoadedAt || s.usLiveError ? String(s.users.length) : "…",
+        color: s.view === "users" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "users" ? "var(--color-accent-900)" : "transparent",
+        click: () => { window.scrollTo(0, 0); this.setState({ view: "users", role: "admin", navOpen: true, detail: null }); }
+      }, {
+        // Scheduled engine jobs and questions (logic/cronsPage.js). The badge is the company's
+        // job count once the list has been read, "…" before.
+        label: "Hoist Crons", icon: "ph-clock-clockwise", badge: s.cronLoadedAt || s.cronLoadErr ? String((s.cronJobs || []).length) : "…",
+        color: s.view === "crons" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "crons" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.cpOpen()
+      }, {
+        // What the chat has learned for this company (logic/memoriesPage.js). The badge is the
+        // count once the page has read it, "…" before.
+        label: "Chat memory", icon: "ph-brain", badge: s.mpLoadedAt || s.mpErr ? String((s.mpRows || []).length) : "…",
+        color: s.view === "memories" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "memories" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.mpOpen()
+      }, {
+        // Every turn as a span tree with cost (logic/tracesPage.js). The badge is the turns in
+        // the range once read, "…" before.
+        label: "Hoist Traces", icon: "ph-flow-arrow", badge: s.tpLoadedAt || s.tpErr ? String((s.tpTurns || []).length) : "…",
+        color: s.view === "traces" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "traces" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.tpOpen()
+      }, {
+        label: "Audit trail", icon: "ph-scroll", badge: s.auLiveLoadedAt || s.auLiveError ? String(s.audit.length) : "…",
+        color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",
+        click: () => {
+          window.scrollTo(0, 0);
+          this.setState({ view: "audit", role: "admin", navOpen: true, detail: null });
+          // Coming back to the page is a visit to the tab it is on (pre-push review, 29 Sep 2026).
+          if (this.state.auTab === "vendors") this.vaLoad();
+        }
       }],
 
       intTiles: [

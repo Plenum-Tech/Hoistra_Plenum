@@ -689,10 +689,23 @@ def _render_tree_visual(tree: dict) -> str:
         all_children.update(children_list)
 
     root_nodes = [t for t in tree.keys() if t not in all_children]
+    # A tree in which every table is somebody's child has no root and would draw nothing;
+    # a tree with a loop in it (a table listed as its own child) would draw forever. Start
+    # from every table in that case and let the path guard below cut the loop.
+    if not root_nodes:
+        root_nodes = list(tree.keys())
 
-    def render_node(node: str, prefix: str = "", is_last: bool = True) -> str:
-        """Recursively render a node and its children."""
+    def render_node(node: str, prefix: str = "", is_last: bool = True,
+                    path: tuple[str, ...] = ()) -> str:
+        """Recursively render a node and its children.
+
+        `path` is the chain of ancestors. A child already on it is a loop, drawn once with
+        a marker and not followed: the picture of a hierarchy must never be what stops the
+        migration that produced it.
+        """
         connector = "└── " if is_last else "├── "
+        if node in path:
+            return prefix + connector + node + "  (↻ loop — already shown above)\n"
         result = prefix + connector + node + "\n"
 
         children = tree.get(node, {}).get("children", [])
@@ -702,7 +715,7 @@ def _render_tree_visual(tree: dict) -> str:
         extension = "    " if is_last else "│   "
         for i, child in enumerate(children):
             is_last_child = (i == len(children) - 1)
-            result += render_node(child, prefix + extension, is_last_child)
+            result += render_node(child, prefix + extension, is_last_child, path + (node,))
 
         return result
 

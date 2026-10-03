@@ -24,13 +24,31 @@ from ..core.exceptions import (
     UnsafeQueryError,
 )
 from ..core.logging import get_logger
+from . import scope
+from .principal import Principal
 
 log = get_logger(__name__)
 
 # Same guard used by table_customizer.py — never relax this.
 _SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
+#: Set once the scoped views have been seen. Never cached as False — see _scoped_views_exist.
+_SCOPED_VIEWS_PRESENT = False
+
 SCHEMA = settings.db_schema
+
+
+def _assert_not_denied(table: str) -> None:
+    """Refuse a table that is closed to this service outright.
+
+    Called from _validate_ident so it covers every route at once — read, search, get, create,
+    update and delete all pass a table name through there, and a guard added per method is a
+    guard the next method forgets."""
+    if scope.is_denied(table):
+        log.warning("db.security.denied_table", table=table)
+        raise UnsafeQueryError(
+            f"The table {table!r} is not available through the Universal Database Reader."
+        )
 
 
 def _validate_ident(name: str) -> str:
@@ -60,8 +78,63 @@ def _serialize_row(row: dict) -> dict:
 
 
 class DatabaseService:
-    def __init__(self, session: AsyncSession) -> None:
+    """Reads and writes any table in the schema, restricted to what ``principal`` may see.
+
+    ``principal`` is optional so internal callers (migrations, tests) keep working unchanged;
+    every HTTP route passes a real one. See services/scope.py for what "restricted" means per
+    table — the predicate is derived from the table's own columns at request time, because the
+    table is not known until the request arrives.
+    """
+
+    def __init__(self, session: AsyncSession, principal: "Principal | None" = None) -> None:
         self._db = session
+        self._principal = principal
+
+    async def _scope(self, table: str) -> tuple[str, dict[str, Any]]:
+        """The row restriction for this caller on this table: ``(fragment, params)``."""
+        return await scope.predicate(self._db, table, self._principal)
+
+    async def _scoped_views_exist(self) -> bool:
+        """Whether the filtered views are in place. Checked once per process, and only ever
+        cached as True — a False must be re-checked, because the migration may land at any
+        moment and a cached False would keep the route refusing for the life of the process."""
+        global _SCOPED_VIEWS_PRESENT
+        if _SCOPED_VIEWS_PRESENT:
+            return True
+        found = bool(
+            await self._db.scalar(
+                text(
+                    "SELECT 1 FROM information_schema.schemata "
+                    "WHERE schema_name = :schema LIMIT 1"
+                ),
+                {"schema": scope.SCOPED_SCHEMA},
+            )
+        )
+        _SCOPED_VIEWS_PRESENT = found
+        return found
+
+    async def _scoped_insert_values(self, table: str, data: dict[str, Any]) -> dict[str, Any]:
+        """``data`` with the caller's company stamped on, or an error if they named another.
+
+        Unrestricted callers (superadmin, internal) are passed through untouched, so seeds and
+        migrations that legitimately write across companies keep working.
+        """
+        principal = self._principal
+        if principal is None or principal.is_superadmin:
+            return data
+        columns = await scope.scope_columns(self._db, table)
+        if scope.ORG_COLUMN not in columns:
+            return data
+        if principal.organization_id is None:
+            raise UnsafeQueryError(
+                "Your account is not attached to a company, so it cannot create records here."
+            )
+        given = data.get(scope.ORG_COLUMN)
+        if given is not None and str(given) != str(principal.organization_id):
+            raise UnsafeQueryError(
+                "You can only create records within your own company."
+            )
+        return {**data, scope.ORG_COLUMN: str(principal.organization_id)}
 
     # ── Schema introspection ──────────────────────────────────────────────────
 
@@ -82,9 +155,12 @@ class DatabaseService:
             """),
             {"schema": SCHEMA},
         )
+        # Denied tables are not listed either. Leaving them in the catalogue only invites the
+        # agent to name one and be refused, and the refusal itself confirms the table exists.
         tables = [
             {"table": r.table_name, "row_estimate": int(r.row_estimate)}
             for r in result
+            if not scope.is_denied(r.table_name)
         ]
         log.info("db.list_tables.done", schema=SCHEMA, table_count=len(tables))
         return tables
@@ -225,6 +301,13 @@ class DatabaseService:
                 filter_params[key] = val
             where_clause = "WHERE " + " AND ".join(parts)
 
+        # The caller's own restriction, derived from this table's columns. Applied to the row
+        # query AND the count — a total that counts rows the caller cannot read is a worse lie
+        # than showing none, because it drives "has_more" and the pager.
+        scope_sql, scope_params = await self._scope(table)
+        where_clause = scope.combine(where_clause, scope_sql)
+        filter_params.update(scope_params)
+
         order_clause = ""
         if order_by:
             _validate_ident(order_by)
@@ -276,9 +359,11 @@ class DatabaseService:
         _validate_ident(id_column)
         await self._assert_table_exists(table)
 
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :rid', scope_sql)
         result = await self._db.execute(
-            text(f'SELECT * FROM {SCHEMA}."{table}" WHERE "{id_column}" = :rid'),
-            {"rid": record_id},
+            text(f'SELECT * FROM {SCHEMA}."{table}" {where}'),
+            {"rid": record_id, **scope_params},
         )
         row = result.fetchone()
         if row is None:
@@ -316,15 +401,20 @@ class DatabaseService:
             _validate_ident(col)
         limit = min(max(1, limit), settings.max_query_rows)
 
+        # Parenthesised before anything is ANDed to it. The search terms are ORed, and OR binds
+        # looser than AND — `a ILIKE t OR b ILIKE t AND scope` would apply the scope to the last
+        # term only and return every row matching the first, which is the leak this fixes.
         like_parts = " OR ".join(f'"{c}"::text ILIKE :term' for c in search_columns)
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f"WHERE ({like_parts})", scope_sql)
         sql = f"""
             SELECT * FROM {SCHEMA}."{table}"
-            WHERE {like_parts}
+            {where}
             LIMIT :limit OFFSET :offset
         """
         result = await self._db.execute(
             text(sql),
-            {"term": f"%{search_term}%", "limit": limit, "offset": offset},
+            {"term": f"%{search_term}%", "limit": limit, "offset": offset, **scope_params},
         )
         rows = [_serialize_row(dict(r._mapping)) for r in result]
         log.info(
@@ -365,12 +455,46 @@ class DatabaseService:
             )
             raise UnsafeQueryError("Multiple statements (semicolon) are not allowed.")
 
+        # A caller-supplied SELECT cannot have a per-table predicate injected into it, so the
+        # restriction lives in the objects it names: plenum_scoped holds one self-filtering view
+        # per table, and the caller is carried in transaction-local settings the views read.
+        if scope.allocated_to_nothing(self._principal):
+            log.info("db.execute_select.no_buildings_allocated", sql_preview=stripped[:120])
+            return []
+
+        # The views are built by a migration that runs at another service's startup. Until it
+        # has, this route has no restriction to apply — and the one thing it must not do then is
+        # carry on against the base tables, which is precisely the unscoped behaviour being
+        # removed. Refuse instead: a caller who sees an error asks; a caller who sees another
+        # company's rows does not.
+        if not await self._scoped_views_exist():
+            log.error("db.execute_select.scoped_schema_missing", schema=scope.SCOPED_SCHEMA)
+            raise UnsafeQueryError(
+                "Custom SELECT is unavailable: the scoped views have not been created yet. "
+                "They are built by migration udr_scoped_views.sql at startup."
+            )
+
+        scoped_sql = scope.redirect_to_scoped_schema(sql)
+        for name, value in scope.session_settings(self._principal):
+            # set_config(..., true) is transaction-local and takes bind parameters, which
+            # SET LOCAL does not. Set on every request: these ride a pooled connection, and a
+            # value left from the previous caller would scope this query to their company.
+            await self._db.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": name, "value": value},
+            )
+        # Covers any table named without a schema; the rewrite above covers qualified ones.
+        await self._db.execute(
+            text(f"SET LOCAL search_path TO {scope.SCOPED_SCHEMA}, public")
+        )
+
         log.debug(
             "db.execute_select.start",
             sql_preview=stripped[:120],
+            redirected=scoped_sql != sql,
             param_count=len(params) if params else 0,
         )
-        result = await self._db.execute(text(sql), params or {})
+        result = await self._db.execute(text(scoped_sql), params or {})
         rows = result.fetchmany(settings.max_query_rows)
         serialized = [_serialize_row(dict(r._mapping)) for r in rows]
         log.info(
@@ -392,6 +516,12 @@ class DatabaseService:
         await self._assert_table_exists(table)
         for col in data:
             _validate_ident(col)
+
+        # An INSERT has no WHERE to restrict, so the equivalent guard is the value written:
+        # a caller who is scoped to a company may only create rows IN that company. Left
+        # unguarded, the row-level filter on every read would be trivially side-stepped by
+        # inserting a row labelled with somebody else's company.
+        data = await self._scoped_insert_values(table, data)
 
         cols = ", ".join(f'"{c}"' for c in data)
         placeholders = ", ".join(f":v_{c}" for c in data)
@@ -436,10 +566,16 @@ class DatabaseService:
         named = {f"u_{c}": v for c, v in data.items()}
         named["_rid"] = record_id
 
+        # The same predicate as a read. An UPDATE that can reach a row the caller may not read
+        # is the worse half of this bug: the row is not just visible, it is altered.
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :_rid', scope_sql)
+        named.update(scope_params)
+
         result = await self._db.execute(
             text(
                 f'UPDATE {SCHEMA}."{table}" SET {set_clause} '
-                f'WHERE "{id_column}" = :_rid RETURNING *'
+                f"{where} RETURNING *"
             ),
             named,
         )
@@ -481,12 +617,14 @@ class DatabaseService:
         _validate_ident(id_column)
         await self._assert_table_exists(table)
 
+        scope_sql, scope_params = await self._scope(table)
+        where = scope.combine(f'WHERE "{id_column}" = :rid', scope_sql)
         result = await self._db.execute(
             text(
                 f'DELETE FROM {SCHEMA}."{table}" '
-                f'WHERE "{id_column}" = :rid RETURNING "{id_column}"'
+                f'{where} RETURNING "{id_column}"'
             ),
-            {"rid": record_id},
+            {"rid": record_id, **scope_params},
         )
         await self._db.commit()
         deleted = result.fetchone() is not None
@@ -511,6 +649,9 @@ class DatabaseService:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     async def _assert_table_exists(self, table: str) -> None:
+        # Before the existence check, not after: a denied table must not be distinguishable
+        # from a missing one, and every read and write path already funnels through here.
+        _assert_not_denied(table)
         result = await self._db.execute(
             text("""
                 SELECT 1

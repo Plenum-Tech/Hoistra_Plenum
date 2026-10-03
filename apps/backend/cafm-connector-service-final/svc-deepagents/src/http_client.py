@@ -33,6 +33,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from contextvars import ContextVar
+
 import httpx
 import structlog
 from tenacity import (
@@ -112,6 +114,89 @@ def _is_transient(exc: BaseException) -> bool:
 # Public request function
 # ──────────────────────────────────────────────────────────────────────────────
 
+#: The signed-in caller's Authorization header, set by the workflow endpoint for the life of
+#: one request and forwarded on every call this service makes on that caller's behalf.
+#: operations-intelligence now requires a caller on every route and scopes what it returns
+#: to that caller's company and buildings — so a request made without this would be refused,
+#: and one made with a service credential would see everything, which is worse. The user's
+#: own token is the only thing that carries the right answer to "what may this call see".
+caller_authorization: ContextVar[str | None] = ContextVar("caller_authorization", default=None)
+
+#: A superadmin's viewAsCompany() override (routes/workflow.py sets this on /run,
+#: /run-stateful and /run-stateful-with-files, authorized exactly like the frontend's own
+#: viewAsCompany — a non-superadmin naming a company that is not their own is refused
+#: before this is ever set), default None for every normal caller. operations-intelligence
+#: already accepts organization_id as an override on the routes the frontend calls directly
+#: (Compliance, Vendors, Home, Users & access, Audit trail all switch to it), and the
+#: *_engine_agent tool functions already accept and forward organization_id — nothing in the
+#: chat/orchestrator path ever supplied one, so a superadmin's chat answers stayed scoped to
+#: their own company's data (from the caller's own token) no matter which company the rest
+#: of the app said they were viewing. Injected centrally here, at the one place every Phase 2
+#: engine's HTTP call already passes through, rather than in each tool function individually.
+caller_organization_id: ContextVar[str | None] = ContextVar("caller_organization_id", default=None)
+
+#: The services that read `organization_id` as "superadmin: act as this company" and narrow
+#: to it. operations-intelligence does on every register route. work-order-management does
+#: too — every /api/maintenance route declares it "Superadmin only: act as this company" and
+#: scopes to that company's buildings (routes/maintenance.py) — and it was left out of this
+#: set on the belief that it had no per-company scoping. Measured 17 Sep 2026: a superadmin
+#: viewing TechCorp saw 368 decisions on the Maintenance page and 374 in the chat, the six
+#: extra at Town Hall, another company's building. UDR and doc-rag genuinely have no act-as
+#: parameter and scope from the token alone; stamping them would be a stray query param.
+_ORG_SCOPED_SERVICES = frozenset({"operations_intelligence", "wo_management"})
+
+#: The page engines the router assigned this turn to, when it named no place for the
+#: database catalogue. Compliance, vendor, energy, asset and maintenance questions are
+#: answered from the page APIs so the chat agrees with the screen; the general loop still
+#: holds every UDR tool, and a fanned-out or action-verb turn runs there. This is the rule
+#: the routing note states, made a refusal: while the set is non-empty, a call to svc-udr
+#: raises PageEngineOwnsThisTurn instead of reading a table. Empty (the default, and
+#: whenever `udr` is one of the agents named) means the catalogue is open.
+turn_page_engines: ContextVar[frozenset[str]] = ContextVar("turn_page_engines", default=frozenset())
+
+
+#: True when the router named `udr` beside the page engines: the database half of the question
+#: is real, but it runs inside task("udr"), whose sub-agent has the catalogue and the query
+#: discipline. The general loop itself still may not read tables on such a turn. Measured
+#: 17 Sep 2026 at 15:40: with the catalogue simply open, the general loop ran four SELECTs of
+#: its own against the asset-condition tables, counted 6 where the Assets page engine says
+#: 17, and the judge blocked a correct answer over the conflict it had created.
+turn_catalogue_via_task: ContextVar[bool] = ContextVar("turn_catalogue_via_task", default=False)
+
+#: The sub-agent whose graph is running on this task, set by the task runner for the life of
+#: the run; None in the general loop.
+active_subagent: ContextVar[str | None] = ContextVar("active_subagent", default=None)
+
+
+def catalogue_closed() -> frozenset[str] | None:
+    """The page engines that own this turn if a svc-udr read must refuse here; None if it may go.
+
+    Open when no page engine owns the turn. Open inside task("udr") when the router named udr.
+    Closed everywhere else on an owned turn — including task("udr") on a turn the router did
+    not give a database half.
+    """
+    owners = turn_page_engines.get()
+    if not owners:
+        return None
+    if turn_catalogue_via_task.get() and active_subagent.get() == "udr":
+        return None
+    return owners
+
+
+class PageEngineOwnsThisTurn(RuntimeError):
+    """Raised in place of a UDR read on a turn the router gave to one or more page engines."""
+
+    def __init__(self, engines: frozenset[str] | set[str]) -> None:
+        self.engines = frozenset(engines)
+        names = ", ".join(sorted(self.engines))
+        super().__init__(
+            f"This question was routed to the {names} page engine(s), which answer from the "
+            "page's own API — the source of record for it. The database catalogue and direct "
+            "table reads are closed for this turn: call task(\"<engine>\") with the user's "
+            "question instead."
+        )
+
+
 async def request(
     method: str,
     base_url: str,
@@ -144,6 +229,12 @@ async def request(
     """
     cb = _breaker(service)
 
+    if service == "udr":
+        _owners = catalogue_closed()
+        if _owners:
+            log.info("http_client.udr_closed_for_page_turn", engines=sorted(_owners), path=path)
+            raise PageEngineOwnsThisTurn(_owners)
+
     if not cb.allow_request():
         raise RuntimeError(
             f"Service '{service}' is unavailable (circuit open). "
@@ -168,6 +259,38 @@ async def request(
                 )
             try:
                 async with httpx.AsyncClient(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+                    _auth = caller_authorization.get()
+                    _has_own = 'Authorization' in {k.title(): v for k, v in (kwargs.get('headers') or {}).items()}
+                    if _auth and not _has_own:
+                        kwargs['headers'] = {**(kwargs.get('headers') or {}), 'Authorization': _auth}
+                    elif not _auth and not _has_own:
+                        # Worth a line of its own. Downstream will answer 401 missing_token,
+                        # the tool will return zero rows, and the agent will tell the user the
+                        # service could not be reached — which reads as an outage rather than
+                        # as a request that was never authenticated. This names it at the
+                        # moment it happens, with the path, so the route that failed to carry
+                        # the caller's token is identifiable rather than inferred.
+                        log.warning(
+                            "http_client.no_caller_token",
+                            service=service, method=method, path=path,
+                            note="calling without the caller's bearer; downstream will refuse "
+                                 "this and the failure will surface as an unreachable service",
+                        )
+                    # A superadmin's viewAsCompany() override, same "don't touch what the
+                    # caller already set" rule as the Authorization header above: a tool
+                    # function that explicitly resolved its own organization_id (the LLM
+                    # supplied one, or a future caller has a reason of its own) is left
+                    # alone. Query-string only (`params`) — operations-intelligence's write
+                    # routes (scan, verify, renewal-email) take their scope from the body and
+                    # this must never reach into one uninvited.
+                    # `params=None` counts as "no params", not as "leave alone": most of the
+                    # maintenance tools pass None when the question named no building, and
+                    # those are exactly the whole-estate reads where the company matters most.
+                    _org = caller_organization_id.get()
+                    _params = kwargs.get('params')
+                    if _org and service in _ORG_SCOPED_SERVICES and (_params is None or isinstance(_params, dict)) \
+                            and not (_params or {}).get('organization_id'):
+                        kwargs['params'] = {**(_params or {}), 'organization_id': _org}
                     resp = await client.request(method, path, **kwargs)
                     resp.raise_for_status()
                     cb.record_success()

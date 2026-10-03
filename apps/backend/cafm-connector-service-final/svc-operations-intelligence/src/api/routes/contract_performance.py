@@ -1,6 +1,7 @@
 """Contract Performance API — Features B1–B3."""
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,16 +9,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...engines.contract_performance import conflicts as conflicts_svc
+from ...engines.contract_performance import evidence as evidence_svc
 from ...engines.contract_performance import extract as extract_svc
 from ...engines.contract_performance import insights as insights_svc
 from ...engines.contract_performance import invoice as invoice_svc
 from ...engines.contract_performance import parameters as params_svc
 from ...engines.contract_performance import scoring as score_svc
 from ...shared import approvals as approvals_svc
+from ...engines.auth import access
+from .auth import scope
 from ..schemas.contract_performance import (
     AssetCriticalityApproveRequest,
     AssetCriticalityRequest,
     ContractConfirmRequest,
+    ContractReopenRequest,
     ContractExtractRequest,
     ContractIngestRequest,
     ContractUpdateRequest,
@@ -35,7 +40,12 @@ from ..schemas.contract_performance import (
     WorkOrderConflictResolveRequest,
 )
 
-router = APIRouter(prefix="/api/contract-performance", tags=["contract-performance"])
+router = APIRouter(prefix="/api/contract-performance", tags=["contract-performance"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 # ── B1 Contract parameters ──────────────────────────────────────────
@@ -45,14 +55,16 @@ router = APIRouter(prefix="/api/contract-performance", tags=["contract-performan
 async def extract_contract(
     body: ContractExtractRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Relationships Agent handoff — extract from document text then draft-ingest."""
+    org_id = access.organization_for(s, body.organization_id)
     return await extract_svc.extract_contract_parameters(
         session,
         source_text=body.source_text,
         pdf_base64=body.pdf_base64,
         extracted_fields=body.extracted_fields or None,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         vendor_id=body.vendor_id,
         document_id=body.document_id,
         contract_ref=body.contract_ref,
@@ -81,15 +93,90 @@ async def reconcile_migration(
     )
 
 
+async def _migration_org(session: AsyncSession, migration_id: UUID, org_id: UUID | None) -> UUID:
+    """The company a run belongs to, given the caller's (already checked) company."""
+    from sqlalchemy import text as _text
+
+    row = (await session.execute(
+        _text("SELECT organization_id::text FROM plenum_cafm.migration_jobs WHERE id::text = :m"),
+        {"m": str(migration_id)})).first()
+    # A run belongs to the company it was started for; another company's run is not found.
+    if not row or (org_id is not None and row[0] and row[0] != str(org_id)):
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "migration_not_found"})
+    org_id = org_id or (UUID(row[0]) if row[0] else None)
+    if org_id is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "no_company"})
+    return org_id
+
+
+@router.post("/migration/{migration_id}/workbook-extras")
+async def migration_workbook_extras(
+    migration_id: UUID,
+    organization_id: UUID | None = None,
+    force: bool = False,
+    trigger: str = "page",
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """After a migration: the contract terms, invoices and plant telemetry its workbook carried,
+    through their engines (engines/contract_performance/workbook_extras_runner.py).
+
+    Each run is read once. The service's own sweep usually gets there first; asked again,
+    this answers the run's status rather than reading it twice. force=true reads it again
+    (the page's "read again"). Nothing is confirmed.
+    """
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    org_id = await _migration_org(session, migration_id, access.organization_for(s, organization_id))
+    trig = trigger if trigger in ("page", "chat") else "page"
+    return await runner.process(session, migration_id=str(migration_id), organization_id=org_id,
+                                trigger=trig, force=force)
+
+
+@router.get("/migration/{migration_id}/workbook-extras")
+async def migration_workbook_extras_status(
+    migration_id: UUID,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Where one run's read stands: waiting (not yet swept), running, done, none (the workbook
+    carried no extras), failed, or predates (finished before the sweep existed)."""
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    await _migration_org(session, migration_id, access.organization_for(s, organization_id))
+    st = await runner.status(session, str(migration_id))
+    return {"ok": True, **(st or {"migration_id": str(migration_id), "status": "waiting"})}
+
+
+@router.get("/workbook-extras/latest")
+async def latest_workbook_extras(
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The company's latest migration read, and how many contracts still wait for a named
+    person - the Vendors page's highlight."""
+    from ...engines.contract_performance import workbook_extras_runner as runner
+
+    org_id = access.organization_for(s, organization_id)
+    if org_id is None:
+        return {"ok": True, "run": None, "drafts_awaiting": 0, "confirmed": 0}
+    return await runner.latest(session, org_id)
+
+
 @router.post("/contracts/ingest")
 async def ingest_contract(
     body: ContractIngestRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    access.assert_can_ingest(s)
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.ingest_contract_parameters(
         session,
         extracted=body.extracted,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         vendor_id=body.vendor_id,
         vendor_name=body.vendor_name,
         contract_id=body.contract_id,
@@ -100,18 +187,21 @@ async def ingest_contract(
 
 @router.get("/contracts")
 async def list_contracts(
-    organization_id: UUID | None = None,
     vendor_id: UUID | None = None,
     status: str | None = None,
     limit: int = Query(100, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     rows = await params_svc.list_contract_parameters(
         session,
-        organization_id=organization_id,
+        organization_id=s.organization_id,
         vendor_id=vendor_id,
         status=status,
         limit=limit,
+        # Narrowed in SQL: contracts placed on the caller's buildings through their
+        # document, and contracts of vendors working on those buildings.
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "parameters": rows}
 
@@ -120,7 +210,9 @@ async def list_contracts(
 async def get_contract(
     parameters_id: UUID,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    await access.assert_owned(session, s, "contract_sla_parameters", parameters_id)
     return await params_svc.get_contract_parameters(session, parameters_id)
 
 
@@ -146,6 +238,19 @@ async def confirm_contract(
     )
 
 
+# An action with no inverse is a trap. Confirming makes a vendor's numbers binding, and
+# before this the only way back was re-ingesting the source document.
+@router.post("/contracts/{parameters_id}/reopen")
+async def reopen_contract(
+    parameters_id: UUID,
+    body: ContractReopenRequest | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    return await params_svc.reopen_contract_parameters(
+        session, parameters_id, reopened_by=(body.reopened_by if body else None)
+    )
+
+
 # ── B1 Asset criticality ────────────────────────────────────────────
 
 
@@ -153,12 +258,14 @@ async def confirm_contract(
 async def upsert_criticality(
     body: AssetCriticalityRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.upsert_asset_criticality(
         session,
         asset_id=body.asset_id,
         asset_code=body.asset_code,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         proposed=body.proposed,
         load_dependence=body.load_dependence,
         function_type=body.function_type,
@@ -185,9 +292,11 @@ async def approve_criticality(
 async def propose_from_udr(
     body: UdrCriticalityRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await params_svc.propose_criticality_from_udr(
-        session, organization_id=body.organization_id, limit=body.limit
+        session, organization_id=org_id, limit=body.limit
     )
 
 
@@ -197,9 +306,12 @@ async def list_criticalities(
     approved: bool | None = None,
     limit: int = Query(200, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await params_svc.list_asset_criticalities(
-        session, organization_id=organization_id, approved=approved, limit=limit
+        session, organization_id=organization_id, approved=approved, limit=limit,
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "items": rows}
 
@@ -207,11 +319,29 @@ async def list_criticalities(
 # ── B2 Scoring / admin weights / scorecards ─────────────────────────
 
 
+async def _refuse_scoring_for_no_company(session: AsyncSession, org_id: UUID | None) -> None:
+    """A scoring run writes one company's scores, card and cost alert, so it names the company.
+
+    With none in scope — a superadmin not viewing as a company, or AUTH_ENFORCE_SCOPE=false
+    with no organization_id — a run wrote company-less copies of a company's scores beside its
+    own, counted both, and overwrote its card (review, 28 Sep 2026). Where the deployment has
+    no company at all, every row is company-less and the org-less run is the only one there is.
+    """
+    if org_id is None and await score_svc.deployment_has_companies(session):
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_organization",
+            "error": "Choose a company to score. Scores, scorecards and cost alerts belong to "
+                     "one company, and none is in scope for this request.",
+        })
+
+
 @router.get("/admin/weights")
 async def get_weights(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     return {"ok": True, "weights": await score_svc.get_or_create_weights(session, organization_id)}
 
 
@@ -219,9 +349,10 @@ async def get_weights(
 async def put_weights(
     body: WeightsUpdateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     updates = body.model_dump(exclude_none=True)
-    org = updates.pop("organization_id", None)
+    org = access.organization_for(s, updates.pop("organization_id", None))
     result = await score_svc.update_weights(session, updates, organization_id=org)
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result)
@@ -232,12 +363,15 @@ async def put_weights(
 async def score_work_orders(
     body: ScoreWorkOrdersRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     return await score_svc.score_completed_work_orders(
         session,
         body.work_orders,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         score_month=body.score_month,
     )
 
@@ -246,16 +380,19 @@ async def score_work_orders(
 async def score_from_udr(
     body: ScoreFromUdrRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     B2 — Score work orders ingested via Phase 1 UDR migration
     (`plenum_cafm.work_orders`). Prefer this after CSV/XLS migration instead of
     posting hand-crafted score batches.
     """
+    org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     if body.all_buckets:
         return await score_svc.score_all_from_udr(
             session,
-            organization_id=body.organization_id,
+            organization_id=org_id,
             vendor_id=body.vendor_id,
             limit_per_month=body.limit,
             allow_default_parameters=body.allow_default_parameters,
@@ -263,7 +400,7 @@ async def score_from_udr(
     return await score_svc.score_work_orders_from_udr(
         session,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         score_month=body.score_month,
         limit=body.limit,
         generate_scorecard=body.generate_scorecard,
@@ -276,8 +413,10 @@ async def udr_work_order_buckets(
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """List vendor×month WO buckets available in migrated UDR tables."""
+    organization_id = access.organization_for(s, organization_id)
     buckets = await score_svc.list_udr_score_months(
         session, vendor_id=vendor_id, organization_id=organization_id
     )
@@ -288,14 +427,42 @@ async def udr_work_order_buckets(
 async def monthly_scorecard(
     body: ScorecardRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
     return await score_svc.generate_monthly_scorecard(
         session,
         vendor_id=body.vendor_id,
         score_month=body.score_month,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         ppm_visits=body.ppm_visits,
     )
+
+
+@router.post("/scorecards/monthly-all")
+async def monthly_scorecards_all(
+    organization_id: UUID | None = None,
+    score_month: date | None = Query(None, description="The month to cut (any day in it); default last month."),
+    building_id: UUID | None = Query(None, description="Only the vendors with a footprint on this building."),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Every vendor's monthly card for the company - the month-end job, run on demand or on a
+    Hoist Crons schedule. A caller allocated to some buildings cuts the cards of the vendors on
+    those buildings only; a building names one."""
+    org_id = access.organization_for(s, organization_id)
+    await _refuse_scoring_for_no_company(session, org_id)
+    if org_id is None:
+        raise HTTPException(status_code=400, detail={
+            "ok": False, "reason": "no_organization", "error": "Choose a company to score."})
+    ids = (access.assert_building(s, building_id, action="score"),) if building_id else s.building_ids
+    month = score_month.replace(day=1) if score_month else None
+    out = await score_svc.generate_scorecards_for_month(session, organization_id=org_id,
+                                                       score_month=month, building_ids=ids)
+    if building_id:
+        out["building_id"] = str(building_id)
+    return out
 
 
 @router.get("/scorecards")
@@ -304,31 +471,64 @@ async def list_scorecards(
     organization_id: UUID | None = None,
     limit: int = Query(50, le=200),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     rows = await score_svc.list_scorecards(
-        session, vendor_id=vendor_id, organization_id=organization_id, limit=limit
+        session, vendor_id=vendor_id, organization_id=organization_id, limit=limit,
+        building_ids=s.building_ids,
     )
     return {"ok": True, "count": len(rows), "scorecards": rows}
+
+
+@router.get("/wo-scores")
+async def list_wo_scores(
+    vendor_id: UUID | None = None,
+    score_month: date | None = Query(None, description="First of the month, e.g. 2026-09-01."),
+    organization_id: UUID | None = None,
+    latest: bool = Query(False, description="Only each vendor's newest scored month."),
+    limit: int = Query(200, le=1000),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The scored work orders behind the scorecards — the Vendors page Evidence tab. Read-only.
+
+    Each row is one vendor_wo_scores verdict with the work order's hours and the confirmed
+    contract's targets beside it. These rows were written on every scoring run and never
+    listed, so the tab could only say the evidence existed somewhere.
+    """
+    organization_id = access.organization_for(s, organization_id)
+    rows = await evidence_svc.list_wo_evidence(
+        session, vendor_id=vendor_id, score_month=score_month,
+        organization_id=organization_id, limit=limit, building_ids=s.building_ids,
+        latest_only=latest,
+    )
+    # `truncated` says the limit cut the list, so an absent row reads as "not in this read"
+    # rather than "the engine scored nothing".
+    return {"ok": True, "count": len(rows), "limit": limit, "truncated": len(rows) >= limit, "wo_scores": rows}
 
 
 @router.get("/saved-space/summary")
 async def vendors_saved_space_summary(
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Vendors Saved Space — scorecards + pending Feature B approvals + weights."""
+    organization_id = access.organization_for(s, organization_id)
     # 20 hid any vendor whose scored months are older than the newest 20 rows
     # portfolio-wide (e.g. a vendor scored from 2023 reports vanished behind
     # three vendors' 2026 months). 200 covers years of monthly cards.
     cards = await score_svc.list_scorecards(
-        session, organization_id=organization_id, limit=200
+        session, organization_id=organization_id, limit=200, building_ids=s.building_ids
     )
     weights = await score_svc.get_or_create_weights(session, organization_id)
     approvals = await approvals_svc.list_queue(
-        session, source_feature="B", status="pending", organization_id=organization_id
+        session, source_feature="B", status="pending", organization_id=organization_id, scope=s
     )
     crit = await params_svc.list_asset_criticalities(
-        session, organization_id=organization_id, approved=False, limit=50
+        session, organization_id=organization_id, approved=False, limit=50,
+        building_ids=s.building_ids,
     )
     return {
         "ok": True,
@@ -359,14 +559,16 @@ async def vendors_saved_space_summary(
 async def fm_staleness(
     body: FmStalenessRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await score_svc.upsert_fm_staleness(
         session,
         vendor_id=body.vendor_id,
         last_report_at=body.last_report_at,
         data_as_of=body.data_as_of,
         note=body.note,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 
@@ -377,16 +579,19 @@ async def fm_staleness(
 async def extract_verify_invoice(
     body: InvoiceExtractVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Orchestrator invoice upload — parse lines then verify vs ingested WOs."""
+    org_id = access.organization_for(s, body.organization_id)
     return await extract_svc.extract_and_verify_invoice(
         session,
         source_text=body.source_text,
         lines=body.lines or None,
         work_orders=body.work_orders or None,
         invoice_ref=body.invoice_ref,
+        invoice_ref_fallback=body.invoice_ref_fallback,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         document_id=body.document_id,
         labour_day_rate=body.labour_day_rate,
         labour_hour_rate=body.labour_hour_rate,
@@ -394,18 +599,57 @@ async def extract_verify_invoice(
     )
 
 
+@router.get("/invoices")
+async def list_invoices(
+    building_id: UUID | None = Query(
+        None, description="Only invoices filed against this building."
+    ),
+    vendor_id: UUID | None = None,
+    invoice_ref: str | None = Query(
+        None, description="Invoice number, partial and case-insensitive."
+    ),
+    status: str | None = None,
+    limit: int = Query(100, le=500),
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Verified invoices with their building and vendor. Read-only.
+
+    There was no way to read an invoice back: the feature exposed verify and decide and
+    nothing that lists, so a question about a building's invoices could only be answered
+    "none found" however many it had.
+    """
+    if building_id is not None:
+        access.assert_building(s, building_id, action="read")
+    rows = await invoice_svc.list_invoices(
+        session,
+        organization_id=s.organization_id,
+        building_id=building_id,
+        vendor_id=vendor_id,
+        invoice_ref=invoice_ref,
+        status=status,
+        limit=limit,
+        building_ids=s.building_ids,
+    )
+    if s.restricted:
+        rows = [r for r in rows if s.allows_building(r.get("building_id"))]
+    return {"ok": True, "count": len(rows), "invoices": rows}
+
+
 @router.post("/invoices/verify")
 async def verify_invoice(
     body: InvoiceVerifyRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    org_id = access.organization_for(s, body.organization_id)
     return await invoice_svc.verify_invoice(
         session,
         invoice_ref=body.invoice_ref,
         lines=body.lines,
         work_orders=body.work_orders,
         vendor_id=body.vendor_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
         document_id=body.document_id,
         labour_day_rate=body.labour_day_rate,
         labour_hour_rate=body.labour_hour_rate,
@@ -436,12 +680,15 @@ async def list_approvals(
     status: str = "pending",
     organization_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         source_feature="B",
         status=status,
         organization_id=organization_id,
+        scope=s,
     )
     return {
         "ok": True,
@@ -474,8 +721,10 @@ async def resolve_wo_conflict(
     body: WorkOrderConflictResolveRequest,
     organization_id: UUID | None = Query(None),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """FR-039: PM accepts stored or incoming values for a conflicted WO."""
+    organization_id = access.organization_for(s, organization_id)
     return await conflicts_svc.resolve_wo_conflict(
         session,
         wo_code=wo_code,
@@ -496,8 +745,10 @@ async def get_insights(
     from_date: str | None = Query(None, description="YYYY-MM-DD"),
     to_date: str | None = Query(None, description="YYYY-MM-DD"),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """FR-028: cost variance, labour variance, and matched/flagged trend for a vendor."""
+    organization_id = access.organization_for(s, organization_id)
     from datetime import date as _date
 
     fd = _date.fromisoformat(from_date) if from_date else None
@@ -508,5 +759,6 @@ async def get_insights(
         organization_id=organization_id,
         from_date=fd,
         to_date=td,
+        building_ids=s.building_ids,
     )
     return result

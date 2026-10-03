@@ -158,6 +158,14 @@ class OutlookConnector:
         For HTML replies, uses createReply → PATCH body → send (preserves thread + HTML).
         Falls back to sendMail on any Graph API error.
         """
+        # EMAIL_PROVIDER=smtp: every send goes through the SMTP mailbox. A reply cannot be
+        # threaded onto a Graph message id over SMTP, so it goes out as a new message with the
+        # same subject.
+        from .smtp_sender import send_via_smtp, smtp_selected
+
+        if smtp_selected():
+            await send_via_smtp(to=to, subject=subject, body=body, is_html=is_html)
+            return
         content_type = "HTML" if is_html else "Text"
         log.info(
             "outlook.send_email",

@@ -229,3 +229,17 @@ TOOL_DEFINITIONS = [
         },
     },
 ]
+
+
+# Every tool takes the agent's reasoning for the call - which step of its plan this is and
+# what it expects to learn (prompts.py). The orchestrator logs it and strips it before the
+# call runs, so no tool ever sees it.
+_REASONING = {
+    "type": "string",
+    "description": "Which step of your plan this call is, and what you expect it to tell you (one or two sentences).",
+}
+for _t in TOOL_DEFINITIONS:
+    _schema = _t["input_schema"]
+    _schema.setdefault("properties", {})["reasoning"] = _REASONING
+    if "reasoning" not in _schema.setdefault("required", []):
+        _schema["required"] = ["reasoning", *_schema["required"]]

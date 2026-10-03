@@ -1,6 +1,7 @@
 // Gate — sign-in gate
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import GatePanel from '../components/shell/GatePanel.jsx';
 
 export default function Gate({ vals }) {
   return (
@@ -282,32 +283,7 @@ export default function Gate({ vals }) {
           </div>
         </div>
         <div style={{ position: "sticky", top: "0", height: "100vh", boxSizing: "border-box", background: "var(--color-surface)", padding: "64px 28px", display: "flex", flexDirection: "column", justifyContent: "center", borderLeft: "1px solid var(--color-divider)" }}>
-          <div style={{ width: "100%" }}>
-            <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-              {"Member access"}
-            </div>
-            <h2 style={{ fontSize: "26px", margin: "12px 0 0", lineHeight: "1.15" }}>
-              {"Sign in"}
-            </h2>
-            <p style={{ fontSize: "12.5px", lineHeight: "1.55", color: "var(--color-neutral-400)", margin: "9px 0 0" }}>
-              {"Your hoisted portfolio is waiting. The reading is done. The decisions are yours."}
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "9px", marginTop: "26px" }}>
-              <input className="input" value={vals.email} onChange={vals.setEmail} onKeyDown={vals.gateKey} placeholder="you@portfolio.com" style={{ width: "100%", boxSizing: "border-box", fontSize: "14px", padding: "11px 13px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-              <div className="hv3" onClick={vals.signIn} style={{ textAlign: "center", padding: "11px", borderRadius: "8px", background: "var(--color-text)", color: "var(--color-bg)", fontSize: "14px", cursor: "pointer" }}>
-                {"Continue"}
-              </div>
-              <div className="hv4" onClick={vals.signIn} style={{ textAlign: "center", padding: "11px", borderRadius: "8px", border: "1px solid var(--color-divider)", fontSize: "13.5px", color: "var(--color-neutral-300)", cursor: "pointer" }}>
-                {"Single sign-on"}
-              </div>
-            </div>
-            <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.55", marginTop: "20px" }}>
-              {"No FM cooperation required. Meter consent is captured at onboarding for MPAN and MPRN feeds."}
-            </div>
-            <a href="Hoistway Customer Journey.dc.html" style={{ fontSize: "11.5px", display: "inline-block", marginTop: "22px" }}>
-              {"Read the customer journey →"}
-            </a>
-          </div>
+          <GatePanel vals={vals} />
         </div>
       </div>
   );

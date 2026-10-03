@@ -10,9 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
 from ...shared import approvals as approvals_svc
+from ...engines.auth import access
+from .auth import scope
 from ..schemas.compliance import QueueDecisionRequest
 
-router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+router = APIRouter(prefix="/api/approvals", tags=["approvals"],
+                   # Every route here needs a signed-in caller, and a company named in
+                   # the query string must be the caller's own (or the caller a
+                   # superadmin). Before this, every endpoint was open and tenancy
+                   # was whatever organization_id the client chose to send.
+                   dependencies=[Depends(scope)])
 
 
 class SendEmailDraftRequest(BaseModel):
@@ -31,17 +38,20 @@ async def list_all_approvals(
     organization_id: UUID | None = None,
     limit: int = Query(150, le=500),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """
     Unified Approvals rail — all Phase 2 sources (A Compliance, B Contract, C Energy)
     unless source_feature is set.
     """
+    organization_id = access.organization_for(s, organization_id)
     items = await approvals_svc.list_queue(
         session,
         organization_id=organization_id,
         status=status,
         source_feature=source_feature,
         limit=limit,
+        scope=s,
     )
     return {
         "ok": True,
@@ -50,12 +60,28 @@ async def list_all_approvals(
     }
 
 
+@router.get("/sent-emails")
+async def sent_emails(
+    subject: str = Query(..., min_length=3, max_length=500),
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+) -> dict[str, Any]:
+    """Whether this company already sent this request, and when - so the dock offers a
+    reminder instead of a fresh copy. Matched on the subject a draft is given (and its
+    "Reminder: " copies); the body is never returned - the log holds what went out."""
+    org_id = access.organization_for(s, organization_id)
+    return await approvals_svc.sent_email_history(session, subject=subject, organization_id=org_id)
+
+
 @router.post("/send-email")
 async def send_email_draft(
     body: SendEmailDraftRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ) -> dict[str, Any]:
     """Send a compliance alert draft to the PM email entered in the UI."""
+    org_id = access.organization_for(s, body.organization_id)
     return await approvals_svc.send_approval_email_draft(
         session,
         to_address=body.to,
@@ -63,7 +89,7 @@ async def send_email_draft(
         body=body.body,
         cc_address=body.cc,
         queue_item_id=body.queue_item_id,
-        organization_id=body.organization_id,
+        organization_id=org_id,
     )
 
 

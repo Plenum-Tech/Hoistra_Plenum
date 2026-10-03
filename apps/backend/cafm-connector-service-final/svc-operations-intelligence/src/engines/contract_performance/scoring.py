@@ -1,13 +1,14 @@
 """Feature B2 — Vendor performance scoring, PPM, cost variance, monthly scorecard."""
 from __future__ import annotations
 
+import json
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
@@ -20,7 +21,7 @@ from ...models.contract_performance import (
     VendorWoScore,
 )
 from ...shared.approvals import enqueue_approval, write_audit
-from .conflicts import detect_and_flag_wo_conflict
+from .conflicts import _CONFLICT_FIELDS, _differs, detect_and_flag_wo_conflict
 from .parameters import CRITICALITY_SLA_WEIGHT, effective_criticality
 
 log = get_logger(__name__)
@@ -554,6 +555,185 @@ def _parse_dt(v: Any) -> datetime | None:
     return None
 
 
+async def _pending_cost_alerts(
+    session: AsyncSession, *, organization_id: UUID | None, vendor_id: UUID | None, score_month: date,
+) -> list[Any]:
+    """The vendor-month's cost-overrun alerts still waiting on someone, newest first.
+
+    Every one, not only the newest: the Rebuilds before 28 Sep 2026 queued a fresh alert on
+    each run, so a vendor-month can have several pending, and each needs settling.
+    """
+    from ...models import ApprovalsQueueItem
+
+    q = ApprovalsQueueItem
+    same_company = (q.organization_id == organization_id if organization_id is not None
+                    else q.organization_id.is_(None))
+    stmt = (select(q).where(
+        q.item_type == "cost_variance_alert",
+        q.status == "pending",
+        q.related_entity_id == vendor_id,
+        q.payload["score_month"].astext == score_month.isoformat(),
+        same_company,
+    ).order_by(q.created_at.desc()))
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def _close_cost_alerts(
+    session: AsyncSession, items: list[Any], *, reason: str, organization_id: UUID | None,
+) -> None:
+    """Settle pending alerts the scorer no longer stands behind, saying why.
+
+    'closed' with the reason in pm_notes is how an item the system settles is closed —
+    db/tools/close_orphaned_approvals.py closes orphans the same way. Not 'dismissed': that is
+    a PM judging an item wrong, and nobody judged these. decided_by stays empty for the same
+    reason; a note a PM already left is kept in front of the reason.
+    """
+    if not items:
+        return
+    now = datetime.now(timezone.utc)
+    for item in items:
+        item.status = "closed"
+        item.decided_at = now
+        item.decided_by = None
+        item.pm_notes = f"{item.pm_notes} {reason}" if item.pm_notes else reason
+        item.updated_at = now
+    await write_audit(
+        session,
+        actor="system",
+        action_type="approvals_queue.close",
+        source_feature="B",
+        organization_id=organization_id,
+        output_payload={"queue_item_ids": [str(i.id) for i in items], "status": "closed"},
+        detail={"item_type": "cost_variance_alert", "reason": reason},
+    )
+
+
+async def _raise_cost_alert(
+    session: AsyncSession, *, organization_id: UUID | None, vendor_id: UUID | None,
+    score_month: date, month_overruns: int, alert_pct: float,
+) -> str:
+    """One alert per vendor-month: refresh the pending one, or queue it.
+
+    Every scoring run used to queue a fresh alert, so each Rebuild added another beside the
+    one already waiting (28 Sep 2026: 30 pending for 24 vendor-months). A decided alert is
+    history and is left alone — a month re-scored after someone acted on it asks again.
+    """
+    summary = (f"Systematic cost overrun: {month_overruns} jobs >{alert_pct}% variance "
+               f"in {score_month.isoformat()} for vendor {vendor_id}")
+    payload = {
+        "vendor_id": str(vendor_id) if vendor_id else None,
+        "overrun_count": month_overruns,
+        "score_month": score_month.isoformat(),
+        "window": "month",
+    }
+    pending = await _pending_cost_alerts(
+        session, organization_id=organization_id, vendor_id=vendor_id, score_month=score_month)
+    if pending:
+        existing, duplicates = pending[0], pending[1:]
+        existing.summary = summary
+        # Merged, not replaced: a PM's Edit is merged into the payload and keeps the item
+        # pending, and the compliance email stamps email_sent / pm_action_status onto every
+        # pending item about the vendor. Replacing the payload erased both (review, 28 Sep
+        # 2026). Only the figures the scorer computes are its to change.
+        existing.payload = {**(existing.payload or {}), **payload}
+        existing.updated_at = datetime.now(timezone.utc)
+        # The older copies earlier Rebuilds queued stay pending otherwise, each still counted
+        # in the Decision queue (review, 28 Sep 2026).
+        await _close_cost_alerts(
+            session, duplicates, organization_id=organization_id,
+            reason=(f"Closed automatically: a duplicate of cost alert {existing.id}, which is "
+                    f"the one kept for this vendor and month."),
+        )
+        return str(existing.id)
+    item = await enqueue_approval(
+        session,
+        source_feature="B",
+        item_type="cost_variance_alert",
+        summary=summary,
+        severity="high",
+        payload=payload,
+        organization_id=organization_id,
+        related_entity_type="vendor",
+        related_entity_id=vendor_id,
+    )
+    return str(item.id)
+
+
+async def _withdraw_cost_alert(
+    session: AsyncSession, *, organization_id: UUID | None, vendor_id: UUID,
+    score_month: date, month_overruns: int, alert_pct: float, job_threshold: int,
+) -> None:
+    """Close the vendor-month's pending alert when a re-score no longer crosses the threshold.
+
+    Review, 28 Sep 2026: the doubled B-301 rows counted 4 overruns and raised "4 jobs";
+    de-duplicated, the month has 2, the alert is never raised again — and with nothing to
+    close it, the "4 jobs" alert sat pending for good with figures nothing supports.
+    """
+    pending = await _pending_cost_alerts(
+        session, organization_id=organization_id, vendor_id=vendor_id, score_month=score_month)
+    await _close_cost_alerts(
+        session, pending, organization_id=organization_id,
+        reason=(f"Closed automatically: re-scored, {score_month.isoformat()} now has "
+                f"{month_overruns} jobs over {alert_pct}% cost variance, below the "
+                f"{job_threshold} that raises this alert."),
+    )
+
+
+async def deployment_has_companies(session: AsyncSession) -> bool:
+    """Whether this deployment holds any company to score for.
+
+    A scoring run that names no company is only right where there is none to name — a
+    single-company deployment with no organizations, whose score rows all carry no company, so
+    an org-less pass is the only pass there is. Anywhere else it writes company-less copies of a
+    company's scores (review, 28 Sep 2026), and the scoring routes refuse it. A deployment
+    without the organizations table has no companies; the table is not read unless it exists.
+    """
+    present = (await session.execute(
+        text("SELECT to_regclass('plenum_cafm.organizations') IS NOT NULL"))).scalar()
+    if not present:
+        return False
+    return bool((await session.execute(
+        text("SELECT EXISTS (SELECT 1 FROM plenum_cafm.organizations)"))).scalar())
+
+
+async def _flag_copies_in_conflict(
+    session: AsyncSession, *, wo_code: str, incoming_fields: dict[str, Any],
+    conflict_details: dict[str, dict[str, Any]], organization_id: UUID | None,
+) -> None:
+    """Flag a job whose two copies in one batch disagree, as FR-039 flags one that disagrees
+    with its stored row.
+
+    The same two writes as conflicts.detect_and_flag_wo_conflict — conflict_flag and
+    conflict_payload on the work order, a work_order_conflict item for a PM — so the Vendors
+    page's resolver settles it the same way: the first copy reads as stored, the later one as
+    incoming, and "Take incoming" writes the later copy's values.
+    """
+    await session.execute(
+        text(
+            "UPDATE plenum_cafm.work_orders "
+            "SET conflict_flag = TRUE, "
+            "    conflict_payload = CAST(:payload AS jsonb) "
+            "WHERE wo_code = :wc"
+        ),
+        {
+            "payload": json.dumps(
+                {k: str(v) if v is not None else None for k, v in incoming_fields.items()}
+            ),
+            "wc": wo_code,
+        },
+    )
+    await enqueue_approval(
+        session,
+        item_type="work_order_conflict",
+        source_feature="B",
+        summary=(f"Re-ingestion conflict on {wo_code}: {', '.join(conflict_details)} "
+                 f"differ between two copies of the work order"),
+        severity="medium",
+        organization_id=organization_id,
+        payload={"wo_code": wo_code, "conflict_details": conflict_details},
+    )
+
+
 async def score_completed_work_orders(
     session: AsyncSession,
     work_orders: list[dict[str, Any]],
@@ -599,6 +779,9 @@ async def score_completed_work_orders(
     job_threshold = int(weights["cost_variance_job_count"])
 
     eligible_work_orders: list[dict[str, Any]] = []
+    # Each job's first copy in this batch: the fields FR-039 compares, and the copy itself
+    # while it is still to be scored (None once the job is conflict-flagged).
+    first_copies: dict[str, dict[str, Any]] = {}
     for wo in work_orders:
         wo_ref = wo.get("wo_code") or wo.get("code") or wo.get("id")
         reported = _parse_dt(wo.get("reported_at") or wo.get("created_at"))
@@ -634,17 +817,81 @@ async def score_completed_work_orders(
                 }
             )
             continue
+        incoming_fields = {
+            "actual_cost": wo.get("actual_cost") or wo.get("cost_actual"),
+            "estimated_cost": wo.get("estimated_cost") or wo.get("cost_estimated"),
+            "attended_at": str(attended) if attended else None,
+            "completed_at": str(completed) if completed else None,
+        }
+        # One score per work order per month. The source can carry the same job twice (a
+        # building migrated twice writes every work order again), and scoring both counted it
+        # twice in the card, the month's overrun alert and the Evidence tab. The first copy
+        # that passes the checks above is scored.
+        #
+        # A copy is the same job twice: the same code, completed at the same moment, on the
+        # same asset. Two jobs that merely share a code (legacy numbering reused across
+        # buildings) are two jobs, and both are scored.
+        #
+        # A later copy is dropped only if it AGREES with the first on what FR-039 compares.
+        # Dropping every later copy hid conflicts (review, 28 Sep 2026): the stored-row check
+        # below compares a copy with ONE stored row, and when that row is the first copy the
+        # second — £12,000 where the first said £1,200 — was never compared with anything.
+        # Copies that disagree flag the job instead, and neither is scored.
+        if wo_ref:
+            ref_key = f"{wo_ref}|{completed.isoformat() if completed else ''}|{wo.get('asset_id') or ''}"
+            first = first_copies.get(ref_key)
+            if first is not None:
+                if first["wo"] is None:
+                    exclusions.append(
+                        {
+                            "wo_ref": wo_ref,
+                            "reason": "conflict_flagged",
+                            "detail": "another copy of this work order is conflict-flagged; "
+                                      "pending PM review",
+                        }
+                    )
+                    continue
+                stored_fields = first["fields"]
+                disagree = {
+                    f: {
+                        "stored": None if stored_fields.get(f) is None else str(stored_fields[f]),
+                        "incoming": None if incoming_fields.get(f) is None else str(incoming_fields[f]),
+                    }
+                    for f in _CONFLICT_FIELDS
+                    if _differs(stored_fields.get(f), incoming_fields.get(f))
+                }
+                if not disagree:
+                    exclusions.append(
+                        {
+                            "wo_ref": wo_ref,
+                            "reason": "duplicate_work_order",
+                            "detail": "the same work order appears more than once in this batch; scored once",
+                        }
+                    )
+                    continue
+                await _flag_copies_in_conflict(
+                    session, wo_code=str(wo_ref), incoming_fields=incoming_fields,
+                    conflict_details=disagree, organization_id=organization_id,
+                )
+                # The first copy was taken as eligible; a flagged job is not scored.
+                eligible_work_orders = [w for w in eligible_work_orders if w is not first["wo"]]
+                first["wo"] = None
+                flagged = {
+                    "wo_ref": wo_ref,
+                    "reason": "conflict_flagged",
+                    "detail": f"two copies of this work order disagree on {', '.join(disagree)}; "
+                              "pending PM review",
+                }
+                # One exclusion per copy: the first, withdrawn, and this one.
+                exclusions.extend([dict(flagged), dict(flagged)])
+                continue
+            first_copies[ref_key] = {"fields": incoming_fields, "wo": wo}
         # FR-039: skip conflicted WOs — flag for PM review, do not score
         if wo_ref:
             conflict_result = await detect_and_flag_wo_conflict(
                 session,
                 wo_code=str(wo_ref),
-                incoming_fields={
-                    "actual_cost": wo.get("actual_cost") or wo.get("cost_actual"),
-                    "estimated_cost": wo.get("estimated_cost") or wo.get("cost_estimated"),
-                    "attended_at": str(attended) if attended else None,
-                    "completed_at": str(completed) if completed else None,
-                },
+                incoming_fields=incoming_fields,
                 organization_id=organization_id,
             )
             if conflict_result["conflict"]:
@@ -655,8 +902,34 @@ async def score_completed_work_orders(
                         "detail": "re-ingestion values differ from stored; pending PM review",
                     }
                 )
+                first_copies[ref_key]["wo"] = None
                 continue
         eligible_work_orders.append(wo)
+
+    # Re-scoring replaces what an earlier run wrote for these work orders in this month
+    # instead of adding a second row beside it: every Rebuild used to append a full copy.
+    #
+    # It is a delete, so it reaches the caller's own company's rows and nothing else. The
+    # score route does not check that the vendor it is handed is the caller's; before this
+    # replacement that could only ADD rows tagged with the caller's company, and a delete keyed
+    # on the vendor alone would have erased another company's scores for the same codes.
+    #
+    # With no company named, "the caller's company" is the company-less rows — for the delete
+    # and for the month's count below alike. The count used to read every company's rows
+    # there, so an org-less run counted a company's jobs beside the company-less copies it had
+    # just written: every job twice (review, 28 Sep 2026).
+    same_company = (VendorWoScore.organization_id == organization_id
+                    if organization_id is not None else VendorWoScore.organization_id.is_(None))
+    codes = sorted({str(w.get("wo_code") or w.get("code")) for w in eligible_work_orders if w.get("wo_code") or w.get("code")})
+    if vendor_id and codes:
+        await session.execute(
+            delete(VendorWoScore).where(
+                VendorWoScore.vendor_id == vendor_id,
+                VendorWoScore.score_month == score_month,
+                VendorWoScore.wo_code.in_(codes),
+                same_company,
+            )
+        )
 
     for wo in eligible_work_orders:
         asset_id = wo.get("asset_id")
@@ -715,16 +988,14 @@ async def score_completed_work_orders(
     # Month-window cost variance (PRD: 3+ jobs in a month), not just this batch
     month_overruns = 0
     if vendor_id:
-        month_rows = list(
-            (
-                await session.execute(
-                    select(VendorWoScore).where(
-                        VendorWoScore.vendor_id == vendor_id,
-                        VendorWoScore.score_month == score_month,
-                    )
-                )
-            ).scalars().all()
+        # The caller's company's rows only — the same scope the replacement above deletes in,
+        # or a row another company wrote for this vendor would count here as a second job.
+        mq = select(VendorWoScore).where(
+            VendorWoScore.vendor_id == vendor_id,
+            VendorWoScore.score_month == score_month,
+            same_company,
         )
+        month_rows = list((await session.execute(mq)).scalars().all())
         month_overruns = sum(
             1
             for r in month_rows
@@ -739,26 +1010,17 @@ async def score_completed_work_orders(
 
     alert = None
     if month_overruns >= job_threshold:
-        item = await enqueue_approval(
-            session,
-            source_feature="B",
-            item_type="cost_variance_alert",
-            summary=(
-                f"Systematic cost overrun: {month_overruns} jobs >{alert_pct}% variance "
-                f"in {score_month.isoformat()} for vendor {vendor_id}"
-            ),
-            severity="high",
-            payload={
-                "vendor_id": str(vendor_id) if vendor_id else None,
-                "overrun_count": month_overruns,
-                "score_month": score_month.isoformat(),
-                "window": "month",
-            },
-            organization_id=organization_id,
-            related_entity_type="vendor",
-            related_entity_id=vendor_id,
+        alert = await _raise_cost_alert(
+            session, organization_id=organization_id, vendor_id=vendor_id,
+            score_month=score_month, month_overruns=month_overruns, alert_pct=alert_pct,
         )
-        alert = str(item.id)
+    elif vendor_id:
+        # Only for a named vendor: with none, the lookup would match every vendor-less alert.
+        await _withdraw_cost_alert(
+            session, organization_id=organization_id, vendor_id=vendor_id,
+            score_month=score_month, month_overruns=month_overruns, alert_pct=alert_pct,
+            job_threshold=job_threshold,
+        )
 
     await write_audit(
         session,
@@ -921,13 +1183,42 @@ async def generate_monthly_scorecard(
         first_this = date(today.year, today.month, 1)
         score_month = (first_this - timedelta(days=1)).replace(day=1)
 
+    # A card cut for a company reads that company's scores, and one cut for no company reads
+    # the company-less ones — the scope re-scoring replaces in. Reading every company's rows
+    # when none was named counted a company's jobs beside the company-less copies of them
+    # (review, 28 Sep 2026); the month-end job now names each company in turn.
     q = select(VendorWoScore).where(
         VendorWoScore.vendor_id == vendor_id,
         VendorWoScore.score_month == score_month,
+        VendorWoScore.organization_id == organization_id
+        if organization_id is not None else VendorWoScore.organization_id.is_(None),
     )
     rows = list((await session.execute(q)).scalars().all())
     if not rows:
         return {"ok": False, "error": "no_wo_scores_for_month", "score_month": score_month.isoformat()}
+
+    # One card per vendor-month (UNIQUE (vendor_id, score_month)), and it is one company's. The
+    # update below keeps the card's organization_id, so a cut for no company, or for another,
+    # put its figures on that company's card — the month-end job's company-less pass did, on
+    # the 1st of every month (review, 28 Sep 2026). Refused instead. A company-less card, left
+    # by a run that named no company, is taken over by the company's own cut: kept
+    # company-less, the company's card list (filtered on its id) never showed it.
+    existing = (
+        await session.execute(
+            select(VendorMonthlyScorecard).where(
+                VendorMonthlyScorecard.vendor_id == vendor_id,
+                VendorMonthlyScorecard.score_month == score_month,
+            )
+        )
+    ).scalar_one_or_none()
+    if (existing is not None and existing.organization_id is not None
+            and existing.organization_id != organization_id):
+        return {
+            "ok": False,
+            "error": "scorecard_belongs_to_another_company",
+            "vendor_id": str(vendor_id),
+            "score_month": score_month.isoformat(),
+        }
 
     # FR-031: snapshot weights at scoring time so future changes don't alter this record
     weights = await get_or_create_weights(session, organization_id)
@@ -1010,15 +1301,6 @@ async def generate_monthly_scorecard(
     if prev and prev.overall_score is not None:
         trend = round(overall - float(prev.overall_score), 2)
 
-    existing = (
-        await session.execute(
-            select(VendorMonthlyScorecard).where(
-                VendorMonthlyScorecard.vendor_id == vendor_id,
-                VendorMonthlyScorecard.score_month == score_month,
-            )
-        )
-    ).scalar_one_or_none()
-
     payload = {
         "overall_score": overall,
         "trend_delta": trend,
@@ -1045,6 +1327,8 @@ async def generate_monthly_scorecard(
                 existing.wo_score_ids = v
             elif k == "block_capped":
                 existing.block_capped = v
+        if existing.organization_id is None:
+            existing.organization_id = organization_id  # a company-less card, see above
         card = existing
     else:
         card = VendorMonthlyScorecard(
@@ -1096,14 +1380,65 @@ async def generate_monthly_scorecard(
     }
 
 
+def previous_month(today: date | None = None) -> date:
+    today = today or date.today()
+    return (date(today.year, today.month, 1) - timedelta(days=1)).replace(day=1)
+
+
+async def generate_scorecards_for_month(
+    session: AsyncSession,
+    *,
+    organization_id: UUID,
+    score_month: date | None = None,
+    building_ids: tuple[UUID, ...] | None = None,
+) -> dict[str, Any]:
+    """Every vendor's card for one company and month - the month-end job, for one company.
+
+    The vendors are those with scored work orders that month. ``building_ids`` narrows them
+    to the vendors with a footprint on those buildings (a building's own scheduled job, or a
+    caller allocated to some buildings only); each card still covers the vendor's whole month
+    for the company, because the card is one per vendor-month."""
+    from ..auth import access as _access
+
+    month = score_month or previous_month()
+    pred, params = _access.vendor_predicate(building_ids, "s.vendor_id", prefix="sc")
+    rows = (await session.execute(text(
+        "SELECT DISTINCT s.vendor_id FROM plenum_cafm.vendor_wo_scores s"
+        " WHERE s.score_month = :m AND s.vendor_id IS NOT NULL AND s.organization_id = :o" + pred),
+        {"m": month, "o": organization_id, **params})).scalars().all()
+    made, skipped, failed = [], [], []
+    for vid in rows:
+        try:
+            r = await generate_monthly_scorecard(session, vendor_id=vid, score_month=month,
+                                                 organization_id=organization_id)
+            (made if r.get("ok") else skipped).append(
+                {"vendor_id": str(vid), **({} if r.get("ok") else {"reason": r.get("error")})})
+        except Exception as exc:  # noqa: BLE001 - one vendor's failure is that vendor's line
+            await session.rollback()
+            log.warning("scorecards.month.vendor_failed", vendor_id=str(vid), error=str(exc)[:200])
+            failed.append({"vendor_id": str(vid), "error": str(exc)[:200]})
+    log.info("scorecards.month.done", org=str(organization_id), month=month.isoformat(),
+             vendors=len(rows), made=len(made), failed=len(failed))
+    return {"ok": not failed or bool(made), "score_month": month.isoformat(), "vendors_scored": len(rows),
+            "scorecards_generated": len(made), "scorecards_skipped": len(skipped),
+            "scorecards_failed": len(failed),
+            "details": {"generated": made, "skipped": skipped, "failed": failed}}
+
+
 async def list_scorecards(
     session: AsyncSession,
     *,
     vendor_id: UUID | None = None,
     organization_id: UUID | None = None,
     limit: int = 50,
+    # The caller's buildings: scorecards of the vendors with a footprint there.
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
     q = select(VendorMonthlyScorecard).order_by(VendorMonthlyScorecard.score_month.desc()).limit(limit)
+    if building_ids is not None:
+        from ..auth import access as _access
+
+        q = _access.orm_where(q, *_access.vendor_predicate(building_ids, "vendor_id"))
     if vendor_id:
         q = q.where(VendorMonthlyScorecard.vendor_id == vendor_id)
     if organization_id:
@@ -1263,6 +1598,76 @@ def _coalesce(cols: dict[str, str], *candidates: str, cast: str = "") -> str | N
     return "COALESCE(" + ", ".join(f"wo.{c}{suffix}" for c in present) + ")"
 
 
+
+def _udr_select_parts(cols: dict[str, str]) -> list[str]:
+    """The SELECT list for the UDR work-order fetch, for whatever columns a tenant has.
+
+    Pure so it can be tested against a real `information_schema` shape without a database —
+    a COALESCE over two columns of different types is rejected by Postgres at parse time, so
+    the whole statement fails and the fetch returns nothing. That failure is caught and logged
+    as a warning upstream, which makes it indistinguishable from a vendor with no work orders.
+    """
+
+    def expr(alias: str, *candidates: str, cast: str = "", default: str = "NULL") -> str:
+        found = _coalesce(cols, *candidates, cast=cast)
+        if found is None:
+            return f"{default} AS {alias}"
+        # A literal default still applies when the columns exist but are null.
+        if not default.startswith("NULL"):
+            found = f"COALESCE({found}, {default})"
+        return f"{found} AS {alias}"
+
+    # Prefer the stable wo_uuid handle so Feature B rows reference a real work order
+    # even where work_orders.id is an integer serial.
+    return [
+        expr("id", "wo_uuid", "id", cast="text"),
+        expr("wo_code", "wo_code", "workorder_ref", "work_order_id", "id", cast="text"),
+        expr("status", "status", "wo_status", default="'Completed'"),
+        expr("priority", "priority", "wo_priority", default="'P3'"),
+        expr(
+            "reported_at",
+            "reported_at", "raised_date", "created_at", "created_date",
+            cast="timestamptz",
+        ),
+        expr("attended_at", "attended_at", "responded_at", "response_at", cast="timestamptz"),
+        expr("completed_at", "completed_at", cast="timestamptz"),
+        expr("first_fix", "first_fix", default="NULL::boolean"),
+        expr("recall", "recall", "return_visit", default="NULL::boolean"),
+        # Cast both branches. These pairs are the same figure under two names, and a tenant
+        # can hold one as numeric and the other as varchar — which hoistra_test does, because
+        # the workbook migration wrote the costs into `cost_actual`/`cost_estimated` and left
+        # the numeric columns null. Uncast, Postgres rejects the COALESCE at parse time and
+        # the whole fetch returns nothing, silently.
+        expr("actual_cost", "actual_cost", "cost_actual", cast="numeric",
+             default="NULL::numeric"),
+        expr("estimated_cost", "estimated_cost", "cost_estimated", cast="numeric",
+             default="NULL::numeric"),
+        expr("asset_id", "asset_id", cast="text"),
+        expr("vendor_id", "vendor_id", "assigned_vendor", cast="text"),
+        expr("organization_id", "organization_id", cast="text"),
+        expr("part_code", "part_code", cast="text"),
+        expr("parts_cost", "parts_cost", default="NULL::numeric"),
+        expr("labour_hours", "labour_hours", "actual_hours", default="NULL::numeric"),
+    ]
+
+
+def _row_limit(limit: Any, default: int = 500) -> int:
+    """How many work orders to pull, when the caller may not have said.
+
+    Every signature down this path declares `limit: int = 500`, but the route hands over
+    `body.limit` whatever it holds — and an omitted limit arrives as None, which overrides
+    the default rather than falling back to it. `int(None)` then raised TypeError and took
+    down the entire scoring run before a single work order was read.
+    """
+    if limit is None:
+        return default
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
 async def _build_udr_wo_query(
     session: AsyncSession,
     *,
@@ -1285,42 +1690,9 @@ async def _build_udr_wo_query(
     (a str where `CAST(:start_d AS date)` promised a date, for instance).
     """
     cols = await _work_order_columns(session)
-    params: dict[str, Any] = {"lim": int(limit)}
+    params: dict[str, Any] = {"lim": _row_limit(limit)}
 
-    def expr(alias: str, *candidates: str, cast: str = "", default: str = "NULL") -> str:
-        found = _coalesce(cols, *candidates, cast=cast)
-        if found is None:
-            return f"{default} AS {alias}"
-        # A literal default still applies when the columns exist but are null.
-        if not default.startswith("NULL"):
-            found = f"COALESCE({found}, {default})"
-        return f"{found} AS {alias}"
-
-    # Prefer the stable wo_uuid handle so Feature B rows reference a real work order
-    # even where work_orders.id is an integer serial.
-    select_parts = [
-        expr("id", "wo_uuid", "id", cast="text"),
-        expr("wo_code", "wo_code", "workorder_ref", "work_order_id", "id", cast="text"),
-        expr("status", "status", "wo_status", default="'Completed'"),
-        expr("priority", "priority", "wo_priority", default="'P3'"),
-        expr(
-            "reported_at",
-            "reported_at", "raised_date", "created_at", "created_date",
-            cast="timestamptz",
-        ),
-        expr("attended_at", "attended_at", "responded_at", "response_at", cast="timestamptz"),
-        expr("completed_at", "completed_at", cast="timestamptz"),
-        expr("first_fix", "first_fix", default="NULL::boolean"),
-        expr("recall", "recall", "return_visit", default="NULL::boolean"),
-        expr("actual_cost", "actual_cost", "cost_actual", default="NULL::numeric"),
-        expr("estimated_cost", "estimated_cost", "cost_estimated", default="NULL::numeric"),
-        expr("asset_id", "asset_id", cast="text"),
-        expr("vendor_id", "vendor_id", "assigned_vendor", cast="text"),
-        expr("organization_id", "organization_id", cast="text"),
-        expr("part_code", "part_code", cast="text"),
-        expr("parts_cost", "parts_cost", default="NULL::numeric"),
-        expr("labour_hours", "labour_hours", "actual_hours", default="NULL::numeric"),
-    ]
+    select_parts = _udr_select_parts(cols)
 
     status_expr = _coalesce(cols, "status", "wo_status") or "'completed'"
     where = [

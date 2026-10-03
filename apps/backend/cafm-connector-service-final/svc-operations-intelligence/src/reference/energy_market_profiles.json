@@ -1,0 +1,349 @@
+{
+  "pack": "Energy market profiles",
+  "note": "Reference facts about each market that no database can derive: the standard a building is held to, how its consumption data arrives, and what the energy is billed in. Every value here is labelled `reference` when served; anything the deployment can measure for itself (buildings in scope, the tariff actually contracted, the routes actually on record, a portfolio benchmark) overrides the reference and is labelled accordingly. Published tariffs carry an as_of date and are indicative, not a quote.",
+  "attributes": [
+    [
+      "Benchmark",
+      "Standard",
+      "std"
+    ],
+    [
+      "Benchmark",
+      "Reference EUI",
+      "ref"
+    ],
+    [
+      "Benchmark",
+      "Unit of measure",
+      "unit"
+    ],
+    [
+      "Data source",
+      "Route",
+      "route"
+    ],
+    [
+      "Data source",
+      "Refresh",
+      "refresh"
+    ],
+    [
+      "Data source",
+      "Per meter · per section",
+      "per"
+    ],
+    [
+      "Data source",
+      "Identifier",
+      "ident"
+    ],
+    [
+      "Data source",
+      "Known limits",
+      "limits"
+    ],
+    [
+      "Commercial",
+      "Electricity",
+      "elec"
+    ],
+    [
+      "Commercial",
+      "Gas",
+      "gas"
+    ],
+    [
+      "Commercial",
+      "Other utilities",
+      "other"
+    ],
+    [
+      "Commercial",
+      "Currency",
+      "cur"
+    ]
+  ],
+  "markets": {
+    "UK": {
+      "name": "United Kingdom",
+      "flag": "🇬🇧",
+      "std": "CIBSE TM46 by use class",
+      "unit": "kWh/m²/yr",
+      "reference_eui": {
+        "note": "the served figure stays TM46 weighted by the use mix of the buildings actually in scope, which is the more precise read; the statutory unweighted figure is carried beside it because that is what the country rule tests against",
+        "source": "CIBSE TM46 (2008), Energy Benchmarks",
+        "statutory_value": 190.0,
+        "unit": "kWh/m2/yr",
+        "statutory_source": "Global Energy Market Profiles & Normalization Matrix",
+        "statutory_basis": "TM46 statutory unweighted, offices (95 heating + 95 electric)"
+      },
+      "route": "Half-hourly data collector under LoA · SMETS2 via SEC intermediary",
+      "refresh": "Daily, D+1 · half-hourly resolution",
+      "per": "Per MPAN and MPRN · per section only where sub-metered",
+      "ident": "MPAN (electricity) · MPRN (gas)",
+      "limits": "Consent per supply point · SMETS1 sites wait on DCC migration",
+      "elec": {
+        "label": "21.0p – 26.0p/kWh",
+        "basis": "commercial, variable by market contract",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.21,
+        "high": 0.26,
+        "unit": "GBP/kWh"
+      },
+      "gas": {
+        "label": "5.5p – 7.0p/kWh",
+        "basis": "commercial; m3 converted via active calorific value",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.055,
+        "high": 0.07,
+        "unit": "GBP/kWh"
+      },
+      "other": "—",
+      "cur": "GBP",
+      "tariff": {
+        "electricity": {
+          "low": 0.21,
+          "high": 0.26,
+          "unit": "GBP/kWh",
+          "label": "21.0p – 26.0p/kWh",
+          "basis": "commercial, variable by market contract"
+        },
+        "gas": {
+          "low": 0.055,
+          "high": 0.07,
+          "unit": "GBP/kWh",
+          "label": "5.5p – 7.0p/kWh",
+          "basis": "commercial; m3 converted via active calorific value"
+        },
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "as_of": "2026-09",
+        "note": "bands, not points: a commercial rate is a contract range, and a single figure priced from it invents precision"
+      },
+      "statutory": {
+        "rule": "eui_over_reference",
+        "reference_eui_kwh_m2": 190.0,
+        "breakdown": {
+          "heating": 95.0,
+          "electricity": 95.0
+        },
+        "basis": "CIBSE TM46 statutory unweighted, offices",
+        "flags_when": "EUI actual > TM46 standard",
+        "penalty": null
+      }
+    },
+    "US": {
+      "name": "United States",
+      "flag": "🇺🇸",
+      "std": "Energy Star score · ASHRAE 100 · NYC LL97 emissions limit",
+      "unit": "kBtu/ft²/yr site EUI · tCO₂e/ft² for LL97",
+      "reference_eui": {
+        "label": "Energy Star 75 for certification · LL97 limit by occupancy group",
+        "source": "EPA ENERGY STAR Portfolio Manager; NYC Local Law 97 of 2019"
+      },
+      "route": "Green Button Connect My Data via aggregator",
+      "refresh": "Daily · 15-minute interval where CMD is live",
+      "per": "Per utility account and service point · tenant aggregate only above the utility threshold",
+      "ident": "Utility account + service point ID · no national identifier",
+      "limits": "CMD availability varies by utility · aggregation thresholds",
+      "elec": {
+        "label": "$0.22/kWh + demand charges",
+        "basis": "commercial base rate, NY",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.22,
+        "high": 0.22,
+        "unit": "USD/kWh"
+      },
+      "gas": {
+        "label": "$1.40/therm",
+        "basis": "billed in therms; converted at 29.3001 kWh per therm",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.04778,
+        "high": 0.04778,
+        "unit": "USD/kWh"
+      },
+      "other": "District steam in Mlb",
+      "cur": "USD",
+      "tariff": {
+        "electricity": {
+          "low": 0.22,
+          "high": 0.22,
+          "unit": "USD/kWh",
+          "label": "$0.22/kWh + demand charges",
+          "basis": "commercial base rate, NY",
+          "excludes": "demand charges billed per kW, which are not a per-kWh rate and are not included in an energy-only price"
+        },
+        "gas": {
+          "low": 0.04778,
+          "high": 0.04778,
+          "unit": "USD/kWh",
+          "label": "$1.40/therm",
+          "basis": "billed in therms; converted at 29.3001 kWh per therm",
+          "billed_as": {
+            "amount": 1.4,
+            "unit": "USD/therm"
+          }
+        },
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "as_of": "2026-09",
+        "note": "bands, not points: a commercial rate is a contract range, and a single figure priced from it invents precision"
+      },
+      "statutory": {
+        "rule": "carbon_cap",
+        "basis": "NYC Local Law 97 metric carbon caps by occupancy group",
+        "energy_star_threshold": 75,
+        "flags_when": "computed tCO2e > statutory cap for the occupancy group",
+        "penalty": {
+          "per_tonne_over": 268.0,
+          "unit": "USD",
+          "formula": "(tCO2e - statutory_cap) * 268"
+        }
+      }
+    },
+    "AE": {
+      "name": "UAE",
+      "flag": "🇦🇪",
+      "std": "None for operation · Estidama and Al Sa'fat rate new build",
+      "unit": "kWh/m²/yr · cooling in RTh",
+      "reference_eui": {
+        "note": "No operational standard is published; the served figure is the rolling median EUI of comparable buildings in this portfolio, or absent when fewer than two have a reading",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "value": 228.0,
+        "unit": "kWh/m2/yr",
+        "basis": "rolling portfolio baseline — no operational standard is published"
+      },
+      "route": "Own sub-meters and BMS trends",
+      "refresh": "15-minute BMS trends, live · DEWA billing monthly",
+      "per": "Per sub-meter · DEWA at premise level only",
+      "ident": "DEWA premise and account number · tenant-held on most leases",
+      "limits": "No utility interval feed · account holder is often the tenant",
+      "elec": {
+        "label": "26.5 – 39.5 fils/kWh incl. fuel surcharge",
+        "basis": "DEWA commercial slab 20–33 fils plus ~6.5 fils fuel surcharge",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.265,
+        "high": 0.395,
+        "unit": "AED/kWh"
+      },
+      "gas": {
+        "label": "LPG by cylinder or weight · no piped grid",
+        "basis": "sold by weight, not energy — there is no per-kWh rate to price gas consumption with in this market",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "unpriceable": true
+      },
+      "other": "District cooling in RTh · water in imperial gallons",
+      "cur": "AED",
+      "tariff": {
+        "electricity": {
+          "low": 0.265,
+          "high": 0.395,
+          "unit": "AED/kWh",
+          "label": "26.5 – 39.5 fils/kWh incl. fuel surcharge",
+          "basis": "DEWA commercial slab 20–33 fils plus ~6.5 fils fuel surcharge",
+          "components": {
+            "slab_low": 0.2,
+            "slab_high": 0.33,
+            "fuel_surcharge": 0.065
+          }
+        },
+        "gas": {
+          "unpriceable": true,
+          "unit": "AED/kg",
+          "label": "LPG by cylinder or weight · no piped grid",
+          "basis": "sold by weight, not energy — there is no per-kWh rate to price gas consumption with in this market"
+        },
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "as_of": "2026-09",
+        "note": "bands, not points: a commercial rate is a contract range, and a single figure priced from it invents precision"
+      },
+      "statutory": {
+        "rule": "eui_over_reference",
+        "reference_eui_kwh_m2": 228.0,
+        "basis": "rolling portfolio baseline — no operational standard is published",
+        "flags_when": "EUI actual > rolling portfolio baseline",
+        "penalty": null
+      }
+    },
+    "SG": {
+      "name": "Singapore",
+      "flag": "🇸🇬",
+      "std": "BCA Building Energy Benchmarking Report",
+      "unit": "kWh/m²/yr",
+      "reference_eui": {
+        "value": 192.0,
+        "unit": "kWh/m2/yr",
+        "label": "192 kWh/m²/yr office reference",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "basis": "BCA Building Energy Benchmarking Report, commercial office"
+      },
+      "route": "Contracted retailer feed against the SP advanced meter",
+      "refresh": "Daily · half-hourly resolution",
+      "per": "Per SP account and meter · per section via own sub-meters",
+      "ident": "SP account number + meter serial · no national supply-point ID",
+      "limits": "Feed ends at retail contract expiry · SP takes no third-party requests",
+      "elec": {
+        "label": "S$0.25 – S$0.28/kWh",
+        "basis": "Open Electricity Market contestable commercial",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "low": 0.25,
+        "high": 0.28,
+        "unit": "SGD/kWh"
+      },
+      "gas": {
+        "label": "Town gas by City Energy, metered in kWh",
+        "basis": "metered in kWh; no published commercial band in the specification",
+        "as_of": "2026-09",
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "unpriceable": true
+      },
+      "other": "District cooling in RTh where connected",
+      "cur": "SGD",
+      "tariff": {
+        "electricity": {
+          "low": 0.25,
+          "high": 0.28,
+          "unit": "SGD/kWh",
+          "label": "S$0.25 – S$0.28/kWh",
+          "basis": "Open Electricity Market contestable commercial"
+        },
+        "gas": {
+          "low": null,
+          "high": null,
+          "unit": "SGD/kWh",
+          "label": "Town gas by City Energy, metered in kWh",
+          "basis": "metered in kWh; no published commercial band in the specification",
+          "unpriceable": true
+        },
+        "source": "Global Energy Market Profiles & Normalization Matrix",
+        "as_of": "2026-09",
+        "note": "bands, not points: a commercial rate is a contract range, and a single figure priced from it invents precision"
+      },
+      "statutory": {
+        "rule": "eui_over_reference",
+        "reference_eui_kwh_m2": 192.0,
+        "basis": "BCA Building Energy Benchmarking Report, commercial office",
+        "flags_when": "EUI actual > BCA office reference",
+        "penalty": null
+      }
+    }
+  },
+  "conversions": {
+    "note": "Every factor the pipeline needs to bring a mixed portfolio down to kWh and m². Held once here so no service converts a unit its own way.",
+    "source": "Global Energy Market Profiles & Normalization Matrix",
+    "area_sqft_to_sqm": 0.092903,
+    "therm_to_kwh": 29.3001,
+    "rth_to_kwh": 3.51685,
+    "uk_gas_m3_to_kwh": {
+      "formula": "m3 * volume_correction_factor * calorific_value / 3.6",
+      "volume_correction_factor": 1.02264,
+      "calorific_value_default": 39.5,
+      "note": "Calorific value is published per settlement period; the default is only a fallback and a conversion that uses it says so."
+    }
+  }
+}

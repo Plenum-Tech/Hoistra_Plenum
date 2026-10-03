@@ -16,6 +16,7 @@ Interrupt handling:
   checkpointer restores the graph from where it paused.
 """
 
+import logging
 import os
 from datetime import datetime
 from uuid import UUID
@@ -50,6 +51,7 @@ class WorkerSettings:
     functions: list = []          # filled in at bottom of module
     allow_abort_jobs = True
     job_timeout = 3600            # 1 hour max per migration
+    poll_delay = 0.1              # seconds between queue polls (arq default 0.5): a gate answer starts sooner
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -78,12 +80,7 @@ async def _run_graph(
             GraphInterrupt = None
 
     try:
-        await graph.ainvoke(input_or_command, config=config)
-
-        # ── Graph ran to completion without interruption ──────────────
-        logger.info("migration_graph_complete", migration_id=migration_id)
-        return {"status": "complete"}
-
+        result = await graph.ainvoke(input_or_command, config=config)
     except Exception as exc:
         # Detect interrupt by type name for resilience across langgraph versions
         is_interrupt = (
@@ -108,6 +105,13 @@ async def _run_graph(
             )
             return {"status": "awaiting_review", "gate_type": gate_type}
 
+        # ── Cancelled: the graph stopped at a step boundary because the user cancelled ──
+        # Not an error, and nothing to write: the cancel already marked the job, and the
+        # trigger keeps it cancelled (schema_patches.ensure_cancel_is_final).
+        if type(exc).__name__ == "MigrationCancelled":
+            logger.info("migration_graph_cancelled", migration_id=migration_id)
+            return {"status": "cancelled"}
+
         # ── Unexpected error ──────────────────────────────────────────
         logger.error(
             "migration_graph_failed",
@@ -115,28 +119,63 @@ async def _run_graph(
             error=str(exc),
             exc_info=True,
         )
-        async with session_factory() as session:
-            try:
-                await session.execute(
-                    update(MigrationJob)
-                    .where(MigrationJob.id == UUID(migration_id))
-                    .values(
-                        status="failed",
-                        error_message=str(exc)[:500],
-                        error_timestamp=datetime.utcnow(),
-                    )
-                )
-                await session.commit()
-            except Exception as db_err:
-                logger.error("migration_db_write_failed", migration_id=migration_id, error=str(db_err))
-        # Finalise the Activity Log card to "failed". This error path never reaches the Node-10
-        # emit, so without this the per-run card stays stuck at its last running/pending sync.
-        try:
-            from .graph.nodes.schema_db_writer import _sync_run_activity
-            await _sync_run_activity(migration_id, caller="worker_error")
-        except Exception as _act_err:
-            logger.warning("migration_error_activity_sync_failed", migration_id=migration_id, error=str(_act_err))
+        # Retried (db_writer.write_error): a failure that happens alongside a short database
+        # blip must still reach the row, or the run looks exactly like one still working.
+        await _mark_run_failed(migration_id, str(exc)[:500], None, status="failed")
         return {"status": "failed", "error": str(exc)}
+
+    # ── A node recorded an error in the state without raising ─────
+    # write_node on a rejected final gate and human_review_node on an invalid decision set
+    # error_message and return; the app's inline runners already end the run on that, while
+    # this path returned "complete" and left the row "running" with no gate — which nothing
+    # can resume (30 Sep 2026 review). Checked after the exception paths, so a cancel is
+    # always recognised before any failure write.
+    #
+    # A DDL rollback is the exception: write_node has already written status="ddl_failed"
+    # with the failing SQL, and /retry-ddl accepts only that status — rewriting it as
+    # "failed" took the retry away (review, 1 Oct 2026).
+    if isinstance(result, dict) and str(result.get("status") or "").lower() == "ddl_failed":
+        logger.info("migration_graph_ddl_failed", migration_id=migration_id)
+        return {"status": "ddl_failed", "error": result.get("error_message")}
+    err = _error_in_final_state(result)
+    if err:
+        logger.error("migration_graph_ended_with_error", migration_id=migration_id, error=err)
+        error_node = result.get("error_node") if isinstance(result, dict) else None
+        await _mark_run_failed(migration_id, err, error_node if isinstance(error_node, int) else None, status="failed")
+        return {"status": "failed", "error": err}
+
+    # ── Graph ran to completion without interruption ──────────────
+    logger.info("migration_graph_complete", migration_id=migration_id)
+    return {"status": "complete"}
+
+
+def _error_in_final_state(result) -> str | None:
+    """The error a graph run ended with, when its final state carries one and the run is not
+    at a healthy stop (complete, a step pause, a review gate)."""
+    if not isinstance(result, dict):
+        return None
+    message = result.get("error_message")
+    if not message:
+        return None
+    status = str(result.get("status") or "").lower()
+    if status in ("complete", "step_paused", "awaiting_review", "ddl_failed"):
+        return None
+    return str(message)[:500]
+
+
+async def _mark_run_failed(migration_id: str, error: str, error_node: int | None, status: str = "failed") -> None:
+    """Record a failed run on the job row (retried, as `status`) and finalise its Activity Log card."""
+    from .graph.nodes.db_writer import write_error
+
+    await write_error(migration_id, error, error_node, status=status)
+    # This error path never reaches the Node-10 emit, so without this the per-run card stays
+    # stuck at its last running/pending sync.
+    try:
+        from .graph.nodes.schema_db_writer import _sync_run_activity
+
+        await _sync_run_activity(migration_id, caller="worker_error")
+    except Exception as _act_err:
+        logger.warning("migration_error_activity_sync_failed", migration_id=migration_id, error=str(_act_err))
 
 
 async def _run_schema_graph(
@@ -233,11 +272,13 @@ async def run_migration(
     json_mapper: dict = None,
     source_blob_path: str = None,
     source_filename: str = None,
+    building_id: str = None,
 ) -> dict:
     """
     Start a fresh migration run through the 9-node pipeline.
 
-    Creates the persistent db_session, builds initial state, and calls ainvoke().
+    Builds initial state and calls ainvoke(). ``building_id`` is the building the uploader
+    selected; it defaults to None so a job enqueued before it was passed still runs.
     If the graph pauses at a gate the task exits with status="awaiting_review".
     """
     session_factory = get_async_session_factory()
@@ -251,16 +292,18 @@ async def run_migration(
     )
 
     # ── Mark as running ───────────────────────────────────────────────
+    # The status column only: the row also carries node_logs and the gate payload (MBs late in a run).
     async with session_factory() as session:
-        result = await session.execute(
-            select(MigrationJob).where(MigrationJob.id == UUID(migration_id))
-        )
-        job = result.scalar_one_or_none()
-        if not job:
+        found = (await session.execute(
+            select(MigrationJob.status).where(MigrationJob.id == UUID(migration_id))
+        )).first()
+        if found is None:
             logger.error("run_migration_job_not_found", migration_id=migration_id)
             return {"status": "failed", "error": "Job not found"}
-        job.status = "running"
-        job.started_at = datetime.utcnow()
+        await session.execute(
+            update(MigrationJob).where(MigrationJob.id == UUID(migration_id))
+            .values(status="running", started_at=datetime.utcnow())
+        )
         await session.commit()
 
     # Create the Activity Log card immediately at run start. Previously the card only appeared
@@ -284,36 +327,40 @@ async def run_migration(
         },
     }
 
-    # ── Build persistent session for nodes that write to DB ──────────
-    async with session_factory() as db_session:
-        initial_state: MigrationState = {
-            "migration_id": migration_id,
-            "organization_id": organization_id,
-            "cmms_name": cmms_name,
-            "source_system": cmms_name,
-            "source_blob_url": source_blob_url,
-            # source_blob_path lets Node 1 re-pull the (combined) upload the inline start path
-            # persisted to Blob — it's checked BEFORE source_blob_url (ingest_node.py:121).
-            "source_blob_path": source_blob_path,
-            "source_filename": source_filename or cmms_name,
-            "uploaded_by": uploaded_by,
-            "upload_timestamp": datetime.utcnow(),
-            "current_step": 0,
-            "status": "running",
-            "checkpoint_count": 0,
-            "event_log": [],
-            "tier1_mapped_count": 0,
-            "tier2_human_count": 0,
-            "overall_confidence": 0.0,
-            "db_session": db_session,   # ← passed to every node for DB writes
-        }
+    # No db_session in the input: the checkpointer serialises the whole input before LangGraph
+    # drops undeclared keys, so a live AsyncSession here failed every run at its first checkpoint
+    # ("Type is not msgpack serializable: AsyncSession"). The migration nodes open their own
+    # sessions from the app factory; see the note in resume_migration.
+    initial_state: MigrationState = {
+        "migration_id": migration_id,
+        "organization_id": organization_id,
+        # The inline start paths always carried the selected building; the worker input did not,
+        # so once worker runs got past their first checkpoint (28 Sep 2026) write_node had no
+        # default_building_id and skipped every reading of a meter export that names no site.
+        # MigrationState declares it, so it is checkpointed and a resume reads it back.
+        "building_id": building_id,
+        "cmms_name": cmms_name,
+        "source_system": cmms_name,
+        "source_blob_url": source_blob_url,
+        # source_blob_path lets Node 1 re-pull the (combined) upload the inline start path
+        # persisted to Blob — it's checked BEFORE source_blob_url (ingest_node.py:125).
+        "source_blob_path": source_blob_path,
+        "source_filename": source_filename or cmms_name,
+        "uploaded_by": uploaded_by,
+        "upload_timestamp": datetime.utcnow(),
+        "current_step": 0,
+        "status": "running",
+        "checkpoint_count": 0,
+        "event_log": [],
+        "tier1_mapped_count": 0,
+        "tier2_human_count": 0,
+        "overall_confidence": 0.0,
+    }
 
-        if json_mapper:
-            initial_state["json_mapper"] = json_mapper
+    if json_mapper:
+        initial_state["json_mapper"] = json_mapper
 
-        result = await _run_graph(graph, initial_state, config, migration_id, session_factory)
-
-    return result
+    return await _run_graph(graph, initial_state, config, migration_id, session_factory)
 
 
 async def resume_migration(
@@ -348,25 +395,28 @@ async def resume_migration(
     )
 
     # ── Mark as running again ─────────────────────────────────────────
+    # The status column only: the row also carries node_logs and the gate payload (MBs late in a run).
     async with session_factory() as session:
-        result = await session.execute(
-            select(MigrationJob).where(MigrationJob.id == UUID(migration_id))
-        )
-        job = result.scalar_one_or_none()
-        if not job:
+        found = (await session.execute(
+            select(MigrationJob.status).where(MigrationJob.id == UUID(migration_id))
+        )).first()
+        if found is None:
             logger.error("resume_migration_job_not_found", migration_id=migration_id, gate_type=gate_type)
             return {"status": "failed", "error": "Job not found"}
-        if job.status not in ["awaiting_review", "running"]:
+        status = found[0]
+        if status not in ["awaiting_review", "running"]:
             logger.error(
                 "resume_migration_not_resumable",
                 migration_id=migration_id,
                 gate_type=gate_type,
-                current_status=job.status,
+                current_status=status,
             )
-            return {"status": "failed", "error": f"Job not resumable: {job.status}"}
+            return {"status": "failed", "error": f"Job not resumable: {status}"}
         # Keep pending_gate fields — the gate node's clear_gate_payload() will
         # wipe them once the graph actually resumes past the interrupt.
-        job.status = "running"
+        await session.execute(
+            update(MigrationJob).where(MigrationJob.id == UUID(migration_id)).values(status="running")
+        )
         await session.commit()
 
     graph = await get_migration_graph()  # async factory — MUST be awaited (else `graph` is a coroutine)
@@ -386,34 +436,42 @@ async def resume_migration(
 
     # The graph restores state from PostgresSaver using thread_id.
     # Command(resume=decisions) is passed to the interrupted interrupt() call.
-    async with session_factory() as db_session:
-        if gate_type == "ddl_retry":
-            # DDL retry: Node 9 ran to completion (with failure — status="ddl_failed").
-            # The graph is NOT paused at an interrupt(); we need to re-run Node 9 with
-            # corrected extra_fields_config injected into state.
-            # Use Command with update only (no resume value needed).
-            corrected_config = decisions.get("extra_fields_config", [])
-            resume_command = Command(
-                resume=None,
-                update={
-                    "db_session": db_session,
-                    "extra_fields_config": corrected_config,
-                    "status": "running",
-                    "error_message": None,
-                },
-            )
-        else:
-            # Inject db_session into state so resumed nodes can still write to DB.
-            resume_command = Command(
-                resume=decisions,
-                update={"db_session": db_session},
-            )
+    # NOTHING LIVE GOES IN A Command(update=...).
+    #
+    # Every resume used to carry {"db_session": <AsyncSession>} here, and every resume
+    # failed: "Type is not msgpack serializable: AsyncSession". A Command's update is
+    # recorded by the checkpointer as a pending write BEFORE undeclared channels are
+    # filtered out, so the session reached msgpack and killed the run at its first
+    # checkpoint after the gate. The initial run (run_migration) passed one too and failed
+    # the same way at its first checkpoint (28 Sep 2026): plain input is recorded whole
+    # before it is filtered, so it no longer carries one either.
+    #
+    # Nothing needed it either: the migration nodes each open their own session from the
+    # app factory (nodes/db_writer.py's _get_session_factory), so state["db_session"] is
+    # read by no node in this graph. Only the fiix_* nodes read it, from a different graph
+    # whose state does declare it.
+    if gate_type == "ddl_retry":
+        # DDL retry: Node 9 ran to completion (with failure — status="ddl_failed").
+        # The graph is NOT paused at an interrupt(); we need to re-run Node 9 with
+        # corrected extra_fields_config injected into state.
+        # Use Command with update only (no resume value needed).
+        resume_command = Command(
+            resume=None,
+            update={
+                "extra_fields_config": decisions.get("extra_fields_config", []),
+                "status": "running",
+                "error_message": None,
+            },
+        )
+    else:
+        resume_command = Command(resume=decisions)
 
-        result = await _run_graph(
+    from .graph.nodes.db_writer import resuming_gate
+
+    with resuming_gate(gate_type):
+        return await _run_graph(
             graph, resume_command, config, migration_id, session_factory
         )
-
-    return result
 
 
 async def run_schema_mapping(
@@ -735,11 +793,52 @@ async def run_fiix_data_ingestion(
             return {"status": "failed", "error": str(exc)}
 
 
+def _sweep_engine_files() -> int:
+    """Remove the engine files of runs nothing has touched for a week (engine/store.py)."""
+    try:
+        from .engine.store import sweep_stale
+
+        removed = sweep_stale()
+        if removed:
+            logger.info(f"[cleanup] removed the engine files of {removed} run(s) untouched for a week")
+        return removed
+    except Exception as exc:  # noqa: BLE001 — housekeeping never stops the worker
+        logger.warning(f"[cleanup] engine file sweep failed: {exc}")
+        return 0
+
+
 async def cleanup_expired_migrations(ctx) -> dict:
-    """Periodic cleanup: archive migrations older than 7 days."""
+    """Periodic cleanup (daily, WorkerSettings.cron_jobs): the engine files of runs that never
+    reached an end. Archiving migrations older than 7 days is still to do."""
     logger.info("[cleanup] Running cleanup_expired_migrations")
-    # TODO: implement if needed
-    return {"status": "ok"}
+    return {"status": "ok", "engine_runs_swept": _sweep_engine_files()}
+
+
+def _engine_logs_to_stdout() -> None:
+    """Print the engine glue's log lines (src.engine, plain `logging`) in the worker log.
+
+    Only the API's lifespan calls configure_logging; in this process `logging` has no handler, so
+    its INFO lines — the engine's per-table write timings among them — were dropped and its
+    warnings came out bare. A process that configured logging already prints them itself."""
+    import sys
+
+    eng = logging.getLogger("src.engine")
+    if logging.getLogger().handlers or eng.handlers:
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_EngineLogFormat())
+    eng.addHandler(handler)
+    eng.setLevel(logging.INFO)
+
+
+class _EngineLogFormat(logging.Formatter):
+    """'2026-10-02 09:14:52 [info     ] message', as the structlog lines around them read."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = f"{self.formatTime(record, '%Y-%m-%d %H:%M:%S')} [{record.levelname.lower():<9}] {record.getMessage()}"
+        if record.exc_info:
+            line += "\n" + self.formatException(record.exc_info)
+        return line
 
 
 async def on_startup(ctx: dict) -> None:
@@ -751,6 +850,8 @@ async def on_startup(ctx: dict) -> None:
     The FastAPI lifespan does the same for the API process, but the
     ARQ worker is a separate process and never runs that lifespan.
     """
+    _engine_logs_to_stdout()
+    _sweep_engine_files()
     settings = get_settings()
 
     if not settings.openai_api_key:
@@ -763,6 +864,30 @@ async def on_startup(ctx: dict) -> None:
         from .services.registry_cache import load_or_build
 
         _oai = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        # AND PUBLISH IT TO app.py's GETTERS, NOT ONLY TO THE CACHE BUILDER.
+        #
+        # The nodes are handed no client: they call app.get_openai_client() /
+        # get_anthropic_client(), which read module-level globals that ONLY the FastAPI
+        # lifespan sets. In this process those globals are None, so on 21 Sep 2026 every
+        # resumed run died inside Node 3 with "OpenAI client not initialized". The
+        # exception was swallowed as "[Node 3] Unhandled exception", the graph ended early,
+        # and the job row was left saying `running` — a migration stuck on "Working…" for
+        # ever with no error recorded anywhere. Building a client here for the embeddings
+        # cache while leaving the getters empty is exactly what made it look initialised.
+        from . import app as _app
+
+        if getattr(_app, "_openai_client", None) is None:
+            _app._openai_client = _oai
+            logger.info("[worker] openai client published to app getters")
+        if getattr(_app, "_anthropic_client", None) is None and settings.anthropic_api_key:
+            import anthropic as _anthropic
+
+            _app._anthropic_client = _anthropic.AsyncAnthropic(
+                api_key=settings.anthropic_api_key, timeout=3600
+            )
+            logger.info("[worker] anthropic client published to app getters")
+
         _config = await load_or_build(settings.db_url)
         canonical_fields = _config.get("canonical_fields", {})
 
@@ -775,9 +900,25 @@ async def on_startup(ctx: dict) -> None:
             canonical_fields = _HARDCODED_CANONICAL_FIELDS
 
         await initialize_canonical_embeddings(_oai, canonical_fields)
-        logger.info(
-            f"[worker] Canonical embeddings initialized: {len(canonical_fields)} fields"
-        )
+
+        # COUNT WHAT LANDED, DO NOT REPORT WHAT WAS ASKED FOR.
+        #
+        # initialize_canonical_embeddings swallows its own failures, so on 22 Sep 2026 an
+        # invalidated OpenAI key produced "Failed to initialize canonical embeddings:
+        # Error code: 401" followed immediately by "Canonical embeddings initialized: 30
+        # fields" — the count of fields REQUESTED, printed over an empty cache. Node 3 then
+        # had nothing to match against. The cache is the only honest source.
+        from .embeddings import get_cached_embeddings
+
+        cached = len(get_cached_embeddings() or {})
+        if cached:
+            logger.info(f"[worker] Canonical embeddings initialized: {cached} fields")
+        else:
+            logger.error(
+                "[worker] Canonical embeddings are EMPTY after initialization "
+                f"({len(canonical_fields)} fields requested) — semantic mapping (Node 3) "
+                "will have nothing to match against. Check the OpenAI key."
+            )
 
     except Exception as exc:
         logger.error(f"[worker] Failed to initialize canonical embeddings at startup: {exc}")
@@ -786,11 +927,19 @@ async def on_startup(ctx: dict) -> None:
 # Populate WorkerSettings.functions now that all @async_task functions are defined.
 # ARQ requires actual Function objects (the result of @async_task), not string names.
 WorkerSettings.on_startup = on_startup
+from arq.worker import func as _arq_func  # noqa: E402
+
 WorkerSettings.functions = [
     run_migration,
-    resume_migration,
+    # keep_result=0: every resume of a migration carries one job id
+    # (migration_runs.resume_job_id) and arq refuses that id while a job or its kept result
+    # holds it; keeping no result frees it the moment the job ends.
+    _arq_func(resume_migration, keep_result=0),
     run_schema_mapping,
     resume_schema_mapping,
     run_fiix_data_ingestion,
     cleanup_expired_migrations,
 ]
+from arq.cron import cron as _arq_cron  # noqa: E402
+
+WorkerSettings.cron_jobs = [_arq_cron(cleanup_expired_migrations, hour={3}, minute={17}, run_at_startup=False)]

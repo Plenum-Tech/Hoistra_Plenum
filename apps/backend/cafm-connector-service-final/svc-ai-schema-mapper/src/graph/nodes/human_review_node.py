@@ -580,7 +580,13 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                     # on a core table — otherwise the user's decision (and the data) is silently lost.
                     if decision.get("is_new_column"):
                         _routing_now = state.get("table_routing") or {}
-                        _dest_tbl = (_routing_now.get(table_name) or table_name)
+                        # Where the column goes. A decision may name a table of its own — a
+                        # field that belongs nowhere on the routed destination needs somewhere
+                        # to live, and "reject it" throws the data away. Default stays the
+                        # routed destination, so an override that says nothing behaves as before.
+                        _dest_tbl = (decision.get("target_table")
+                                     or _routing_now.get(table_name) or table_name)
+                        _is_new_tbl = bool(decision.get("is_new_table"))
                         _already = any(
                             (getattr(e, "target_table", None) or (e.get("target_table") if isinstance(e, dict) else None)) == _dest_tbl
                             and (getattr(e, "custom_column_name", None) or (e.get("custom_column_name") if isinstance(e, dict) else None)) == override_target
@@ -594,14 +600,14 @@ async def human_review_node(state: MigrationState) -> MigrationState:
                                 target_table=_dest_tbl,
                                 custom_column_name=override_target,
                                 data_type=(decision.get("data_type") or "VARCHAR(255)"),
-                                is_new_table=False,
-                                new_table_pk="id",
+                                is_new_table=_is_new_tbl,
+                                new_table_pk=(decision.get("new_table_pk") or "id"),
                                 nullable=bool(decision.get("nullable", True)),
                                 user_approved=True,
                             ))
                             logger.info(
-                                f"[Node 4]   + New column (DDL) from override: "
-                                f"plenum_cafm.{_dest_tbl}.{override_target} "
+                                f"[Node 4]   + New {'table and ' if _is_new_tbl else ''}column "
+                                f"(DDL) from override: plenum_cafm.{_dest_tbl}.{override_target} "
                                 f"({decision.get('data_type') or 'VARCHAR(255)'})"
                             )
 
