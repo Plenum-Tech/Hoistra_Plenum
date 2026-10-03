@@ -11,6 +11,7 @@ from .maintenance_watch import router as maintenance_watch_router
 from .reports import router as reports_router
 from .superadmin import router as superadmin_router
 from .value import router as value_router
+from .replacement_candidates import router as replacement_candidates_router
 from .work_order_blockers import router as work_order_blockers_router
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "reports_router",
     "superadmin_router",
     "value_router",
+    "replacement_candidates_router",
     "work_order_blockers_router",
 ]

@@ -1372,13 +1372,14 @@ from .ontology_qa import answer_from_records  # noqa: E402 - the record-question
 from .cost_savings_agent import get_cost_savings  # noqa: E402 - the cost-saving read
 
 from .document_search_tool import search_documents  # noqa: E402 - what the linked documents say
-from .thread_scope import work_order_blockers  # noqa: E402 - blocked by the vendor, one read
+from .thread_scope import replacement_candidates, work_order_blockers  # noqa: E402 - two joined reads
 
 MAINTENANCE_READ_TOOLS = [
     search_documents,
     answer_from_records,
     get_cost_savings,
     work_order_blockers,
+    replacement_candidates,
     get_maintenance_overview,
     list_maintenance_decisions,
     get_inspection_intelligence,

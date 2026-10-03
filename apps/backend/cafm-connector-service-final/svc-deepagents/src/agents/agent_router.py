@@ -162,7 +162,7 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
         # The model could not place it. That is an answer, not a failure — the orchestrator
         # loop asks the user rather than a keyword table guessing on their behalf.
         log.info("agent_router.clarify", reason=reason)
-        return {"agent": None, "also": also, "reason": reason, "source": "llm"}
+        return {"agent": None, "also": also, "reason": reason, "source": "llm", "clarify": True}
     if agent not in known:
         log.warning("agent_router.unknown_agent", named=agent, known=sorted(known))
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)

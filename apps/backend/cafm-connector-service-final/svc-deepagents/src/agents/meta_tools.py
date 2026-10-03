@@ -241,6 +241,19 @@ async def run_phase2_engine_verbose(
     return await _task_runner.run_verbose(runner_key, prompt, on_event=on_event)
 
 
+def with_turn_recall(prompt: str) -> str:
+    """The sub-agent's prompt with the turn's recall block in front - what colleagues taught us
+    (services/chat_memories.turn_recall). A teaching that says "repurchase means parts below
+    reorder level" is useless in the orchestrator's prompt alone: the udr sub-agent writes the SQL
+    and never saw it. Idempotent: a prompt that already carries the block is left alone."""
+    from ..services import chat_memories
+
+    block = (chat_memories.turn_recall.get() or "").strip()
+    if not block or block in (prompt or ""):
+        return prompt
+    return block + "\n\n" + (prompt or "")
+
+
 class _TaskRunner:
     """
     Runs focused sub-agents scoped to a single domain.
@@ -307,6 +320,7 @@ class _TaskRunner:
         )
         from .udr_hybrid_tools import answer_with_graph_context, retrieve_vector_evidence
         from .ontology_qa import answer_from_records
+        from .thread_scope import replacement_candidates
         from .wo_engine_agent import (
             approve_work_order,
             close_work_order,
@@ -407,7 +421,7 @@ class _TaskRunner:
             "udr": create_react_agent(
                 llm,
                 tools=[
-                    answer_from_records,
+                    answer_from_records, replacement_candidates,
                     find_tables, table_card,
                     get_schema, udr_list_tables, udr_describe_table,
                     find_asset, find_location, get_asset_documents,
@@ -484,6 +498,7 @@ class _TaskRunner:
                 ),
                 [],
             )
+        prompt = with_turn_recall(prompt)
         # Outside the try, so the cancellation handler can always report how long the
         # sub-agent had been running — the number that makes a silent death diagnosable.
         _t0 = time.perf_counter()

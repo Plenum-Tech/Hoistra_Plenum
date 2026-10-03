@@ -24,6 +24,8 @@ triggers:
   - stock
   - inventory
   - reorder
+  - restock
+  - repurchase
   - purchase order
   - reading
   - meter reading value

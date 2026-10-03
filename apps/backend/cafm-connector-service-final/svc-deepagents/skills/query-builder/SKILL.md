@@ -49,6 +49,12 @@ Every fact the answer needs lives in one of two places. Sort them in the plan:
 | what a **warranty** covers, excludes, or how to claim | the **warranty document** | `search_documents(question, asset=…, doc_type="warranty")` |
 | a certificate's conditions or limitations, an O&M procedure, a manual's instruction | that **document** | `search_documents(question, asset=… / vendor=… / building_name=…)` |
 
+**Repurchase / reorder / replace / end of life** is two readings at once - parts below reorder level
+(`spare_parts.stock_quantity <= reorder_level`, company stock) and assets at condition grade >= 4 with
+repeat failures and inspection recommendations to replace. One tool answers both: `replacement_candidates`.
+There is no replacement register to go looking for: `purchase_orders`, `asset_condition_verdicts` and
+`energy_recommendations` are not one, and an empty table answers "none", not "no register".
+
 Many questions need both: "claim from the vendor for SLA breaches **based on the contract clause**"
 = the breaching work orders (records) + the service-credit clause (contract) + the fee it applies to
 (records). Plan both reads, then join them in the answer.

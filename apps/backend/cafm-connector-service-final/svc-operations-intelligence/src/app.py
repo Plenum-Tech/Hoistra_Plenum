@@ -26,6 +26,7 @@ from .api.routes import (
     reports_router,
     superadmin_router,
     value_router,
+    replacement_candidates_router,
     work_order_blockers_router,
 )
 from .config import settings
@@ -199,6 +200,7 @@ async def metrics():
 
 
 app.include_router(approvals_router)
+app.include_router(replacement_candidates_router)
 app.include_router(auth_router)
 app.include_router(superadmin_router)
 app.include_router(admin_router)

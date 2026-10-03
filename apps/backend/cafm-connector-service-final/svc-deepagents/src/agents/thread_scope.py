@@ -173,6 +173,53 @@ _TIMEOUT = 60.0
 
 
 @tool
+async def replacement_candidates(building_name: str | None = None, building_id: str | None = None,
+                                 period: str | None = None) -> dict:
+    """What should be bought again - PARTS to reorder and ASSETS at the end of their life - in one read.
+
+    USE THIS for "repurchase", "reorder", "restock", "replace", "replacement", "end of life", "beyond economic
+    repair", "write off", "which assets should we replace / buy new", "what is below reorder level". The
+    question has two readings and this answers both from the product's own definitions: `parts_to_reorder`
+    (spare_parts at or below reorder level, company stock), `end_of_life` (assets at condition grade >= 4,
+    the Assets page's remediate-or-replace grade), `repeat_failures` (3+ reactive jobs in the period, reactive
+    cost against replacement value), `inspection_recommendations` that say replace and whether they were
+    actioned, `replacement_work_orders`, and what `purchase_orders` actually holds. Returns `answer_rules`.
+
+    Name the building; `period` (last_month, this_year, last_90_days, 'September 2026') bounds the repeat
+    failures - a year back by default. On a follow-up the thread's working set fills these in. Never look for
+    a replacement register elsewhere (energy_recommendations is not one).
+    """
+    from .energy_intelligence_agent import _resolve_building
+
+    if not (building_name or building_id):
+        building_name, building_id = scope_building()
+    params: dict[str, Any] = {}
+    if building_name or building_id:
+        bid, problem = await _resolve_building(building_name, building_id)
+        if problem:
+            return problem
+        params["building_id"] = bid
+    bounds = parse_period(period or "") if period else None
+    if bounds:
+        params["period_from"], params["period_to"] = bounds["from"], bounds["to"]
+    elif not period:
+        f, to = scope_period_bounds()
+        if f and to:
+            params["period_from"], params["period_to"] = f, to
+    try:
+        resp = await _request("GET", settings.operations_intelligence_base_url.rstrip("/"), "/api/assets/replacement-candidates",
+                              service=_SERVICE, timeout=_TIMEOUT, params=params)
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001 - a tool answers, it does not raise into the agent loop
+        log.error("replacement_candidates.failed", error=str(exc)[:300])
+        return {"ok": False, "error": "The replacement read failed: " + str(exc).splitlines()[0][:300]}
+    if isinstance(body, dict):
+        body["scope"] = {"building": building_name or building_id or "all buildings",
+                         "period": period or ((active_scope.get() or {}).get("period") or {}).get("label") or "the last 12 months"}
+    return body
+
+
+@tool
 async def work_order_blockers(building_name: str | None = None, building_id: str | None = None,
                               period: str | None = None, work_orders: list[str] | None = None) -> dict:
     """Which OPEN work orders cannot proceed because of their vendor - and why - in one read.

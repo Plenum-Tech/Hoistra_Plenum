@@ -86,6 +86,7 @@ Rules:
   counts, lists or details of records -> answer_from_records {{"question": "..."}};
   cost saving / where money goes -> get_cost_savings {{"building_name": "...", "period": "last_month|this_month|this_year|last_90_days"}};
   work orders blocked by a vendor's compliance or contract -> work_order_blockers {{"building_name": "...", "period": "..."}};
+  repurchase / reorder / restock / replace / end of life / write off -> replacement_candidates {{"building_name": "...", "period": "..."}};
   what a document says -> search_documents {{"question": "...", "vendor"|"contract_ref"|"asset"|"building_name": "..."}}.
   An engine step costs 5-10x a tool step and rewrites the data as prose the final answer rewrites again:
   use an engine ONLY when the step needs judgement across several reads (a compliance analysis, an

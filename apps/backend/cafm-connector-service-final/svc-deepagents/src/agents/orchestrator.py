@@ -395,7 +395,7 @@ _TOOL_DOMAIN: dict[str, str] = {
     "read_file": "meta", "memory_set": "meta", "memory_get": "meta",
     # UDR (11+)
     "get_schema": "udr", "lookup_user": "udr", "query_table": "udr",
-    "find_tables": "udr", "table_card": "udr",
+    "find_tables": "udr", "table_card": "udr", "replacement_candidates": "wo_engine",
     "find_asset": "udr", "find_location": "udr",
     "get_asset_documents": "udr",
     "list_building_documents": "udr",
@@ -924,6 +924,7 @@ class DeepAgentOrchestrator:
         scope_text = thread_scope.scope_block(ws) if ws else ""
         # What earlier conversations taught us that bears on this question (services/chat_memories.py).
         memories_text = chat_memories.format_recall(await chat_memories.recall(user_message))
+        chat_memories.turn_recall.set(memories_text)
         for block in [b for b in (scope_text, memories_text) if b]:
             wrapped = wrapped.replace("\n\n---\n\n**Current user message:**", "\n\n" + block + "\n\n---\n\n**Current user message:**", 1) \
                 if "**Current user message:**" in wrapped else block + "\n\n---\n\n**Current user message:**\n" + wrapped
@@ -3783,6 +3784,31 @@ class DeepAgentOrchestrator:
             return engine, None
         return None, cls._routing_note(routing)
 
+    @staticmethod
+    def _clarify_reply(routing: dict[str, Any] | None, user_message: str) -> str | None:
+        """The one-line question to ask when the router read the question and could not place it.
+
+        agents/agent_router.py returns `clarify` with the readings it saw. Until 3 Oct 2026 that
+        decision was dropped on the floor: "which assets are required for repurchase?" was read
+        by the router as asset replacement, repair cost or parts reorder - and then the general
+        loop guessed, keyword-matched "which assets" to udr, and answered from an empty energy
+        table after 50 seconds and 15 tool calls. Asking costs one line and no read.
+
+        None when there is nothing to ask: the router placed the question, gave no reason, or
+        the message is too short to have been misread (a greeting, a "yes").
+        """
+        if not routing or not routing.get("clarify"):
+            return None
+        reason = " ".join(str(routing.get("reason") or "").split()).rstrip(".")
+        if not reason or len((user_message or "").strip()) < 12:
+            return None
+        return (
+            "Before I read anything, I want to be sure what you are asking: " + reason + ".\n\n"
+            "Tell me which you mean - or name the register (parts stock, assets, work orders, "
+            "certificates, contracts, meters, documents) - and I will answer from it. "
+            "Say \"all of them\" and I will answer each reading."
+        )
+
     @classmethod
     def _general_loop_panel(
         cls, user_message: str, tool_calls: list[dict[str, Any]]
@@ -6447,6 +6473,11 @@ class DeepAgentOrchestrator:
         ]
         if extra_context and extra_context.strip():
             prompt_parts.append("# Extraction / runtime context\n" + extra_context.strip())
+        # What earlier conversations taught us: the turn's block when the orchestrator read the
+        # question, else recalled here (a direct engine dispatch never builds the stateful input).
+        recall = chat_memories.turn_recall.get() or chat_memories.format_recall(await chat_memories.recall(user_message))
+        if recall:
+            prompt_parts.append(recall)
         prompt_parts.append("# User request\n" + (user_message or "").strip())
         prompt = "\n\n".join(prompt_parts)
 
@@ -6973,8 +7004,17 @@ class DeepAgentOrchestrator:
         # on this task must not outlive the turn that made it.
         _turn_page_engines.set(frozenset())
         _turn_catalogue_via_task.set(False)
+        chat_memories.turn_recall.set("")
         if engine is None and route_intent not in core_routes:
             routing = await select_agent(user_message, extra_context)
+            clarify = self._clarify_reply(routing, user_message)
+            if clarify:
+                trace.on_plan(planner.one_step_plan("clarify", routing.get("reason"), source="router"), source="router")
+                return attach_route_to_result(
+                    {"session_id": session_id, "answer": clarify, "tool_calls": [], "success": True, "error": None,
+                     "interrupted": False, "interrupt_payload": None},
+                    session_id, intent=ROUTE_GENERAL, domain="orchestrator",
+                )
             engine, routing_note = self._decide_dispatch(routing, msg_l)
             self._claim_turn_for_page_engines(routing)
             # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
@@ -7371,6 +7411,7 @@ class DeepAgentOrchestrator:
         # on this task must not outlive the turn that made it.
         _turn_page_engines.set(frozenset())
         _turn_catalogue_via_task.set(False)
+        chat_memories.turn_recall.set("")
         if route_intent not in phase2_core_routes:
             # A reading model routes first; the keyword tables are its fallback. The order
             # used to be the reverse, and "what must a contractor hold" matched both the
@@ -7379,6 +7420,19 @@ class DeepAgentOrchestrator:
             # was never asked.
             llm_cost.begin_turn(sid)
             routing = await select_agent(user_message, extra_context)
+            clarify = self._clarify_reply(routing, user_message)
+            if clarify:
+                # The router could not place the question: ask, as one turn, before any register is read.
+                trace.on_plan(planner.one_step_plan("clarify", routing.get("reason"), source="router"), source="router")
+                yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
+                       "text": "Read the question → it can be taken more than one way (" + str(routing.get("reason") or "")
+                               + "). Asking before reading any register."}
+                result = {"session_id": sid, "answer": clarify, "tool_calls": [], "success": True, "error": None,
+                          "interrupted": False, "interrupt_payload": None}
+                attach_route_to_result(result, sid, intent=ROUTE_GENERAL, domain="orchestrator")
+                await self._close_streamed_turn(sid, result, _stream_t0)
+                yield workflow_stream_completion_payload(sid, answer=clarify, tool_calls=[])
+                return
             phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
             self._claim_turn_for_page_engines(routing)
             # A question that needs decomposition is planned, run step by step and verified

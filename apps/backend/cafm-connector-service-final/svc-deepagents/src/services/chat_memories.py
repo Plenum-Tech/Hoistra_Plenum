@@ -28,6 +28,8 @@ company always; every write is best-effort and never breaks a turn.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import asyncio
 import json
 import math
@@ -47,6 +49,12 @@ log = structlog.get_logger(__name__)
 TABLE = "plenum_cafm.chat_memories"
 KINDS = ("fact", "correction", "preference")
 #: Memories recalled into a turn, and the similarity below which none is.
+#: The recall block of the current turn, set once by the orchestrator when it reads the question
+#: and read by every sub-agent and engine the turn then runs. Until 3 Oct 2026 the block reached
+#: only the orchestrator's own prompt: a teaching saved from the trace never reached the udr
+#: sub-agent that writes the SQL, so the same correction had to be typed every time.
+turn_recall: ContextVar[str] = ContextVar("chat_turn_recall", default="")
+
 RECALL_TOP = 6
 RECALL_MIN = 0.30
 #: Closer than this to an existing memory = the same memory, refreshed rather than duplicated.

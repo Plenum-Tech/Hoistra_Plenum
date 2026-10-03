@@ -308,8 +308,66 @@ async def write_purpose(meta: dict[str, Any]) -> tuple[dict[str, Any], str]:
         return fallback, "heuristic"
 
 
+#: Words users say that no column name says. "which assets are required for repurchase?"
+#: (3 Oct 2026) found nothing: `find_tables` had no card that said repurchase, reorder or end of
+#: life, so the agent grepped the schema and took `energy_recommendations.replace_cost_gbp` for
+#: a replacement register. These go into the embedded text and the card's questions, and the
+#: near-miss tables say where the question really lives. Edit here, rebuild that table.
+VOCABULARY: dict[str, dict[str, Any]] = {
+    "spare_parts": {
+        "aliases": ["reorder", "re-order", "restock", "replenish", "repurchase", "low stock", "stock-out",
+                    "out of stock", "below minimum", "below reorder level", "parts to buy", "purchase list"],
+        "questions": ["Which parts need reordering or repurchasing?", "What is below its reorder level?",
+                      "Which parts are out of stock?", "How much would it cost to restock?"]},
+    "assets": {
+        "aliases": ["replace", "replacement", "repurchase", "end of life", "beyond economic repair", "write off",
+                    "condition grade", "condition score 4 or 5", "design life used", "asset health",
+                    "replacement value", "what it would cost to replace"],
+        "questions": ["Which assets are due for replacement or repurchase?",
+                      "Which assets are at end of life (condition grade 4 or 5)?",
+                      "What would it cost to replace an asset?", "Which assets are in the worst condition?"]},
+    "inspections": {
+        "aliases": ["inspector recommended replacement", "recommendation to replace", "condition report",
+                    "replace recommendation never actioned"],
+        "questions": ["Which inspections recommended replacing an asset?",
+                      "Which replace recommendations never became a work order?"]},
+    "work_orders": {
+        "aliases": ["replacement job", "repeat failure", "reactive breakdown", "replaced"],
+        "questions": ["Which work orders replaced a component or an asset?",
+                      "Which assets keep failing (three or more reactive jobs)?"]},
+    "purchase_orders": {
+        "aliases": ["purchase order", "PO", "procurement", "ordered parts", "on order"],
+        "questions": ["Which purchase orders are open?", "What has been ordered and not received?"]},
+    "energy_recommendations": {
+        "not_for": "Not an asset replacement or repurchase register: an asset's end of life is assets.condition_score "
+                   "(4-5) with inspections.recommendation and the replacement work orders; parts to reorder are "
+                   "spare_parts (stock_quantity vs reorder_level)."},
+    "asset_condition_verdicts": {
+        "not_for": "Usually empty; the live condition grade is assets.condition_score."},
+}
+
+
+def with_vocabulary(table: str, words: dict[str, Any]) -> dict[str, Any]:
+    """The purpose words with the table's VOCABULARY folded in: its questions added to `answers`
+    (kept unique, capped) and its near-miss appended to `not_for`."""
+    v = VOCABULARY.get(table)
+    if not v:
+        return words
+    out = dict(words)
+    answers = list(out.get("answers") or [])
+    for q in v.get("questions") or []:
+        if q not in answers:
+            answers.append(q)
+    out["answers"] = answers[:12]
+    if v.get("not_for"):
+        prior = (out.get("not_for") or "").strip()
+        out["not_for"] = (prior + (" " if prior else "") + v["not_for"]).strip()[:800]
+    return out
+
+
 def semantic_text(meta: dict[str, Any], words: dict[str, Any]) -> str:
     """What gets embedded: the table's meaning, its questions, and its vocabulary."""
+    aliases = (VOCABULARY.get(meta["table"]) or {}).get("aliases") or []
     cols = ", ".join(c["name"] for c in meta["columns"][:80])
     links = ", ".join(sorted({l["to_table"] for l in meta["links_out"]}))
     refs = ", ".join(sorted({l["from_table"] for l in meta["links_in"]})[:15])
@@ -318,6 +376,7 @@ def semantic_text(meta: dict[str, Any], words: dict[str, Any]) -> str:
         words["purpose"],
         "Answers: " + " | ".join(words["answers"]),
         (f"Not for: {words['not_for']}" if words.get("not_for") else ""),
+        (f"Also asked as: {', '.join(aliases)}." if aliases else ""),
         f"Columns: {cols}.",
         (f"Links to: {links}." if links else ""),
         (f"Referenced by: {refs}." if refs else ""),
@@ -397,6 +456,7 @@ async def build(session: AsyncSession, *, only: list[str] | None = None, with_mo
                 c["fk"] = any(l["column"] == c["name"] for l in m["links_out"])
             m["sample_rows"] = sample_rows
             words, source = (await write_purpose(m)) if with_model else (heuristic_purpose(t, m["columns"], m["keys"], m["links_out"]), "heuristic")
+            words = with_vocabulary(t, words)
             sem = semantic_text(m, words)
             vec = await embed([sem])
             await session.execute(text(f"""

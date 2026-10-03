@@ -142,24 +142,6 @@ def pins_from(corrections: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"exclude_statuses": ex, "period": period, "date_field": field}
 
 
-def pins_from(corrections: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The structured corrections a reader made on a query or tool - excluded statuses, a period, a
-    date field - as filters the record engine compiles into its plan (ontology_qa.apply_pinned)."""
-    ex: list[str] = []
-    period = field = None
-    for c in corrections or []:
-        if c.get("mode") not in ("query", "tool", "suggestion"):
-            continue
-        for x in c.get("exclude") or []:
-            if str(x).strip() and str(x) not in ex:
-                ex.append(str(x))
-        period = c.get("period") or period
-        field = c.get("field") or field
-    if not (ex or period or field):
-        return None
-    return {"exclude_statuses": ex, "period": period, "date_field": field}
-
-
 def rerun_question(turn: dict[str, Any], notes: list[str]) -> str:
     """The question the re-run is recorded under, so the thread reads as what happened."""
     q = (turn.get("question") or "").strip()

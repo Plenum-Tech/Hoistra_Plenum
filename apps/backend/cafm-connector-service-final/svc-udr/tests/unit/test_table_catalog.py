@@ -106,3 +106,30 @@ class TestTheWords:
 
     def test_vectors_are_serialised_the_way_pgvector_reads_them(self):
         assert C._vec([0.5, -1.0, 0.1234567891]) == "[0.5000000,-1.0000000,0.1234568]"
+
+
+class TestVocabulary:
+    """The words users say that no column says reach the embedded text and the card. Measured
+    3 Oct 2026: "which assets are required for repurchase?" found no table because none said
+    repurchase, reorder or end of life."""
+
+    def _meta(self, table):
+        return {"table": table, "domain": C.domain_for(table), "columns": [{"name": "id"}, {"name": "stock_quantity"}],
+                "links_out": [], "links_in": []}
+
+    def test_spare_parts_and_assets_answer_repurchase_in_their_own_words(self):
+        words = C.with_vocabulary("spare_parts", {"grain": "one stock line", "purpose": "Stock.", "answers": ["How many parts?"], "not_for": None})
+        assert "Which parts need reordering or repurchasing?" in words["answers"] and words["answers"][0] == "How many parts?"
+        text = C.semantic_text(self._meta("spare_parts"), words)
+        assert "Also asked as:" in text and "repurchase" in text and "below reorder level" in text
+        text = C.semantic_text(self._meta("assets"), C.with_vocabulary("assets", {"grain": "g", "purpose": "p", "answers": [], "not_for": None}))
+        assert "end of life" in text and "condition grade" in text
+
+    def test_the_near_miss_table_says_where_the_question_lives(self):
+        words = C.with_vocabulary("energy_recommendations", {"grain": "g", "purpose": "p", "answers": [], "not_for": "Not for meter readings."})
+        assert words["not_for"].startswith("Not for meter readings.") and "spare_parts" in words["not_for"] and "assets.condition_score" in words["not_for"]
+
+    def test_a_table_without_vocabulary_is_untouched(self):
+        words = {"grain": "g", "purpose": "p", "answers": ["a"], "not_for": None}
+        assert C.with_vocabulary("currencies", words) is words
+        assert "Also asked as" not in C.semantic_text(self._meta("currencies"), words)
