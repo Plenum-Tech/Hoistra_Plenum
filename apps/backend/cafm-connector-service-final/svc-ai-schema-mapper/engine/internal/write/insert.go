@@ -3,6 +3,8 @@ package write
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"hoistra/engine/internal/cell"
 	"hoistra/engine/internal/coerce"
+	"hoistra/engine/internal/pgschema"
 	"hoistra/engine/internal/rules"
 )
 
@@ -466,16 +469,21 @@ func (w *writer) keyLookup(ctx context.Context, tx pgx.Tx, p *tablePlan, km rule
 	conds := make([]string, len(km.Cols))
 	args := make([]any, 0, len(km.Cols)+1)
 	for i, c := range km.Cols {
-		conds[i] = fmt.Sprintf("%s = $%d", c, i+1)
+		if km.Vals[i].IsNull() {
+			conds[i] = c + " IS NULL" // an empty optional column matches only an empty one
+			continue
+		}
+		args = append(args, nil)
+		conds[i] = keyCond(c, "$"+strconv.Itoa(len(args)), p.colInfo[c])
 		arg, why := pyOf(km.Vals[i]).encode(p.colInfo[c])
 		if why != "" {
 			return false, nil // asyncpg refuses the value: the lookup raises and counts as no match
 		}
-		args = append(args, arg)
+		args[len(args)-1] = arg
 	}
 	if p.cols["organization_id"] {
-		conds = append(conds, fmt.Sprintf("organization_id::text = $%d", len(km.Cols)+1))
 		args = append(args, w.org)
+		conds = append(conds, fmt.Sprintf("organization_id::text = $%d", len(args)))
 	}
 	rows, err := w.fetch(ctx, tx, fmt.Sprintf("SELECT 1 FROM %s.%s WHERE %s LIMIT 1", w.job.Schema, p.dest,
 		strings.Join(conds, " AND ")), args...)
@@ -492,7 +500,12 @@ func (w *writer) keyLookup(ctx context.Context, tx pgx.Tx, p *tablePlan, km rule
 func (w *writer) prefetchKeys(ctx context.Context, tx pgx.Tx, p *tablePlan, items []*built) (map[string]bool, error) {
 	known := map[string]bool{}
 	groups := w.spec.NaturalKeys[p.dest]
-	for _, g := range groups {
+	for _, spec := range groups {
+		g := make([]string, len(spec))
+		optional := make([]bool, len(spec))
+		for j, c := range spec {
+			g[j], optional[j] = rules.KeyCol(c)
+		}
 		var keys []rules.KeyMatch
 		var cks []string
 		seen := map[string]bool{}
@@ -516,18 +529,22 @@ func (w *writer) prefetchKeys(ctx context.Context, tx pgx.Tx, p *tablePlan, item
 		if len(keys) == 0 {
 			continue
 		}
-		cols := make([][]string, len(g))
+		cols := make([][]*string, len(g))
 		var idx []int
 		for i, km := range keys {
-			texts := make([]string, len(g))
+			texts := make([]*string, len(g))
 			refused := false
 			for j, c := range g {
+				if km.Vals[j].IsNull() {
+					continue // only an optional column can be empty: it stays NULL
+				}
 				arg, why := pyOf(km.Vals[j]).encode(p.colInfo[c])
 				if why != "" {
 					refused = true
 					break
 				}
-				texts[j] = arg.(string)
+				t := arg.(string)
+				texts[j] = &t
 			}
 			if refused {
 				known[cks[i]] = false
@@ -548,7 +565,11 @@ func (w *writer) prefetchKeys(ctx context.Context, tx pgx.Tx, p *tablePlan, item
 		for j, c := range g {
 			unn[j] = fmt.Sprintf("$%d::text[]", j+1)
 			names[j] = fmt.Sprintf("v%d", j)
-			conds[j] = fmt.Sprintf("t.%s = k.v%d::%s", c, j, p.colInfo[c].BaseType)
+			conds[j] = keyCond("t."+c, fmt.Sprintf("k.v%d::%s", j, p.colInfo[c].BaseType), p.colInfo[c])
+			if optional[j] {
+				// IS NOT DISTINCT FROM: an empty optional column matches only an empty one
+				conds[j] = strings.Replace(conds[j], " = ", " IS NOT DISTINCT FROM ", 1)
+			}
 			args = append(args, cols[j])
 		}
 		if p.cols["organization_id"] {
@@ -576,6 +597,17 @@ func (w *writer) prefetchKeys(ctx context.Context, tx pgx.Tx, p *tablePlan, item
 	}
 	return known, nil
 }
+
+// keyCond compares a key column with a value as _already_written does. A numeric(p,s) column
+// holds the value rounded to s places, so the value is rounded the same way first.
+func keyCond(col, val string, info *pgschema.Column) string {
+	if m := numericScale.FindStringSubmatch(info.FormatType); m != nil {
+		return fmt.Sprintf("%s = round(%s::numeric, %s)", col, val, m[1])
+	}
+	return col + " = " + val
+}
+
+var numericScale = regexp.MustCompile(`^numeric\(\d+,(\d+)\)$`)
 
 func sameCols(a, b []string) bool {
 	if len(a) != len(b) {

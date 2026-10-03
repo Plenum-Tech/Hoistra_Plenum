@@ -1550,12 +1550,22 @@ _NATURAL_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
     # A contract is its vendor, its name and its start: a renewal starting later is its own
     # contract. vendor_id / asset_id are resolved before the key is read.
     "vendor_contracts": (("vendor_id", "contract_name", "contract_start"),),
-    # A band carries no reference of its own (none, in the workbooks seen): the same band is the
-    # same reading type and unit with the same limits.
-    "asset_reading_bands": (("reading_type", "unit", "lo", "hi"),),
-    "asset_readings": (("asset_id", "reading_type", "recorded_at"),),
-    "maintenance_plans": (("sm_code",),),
+    # A band carries no reference of its own: it is the same band only when every column that
+    # says what it applies to matches, the asset or category it is scoped to included — a Boiler
+    # band with a Chiller band's limits is a different band. "?" marks a column that may be empty
+    # and then matches only an empty one (a band with no unit, or with one limit).
+    "asset_reading_bands": (("reading_type", "?unit", "?lo", "?hi", "?asset_id", "?asset_category"),),
+    # Workbooks stamp readings by the day, so one asset can carry a dozen readings of one type at
+    # one stamp: the value is part of what the reading is.
+    "asset_readings": (("asset_id", "reading_type", "recorded_at", "value"),),
+    # One schedule code covers every asset on that schedule: a plan is the code AND its asset.
+    "maintenance_plans": (("sm_code", "asset_id"),),
 }
+
+
+def _key_value_present(v: object) -> bool:
+    """A key column says something: not missing, not blank. 0 and False say something."""
+    return v is not None and str(v).strip() != ""
 
 
 def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[str, ...], list]]:
@@ -1570,8 +1580,11 @@ def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[s
     """
     out: list[tuple[tuple[str, ...], list]] = []
     for group in _NATURAL_KEYS.get(table, ()):
-        if all(c in db_cols and str(row.get(c) or "").strip() for c in group):
-            out.append((group, [row[c] for c in group]))
+        cols = tuple(c.lstrip("?") for c in group)
+        if all(c in db_cols for c in cols) and all(
+            g.startswith("?") or _key_value_present(row.get(c)) for g, c in zip(group, cols)
+        ):
+            out.append((cols, [row.get(c) for c in cols]))
     return out
 
 
@@ -1910,11 +1923,23 @@ async def _apply_records_with_schema_alignment(
             # per row.
             _nk_seen: dict[tuple, bool] = {}
 
-            async def _already_written(_table: str, _cols: tuple, _vals: list, _has_org: bool) -> bool:
+            async def _already_written(_table: str, _cols: tuple, _vals: list, _has_org: bool,
+                                       _scales: dict[str, int]) -> bool:
                 _ck = (_table, _cols, tuple(str(v) for v in _vals))
                 if _ck not in _nk_seen:
-                    _where = " AND ".join(f"{c} = :v{i}" for i, c in enumerate(_cols))
-                    _prm = {f"v{i}": v for i, v in enumerate(_vals)}
+                    # An empty optional column matches only an empty one. A numeric(p,s) column
+                    # holds the value rounded to s places, so the value is rounded the same way
+                    # before it is compared — 7.700000000000001 is on file as 7.7000.
+                    _conds = []
+                    for i, (c, v) in enumerate(zip(_cols, _vals)):
+                        if v is None:
+                            _conds.append(f"{c} IS NULL")
+                        elif c in _scales:
+                            _conds.append(f"{c} = round(CAST(:v{i} AS numeric), {_scales[c]})")
+                        else:
+                            _conds.append(f"{c} = :v{i}")
+                    _where = " AND ".join(_conds)
+                    _prm = {f"v{i}": v for i, v in enumerate(_vals) if v is not None}
                     if _has_org:
                         _where += " AND organization_id::text = :org"
                         _prm["org"] = effective_org_id
@@ -2005,7 +2030,7 @@ async def _apply_records_with_schema_alignment(
                 cols_rs = await session.execute(
                     text(
                         """
-                        SELECT column_name, data_type, is_nullable, column_default
+                        SELECT column_name, data_type, is_nullable, column_default, numeric_scale
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name AND table_name = :table_name
                         """
@@ -2014,6 +2039,10 @@ async def _apply_records_with_schema_alignment(
                 )
                 _col_rows = cols_rs.fetchall()
                 db_col_type_map = {str(r[0]): str(r[1]) for r in _col_rows}
+                db_numeric_scale = {
+                    str(r[0]): int(r[4]) for r in _col_rows
+                    if len(r) > 4 and str(r[1]) == "numeric" and r[4] is not None
+                }
                 # Columns that accept NULL — used to recover a row whose FK points at a parent that
                 # isn't present (orphan reference): null the FK so the row still lands, instead of
                 # dropping it. NOT NULL FKs can't be nulled, so those rows are skipped.
@@ -2492,7 +2521,8 @@ async def _apply_records_with_schema_alignment(
                     _dupe = False
                     for _cols, _vals in _natural_keys_for(safe_table, filtered, db_cols):
                         if await _already_written(
-                            safe_table, _cols, _vals, "organization_id" in db_cols
+                            safe_table, _cols, _vals, "organization_id" in db_cols,
+                            db_numeric_scale,
                         ):
                             _dupe = True
                             break

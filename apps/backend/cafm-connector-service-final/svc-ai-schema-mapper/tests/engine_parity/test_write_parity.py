@@ -86,7 +86,7 @@ async def _python_write(sc: dict, monkeypatch, runs: int = 1) -> tuple[list[dict
             counter = itertools.count(1 + run * _RUN_ID_BLOCK)
             monkeypatch.setattr(uuid, "uuid4", lambda c=counter: uuid.UUID(f"00000000-0000-4000-9000-{next(c):012d}"))
             results.append(await wn._apply_records_with_schema_alignment(
-                cleaned_tables=copy.deepcopy(sc["tables"]), organization_id=ORG, schema_name="plenum_cafm",
+                cleaned_tables=copy.deepcopy(_tables_for(sc, run)), organization_id=ORG, schema_name="plenum_cafm",
                 table_routing=sc["routing"], approved_new_columns={t: set(c) for t, c in sc.get("approved", {}).items()},
                 confirmed_hierarchies=[], default_building_id=sc.get("building"), beat=None))
     finally:
@@ -97,10 +97,10 @@ async def _python_write(sc: dict, monkeypatch, runs: int = 1) -> tuple[list[dict
 async def _go_write(sc: dict, tmp_path: Path, runs: int = 1, bulk_min_rows: int = 0) -> tuple[list[dict], dict]:
     await reset_parity_run()
     await _seed(sc.get("seed", []))
-    cleaned = tmp_path / "cleaned"
-    store.write_tables(cleaned, copy.deepcopy(sc["tables"]))
     results = []
     for i in range(runs):
+        cleaned = tmp_path / f"cleaned{i}"
+        store.write_tables(cleaned, copy.deepcopy(_tables_for(sc, i)))
         out = tmp_path / f"out{i}"
         job = steps.write_job(mode="apply", organization_id=ORG, default_building_id=sc.get("building"),
                               cleaned_dir=str(cleaned), out_dir=str(out), table_routing=sc["routing"],
@@ -112,6 +112,11 @@ async def _go_write(sc: dict, tmp_path: Path, runs: int = 1, bulk_min_rows: int 
             job["bulk_min_rows"] = bulk_min_rows
         results.append(await client.run_engine("write", job, workdir=out, env={"HOIST_ENGINE_DSN": DSN}))
     return results, await _dump()
+
+
+def _tables_for(sc: dict, run: int) -> dict:
+    """The upload a run makes: the same workbook every time, unless the scenario names a second one."""
+    return sc["rerun_tables"] if run and "rerun_tables" in sc else sc["tables"]
 
 
 def _comparable(result: dict) -> dict:
@@ -142,6 +147,8 @@ def _uniform(tables: dict) -> dict:
 async def _parity(sc: dict, monkeypatch, tmp_path, runs: int = 1, inserted_less_by: "int | tuple" = 0,
                   written_less_by: tuple = ()) -> tuple[list, list]:
     sc = {**sc, "tables": _uniform(sc["tables"])}
+    if "rerun_tables" in sc:
+        sc["rerun_tables"] = _uniform(sc["rerun_tables"])
     py, py_db = await _python_write(sc, monkeypatch, runs)
     assert any(p["rows_inserted"] or p["rows_merged"] or p["rows_skipped"] for p in py), "the scenario wrote nothing"
     # The engine twice: as it runs by default, and with the bulk load taking every run of chunks
@@ -429,3 +436,44 @@ async def test_a_rerun_adds_no_contracts_bands_readings_or_plans(parity_db, monk
     run2 = {t["dest"]: t for t in go[1]["tables"]}
     for dest, n in (("vendor_contracts", 2), ("asset_reading_bands", 2), ("asset_readings", 3), ("maintenance_plans", 2)):
         assert run2[dest]["inserted"] == 0 and run2[dest]["already_present"] == n, run2[dest]
+
+
+async def test_a_second_upload_keeps_what_is_new(parity_db, monkeypatch, tmp_path):
+    # The keys above must not swallow a row that only looks like one on file (3 Oct 2026 review):
+    # a band with a 0 limit, no unit or a computed limit was re-added every upload; a band scoped to
+    # a category, a plan code reused on another asset and a second reading at the same stamp were
+    # skipped as "already present". Upload 2 repeats upload 1 and adds one of each new row.
+    plan = {"maintenance_type": "preventive", "frequency_type": "months", "frequency_value": "3", "status": "active"}
+    bands = [{"reading_type": "temperature", "unit": "°C", "lo": "5.0", "hi": "95.0"},
+             {"reading_type": "vibration", "unit": "mm/s", "lo": "0", "hi": "7.1"},
+             {"reading_type": "humidity", "lo": "30", "hi": "70"},
+             {"reading_type": "flow", "unit": "l/s", "lo": "0", "hi": "7.700000000000001"}]
+    readings = [{"asset_code": "A-1", "reading_type": "temperature", "value": v, "unit": "°C", "recorded_at": at}
+                for v, at in (("80", "2026-09-27T00:00:00"), ("81.123456", "2026-09-27T01:00:00"))]
+    plans = [{"sm_code": "PPM-Q", "asset_code": "A-1", "description": "Quarterly", **plan}]
+    first = {"Assets": [{"asset_code": "A-1", "asset_name": "Chiller 1", "site": "B-101"},
+                        {"asset_code": "A-2", "asset_name": "Boiler 2", "site": "B-101"}],
+             "Bands": bands, "AssetReadings": readings, "Plans": plans}
+    second = {**first,
+              "Bands": bands + [{"reading_type": "temperature", "unit": "°C", "lo": "5.0", "hi": "95.0",
+                                 "asset_category": "Boiler"}],
+              "AssetReadings": readings + [{"asset_code": "A-1", "reading_type": "temperature", "value": "99",
+                                            "unit": "°C", "recorded_at": "2026-09-27T00:00:00"}],
+              "Plans": plans + [{"sm_code": "PPM-Q", "asset_code": "A-2", "description": "Quarterly", **plan}]}
+    sc = {"seed": [SEED_B101], "tables": first, "rerun_tables": second,
+          "routing": {"Assets": "assets", "Bands": "asset_reading_bands", "AssetReadings": "asset_readings",
+                      "Plans": "maintenance_plans"}}
+    py, go = await _parity(sc, monkeypatch, tmp_path, runs=2)
+
+    import asyncpg
+
+    conn = await asyncpg.connect(DSN)
+    try:
+        counts = {t: await conn.fetchval(f"SELECT count(*) FROM plenum_cafm.{t}")
+                  for t in ("asset_reading_bands", "asset_readings", "maintenance_plans")}
+    finally:
+        await conn.close()
+    assert counts == {"asset_reading_bands": 5, "asset_readings": 3, "maintenance_plans": 2}
+    run2 = {t["dest"]: t for t in go[1]["tables"]}
+    for dest, n in (("asset_reading_bands", 4), ("asset_readings", 2), ("maintenance_plans", 1)):
+        assert run2[dest]["inserted"] == 1 and run2[dest]["already_present"] == n, run2[dest]

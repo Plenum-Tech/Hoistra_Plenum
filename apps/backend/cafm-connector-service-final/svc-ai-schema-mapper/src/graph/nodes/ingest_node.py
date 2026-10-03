@@ -281,7 +281,9 @@ async def _read_source(state: dict) -> bytes:
     from azure.core.exceptions import ResourceNotFoundError
     from azure.storage.blob.aio import BlobServiceClient as _BSC
 
-    delays = list(_SOURCE_RETRY_DELAYS_S)
+    # Only a background upload can still be landing; otherwise the app stored the file before the
+    # run was queued, and a missing blob is gone for good.
+    delays = list(_SOURCE_RETRY_DELAYS_S) if _engine_store.background_uploads() else []
     while True:
         try:
             async with _BSC.from_connection_string(conn) as svc:

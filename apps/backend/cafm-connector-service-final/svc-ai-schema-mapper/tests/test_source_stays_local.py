@@ -122,6 +122,7 @@ async def test_node_1_waits_for_a_blob_copy_still_going_up(azure, monkeypatch):
     from azure.storage.blob.aio import BlobServiceClient
 
     blob = f"migrations/{MID}/source/c.csv"
+    monkeypatch.setenv("HOIST_BACKGROUND_UPLOADS", "1")
     fake = _Blobs(missing_first=2)
     fake.data[blob] = b"a\n2\n"
     monkeypatch.setattr(BlobServiceClient, "from_connection_string", _Blobs.factory(fake))
@@ -134,12 +135,28 @@ async def test_a_source_that_never_lands_fails_with_the_blob_error(azure, monkey
     from azure.core.exceptions import ResourceNotFoundError
     from azure.storage.blob.aio import BlobServiceClient
 
+    monkeypatch.setenv("HOIST_BACKGROUND_UPLOADS", "1")
     fake = _Blobs()
     monkeypatch.setattr(BlobServiceClient, "from_connection_string", _Blobs.factory(fake))
     monkeypatch.setattr(ing, "_SOURCE_RETRY_DELAYS_S", (0.01, 0.01))
     with pytest.raises(ResourceNotFoundError):
         await ing._read_source({"migration_id": MID, "source_blob_path": f"migrations/{MID}/source/d.csv"})
     assert fake.downloads == 3
+
+
+async def test_without_the_switch_a_missing_source_fails_at_once(azure, monkeypatch):
+    # Production uploads the source before the run is queued, so a missing blob is gone for good:
+    # Node 1 fails straight away, as it always did, instead of waiting a minute for it.
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.storage.blob.aio import BlobServiceClient
+
+    monkeypatch.delenv("HOIST_BACKGROUND_UPLOADS", raising=False)
+    fake = _Blobs()
+    monkeypatch.setattr(BlobServiceClient, "from_connection_string", _Blobs.factory(fake))
+    monkeypatch.setattr(ing, "_SOURCE_RETRY_DELAYS_S", (0.01, 0.01))
+    with pytest.raises(ResourceNotFoundError):
+        await ing._read_source({"migration_id": MID, "source_blob_path": f"migrations/{MID}/source/e.csv"})
+    assert fake.downloads == 1
 
 
 def test_a_source_name_cannot_escape_the_run_directory():

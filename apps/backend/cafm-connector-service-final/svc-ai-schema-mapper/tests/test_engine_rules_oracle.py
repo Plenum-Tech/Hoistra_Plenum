@@ -93,7 +93,7 @@ def _cases():
         want.append(wn._to_safe_identifier(raw))
     for _ in range(300):
         table = rnd.choice(list(wn._NATURAL_KEYS) + ["assets", "custom_table"])
-        cols = sorted({c for g in wn._NATURAL_KEYS.get(table, ()) for c in g} | {"asset_code", "id", "name"})
+        cols = sorted({c.lstrip("?") for g in wn._NATURAL_KEYS.get(table, ()) for c in g} | {"asset_code", "id", "name"})
         row_types = [(c, rnd.choice(VALUES + ["0", "00", "1.50", "True"]), rnd.choice(DB_TYPES)) for c in cols]
         db_cols = sorted(c for c in cols if rnd.random() < 0.8)
         filtered = _coerced(row_types)

@@ -65,10 +65,19 @@ func (f *Filtered) Delete(k string) {
 
 func (f *Filtered) Len() int { return len(f.K) }
 
-// present is `str(row.get(c) or "").strip()` being non-empty.
+// present is write_node._key_value_present: not missing, not blank. 0 and False say something.
 func present(f *Filtered, c string) bool {
 	v, ok := f.Get(c)
-	return ok && v.Truthy() && pystr.Strip(v.PyStr()) != ""
+	return ok && !v.IsNull() && pystr.Strip(v.PyStr()) != ""
+}
+
+// KeyCol splits a natural-key column as the spec names it: "?unit" is the column unit, which may
+// be empty and then matches only an empty one.
+func KeyCol(c string) (string, bool) {
+	if strings.HasPrefix(c, "?") {
+		return strings.TrimLeft(c, "?"), true
+	}
+	return c, false
 }
 
 // KeyMatch is one natural key of a row: its columns and the row's values for them.
@@ -82,8 +91,11 @@ func NaturalKeys(spec *Spec, table string, f *Filtered, dbCols map[string]bool) 
 	var out []KeyMatch
 	for _, group := range spec.NaturalKeys[table] {
 		ok := true
-		for _, c := range group {
-			if !dbCols[c] || !present(f, c) {
+		cols := make([]string, len(group))
+		for i, g := range group {
+			c, optional := KeyCol(g)
+			cols[i] = c
+			if !dbCols[c] || (!optional && !present(f, c)) {
 				ok = false
 				break
 			}
@@ -92,10 +104,10 @@ func NaturalKeys(spec *Spec, table string, f *Filtered, dbCols map[string]bool) 
 			continue
 		}
 		vals := make([]coerce.Value, len(group))
-		for i, c := range group {
-			vals[i], _ = f.Get(c)
+		for i, c := range cols {
+			vals[i], _ = f.Get(c) // a column the row lacks is None, as row.get(c) is
 		}
-		out = append(out, KeyMatch{Cols: group, Vals: vals})
+		out = append(out, KeyMatch{Cols: cols, Vals: vals})
 	}
 	return out
 }

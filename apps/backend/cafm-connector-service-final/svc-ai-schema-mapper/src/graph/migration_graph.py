@@ -521,15 +521,18 @@ async def _build_migration_graph(_loop) -> Any:
                 open=False,
             )
             await pool.open()
+            checkpointer = _AsyncPostgresSaver(pool, serde=CompressedJsonPlus())
             try:
-                checkpointer = _AsyncPostgresSaver(pool, serde=CompressedJsonPlus())
                 await checkpointer.setup()
-            except Exception:
-                checkpointer = None
-                await pool.close()  # a pool whose setup failed is not left open
-                raise
-            _POOLS[_loop] = pool
-            logger.info("AsyncPostgresSaver initialised and tables set up")
+            except Exception as e:
+                # The database is unreachable right now. Keep this saver: its pool reconnects
+                # when the database is back, and the tables exist already. An in-memory saver
+                # would lose a paused run's checkpoint. Not cached, so the next build tries
+                # setup() again.
+                logger.warning(f"AsyncPostgresSaver setup failed, keeping it on its pool: {e}")
+            else:
+                _POOLS[_loop] = pool
+                logger.info("AsyncPostgresSaver initialised and tables set up")
         except Exception as e:
             logger.warning(f"AsyncPostgresSaver init failed: {e}")
 

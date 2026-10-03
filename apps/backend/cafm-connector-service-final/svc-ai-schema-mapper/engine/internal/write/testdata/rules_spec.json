@@ -176,16 +176,19 @@
   "asset_reading_bands": [
    [
     "reading_type",
-    "unit",
-    "lo",
-    "hi"
+    "?unit",
+    "?lo",
+    "?hi",
+    "?asset_id",
+    "?asset_category"
    ]
   ],
   "asset_readings": [
    [
     "asset_id",
     "reading_type",
-    "recorded_at"
+    "recorded_at",
+    "value"
    ]
   ],
   "building_sections": [
@@ -217,7 +220,8 @@
   ],
   "maintenance_plans": [
    [
-    "sm_code"
+    "sm_code",
+    "asset_id"
    ]
   ],
   "ppm_visits": [
