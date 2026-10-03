@@ -284,7 +284,9 @@ func index(list []string, s string) int {
 
 // ── the ISO 8601 parser (string_to_dts with no format) ─────────────────────────────────────────
 
-func cSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r' }
+func cSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'
+}
 
 // parseISO is pandas' parse_iso_8601_datetime with no format to follow: a date (YYYY, YYYY-MM,
 // YYYY-MM-DD with - . / \ or space between, or YYYYMMDD), then optionally T or space and a time

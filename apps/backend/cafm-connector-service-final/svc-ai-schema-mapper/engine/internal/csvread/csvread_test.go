@@ -114,14 +114,14 @@ func TestReadFailsWherePandasFails(t *testing.T) {
 
 func TestDelimiterIsIngestsFirstMatch(t *testing.T) {
 	cases := map[string]byte{
-		"a,b\n1,2":                   ',',
-		"a\tb\n1\t2, with comma":     ',', // any comma in the first five lines wins
-		"a\tb\n1\t2":                 '\t',
-		"a;b\n1;2":                   ';',
-		"a|b\n1|2":                   '|',
-		"plain":                      ',',
-		"1\n2\n3\n4\n5\n6,7":         ',', // the sixth line is not looked at — and nothing else matched
-		"1\n2\n3\n4\n5\t\n6;7":       '\t',
+		"a,b\n1,2":                      ',',
+		"a\tb\n1\t2, with comma":        ',', // any comma in the first five lines wins
+		"a\tb\n1\t2":                    '\t',
+		"a;b\n1;2":                      ';',
+		"a|b\n1|2":                      '|',
+		"plain":                         ',',
+		"1\n2\n3\n4\n5\n6,7":            ',', // the sixth line is not looked at — and nothing else matched
+		"1\n2\n3\n4\n5\t\n6;7":          '\t',
 		strings.Repeat("x", 5000) + ",": ',',
 	}
 	for text, want := range cases {

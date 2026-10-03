@@ -276,15 +276,15 @@ func TestValuesThatFailTheWholeRead(t *testing.T) {
 		return book{rows: `<row r="1"><c r="A1" s="1"><v>` + x + `</v></c></row>`, fmts: []any{"[h]:mm:ss"}}
 	}
 	cases := map[string]book{
-		"days=1000000000; must have magnitude <= 999999999":  dur("1000000000"),
-		"days=-1000000000; must have magnitude <= 999999999": dur("-999999999.9"),
-		"days=2147483647; must have magnitude <= 999999999":  dur("-3000000000"),
-		"Python int too large to convert to C long":          dur("999999999"),
-		"cannot convert float NaN to integer":                {rows: `<row r="1">` + c("A1", "", v("NaN")) + `</row>`},
-		"cannot convert float infinity to integer":           {rows: `<row r="1">` + c("A1", "", v("1e400")) + `</row>`},
-		"Unsupported cell error value '#SPILL!'":             {rows: `<row r="1">` + c("A1", `t="e"`, v("#SPILL!")) + `</row>`},
+		"days=1000000000; must have magnitude <= 999999999":   dur("1000000000"),
+		"days=-1000000000; must have magnitude <= 999999999":  dur("-999999999.9"),
+		"days=2147483647; must have magnitude <= 999999999":   dur("-3000000000"),
+		"Python int too large to convert to C long":           dur("999999999"),
+		"cannot convert float NaN to integer":                 {rows: `<row r="1">` + c("A1", "", v("NaN")) + `</row>`},
+		"cannot convert float infinity to integer":            {rows: `<row r="1">` + c("A1", "", v("1e400")) + `</row>`},
+		"Unsupported cell error value '#SPILL!'":              {rows: `<row r="1">` + c("A1", `t="e"`, v("#SPILL!")) + `</row>`},
 		"Cell string index not found in shared strings table": {rows: `<row r="1">` + c("A1", `t="s"`, v("9")) + `</row>`, strings: []string{"a"}},
-		"Parse float error: invalid float literal":           {rows: `<row r="1">` + c("A1", `t="n"`, v("abc")) + `</row>`},
+		"Parse float error: invalid float literal":            {rows: `<row r="1">` + c("A1", `t="n"`, v("abc")) + `</row>`},
 		`Unknown cell 't' attribute: "zz"`:                    {rows: `<row r="1">` + c("A1", `t="zz"`, v("x")) + `</row>`},
 	}
 	for want, b := range cases {
@@ -329,7 +329,9 @@ func TestTheFrameIngestBuildsFromASheet(t *testing.T) {
 	s := func(ref string, i int) string { return c(ref, `t="s"`, v(fmt.Sprint(i))) }
 	b := func(ref, x string) string { return c(ref, `t="b"`, v(x)) }
 	n := func(ref, x string) string { return c(ref, "", v(x)) }
-	row := func(r int, cells ...string) string { return fmt.Sprintf(`<row r="%d">`, r) + strings.Join(cells, "") + "</row>" }
+	row := func(r int, cells ...string) string {
+		return fmt.Sprintf(`<row r="%d">`, r) + strings.Join(cells, "") + "</row>"
+	}
 	cases := []struct {
 		name string
 		b    book

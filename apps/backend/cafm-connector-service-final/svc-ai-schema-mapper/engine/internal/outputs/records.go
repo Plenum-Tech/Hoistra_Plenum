@@ -14,8 +14,8 @@ type table struct {
 	t    *arrowtab.Table
 }
 
-func (t *table) rows() int         { return t.t.Rows }
-func (t *table) cols() []string    { return t.t.Columns }
+func (t *table) rows() int             { return t.t.Rows }
+func (t *table) cols() []string        { return t.t.Columns }
 func (t *table) at(c, r int) cell.Cell { return t.t.Cell(c, r) }
 
 // routed is one destination: its source tables, rows in order (`extend`).

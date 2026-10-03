@@ -32,9 +32,9 @@ func TestFloatReprMatchesPython(t *testing.T) {
 func TestStripUsesPythonsWhitespace(t *testing.T) {
 	cases := map[string]string{
 		"\x1c　 a b \x1f": "a b",
-		"​ a":                 "​ a", // ZWSP is not whitespace to Python
-		"\u0085x\u00a0":            "x",
-		" \t5\n":                   "5",
+		"​ a":            "​ a", // ZWSP is not whitespace to Python
+		"\u0085x\u00a0":  "x",
+		" \t5\n":         "5",
 	}
 	for in, want := range cases {
 		if got := Strip(in); got != want {

@@ -45,7 +45,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func (s *Spec) IsBuildingLinked(t string) bool   { return contains(s.BuildingLinkedTables, t) }
+func (s *Spec) IsBuildingLinked(t string) bool    { return contains(s.BuildingLinkedTables, t) }
 func (s *Spec) IsBuildingHintTable(t string) bool { return contains(s.BuildingHintTables, t) }
 func (s *Spec) IsBuildingViaAsset(t string) bool  { return contains(s.BuildingViaAssetTables, t) }
 func (s *Spec) IsKnownCore(t string) bool         { return contains(s.KnownCoreTables, t) }

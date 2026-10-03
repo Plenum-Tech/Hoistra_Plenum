@@ -110,7 +110,9 @@ func (e *Emitter) Result(v any) error {
 	return e.write(event{Type: "result", Result: v})
 }
 
-func (e *Emitter) Error(code, msg string) { _ = e.write(event{Type: "error", Code: code, Message: msg}) }
+func (e *Emitter) Error(code, msg string) {
+	_ = e.write(event{Type: "error", Code: code, Message: msg})
+}
 
 // ReadJob decodes a job file strictly: an unknown field means Python and Go disagree about
 // the contract, which must fail loudly rather than be ignored.

@@ -11,6 +11,15 @@ ADMIN_DSN = (DSN or "").replace("/parity_run", "/parity")
 def parity_db():
     if not DSN:
         pytest.skip("parity database not available (engine/scripts/parity_db.sh up; HOIST_PARITY=1)")
+    # The Python writer under test writes through DB_URL, not HOIST_PARITY_DSN: both must name the
+    # throwaway parity server, never a stack's database.
+    from urllib.parse import urlparse
+
+    from src.config import get_settings
+
+    hosts = {urlparse(DSN).hostname, urlparse(get_settings().db_url.replace("+asyncpg", "")).hostname}
+    if hosts != {"hoist-parity-pg"}:
+        pytest.fail(f"parity tests must run against hoist-parity-pg only (got {sorted(h or '' for h in hosts)})")
     return {"dsn_sync": DSN, "dsn_async": DSN.replace("postgresql://", "postgresql+asyncpg://")}
 
 

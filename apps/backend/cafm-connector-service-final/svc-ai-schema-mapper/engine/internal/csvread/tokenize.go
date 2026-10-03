@@ -61,9 +61,9 @@ func tokenize(text string, delim byte) ([]record, int, error) {
 	var recs []record
 	var fields []string
 	var field []byte
-	lines := 0      // file_lines: record ends and skipped lines so far
-	quoteRow := -1  // the record a quoted field started in
-	lineStart := 0  // where the current physical line began (for the whitespace backtrack)
+	lines := 0     // file_lines: record ends and skipped lines so far
+	quoteRow := -1 // the record a quoted field started in
+	lineStart := 0 // where the current physical line began (for the whitespace backtrack)
 	state := startRecord
 	endField := func() {
 		f := field

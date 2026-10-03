@@ -24,7 +24,7 @@ func TestDuplicateSheetTitlesFollowOpenpyxl(t *testing.T) {
 func TestQuoteIdentFollowsTheExportersRegex(t *testing.T) {
 	cases := map[string]string{
 		"abc": "abc", "Abc_1": "Abc_1", "_x": "_x", "1abc": `"1abc"`, "a b": `"a b"`, `a"b`: `"a""b"`,
-		"abc\n": "abc\n", // re.match's $ also matches before a final newline
+		"abc\n":  "abc\n", // re.match's $ also matches before a final newline
 		"ſtatus": "ſtatus", "Kelvin_K": "Kelvin_K", "é": `"é"`, "": `""`,
 	}
 	for in, want := range cases {
