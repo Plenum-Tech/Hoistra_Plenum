@@ -4288,10 +4288,38 @@ class DeepAgentOrchestrator:
             exp = str(r.get("expiry_date") or "")[:10]
             return f"{r.get('id')} · {typ} · {owner}" + (f" · expiry {exp}" if exp else "")
 
+        # The flags (is_lapsed, is_expiring_soon, is_blocked) are set by one fetch path and not by
+        # another: the cron run of 4 Oct 2026 handed the analyst "by status: Lapsed 9" and
+        # "lapsed/expired: 0" in the same block, and the analyst believed the zero. Status and
+        # dates are on every row; the flags are only a shortcut.
+        from datetime import date as _date
+
+        from .compliance_answer import _is_at_risk, _is_blocked, _is_lapsed
+
+        def days_of(r: dict[str, Any]) -> int | None:
+            d = r.get("days_to_expiry")
+            if isinstance(d, int):
+                return d
+            exp = str(r.get("expiry_date") or "")[:10]
+            try:
+                return (_date.fromisoformat(exp) - _date.today()).days if exp else None
+            except ValueError:
+                return None
+
+        def is_lapsed(r: dict[str, Any]) -> bool:
+            d = days_of(r)
+            return bool(r.get("is_lapsed")) or _is_lapsed(r) or (d is not None and d < 0)
+
+        def is_expiring(r: dict[str, Any]) -> bool:
+            if is_lapsed(r):
+                return False
+            d = days_of(r)
+            return bool(r.get("is_expiring_soon")) or _is_at_risk(r) or (d is not None and 0 <= d <= 90)
+
         total = len(rows)
-        lapsed = [r for r in rows if r.get("is_lapsed")]
-        expiring = [r for r in rows if r.get("is_expiring_soon")]
-        blocked = [r for r in rows if r.get("is_blocked")]
+        lapsed = [r for r in rows if is_lapsed(r)]
+        expiring = [r for r in rows if is_expiring(r)]
+        blocked = [r for r in rows if r.get("is_blocked") or _is_blocked(r)]
         by_status: dict[str, int] = {}
         for r in rows:
             by_status[str(r.get("status") or "unknown")] = by_status.get(str(r.get("status") or "unknown"), 0) + 1
@@ -4323,6 +4351,60 @@ class DeepAgentOrchestrator:
         lines.append(f"- on a blocked vendor: {len(blocked)}"
                      + (" - " + "; ".join(sorted({str(r.get('vendor_name') or '?') for r in blocked})) if blocked else ""))
         return "\n".join(lines) + "\n\n"
+
+    @classmethod
+    def _facts_fallback(cls, draft: dict[str, Any] | None, rows: list[dict[str, Any]] | None,
+                        review: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The answer when the reviewer said revise and the revision never parsed: the counts
+        and names the register holds, written by code - never the draft the reviewer rejected.
+
+        4 Oct 2026, a scheduled "which certificates expired?": draft said 0 (the FACTS flags
+        were empty), the reviewer caught it, the 59 s revision was cut mid-JSON, and the
+        rejected draft shipped. None without rows (nothing to assert).
+        """
+        if not rows:
+            return None
+        facts = cls._compliance_facts(rows)
+        from .compliance_answer import _is_at_risk, _is_blocked, _is_lapsed
+
+        def name(r: dict[str, Any]) -> str:
+            typ = r.get("certificate_type_code") or r.get("cert_type") or "certificate"
+            owner = r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name"))
+            exp = str(r.get("expiry_date") or "")[:10]
+            return f"{typ} — {owner or '?'}" + (f" (expired {exp})" if exp else "")
+
+        lapsed = [r for r in rows if _is_lapsed(r) or r.get("is_lapsed")]
+        expiring = [r for r in rows if not (_is_lapsed(r) or r.get("is_lapsed")) and (_is_at_risk(r) or r.get("is_expiring_soon"))]
+        blocked = sorted({str(r.get("vendor_name") or "?") for r in rows if _is_blocked(r) or r.get("is_blocked")})
+        ids = lambda xs: [str(r.get("id")) for r in xs if r.get("id")]  # noqa: E731
+        narrative = (f"{len(lapsed)} certificate{'s have' if len(lapsed) != 1 else ' has'} lapsed or expired out of {len(rows)} on the register"
+                     + (f"; {len(expiring)} more expire within 90 days" if expiring else "")
+                     + (f"; blocked vendors: {', '.join(blocked)}" if blocked else "") + ". "
+                     + ("Lapsed: " + "; ".join(name(r) for r in lapsed[:12]) + ("…" if len(lapsed) > 12 else "") + "." if lapsed else "No certificate has lapsed."))
+        sev = "critical" if lapsed else ("warning" if expiring else "ok")
+        groups = []
+        by_owner: dict[str, list[dict[str, Any]]] = {}
+        for r in lapsed:
+            owner = str((r.get("vendor_name") if str(r.get("cert_scope") or "").lower() == "vendor" else (r.get("building_name") or r.get("site_name"))) or "?")
+            by_owner.setdefault(owner, []).append(r)
+        for owner, rs in sorted(by_owner.items(), key=lambda kv: -len(kv[1])):
+            scope = "Vendor" if str(rs[0].get("cert_scope") or "").lower() == "vendor" else "Building"
+            groups.append({"owner": owner, "scope": scope, "severity": "critical", "headline": f"{len(rs)} lapsed",
+                           "points": [name(r) for r in rs[:6]], "cert_ids": ids(rs), "sub_question_id": "q1"})
+        out = {
+            "narrative": narrative,
+            "sections": [], "groups": groups[:8],
+            "kpis": [{"count": len(lapsed), "label": "Lapsed or expired", "sublabel": "status Lapsed/Expired or past expiry", "severity": "critical" if lapsed else "ok", "unit": "certificates", "cert_ids": ids(lapsed)},
+                     {"count": len(expiring), "label": "Expiring within 90 days", "sublabel": "not yet lapsed", "severity": "warning" if expiring else "ok", "unit": "certificates", "cert_ids": ids(expiring)},
+                     {"count": len(blocked), "label": "Blocked vendors", "sublabel": "an accreditation lapsed", "severity": "critical" if blocked else "ok", "unit": "vendors", "cert_ids": []}],
+            "actions": [{"title": f"Renew or reassign: {name(r)}", "scope": "Vendor" if str(r.get("cert_scope") or "").lower() == "vendor" else "Building",
+                         "severity": "critical", "tags": ["lapsed"], "cert_ids": ids([r]), "sub_question_id": "q1"} for r in lapsed[:6]],
+            "insights": [], "certificates": (draft or {}).get("certificates") or [], "pending": [], "offers": [],
+            "validation": {**((draft or {}).get("validation") or {}),
+                           "review": {"reviewer": (review or {}).get("reason"), "revision": "failed to parse; answer built from the register counts", "facts": facts[:1500]}},
+        }
+        log.warning("compliance.revision_failed.facts_fallback", lapsed=len(lapsed), rows=len(rows))
+        return out
 
     async def _claude_analyse_compliance(
         self,
@@ -5150,6 +5232,7 @@ class DeepAgentOrchestrator:
                         + query_notes,
                         taxonomy=True,
                     )
+                    revised = revised or self._facts_fallback(analysis, fetched_rows, review)
                     if revised and (revised.get("narrative") or "").strip():
                         if fetched_rows:
                             revised, _ = self._validate_compliance_response(
@@ -6435,6 +6518,7 @@ class DeepAgentOrchestrator:
                 role="analyst_revision",
                 facts=self._compliance_facts(rows),
             )
+            revised = revised or self._facts_fallback(analysis, rows, review)
             if revised and str(revised.get("narrative") or "").strip():
                 if rows:
                     revised, _ = self._validate_compliance_response(
@@ -7008,6 +7092,47 @@ class DeepAgentOrchestrator:
         return await self._invoke({"messages": messages}, thread_id, sid)
 
     async def run_stateful(
+        self,
+        user_message: str,
+        session_id: str,
+        extra_context: str | None = None,
+        preferred_engine: Phase2AgentId | None = None,
+        detected_engines: list[str] | None = None,
+        pipeline_tool_calls: list[dict[str, Any]] | None = None,
+        filenames: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """run_stateful, traced whatever path answers it.
+
+        The REST path (report cards, Hoist Crons, API callers) opened its trace turn only
+        inside _invoke; the compliance shortcut, the phase-2 engine path and the preflight
+        answers returned before that, so no scheduled question ever appeared on Hoist Traces
+        (found 4 Oct 2026: 82 activity rows for the day's cron sessions, 0 turns). The turn
+        is opened here, before anything can return, and closed here on every exit; a path
+        that already closed it (_invoke) is left alone by the trace.
+        """
+        activity_log.set_current_session(session_id, session_id)
+        activity_log.ensure_turn()
+        t0 = time.perf_counter()
+        activity_log.fire(agent="orchestrator", stage="turn", direction="input", summary=(user_message or "")[:300],
+                          payload={"message": user_message, "mode": "rest", "context": (extra_context or "")[:300] or None})
+        try:
+            result = await self._run_stateful_inner(
+                user_message=user_message, session_id=session_id, extra_context=extra_context,
+                preferred_engine=preferred_engine, detected_engines=detected_engines,
+                pipeline_tool_calls=pipeline_tool_calls, filenames=filenames)
+        except Exception as exc:
+            activity_log.fire(agent="orchestrator", stage="turn", direction="error", summary=str(exc)[:300], ok=False,
+                              error=str(exc)[:300], latency_ms=(time.perf_counter() - t0) * 1000)
+            raise
+        answer = str((result or {}).get("answer") or "")
+        activity_log.fire(agent="orchestrator", stage="turn", direction="output", summary=answer[:300],
+                          payload={"answer": answer, "tool_calls": list((result or {}).get("tool_calls") or []), "mode": "rest",
+                                   "route": ((result or {}).get("route_metadata") or {}).get("intent")},
+                          ok=bool((result or {}).get("success", True)), error=(result or {}).get("error"),
+                          latency_ms=(time.perf_counter() - t0) * 1000)
+        return result
+
+    async def _run_stateful_inner(
         self,
         user_message: str,
         session_id: str,

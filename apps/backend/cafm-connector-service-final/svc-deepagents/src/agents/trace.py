@@ -304,7 +304,7 @@ def on_activity(kw: dict[str, Any]) -> None:
                 t.question = str(payload.get("message") or inp.get("latest_user_message") or kw.get("summary") or "")[:4000]
                 t.root.input = _bound({"message": t.question, "mode": payload.get("mode")})
                 return
-            if t is None:
+            if t is None or t.flushed:
                 return
             answer = payload.get("answer") or ("gate_interrupt" if "gate_interrupt" in payload else "") or kw.get("summary") or ""
             t.root.close(output=_bound({"answer": answer}), ok=bool(kw.get("ok", True)), error=kw.get("error"),
