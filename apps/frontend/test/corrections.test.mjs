@@ -90,3 +90,14 @@ test('a correction from an agent row is addressed to that agent', () => {
   assert.equal(correctionText({ exclude: [], period: '', field: '', route: '', why: '', note: 'include building certificates in lapsed counts' }, { agent: 'compliance engine', building: '' }),
     'For the compliance engine: include building certificates in lapsed counts.');
 });
+
+
+test('a thumbs-down reason teaches only when it says why - the same rule the server applies', async () => {
+  const { whyTeaches, WHY_MIN } = await import('../src/logic/corrections.js');
+  assert.equal(WHY_MIN, 12);
+  assert.equal(whyTeaches('wrong'), false);
+  assert.equal(whyTeaches('Not right.'), false);
+  assert.equal(whyTeaches('   bad   '), false);
+  assert.equal(whyTeaches('It counted cancelled jobs as raised'), true);
+  assert.equal(whyTeaches(''), false);
+});

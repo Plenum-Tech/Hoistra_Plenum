@@ -17,6 +17,16 @@
 // until the reader acts. Pure functions are tested in test/corrections.test.mjs.
 import { deepAgentsApi } from '../api/deepAgents.js';
 
+// Whether a thumbs-down reason is enough to become a teaching - the server's own rule
+// (agents/auto_teach.py: twelve characters or more, not a one-word verdict), so the box can
+// say so before the reader presses Send.
+export const WHY_MIN = 12;
+const WHY_NOISE = /^(wrong|no|bad|incorrect|not right|nope|rubbish|useless)[.!\s]*$/i;
+export function whyTeaches(comment) {
+  const c = String(comment || '').replace(/\s+/g, ' ').trim();
+  return c.length >= WHY_MIN && !WHY_NOISE.test(c);
+}
+
 export const PERIODS = [
   { key: '', label: 'Keep the period' }, { key: 'last_month', label: 'Last month' }, { key: 'this_month', label: 'This month' },
   { key: 'last_90_days', label: 'Last 90 days' }, { key: 'this_year', label: 'This year' }
@@ -230,8 +240,27 @@ export const correctionMethods = {
   async crRate(turnId, rating) {
     const cur = (this.state.crRatings || {})[turnId] || null;
     const next = cur === rating ? null : rating;
-    this.setState((p) => ({ crRatings: Object.assign({}, p.crRatings || {}, { [turnId]: next }) }));
+    // A thumbs-down opens the one-line "why?" box under the answer: the reason is what teaches
+    // (channel 5); the rating alone is kept on the trace and teaches nothing.
+    this.setState((p) => ({ crRatings: Object.assign({}, p.crRatings || {}, { [turnId]: next }),
+      crWhy: next === 'down' ? { turnId: turnId, text: '' } : (p.crWhy && p.crWhy.turnId === turnId ? null : p.crWhy) }));
     try { await deepAgentsApi.traceFeedback(turnId, next, null); } catch (e) { this.flash('Could not save the rating: ' + ((e && e.message) || e)); }
+  },
+  crWhySet(text) { this.setState((p) => ({ crWhy: p.crWhy ? Object.assign({}, p.crWhy, { text: text }) : null })); },
+  crWhySkip() { this.setState({ crWhy: null }); },
+  async crWhySend() {
+    const w = this.state.crWhy;
+    const text = String((w && w.text) || '').replace(/\s+/g, ' ').trim();
+    if (!w || !text) { this.setState({ crWhy: null }); return; }
+    this.setState({ crWhy: null });
+    try {
+      const out = await deepAgentsApi.traceFeedback(w.turnId, 'down', text);
+      this.flash((out && (out.taught || []).length) ? 'Thanks - saved as a teaching; similar questions get it from now on.'
+        : (whyTeaches(text) ? 'Thanks - noted on the trace.' : 'Noted on the trace. A fuller reason (a sentence) would become a teaching.'));
+      if (typeof this.mpLoad === 'function' && this.state.mpLoadedAt) this.mpLoad();
+    } catch (e) {
+      this.flash('Could not save the reason: ' + ((e && e.message) || e));
+    }
   },
   // Rail rows (from the stream) joined to the stored run: queries under each tool, Correct on
   // tools and queries, Edit plan on the plan. Rows come back unchanged when the run is unknown.

@@ -1979,6 +1979,13 @@ export const renderValsMethods = {
         rating: (s.crRatings || {})[m.turnId] || null,
         rateUp: () => this.crRate(m.turnId, "up"),
         rateDown: () => this.crRate(m.turnId, "down"),
+        // The one-line "why?" under a thumbs-down; the reason becomes a teaching (channel 5).
+        whyShow: s.crWhy && s.crWhy.turnId === m.turnId ? "flex" : "none",
+        whyText: s.crWhy && s.crWhy.turnId === m.turnId ? s.crWhy.text : "",
+        whySet: (e) => this.crWhySet(e.target.value),
+        whyKey: (e) => { if (e.key === "Enter") { e.preventDefault(); this.crWhySend(); } if (e.key === "Escape") this.crWhySkip(); },
+        whySend: () => this.crWhySend(),
+        whySkip: () => this.crWhySkip(),
         suggest: () => { this.setState({ ccTraceIdx: i }); this.crLoadRun(m.turnId); this.crOpen(m.turnId, null, "suggestion"); }
       })),
       ccEditText: s.ccEditText,

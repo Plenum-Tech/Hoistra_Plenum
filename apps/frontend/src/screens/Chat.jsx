@@ -155,6 +155,14 @@ export default function Chat({ vals }) {
                           <button type="button" aria-label="Rate down" onClick={m.rateDown} style={{ ...BARE, fontSize: "12px", padding: "3px 8px", borderRadius: "6px", border: "1px solid " + (m.rating === "down" ? "var(--st-risk)" : "var(--color-divider)"), color: m.rating === "down" ? "var(--st-risk)" : "var(--color-neutral-400)", cursor: "pointer" }}><i className="ph ph-thumbs-down"></i></button>
                           <button type="button" onClick={m.suggest} style={{ ...BARE, fontSize: "11.5px", padding: "3px 10px", borderRadius: "6px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "5px" }}><i className="ph ph-chalkboard-teacher"></i>{"Suggest a correction"}</button>
                         </div>
+                        {/* Why? One line under a thumbs-down. A reason of a sentence becomes a company
+                            teaching (channel 5); Enter sends, Escape skips. */}
+                        <div style={{ display: m.whyShow, alignItems: "center", gap: "6px", marginTop: "6px" }}>
+                          <input type="text" value={m.whyText} onChange={m.whySet} onKeyDown={m.whyKey} autoFocus placeholder="Why was it wrong? One line - it becomes a teaching for similar questions."
+                            aria-label="Why was this answer wrong" style={{ flex: "1", minWidth: "0", font: "inherit", fontSize: "11.5px", padding: "5px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "inherit" }} />
+                          <button type="button" onClick={m.whySend} style={{ ...BARE, fontSize: "11.5px", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--color-accent)", color: "var(--color-accent)" }}>{"Send"}</button>
+                          <button type="button" onClick={m.whySkip} aria-label="Skip" style={{ ...BARE, fontSize: "11px", padding: "4px 8px", color: "var(--color-neutral-500)" }}>{"Skip"}</button>
+                        </div>
                         <div style={{ display: m.migShow, gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
                           {(m.migIds || []).map((g) => (
                             <button key={g.id} type="button" className="hv13" onClick={g.open} title={g.id} style={{ ...BARE, fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
