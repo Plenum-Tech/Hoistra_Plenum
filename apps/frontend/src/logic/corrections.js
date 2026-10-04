@@ -200,10 +200,13 @@ export const correctionMethods = {
       this.setState((p) => ({
         ccBusy: false, ccStream: null,
         ccChat: (p.ccChat || []).concat([{ role: 'bot', text: out.answer || '', calls: (out.tool_calls || []).map((t) => t.tool).filter(Boolean),
-          trace: [{ at: 0, kind: 'reasoning', label: 'Re-run', text: 'Steps replayed with your correction: ' + (out.applied || []).join('; ') }],
+          trace: [{ at: 0, kind: 'reasoning', label: 'Re-run', text: 'Steps replayed with your correction: ' + (out.applied || []).join('; ') }]
+            .concat((out.taught || []).length ? [{ at: 0, kind: 'reasoning', label: 'Taught', text: 'Remembered for similar questions: ' + out.taught.join(' · ') }] : []),
           ms: Date.now() - t0, turnId: out.turn_id || null, rerunOf: out.rerun_of || o.turnId }])
       }));
       if (out.turn_id) setTimeout(() => this.crLoadRun(out.turn_id), 800);
+      // The correction is a company teaching from now on (channel 5): say so once, where the answer is.
+      if ((out.taught || []).length) this.flash('Saved as a teaching too — similar questions get it from now on.');
       this.setState((p) => ({ ccTraceIdx: (p.ccChat || []).length - 1 }));
     } catch (e) {
       this.setState((p) => ({ ccBusy: false, ccStream: null, ccChat: (p.ccChat || []).concat([{ role: 'bot', error: true, note: true, text: 'Could not re-run: ' + ((e && e.message) || e) }]) }));

@@ -121,7 +121,7 @@ export default function CorrectionDrawer({ vals }) {
         <button type="button" className="btn btn-primary" onClick={vals.crRerun} disabled={vals.crBusy} style={{ fontSize: "12px", padding: "7px 14px", cursor: "pointer" }}>{"Re-run the steps"}</button>
         <button type="button" onClick={vals.crReanswer} disabled={vals.crBusy} style={QUIET}>{"Re-answer freely"}</button>
         <button type="button" onClick={vals.crTeach} disabled={vals.crBusy} style={{ ...QUIET, borderColor: "var(--color-accent)", color: "var(--color-accent)" }}>{vals.crBusy ? "Saving…" : "Save as teaching"}</button>
-        <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginLeft: "auto" }}>{"Re-run: the same steps, corrected · Re-answer: the orchestrator decides again · Teaching: remembered company-wide"}</span>
+        <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginLeft: "auto" }}>{"Re-run: the same steps, corrected, and remembered for similar questions · Re-answer: the orchestrator decides again · Teaching: remembered only"}</span>
       </div>
     </div>
   );

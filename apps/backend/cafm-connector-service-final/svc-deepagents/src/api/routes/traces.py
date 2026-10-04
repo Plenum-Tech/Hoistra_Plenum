@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ...agents import trace
+from ...agents import auto_teach, trace
 from ...http_client import caller_authorization, caller_organization_id
 from ..deps import get_orchestrator
 from ...services.principal import Principal, caller_principal, current_principal
@@ -78,7 +78,15 @@ async def set_feedback(turn_id: str, body: Feedback, organization_id: str | None
     org = _act(principal, organization_id)
     if not await trace.set_feedback(principal, org, turn_id, body.rating, body.comment):
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
-    return {"ok": True}
+    # A thumbs-down with a reason teaches by itself (agents/auto_teach.py).
+    taught: list[str] = []
+    if body.rating == "down" and body.comment:
+        turn = await trace.get_turn(principal, org, turn_id)
+        t = auto_teach.teaching_from_feedback((turn or {}).get("question") or "", body.comment)
+        if t:
+            taught = await auto_teach.teach([t], principal=principal, org=org, source_thread=(turn or {}).get("session_id"),
+                                            subject=auto_teach.subject_of(turn))
+    return {"ok": True, "taught": taught}
 
 
 class Correction(BaseModel):
@@ -110,9 +118,15 @@ async def rerun_turn(turn_id: str, body: RerunBody, request: Request, organizati
         raise HTTPException(status_code=404, detail={"ok": False, "error": "Turn not found"})
     if not body.corrections:
         raise HTTPException(status_code=422, detail={"ok": False, "error": "Say what to correct first."})
-    out = await orchestrator.rerun_turn(turn, [c.model_dump() for c in body.corrections], session_id=body.session_id)
+    corrections = [c.model_dump() for c in body.corrections]
+    out = await orchestrator.rerun_turn(turn, corrections, session_id=body.session_id)
     if not out.get("ok"):
         raise HTTPException(status_code=422, detail={"ok": False, "error": out.get("error") or "Could not re-run this turn."})
+    # Every correction that re-ran the turn is remembered for the next similar question
+    # (agents/auto_teach.py) - the re-run fixed one answer; the teaching fixes the rest.
+    texts = [t for t in (auto_teach.teaching_from_correction(turn.get("question") or "", c) for c in corrections) if t]
+    out["taught"] = await auto_teach.teach(texts, principal=principal, org=org, source_thread=body.session_id,
+                                           subject=auto_teach.subject_of(turn))
     return out
 
 
