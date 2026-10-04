@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -66,6 +66,11 @@ class Principal:
     role: str
     #: None = every building in the company. () = allocated to nothing.
     building_ids: tuple[UUID, ...] | None
+    #: A superadmin who chose a company to act for (X-Acting-Organization-Id): organization_id
+    #: is that company and the reads are scoped to it like an admin's. Found 4 Oct 2026: a
+    #: superadmin "acting as Plenum Technologies" asked for outstanding work orders and the
+    #: answer carried Northbridge's B-101 jobs, because a superadmin read everything.
+    acting: bool = False
 
     @property
     def is_admin(self) -> bool:
@@ -74,6 +79,11 @@ class Principal:
     @property
     def is_superadmin(self) -> bool:
         return (self.role or "").lower() in SUPERADMIN_ROLES
+
+    @property
+    def unrestricted(self) -> bool:
+        """Reads every company: a superadmin who has NOT chosen a company to act for."""
+        return self.is_superadmin and not self.acting
 
 
 def _detail(error: str, reason: str, **extra: Any) -> dict:
@@ -143,9 +153,36 @@ async def resolve(authorization: str | None) -> Principal:
     return principal
 
 
-async def current_principal(authorization: str | None = Header(default=None)) -> Principal:
-    """FastAPI dependency: the signed-in caller, or 401."""
-    return await resolve(authorization)
+ACTING_HEADER = "X-Acting-Organization-Id"
+
+
+def acting_as(principal: Principal, acting_organization_id: str | None) -> Principal:
+    """The principal narrowed to the company it is acting for, when the header names one.
+
+    A superadmin gets that company (every building in it). Anyone else may only name their own
+    company; naming another is refused rather than ignored, so a stale header never reads as a
+    silent widening. A malformed id is refused for the same reason.
+    """
+    if acting_organization_id in (None, ""):
+        return principal
+    try:
+        wanted = UUID(str(acting_organization_id).strip())
+    except (ValueError, TypeError):
+        raise _forbidden("That is not a company id.", "bad_organization") from None
+    if principal.is_superadmin:
+        return replace(principal, organization_id=wanted, building_ids=None, acting=True)
+    if wanted == principal.organization_id:
+        return principal
+    raise _forbidden(
+        "You can only work within your own company.", "wrong_organization",
+        your_organization_id=str(principal.organization_id) if principal.organization_id else None,
+    )
+
+
+async def current_principal(authorization: str | None = Header(default=None),
+                            x_acting_organization_id: str | None = Header(default=None, alias=ACTING_HEADER)) -> Principal:
+    """FastAPI dependency: the signed-in caller, or 401 - acting for the company named, if any."""
+    return acting_as(await resolve(authorization), x_acting_organization_id)
 
 
 async def require_admin(principal: Principal = Depends(current_principal)) -> Principal:

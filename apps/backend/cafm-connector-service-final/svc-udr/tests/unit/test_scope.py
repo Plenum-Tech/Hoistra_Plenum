@@ -273,3 +273,34 @@ class TestTheDeniedListIsTheSameInBothPlaces:
         assert in_sql == set(scope.DENIED_TABLES), (
             f"only in SQL: {in_sql - set(scope.DENIED_TABLES)}; "
             f"only in Python: {set(scope.DENIED_TABLES) - in_sql}")
+
+
+class TestActingForACompany:
+    """A superadmin who chose a company to act for reads that company, not every company.
+    Found 4 Oct 2026: acting as Plenum Technologies, "what's outstanding?" listed Northbridge's
+    B-101 work orders."""
+
+    def test_an_acting_superadmin_is_scoped_like_an_admin_of_that_company(self):
+        from src.services.principal import acting_as
+        other = uuid4()
+        p = acting_as(who(role="superadmin", org=None), str(other))
+        assert p.acting and p.organization_id == other and p.building_ids is None and not p.unrestricted
+        assert dict(scope.session_settings(p)) == {scope.SETTING_UNRESTRICTED: "0", scope.SETTING_ORG: str(other), scope.SETTING_BUILDINGS: ""}
+        frag, params = scope.predicate_for(frozenset({"id", "organization_id"}), p)
+        assert frag == '"organization_id"::text = :scope_org' and params == {"scope_org": str(other)}
+
+    def test_a_superadmin_with_no_company_chosen_still_reads_everything(self):
+        from src.services.principal import acting_as
+        p = acting_as(who(role="superadmin", org=None), None)
+        assert p.unrestricted and scope.session_settings(p)[0] == (scope.SETTING_UNRESTRICTED, "1")
+        assert scope.predicate_for(frozenset({"organization_id"}), p) == ("", {})
+
+    def test_an_ordinary_user_cannot_act_for_another_company_and_a_bad_id_is_refused(self):
+        from fastapi import HTTPException
+        from src.services.principal import acting_as
+        me = who()
+        assert acting_as(me, str(ORG)) is me
+        with pytest.raises(HTTPException):
+            acting_as(me, str(uuid4()))
+        with pytest.raises(HTTPException):
+            acting_as(who(role="superadmin"), "not-a-uuid")

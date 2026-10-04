@@ -263,6 +263,11 @@ async def request(
                     _has_own = 'Authorization' in {k.title(): v for k, v in (kwargs.get('headers') or {}).items()}
                     if _auth and not _has_own:
                         kwargs['headers'] = {**(kwargs.get('headers') or {}), 'Authorization': _auth}
+                    # The company a superadmin is acting for travels as a header to every service,
+                    # so svc-udr's raw SELECTs are scoped to it too (its principal reads it).
+                    _acting = caller_organization_id.get()
+                    if _acting and 'X-Acting-Organization-Id' not in {k.title() for k in (kwargs.get('headers') or {})}:
+                        kwargs['headers'] = {**(kwargs.get('headers') or {}), 'X-Acting-Organization-Id': str(_acting)}
                     elif not _auth and not _has_own:
                         # Worth a line of its own. Downstream will answer 401 missing_token,
                         # the tool will return zero rows, and the agent will tell the user the

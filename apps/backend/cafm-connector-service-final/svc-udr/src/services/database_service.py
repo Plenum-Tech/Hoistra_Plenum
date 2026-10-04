@@ -120,7 +120,7 @@ class DatabaseService:
         migrations that legitimately write across companies keep working.
         """
         principal = self._principal
-        if principal is None or principal.is_superadmin:
+        if principal is None or principal.unrestricted:
             return data
         columns = await scope.scope_columns(self._db, table)
         if scope.ORG_COLUMN not in columns:

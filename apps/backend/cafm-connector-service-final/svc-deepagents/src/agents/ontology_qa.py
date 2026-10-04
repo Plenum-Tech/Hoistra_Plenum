@@ -1590,6 +1590,14 @@ def scope_settings(principal) -> list[tuple[str, str]]:
     if principal is None:
         raise NotAllowed("no signed-in caller for this read")
     if principal.role == "superadmin":
+        # Acting for a company (the frontend's viewAsCompany, carried in caller_organization_id)
+        # reads that company and nothing else. Found 4 Oct 2026: acting as Plenum Technologies,
+        # "what's outstanding?" listed Northbridge's B-101 work orders.
+        from ..http_client import caller_organization_id
+
+        acting = (caller_organization_id.get() or "").strip()
+        if acting:
+            return [("app.udr_unrestricted", "0"), ("app.udr_org", acting), ("app.udr_buildings", "")]
         return [("app.udr_unrestricted", "1"), ("app.udr_org", ""), ("app.udr_buildings", "")]
     if principal.building_ids is not None and not principal.building_ids:
         raise NotAllowed("you are not allocated to any building")

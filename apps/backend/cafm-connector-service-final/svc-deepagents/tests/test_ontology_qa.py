@@ -391,3 +391,23 @@ def test_open_work_that_can_endanger_people_is_flagged_with_its_reason():
     assert r(category="Water Hygiene", title="Closed-system inhibitor top-up and dosing pot valve replacement") is None
     assert r(category="HVAC \u00b7 Terminal Units", title="FCU L4-12 not holding set point") is None
     assert "Risk to life" in oq.PENDING_RULES
+
+
+class TestActingSuperadmin:
+    """A superadmin acting for a company (caller_organization_id) is scoped to it; one who has
+    chosen no company still reads everything. Found 4 Oct 2026 on "what's outstanding?"."""
+
+    def test_acting_narrows_and_not_acting_does_not(self):
+        from src.http_client import caller_organization_id
+        org = uuid.uuid4()
+        p = Principal(uuid.uuid4(), "sa@x", None, "superadmin", True, None)
+        tok = caller_organization_id.set(str(org))
+        try:
+            assert dict(oq.scope_settings(p)) == {"app.udr_unrestricted": "0", "app.udr_org": str(org), "app.udr_buildings": ""}
+        finally:
+            caller_organization_id.reset(tok)
+        tok = caller_organization_id.set(None)
+        try:
+            assert dict(oq.scope_settings(p))["app.udr_unrestricted"] == "1"
+        finally:
+            caller_organization_id.reset(tok)

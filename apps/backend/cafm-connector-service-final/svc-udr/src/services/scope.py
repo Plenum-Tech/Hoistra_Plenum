@@ -157,7 +157,7 @@ def predicate_for(
     a test). It is left unrestricted deliberately: every route that reaches this passes a real
     principal, and inventing a restriction for an internal caller would silently break them.
     """
-    if principal is None or principal.is_superadmin:
+    if principal is None or principal.unrestricted:
         return "", {}
 
     parts: list[str] = []
@@ -262,7 +262,7 @@ def allocated_to_nothing(principal: Principal | None) -> bool:
     "allocated to everything" — the failure this whole change exists to stop. So the empty case
     never reaches SQL: it answers with no rows here.
     """
-    if principal is None or principal.is_superadmin:
+    if principal is None or principal.unrestricted:
         return False
     return principal.building_ids is not None and not principal.building_ids
 
@@ -277,7 +277,7 @@ def session_settings(principal: Principal | None) -> list[tuple[str, str]]:
     Values are always strings — never None. ``''`` means "not restricted by this dimension";
     the empty-building-list case is refused by ``allocated_to_nothing`` before it gets here.
     """
-    if principal is None or principal.is_superadmin:
+    if principal is None or principal.unrestricted:
         return [(SETTING_UNRESTRICTED, "1"), (SETTING_ORG, ""), (SETTING_BUILDINGS, "")]
     return [
         (SETTING_UNRESTRICTED, "0"),
