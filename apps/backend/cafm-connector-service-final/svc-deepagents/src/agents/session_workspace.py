@@ -1098,6 +1098,21 @@ def attach_route_to_result(
     result["route_metadata"] = meta
     result["workspace_status"] = workspace_snapshot(session_id)
     answer = str(result.get("answer") or "").strip()
+    # The answer as a dashboard, whichever route produced it: a scheduled question must come
+    # back as KPI cards every day, not only when the planner or the compliance engine ran
+    # (4 Oct 2026). Built from the tool outputs, never from the prose; nothing when none fit.
+    if answer and tool_calls:
+        try:
+            from . import llm_cost, planner
+            ledger = llm_cost.current()
+            built = planner.cards_from_tool_calls("", tool_calls, answer, cost=ledger.log_summary(answer[:120]) if ledger else None)
+            if built:
+                response, pipeline = built
+                tool_calls = list(tool_calls) + [{"tool": "compliance_pipeline", "input": {}, "output": pipeline},
+                                                 {"tool": "compliance_response", "input": {}, "output": response}]
+                result["tool_calls"] = tool_calls
+        except Exception as exc:  # noqa: BLE001 - cards are a presentation, never the answer
+            log.warning("cards.attach_failed", error=str(exc)[:200])
     if answer:
         record_conversation_turn(session_id, "assistant", answer)
         # The durable copy (every run_stateful path ends here; the stream path records its own).

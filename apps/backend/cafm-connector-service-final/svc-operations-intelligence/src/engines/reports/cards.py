@@ -449,12 +449,18 @@ async def _owner_token(session: AsyncSession, owner_id: UUID) -> str:
     return token
 
 
-async def _ask_orchestrator(card: ReportCard, token: str, *, http: httpx.AsyncClient | None = None) -> dict[str, Any]:
+async def _ask_orchestrator(card: ReportCard, token: str, *, organization_id: Any = None,
+                            http: httpx.AsyncClient | None = None) -> dict[str, Any]:
     payload = {
         "message": card.prompt,
         "session_id": f"report-{str(card.id)[:8]}-{int(_now().timestamp())}",
         "context": report_context(card),
     }
+    # The company the card or job belongs to, named on the call. The token alone is not enough:
+    # a superadmin's token resolves to the platform company, which holds no certificates, so a
+    # question scheduled for Plenum answered "the register is empty" (4 Oct 2026).
+    if organization_id:
+        payload["organization_id"] = str(organization_id)
     headers = {"Authorization": f"Bearer {token}"}
     timeout = float(settings.report_run_timeout_seconds)
     if http is not None:
@@ -543,7 +549,7 @@ async def run_card(session: AsyncSession, card_id: UUID, *, trigger: str = "sche
         # this call timed out. Nothing here is written until the run is over, so there is
         # nothing to keep open; commit returns the connection to the pool for the duration.
         await session.commit()
-        body = await _ask_orchestrator(card, token, http=http)
+        body = await _ask_orchestrator(card, token, organization_id=getattr(card, "organization_id", None), http=http)
         if body.get("success") is False:
             raise RuntimeError(str(body.get("error") or "the orchestrator returned no answer"))
         answer = str(body.get("answer") or "")
@@ -586,3 +592,85 @@ async def run_card(session: AsyncSession, card_id: UUID, *, trigger: str = "sche
     log.info("report_card.run", card_id=str(card.id), ok=error is None, trigger=trigger,
              duration_ms=run.duration_ms, error=(error or "")[:120])
     return run
+
+
+# ── a dashboard from the answer's own figures ────────────────────────────────────────────
+# A scheduled question must come back as cards every day whichever route answered it. When
+# the orchestrator attached no card payload (no recognised tool ran), the answer's own
+# headline figures and tables become the dashboard: a bold number with its noun is a KPI, a
+# markdown table is a group (its heading is the owner, each row a point). Nothing is invented:
+# every figure on a card is a figure the answer stated. Asked for 4 Oct 2026.
+
+_BOLD_FIG = re.compile(r"\*\*\s*([£$€]?\s?\d[\d,]*(?:\.\d+)?%?)\s*([^*]{0,60}?)\s*\*\*")
+_LEAD_FIG = re.compile(r"(?<![\w.])([£$€]?\d[\d,]*(?:\.\d+)?%?)\s+([A-Za-z][A-Za-z \-/]{2,40}?)(?=[,.;:)]|\s(?:are|is|were|was|have|has|in|at|of|across|and)\b)")
+_SEV_WORDS = (("critical", ("lapsed", "expired", "blocked", "overdue", "failed", "statutory", "critical")),
+              ("warning", ("expiring", "due", "at risk", "late", "held", "awaiting", "draft", "below", "waste")),
+              ("ok", ("current", "ok", "clear", "compliant", "none", "no ")))
+
+
+def _sev_for(text: str) -> str:
+    t = (text or "").lower()
+    for sev, words in _SEV_WORDS:
+        if any(w in t for w in words):
+            return sev
+    return "info"
+
+
+def _num(v: str) -> int | None:
+    try:
+        return int(round(float(re.sub(r"[£$€,%\s]", "", v))))
+    except ValueError:
+        return None
+
+
+def cards_from_answer(answer: str, question: str = "") -> dict[str, Any] | None:
+    """The card payload (the frontend's compliance_response shape, plus `steps`) read off a
+    markdown answer, or None when the answer states no figure and holds no table."""
+    text = answer or ""
+    kpis: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for m in list(_BOLD_FIG.finditer(text)) + list(_LEAD_FIG.finditer(text[:1200])):
+        n = _num(m.group(1))
+        label = " ".join(m.group(2).split()).strip(" -:")
+        if n is None or not label or label.lower() in seen or len(kpis) >= 6:
+            continue
+        if re.fullmatch(r"(19|20)\d\d", m.group(1)):
+            continue  # a year, not a figure
+        seen.add(label.lower())
+        kpis.append({"count": n, "label": label[:60], "sublabel": "from the answer", "severity": _sev_for(label),
+                     "unit": "other", "cert_ids": []})
+    groups: list[dict[str, Any]] = []
+    heading = question[:80] or "Findings"
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        ln = lines[i].strip()
+        if ln.startswith("#"):
+            heading = ln.lstrip("#").strip()[:80] or heading
+        elif ln.startswith("|") and i + 1 < len(lines) and re.match(r"^\|?\s*:?-{2,}", lines[i + 1].strip()):
+            header = [c.strip() for c in ln.strip("|").split("|")]
+            rows = []
+            j = i + 2
+            while j < len(lines) and lines[j].strip().startswith("|"):
+                cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+                rows.append(cells)
+                j += 1
+            pts = [" · ".join(f"{h}: {c}" if h else c for h, c in zip(header, cells) if c)[:220]
+                   for cells in rows[:8]]
+            if pts:
+                groups.append({"owner": heading, "scope": "Mixed", "severity": _sev_for(heading + " " + " ".join(pts)),
+                               "headline": f"{len(rows)} row{'s' if len(rows) != 1 else ''}", "points": pts, "cert_ids": [], "sub_question_id": ""})
+            i = j
+            continue
+        i += 1
+    if not kpis and not groups:
+        return None
+    lead = ""
+    for para in re.split(r"\n\s*\n", text):
+        t = re.sub(r"[*_`#>|]", "", para).strip()
+        if t and not t.startswith("-") and len(t) > 20:
+            lead = t[:600]
+            break
+    return {"narrative": lead, "sections": [], "groups": groups[:6], "kpis": kpis, "actions": [], "insights": [],
+            "certificates": [], "pending": [], "offers": [], "validation": None,
+            "steps": [{"stage": "data", "label": "cards read from the answer's own figures", "detail": ""}], "cost": None}

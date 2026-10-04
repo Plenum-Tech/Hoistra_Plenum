@@ -606,13 +606,24 @@ async def _call(job: dict[str, Any], token: str, organization_id: Any = None, *,
         card = type("C", (), {"prompt": prompt, "id": UUID(job["id"]), "name": job["name"],
                               "refresh": job["refresh"], "timezone": job["timezone"],
                               "source_page": "Hoist Crons (a scheduled job)"})()
-        body = await card_engine._ask_orchestrator(card, token, http=http)  # noqa: SLF001 - the card engine's own call
+        body = await card_engine._ask_orchestrator(card, token, organization_id=organization_id, http=http)  # noqa: SLF001 - the card engine's own call
         if body.get("success") is False:
             raise RuntimeError(str(body.get("error") or "the orchestrator returned no answer"))
         answer = str(body.get("answer") or "")
         if not answer:
             raise RuntimeError("the orchestrator returned an empty answer")
-        return {"tools": len(body.get("tool_calls") or [])}, answer[:6000]
+        # The dashboard the chat renders for this answer (KPIs, groups, actions, pipeline) rides
+        # on the run, so the Hoist Crons page shows the same cards the chat does, not a wall
+        # of text (asked for 4 Oct 2026). summaryLine ignores it: it is not a number.
+        summary: dict[str, Any] = {"tools": len(body.get("tool_calls") or [])}
+        rich = card_engine.rich_from_tool_calls(body.get("tool_calls") or [])
+        # A scheduled question always comes back as a dashboard: the orchestrator's cards when
+        # it built some, else cards read from the answer's own figures and tables.
+        if not (rich and any(rich.get(k) for k in ("kpis", "groups", "actions"))):
+            rich = card_engine.cards_from_answer(answer, prompt)
+        if rich:
+            summary["rich"] = rich
+        return summary, answer[:6000]
     method, path, query, payload = spec["call"]
     # Name the job's company on every call. The token's own company is the default, but a job
     # a superadmin scheduled for another company must scan that company, not none.
@@ -677,9 +688,55 @@ def _esc(s: Any) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
 
 
+_SEV_COLOUR = {"critical": "#c0392b", "warning": "#b7791f", "info": "#2b6cb0", "ok": "#1f7a4d"}
+
+
+def cards_html(rich: dict[str, Any]) -> tuple[str, str]:
+    """(html, text) for a run's dashboard: KPI tiles, priority actions, owner groups - the same
+    cards the chat and the Hoist Crons page show, so the email carries the details, not only
+    the prose (asked for 4 Oct 2026)."""
+    kpis = [k for k in (rich.get("kpis") or []) if isinstance(k, dict)]
+    actions = [a for a in (rich.get("actions") or []) if isinstance(a, dict)]
+    groups = [g for g in (rich.get("groups") or []) if isinstance(g, dict)]
+    html, text = [], []
+
+    def colour(sev: Any, default: str = "#8a8a84") -> str:
+        return _SEV_COLOUR.get(str(sev or ""), default)
+
+    if kpis:
+        tiles = "".join(
+            f"<td style='padding:0 8px 8px 0;vertical-align:top'><div style='border:1px solid #e6e4df;border-left:3px solid "
+            f"{colour(k.get('severity'))};border-radius:8px;padding:10px 12px;min-width:110px'>"
+            f"<div style='font-size:22px;font-weight:600;color:{colour(k.get('severity'), '#1a1a18')}'>{_esc(k.get('count'))}</div>"
+            f"<div style='font-size:12px'>{_esc(k.get('label'))}</div>"
+            + (f"<div style='font-size:11px;color:#8a8a84'>{_esc(k.get('sublabel'))}</div>" if k.get("sublabel") else "")
+            + "</div></td>"
+            for k in kpis[:8])
+        html.append(f"<table style='border-collapse:collapse'><tr>{tiles}</tr></table>")
+        text.append("Key figures: " + " · ".join(f"{k.get('count')} {k.get('label')}" for k in kpis[:8]))
+    if actions:
+        html.append("<h3 style='font-size:13px;margin:18px 0 8px;color:#6b6b66;text-transform:uppercase;letter-spacing:.08em'>"
+                    "Priority actions</h3><ol style='margin:0;padding-left:18px;font-size:13px;line-height:1.6'>"
+                    + "".join(f"<li><span style='color:{colour(a.get('severity'), '#1a1a18')};font-weight:600'>"
+                              f"{_esc(str(a.get('severity') or '').upper())}</span> {_esc(a.get('title'))}</li>" for a in actions[:6])
+                    + "</ol>")
+        text.append("Priority actions:\n" + "\n".join(f"  {i + 1}. {a.get('title')}" for i, a in enumerate(actions[:6])))
+    for g in groups[:6]:
+        pts = [p for p in (g.get("points") or []) if p]
+        html.append(f"<div style='border:1px solid #e6e4df;border-left:3px solid {colour(g.get('severity'))};"
+                    f"border-radius:8px;padding:10px 12px;margin-top:10px'><div style='font-size:14px;font-weight:600'>{_esc(g.get('owner'))}</div>"
+                    + (f"<div style='font-size:12px;color:{colour(g.get('severity'), '#6b6b66')}'>{_esc(g.get('headline'))}</div>" if g.get("headline") else "")
+                    + ("<ul style='margin:6px 0 0;padding-left:18px;font-size:12.5px;line-height:1.55'>"
+                       + "".join(f"<li>{_esc(p)}</li>" for p in pts[:8]) + "</ul>" if pts else "")
+                    + "</div>")
+        text.append(str(g.get("owner") or "") + (f" — {g.get('headline')}" if g.get("headline") else "")
+                    + "\n" + "\n".join(f"  - {p}" for p in pts[:8]))
+    return "".join(html), "\n\n".join(text)
+
+
 def report_email(job: dict[str, Any], result: str, *, failed: bool, when: datetime | None = None,
                  took_ms: int | None = None, week: dict[str, int] | None = None,
-                 url: str = "") -> tuple[str, str, str]:
+                 url: str = "", rich: dict[str, Any] | None = None) -> tuple[str, str, str]:
     """Subject, plain text and HTML for one run's report: what ran, what it found, how the
     last week went, and the link to the job's page with every run."""
     when = when or datetime.now(timezone.utc)
@@ -698,8 +755,9 @@ def report_email(job: dict[str, Any], result: str, *, failed: bool, when: dateti
     else:
         week_line = ""
     sched = f"Scheduled on Hoist Crons: {job.get('refresh_label') or ''} ({job.get('timezone') or 'UTC'})."
+    cards_h, cards_t = cards_html(rich) if (rich and not failed) else ("", "")
     text_body = "\n".join(x for x in [
-        head, "", "What it found:" if not failed else "What went wrong:", result.strip(), "",
+        head, "", "What it found:" if not failed else "What went wrong:", (cards_t + "\n\n" if cards_t else "") + result.strip(), "",
         week_line, "", (f"See the full report and every run: {url}" if url else ""), "—", sched,
         "Pause, change or remove it under Administration › Hoist Crons.",
     ] if x is not None).replace("\n\n\n", "\n\n")
@@ -725,7 +783,10 @@ def report_email(job: dict[str, Any], result: str, *, failed: bool, when: dateti
         f"<div style='font-size:13px;color:#6b6b66'><span style='color:{tone};font-weight:600'>"
         f"{'Failed' if failed else 'Ran'}</span> {_esc(stamp)} ({_esc(job.get('timezone') or 'UTC')}){_esc(took)}</div>"
         f"<h3 style='font-size:13px;margin:18px 0 8px;color:#6b6b66;text-transform:uppercase;letter-spacing:.08em'>"
-        f"{'What went wrong' if failed else 'What it found'}</h3>{found}"
+        f"{'What went wrong' if failed else 'What it found'}</h3>{cards_h}"
+        + ("<h3 style='font-size:13px;margin:18px 0 8px;color:#6b6b66;text-transform:uppercase;letter-spacing:.08em'>"
+           "The answer</h3>" if cards_h else "")
+        + found
         + (f"<p style='font-size:13px;color:#6b6b66;margin:16px 0 0'>{_esc(week_line)}</p>" if week_line else "")
         + button
         + f"<hr style='border:none;border-top:1px solid #e6e4df;margin:20px 0 10px'>"
@@ -736,7 +797,7 @@ def report_email(job: dict[str, Any], result: str, *, failed: bool, when: dateti
 
 async def _email_answer(session: AsyncSession, job: dict[str, Any], organization_id: UUID, owner_id: UUID,
                         answer: str, *, to_owner: bool = True, failed: bool = False,
-                        took_ms: int | None = None) -> dict[str, Any]:
+                        took_ms: int | None = None, rich: dict[str, Any] | None = None) -> dict[str, Any]:
     """Mail a run's report - a question's answer, an engine job's figures, or why it failed,
     with a link to the job's page - to the creator (when they asked) and to every one of the
     job's recipients. Never fails the run: a send that does not go is written on the run's
@@ -754,7 +815,7 @@ async def _email_answer(session: AsyncSession, job: dict[str, Any], organization
     if not to:
         return {"email_status": "no_address"}
     subject, body, html = report_email(job, answer, failed=failed, took_ms=took_ms,
-                                       week=await _week(session, job["id"]), url=report_url(job["id"]))
+                                       week=await _week(session, job["id"]), url=report_url(job["id"]), rich=rich)
     sent, bad, errors = [], [], []
     for addr in to:
         try:
@@ -818,7 +879,8 @@ async def run_job(session: AsyncSession, job_id: UUID, *, trigger: str = "schedu
                                        to_owner=to_owner, failed=True, took_ms=took)
         else:
             mail = await _email_answer(session, job, org, r["owner_user_id"], answer or result_text(summary),
-                                       to_owner=to_owner, took_ms=took)
+                                       to_owner=to_owner, took_ms=took,
+                                       rich=summary.get("rich") if isinstance(summary, dict) else None)
         summary = {**summary, **mail}
     finished = _now()
     run_id = uuid4()

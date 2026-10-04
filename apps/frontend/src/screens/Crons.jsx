@@ -3,6 +3,8 @@
 // in the platform on the service's own clock, as the person who scheduled them.
 import React from 'react';
 import RecipientsField from '../components/shell/RecipientsField.jsx';
+import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
+import { richHasCards } from '../logic/complianceLive.js';
 
 const CARD = { borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" };
 const KICK = { fontSize: "10.5px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)" };
@@ -231,7 +233,9 @@ function JobDetail({ vals }) {
                   <span style={{ ...MONO, fontSize: "11.5px", color: "var(--color-neutral-400)" }}>{r.took}</span>
                   <span style={{ color: r.tone }}>{r.result}</span>
                 </div>
-                {r.answer ? <div style={{ fontSize: "11.5px", color: "var(--color-neutral-400)", marginTop: "6px", whiteSpace: "pre-line", lineHeight: "1.5" }}>{r.answer}</div> : null}
+                {r.rich && richHasCards(r.rich)
+                  ? <div style={{ marginTop: "8px" }}><ComplianceAnswer rich={r.rich} fallbackText={r.answerFull} /></div>
+                  : r.answer ? <div style={{ fontSize: "11.5px", color: "var(--color-neutral-400)", marginTop: "6px", whiteSpace: "pre-line", lineHeight: "1.5" }}>{r.answer}</div> : null}
               </div>
             )) : <div style={{ padding: "14px 15px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{d.loading ? "Reading…" : "No runs yet."}</div>}
           </div>

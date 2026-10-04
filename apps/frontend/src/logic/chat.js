@@ -16,9 +16,17 @@ import { isTerminal } from './migration.js';
 // so the first family present is the label — compliance first because its accreditation
 // tools also mention vendors.
 export function domainOf(calls) {
-  const names = (calls || []).map((t) => String(t || "").toLowerCase());
+  const all = (calls || []).map((t) => String(t || "").toLowerCase());
+  // The card payload (compliance_response / compliance_pipeline) now rides on EVERY answer
+  // that made a recognised tool call, so it says nothing about the domain; the tools beside
+  // it do. Alone - the compliance preflight's own answer - it still reads Compliance.
+  const cardOnly = ["compliance_response", "compliance_pipeline"];
+  const names = all.filter((n) => cardOnly.indexOf(n) < 0);
+  if (!names.length) return all.length ? "Compliance" : "Orchestrator";
   const has = (re) => names.some((n) => re.test(n));
-  if (!names.length) return "Orchestrator";
+  // A planned turn attaches `planner` and renders as cards through compliance_response; the
+  // ladder below would badge it Compliance for that name alone (4 Oct 2026).
+  if (names.indexOf("planner") > -1) return "Orchestrator";
   // The engine that ran, when it said so, beats guessing from tool names. The vendor engine
   // emits `compliance_response` because that is the name the answer renderer matches on — so
   // every vendor answer was being badged Compliance, and the trace beside it said

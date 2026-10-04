@@ -70,7 +70,7 @@ def wired(monkeypatch):
         sess.events.append("owner_token")
         return "tok"
 
-    async def fake_ask(card, token, *, http=None):
+    async def fake_ask(card, token, *, organization_id=None, http=None):
         session.events.append("ask_orchestrator")
         return {"answer": "Six vendors are blocked.", "tool_calls": []}
 

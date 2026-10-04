@@ -142,3 +142,31 @@ class TestTheThreeNumbersEachMeanOneThing:
         g = _group(rows, "building", limit=2)[0]
         assert g["estimated_cost"] == 1000.0     # not 200.0
         assert len(g["decisions"]) == 2
+
+
+
+class TestStatutoryMarking:
+    """Every decision row says whether a certificate forces it, and which. The list the chat
+    reads used to carry no such field (4 Oct 2026)."""
+
+    def test_a_decision_about_a_certificate_and_one_on_a_lapsed_asset_are_marked(self):
+        from datetime import date
+        from src.services.maintenance import mark_statutory_rows
+        rows = [
+            {"work_order": "WO-1", "certificate_expires": "2026-10-20", "certificate": "C-1", "certificate_type": "LOLER"},
+            {"work_order": "WO-2", "asset_id": "a1"},
+            {"work_order": "WO-3", "asset_id": "a9", "vendor_id": "v1"},
+            {"work_order": "WO-4", "asset_id": "zz"},
+        ]
+        lookup = {"asset:a1": {"certificate": "C-2", "certificate_type": "EICR", "expires": "2026-09-01", "lapsed": True},
+                  "vendor:v1": {"certificate": "C-3", "certificate_type": "NICEIC", "expires": "2026-11-01", "lapsed": False}}
+        assert mark_statutory_rows(rows, lookup, today=date(2026, 10, 4)) == 3
+        assert rows[0]["statutory"] and rows[0]["statutory_certificate"]["matched_on"] == "the certificate this decision is about"
+        assert rows[1]["statutory_certificate"]["lapsed"] and rows[2]["statutory_certificate"]["certificate_type"] == "NICEIC"
+        assert rows[3] == {"work_order": "WO-4", "asset_id": "zz", "statutory": False, "statutory_certificate": None}
+
+    def test_a_certificate_far_in_the_future_does_not_force_the_decision(self):
+        from datetime import date
+        from src.services.maintenance import STATUTORY_WINDOW_DAYS, mark_statutory_rows
+        rows = [{"work_order": "WO-1", "certificate_expires": "2027-12-31"}]
+        assert mark_statutory_rows(rows, {}, today=date(2026, 10, 4)) == 0 and STATUTORY_WINDOW_DAYS > 0

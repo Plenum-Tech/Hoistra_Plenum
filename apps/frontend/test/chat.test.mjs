@@ -255,6 +255,11 @@ test('the chat view survives a reload', () => {
 
 test('the domain label is read off the tools behind a reply', () => {
   assert.equal(domainOf(['compliance_response', 'compliance_pipeline']), 'Compliance');
+  // a planned turn renders as cards through compliance_response but is the orchestrator's
+  assert.equal(domainOf(['answer_from_records', 'planner', 'compliance_pipeline', 'compliance_response']), 'Orchestrator');
+  // cards ride on any answer now: the tools beside them name the domain
+  assert.equal(domainOf(['work_order_blockers', 'compliance_pipeline', 'compliance_response']), 'Work orders');
+  assert.equal(domainOf(['list_energy_anomalies', 'compliance_response']), 'Energy');
   assert.equal(domainOf(['list_energy_anomalies']), 'Energy');
   assert.equal(domainOf(['get_vendor_scorecards']), 'Vendors');
   assert.equal(domainOf(['create_work_order']), 'Work orders');

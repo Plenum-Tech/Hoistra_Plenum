@@ -270,7 +270,11 @@ export function cronsPageVals(c) {
         at: fmtWhen(r.finished_at, now), by: r.trigger === 'schedule' ? 'The schedule' : 'Run now · ' + (r.requested_by || 'someone'),
         took: ((r.duration_ms || 0) / 1000).toFixed(1) + ' s',
         result: r.ok ? (summaryLine(r.summary) || 'ok') : 'Failed: ' + (r.error || 'no reason given'),
-        tone: r.ok ? 'var(--color-text)' : 'var(--st-risk)', answer: r.answer ? String(r.answer).slice(0, 400) : ''
+        tone: r.ok ? 'var(--color-text)' : 'var(--st-risk)', answer: r.answer ? String(r.answer).slice(0, 400) : '',
+        // The dashboard the orchestrator built for this answer (kept on the run's summary), so a
+        // scheduled question shows the same cards the chat does; the full answer is its fallback.
+        rich: r.summary && r.summary.rich && typeof r.summary.rich === 'object' ? r.summary.rich : null,
+        answerFull: r.answer ? String(r.answer) : ''
       })),
       events: ((d && d.events) || []).map((e) => ({
         action: ACTION[e.action] || e.action, who: e.user_email || 'unknown', at: fmtWhen(e.at, now), detail: detailOf(e),

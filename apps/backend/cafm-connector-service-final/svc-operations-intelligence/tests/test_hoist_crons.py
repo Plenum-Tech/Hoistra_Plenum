@@ -198,3 +198,65 @@ async def test_a_building_job_names_its_building_the_way_its_route_takes_one():
     (p1, q1, j1), (p2, q2, j2) = calls
     assert p1.endswith("/scorecards/monthly-all") and q1["building_id"] == b and q1["organization_id"] == str(org)
     assert p2 == "/api/compliance/scan" and j2["building_id"] == b and j2["scope"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_question_names_the_jobs_company_to_the_orchestrator():
+    """The creator's token alone is not enough: a superadmin's token resolves to the platform
+    company, which holds no certificates, so "which certificates expired?" scheduled for Plenum
+    answered "the register is empty" (4 Oct 2026). The job's company rides in the payload."""
+    import uuid
+    posted = []
+
+    class FakeResp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"success": True, "answer": "15 lapsed.", "tool_calls": [
+                {"tool": "planner", "input": {}, "output": {}},
+                {"tool": "compliance_response", "input": {}, "output": {"kpis": [{"count": 15, "label": "Lapsed", "severity": "critical"}], "groups": [], "actions": []}},
+                {"tool": "compliance_pipeline", "input": {}, "output": {"steps": [{"stage": "plan", "label": "1 step planned"}]}}]}
+
+    class FakeHttp:
+        async def post(self, path, json=None, headers=None, timeout=None):
+            posted.append((path, json, headers))
+            return FakeResp()
+
+    org = uuid.uuid4()
+    job = {"id": str(uuid.uuid4()), "name": "Ask", "refresh": {"every_minutes": 15}, "timezone": "Asia/Dubai", "job_key": "question",
+           "params": {"prompt": "which are the compliance certificates expired ?"}}
+    summary, answer = await cron._call(job, "tok", org, http=FakeHttp())
+    path, body, headers = posted[0]
+    assert path == "/api/workflow/run-stateful" and body["organization_id"] == str(org)
+    assert body["message"].startswith("which are the compliance") and headers["Authorization"] == "Bearer tok"
+    assert answer == "15 lapsed." and summary["tools"] == 3
+    assert summary["rich"]["kpis"][0]["count"] == 15 and summary["rich"]["steps"][0]["stage"] == "plan"
+
+
+def test_an_answer_with_no_card_payload_still_becomes_a_dashboard():
+    from src.engines.reports import cards as C
+    answer = ("**9 certificates** have lapsed and **6** are **expiring soon** at Bishopsgate Tower.\n\n"
+              "## Lapsed\n| Certificate | Vendor | Expired |\n|---|---|---|\n| BAFE SP203-1 | Pennard Fire Services | 2026-09-14 |\n"
+              "| NICEIC | Ostley Power Services | 2026-09-06 |\n")
+    rich = C.cards_from_answer(answer, "which certificates expired?")
+    labels = {k["label"]: k for k in rich["kpis"]}
+    assert labels["certificates"]["count"] == 9 and labels["certificates"]["sublabel"] == "from the answer"
+    assert rich["groups"][0]["owner"] == "Lapsed" and rich["groups"][0]["severity"] == "critical"
+    assert rich["groups"][0]["points"][0] == "Certificate: BAFE SP203-1 · Vendor: Pennard Fire Services · Expired: 2026-09-14"
+    assert rich["narrative"].startswith("9 certificates have lapsed")
+    assert C.cards_from_answer("No figures here, just prose.") is None
+
+
+def test_the_run_email_carries_the_kpi_tiles_actions_and_groups():
+    rich = {"kpis": [{"count": 13, "label": "Decisions owed", "sublabel": "owed today", "severity": "warning"},
+                     {"count": 2, "label": "Statutory", "severity": "critical"}],
+            "actions": [{"title": "Unblock WO-B-301-4562 — BAFE has lapsed", "severity": "critical"}],
+            "groups": [{"owner": "Blocked", "headline": "2 decisions", "severity": "critical", "points": ["WO-B-301-4562 — Fire alarm panel"]}]}
+    job = {"id": "j1", "name": "Ask: decisions", "timezone": "Asia/Dubai", "refresh_label": "every day"}
+    subject, text, html = cron.report_email(job, "13 decisions are owed.", failed=False, rich=rich)
+    assert "Key figures: 13 Decisions owed · 2 Statutory" in text and "1. Unblock WO-B-301-4562" in text and "  - WO-B-301-4562 — Fire alarm panel" in text
+    assert ">13<" in html and "Decisions owed" in html and "Priority actions" in html and "The answer" in html and "#c0392b" in html
+    # a failed run never shows stale cards
+    _, text_f, html_f = cron.report_email(job, "boom", failed=True, rich=rich)
+    assert "Key figures" not in text_f and "Priority actions" not in html_f

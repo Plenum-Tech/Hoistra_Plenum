@@ -2342,7 +2342,8 @@ def evidence(onto, question, plan, result, notes):
     truncated = len(data) > MAX_EVIDENCE_CHARS
     if truncated:
         data = data[:MAX_EVIDENCE_CHARS] + " ...(truncated)"
-    return {"ok": True, "question": question, "interpretation": interpretation(onto, plan, notes),
+    return {"ok": True, "question": (question if len(question) <= 300 else question[:300] + " …"),
+            "interpretation": interpretation(onto, plan, notes),
             "header": header, "records": data, "truncated": truncated,
             "total": result.get("total"), "paths": result.get("paths", []), "answer_rules": ANSWER_RULES}
 

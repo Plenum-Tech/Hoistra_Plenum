@@ -332,6 +332,7 @@ async def decisions(
             and (source is None or d["source"] == source)]
 
     page = kept[:limit]
+    await mark_statutory(session, page, building_ids=building_ids)
     return {
         "ok": True,
         # Three numbers that each mean one thing: how many came back in this response, how
@@ -1267,28 +1268,19 @@ async def statutory_assets(
     return out
 
 
-async def overview(
-    session: AsyncSession, *, building_ids: list[UUID] | None,
-) -> dict[str, Any]:
-    """The four cards across the top of the Maintenance screen, in one call.
+def mark_statutory_rows(rows: list[dict[str, Any]], statutory: dict[str, dict[str, Any]],
+                        today: date | None = None) -> int:
+    """Mark each decision statutory or not, and say which certificate makes it so. Pure.
 
-    Each card returns the sub-counts printed underneath it, not just the headline number —
-    "2 blocked · 4 to raise · 2 deviating" is the part that tells somebody what to do next.
+    Two ways a decision qualifies. A decision raised *about* a certificate is tested against
+    that certificate's own expiry - exact, and the only test that catches building-scope
+    certificates like an EICR, which carry neither an asset nor a vendor and are most of them.
+    Anything else is matched on the asset or the vendor it names. Returns how many were marked.
     """
-    dec = await decisions(session, building_ids=building_ids, limit=1000)
-    statutory = await statutory_assets(session, building_ids=building_ids)
-
-    # Which decisions are statutory, and why. Marked on the decision itself so the chip and
-    # the card agree by construction rather than by two counts happening to match.
-    #
-    # Two ways a decision qualifies. A decision raised *about* a certificate is tested against
-    # that certificate's own expiry — exact, and the only test that catches building-scope
-    # certificates like an EICR, which carry neither an asset nor a vendor and are most of
-    # them. Anything else is matched on the asset or the vendor it names.
-    horizon = (datetime.now(timezone.utc).date() + timedelta(days=STATUTORY_WINDOW_DAYS))
-    today = datetime.now(timezone.utc).date()
+    t = today or datetime.now(timezone.utc).date()
+    horizon = t + timedelta(days=STATUTORY_WINDOW_DAYS)
     marked = 0
-    for d in dec.get("decisions", []):
+    for d in rows:
         hit = None
         expires = d.get("certificate_expires")
         if expires:
@@ -1299,7 +1291,7 @@ async def overview(
             if when and when <= horizon:
                 hit = {"certificate": d.get("certificate"),
                        "certificate_type": d.get("certificate_type"),
-                       "expires": when.isoformat(), "lapsed": when < today,
+                       "expires": when.isoformat(), "lapsed": when < t,
                        "matched_on": "the certificate this decision is about"}
         if hit is None:
             keyed = (statutory.get(f"asset:{d.get('asset_id')}")
@@ -1310,6 +1302,31 @@ async def overview(
         d["statutory_certificate"] = hit
         if hit:
             marked += 1
+    return marked
+
+
+async def mark_statutory(session: AsyncSession, rows: list[dict[str, Any]], *,
+                         building_ids: list[UUID] | None) -> int:
+    """Mark the decisions in `rows` (see mark_statutory_rows). Until 4 Oct 2026 only the
+    overview marked them: the /decisions list the chat tool reads carried no `statutory` field,
+    so "which of my decisions are statutory" was answered "not recorded"."""
+    if not rows:
+        return 0
+    return mark_statutory_rows(rows, await statutory_assets(session, building_ids=building_ids))
+
+
+async def overview(
+    session: AsyncSession, *, building_ids: list[UUID] | None,
+) -> dict[str, Any]:
+    """The four cards across the top of the Maintenance screen, in one call.
+
+    Each card returns the sub-counts printed underneath it, not just the headline number —
+    "2 blocked · 4 to raise · 2 deviating" is the part that tells somebody what to do next.
+    """
+    dec = await decisions(session, building_ids=building_ids, limit=1000)
+    # decisions() marks each row statutory or not (mark_statutory), so the chip and the card
+    # agree by construction rather than by two counts happening to match.
+    marked = sum(1 for d in dec.get("decisions", []) if d.get("statutory"))
 
     ins = await ii.panel(session, building_ids=building_ids)
     unconv = ins["cards"]["unconverted_recommendations"]

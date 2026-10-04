@@ -1215,7 +1215,7 @@ async def list_asset_conditions(
     min_deviation_pct: float | None = None,
     limit: int = 500,
 ) -> dict:
-    """E — The banded assets themselves, each with the sentence that explains its band.
+    """E — Assets by ENERGY band (threat / watch / in_control) with the sentence explaining the band. NOT the 1-5 condition grade: that is assets.condition_score (answer_from_records, replacement_candidates).
 
     `band` is one of **threat**, **watch**, **in_control** (the page's chips); omit it for all.
     `min_deviation_pct` backs the "above 10%" / "above 30%" chips. Each row carries `band`,

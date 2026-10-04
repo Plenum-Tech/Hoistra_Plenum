@@ -5985,8 +5985,69 @@ class DeepAgentOrchestrator:
         for tools in PHASE2_ENGINE_TOOLS.values():
             for t in tools:
                 if t.name not in out:
-                    out[t.name] = (t.description or "").strip().splitlines()[0][:160]
+                    line = planner.catalogue_line(t.name, t.description)
+                    if line:
+                        out[t.name] = line
         return out
+
+    async def _check_step(self, step: dict[str, Any], result: dict[str, Any]) -> tuple[bool, str]:
+        """Does this step's result answer its ask? One short model call, between a step and the
+        steps that build on it (agents/planner.py CHECK_PROMPT)."""
+        raw = await self._planner_llm("You check one step of a plan for the Plenum CAFM orchestrator.",
+                                      planner.check_prompt(step, result.get("output")), "check")
+        return planner.parse_check(raw)
+
+    async def _replan_after_gates(self, question: str, plan: dict[str, Any], findings: dict[str, list[dict[str, str]]],
+                                  results: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+        """One more planning call, with the gate findings as hard constraints (agents/planner.py)."""
+        ws = thread_scope.active_scope.get()
+        ctx = planner.replan_context(question, plan, findings, results)
+        if ws:
+            ctx += "WORKING SET (hard filter): " + thread_scope.describe(ws) + "\n"
+        new_plan, why = await planner.make_plan(question, context=ctx, tools=self._planner_tools(), llm=self._planner_llm)
+        if new_plan is None:
+            log.warning("planner.replan_rejected", reason=why)
+        return new_plan
+
+    def _planned_cards(self, question: str, plan: dict[str, Any], results: dict[str, dict[str, Any]], answer: str) -> list[dict[str, Any]]:
+        """The planned answer as the chat's dashboard: the two tool outputs it renders as cards
+        (agents/planner.cards_from_results) plus a `planner` marker the badge reads."""
+        ledger = llm_cost.current()
+        try:
+            response, pipeline = planner.cards_from_results(question, plan, results, answer,
+                                                            cost=ledger.log_summary(question) if ledger else None)
+        except Exception as exc:  # noqa: BLE001 - cards are a presentation, never the answer
+            log.warning("planner.cards_failed", error=str(exc)[:200])
+            return []
+        out = [{"tool": "planner", "input": {"question": question[:300]}, "output": {"steps": [s["target"] for s in plan.get("steps") or []]}},
+               {"tool": self.PIPELINE_PANEL_TOOL, "input": {"question": question[:300]}, "output": pipeline}]
+        if response.get("kpis") or response.get("groups") or response.get("actions"):
+            out.append({"tool": "compliance_response", "input": {}, "output": response})
+        return out
+
+    async def _write_planned_answer(self, question: str, plan: dict[str, Any], results: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+        """Synthesise, check the claims against the results (one rewrite when they contradict), then
+        check the figures. Returns (answer, figure check)."""
+        plan = (results.get("__plan__") or {}).get("output") or plan
+        try:
+            answer = await planner.synthesise(question, plan, results, self._planner_llm)
+        except Exception as exc:  # noqa: BLE001
+            return "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200], {"ok": True, "unmatched": [], "figures_checked": 0}
+        claims = planner.verify_claims(answer, question, results)
+        rid = trace.on_step_open("verify", "verify claims", {"claims_checked": True})
+        trace.on_step_close(rid, {"contradictions": claims}, ok=not claims, error="; ".join(claims)[:300] if claims else None)
+        if claims:
+            try:
+                answer = await planner.synthesise(question + planner.REWRITE_NOTE + "\n".join("- " + c for c in claims), plan, results, self._planner_llm)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("planner.rewrite_failed", error=str(exc)[:200])
+        check = planner.verify(answer, results)
+        rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
+        trace.on_step_close(rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
+        if not check["ok"]:
+            answer += ("\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8])
+                       + (" could not be traced to a step result." if len(check["unmatched"]) == 1 else " could not be traced to the step results."))
+        return answer, check
 
     async def _run_planned_tool(self, name: str, args: dict[str, Any]) -> Any:
         for tools in PHASE2_ENGINE_TOOLS.values():
@@ -6010,7 +6071,8 @@ class DeepAgentOrchestrator:
         ws = thread_scope.active_scope.get()
         exec_task = asyncio.create_task(planner.execute(
             plan, run_engine=run_engine, run_tool=self._run_planned_tool,
-            scope_hint=thread_scope.describe(ws) if ws else "", on_event=on_event))
+            scope_hint=thread_scope.describe(ws) if ws else "", on_event=on_event,
+            question=user_message, replan=self._replan_after_gates, check=self._check_step))
         pending_get = asyncio.create_task(queue.get())
         try:
             while not exec_task.done():
@@ -6023,17 +6085,10 @@ class DeepAgentOrchestrator:
         finally:
             pending_get.cancel()
         results = await exec_task
-        tool_calls = [tc for r in results.values() for tc in (r.get("tool_calls") or [])]
-        try:
-            answer = await planner.synthesise(user_message, plan, results, self._planner_llm)
-        except Exception as exc:  # noqa: BLE001
-            answer = "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200]
-        check = planner.verify(answer, results)
-        trace_rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
-        trace.on_step_close(trace_rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
-        if not check["ok"]:
-            answer += ("\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8])
-                       + (" could not be traced to a step result." if len(check["unmatched"]) == 1 else " could not be traced to the step results."))
+        plan = (results.get("__plan__") or {}).get("output") or plan
+        tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
+        answer, check = await self._write_planned_answer(user_message, plan, results)
+        tool_calls = tool_calls + self._planned_cards(user_message, plan, results, answer)
         result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
                   "route_metadata": {"intent": "planned", "domain": "orchestrator", "steps": [s["target"] for s in plan["steps"]]}}
         attach_route_to_result(result, sid, intent="planned", domain="orchestrator")
@@ -6085,21 +6140,16 @@ class DeepAgentOrchestrator:
         _tok = _oq.pinned_filters.set(pins)
         try:
             results = await planner.execute(plan, run_engine=run_engine, run_tool=self._run_planned_tool,
-                                            scope_hint=thread_scope.describe(ws) if ws else "")
+                                            scope_hint=thread_scope.describe(ws) if ws else "",
+                                            question=question, replan=self._replan_after_gates, check=self._check_step)
         finally:
             _oq.pinned_filters.reset(_tok)
-        tool_calls = [tc for r in results.values() for tc in (r.get("tool_calls") or [])]
-        try:
-            answer = await planner.synthesise(
-                question + ("\n\nApply these corrections exactly; where a correction changes a figure, state the corrected figure:\n" + rules if rules else ""),
-                plan, results, self._planner_llm)
-        except Exception as exc:  # noqa: BLE001
-            answer = "I could not write the answer from the step results: " + str(exc).splitlines()[0][:200]
-        check = planner.verify(answer, results)
-        rid = trace.on_step_open("verify", "verify figures", {"figures_checked": check["figures_checked"]})
-        trace.on_step_close(rid, check, ok=check["ok"], error=None if check["ok"] else "figures not traceable: " + ", ".join(check["unmatched"][:8]))
-        if not check["ok"]:
-            answer += "\n\n_Check before quoting: " + ", ".join(check["unmatched"][:8]) + " could not be traced to the step results._"
+        plan = (results.get("__plan__") or {}).get("output") or plan
+        tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
+        answer, check = await self._write_planned_answer(
+            question + ("\n\nApply these corrections exactly; where a correction changes a figure, state the corrected figure:\n" + rules if rules else ""),
+            plan, results)
+        tool_calls = tool_calls + self._planned_cards(question, plan, results, answer)
         new_turn_id = activity_log.current_turn()
         result = {"session_id": session_id, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
                   "route_metadata": {"intent": "rerun", "domain": "orchestrator", "rerun_of": turn.get("turn_id"), "steps": [s["target"] for s in plan["steps"]]}}
