@@ -89,7 +89,21 @@ _DDL = [
         deleted_by       UUID
     )""",
     f"CREATE INDEX IF NOT EXISTS ix_chat_memories_org ON {TABLE} (organization_id, deleted_at, user_id)",
+    # Approval (5 Oct 2026): a teaching from someone who is not an admin waits as `pending` and is
+    # not recalled until an admin approves it; a rejected one is hidden. Admins' teachings and
+    # everyone's own preferences are active at once.
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'",
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS reviewed_by UUID",
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS reviewed_by_email TEXT",
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ",
 ]
+
+STATUSES = ("active", "pending", "rejected")
+
+
+def needs_approval(principal: Principal, kind: str) -> bool:
+    """A company teaching (fact or correction) from a non-admin waits for an admin."""
+    return kind != "preference" and not principal.is_admin
 
 
 def ready() -> bool:
@@ -184,32 +198,61 @@ def score(question: str, q_vec: list[float] | None, memory: dict[str, Any]) -> f
 
 # ── reading ───────────────────────────────────────────────────────────────────────────
 
-def _visible_sql(p: Principal, org: str | None) -> tuple[str, dict[str, Any]]:
-    """The company's shared memories plus this person's own."""
+def _visible_sql(p: Principal, org: str | None, *, include_pending: bool = False) -> tuple[str, dict[str, Any]]:
+    """The company's shared memories plus this person's own. Active ones only - what the chat
+    recalls - unless the caller asks for the pending ones too (the admin page; a person sees
+    their own pending teachings there)."""
     params: dict[str, Any] = {"uid": str(p.user_id)}
+    st = (" AND (status = 'active' OR (status = 'pending' AND (created_by = CAST(:uid AS uuid) OR :admin)))"
+          if include_pending else " AND status = 'active'")
+    if include_pending:
+        params["admin"] = bool(p.is_admin)
     if org:
         params["org"] = org
         return ("organization_id = CAST(:org AS uuid) AND deleted_at IS NULL"
-                " AND (user_id IS NULL OR user_id = CAST(:uid AS uuid))"), params
-    return "organization_id IS NULL AND deleted_at IS NULL AND user_id = CAST(:uid AS uuid)", params
+                " AND (user_id IS NULL OR user_id = CAST(:uid AS uuid))" + st), params
+    return "organization_id IS NULL AND deleted_at IS NULL AND user_id = CAST(:uid AS uuid)" + st, params
 
 
-async def visible(limit: int = 2000) -> list[dict[str, Any]]:
+async def visible(limit: int = 2000, *, include_pending: bool = False) -> list[dict[str, Any]]:
     if not _ready:
         return []
     p, org = _caller()
     if p is None:
         return []
-    where, params = _visible_sql(p, org)
+    where, params = _visible_sql(p, org, include_pending=include_pending)
     params["lim"] = limit
     from ..database import _get_engine
 
     async with _get_engine().connect() as conn:
         rows = (await conn.execute(text(f"""
             SELECT id::text, kind, text, subject, embedding, user_id::text AS user_id, created_by_email, created_at,
-                   last_used_at, use_count, source_thread
-              FROM {TABLE} WHERE {where} ORDER BY created_at DESC LIMIT :lim"""), params)).mappings().all()
+                   last_used_at, use_count, source_thread, status, created_by::text AS created_by,
+                   reviewed_by_email, reviewed_at
+              FROM {TABLE} WHERE {where} ORDER BY (status = 'pending') DESC, created_at DESC LIMIT :lim"""), params)).mappings().all()
     return [dict(r) for r in rows]
+
+
+async def review(memory_id: str, decision: str) -> bool:
+    """An admin approves a pending teaching (it is recalled from now on) or rejects it (hidden)."""
+    if not _ready or decision not in ("approve", "reject"):
+        return False
+    p, org = _caller()
+    if p is None or not p.is_admin:
+        return False
+    where, params = _visible_sql(p, org, include_pending=True)
+    params.update({"id": memory_id, "by": str(p.user_id), "email": p.email})
+    from ..database import _get_engine
+
+    async with _get_engine().begin() as conn:
+        if decision == "approve":
+            res = await conn.execute(text(f"UPDATE {TABLE} SET status = 'active', reviewed_by = CAST(:by AS uuid), reviewed_by_email = :email,"
+                                          f" reviewed_at = now() WHERE id = CAST(:id AS uuid) AND status = 'pending' AND {where}"), params)
+        else:
+            res = await conn.execute(text(f"UPDATE {TABLE} SET status = 'rejected', deleted_at = now(), deleted_by = CAST(:by AS uuid),"
+                                          f" reviewed_by = CAST(:by AS uuid), reviewed_by_email = :email, reviewed_at = now()"
+                                          f" WHERE id = CAST(:id AS uuid) AND status = 'pending' AND {where}"), params)
+    return bool(res.rowcount)
 
 
 async def recall(question: str, *, top: int = RECALL_TOP) -> list[dict[str, Any]]:
@@ -313,7 +356,7 @@ async def store(items: list[dict[str, Any]], *, principal: Principal, org: str |
     """Insert what is new; a near-duplicate of an existing memory is refreshed instead. Returns inserts."""
     if not _ready or not items:
         return 0
-    existing = await visible()
+    existing = await visible(include_pending=True)
     vecs = await embed([i["text"] for i in items])
     ex_vecs = any(e.get("embedding") for e in existing)
     inserted = 0
@@ -336,12 +379,13 @@ async def store(items: list[dict[str, Any]], *, principal: Principal, org: str |
             owner = str(principal.user_id) if it["kind"] == "preference" else None
             await conn.execute(text(f"""
                 INSERT INTO {TABLE} (id, organization_id, user_id, kind, text, subject, embedding, source_thread, source_turn,
-                                     created_by, created_by_email)
+                                     created_by, created_by_email, status)
                 VALUES (CAST(:id AS uuid), CAST(:org AS uuid), CAST(:uid AS uuid), :kind, :text, :subject,
-                        CAST(:emb AS jsonb), :thread, :turn, CAST(:by AS uuid), :email)"""),
+                        CAST(:emb AS jsonb), :thread, :turn, CAST(:by AS uuid), :email, :status)"""),
                 {"id": str(uuid.uuid4()), "org": org, "uid": owner, "kind": it["kind"], "text": it["text"],
                  "subject": it.get("subject"), "emb": json.dumps(vec) if vec else None, "thread": source_thread,
-                 "turn": source_turn, "by": str(principal.user_id), "email": principal.email})
+                 "turn": source_turn, "by": str(principal.user_id), "email": principal.email,
+                 "status": "pending" if needs_approval(principal, it["kind"]) else "active"})
             inserted += 1
     return inserted
 

@@ -52,3 +52,21 @@ test("a server thread reads back as the chat's own turns, tools kept, capped to 
   assert.equal(many.length, MAX_TURNS);
   assert.equal(turnsFromThread(null).length, 0);
 });
+
+
+test('a reopened session gets its stored runs back behind each answer, matched by question then by order', async () => {
+  const { attachTurns } = await import('../src/logic/sessions.js');
+  const msgs = [{ role: 'you', text: 'How many work orders?' }, { role: 'bot', text: '794.' },
+                { role: 'you', text: 'Which are blocked?' }, { role: 'bot', text: 'Two.' }, { role: 'bot', text: 'A note with no run.' }];
+  const turns = [{ turn_id: 't2', question: 'Which are blocked?', started_at: '2026-10-05T08:01:00Z', latency_ms: 2000 },
+                 { turn_id: 't1', question: 'How many work orders?', started_at: '2026-10-05T08:00:00Z', latency_ms: 9000 }];
+  const out = attachTurns(msgs, turns);
+  assert.equal(out[1].turnId, 't1'); assert.equal(out[1].ms, 9000); assert.equal(out[1].trace[0].label, 'Stored run');
+  assert.equal(out[3].turnId, 't2');
+  assert.equal(out[4].turnId, undefined);
+  assert.equal(out[0].turnId, undefined);
+  // nothing recorded: the messages come back untouched; an answer that already has a run keeps it
+  assert.deepEqual(attachTurns(msgs, []), msgs);
+  const kept = attachTurns([{ role: 'bot', text: 'x', turnId: 'keep', trace: [{ label: 'live' }] }], turns);
+  assert.equal(kept[0].turnId, 'keep'); assert.equal(kept[0].trace[0].label, 'live');
+});

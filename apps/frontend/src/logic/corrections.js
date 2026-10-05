@@ -231,7 +231,9 @@ export const correctionMethods = {
     try {
       const lead = ctx.question ? 'For questions like "' + ctx.question.slice(0, 140) + '": ' : '';
       const out = await deepAgentsApi.addMemory({ kind: 'correction', text: lead + text, subject: ctx.building || null, source_thread: this.state.sessionId || null });
-      this.setState({ crBusy: false, crMsg: out && out.refreshed ? 'Already known — refreshed.' : 'Saved as a teaching. Colleagues asking similar questions get it from now on.' });
+      this.setState({ crBusy: false, crMsg: out && out.refreshed ? 'Already known — refreshed.'
+        : (out && out.status === 'pending' ? 'Saved — an admin approves it before the chat recalls it (Administration › Chat memory).'
+          : 'Saved as a teaching. Colleagues asking similar questions get it from now on.') });
       if (typeof this.mpLoad === 'function' && this.state.mpLoadedAt) this.mpLoad();
     } catch (e) {
       this.setState({ crBusy: false, crMsg: 'Could not save: ' + ((e && e.message) || e) });

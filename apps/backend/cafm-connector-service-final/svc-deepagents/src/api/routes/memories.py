@@ -3,6 +3,8 @@
     GET    /api/memories          the memories the caller can see: the company's shared facts and
                                   corrections, plus their own preferences
     DELETE /api/memories/{id}     forget one (own, or any as an admin)
+    POST   /api/memories          remember something the reader states (a non-admin's waits for approval)
+    POST   /api/memories/{id}/approve | /reject   an admin's decision on a pending teaching
 """
 from __future__ import annotations
 
@@ -30,13 +32,14 @@ def _act(principal: Principal, organization_id: str | None) -> None:
 async def list_memories(limit: int = Query(200, ge=1, le=2000), organization_id: str | None = Query(None),
                         principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     _act(principal, organization_id)
-    rows = await chat_memories.visible(limit=limit)
+    rows = await chat_memories.visible(limit=limit, include_pending=True)
     for r in rows:
         r.pop("embedding", None)
-        for k in ("created_at", "last_used_at"):
+        for k in ("created_at", "last_used_at", "reviewed_at"):
             if r.get(k) is not None and hasattr(r[k], "isoformat"):
                 r[k] = r[k].isoformat()
-    return {"ok": True, "available": chat_memories.ready(), "memories": rows, "can_manage": principal.is_admin}
+    return {"ok": True, "available": chat_memories.ready(), "memories": rows, "can_manage": principal.is_admin,
+            "pending": sum(1 for r in rows if r.get("status") == "pending")}
 
 
 @router.delete("/{memory_id}")
@@ -67,4 +70,28 @@ async def add_memory(body: Teaching, organization_id: str | None = Query(None),
     org = str(organization_id) if organization_id else (str(principal.organization_id) if principal.organization_id else None)
     n = await chat_memories.store([{"kind": body.kind, "text": " ".join(body.text.split()), "subject": body.subject}],
                                   principal=principal, org=org, source_thread=body.source_thread)
-    return {"ok": True, "stored": n, "refreshed": n == 0}
+    return {"ok": True, "stored": n, "refreshed": n == 0,
+            "status": "pending" if chat_memories.needs_approval(principal, body.kind) else "active"}
+
+
+@router.post("/{memory_id}/approve")
+async def approve_memory(memory_id: str, organization_id: str | None = Query(None),
+                         principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """An admin lets a colleague's teaching into what the chat recalls."""
+    _act(principal, organization_id)
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail={"ok": False, "error": "Admins approve teachings."})
+    if not await chat_memories.review(memory_id, "approve"):
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "No pending teaching with that id."})
+    return {"ok": True, "status": "active"}
+
+
+@router.post("/{memory_id}/reject")
+async def reject_memory(memory_id: str, organization_id: str | None = Query(None),
+                        principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    _act(principal, organization_id)
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail={"ok": False, "error": "Admins reject teachings."})
+    if not await chat_memories.review(memory_id, "reject"):
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "No pending teaching with that id."})
+    return {"ok": True, "status": "rejected"}

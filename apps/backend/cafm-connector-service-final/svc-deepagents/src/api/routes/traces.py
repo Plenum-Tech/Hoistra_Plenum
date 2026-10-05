@@ -40,12 +40,13 @@ def _act(principal: Principal, organization_id: str | None) -> str | None:
 async def list_turns(since: datetime | None = Query(None), until: datetime | None = Query(None),
                      q: str | None = Query(None, max_length=200), status: str | None = Query(None, pattern="^(ok|error)$"),
                      model: str | None = Query(None, max_length=120), user: str | None = Query(None, max_length=200),
+                     session_id: str | None = Query(None, max_length=120),
                      limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
                      organization_id: str | None = Query(None),
                      principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     org = _act(principal, organization_id)
     rows = await trace.list_turns(principal, org, since=since, until=until, q=q, status=status, model=model, user=user,
-                                  limit=limit, offset=offset)
+                                  session_id=session_id, limit=limit, offset=offset)
     return {"ok": True, "available": trace.ready(), "turns": rows, "can_manage": principal.is_admin}
 
 

@@ -26,7 +26,7 @@ test('the tiles count company memories, the admin\'s own preferences and recalls
   const v = memoriesPageVals(c, NOW);
   assert.equal(v.isMemories, true);
   assert.deepEqual(v.mpTiles.map((t) => [t.label, t.value]), [
-    ['Company memories', '2'], ['Your preferences', '1'], ['Times recalled', '4'], ['Contributors', '2']]);
+    ['Company memories', '2'], ['Your preferences', '1'], ['Times recalled', '4'], ['Contributors', '2'], ['Awaiting approval', '0']]);
   assert.equal(v.mpTiles[0].hint, '1 facts · 1 corrections');
 });
 
@@ -71,4 +71,26 @@ test('elapsed time lands in the page\'s bands', () => {
   assert.equal(fmtAgo('2026-10-02T09:00:00Z', NOW), '3 hours ago');
   assert.equal(fmtAgo('2026-09-25T12:00:00Z', NOW), '7 days ago');
   assert.equal(fmtAgo(null, NOW), '');
+});
+
+
+test('pending teachings sit above the table with the decision beside each, and count on a tile', async () => {
+  const { memoriesPageVals } = await import('../src/logic/memoriesPage.js');
+  const reviewed = [];
+  const c = { state: { signedIn: true, view: 'memories', mpLoadedAt: 1, mpCanManage: true, mpRows: [
+    { id: 'p1', kind: 'correction', text: 'Repurchase means parts below reorder level.', status: 'pending', created_by_email: 'aasim@x', created_at: '2026-10-05T08:00:00Z' },
+    { id: 'a1', kind: 'correction', text: 'Count only open jobs.', status: 'active', created_by_email: 'bala@x', reviewed_by_email: 'admin@x', created_at: '2026-10-05T08:00:00Z' },
+    { id: 'm1', kind: 'preference', text: 'Costs in AED.', status: 'active', user_id: 'u', created_at: '2026-10-05T08:00:00Z' }
+  ] }, mpReview: (id, d) => reviewed.push([id, d]), mpForget: () => {}, mpLoad: () => {}, mpSetFilter: () => {}, mpSetSearch: () => {} };
+  const v = memoriesPageVals(c, Date.parse('2026-10-05T09:00:00Z'));
+  assert.equal(v.mpPending.length, 1);
+  assert.equal(v.mpPending[0].who, 'aasim@x');
+  assert.deepEqual(v.mpRows.map((r) => r.id), ['a1', 'm1']);
+  assert.equal(v.mpRows[0].approvedBy, 'approved by admin@x');
+  assert.equal(v.mpTiles.find((t) => t.label === 'Awaiting approval').value, '1');
+  assert.equal(v.mpTiles.find((t) => t.label === 'Company memories').value, '1');
+  v.mpPending[0].approve();
+  v.mpPending[0].reject();
+  assert.deepEqual(reviewed, [['p1', 'approve'], ['p1', 'reject']]);
+  assert.equal(v.mpCanManage, true);
 });

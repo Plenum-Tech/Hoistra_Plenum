@@ -195,3 +195,38 @@ def test_the_routes_need_a_signed_in_caller_and_list_without_vectors(monkeypatch
     r = c.get("/api/memories")
     assert r.status_code == 200 and r.json()["can_manage"] and "embedding" not in r.json()["memories"][0]
     assert r.json()["memories"][0]["created_at"].startswith("2026-10-01")
+
+
+
+def test_a_colleagues_teaching_waits_for_an_admin_and_a_preference_does_not(db):
+    user = _principal(role="user")
+    caller_principal.set(user)
+    caller_organization_id.set(str(user.organization_id))
+    asyncio.run(cm.store([{"kind": "correction", "text": "Repurchase means parts below reorder level, not energy recommendations.", "subject": None},
+                          {"kind": "preference", "text": "The user prefers costs in AED.", "subject": None}],
+                         principal=user, org=str(user.organization_id)))
+    inserts = [x[1] for x in db["sql"] if "INSERT INTO plenum_cafm.chat_memories" in x[0]]
+    assert [i["status"] for i in inserts] == ["pending", "active"]
+    assert cm.needs_approval(_principal(role="admin"), "correction") is False
+    # what the chat recalls is the active set; the page sees pending ones too
+    db["sql"].clear()
+    asyncio.run(cm.visible())
+    assert "AND status = 'active'" in db["sql"][-1][0]
+    asyncio.run(cm.visible(include_pending=True))
+    assert "status = 'pending' AND (created_by = CAST(:uid AS uuid) OR :admin)" in db["sql"][-1][0]
+
+
+def test_only_an_admin_reviews_and_a_rejection_hides_the_teaching(db):
+    user = _principal(role="user")
+    caller_principal.set(user)
+    caller_organization_id.set(str(user.organization_id))
+    assert asyncio.run(cm.review("m-1", "approve")) is False
+    admin = _principal(role="admin", org=user.organization_id)
+    caller_principal.set(admin)
+    assert asyncio.run(cm.review("m-1", "approve")) is True
+    sql, params = db["sql"][-1]
+    assert "SET status = 'active'" in sql and "status = 'pending'" in sql and params["email"] == admin.email and params["id"] == "m-1"
+    assert asyncio.run(cm.review("m-2", "reject")) is True
+    sql, _ = db["sql"][-1]
+    assert "SET status = 'rejected', deleted_at = now()" in sql
+    assert asyncio.run(cm.review("m-3", "maybe")) is False

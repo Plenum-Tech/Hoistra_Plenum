@@ -186,6 +186,32 @@ export function turnsFromThread(thread) {
   return out.slice(-MAX_TURNS);
 }
 
+// The stored runs of a reopened session, put behind its answers again. The thread keeps the
+// question and the answer, not the run; without the turn id the rail had nothing to load and
+// "Was this right?" never showed (5 Oct 2026). Runs are matched to answers in order, checked
+// against the question each run recorded; a run with no answer to sit behind is left out.
+export function attachTurns(messages, turns) {
+  const runs = (turns || []).filter((t) => t && t.turn_id).slice()
+    .sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')));
+  if (!runs.length) return messages;
+  let r = 0;
+  return (messages || []).map((m, i) => {
+    if (!m || m.role !== 'bot' || m.turnId) return m;
+    const asked = i > 0 && messages[i - 1] && messages[i - 1].role === 'you' ? String(messages[i - 1].text || '').trim() : '';
+    // the next run whose question is this answer's question; failing that, the next run in order
+    let k = runs.findIndex((t, j) => j >= r && asked && String(t.question || '').trim() === asked);
+    if (k < 0) k = r < runs.length ? r : -1;
+    if (k < 0) return m;
+    r = k + 1;
+    const t = runs[k];
+    return Object.assign({}, m, {
+      turnId: t.turn_id,
+      ms: typeof t.latency_ms === 'number' ? t.latency_ms : m.ms,
+      trace: (m.trace || []).length ? m.trace : [{ at: 0, kind: 'reasoning', label: 'Stored run', text: 'Restored from Hoist Traces - every stage, tool and query of this answer is in the rail.' }]
+    });
+  });
+}
+
 // ── storage ──────────────────────────────────────────────────────────────────
 const store = () => {
   try { return (typeof window !== 'undefined' && window.localStorage) || null; } catch (e) { return null; }
@@ -360,12 +386,25 @@ export const sessionsMethods = {
     try { out = await deepAgentsApi.thread(id); } catch (e) { return; }
     const thread = out && out.thread;
     if (!thread) return;
-    const turns = turnsFromThread(thread);
+    let turns = turnsFromThread(thread);
+    // The runs behind the answers, from Hoist Traces, so the rail and "Was this right?" work on
+    // a reopened chat. Best effort: the thread shows either way.
+    try {
+      const tr = await deepAgentsApi.traceTurns({ session_id: id, limit: 100 });
+      turns = attachTurns(turns, (tr && tr.turns) || []);
+    } catch (e) { /* the thread without its runs */ }
     this.setState((p) => {
       const list = (p.sessions || []).map((x) => (x.id === id ? Object.assign(syncTurns(x, turns, x.at), { remote: false, title: x.title || thread.title || '' }) : x));
       // Still the open conversation and nothing typed since: show what came back.
       const patch = { sessions: list };
-      if (p.sessionId === id && !(p.ccChat || []).length) patch.ccChat = turns;
+      if (p.sessionId === id && !(p.ccChat || []).length) {
+        patch.ccChat = turns;
+        const last = turns.length - 1;
+        if (last >= 0 && turns[last].turnId) {
+          patch.ccTraceIdx = last;
+          if (typeof this.crLoadRun === 'function') setTimeout(() => this.crLoadRun(turns[last].turnId), 0);
+        }
+      }
       return patch;
     });
   },

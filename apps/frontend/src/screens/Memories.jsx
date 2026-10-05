@@ -65,6 +65,29 @@ export default function Memories({ vals }) {
             </div>
           ) : vals.mpNoMatch ? <div style={{ padding: "18px", fontSize: "12.5px", color: "var(--color-neutral-500)" }}>{"Nothing matches."}</div>
             : (
+              <>
+              {vals.mpPending.length ? (
+                <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--color-divider)", background: "var(--st-warn-bg)" }}>
+                  <div style={{ ...KICK, marginBottom: "8px" }}>{"Teachings awaiting approval · " + vals.mpPending.length}</div>
+                  <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginBottom: "8px" }}>
+                    {vals.mpCanManage ? "A colleague corrected the chat. Approve to have it recalled on similar questions company-wide; reject to drop it." : "Not recalled until an admin approves."}
+                  </div>
+                  {vals.mpPending.map((m) => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "flex-start", gap: "10px", padding: "7px 0", borderTop: "1px solid var(--color-divider)", opacity: m.busy ? "0.5" : "1" }}>
+                      <div style={{ flex: "1", minWidth: "0", fontSize: "12.5px", lineHeight: "1.5" }}>
+                        {m.text}
+                        <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "3px" }}>{m.kind + " · " + m.who + " · " + m.when + (m.subject ? " · about " + m.subject : "")}</div>
+                      </div>
+                      {vals.mpCanManage ? (
+                        <div style={{ display: "flex", gap: "6px", flexShrink: "0" }}>
+                          <button type="button" onClick={m.approve} disabled={m.busy} style={{ ...QUIET, borderColor: "var(--st-ok)", color: "var(--st-ok)" }}>{"Approve"}</button>
+                          <button type="button" onClick={m.reject} disabled={m.busy} style={{ ...QUIET, borderColor: "var(--st-risk)", color: "var(--st-risk)" }}>{"Reject"}</button>
+                        </div>
+                      ) : <span style={{ fontSize: "10.5px", padding: "2px 8px", borderRadius: "999px", background: "var(--st-warn-bg)", color: "var(--st-warn)", whiteSpace: "nowrap" }}>{"awaiting approval"}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ textAlign: "left", ...KICK }}>
@@ -85,7 +108,7 @@ export default function Memories({ vals }) {
                       <td style={{ ...CELL, whiteSpace: "nowrap" }}>{m.scope}</td>
                       <td style={{ ...CELL, whiteSpace: "nowrap" }}>
                         <div>{m.who}</div>
-                        <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{m.when}</div>
+                        <div style={{ fontSize: "11px", color: "var(--color-neutral-500)" }}>{m.when}{m.approvedBy ? " · " + m.approvedBy : ""}</div>
                       </td>
                       <td style={{ ...CELL, whiteSpace: "nowrap" }}>
                         <div>{m.used + (m.used === 1 ? " time" : " times")}</div>
@@ -101,6 +124,7 @@ export default function Memories({ vals }) {
                   ))}
                 </tbody>
               </table>
+              </>
             )}
       </div>
     </div>

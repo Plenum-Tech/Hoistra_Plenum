@@ -68,6 +68,8 @@ export const deepAgentsApi = {
   // shared facts and corrections plus the caller's own preferences; forget removes one.
   memories: () => apiFetch(B, '/api/memories', { query: Object.assign({ limit: 500 }, orgOverride()), timeoutMs: 12000 }),
   forgetMemory: (id) => apiFetch(B, '/api/memories/' + encodeURIComponent(id), { method: 'DELETE', query: orgOverride(), timeoutMs: 8000 }),
+  // An admin's decision on a colleague's pending teaching: 'approve' lets the chat recall it, 'reject' hides it.
+  reviewMemory: (id, decision) => apiFetch(B, '/api/memories/' + encodeURIComponent(id) + '/' + decision, { method: 'POST', query: orgOverride(), timeoutMs: 8000 }),
 
   // Hoist Traces (agents/trace.py): the runs, one run's span tree, the aggregates, a rating,
   // and the JSONL dataset. The export is a file, so it goes through fetch with the token and

@@ -776,10 +776,14 @@ def _iso(d: dict[str, Any]) -> dict[str, Any]:
 
 async def list_turns(principal, org: str | None, *, since: datetime | None = None, until: datetime | None = None,
                      q: str | None = None, status: str | None = None, model: str | None = None, user: str | None = None,
-                     limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+                     session_id: str | None = None, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     if not _ready:
         return []
     where, p = _scope_sql(principal, org)
+    if session_id:
+        # A reopened chat asks for its own runs, to put the stored run behind each answer again.
+        where += " AND session_id = :sid"
+        p["sid"] = session_id
     if since:
         where += " AND started_at >= :since"
         p["since"] = since
