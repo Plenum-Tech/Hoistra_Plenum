@@ -1731,10 +1731,44 @@ async def fill_date_filters(r: ScopedReader, onto, plan) -> list[str]:
     return notes
 
 
+# ── resolving names and codes to keys ──────────────────────────────────────────────────────
+# Measured 5 Oct 2026: one answer ran 116 resolve queries - every code in the question (13 of them,
+# the planner's digest pasted UUIDs and asset codes in) looked up in each of 12 tables one query at a
+# time, and a UUID never matched because the exact lookup read only the code columns. Now a UUID is
+# matched on the key, the sweep across concepts is ONE union query, every lookup is remembered for
+# the life of the read, and a question's codes are looked up together.
+
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+#: Codes taken from one question: past this many the rest are prose, not things to resolve.
+MAX_CODES = 30
+
+
+def _exact_cols(concept, texts) -> list[str]:
+    cols = list(concept.identifiers)
+    if any(UUID_RE.match(str(t or "").strip()) for t in texts) and concept.key not in cols:
+        cols.append(concept.key)
+    return cols
+
+
+def _memo(r) -> dict:
+    m = getattr(r, "_resolve_memo", None)
+    if m is None:
+        m = {}
+        try:
+            setattr(r, "_resolve_memo", m)
+        except Exception:  # noqa: BLE001 - a reader that takes no attributes just does not remember
+            pass
+    return m
+
+
 async def _lookup(r: ScopedReader, onto, concept, text_, mode):
-    cols = concept.identifiers if mode == "exact" else concept.search
+    cols = _exact_cols(concept, [text_]) if mode == "exact" else concept.search
     if not cols:
         return []
+    memo = _memo(r)
+    mk = ("one", concept.name, mode, str(text_).lower())
+    if mk in memo:
+        return memo[mk]
     p = Params()
     if mode == "exact":
         cond = " OR ".join("lower(" + qi(c) + "::text) = lower(" + p.add(text_) + ")" for c in cols)
@@ -1742,7 +1776,44 @@ async def _lookup(r: ScopedReader, onto, concept, text_, mode):
         cond = " OR ".join(qi(c) + "::text ~* " + p.add(loose_pattern(text_)) for c in cols)
     sql = ("SELECT " + qi(concept.key) + "::text AS k, " + qi(concept.label) + "::text AS l FROM "
            + qi(onto.schema) + "." + qi(concept.table) + " WHERE " + cond + " LIMIT " + str(MAX_MATCH_KEYS))
-    return await r.try_fetch(sql, p, "resolve " + concept.name + " (" + mode + ")")
+    rows = await r.try_fetch(sql, p, "resolve " + concept.name + " (" + mode + ")")
+    memo[mk] = rows
+    return rows
+
+
+async def _lookup_union(r: ScopedReader, onto, concepts, texts, mode) -> list[dict]:
+    """One query across many concepts: rows {c (concept name), o (its order), v (the text it
+    matched), k, l}. Exact mode takes many texts at once (= ANY); search mode one text."""
+    texts = [str(t) for t in texts if str(t or "").strip()]
+    if not texts or not concepts:
+        return []
+    memo = _memo(r)
+    mk = ("union", mode, tuple(c.name for c in concepts), tuple(sorted(t.lower() for t in texts)))
+    if mk in memo:
+        return memo[mk]
+    p = Params()
+    arr = p.add([t.lower() for t in texts], "text[]") if mode == "exact" else None
+    pat = p.add(loose_pattern(texts[0])) if mode == "search" else None
+    parts = []
+    for o, c in enumerate(concepts):
+        cols = _exact_cols(c, texts) if mode == "exact" else c.search
+        if not cols:
+            continue
+        # CAST, not ::text - SQLAlchemy does not read ":p1::text" as a bind parameter.
+        name = p.add(c.name, "text")
+        for col in cols:
+            if mode == "exact":
+                cond, v = "lower(" + qi(col) + "::text) = ANY(" + arr + ")", "lower(" + qi(col) + "::text)"
+            else:
+                cond, v = qi(col) + "::text ~* " + pat, p.add(texts[0], "text")
+            parts.append("(SELECT " + name + " AS c, " + str(o) + " AS o, " + v + " AS v, " + qi(c.key) + "::text AS k, "
+                         + qi(c.label) + "::text AS l FROM " + qi(onto.schema) + "." + qi(c.table) + " WHERE " + cond
+                         + " LIMIT " + str(MAX_MATCH_KEYS) + ")")
+    if not parts:
+        return []
+    rows = await r.try_fetch(" UNION ALL ".join(parts), p, "resolve " + str(len(texts)) + " across " + str(len(concepts)) + " concepts (" + mode + ")")
+    memo[mk] = rows
+    return rows
 
 
 async def resolve_match(r, onto, concept_name, text_):
@@ -1752,14 +1823,14 @@ async def resolve_match(r, onto, concept_name, text_):
         if rows:
             return concept_name, [x["k"] for x in rows], [x["l"] for x in rows], None
     candidates = []
+    others = [c for c in onto.concepts.values() if c.name != concept_name]
     for mode in ("exact", "search"):
-        for c in onto.concepts.values():
-            if c.name == concept_name:
-                continue
-            rows = await _lookup(r, onto, c, text_, mode)
-            if rows:
-                exact_label = any((x["l"] or "").lower() == text_.lower() for x in rows)
-                candidates.append((0 if mode == "exact" else 1, 0 if exact_label else 1, len(rows), c.name, rows))
+        hits: dict[str, list[dict]] = {}
+        for row in await _lookup_union(r, onto, others, [text_], mode):
+            hits.setdefault(row["c"], []).append(row)
+        for name, rows in hits.items():
+            exact_label = any((x["l"] or "").lower() == text_.lower() for x in rows)
+            candidates.append((0 if mode == "exact" else 1, 0 if exact_label else 1, len(rows), name, rows))
         if candidates:
             break
     if not candidates:
@@ -1772,21 +1843,28 @@ async def resolve_match(r, onto, concept_name, text_):
 
 async def add_missing_codes(r, onto, plan, question):
     mentioned = " ".join(str(n.get("match") or "") for n in [plan["focus"]] + plan["constraints"]).lower()
-    for code in sorted({m for m in IDENTIFIER_RE.findall(question) if is_identifier(m)}):
-        if code.lower() in mentioned:
+    codes = [m for m in sorted({m for m in IDENTIFIER_RE.findall(question) if is_identifier(m)}) if m.lower() not in mentioned][:MAX_CODES]
+    if not codes:
+        return plan
+    concepts = list(onto.concepts.values())
+    # Every code, every concept, one query; each code goes to the first concept (in ontology order)
+    # that holds it - the order the one-at-a-time loop used.
+    first: dict[str, str] = {}
+    for row in sorted(await _lookup_union(r, onto, concepts, codes, "exact"), key=lambda x: x["o"]):
+        first.setdefault(str(row["v"]).lower(), row["c"])
+    for code in codes:
+        name = first.get(code.lower())
+        if not name:
             continue
-        for c in onto.concepts.values():
-            if await _lookup(r, onto, c, code, "exact"):
-                if c.name == plan["focus"]["concept"] and not plan["focus"]["match"]:
-                    plan["focus"]["match"] = code
-                else:
-                    node = normalise_node({"concept": c.name, "match": code})
-                    try:
-                        onto.resolve_path(plan["focus"]["concept"], c.name, [])
-                        plan["constraints"].append(node)
-                    except OntologyError:
-                        continue
-                break
+        if name == plan["focus"]["concept"] and not plan["focus"]["match"]:
+            plan["focus"]["match"] = code
+        else:
+            node = normalise_node({"concept": name, "match": code})
+            try:
+                onto.resolve_path(plan["focus"]["concept"], name, [])
+                plan["constraints"].append(node)
+            except OntologyError:
+                continue
     return plan
 
 
