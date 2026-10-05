@@ -108,6 +108,7 @@ from .migration_runs import await_checkpoint_past as _await_checkpoint_past
 from .migration_runs import paused_node_for as _paused_node_for
 from .migration_runs import claim_awaiting_gate as _claim_awaiting_gate
 from .migration_runs import enqueue_resume as _enqueue_resume
+from .migration_runs import after_enqueue_error as _after_enqueue_error
 from .migration_runs import release_gate as _release_gate
 from .migration_runs import track_migration_run as _track_migration_run
 
@@ -2410,10 +2411,19 @@ def create_app() -> FastAPI:
                         decisions=decisions,
                     )
                 except Exception as _enq_err:
-                    # The queue failed mid-wait while a resume of this migration may still be
-                    # running: resuming inline beside it would be two runs on one thread.
-                    logger.warning(f"[{migration_id}] resume enqueue failed mid-wait: {_enq_err}")
-                    _new = "busy"
+                    # A queue that failed mid-wait may have a resume of this migration still
+                    # running: resuming inline beside it would be two runs on one thread, so the
+                    # gate is handed back. But a Redis that refuses the queue's transaction
+                    # outright (CROSSSLOT) never queued anything: resume inline, once no run of
+                    # this migration is in flight here (migration_runs.after_enqueue_error).
+                    _new = await _after_enqueue_error(_enq_err, migration_id)
+                    if _new == "inline":
+                        logger.warning(
+                            f"[{migration_id}] Redis refuses the job queue "
+                            f"({str(_enq_err)[:160]}); resuming inline"
+                        )
+                    else:
+                        logger.warning(f"[{migration_id}] resume enqueue failed mid-wait: {_enq_err}")
                 finally:
                     await pool.aclose()
                 if _new == "duplicate":
@@ -2425,7 +2435,7 @@ def create_app() -> FastAPI:
                         message=f"Gate '{gate_type}' was already answered; that answer is being applied.",
                         decisions_processed=0,
                     )
-                if _new != "queued":
+                if _new not in ("queued", "inline"):
                     # The resume before it is still running after the wait. Hand the gate back
                     # so this answer can be given again, rather than report it applied.
                     await _release_gate(session, migration_id_uuid, _prev_gate, _prev_payload)
@@ -2444,8 +2454,9 @@ def create_app() -> FastAPI:
                         detail=(f"The previous answer is still being applied; answer "
                                 f"'{gate_type}' again in a moment."),
                     )
-                logger.info(f"[{migration_id}] resume_migration enqueued via ARQ")
-                arq_enqueued = True
+                if _new == "queued":
+                    logger.info(f"[{migration_id}] resume_migration enqueued via ARQ")
+                    arq_enqueued = True
         except HTTPException:
             raise
         except Exception as arq_err:

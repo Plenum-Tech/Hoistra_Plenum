@@ -160,6 +160,35 @@ async def enqueue_resume(pool, *, migration_id, gate_type, decisions, wait: floa
         await asyncio.sleep(interval)
 
 
+def redis_refuses_the_queue(exc: BaseException) -> bool:
+    """Redis refused the job queue's own transaction, so no job can ever be queued on it.
+
+    arq enqueues inside WATCH/MULTI over keys that hash to different slots (arq:job:<id>,
+    arq:result:<id>, arq:queue). A Redis that enforces cluster slots answers CROSSSLOT to every
+    one of those transactions - the platform's Azure Redis has, on every enqueue since at least
+    10 Sep 2026 - so nothing has ever been queued there and no queued resume can be running.
+    """
+    return "CROSSSLOT" in str(exc)
+
+
+async def after_enqueue_error(exc: BaseException, migration_id, wait: float = 60.0) -> str:
+    """What a gate answer does when queueing its resume raised.
+
+    "inline" when Redis cannot run the queue at all (redis_refuses_the_queue) and no run of this
+    migration is in flight in this process, after waiting up to ``wait`` s for one: one resume
+    can reach the next gate while still finishing, and the driver answers that gate within
+    seconds. "busy" otherwise - any other error, or a run still going - and the caller hands the
+    gate back, as before.
+
+    Until 5 Oct 2026 every error here was "busy", so on this Redis every Excel migration was
+    handed its first gate back on every Approve and never got past it; before 29 Sep the same
+    error fell back to an inline resume and migrations finished.
+    """
+    if not redis_refuses_the_queue(exc):
+        return "busy"
+    return "inline" if await await_migration_run(migration_id, timeout=wait) else "busy"
+
+
 async def claim_awaiting_gate(session, migration_id_uuid) -> bool:
     """Flip awaiting_review → running for the answer that finds the gate waiting. False when
     it was not waiting (already answered, or the run is past it): that answer is not applied."""

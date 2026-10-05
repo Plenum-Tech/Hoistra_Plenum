@@ -185,3 +185,52 @@ def test_an_answer_waiting_for_the_resume_before_it_asks_again_every_fifth_of_a_
     import inspect
 
     assert inspect.signature(enqueue_resume).parameters["interval"].default <= 0.2
+
+
+# ── A Redis that refuses the queue outright (5 Oct 2026) ─────────────────────────────────────
+# The platform's Azure Redis answers CROSSSLOT to arq's enqueue transaction, every time, since at
+# least 10 Sep 2026. From 29 Sep that error was read as "a resume is still running" and the gate
+# handed back, so every Excel migration sat at its first gate (pk_approval) however often it was
+# approved. Nothing can ever have been queued there, so the answer resumes inline - once no run of
+# this migration is in flight in this process.
+
+_CROSSSLOT = Exception(
+    "CROSSSLOT Keys in request don't hash to the same slot (context='within WATCH', "
+    "command='exists', original-slot='10605', wrong-slot='4920')")
+
+
+def test_a_crossslot_refusal_is_a_queue_that_cannot_work_and_nothing_else_is():
+    from src.migration_runs import redis_refuses_the_queue
+
+    assert redis_refuses_the_queue(_CROSSSLOT)
+    assert not redis_refuses_the_queue(ConnectionError("Timeout reading from socket"))
+    assert not redis_refuses_the_queue(Exception("READONLY You can't write against a read only replica"))
+
+
+def test_a_refused_queue_resumes_inline_and_any_other_error_still_hands_the_gate_back():
+    from src.migration_runs import MIGRATION_RUNS, after_enqueue_error
+
+    MIGRATION_RUNS.pop(MIG, None)
+    assert asyncio.run(after_enqueue_error(_CROSSSLOT, MIG, wait=0.1)) == "inline"
+    assert asyncio.run(after_enqueue_error(ConnectionError("reset"), MIG, wait=0.1)) == "busy"
+
+
+def test_a_refused_queue_waits_for_the_inline_run_still_finishing_before_resuming():
+    from src.migration_runs import after_enqueue_error, track_migration_run
+
+    async def go(run_for, wait):
+        track_migration_run(MIG, asyncio.sleep(run_for))
+        return await after_enqueue_error(_CROSSSLOT, MIG, wait=wait)
+
+    # The run before it ends inside the wait: this answer resumes inline after it.
+    assert asyncio.run(go(0.05, 1.0)) == "inline"
+    # Still going after the wait: two runs on one migration is refused, the gate handed back.
+    assert asyncio.run(go(1.0, 0.05)) == "busy"
+
+
+def test_the_gate_handler_resumes_inline_on_a_refused_queue_instead_of_handing_back():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "app.py").read_text(encoding="utf-8")
+    assert "_new = await _after_enqueue_error(_enq_err, migration_id)" in src
+    assert 'if _new not in ("queued", "inline"):' in src
