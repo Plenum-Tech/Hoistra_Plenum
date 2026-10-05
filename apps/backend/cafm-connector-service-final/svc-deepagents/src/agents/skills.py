@@ -301,6 +301,10 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
     shared = shared_skill()
     if shared:
         parts.append(shared.body)
+    if agent not in NO_LENS_AGENTS:
+        lens = fm_lens()
+        if lens:
+            parts.append(lens)
     if extra:
         parts.append(extra.strip())
     own = skill_for_agent(agent)
@@ -328,6 +332,30 @@ def agent_system_prompt(agent: str, extra: str | None = None) -> str | None:
     if not parts:
         return None
     return "\n\n---\n\n".join(parts)
+
+
+#: Agents that weigh nothing for a reader: migration imports data and reports what it did.
+NO_LENS_AGENTS = frozenset({"migration"})
+
+
+@lru_cache(maxsize=1)
+def fm_lens() -> str:
+    """skills/query-builder/fm-lens.md - how every answer weighs what it found, as the facilities
+    manager accountable for the buildings would: risk to life, then statutory exposure, then service
+    to occupants, then money, sized to the question.
+
+    Every answer writer loads this one file - the sub-agents (through agent_system_prompt), the
+    orchestrator, the planner's writer, the compliance and vendor analysts, the record engine - so
+    the order of what matters is stated once. Before 5 Oct 2026 it lived in the record engine's
+    rules and the compliance tiers only, and a question routed anywhere else got facts with no
+    weighing. Missing is a warning and an empty string, not a failure: the lens is judgement on top
+    of a grounded answer, and losing it must not take answers down with it.
+    """
+    try:
+        return prompt_doc("query-builder", "fm-lens")
+    except RuntimeError as exc:
+        log.warning("skills.fm_lens_missing", error=str(exc))
+        return ""
 
 
 @lru_cache(maxsize=64)

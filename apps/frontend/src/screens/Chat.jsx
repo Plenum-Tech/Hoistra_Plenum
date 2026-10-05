@@ -14,6 +14,7 @@
 // compliance console's dock reads.
 import React, { useRef } from 'react';
 import AnswerCards from '../components/shell/AnswerCards.jsx';
+import ChoiceCards from '../components/shell/ChoiceCards.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
 import CorrectionDrawer from '../components/shell/CorrectionDrawer.jsx';
@@ -151,7 +152,9 @@ export default function Chat({ vals }) {
                                 <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "13px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "3px" }}></i>
                                 <span>{m.text}</span>
                               </div>
-                            : <AnswerCards text={m.text} />}
+                            : (m.choices || []).length
+                              ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} />
+                              : <AnswerCards text={m.text} />}
                         <div style={{ display: m.interruptShow, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
                         {/* Teach from this answer: was it right, and if not, what should change
                             (logic/corrections.js). Shown once the turn is on record. */}

@@ -160,7 +160,8 @@ from .compliance_router import compliance_skill_path_enabled
 from . import activity_log
 from . import contract_answer
 from . import llm_cost
-from .skills import prompt_doc
+from .skills import fm_lens, prompt_doc
+from .migration_chooser import CHOICES as MIGRATION_CHOICES, CHOOSER_REPLY, is_bare_migration_request
 from .system_prompt import build_system_prompt
 from .udr_agent import (
     get_schema,
@@ -2273,6 +2274,10 @@ class DeepAgentOrchestrator:
                 "reader — report the figure the question asked for and stay silent on the other.\n"
                 "- End with a single concrete next step.\n\n"
         )
+        # How a facilities manager weighs what was found (skills/query-builder/fm-lens.md).
+        _lens = fm_lens()
+        if _lens:
+            system_text += "---\n\n" + _lens + "\n"
         human_text = f"QUESTION:\n{user_message}\n\nDATA (JSON):\n{data_json}"
 
         # STAGE 2 LOG — exactly what is being sent to the model.
@@ -3786,6 +3791,14 @@ class DeepAgentOrchestrator:
         return None, cls._routing_note(routing)
 
     @staticmethod
+    def _offers_migration_choice(user_message: str, extra_context: str | None, session_state: dict[str, Any]) -> bool:
+        """"I want to migrate my data" names no method: answer with the three ways in
+        (agents/migration_chooser.py) before the keyword table reads "migrate my data" as
+        "run mapping over the uploaded files". Not when the session already holds uploads, a
+        Fiix connection or a schema mapping: then that route has something to run over."""
+        return is_bare_migration_request(user_message, extra_context) and not workspace_has_ingestion(session_state or {})
+
+    @staticmethod
     def _clarify_reply(routing: dict[str, Any] | None, user_message: str) -> str | None:
         """The one-line question to ask when the router read the question and could not place it.
 
@@ -4471,6 +4484,8 @@ class DeepAgentOrchestrator:
             system_text = "\n\n---\n\n".join(
                 [self._ANALYST_CONTEXT_DOCS, self._ANALYST_PROMPT]
                 + ([self._TAXONOMY_DIRECTIVE] if taxonomy else [])
+                # How a facilities manager weighs what was found; the analyst writes the answer.
+                + ([fm_lens()] if fm_lens() else [])
             )
             activity_log.fire(
                 agent="compliance", stage=role, direction="input", model=model,
@@ -7287,6 +7302,13 @@ class DeepAgentOrchestrator:
         session_state = get_session_state(session_id)
         msg_l = " ".join((user_message or "").strip().lower().split())
         route_intent = resolve_route_intent(msg_l, session_state, extra_context)
+        if self._offers_migration_choice(user_message, extra_context, session_state):
+            trace.on_plan(planner.one_step_plan("clarify", "migration request names no method", source="router"), source="router")
+            return attach_route_to_result(
+                {"session_id": session_id, "answer": CHOOSER_REPLY, "tool_calls": [], "success": True, "error": None,
+                 "interrupted": False, "interrupt_payload": None, "choices": MIGRATION_CHOICES},
+                session_id, intent=ROUTE_GENERAL, domain="migration",
+            )
 
         # Content-based Phase 2 engine selection (Feature A/B/C).
         # Skip when the turn is clearly UDR/Fiix/WO — those stay on the core agent.
@@ -7616,6 +7638,16 @@ class DeepAgentOrchestrator:
         session_state = get_session_state(sid)
         msg_l = " ".join((user_message or "").strip().lower().split())
         route_intent = resolve_route_intent(msg_l, session_state, extra_context)
+        if self._offers_migration_choice(user_message, extra_context, session_state):
+            trace.on_plan(planner.one_step_plan("clarify", "migration request names no method", source="router"), source="router")
+            yield {"type": "reasoning", "label": "Domain routing", "domain": "migration",
+                   "text": "A request to migrate that names no method -> offering CSV/Excel, documents or a direct database connection."}
+            result = {"session_id": sid, "answer": CHOOSER_REPLY, "tool_calls": [], "success": True, "error": None,
+                      "interrupted": False, "interrupt_payload": None, "choices": MIGRATION_CHOICES}
+            attach_route_to_result(result, sid, intent=ROUTE_GENERAL, domain="migration")
+            await self._close_streamed_turn(sid, result, _stream_t0)
+            yield workflow_stream_completion_payload(sid, answer=CHOOSER_REPLY, tool_calls=[], choices=MIGRATION_CHOICES)
+            return
 
         # Chain-of-thought step: surface the orchestrator's intent classification so the
         # activity log's Section 2 shows the reasoning, not just the tool calls (CoA).

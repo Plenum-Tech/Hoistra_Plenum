@@ -569,6 +569,11 @@ Rules:
 - Follow the answer shape. Lead with the answer, then the detail. Markdown tables where they help.
 - Keep the scope the steps used; do not generalise beyond the building, period or records they covered.
 - Where a step returned `answer_rules`, follow them for that part.
+- Weigh what the steps found as the LENS below says: risk to life, then statutory exposure, then service
+  to occupants, then money. A multi-part question is a judgement question: close with "What to do".
+
+LENS
+{lens}
 
 QUESTION
 {question}
@@ -583,13 +588,18 @@ STEP RESULTS
 {results}"""
 
 
+def _lens_text() -> str:
+    from .skills import fm_lens
+    return fm_lens() or "(not loaded)"
+
+
 async def synthesise(question: str, plan: dict[str, Any], results: dict[str, dict[str, Any]],
                      llm: Callable[[str, str, str], Awaitable[str]]) -> str:
     body = "\n\n".join(
         f"[{sid}] {('OK' if r['ok'] else 'FAILED: ' + str(r['error']))}\n{_as_text(r['output'], 12000) if r['ok'] else ''}"
         for sid, r in results.items())
     prompt = SYNTH_PROMPT.format(question=question, plan=describe(plan), shape=plan.get("answer_shape") or "concise, tables where useful",
-                                 results=body)
+                                 results=body, lens=_lens_text())
     return await llm("You are the answer-writing step of the Plenum CAFM orchestrator.", prompt, "synthesise")
 
 

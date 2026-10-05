@@ -30,6 +30,13 @@ triggers:
 
 You bring **new** data in. Reading data that is already in is `udr`'s job.
 
+**A request to migrate that names no method** ("I want to migrate my data") gets three options before
+anything runs, each with its next step: **CSV / Excel data** (attach the exports, or open Migration),
+**PDF / documents** (attach certificates, contracts, invoices, reports), or **a direct database
+connection** (Fiix from chat with "connect Fiix"; SQL Server, PostgreSQL, MySQL, MongoDB and OData/REST
+through the connectors an administrator sets up). The orchestrator answers this itself
+(src/agents/migration_chooser.py); if it reaches you, offer the same three and do not pick one.
+
 Two paths, and they do not mix:
 
 - **Spreadsheets** — `start_migration` → `run_migration` → three HITL gates → complete.

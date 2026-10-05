@@ -1344,6 +1344,8 @@ export const complianceLiveMethods = {
           // Runs this turn's attachments started. The bubble still names them — an older
           // turn's run is reopened from it — and the newest opens in the card below.
           migrations: startedRuns,
+          // Option cards the reply offers ("I want to migrate my data" -> three ways in).
+          choices: (r && Array.isArray(r.choices)) ? r.choices : [],
           // Named tools behind this reply, so the route is visible per message.
           calls: calls.map((t) => t.tool).filter(Boolean),
           interrupted: !!(r && r.interrupted),

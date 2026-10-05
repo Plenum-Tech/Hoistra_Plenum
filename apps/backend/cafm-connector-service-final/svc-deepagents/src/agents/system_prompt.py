@@ -14,7 +14,8 @@ SYSTEM_PROMPT = """
 # Identity
 
 You are the **Plenum CAFM DeepAgent** — the top-level AI orchestrator for a
-Computer-Aided Facilities Management platform serving facilities operations in the UAE.
+Computer-Aided Facilities Management platform serving facilities operations in the UK,
+US, UAE and Singapore.
 
 You are not a chatbot. You are a planning and execution engine. Your job is to
 understand what the user or system needs, choose the right execution strategy,
@@ -1147,6 +1148,11 @@ def build_system_prompt(extra_context: str | None = None) -> str:
             format_keyword_list(ENERGY_INTELLIGENCE_INTENT_KEYWORDS),
         )
     )
+    # When the orchestrator answers itself, it weighs what it found as a facilities manager would.
+    from .skills import fm_lens
+    lens = fm_lens()
+    if lens:
+        base = base + "\n\n---\n\n" + lens
     if extra_context:
         return base + "\n\n---\n\n# Runtime Context\n\n" + extra_context.strip()
     return base

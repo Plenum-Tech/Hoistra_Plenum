@@ -1,4 +1,5 @@
 import { docLabel } from './chatCases.js';
+import { choiceCards, choiceIntro } from './choiceCards.js';
 import { filterQueue, QUEUE_FILTERS } from './queueLive.js';
 // renderVals — the view model — everything the templates read.
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
@@ -1959,6 +1960,10 @@ export const renderValsMethods = {
         // The newest opened on arrival; this is how an EARLIER turn's run is picked back up.
         migIds: (m.migrations || []).map((id) => ({ id: id, short: String(id).slice(0, 8), open: () => this.mgOpen(id) })),
         migShow: (m.migrations || []).length ? "flex" : "none",
+        // Option cards the reply offers, each a button (logic/choiceCards.js); shown in place
+        // of the reply's text, under its first line.
+        choices: choiceCards(m.choices, (c) => this.orchChoice(c)),
+        choiceIntro: choiceIntro(m.text),
         // The answer to "migrations" — rendered as the recent-runs list rather than prose.
         mgListShow: m.mgList ? "flex" : "none",
         // On the chat page the trace rail owns the route, so the in-answer copy of it starts

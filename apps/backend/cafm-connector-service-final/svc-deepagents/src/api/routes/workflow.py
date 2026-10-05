@@ -161,6 +161,8 @@ class WorkflowResponse(BaseModel):
     # building, and will not be until somebody answers.
     validation_cases: list[dict[str, Any]] = Field(default_factory=list)
     validation_held: list[str] = Field(default_factory=list)
+    # Option cards the chat renders under the answer (agents/migration_chooser.py).
+    choices: list[dict[str, Any]] = Field(default_factory=list)
     # What each uploaded file was READ FOR, per domain, and for the domains it does not
     # mention, why not. A document is not one kind of thing — an FM contract names the
     # supplier, the assets it covers, the PPM frequency it commits to and the certificates
@@ -309,6 +311,7 @@ def _to_response(result: dict[str, Any]) -> WorkflowResponse:
         validation_cases=list(result.get("validation_cases") or []),
         validation_held=[str(x) for x in (result.get("validation_held") or []) if x],
         extraction_plans=list(result.get("extraction_plans") or []),
+        choices=list(result.get("choices") or []),
     )
 
 

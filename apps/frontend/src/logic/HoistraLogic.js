@@ -52,6 +52,7 @@ import { ingestionLiveMethods } from './ingestionLive.js';
 import { migrationMethods } from './migration.js';
 import { superAdminLiveMethods } from './superAdminLive.js';
 import { platformCostMethods } from './platformCost.js';
+import { choiceMethods } from './choiceCards.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -322,4 +323,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, migrationMethods, emailHistoryMethods, renderValsMethods);

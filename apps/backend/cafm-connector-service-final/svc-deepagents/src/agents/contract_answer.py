@@ -19,6 +19,8 @@ the figure was an invoice total and the disputed amount was never established at
 """
 from __future__ import annotations
 
+from .skills import fm_lens
+
 import json
 import re
 import time
@@ -424,7 +426,8 @@ async def write_answer(
         resp = await client.messages.create(
             model=model,
             max_tokens=8000,
-            system=_ANALYST_SYSTEM,
+            # The facilities manager's order of what matters (skills/query-builder/fm-lens.md).
+            system=_ANALYST_SYSTEM + ("\n\n---\n\n" + fm_lens() if fm_lens() else ""),
             messages=[{"role": "user", "content": human}],
         )
         blocks = getattr(resp, "content", None) or []

@@ -2,6 +2,7 @@
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React, { useRef } from 'react';
 import AnswerCards from './AnswerCards.jsx';
+import ChoiceCards from './ChoiceCards.jsx';
 import ComplianceAnswer from './ComplianceAnswer.jsx';
 import HoistBuildingCard from './HoistBuildingCard.jsx';
 import { useFollowBottom } from './useFollowBottom.js';
@@ -763,7 +764,9 @@ export default function OrchestratorDock({ vals }) {
                               <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "12px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "2px" }}></i>
                               <span>{m.text}</span>
                             </div>
-                          : <AnswerCards text={m.text} />}
+                          : (m.choices || []).length
+                            ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} compact />
+                            : <AnswerCards text={m.text} />}
                       <div style={{ display: m.interruptShow, fontSize: "10px", color: "var(--color-accent)", marginTop: "6px" }}>
                         {"Paused for approval before finishing."}
                       </div>

@@ -1013,8 +1013,12 @@ def workflow_stream_completion_payload(
     *,
     answer: str,
     tool_calls: list[dict[str, Any]] | None = None,
+    choices: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Enrich WebSocket workflow_completed with REST-parity fields for the orchestrator UI."""
+    """Enrich WebSocket workflow_completed with REST-parity fields for the orchestrator UI.
+
+    ``choices`` are option cards the chat renders under the answer (agents/migration_chooser.py);
+    absent unless a reply offers them."""
     tcs = tool_calls or []
     if tcs:
         sync_schema_mapping_from_tool_calls(session_id, tcs)
@@ -1031,7 +1035,7 @@ def workflow_stream_completion_payload(
     # its spans, queries and rows - and offer corrections against it.
     from . import activity_log as _activity
 
-    return {
+    out = {
         "type": "workflow_completed",
         "answer": answer,
         "session_id": session_id,
@@ -1040,6 +1044,9 @@ def workflow_stream_completion_payload(
         "workspace_status": ws,
         "ingested_schema_mapping_ids": schema_ids,
     }
+    if choices:
+        out["choices"] = choices
+    return out
 
 
 def sync_schema_mapping_from_tool_calls(
