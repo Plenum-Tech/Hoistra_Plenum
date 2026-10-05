@@ -1913,6 +1913,10 @@ export const renderValsMethods = {
         isYou: m.role === "you",
         isBot: m.role !== "you",
         text: m.text,
+        // A re-run keeps its original question; the correction it was re-run with sits beneath.
+        // A reopened thread stores no correction text, only that it was a re-run.
+        correction: m.role !== "you" || !m.correction ? ""
+          : m.correction === "Re-run with your correction" ? m.correction : "Re-run with your correction: " + m.correction,
         // Which engine answered, read off the tools behind the reply.
         domain: m.error ? "Orchestrator" : (m.rich ? "Compliance" : domainOf(m.calls)),
         // Tool names behind a reply, de-duplicated, so the route is visible per message.

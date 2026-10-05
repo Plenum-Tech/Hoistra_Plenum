@@ -13,7 +13,7 @@
 // `vals` is the view model from useHoistra(); the transcript keys are the same ones the
 // compliance console's dock reads.
 import React, { useRef } from 'react';
-import Markdown from '../components/shell/Markdown.jsx';
+import AnswerCards from '../components/shell/AnswerCards.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
 import CorrectionDrawer from '../components/shell/CorrectionDrawer.jsx';
@@ -113,6 +113,12 @@ export default function Chat({ vals }) {
                       {m.text}
                       <div style={{ display: m.filesShow, fontFamily: "ui-monospace,monospace", fontSize: "10px", opacity: "0.7", marginTop: "6px" }}>{m.fileNames}</div>
                     </div>
+                    {m.correction ? (
+                      <div title={m.correction} style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: "5px", maxWidth: "100%", textAlign: "right", fontSize: "11px", lineHeight: "1.45", color: "var(--color-neutral-500)" }}>
+                        <i className="ph ph-arrows-clockwise" style={{ fontSize: "11px", flexShrink: "0", color: "var(--color-accent)", transform: "translateY(1px)" }}></i>
+                        <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: "2", WebkitBoxOrient: "vertical" }}>{m.correction}</span>
+                      </div>
+                    ) : null}
                     <button type="button" className="hv11" onClick={m.edit} title="Edit this question and ask again" style={{ ...BARE, display: m.editShow, alignItems: "center", gap: "4px", fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
                       <i className="ph ph-pencil-simple" style={{ fontSize: "10.5px" }}></i>
                       {"Edit"}
@@ -145,7 +151,7 @@ export default function Chat({ vals }) {
                                 <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "13px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "3px" }}></i>
                                 <span>{m.text}</span>
                               </div>
-                            : <Markdown text={m.text} />}
+                            : <AnswerCards text={m.text} />}
                         <div style={{ display: m.interruptShow, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
                         {/* Teach from this answer: was it right, and if not, what should change
                             (logic/corrections.js). Shown once the turn is on record. */}

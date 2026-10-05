@@ -16,6 +16,7 @@
 // returned, so a reader sees the effect before anything is sent. Everything else is read-only
 // until the reader acts. Pure functions are tested in test/corrections.test.mjs.
 import { deepAgentsApi } from '../api/deepAgents.js';
+import { extractComplianceAnswer } from './complianceLive.js';
 
 // Whether a thumbs-down reason is enough to become a teaching - the server's own rule
 // (agents/auto_teach.py: twelve characters or more, not a one-word verdict), so the box can
@@ -149,6 +150,20 @@ export function correctionText(edits, context) {
   return who + (who ? text.charAt(0).toLowerCase() + text.slice(1) : text) + where + (edits.why && edits.why.trim() ? '. Reason: ' + edits.why.trim() : '') + '.';
 }
 
+// The transcript a re-run starts from: the corrected answer's ORIGINAL question, verbatim, with
+// the correction as a note beneath it, and nothing after it. The corrected answer then lands
+// where the old one was, as Edit does. Posting the correction as a question of its own made a
+// re-run read as a new query (5 Oct 2026). An answer no longer in the transcript appends the
+// run's own question.
+export function rerunTranscript(chat, turnId, fallbackQuestion, correction) {
+  const list = chat || [];
+  const ai = list.findIndex((m) => m && m.role !== 'you' && m.turnId === turnId);
+  let qi = -1;
+  for (let j = ai - 1; j >= 0; j -= 1) { if (list[j] && list[j].role === 'you') { qi = j; break; } }
+  const question = (qi > -1 && list[qi].text) || fallbackQuestion || '';
+  return (qi > -1 ? list.slice(0, qi) : list).concat([{ role: 'you', text: question, correction: correction, rerun: true }]);
+}
+
 export const correctionMethods = {
   // The stored run for a finished turn; the trace flushes a moment after the answer, so a
   // first miss is retried once.
@@ -202,14 +217,19 @@ export const correctionMethods = {
     const edits = this.crEdits();
     const body = { session_id: this.state.sessionId || 'rerun', corrections: [{ span_id: o.spanId || null, mode: o.mode, text: text, route: edits.route || null, args: null,
       exclude: edits.exclude.length ? edits.exclude : null, period: edits.period || null, field: edits.field || null }] };
-    this.setState({ crOpen: null, ccBusy: true, ccStream: { steps: [], zones: {}, reasoning: 'Re-running the steps with your correction…', trace: [], answer: '' } });
-    this.setState((p) => ({ ccChat: (p.ccChat || []).concat([{ role: 'you', text: 'Re-run with correction: ' + text, rerun: true }]) }));
+    const before = this.state.ccChat || [];
+    const question = (((this.state.crRuns || {})[o.turnId]) || {}).question || '';
+    this.setState({ crOpen: null, ccBusy: true, ccChat: rerunTranscript(before, o.turnId, question, text),
+      ccStream: { steps: [], zones: {}, reasoning: 'Re-running the steps with your correction…', trace: [], answer: '' } });
     const t0 = Date.now();
     try {
       const out = await deepAgentsApi.traceRerun(o.turnId, body);
       this.setState((p) => ({
         ccBusy: false, ccStream: null,
+        // The same structured outputs a first answer renders as the dashboard (compliance_response
+        // / compliance_pipeline); without them a corrected answer fell back to plain markdown.
         ccChat: (p.ccChat || []).concat([{ role: 'bot', text: out.answer || '', calls: (out.tool_calls || []).map((t) => t.tool).filter(Boolean),
+          rich: extractComplianceAnswer(out.tool_calls || []),
           trace: [{ at: 0, kind: 'reasoning', label: 'Re-run', text: 'Steps replayed with your correction: ' + (out.applied || []).join('; ') }]
             .concat((out.taught || []).length ? [{ at: 0, kind: 'reasoning', label: 'Taught', text: 'Remembered for similar questions: ' + out.taught.join(' · ') }] : []),
           ms: Date.now() - t0, turnId: out.turn_id || null, rerunOf: out.rerun_of || o.turnId }])
@@ -219,7 +239,8 @@ export const correctionMethods = {
       if ((out.taught || []).length) this.flash('Saved as a teaching too — similar questions get it from now on.');
       this.setState((p) => ({ ccTraceIdx: (p.ccChat || []).length - 1 }));
     } catch (e) {
-      this.setState((p) => ({ ccBusy: false, ccStream: null, ccChat: (p.ccChat || []).concat([{ role: 'bot', error: true, note: true, text: 'Could not re-run: ' + ((e && e.message) || e) }]) }));
+      // The old answer comes back: a failed re-run has nothing to replace it with.
+      this.setState({ ccBusy: false, ccStream: null, ccChat: before.concat([{ role: 'bot', error: true, note: true, text: 'Could not re-run: ' + ((e && e.message) || e) }]) });
     }
   },
   // The correction becomes a company memory, recalled on similar questions from now on.

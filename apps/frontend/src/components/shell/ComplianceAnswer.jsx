@@ -13,25 +13,11 @@
 // a specific call would be a guess, not a fact. `cost` is a turn-level total instead: real
 // numbers, scoped to what they actually describe.
 import React from 'react';
-import Markdown from './Markdown.jsx';
+import AnswerCards from './AnswerCards.jsx';
+import { sev, LABEL, CARD } from './cardStyles.js';
 import { richHasCards, costSummary, stepCostLabel } from '../../logic/complianceLive.js';
 
-const SEV = {
-  critical: { fg: 'var(--st-risk)', bg: 'var(--st-risk-bg)' },
-  warning: { fg: 'var(--st-warn)', bg: 'var(--st-warn-bg)' },
-  info: { fg: 'var(--color-accent)', bg: 'var(--color-accent-900)' },
-  ok: { fg: 'var(--st-ok)', bg: 'var(--st-ok-bg)' }
-};
-const sev = (s) => SEV[String(s || '').toLowerCase()] || { fg: 'var(--color-neutral-400)', bg: 'var(--color-bg)' };
-
-const LABEL = {
-  fontSize: '9.5px', letterSpacing: '0.11em', textTransform: 'uppercase',
-  color: 'var(--color-neutral-500)'
-};
-const CARD = {
-  border: '1px solid var(--color-divider)', borderRadius: '9px',
-  background: 'var(--color-bg)', padding: '10px 11px'
-};
+// SEV / sev / LABEL / CARD live in cardStyles.js, shared with AnswerCards.jsx.
 
 const STAGE_ICON = { plan: 'ph-list-checks', data: 'ph-database', analyse: 'ph-brain', validate: 'ph-shield-check', review: 'ph-eye', revise: 'ph-pencil-simple' };
 
@@ -203,7 +189,7 @@ export default function ComplianceAnswer({ rich, ms, open, onToggle, fallbackTex
         </div>
       ) : (!hasCards && fallbackText) ? (
         <div style={{ fontSize: '13px', lineHeight: '1.55', textWrap: 'pretty' }}>
-          <Markdown text={fallbackText} />
+          <AnswerCards text={fallbackText} />
         </div>
       ) : null}
 
@@ -219,7 +205,8 @@ export default function ComplianceAnswer({ rich, ms, open, onToggle, fallbackTex
                 {k.sublabel ? (
                   <div style={{ fontSize: '10px', color: 'var(--color-neutral-500)', marginTop: '2px', lineHeight: '1.35' }}>{k.sublabel}</div>
                 ) : null}
-                {k.unit ? (
+                {/* "other" is the builders' placeholder (planner._kpi), not a unit worth printing */}
+                {k.unit && k.unit !== 'other' ? (
                   <div style={{ fontFamily: 'ui-monospace,monospace', fontSize: '9px', color: 'var(--color-neutral-500)', marginTop: '4px' }}>{k.unit}</div>
                 ) : null}
               </div>

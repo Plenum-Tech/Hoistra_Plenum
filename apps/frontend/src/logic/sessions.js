@@ -18,6 +18,7 @@
 import { domainOf } from './chat.js';
 import { dayLabel } from './homeLive.js';
 import { deepAgentsApi } from '../api/deepAgents.js';
+import { extractComplianceAnswer } from './complianceLive.js';
 
 export const SESSIONS_KEY = 'hoistra.sessions.v1';
 export const MAX_SESSIONS = 60;
@@ -176,12 +177,39 @@ export function mergeServerThreads(local, threads, opts) {
 // A server thread's turns in the chat's own message shape, so a conversation asked on another
 // device reads here as it did there. Structured (rich) compliance answers come back as their
 // markdown; the tools behind each reply are kept so the engine badge is right.
+//
+// A re-run (route "rerun") is stored under "Re-run with corrections (<notes>): <question>". It
+// reads as it did live: the original question, a note that it was re-run, and the corrected
+// answer in the old one's place. The bot message keeps the stored question as `asked`, so
+// attachTurns gives it the re-run's own run rather than the original's.
+const RERUN_LEAD = /^Re-run with corrections \(/;
+function rerunOriginal(stored, prev) {
+  if (prev && stored.endsWith('): ' + prev)) return prev;
+  const at = stored.indexOf('): ');
+  return at > -1 ? stored.slice(at + 3) : stored;
+}
 export function turnsFromThread(thread) {
   const out = [];
   ((thread && thread.turns) || []).forEach((t) => {
     if (!t) return;
-    if (t.question) out.push({ role: 'you', text: String(t.question) });
-    if (t.answer) out.push({ role: 'bot', text: String(t.answer), calls: Array.isArray(t.tools) ? t.tools.filter((x) => typeof x === 'string') : [] });
+    const tools = Array.isArray(t.tools) ? t.tools : [];
+    const calls = tools.filter((x) => typeof x === 'string');
+    // The dashboard payloads the server keeps beside the names (services/chat_threads.py
+    // _card_payloads): the answer reopens as it rendered live. Older rows have names only.
+    const rich = extractComplianceAnswer(tools.filter((x) => x && typeof x === 'object' && typeof x.tool === 'string'));
+    const stored = String(t.question || '');
+    if (t.route === 'rerun' && RERUN_LEAD.test(stored)) {
+      let qi = -1;
+      for (let j = out.length - 1; j >= 0; j -= 1) { if (out[j].role === 'you') { qi = j; break; } }
+      const prev = qi > -1 ? String(out[qi].text || '') : '';
+      const original = rerunOriginal(stored, prev);
+      if (qi > -1 && prev === original) out.splice(qi);
+      out.push({ role: 'you', text: original, correction: 'Re-run with your correction', rerun: true });
+      if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls, asked: stored, rerunOf: true }, rich ? { rich: rich } : {}));
+      return;
+    }
+    if (t.question) out.push({ role: 'you', text: stored });
+    if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls }, rich ? { rich: rich } : {}));
   });
   return out.slice(-MAX_TURNS);
 }
@@ -197,7 +225,8 @@ export function attachTurns(messages, turns) {
   let r = 0;
   return (messages || []).map((m, i) => {
     if (!m || m.role !== 'bot' || m.turnId) return m;
-    const asked = i > 0 && messages[i - 1] && messages[i - 1].role === 'you' ? String(messages[i - 1].text || '').trim() : '';
+    const asked = m.asked ? String(m.asked).trim()
+      : i > 0 && messages[i - 1] && messages[i - 1].role === 'you' ? String(messages[i - 1].text || '').trim() : '';
     // the next run whose question is this answer's question; failing that, the next run in order
     let k = runs.findIndex((t, j) => j >= r && asked && String(t.question || '').trim() === asked);
     if (k < 0) k = r < runs.length ? r : -1;
