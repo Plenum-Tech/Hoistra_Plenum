@@ -3,6 +3,7 @@ of it, when the summary folds, and that a thread is its owner's alone."""
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -112,12 +113,52 @@ def test_nobody_signed_in_records_nothing_and_a_store_that_is_down_never_raises(
 def test_the_answer_fills_the_latest_open_turn_and_keeps_only_tool_names(db, monkeypatch):
     scheduled = []
     monkeypatch.setattr(ct, "schedule_fold", lambda sid: scheduled.append(sid))
+    db["answers"] = [("UPDATE plenum_cafm.chat_turns", [("Which boilers are overdue?",)])]
     asyncio.run(ct.record_answer("sess-1", "Three.", tools=[{"tool": "get_work_orders", "input": {"x": 1}},
                                                             {"tool": "get_work_orders"}, {"name": "udr_read_records"}]))
     upd = next(s for s in db["sql"] if "UPDATE plenum_cafm.chat_turns" in s[0])
-    assert "answer IS NULL ORDER BY turn_no DESC LIMIT 1" in upd[0]
+    # only the NEWEST turn, and only while it has no answer
+    assert "ORDER BY turn_no DESC LIMIT 1) AND answer IS NULL" in upd[0]
     assert upd[1]["tools"] == '["get_work_orders", "udr_read_records"]'
     assert scheduled == ["sess-1"]
+
+
+def test_a_repeated_answer_write_never_fills_an_older_question(db, monkeypatch):
+    """Some paths record one answer twice. The second write finds the newest turn answered and does
+    nothing - it used to fill an OLDER unanswered turn (a stopped one) with this answer (5 Oct 2026)."""
+    scheduled = []
+    monkeypatch.setattr(ct, "schedule_fold", lambda sid: scheduled.append(sid))
+    asyncio.run(ct.record_answer("sess-1", "Three.", tools=[]))      # UPDATE matches no row
+    assert not any("UPDATE plenum_cafm.chat_threads" in s_[0] for s_ in db["sql"])
+    assert scheduled == []
+
+
+def test_the_answer_keeps_its_card_payloads_beside_the_names(db, monkeypatch):
+    """A reopened chat renders the dashboard it rendered live (5 Oct 2026): the two presentation
+    payloads are kept after the names; names stay strings, so readers of names are unchanged."""
+    monkeypatch.setattr(ct, "schedule_fold", lambda sid: None)
+    resp = {"narrative": "Five vendors are blocked.", "kpis": [{"value": 5}]}
+    pipe = {"engine": "compliance", "steps": []}
+    asyncio.run(ct.record_answer("sess-1", "Five.", tools=[
+        {"tool": "list_vendor_accreditations", "input": {"risk_filter": "blocked"}, "output": {"rows": [{"secret": "x"}]}},
+        {"tool": "compliance_pipeline", "input": {}, "output": {"steps": ["old"]}},
+        {"tool": "compliance_pipeline", "input": {}, "output": pipe},
+        {"tool": "compliance_response", "input": {}, "output": resp}]))
+    upd = next(s for s in db["sql"] if "UPDATE plenum_cafm.chat_turns" in s[0])
+    stored = json.loads(upd[1]["tools"])
+    assert stored[:3] == ["list_vendor_accreditations", "compliance_pipeline", "compliance_response"]
+    # the FIRST of each, the one the chat draws (complianceLive.extractComplianceAnswer uses find)
+    assert stored[3:] == [{"tool": "compliance_pipeline", "output": {"steps": ["old"]}}, {"tool": "compliance_response", "output": resp}]
+    # only the presentation payloads: no other tool's input or output is kept
+    assert "secret" not in upd[1]["tools"] and "risk_filter" not in upd[1]["tools"]
+
+
+def test_an_oversized_card_payload_is_not_kept(db, monkeypatch):
+    monkeypatch.setattr(ct, "schedule_fold", lambda sid: None)
+    big = {"narrative": "x" * (ct.CARD_MAX_BYTES + 10)}
+    asyncio.run(ct.record_answer("sess-1", "Five.", tools=[{"tool": "compliance_response", "output": big}]))
+    upd = next(s for s in db["sql"] if "UPDATE plenum_cafm.chat_turns" in s[0])
+    assert json.loads(upd[1]["tools"]) == ["compliance_response"]
 
 
 def test_the_summary_folds_only_once_enough_turns_left_the_window(db, monkeypatch):

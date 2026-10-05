@@ -126,6 +126,7 @@ from .udr_response_evaluator import evaluate_udr_response, has_udr_tool_calls
 from ..services import chat_memories, chat_threads
 from . import planner, thread_scope, trace
 from .session_workspace import (
+    last_working_tool,
     ROUTE_UDR_INGEST,
     ROUTE_UDR_MAP,
     ROUTE_WO_CLARIFY,
@@ -3809,6 +3810,34 @@ class DeepAgentOrchestrator:
             "Say \"all of them\" and I will answer each reading."
         )
 
+    @staticmethod
+    def _loop_cards(user_message: str, tool_calls: list[dict[str, Any]], answer: str) -> list[dict[str, Any]]:
+        """The cards for an answer the general loop wrote: built from the data tools the loop
+        AND its sub-agents read (agents/trace.py keeps those outputs whole), with the same
+        builders a planned turn uses. Only the response is added; the loop's own run panel
+        stays the pipeline. Nothing when no card tool ran or the turn has its own dashboard."""
+        try:
+            top = [t for t in (tool_calls or []) if isinstance(t, dict)]
+            top_names = {str(t.get("tool") or "") for t in top}
+            # A sub-agent's card-tool output is used only for a tool the turn did not call itself,
+            # and only when every call of it returned the same thing: two buildings' figures
+            # under one unlabelled tile would read as a total.
+            by_tool: dict[str, list[dict[str, Any]]] = {}
+            for c in trace.card_tool_outputs():
+                if c.get("tool") not in top_names:
+                    by_tool.setdefault(str(c.get("tool")), []).append(c)
+            nested = [cs[0] for cs in by_tool.values()
+                      if len({json.dumps(c.get("output"), sort_keys=True, default=str) for c in cs}) == 1]
+            calls = [*top, *nested]
+            built = planner.cards_from_tool_calls(user_message or "", calls, answer or "")
+        except Exception as exc:  # noqa: BLE001 - cards are a presentation, never the answer
+            log.warning("orchestrator.loop_cards_failed", error=str(exc)[:200])
+            return []
+        if not built:
+            return []
+        response, _pipeline = built
+        return [{"tool": "compliance_response", "input": {"question": (user_message or "")[:300]}, "output": response}]
+
     @classmethod
     def _general_loop_panel(
         cls, user_message: str, tool_calls: list[dict[str, Any]]
@@ -6221,22 +6250,94 @@ class DeepAgentOrchestrator:
         if pins:
             notes.append("pinned: " + json.dumps(pins))
         _tok = _oq.pinned_filters.set(pins)
+        # A one-step engine plan is how every direct engine answer is recorded (rerun.plan_of).
+        # Replay that engine's own path - for compliance the analyst, the reviewer and the
+        # dashboard (compliance_response) - so the corrected answer renders as the original did;
+        # the bare step-by-step replay never ran the analyst and came back as a markdown table
+        # (5 Oct 2026). attach_route=False: the engine path must not write its answer into the
+        # thread here; the re-run records its turn once, below. A failed engine path falls back
+        # to the step-by-step replay, which records the failure as a fact.
+        step = _rerun.single_engine_step(plan)
+        # A general-loop answer has no steps to replay: the loop is asked again - the original
+        # question with the corrections, in the same conversation (the thread's history and, for
+        # a follow-up, its working set), recorded once below as the re-run's turn (5 Oct 2026).
+        loop = _rerun.loop_step(plan)
+        engine_out: dict[str, Any] | None = None
+        loop_out: dict[str, Any] | None = None
+        results: dict[str, dict[str, Any]] = {}
         try:
-            results = await planner.execute(plan, run_engine=run_engine, run_tool=self._run_planned_tool,
-                                            scope_hint=thread_scope.describe(ws) if ws else "",
-                                            question=question, replan=self._replan_after_gates, check=self._check_step)
+            if loop is not None:
+                ask = str(loop.get("ask") or question)
+                if rules and "Correction (apply exactly)" not in ask:
+                    ask += "\n\nCorrections (apply exactly):\n" + rules
+                # The router's recorded decision, replayed: the loop is told the same sub-agents, and
+                # a page-engine turn keeps the database catalogue closed, as the original turn did.
+                routing = _rerun.routing_of(turn)
+                _turn_page_engines.set(frozenset())
+                _turn_catalogue_via_task.set(False)
+                note = None
+                if routing:
+                    _, note = self._decide_dispatch(routing, question.lower())
+                    self._claim_turn_for_page_engines(routing)
+                try:
+                    loop_in = await self._build_stateful_input(
+                        session_id, ask, self._with_routing_note(thread_scope.describe(ws) if ws else None, note))
+                    loop_out = await self._invoke(loop_in, session_id, session_id, record_turn=False)
+                except Exception as exc:  # noqa: BLE001 - reported below as the re-run's failure
+                    log.warning("rerun.loop_failed", error=str(exc)[:200])
+                    loop_out = {"success": False, "answer": "", "error": str(exc)[:200]}
+                if not loop_out.get("success") or loop_out.get("interrupted") or not str(loop_out.get("answer") or "").strip():
+                    why = ("it stopped for an approval" if loop_out.get("interrupted")
+                           else str(loop_out.get("error") or "the loop gave no answer"))[:200]
+                    activity_log.fire(agent="orchestrator", stage="turn", direction="error", summary=why[:300], ok=False,
+                                      error=why, latency_ms=(time.perf_counter() - t0) * 1000)
+                    return {"ok": False, "error": "The re-run did not finish: " + why}
+            elif step is not None:
+                ask = str(step.get("ask") or question)
+                if rules and "Correction (apply exactly)" not in ask:
+                    ask += "\n\nCorrections (apply exactly):\n" + rules
+                try:
+                    engine_out = await self._invoke_phase2_engine(
+                        engine=step["target"], user_message=ask, session_id=session_id,
+                        extra_context=thread_scope.describe(ws) if ws else None, attach_route=False)
+                except Exception as exc:  # noqa: BLE001 - the analyst, reviewer or composer raised; replay instead
+                    log.warning("rerun.engine_path_failed", engine=step["target"], error=str(exc)[:200])
+                    engine_out = {"success": False, "answer": "", "error": str(exc)[:200]}
+                failed = (not engine_out.get("success")) or _rerun.is_engine_error(engine_out.get("answer"))
+                if failed:
+                    notes.append(f"{step['id']}: the engine path failed ({str(engine_out.get('error') or engine_out.get('answer') or 'no answer')[:120]}); replayed step by step")
+                    engine_out = None
+            if engine_out is None and loop_out is None:
+                results = await planner.execute(plan, run_engine=run_engine, run_tool=self._run_planned_tool,
+                                                scope_hint=thread_scope.describe(ws) if ws else "",
+                                                question=question, replan=self._replan_after_gates, check=self._check_step)
         finally:
             _oq.pinned_filters.reset(_tok)
-        plan = (results.get("__plan__") or {}).get("output") or plan
-        tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
-        answer, check = await self._write_planned_answer(
-            question + ("\n\nApply these corrections exactly; where a correction changes a figure, state the corrected figure:\n" + rules if rules else ""),
-            plan, results)
-        tool_calls = tool_calls + self._planned_cards(question, plan, results, answer)
+        if loop_out is not None:
+            answer = str(loop_out.get("answer") or "")
+            tool_calls = list(loop_out.get("tool_calls") or [])
+            check = None
+            domain = (loop_out.get("route_metadata") or {}).get("domain") or "meta"
+        elif engine_out is not None:
+            answer = str(engine_out.get("answer") or "")
+            tool_calls = list(engine_out.get("tool_calls") or [])
+            check = None
+            domain = step["target"]
+        else:
+            plan = (results.get("__plan__") or {}).get("output") or plan
+            tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
+            answer, check = await self._write_planned_answer(
+                question + ("\n\nApply these corrections exactly; where a correction changes a figure, state the corrected figure:\n" + rules if rules else ""),
+                plan, results)
+            tool_calls = tool_calls + self._planned_cards(question, plan, results, answer)
+            domain = "orchestrator"
         new_turn_id = activity_log.current_turn()
         result = {"session_id": session_id, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
-                  "route_metadata": {"intent": "rerun", "domain": "orchestrator", "rerun_of": turn.get("turn_id"), "steps": [s["target"] for s in plan["steps"]]}}
-        attach_route_to_result(result, session_id, intent="rerun", domain="orchestrator")
+                  "route_metadata": {"intent": "rerun", "domain": domain, "rerun_of": turn.get("turn_id"), "steps": [s["target"] for s in plan["steps"]]}}
+        attach_route_to_result(result, session_id, intent="rerun", domain=domain)
+        # attach_route_to_result can add the cards built from the engine's data tools (a wo_engine
+        # or energy step); what the chat is sent must be what the thread records.
+        tool_calls = list(result.get("tool_calls") or tool_calls)
         await self._close_streamed_turn(session_id, result, t0)
         return {"ok": True, "turn_id": new_turn_id, "rerun_of": turn.get("turn_id"), "question": rq, "answer": answer,
                 "tool_calls": tool_calls, "plan": plan, "applied": notes, "verify": check,
@@ -6578,9 +6679,14 @@ class DeepAgentOrchestrator:
         session_id: str,
         extra_context: str | None,
         on_zone: Any = None,
+        attach_route: bool = True,
     ) -> dict[str, Any]:
         """
         Run ONLY the selected Phase 2 engine's tools (not the full ALL_TOOLS set).
+
+        ``attach_route=False`` returns the result without attach_route_to_result: no thread or
+        conversation write, no route metadata, no extra cards. A caller that records its own turn
+        (rerun_turn) uses it so the engine's answer is not written into the thread early.
 
         ``on_zone(key, value)`` — when given, the turn is streamed: the agent's tool calls
         arrive as events while it works, the composer's pipeline steps as they happen, and the
@@ -6657,16 +6763,19 @@ class DeepAgentOrchestrator:
                 error=err,
                 exc_info=True,
             )
+            failed = {
+                "session_id": session_id,
+                "answer": "",
+                "tool_calls": [],
+                "success": False,
+                "error": err,
+                "interrupted": False,
+                "interrupt_payload": None,
+            }
+            if not attach_route:
+                return failed
             return attach_route_to_result(
-                {
-                    "session_id": session_id,
-                    "answer": "",
-                    "tool_calls": [],
-                    "success": False,
-                    "error": err,
-                    "interrupted": False,
-                    "interrupt_payload": None,
-                },
+                failed,
                 session_id,
                 intent="phase2_engine",
                 domain=engine,
@@ -6939,6 +7048,8 @@ class DeepAgentOrchestrator:
             engine=engine,
             tool_count=len(tool_names),
         )
+        if not attach_route:
+            return out
         return attach_route_to_result(
             out,
             session_id,
@@ -6954,21 +7065,29 @@ class DeepAgentOrchestrator:
         thread_id: str,
         session_id: str,
         routing_note: str | None = None,
+        *,
+        record_turn: bool = True,
     ) -> dict[str, Any]:
-        """Invoke the agent and normalise the result into our response shape."""
+        """Invoke the agent and normalise the result into our response shape.
+
+        record_turn=False is a corrected re-run of a general-loop answer (rerun_turn): the loop
+        runs inside the re-run's own turn, which opened the turn and records its answer once, so
+        here there is no turn input/output row and no thread write. It draws the run panel as a
+        routed loop answer does, and returns the domain in route_metadata for the caller."""
         config = self._config(thread_id)
         set_session_context(thread_id)
         activity_log.set_current_session(session_id, thread_id)
         activity_log.ensure_turn()
         _turn_t0 = time.perf_counter()
-        activity_log.fire(
-            agent="orchestrator", stage="turn", direction="input",
-            summary=_latest_user_message(input_)[:300],
-            payload={"input": input_ if not isinstance(input_, dict) else {
-                "message_count": len(input_.get("messages") or []),
-                "latest_user_message": _latest_user_message(input_),
-            }},
-        )
+        if record_turn:
+            activity_log.fire(
+                agent="orchestrator", stage="turn", direction="input",
+                summary=_latest_user_message(input_)[:300],
+                payload={"input": input_ if not isinstance(input_, dict) else {
+                    "message_count": len(input_.get("messages") or []),
+                    "latest_user_message": _latest_user_message(input_),
+                }},
+            )
         try:
             # Outside the event stream, the trace learns the loop's model and tool calls this way.
             _h = trace.callback_handler("orchestrator loop")
@@ -6976,10 +7095,11 @@ class DeepAgentOrchestrator:
         except Exception as exc:
             err = friendly_openai_error(exc)
             log.error("orchestrator.invoke.error", thread_id=thread_id, error=err, exc_info=True)
-            activity_log.fire(
-                agent="orchestrator", stage="turn", direction="error", summary=err[:300],
-                ok=False, error=err, latency_ms=(time.perf_counter() - _turn_t0) * 1000,
-            )
+            if record_turn:
+                activity_log.fire(
+                    agent="orchestrator", stage="turn", direction="error", summary=err[:300],
+                    ok=False, error=err, latency_ms=(time.perf_counter() - _turn_t0) * 1000,
+                )
             return {
                 "session_id": session_id,
                 "answer": "",
@@ -7024,10 +7144,12 @@ class DeepAgentOrchestrator:
                 tool_calls=tool_calls,
                 llm=self._llm,
             )
-        if routing_note and interrupt_payload is None:
+        if (routing_note or not record_turn) and interrupt_payload is None:
             panel = self._general_loop_panel(_latest_user_message(input_), tool_calls)
             if panel:
                 tool_calls = [*tool_calls, panel]
+        if interrupt_payload is None:
+            tool_calls = [*tool_calls, *self._loop_cards(_latest_user_message(input_), tool_calls, str(answer or ""))]
         out = {
             "session_id": session_id,
             "answer": answer,
@@ -7040,8 +7162,11 @@ class DeepAgentOrchestrator:
         domain = "meta"
         tool_name = ""
         if tool_calls:
-            tool_name = str(tool_calls[-1].get("tool") or "")
+            # The last tool that did work, not the run panel or the cards appended after it.
+            tool_name = last_working_tool(tool_calls)
             domain = _TOOL_DOMAIN.get(tool_name, "meta")
+        if not record_turn:
+            return {**out, "route_metadata": {"domain": domain, "tool": tool_name}}
         activity_log.fire(
             agent="orchestrator", stage="turn", direction="output",
             summary=(answer or "")[:300],
@@ -7856,13 +7981,16 @@ class DeepAgentOrchestrator:
             payload={"answer": final_answer, "tool_calls": streamed_tool_calls, "mode": "stream"},
             latency_ms=(time.perf_counter() - _stream_t0) * 1000,
         )
-        if final_answer.strip():
-            record_conversation_turn(sid, "assistant", final_answer)
-            await chat_threads.record_answer(sid, final_answer, tools=streamed_tool_calls)
         if routing_note:
             panel = self._general_loop_panel(user_message, streamed_tool_calls)
             if panel:
                 streamed_tool_calls = [*streamed_tool_calls, panel]
+        streamed_tool_calls = [*streamed_tool_calls, *self._loop_cards(user_message, streamed_tool_calls, final_answer)]
+        # Recorded after the panel and the cards, so a chat reopened from the server shows the
+        # answer as it rendered here.
+        if final_answer.strip():
+            record_conversation_turn(sid, "assistant", final_answer)
+            await chat_threads.record_answer(sid, final_answer, tools=streamed_tool_calls)
         yield workflow_stream_completion_payload(
             sid,
             answer=final_answer,

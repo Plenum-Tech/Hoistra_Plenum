@@ -163,7 +163,12 @@ async def record_question(session_id: str, question: str, *, building_id: str | 
 
 async def record_answer(session_id: str, answer: str, *, tools: list | None = None,
                         citations: list | None = None) -> None:
-    """The assistant's side: fills the thread's latest unanswered turn, then schedules a fold."""
+    """The assistant's side: fills the thread's NEWEST turn if it is unanswered, then schedules a fold.
+
+    Only the newest: a turn is answered by the answer that follows it. Some paths record one
+    answer twice (attach_route_to_result, then the closing write); when the newest turn already
+    had it, the second write used to fill an OLDER unanswered turn (a stopped or gated one),
+    putting this answer under a different question (found 5 Oct 2026). Now it is a no-op."""
     if not _ready or not session_id or not (answer or "").strip():
         return
     try:
@@ -173,11 +178,14 @@ async def record_answer(session_id: str, answer: str, *, tools: list | None = No
             row = (await conn.execute(text(f"""
                 UPDATE {TURNS} SET answer = :a, tools = CAST(:tools AS jsonb), citations = CAST(:cites AS jsonb),
                        answered_at = now()
-                 WHERE id = (SELECT id FROM {TURNS} WHERE thread_id = :tid AND answer IS NULL
+                 WHERE id = (SELECT id FROM {TURNS} WHERE thread_id = :tid
                              ORDER BY turn_no DESC LIMIT 1)
+                   AND answer IS NULL
              RETURNING question"""),
-                {"a": answer, "tools": json.dumps(_tool_names(tools)), "cites": json.dumps(citations or []),
+                {"a": answer, "tools": json.dumps(_tool_names(tools) + _card_payloads(tools), default=str), "cites": json.dumps(citations or []),
                  "tid": session_id})).first()
+            if row is None:
+                return          # the newest turn already has its answer (a repeat write): nothing to do
             head = (await conn.execute(text(f"SELECT working_set FROM {THREADS} WHERE id = :tid"),
                                        {"tid": session_id})).first()
             # What the thread is now about (agents/thread_scope.py): the next follow-up's hard filter.
@@ -222,6 +230,27 @@ def record_answer_soon(session_id: str, answer: str, *, tools: list | None = Non
         asyncio.get_running_loop().create_task(record_answer(session_id, answer, tools=tools))
     except RuntimeError:
         pass
+
+
+# The chat renders an answer as the compliance dashboard from these two tool outputs. They are
+# presentation, built from the answer's own figures, and are kept after the tool names so a chat
+# reopened from the server renders as it did live (5 Oct 2026); every other tool's input and
+# output is still dropped. Names stay strings, so a reader that wants names is unchanged.
+CARD_TOOLS = ("compliance_pipeline", "compliance_response")
+CARD_MAX_BYTES = 256_000
+
+
+def _card_payloads(tools: list | None) -> list[dict]:
+    # The FIRST of each: the chat draws the first compliance_response / compliance_pipeline it
+    # finds (complianceLive.extractComplianceAnswer), so the reopened chat shows the same one.
+    first: dict[str, dict] = {}
+    for t in tools or []:
+        if isinstance(t, dict) and t.get("tool") in CARD_TOOLS and isinstance(t.get("output"), dict):
+            first.setdefault(t["tool"], t["output"])
+    out = [{"tool": name, "output": first[name]} for name in CARD_TOOLS if name in first]
+    if not out or len(json.dumps(out, default=str)) > CARD_MAX_BYTES:
+        return []
+    return out
 
 
 def _tool_names(tools: list | None) -> list[str]:

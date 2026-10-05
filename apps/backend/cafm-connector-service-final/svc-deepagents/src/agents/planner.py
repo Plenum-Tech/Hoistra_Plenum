@@ -814,11 +814,27 @@ def cards_from_results(question: str, plan: dict[str, Any], results: dict[str, d
     actions: list[dict[str, Any]] = []
     steps_out: list[dict[str, Any]] = [{"stage": "plan", "label": f"{len(plan.get('steps') or [])} step{'s' if len(plan.get('steps') or []) != 1 else ''} planned",
                                         "detail": plan.get("goal") or describe(plan)[:200]}]
+    # A card tool's figures carry no scope label, so a tool that returned DIFFERENT outputs in one
+    # plan (one per building) is not carded from the engine steps - the cards would show one
+    # building's figures as if they were the total. Identical outputs are carded once.
+    seen_outputs: set[str] = set()
+    variants: dict[str, set[str]] = {}
+    for st in plan.get("steps") or []:
+        r = results.get(st["id"]) or {}
+        if not r.get("ok"):
+            continue
+        if st.get("kind") != "engine" and isinstance(r.get("output"), dict):
+            variants.setdefault(str(st.get("target") or ""), set()).add(json.dumps(r["output"], sort_keys=True, default=str))
+        for c in (r.get("tool_calls") or []):
+            co = _as_dict(c.get("output")) if isinstance(c, dict) else None
+            if co is not None:
+                variants.setdefault(str(c.get("tool") or ""), set()).add(json.dumps(co, sort_keys=True, default=str))
     for st in plan.get("steps") or []:
         r = results.get(st["id"]) or {}
         o = r.get("output")
         qid = st["id"]
         if r.get("ok") and isinstance(o, dict):
+            seen_outputs.add(json.dumps(o, sort_keys=True, default=str))
             t = st.get("target")
             if t == "list_maintenance_decisions":
                 _cards_decisions(o, qid, kpis, groups, actions)
@@ -830,6 +846,22 @@ def cards_from_results(question: str, plan: dict[str, Any], results: dict[str, d
                 _cards_blockers(o, qid, kpis, groups, actions)
             elif t == "answer_from_records":
                 _cards_records(o, st.get("ask") or "", qid, kpis, groups)
+            elif t == "get_asset_condition_summary":
+                _cards_condition(o, qid, kpis, groups, actions)
+        # An engine step answers in prose, but the data tools it called are the same ones the
+        # builders know; card those (once each) unless the engine produced its own dashboard.
+        nested = [c for c in (r.get("tool_calls") or []) if isinstance(c, dict)] if r.get("ok") else []
+        if st.get("kind") == "engine" and not any(c.get("tool") == "compliance_response" for c in nested):
+            for c in nested:
+                name = str(c.get("tool") or "")
+                co = _as_dict(c.get("output"))
+                if name not in _CARD_BUILDERS or co is None or co.get("ok") is False or len(variants.get(name) or ()) > 1:
+                    continue
+                key = json.dumps(co, sort_keys=True, default=str)
+                if key not in seen_outputs:
+                    seen_outputs.add(key)
+                    ask = (c.get("input") or {}).get("question") if isinstance(c.get("input"), dict) else ""
+                    _CARD_BUILDERS[name](co, qid, kpis, groups, actions, str(ask or st.get("ask") or question or ""))
         n = len(_rows_of(o)) if r.get("ok") else 0
         steps_out.append({"stage": "data", "label": f"{st['id']}: {st.get('target')}",
                           "detail": (f"{n} rows · " if n else "") + f"{r.get('ms', 0)} ms" + ("" if r.get("ok") else f" · failed: {r.get('error')}")})
@@ -845,12 +877,47 @@ def cards_from_results(question: str, plan: dict[str, Any], results: dict[str, d
     return response, pipeline
 
 
+def _fmt_num(v: Any) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    return str(int(f)) if f == int(f) else f"{f:.1f}"
+
+
+def _cards_condition(o: dict[str, Any], qid: str, kpis: list, groups: list, actions: list) -> None:
+    """get_asset_condition_summary: the Assets page's Threat / Watch / In control tiles, the
+    sections running over their own reference, and the buildings behind them (5 Oct 2026)."""
+    sm = o.get("summary") if isinstance(o.get("summary"), dict) else {}
+    kpis.append(_kpi(sm.get("threat", 0), "Threat", "over reference and a persistent anomaly", "critical" if sm.get("threat") else "ok", unit="assets"))
+    kpis.append(_kpi(sm.get("watch", 0), "Watch", f"{sm.get('watch_shares_section', 0)} shared section · {sm.get('watch_persistent_anomaly', 0)} persistent anomaly",
+                     "warning" if sm.get("watch") else "ok", unit="assets"))
+    kpis.append(_kpi(sm.get("in_control", 0), "In control", f"{sm.get('in_control_anomaly_under_threshold', 0)} with an anomaly under threshold", "ok", unit="assets"))
+    kpis.append(_kpi(sm.get("assets", 0), "Assets banded", f"{sm.get('section_not_measured', 0)} on one signal (no sub-meter)" if sm.get("section_not_measured") else "every section measured", "info", unit="assets"))
+    over = [x for x in (o.get("sections") or []) if isinstance(x, dict) and x.get("over_reference")]
+    if over:
+        groups.append(_group("Sections over reference", f"{len(over)} section{'s' if len(over) != 1 else ''} running over their own reference EUI",
+                             [f"{x.get('section')}, {x.get('building')} — {_fmt_num(x.get('eui_kwh_per_m2'))} vs {_fmt_num(x.get('reference_eui_kwh_m2'))} kWh/m², "
+                              f"+{_fmt_num(x.get('deviation_pct'))}% · {x.get('threat', 0)} threat, {x.get('watch', 0)} watch of {x.get('assets', 0)}" for x in over],
+                             "critical" if any(x.get("threat") for x in over) else "warning", scope="Building", qid=qid))
+        for x in [x for x in over if x.get("threat")][:2]:
+            actions.append(_action(f"Investigate {x.get('section')} at {x.get('building')}: {x.get('threat')} threat asset{'s' if x.get('threat') != 1 else ''}, "
+                                   f"+{_fmt_num(x.get('deviation_pct'))}% over its reference EUI", "critical", ["threat", "energy"], scope="Building", qid=qid))
+    blds = [b for b in (o.get("buildings") or []) if isinstance(b, dict)]
+    if blds:
+        groups.append(_group("By building", f"{len(blds)} building{'s' if len(blds) != 1 else ''}",
+                             [f"{b.get('building') or 'Unplaced'} — {b.get('threat', 0)} threat · {b.get('watch', 0)} watch · {b.get('in_control', 0)} in control; "
+                              f"{b.get('sections_over_reference', 0)} of {b.get('sections', 0)} sections over reference, {b.get('work_orders_open', 0)} open work orders"
+                              for b in blds], "critical" if any(b.get("threat") for b in blds) else "info", scope="Building", qid=qid))
+
+
 _CARD_BUILDERS = {
     "list_maintenance_decisions": lambda o, q, k, g, a, ask: _cards_decisions(o, q, k, g, a),
     "get_cost_savings": lambda o, q, k, g, a, ask: _cards_savings(o, q, k, g, a),
     "replacement_candidates": lambda o, q, k, g, a, ask: _cards_replacement(o, q, k, g, a),
     "work_order_blockers": lambda o, q, k, g, a, ask: _cards_blockers(o, q, k, g, a),
     "answer_from_records": lambda o, q, k, g, a, ask: _cards_records(o, ask, q, k, g),
+    "get_asset_condition_summary": lambda o, q, k, g, a, ask: _cards_condition(o, q, k, g, a),
 }
 CARD_TOOLS = frozenset(_CARD_BUILDERS)
 

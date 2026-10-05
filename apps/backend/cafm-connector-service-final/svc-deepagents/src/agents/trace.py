@@ -229,6 +229,9 @@ class Turn:
         self.runs: dict[str, Span] = {}      # model runs by run_id (stream events / callbacks)
         self.tool_runs: dict[str, Span] = {} # tool runs by run_id (callbacks)
         self.flushed = False
+        # The card tools' outputs, whole: spans keep a bounded copy, the answer's cards need the
+        # rows (see keep_card_output). A handful per turn at most.
+        self.card_outputs: list[dict[str, Any]] = []
         from ..http_client import caller_organization_id
         from ..services.principal import caller_principal
 
@@ -266,6 +269,24 @@ _turn: ContextVar[Turn | None] = ContextVar("hoist_trace_turn", default=None)
 
 def current() -> Turn | None:
     return _turn.get()
+
+
+def keep_card_output(t: Turn, name: str, output: Any) -> None:
+    """Keep a card tool's output whole on the turn. A sub-agent's tool calls never reach the
+    turn's own tool list (that holds only `task`), so without this the answer the loop writes
+    from them could not be carded (5 Oct 2026)."""
+    try:
+        from .planner import CARD_TOOLS
+    except Exception:  # noqa: BLE001
+        return
+    if name in CARD_TOOLS and isinstance(output, dict) and len(t.card_outputs) < 20:
+        t.card_outputs.append({"tool": name, "output": output})
+
+
+def card_tool_outputs() -> list[dict[str, Any]]:
+    """The card tools' whole outputs recorded on the current turn, in call order."""
+    t = _turn.get()
+    return list(t.card_outputs) if t is not None else []
 
 
 def begin(turn_id: str | None, session_id: str | None) -> Turn | None:
@@ -322,6 +343,8 @@ def on_activity(kw: dict[str, Any]) -> None:
                 s = t.last_open(lambda x: x.kind == "tool" and x.name == name)
                 if s is None:
                     s = t.new(kind="tool", name=name, agent=agent, parent_id=t.root.id)
+                if kw.get("ok", True) and not kw.get("error"):
+                    keep_card_output(t, name, payload.get("output"))
                 s.close(output=_bound(payload.get("output")), ok=bool(kw.get("ok", True)), error=kw.get("error"))
             return
         model = kw.get("model")
@@ -603,6 +626,8 @@ def on_tool_close(run_id: str, output: Any, error: str | None = None) -> None:
                 out = json.loads(out)
             except ValueError:
                 pass
+        if not error:
+            keep_card_output(t, s.name, out)
         s.close(output=_bound(out), ok=not error, error=error)
     except Exception as exc:  # noqa: BLE001
         log.warning("trace.on_tool_close_failed", error=str(exc)[:200])

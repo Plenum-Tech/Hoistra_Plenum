@@ -1066,6 +1066,20 @@ def sync_schema_mapping_from_tool_calls(
                 set_pending_schema_gate_confirm(session_id, schema_mapping_id=sid)
 
 
+# The chat's presentation calls: appended after the tools that did the work.
+PRESENTATION_TOOLS = frozenset({"compliance_pipeline", "compliance_response", "planner"})
+
+
+def last_working_tool(tool_calls: list | None) -> str:
+    """The last tool that did the turn's work - not the run panel or the cards appended after it,
+    which would otherwise decide the turn's domain (5 Oct 2026: a wo_engine answer read as meta)."""
+    for t in reversed(tool_calls or []):
+        name = str((t or {}).get("tool") or "") if isinstance(t, dict) else ""
+        if name and name not in PRESENTATION_TOOLS:
+            return name
+    return ""
+
+
 def attach_route_to_result(
     result: dict[str, Any],
     session_id: str,
@@ -1082,8 +1096,7 @@ def attach_route_to_result(
     if tool and not domain:
         domain = "meta"
     if tool_calls and not tool:
-        last = tool_calls[-1]
-        tool = str(last.get("tool") or "")
+        tool = last_working_tool(tool_calls)
     if not intent:
         intent = classify_route_intent(
             " ".join((result.get("answer") or "").lower().split()), state

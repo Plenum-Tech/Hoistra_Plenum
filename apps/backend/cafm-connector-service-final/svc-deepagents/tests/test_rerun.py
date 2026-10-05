@@ -33,11 +33,12 @@ def test_a_planned_turn_replays_its_own_steps_and_a_routed_turn_becomes_one_engi
     one = rerun.plan_of(routed)
     assert one["mode"] == "single" and one["steps"][0]["target"] == "compliance" and one["steps"][0]["ask"] == "expired certificates by vendor"
     assert rerun.plan_of({"question": "q", "spans": [{"id": "root", "seq": 0, "kind": "turn", "name": "turn"}]}) is None
-    # a general-loop plan ("orchestrator loop") has nothing to replay as a step; the router's engine decides
+    # a general-loop plan ("orchestrator loop") replays the loop - the plan is what ran, even when an
+    # engine ran inside it (5 Oct 2026; it used to fall to that engine when the loop had no replay)
     loop = {"question": "q", "spans": [{"id": "root", "seq": 0, "kind": "turn", "name": "turn"},
                                       {"id": "p", "seq": 1, "kind": "plan", "name": "plan: 1 step", "parent_id": "root", "output": {"plan": {"mode": "single", "steps": [{"id": "s1", "kind": "loop", "target": "orchestrator loop"}]}}},
                                       {"id": "g", "seq": 2, "kind": "agent", "name": "wo_engine", "parent_id": "root"}]}
-    assert rerun.plan_of(loop)["steps"][0]["target"] == "wo_engine"
+    assert rerun.loop_step(rerun.plan_of(loop))["target"] == "orchestrator loop"
 
 
 def test_a_correction_lands_on_the_step_its_span_belongs_to():

@@ -19,7 +19,9 @@ How a correction lands, by the span it was raised on (agents/trace.py kinds):
                                                 a constraint (agents/planner.py)
 
 A run that had no plan of its own (one engine by the router) is replayed as a one-step plan for
-that engine, so the same machinery applies.
+that engine, so the same machinery applies. A run the general loop answered ("orchestrator loop",
+with its `task` sub-agents) is replayed as one loop step: the original question with the
+corrections, asked of the same loop in the same conversation (5 Oct 2026).
 """
 from __future__ import annotations
 
@@ -33,6 +35,9 @@ from . import planner
 
 log = structlog.get_logger(__name__)
 
+#: The general loop's name in the trace (agents/trace.py) and in a recorded plan.
+LOOP = "orchestrator loop"
+
 
 def _parse(v: Any) -> Any:
     if isinstance(v, str):
@@ -43,11 +48,27 @@ def _parse(v: Any) -> Any:
     return v
 
 
+def _router_decision(spans: list[dict[str, Any]]) -> Any:
+    """The router span's decision: the live router records its routing dict as the span output
+    ({agent, also, reason} - seen on agent_trace_spans 5 Oct 2026); other recorders nest it
+    under model_output. Either shape, or a bare agent name."""
+    router = next((s for s in spans if s.get("kind") == "router"), None)
+    if router is None:
+        return None
+    out = _parse(router.get("output"))
+    if isinstance(out, dict) and "model_output" in out:
+        return out.get("model_output")
+    return out or None
+
+
 def plan_of(turn: dict[str, Any]) -> dict[str, Any] | None:
     """The plan the recorded turn ran on: the planner's steps, or one step for the engine the
-    router chose. None when the run shows no route at all (nothing to replay)."""
+    router chose, or one loop step for a general-loop answer. None when the run shows no route at
+    all (nothing to replay)."""
     spans = sorted(turn.get("spans") or [], key=lambda s: s.get("seq") or 0)
     plan_span = next((s for s in spans if s.get("kind") == "plan"), None)
+    loop_plan = {"mode": "single", "source": "rerun", "goal": "", "answer_shape": "",
+                 "steps": [{"id": "s1", "kind": "loop", "target": LOOP, "ask": turn.get("question") or "", "depends_on": [], "why": "the general loop answered it"}]}
     if plan_span:
         out = _parse(plan_span.get("output")) or {}
         plan = out.get("plan") if isinstance(out, dict) else None
@@ -56,7 +77,7 @@ def plan_of(turn: dict[str, Any]) -> dict[str, Any] | None:
             for st in plan["steps"]:
                 target = str(st.get("target") or "")
                 kind = st.get("kind") or ("engine" if target in planner.ENGINES else "tool")
-                if kind == "loop" or target == "orchestrator loop":
+                if kind == "loop" or target == LOOP:
                     continue
                 steps.append({"id": str(st.get("id") or f"s{len(steps) + 1}"), "kind": kind, "target": target,
                               "ask": st.get("ask") or turn.get("question") or "", "depends_on": list(st.get("depends_on") or []),
@@ -64,19 +85,64 @@ def plan_of(turn: dict[str, Any]) -> dict[str, Any] | None:
             if steps:
                 return {"mode": plan.get("mode") or "multi", "source": "rerun", "goal": plan.get("goal") or "",
                         "steps": steps, "answer_shape": plan.get("answer_shape") or ""}
-    router = next((s for s in spans if s.get("kind") == "router"), None)
-    engine = None
-    if router:
-        out = _parse(router.get("output")) or {}
-        mo = out.get("model_output") if isinstance(out, dict) else None
-        engine = (mo.get("agent") if isinstance(mo, dict) else mo) if mo else None
+            # The recorded plan says the loop answered - after the router, which may have named an
+            # engine the dispatch then sent to the loop (two registers, an action verb). The plan
+            # is what ran, so the loop is what replays.
+            if any((st.get("kind") == "loop" or str(st.get("target") or "") == LOOP) for st in plan["steps"]):
+                return loop_plan
+    mo = _router_decision(spans)
+    engine = (mo.get("agent") if isinstance(mo, dict) else mo) if mo else None
     if not engine:
         group = next((s for s in spans if s.get("kind") == "agent" and s.get("name") in planner.ENGINES), None)
         engine = group.get("name") if group else None
     if engine in planner.ENGINES:
         return {"mode": "single", "source": "rerun", "goal": "", "answer_shape": "",
                 "steps": [{"id": "s1", "kind": "engine", "target": engine, "ask": turn.get("question") or "", "depends_on": [], "why": "the engine the router chose"}]}
+    if any(s.get("kind") == "agent" and s.get("name") == LOOP for s in spans):
+        return loop_plan
     return None
+
+
+def routing_of(turn: dict[str, Any]) -> dict[str, Any] | None:
+    """What the router decided for the recorded turn - {agent, also, reason} from its span - so a
+    loop re-run is told the same sub-agents and keeps the same catalogue rule. None: no decision."""
+    mo = _router_decision(sorted(turn.get("spans") or [], key=lambda s: s.get("seq") or 0))
+    return mo if isinstance(mo, dict) and mo.get("agent") else None
+
+
+def loop_step(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The step when the plan is the general loop and nothing else (plan_of). Such a re-run asks
+    the loop again; there are no steps to replay one by one."""
+    steps = (plan or {}).get("steps") or []
+    if len(steps) != 1:
+        return None
+    return steps[0] if steps[0].get("kind") == "loop" else None
+
+
+def single_engine_step(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The step when the plan is one engine and nothing else - how every direct engine answer is
+    recorded (plan_of). Such a re-run replays the engine's own path, so it comes back with the
+    dashboard the answer first had; any other plan replays step by step (5 Oct 2026)."""
+    steps = (plan or {}).get("steps") or []
+    if len(steps) != 1:
+        return None
+    st = steps[0]
+    return st if st.get("kind") == "engine" and st.get("target") in planner.ENGINES else None
+
+
+def is_engine_error(answer: Any) -> bool:
+    """An engine run that failed inside meta_tools.run_verbose comes back as a normal answer whose
+    text is a bare JSON error object; the chat would show it as the answer."""
+    text = str(answer or "").strip()
+    if not text:
+        return True
+    if not text.startswith("{"):
+        return False
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(obj, dict) and "error" in obj and len(obj) <= 3
 
 
 def step_for_span(turn: dict[str, Any], span_id: str | None, plan: dict[str, Any]) -> str:
