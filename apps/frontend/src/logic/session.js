@@ -110,6 +110,8 @@ function readSlice(storage) {
   // that is actually a superadmin; HoistraLogic's own constructor re-checks this again
   // once the stored account is merged in, the same way it re-checks a stored admin role.
   if (d.saOn === true && account && account.role === 'superadmin') out.saOn = true;
+  // Which console page was open (superAdmin.js's saGo*): a reload stays on Platform cost.
+  if (d.saPage === 'cost' && account && account.role === 'superadmin') out.saPage = 'cost';
 
   // A superadmin's "View as this company" override (superAdmin.js's viewAsCompany()) was
   // never persisted at all — every reload silently dropped it and fell back to reading the
@@ -309,6 +311,7 @@ function buildSlice(state) {
     account: cleanAccount(state.account),
     navOpen: !!state.navOpen,
     saOn: !!state.saOn,
+    saPage: state.saPage === 'cost' ? 'cost' : 'companies',
     viewOrgId: state.viewOrgId || null,
     viewOrgName: state.viewOrgName || null,
     view: state.view || 'home',

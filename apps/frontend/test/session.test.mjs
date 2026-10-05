@@ -136,6 +136,22 @@ test('saveSession round-trips saOn', () => {
   assert.equal(d.saOn, true);
 });
 
+test('a reload inside the console lands back on the page it was on — Platform cost included', () => {
+  saveSession({ signedIn: true, email: 'sadie@example.com', role: 'admin', view: 'home', refreshToken: 'ref-9', account: SUPER, saOn: true, saPage: 'cost' });
+  assert.equal(JSON.parse(mem[SESSION_KEY]).saPage, 'cost');
+  assert.equal(loadSession().saPage, 'cost');
+});
+
+test('an unknown stored console page falls back to the default', () => {
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: SUPER, view: 'home', role: 'admin', saOn: true, saPage: 'nonsense' });
+  assert.equal(loadSession().saPage, undefined);
+});
+
+test('only a superadmin has a console page to return to', () => {
+  mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: ACCOUNT, view: 'home', role: 'user', saPage: 'cost' });
+  assert.equal(loadSession().saPage, undefined);
+});
+
 // ── viewOrgId: a superadmin's "View as this company" was never persisted at all — a
 //    reload silently dropped it and fell back to the account's own company. Reported as:
 //    viewing Plenum Tech, reload, back on TechCorp (the account's own company). ──

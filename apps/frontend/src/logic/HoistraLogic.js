@@ -252,6 +252,8 @@ export class HoistraLogic extends Controller {
     // falls back to it when the backend is unreachable, and the banner says so. Until the
     // read answers, the list is empty and the console says it is loading.
     saOn: false, saSel: null, saNew: false, saName: "", saCc: "UK", saEmail: "",
+    // Which console page is open: "companies" (onboarding) or "cost" (components/shell/PlatformCostPage.jsx).
+    saPage: "companies",
     saCompanies: [],
     // Set only while a superadmin is viewing/acting as a company other than their own
     // (superAdmin.js's viewAsCompany/exitViewAsCompany) — null the rest of the time,

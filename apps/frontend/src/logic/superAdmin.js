@@ -44,6 +44,14 @@ export const superAdminMethods = {
     return {
       saOn: s.saOn,
       saOpen: () => this.setState({ saOn: true, acctOpen: false }),
+      // The console's two pages. Platform cost is read when the console opens (saLiveLoad);
+      // arriving on it with nothing read and nothing in flight reads it then.
+      saPage: s.saPage === "cost" ? "cost" : "companies",
+      saGoCompanies: () => this.setState({ saPage: "companies" }),
+      saGoCost: () => {
+        this.setState({ saPage: "cost" });
+        if (!this.state.pcData && !this.state.pcLoading && typeof this.pcLoad === "function") this.pcLoad(this.state.pcMonth || "this");
+      },
       // Live once the companies read has answered; until then the seed is on show, and
       // the overlay says so next to the retry control.
       saLiveError: s.saLiveError
