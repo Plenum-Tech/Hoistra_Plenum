@@ -1,13 +1,32 @@
 ---
 name: work-order-engine
 agent: wo_engine
-description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together as a corpus (recommendations never converted to orders, which earlier inspection reports confirm or corroborate an energy anomaly, findings under warranty, condition grades). A question about what the inspection REPORTS say about orders, anomalies or warranty is this agent's, not the document reader's. Only an asset CONDITION or HEALTH question also touches energy_intelligence (consumption and anomalies) — name it under also then; a work-order, decision, PPM, approval or inspection-report question is this agent's alone and has no also. ALSO owns COST SAVING across modules — where the company or a building can save money and the work that captures it: open jobs that remove priced energy waste, repeat-failure assets whose reactive cost nears their replacement value, invoice lines over contract rates, reactive versus planned spend, a cost-saving corrective action plan. ALSO owns REPURCHASE and REPLACEMENT: which parts are below reorder level or out of stock, which assets are at end of life (condition grade 4-5), repeat failures whose reactive cost nears replacement value, inspection recommendations to replace - one read, `replacement_candidates`. A cost-saving, "save money", "reduce cost", "overspend", "reactive spend" or "which work orders save cost" question is this agent's (an energy-only "where are we wasting energy" stays with energy_intelligence). Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
+description: Everything about work orders — raising, tracking, approving, transitioning and closing them — plus PPM schedules, technician and asset lookups for a job, and operational dashboard counts. Also owns the MAINTENANCE DECISIONS page — decisions owed and their four states (blocked, to raise, awaiting approval, deviation), which decisions are statutory and which module triggered them, PPM contracts measured against plan with visits and reports, and inspection reports read together as a corpus (recommendations never converted to orders, which earlier inspection reports confirm or corroborate an energy anomaly, findings under warranty, condition grades). A question about what the inspection REPORTS say about orders, anomalies or warranty is this agent's, not the document reader's. Only an asset CONDITION or HEALTH question also touches energy_intelligence (consumption and anomalies) — name it under also then; a work-order, decision, PPM, approval or inspection-report question is this agent's alone and has no also. ALSO owns COST SAVING across modules — where the company or a building can save money and the work that captures it: open jobs that remove priced energy waste, repeat-failure assets whose reactive cost nears their replacement value, invoice lines over contract rates, reactive versus planned spend, a cost-saving corrective action plan. ALSO owns REPURCHASE and REPLACEMENT: which parts are below reorder level or out of stock, which assets are at end of life (condition grade 4-5), repeat failures whose reactive cost nears replacement value, inspection recommendations to replace - one read, `replacement_candidates`. A cost-saving, "save money", "reduce cost", "overspend", "reactive spend" or "which work orders save cost" question is this agent's (an energy-only "where are we wasting energy" stays with energy_intelligence). ALSO owns WHO MAINTAINS a piece of equipment and its MAINTENANCE HISTORY: which vendor services the lifts, the boiler or an AHU, when it was last serviced, its open and past jobs, and repair or replace with the work behind it (the asset register record itself is udr's; name udr under also when the question also needs the asset's condition or details). Use for "work order", "WO", "job", "raise a request", "who approves", "status of", "overdue PM", "backlog", "what needs my decision", "which decisions are statutory", "PPM behind plan", "missed visits", "inspection recommendations", "never converted", "under warranty".
 references:
   - decisions
   - work-orders
   - dispatch
   - cost-savings
 triggers:
+  - maintenance
+  - maintain
+  - maintains
+  - maintained by
+  - maintenance history
+  - maintenance vendor
+  - maintenance contractor
+  - who maintains
+  - who services
+  - services the
+  - serviced
+  - serviced by
+  - servicing
+  - service history
+  - last serviced
+  - looks after
+  - look after
+  - responsible for
+  - repair or replace
   - repurchase
   - re-purchase
   - restock

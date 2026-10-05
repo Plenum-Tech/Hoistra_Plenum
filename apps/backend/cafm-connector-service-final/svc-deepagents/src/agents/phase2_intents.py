@@ -117,10 +117,23 @@ ENERGY_INTELLIGENCE_INTENT_KEYWORDS: tuple[str, ...] = (
     "benchmark",
 )
 
+#: Work orders and who maintains what. Until 5 Oct 2026 the fallback had no list for wo_engine,
+#: so when the model router was unavailable "who maintains the boiler" or "how many work orders
+#: are open" reached no engine. It loses every tie to the three above: a question that names a
+#: certificate, an SLA or energy belongs to that engine even when it also says maintenance.
+WO_ENGINE_INTENT_KEYWORDS: tuple[str, ...] = (
+    "work order", "work orders", "ppm", "planned maintenance", "preventive maintenance",
+    "maintenance", "maintains", "maintained by", "who maintains", "who services", "services the",
+    "serviced", "servicing", "service history", "last serviced", "looks after", "breakdown",
+    "repair", "repairs", "technician", "backlog", "decisions owed", "needs my decision",
+    "repair or replace", "end of life", "repurchase",
+)
+
 PHASE2_INTENT_BY_AGENT: dict[Phase2AgentId, tuple[str, ...]] = {
     "compliance": COMPLIANCE_INTENT_KEYWORDS,
     "contract_performance": CONTRACT_PERFORMANCE_INTENT_KEYWORDS,
     "energy_intelligence": ENERGY_INTELLIGENCE_INTENT_KEYWORDS,
+    "wo_engine": WO_ENGINE_INTENT_KEYWORDS,
 }
 
 
@@ -179,6 +192,7 @@ def match_phase2_agent(message: str) -> Phase2AgentId | None:
         "compliance": 0.0,
         "contract_performance": 0.0,
         "energy_intelligence": 0.0,
+        "wo_engine": 0.0,
     }
     for agent, keywords in PHASE2_INTENT_BY_AGENT.items():
         for kw in keywords:
@@ -191,7 +205,8 @@ def match_phase2_agent(message: str) -> Phase2AgentId | None:
     best_score = 0.0
     # Prefer more specific agents on ties: energy > contract > compliance
     # when scores equal (EPC/energy vs compliance certificate ambiguity).
-    for agent in ("energy_intelligence", "contract_performance", "compliance"):
+    # wo_engine last: it wins only with a strictly higher score.
+    for agent in ("energy_intelligence", "contract_performance", "compliance", "wo_engine"):
         if scores[agent] > best_score:  # type: ignore[index]
             best_score = scores[agent]  # type: ignore[index]
             best_agent = agent  # type: ignore[assignment]

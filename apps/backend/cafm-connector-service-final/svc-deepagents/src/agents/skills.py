@@ -52,6 +52,11 @@ class Skill:
     #: Opt-in per skill: a SKILL.md with no `references:` key loads exactly as before, which is
     #: why adding this does not change compliance — it routes its own documents separately.
     references: tuple[str, ...] = ()
+    #: Words that only NAME something the skill holds (equipment, "assets"). They rank the skill
+    #: like any trigger, so "list the assets" or "show me the chillers" lands here, but a match made
+    #: of these alone never adds the skill under `also`: "is the lift LOLER certificate current"
+    #: names a lift, and that is no reason to spend a second agent run on the asset register.
+    naming_triggers: tuple[str, ...] = ()
 
     @property
     def is_routable(self) -> bool:
@@ -141,6 +146,9 @@ def _load_one(path: Path) -> Skill | None:
     triggers = meta.get("triggers") or []
     if isinstance(triggers, str):
         triggers = [t.strip() for t in triggers.split(",") if t.strip()]
+    naming = meta.get("naming_triggers") or []
+    if isinstance(naming, str):
+        naming = [t.strip() for t in naming.split(",") if t.strip()]
     references = meta.get("references") or []
     if isinstance(references, str):
         references = [r.strip() for r in references.split(",") if r.strip()]
@@ -154,6 +162,7 @@ def _load_one(path: Path) -> Skill | None:
         body=body.strip(),
         path=str(path),
         references=tuple(str(r).strip() for r in references if str(r).strip()),
+        naming_triggers=tuple(t.lower() for t in naming if t),
     )
 
 
@@ -233,7 +242,7 @@ def select_skills(question: str) -> list[SkillMatch]:
     haystack = _normalise(question or "")
     matches: list[SkillMatch] = []
     for skill in routable_skills():
-        hits = [t for t in skill.triggers if _trigger_hit(haystack, t)]
+        hits = [t for t in skill.triggers + skill.naming_triggers if _trigger_hit(haystack, t)]
         if not hits:
             continue
         score = sum(len(_WORD_RE.findall(t)) for t in hits)
@@ -269,7 +278,9 @@ def route(question: str) -> dict:
         }
 
     primary = matches[0]
-    others = [m for m in matches[1:] if m.score >= 1]
+    # A skill matched only on words that name things it holds is not a second domain.
+    others = [m for m in matches[1:] if m.score >= 1
+              and not set(m.matched) <= set(m.skill.naming_triggers)]
     confidence = "high" if primary.score >= 3 else "medium" if primary.score >= 2 else "low"
     return {
         "primary_agent": primary.skill.agent,
