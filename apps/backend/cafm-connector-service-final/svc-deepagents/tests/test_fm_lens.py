@@ -18,8 +18,18 @@ LENS = skills.fm_lens()
 
 def test_the_lens_is_loaded_and_states_the_order_of_what_matters():
     assert LENS, "skills/query-builder/fm-lens.md did not load"
-    order = [LENS.index(t) for t in ("Risk to life", "Statutory and legal exposure", "Service to occupants", "Money")]
+    order = [LENS.index(t) for t in ("Risk to life", "Statutory and legal exposure", "Service to occupants")]
     assert order == sorted(order)
+
+
+def test_money_runs_through_every_finding_not_only_the_bottom_of_the_list():
+    # "money also important factor" (5 Oct 2026): money is carried on every finding, breaks ties,
+    # leads a money question, and every action says what it costs or saves.
+    assert "## Money runs through every finding" in LENS
+    assert "then the most money at stake" in LENS
+    assert "**A money question**" in LENS and "leads\n  with the money" in LENS
+    assert "carrying its cost or saving when recorded" in LENS
+    assert "4. **Money.**" not in LENS
 
 
 def test_the_lens_sizes_the_answer_so_a_lookup_gets_no_action_list():
@@ -66,7 +76,8 @@ def test_the_planners_writer_reads_the_lens():
 
 
 def test_the_record_engine_orders_findings_the_same_way():
-    assert "risk to life, then statutory exposure, then service to occupants, then money" in ANSWER_RULES
+    assert "risk to life, then statutory exposure, then service to " in ANSWER_RULES
+    assert "then the most money at stake" in ANSWER_RULES and "costs or saves on every one" in ANSWER_RULES
 
 
 def test_a_missing_lens_file_leaves_answers_running(monkeypatch, tmp_path):

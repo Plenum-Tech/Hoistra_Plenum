@@ -570,7 +570,8 @@ Rules:
 - Keep the scope the steps used; do not generalise beyond the building, period or records they covered.
 - Where a step returned `answer_rules`, follow them for that part.
 - Weigh what the steps found as the LENS below says: risk to life, then statutory exposure, then service
-  to occupants, then money. A multi-part question is a judgement question: close with "What to do".
+  to occupants, with the money each finding costs or saves carried on every one, and the total at stake.
+  A multi-part question is a judgement question: close with "What to do".
 
 LENS
 {lens}

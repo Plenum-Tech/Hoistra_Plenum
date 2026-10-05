@@ -341,8 +341,9 @@ NO_LENS_AGENTS = frozenset({"migration"})
 @lru_cache(maxsize=1)
 def fm_lens() -> str:
     """skills/query-builder/fm-lens.md - how every answer weighs what it found, as the facilities
-    manager accountable for the buildings would: risk to life, then statutory exposure, then service
-    to occupants, then money, sized to the question.
+    manager accountable for the buildings and their budget would: risk to life, then statutory
+    exposure, then service to occupants, with what each finding costs or saves carried on every one,
+    sized to the question.
 
     Every answer writer loads this one file - the sub-agents (through agent_system_prompt), the
     orchestrator, the planner's writer, the compliance and vendor analysts, the record engine - so
