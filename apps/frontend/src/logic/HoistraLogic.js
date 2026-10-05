@@ -316,6 +316,9 @@ export class HoistraLogic extends Controller {
     const prev = this.state;
     super.setState(patch, cb);
     if (prev.ccChat !== this.state.ccChat) this.sessionSync();
+    // The rail's answer has its run (Correct, every step) whichever way it got on screen.
+    if (prev.ccChat !== this.state.ccChat || prev.ccTraceIdx !== this.state.ccTraceIdx
+      || prev.ccBusy !== this.state.ccBusy || prev.signedIn !== this.state.signedIn) this.crEnsureRun();
     if (prev.sessions !== this.state.sessions) saveSessions(this.state.sessions);
     // Only a signed-in tab owns the stored session. A tab sitting on the gate writes nothing —
     // its animation ticks would otherwise erase the refresh token another tab is signed in with —

@@ -14,7 +14,7 @@ import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { memoriesPageVals } from './memoriesPage.js';
 import { tracesPageVals } from './tracesPage.js';
-import { correctionVals } from './corrections.js';
+import { correctionVals, railTurnIndex } from './corrections.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { openDocument } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
@@ -1977,7 +1977,8 @@ export const renderValsMethods = {
           return { ccStepsOpen: o };
         }),
         // Send this turn's run to the rail. Offered only where there is one to send.
-        traceShow: (m.trace || []).length && !s.ccBusy ? "inline-flex" : "none",
+        // An answer whose run is on record has one even when its stream trace was not kept.
+        traceShow: ((m.trace || []).length || (m.role !== "you" && m.turnId)) && !s.ccBusy ? "inline-flex" : "none",
         traceSelected: s.ccTraceIdx === i,
         selectTrace: () => { this.setState({ ccTraceIdx: i }); if (m.turnId && typeof this.crLoadRun === "function") this.crLoadRun(m.turnId); },
         // Teach from this answer (logic/corrections.js): a rating, and a suggestion that opens
@@ -2023,11 +2024,10 @@ export const renderValsMethods = {
       // avoids showing "Running list_certificates…" twice.
       ...(() => {
         const chat = s.ccChat || [];
-        let lastIdx = -1;
-        for (let i = chat.length - 1; i >= 0; i -= 1) {
-          if (chat[i].role !== "you" && (chat[i].trace || []).length) { lastIdx = i; break; }
-        }
-        const picked = (typeof s.ccTraceIdx === "number" && chat[s.ccTraceIdx]) ? s.ccTraceIdx : lastIdx;
+        // The newest traced answer, and the one on screen: the same rule crEnsureRun loads
+        // the run of (logic/corrections.js).
+        const lastIdx = railTurnIndex(chat, null);
+        const picked = railTurnIndex(chat, s.ccTraceIdx);
         const busy = !!s.ccBusy;
         const src = busy ? ((s.ccStream && s.ccStream.trace) || []) : (picked >= 0 ? (chat[picked].trace || []) : []);
         const secs = (n) => (n / 1000).toFixed(n < 10000 ? 1 : 0) + " s";
@@ -2083,14 +2083,16 @@ export const renderValsMethods = {
         if (busy) { for (let i = chat.length - 1; i >= 0; i -= 1) { if (chat[i].role === "you") { forQ = chat[i].text; break; } } }
 
         return {
-          orchTraceShow: chatView && (busy || rows.length > 0),
+          // The stored run can be all there is: a re-run's own trace is one note, and a trace
+          // shed to fit the browser's storage is none.
+          orchTraceShow: chatView && (busy || railRows.length > 0),
           orchTraceRows: railRows,
           orchTraceLive: busy,
           orchTraceLiveLabel: (s.ccStream && s.ccStream.reasoning) || "Reading the graph…",
           orchTraceElapsed: elapsed,
           orchTraceTitle: busy ? "Working" : "Run trace",
           orchTraceFor: forQ,
-          orchTraceCount: rows.length + (busy ? 1 : 0),
+          orchTraceCount: railRows.length + (busy ? 1 : 0),
           // Which turn's trace is on screen, as one value the rail can key its swap
           // animation on — distinct from orchTraceRows, which also changes shape as a
           // live run's rows grow (that growth should not replay the swap).

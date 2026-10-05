@@ -58,6 +58,9 @@ export const coreMethods = {
     // working. The Migration page did this on arrival; deleting the page deleted the line
     // and left this comment standing over nothing.
     if (this.state.view === "chat" && this.state.mgId) this.mgPoll(true);
+    // The constructor puts the transcript back without setState, so the run behind the
+    // rail's answer is asked for here; without it a reload dropped every Correct.
+    if (typeof this.crEnsureRun === "function") this.crEnsureRun();
   },
 
   componentWillUnmount() {

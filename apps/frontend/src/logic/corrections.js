@@ -164,17 +164,57 @@ export function rerunTranscript(chat, turnId, fallbackQuestion, correction) {
   return (qi > -1 ? list.slice(0, qi) : list).concat([{ role: 'you', text: question, correction: correction, rerun: true }]);
 }
 
+// Which answer the rail shows: the pinned one while it is still in the transcript, otherwise
+// the newest answer with a trace. An answer whose run is on record (turnId) counts even when
+// its stream trace was shed to fit the browser's storage - the run is its trace. renderVals
+// draws this answer; crEnsureRun loads its run.
+export function railTurnIndex(chat, traceIdx) {
+  const list = chat || [];
+  if (typeof traceIdx === 'number' && list[traceIdx]) return traceIdx;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m && m.role !== 'you' && ((m.trace || []).length || m.turnId)) return i;
+  }
+  return -1;
+}
+
+// Waits between reads of a run not on record yet. The trace is written after the answer is
+// sent (0.7 s after a 50-span re-run on 5 Oct 2026), longer on a slow database.
+const RUN_RETRY_MS = [800, 1500, 3000, 6000];
+
 export const correctionMethods = {
-  // The stored run for a finished turn; the trace flushes a moment after the answer, so a
-  // first miss is retried once.
+  // The stored run for a finished turn, retried while the trace is still being written. One
+  // read per turn at a time; `_crRunState` remembers loading / failed so crEnsureRun does not
+  // ask again for a run the store does not have. An explicit call (a click) always asks.
   async crLoadRun(turnId, attempt) {
     if (!turnId || (this.state.crRuns || {})[turnId]) return;
+    const n = attempt || 0;
+    const seen = this._crRunState || (this._crRunState = {});
+    if (!n && seen[turnId] === 'loading') return;
+    seen[turnId] = 'loading';
     try {
       const out = await deepAgentsApi.traceTurn(turnId);
-      if (out && out.turn) this.setState((p) => ({ crRuns: Object.assign({}, p.crRuns || {}, { [turnId]: out.turn }) }));
+      if (out && out.turn) {
+        seen[turnId] = 'loaded';
+        this.setState((p) => ({ crRuns: Object.assign({}, p.crRuns || {}, { [turnId]: out.turn }) }));
+      } else seen[turnId] = 'failed';
     } catch (e) {
-      if (!attempt) setTimeout(() => this.crLoadRun(turnId, 1), 1500);
+      if (n < RUN_RETRY_MS.length) setTimeout(() => this.crLoadRun(turnId, n + 1), RUN_RETRY_MS[n]);
+      else seen[turnId] = 'failed';
     }
+  },
+  // The run behind the answer the rail shows, whenever it is not in memory: after a reload, on
+  // a reopened session, when the scroll-spy moves the rail - not only on a click. The runs live
+  // in memory, so a reload kept the rail's stream rows and lost every Correct, and a re-run -
+  // whose own trace is just its "Re-run" note - showed no steps at all (5 Oct 2026). Called
+  // from the controller's setState and at mount.
+  crEnsureRun() {
+    const s = this.state;
+    if (s.ccBusy || !s.signedIn) return;
+    const i = railTurnIndex(s.ccChat, s.ccTraceIdx);
+    const id = i > -1 ? s.ccChat[i].turnId : null;
+    if (!id || (s.crRuns || {})[id] || (this._crRunState || {})[id]) return;
+    this.crLoadRun(id);
   },
   crOpen(turnId, spanId, mode) {
     this.setState({ crOpen: { turnId: turnId, spanId: spanId || null, mode: mode || 'query' }, crExclude: [], crPeriod: '', crField: '', crRoute: '', crWhy: '', crNote: '', crMsg: '' });
