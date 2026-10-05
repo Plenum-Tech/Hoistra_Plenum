@@ -545,17 +545,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def get_anthropic_client() -> anthropic.AsyncAnthropic:
-    """Get the global Anthropic client."""
+    """Get the global Anthropic client - wrapped so each call is recorded against the
+    migration run that made it (llm_ledger.py)."""
     if _anthropic_client is None:
         raise RuntimeError("Anthropic client not initialized")
-    return _anthropic_client
+    from .llm_ledger import wrap_anthropic
+
+    return wrap_anthropic(_anthropic_client)
 
 
 def get_openai_client() -> AsyncOpenAI:
-    """Get the global OpenAI client (for embeddings)."""
+    """Get the global OpenAI client (for embeddings), recorded like the Anthropic one."""
     if _openai_client is None:
         raise RuntimeError("OpenAI client not initialized")
-    return _openai_client
+    from .llm_ledger import wrap_openai
+
+    return wrap_openai(_openai_client)
 
 
 def get_redis_client() -> aioredis.Redis:
@@ -2061,6 +2066,32 @@ def create_app() -> FastAPI:
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="migration_{migration_id}_full_csv.zip"'},
         )
+
+    @app.get(
+        "/api/migration/{migration_id}/cost",
+        tags=["Migration"],
+        summary="What this migration run spent on models: totals by stage and by model",
+    )
+    async def migration_cost(
+        migration_id: str = Path(..., description="Migration UUID"),
+        session: AsyncSession = Depends(get_db_session),
+        principal: "Principal" = Depends(current_principal),
+    ):
+        """Model spend recorded for one run (llm_ledger.py). Signed in; a run of another company
+        is 404 unless the caller is a superadmin."""
+        from .llm_ledger import run_cost
+
+        try:
+            mid = UUID(migration_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Migration not found")
+        job = (await session.execute(select(MigrationJob).where(MigrationJob.id == mid))).scalar_one_or_none()
+        if not job or (not principal.is_superadmin and getattr(job, "organization_id", None)
+                       and principal.organization_id and str(job.organization_id) != str(principal.organization_id)):
+            raise HTTPException(status_code=404, detail="Migration not found")
+        out = await run_cost(session, str(mid))
+        out["status"] = job.status
+        return out
 
     @app.get(
         "/api/migration/{migration_id}/source",

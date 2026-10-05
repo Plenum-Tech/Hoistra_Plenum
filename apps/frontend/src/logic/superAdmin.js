@@ -25,6 +25,11 @@ const NO_CO = { id: null, name: "No companies yet", cc: "—", status: "—", bu
 
 export const superAdminMethods = {
   saVals(s) {
+    const pc = typeof this.pcValsFor === 'function' ? this.pcValsFor() : {};
+    // Called through the module, not `this`: the console's tests call saVals on a bare object.
+    return Object.assign(superAdminMethods.saValsBase.call(this, s), pc);
+  },
+  saValsBase(s) {
     // "No companies yet" is a finding about the platform, and it is not true while the
     // read that would say so is still in flight. An empty list before the answer is an
     // unanswered question, so the header says that instead of asserting an empty platform.

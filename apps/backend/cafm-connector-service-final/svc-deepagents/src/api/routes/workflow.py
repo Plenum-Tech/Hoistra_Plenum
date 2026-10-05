@@ -1059,7 +1059,8 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
         # refused rather than the socket silently ignoring it and answering from their own
         # company anyway.
         try:
-            caller_organization_id.set(_resolve_acting_org(body.get("organization_id"), principal))
+            _acting = _resolve_acting_org(body.get("organization_id"), principal)
+            caller_organization_id.set(_acting)
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
             await websocket.send_text(json.dumps({
@@ -1067,6 +1068,14 @@ async def ws_workflow(session_id: str, websocket: WebSocket) -> None:
             }))
             return
 
+        # Billed once accepted, as /run-stateful is. The app's chat comes in here, and until
+        # 5 Oct 2026 this path wrote no receipt, so Plenum asked 55 questions and was billed 2.
+        await usage_events.record_usage(
+            kind="query", organization_id=usage_events.billing_org(principal.organization_id, _acting),
+            user_id=principal.user_id,
+            detail=usage_events.billed_detail({"session_id": session_id, "chars": len(message), "stream": True},
+                                              principal.organization_id, _acting),
+        )
         activity_log.set_current_session(session_id, session_id)
         activity_log.start_turn()  # one transaction per request; every row below shares it
         log.info("ws_workflow.start", session_id=session_id, message_len=len(message))

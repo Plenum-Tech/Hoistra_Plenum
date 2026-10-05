@@ -44,5 +44,12 @@ export const superAdminApi = {
   // column its own Home page shows → {ok, year, currency, companies[{organization_id, name,
   // total_detected (null: nothing counted or not readable), counted_modules, error}]}. About
   // ten reads per company server-side, hence the longer timeout.
-  value: () => apiFetch(B, '/api/superadmin/value', { timeoutMs: 120000 })
+  value: () => apiFetch(B, '/api/superadmin/value', { timeoutMs: 120000 }),
+  // What each company cost to run in a month against what it was billed: {month, companies:[...],
+  // totals, by_model, assumptions, not_recorded}. month = 'this' | 'last' | 'YYYY-MM'.
+  // The default month travels as no query at all: superadmin calls carry no query string unless they must.
+  platformCost: (month) => apiFetch(B, '/api/superadmin/platform-cost', Object.assign({ timeoutMs: 30000 }, month && month !== 'this' ? { query: { month: month } } : {})),
+  // One company's month split every way (the drill-down). The company is in the path, as everywhere here.
+  platformCostCompany: (id, month) => apiFetch(B, '/api/superadmin/platform-cost/' + encodeURIComponent(id),
+    Object.assign({ timeoutMs: 30000 }, month && month !== 'this' ? { query: { month: month } } : {}))
 };

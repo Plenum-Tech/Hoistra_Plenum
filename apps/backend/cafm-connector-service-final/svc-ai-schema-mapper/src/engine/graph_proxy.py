@@ -27,7 +27,15 @@ class MigrationGraphProxy:
         if "interrupt_after" not in kwargs and await self._engine_of(input, config) == selection.ENGINE_GO:
             skip = selection.go_auto_continue_nodes()
             kwargs["interrupt_after"] = [n for n in self._step_nodes if n not in skip]
-        return await self._graph.ainvoke(input, config, **kwargs)
+        # Every model call a node makes is recorded against this run (llm_ledger.py).
+        from ..llm_ledger import current_migration
+
+        run = ((config or {}).get("configurable") or {}).get("thread_id") if isinstance(config, dict) else None
+        token = current_migration.set(str(run) if run else current_migration.get())
+        try:
+            return await self._graph.ainvoke(input, config, **kwargs)
+        finally:
+            current_migration.reset(token)
 
     async def _engine_of(self, input: Any, config: Any) -> "str | None":
         if isinstance(input, dict):
