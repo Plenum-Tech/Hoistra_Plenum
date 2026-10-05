@@ -565,9 +565,11 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
             # Download from Azure Blob
             log("Downloading FULL source file from Blob for complete export...")
             try:
-                async with BlobClient.from_blob_url(source_blob_url) as blob_client:
-                    file_bytes_dl = await blob_client.download_blob()
-                    file_content = await file_bytes_dl.readall()
+                # With the account's credentials: the container is private (blob_links.py).
+                from ...blob_links import read_blob_url
+                from ...config import get_settings as _gs_blob
+
+                file_content = await read_blob_url(source_blob_url, getattr(_gs_blob(), "azure_storage_connection_string", "") or "")
                 log(f"Downloaded FULL file: {len(file_content):,} bytes")
 
                 detected = chardet.detect(file_content)

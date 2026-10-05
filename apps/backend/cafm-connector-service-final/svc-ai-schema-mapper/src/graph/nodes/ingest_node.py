@@ -345,9 +345,11 @@ async def ingest_node(state: MigrationState) -> MigrationState:
         else:
             # Fallback: download from a full Azure Blob URL (legacy / SAS)
             logger.info(f"[Node 1] Downloading file from Blob: {source_blob_url[:60]}...")
-            async with BlobClient.from_blob_url(source_blob_url) as blob_client:
-                file_bytes = await blob_client.download_blob()
-                file_content = await file_bytes.readall()
+            # With the account's credentials: the container is private (blob_links.py).
+            from ...blob_links import read_blob_url
+            from ...config import get_settings as _gs_blob
+
+            file_content = await read_blob_url(source_blob_url, getattr(_gs_blob(), "azure_storage_connection_string", "") or "")
             logger.info(f"[Node 1] Downloaded {len(file_content):,} bytes from Blob")
 
         state["source_file_bytes"] = file_content  # Transient; will be cleared before checkpoint

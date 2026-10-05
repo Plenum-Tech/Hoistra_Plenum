@@ -236,6 +236,15 @@ async def _store_migration_source(
         return None
 
 
+def _signed(url):
+    """A stored export URL as a short-lived read link (the container is private)."""
+    from .blob_links import signed_url
+
+    from .config import get_settings as _gs
+
+    return signed_url(url, getattr(_gs(), "azure_storage_connection_string", "") or "")
+
+
 def _source_status_fields(job) -> tuple[Optional[str], Optional[str]]:
     """(source_filename, source_download_url) for a migration status response.
 
@@ -1895,11 +1904,12 @@ def create_app() -> FastAPI:
                 total_fields=migration_job.total_fields,
                 source_filename=_source_status_fields(migration_job)[0],
                 source_download_url=_source_status_fields(migration_job)[1],
-                output_json_url=migration_job.output_json_url,
-                output_csv_url=migration_job.output_csv_url,
-                output_sql_url=migration_job.output_sql_url,
-                migration_report_url=migration_job.migration_report_url,
-                output_structure_md_url=getattr(migration_job, "output_structure_md_url", None),
+                # Signed, short-lived links: the attachments container is private (blob_links.py).
+                output_json_url=_signed(migration_job.output_json_url),
+                output_csv_url=_signed(migration_job.output_csv_url),
+                output_sql_url=_signed(migration_job.output_sql_url),
+                migration_report_url=_signed(migration_job.migration_report_url),
+                output_structure_md_url=_signed(getattr(migration_job, "output_structure_md_url", None)),
                 pending_gate_type=migration_job.pending_gate_type,
                 pending_gate_payload=migration_job.pending_gate_payload,
                 field_mapping_draft=getattr(migration_job, "field_mapping_draft", None),
@@ -2164,11 +2174,12 @@ def create_app() -> FastAPI:
                 total_fields=migration_job.total_fields,
                 source_filename=_source_status_fields(migration_job)[0],
                 source_download_url=_source_status_fields(migration_job)[1],
-                output_json_url=migration_job.output_json_url,
-                output_csv_url=migration_job.output_csv_url,
-                output_sql_url=migration_job.output_sql_url,
-                migration_report_url=migration_job.migration_report_url,
-                output_structure_md_url=getattr(migration_job, "output_structure_md_url", None),
+                # Signed, short-lived links: the attachments container is private (blob_links.py).
+                output_json_url=_signed(migration_job.output_json_url),
+                output_csv_url=_signed(migration_job.output_csv_url),
+                output_sql_url=_signed(migration_job.output_sql_url),
+                migration_report_url=_signed(migration_job.migration_report_url),
+                output_structure_md_url=_signed(getattr(migration_job, "output_structure_md_url", None)),
                 pending_gate_type=migration_job.pending_gate_type,
                 pending_gate_payload=migration_job.pending_gate_payload,
                 field_mapping_draft=getattr(migration_job, "field_mapping_draft", None),
@@ -3988,10 +3999,10 @@ def create_app() -> FastAPI:
 
             # Determine which URL to return based on format
             url_map = {
-                "json": migration_job.output_json_url,
-                "csv": migration_job.output_csv_url,
-                "sql": migration_job.output_sql_url,
-                "pdf": migration_job.migration_report_url,
+                "json": _signed(migration_job.output_json_url),
+                "csv": _signed(migration_job.output_csv_url),
+                "sql": _signed(migration_job.output_sql_url),
+                "pdf": _signed(migration_job.migration_report_url),
             }
 
             download_url = url_map.get(format)

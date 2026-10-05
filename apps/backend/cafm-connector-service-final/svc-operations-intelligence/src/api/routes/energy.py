@@ -1363,7 +1363,11 @@ async def download_report_pdf(
         raise HTTPException(status_code=404, detail="pdf_not_found")
     url = row.pdf_blob_url
     if url.startswith("http://") or url.startswith("https://"):
-        return RedirectResponse(url)
+        # A signed, short-lived link: the attachments container is private (shared/blob_links.py).
+        from ...config import settings as _settings
+        from ...shared.blob_links import signed_url
+
+        return RedirectResponse(signed_url(url, _settings.azure_storage_connection_string or ""))
     path = Path(url)
     if not path.exists():
         raise HTTPException(status_code=404, detail="pdf_file_missing")
