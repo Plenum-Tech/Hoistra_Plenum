@@ -93,6 +93,19 @@ def make_client(monkeypatch, resolver=None) -> tuple[TestClient, FakeOrchestrato
 
 
 @pytest.fixture(autouse=True)
+def receipts(monkeypatch):
+    """Every receipt the socket writes, kept here rather than in a database."""
+    written: list[dict] = []
+
+    async def record(**kw):
+        written.append(kw)
+        return 1.0
+
+    monkeypatch.setattr(workflow.usage_events, "record_usage", record)
+    return written
+
+
+@pytest.fixture(autouse=True)
 def _clean_context():
     """No test inherits another's caller."""
     auth = caller_authorization.set(None)
@@ -209,3 +222,40 @@ def test_the_agreed_subprotocol_is_the_marker_and_never_the_token(monkeypatch):
 
     with client.websocket_connect("/api/workflow/ws/s-1", subprotocols=[MARKER, TOKEN]) as ws:
         assert ws.accepted_subprotocol == MARKER
+
+
+# ── billing ──────────────────────────────────────────────────────────────────────────
+
+def test_a_question_asked_over_the_socket_is_billed_once_to_the_callers_company(monkeypatch, receipts):
+    """The app's chat comes in over this socket. It wrote no receipt until 5 Oct 2026, so
+    a company asking 55 questions in the app was billed for 2."""
+    who = a_caller()
+
+    async def accepts(authorization):
+        return who
+
+    client, _ = make_client(monkeypatch, accepts)
+    with client.websocket_connect("/api/workflow/ws/s-1", subprotocols=[MARKER, TOKEN]) as ws:
+        ws.send_text(json.dumps({"message": "which certificates are lapsed"}))
+        ws.receive_text()
+
+    assert len(receipts) == 1
+    r = receipts[0]
+    assert (r["kind"], r["organization_id"], r["user_id"]) == ("query", who.organization_id, who.user_id)
+    assert r["detail"]["stream"] is True and r["detail"]["session_id"] == "s-1"
+
+
+def test_a_refused_or_empty_socket_is_not_billed(monkeypatch, receipts):
+    async def accepts(authorization):
+        return a_caller()
+
+    client, orchestrator = make_client(monkeypatch, accepts)
+    with client.websocket_connect("/api/workflow/ws/s-1", subprotocols=[MARKER, TOKEN]) as ws:
+        ws.send_text(json.dumps({"message": "   "}))
+        ws.receive_text()
+    # A plain user naming another company is refused before anything runs.
+    with client.websocket_connect("/api/workflow/ws/s-2", subprotocols=[MARKER, TOKEN]) as ws:
+        ws.send_text(json.dumps({"message": "hello", "organization_id": str(uuid4())}))
+        ws.receive_text()
+
+    assert receipts == [] and not orchestrator.ran

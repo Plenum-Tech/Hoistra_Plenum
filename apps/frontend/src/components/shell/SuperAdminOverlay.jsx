@@ -116,6 +116,96 @@ export default function SuperAdminOverlay({ vals }) {
                 {"Billing is usage-led: platform activity, API requests and credits, with a nominal per-seat charge. No user limits are imposed — more users simply consume more."}
               </div>
             </div>
+            {/* Platform cost — what each company cost to run against what it was billed (logic/platformCost.js). */}
+            <div style={{ marginTop: "18px", padding: "16px 18px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <div style={{ flex: "1", fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>{"Platform cost by company" + (vals.pcMonthLabel ? " — " + vals.pcMonthLabel : "")}</div>
+                {(vals.pcMonths || []).map((m, $index) => (
+                  <span key={$index} className="hv4" onClick={m.pick} style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "6px", cursor: "pointer", border: "1px solid " + (m.on ? "var(--color-accent)" : "var(--color-divider)"), color: m.on ? "var(--color-accent)" : "var(--color-neutral-400)" }}>{m.label}</span>
+                ))}
+                <span className="hv4" onClick={vals.pcReload} title="Read again" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}><i className="ph ph-arrow-clockwise"></i></span>
+              </div>
+              {vals.pcError ? <div style={{ marginTop: "10px", fontSize: "11.5px", color: "var(--st-warn)" }}>{"Platform cost unavailable — " + vals.pcError}</div> : null}
+              {vals.pcLoading ? <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Reading what the platform cost…"}</div> : null}
+              {(vals.pcTiles || []).length ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: "11px", marginTop: "12px" }}>
+                  {vals.pcTiles.map((t, $index) => (
+                    <div key={$index} style={{ padding: "11px 13px", borderRadius: "9px", background: "var(--color-bg)", borderLeft: "3px solid " + t.color }}>
+                      <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "19px", color: t.color }}>{t.value}</div>
+                      <div style={{ fontSize: "10px", letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "4px" }}>{t.label}</div>
+                      <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{t.hint}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {(vals.pcRows || []).length ? (
+                <div style={{ overflowX: "auto", marginTop: "14px" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                    <thead>
+                      <tr style={{ textAlign: "right", fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                        {["Company", "Queries", "Chat model $", "$ / query", "Compliance $ (n)", "Migrations · $", "Infra share", "Total cost", "Billed", "Margin"].map((h, i) => (
+                          <th key={i} style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-divider)", textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vals.pcRows.map((r, $index) => (
+                        <tr key={$index} className="hv1" onClick={r.open} title="Open this company's split" style={{ textAlign: "right", fontFamily: "ui-monospace,monospace", cursor: "pointer", background: r.selected ? "var(--color-accent-900)" : "transparent" }}>
+                          <td style={{ padding: "7px 8px", textAlign: "left", fontFamily: "var(--font-body)", borderBottom: "1px solid var(--color-neutral-900)", whiteSpace: "nowrap" }}><i className={"ph " + (r.selected ? "ph-caret-down" : "ph-caret-right")} style={{ fontSize: "10px", marginRight: "6px", color: "var(--color-neutral-500)" }}></i>{r.name}</td>
+                          {[r.queries, r.chat, r.perQuery, r.compliance, r.migrations, r.infra, r.cost, r.billed].map((v, i) => (
+                            <td key={i} style={{ padding: "7px 8px", borderBottom: "1px solid var(--color-neutral-900)", whiteSpace: "nowrap" }}>{v}</td>
+                          ))}
+                          <td style={{ padding: "7px 8px", borderBottom: "1px solid var(--color-neutral-900)", color: r.marginColor, whiteSpace: "nowrap" }}>{r.margin}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (!vals.pcLoading && !vals.pcError ? <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{"No company activity recorded this month."}</div> : null)}
+              {vals.pcDetail ? (
+                <div style={{ marginTop: "14px", padding: "14px", borderRadius: "10px", border: "1px solid var(--color-divider)", background: "var(--color-bg)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1", fontSize: "13px" }}>{vals.pcDetail.name}{vals.pcDetail.title ? <span style={{ color: "var(--color-neutral-500)" }}>{" · " + vals.pcDetail.title}</span> : null}</div>
+                    <span className="hv4" onClick={vals.pcDetail.close} style={{ fontSize: "11px", color: "var(--color-neutral-500)", cursor: "pointer" }}>{"Close"}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "10px", borderBottom: "1px solid var(--color-divider)" }}>
+                    {(vals.pcDetail.tabs || []).map((t) => (
+                      <span key={t.key} className="hv4" onClick={() => vals.pcDetail.pickTab(t.key)} style={{ fontSize: "11.5px", padding: "6px 11px", cursor: "pointer", borderBottom: "2px solid " + (t.on ? "var(--color-accent)" : "transparent"), color: t.on ? "var(--color-text)" : "var(--color-neutral-500)" }}>{t.label}</span>
+                    ))}
+                  </div>
+                  {vals.pcDetail.error ? <div style={{ marginTop: "10px", fontSize: "11.5px", color: "var(--st-warn)" }}>{"Could not read this company — " + vals.pcDetail.error}</div> : null}
+                  {vals.pcDetail.loading && !(vals.pcDetail.rows || []).length ? <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Reading the split…"}</div> : null}
+                  {(vals.pcDetail.rows || []).length ? (
+                    <div style={{ overflowX: "auto", marginTop: "10px" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                        <thead>
+                          <tr style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                            {(vals.pcDetail.columns || []).map((h, i) => <th key={i} style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-divider)", textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>{h}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vals.pcDetail.rows.map((row, i) => (
+                            <tr key={i}>
+                              {row.map((cell, j) => <td key={j} style={{ padding: "6px 8px", borderBottom: "1px solid var(--color-neutral-900)", textAlign: j === 0 ? "left" : "right", fontFamily: j === 0 ? "var(--font-body)" : "ui-monospace,monospace", whiteSpace: j === 0 ? "normal" : "nowrap" }}>{String(cell)}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (!vals.pcDetail.loading && !vals.pcDetail.error ? <div style={{ marginTop: "10px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Nothing recorded for this view."}</div> : null)}
+                  {vals.pcDetail.note ? <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>{vals.pcDetail.note}</div> : null}
+                </div>
+              ) : null}
+              {vals.pcQuiet ? <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--color-neutral-500)" }}>{vals.pcQuiet}</div> : null}
+              {(vals.pcModels || []).length ? (
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "12px" }}>
+                  {vals.pcModels.map((m, $index) => (
+                    <span key={$index} style={{ fontSize: "11px", padding: "4px 9px", borderRadius: "6px", background: "var(--color-bg)", color: "var(--color-neutral-400)", fontFamily: "ui-monospace,monospace" }}>{m.model + " · " + m.cost + " · " + m.share + " · " + m.calls + " calls"}</span>
+                  ))}
+                </div>
+              ) : null}
+              <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "12px", lineHeight: "1.5" }}>{vals.pcNote}</div>
+            </div>
           </div>
         </div>
       </div>

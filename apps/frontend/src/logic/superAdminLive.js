@@ -27,6 +27,7 @@
 // shapeLiveCompany() and the formatters are pure; the methods below are mixed into
 // HoistraLogic.prototype and `this` is the controller.
 import { superAdminApi } from '../api/superAdmin.js';
+export { platformCostMethods, pcVals } from './platformCost.js';
 import { SA_COMPANIES } from '../data/hoistra-access.js';
 import { lastActiveLabel } from './usersLive.js';
 
@@ -177,6 +178,8 @@ export const superAdminLiveMethods = {
   async saLiveLoad(opts) {
     if (this._saLiveLoading) return;
     this._saLiveLoading = true;
+    // The Platform cost section reads on its own; a slow or failed read never holds the list back.
+    if (typeof this.pcLoad === 'function') this.pcLoad(this.state.pcMonth || 'this');
     clearTimeout(this._saLiveRetry);
     this.setState({ saLiveLoading: true });
     const [companies, credits] = await Promise.allSettled([superAdminApi.listCompanies(), superAdminApi.credits()]);

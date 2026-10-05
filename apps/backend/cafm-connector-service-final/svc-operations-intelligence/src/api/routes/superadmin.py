@@ -5,6 +5,8 @@
     GET  /api/superadmin/companies/{id}                  one company's usage card
     POST /api/superadmin/companies/{id}/invite-admin     send the administrator invitation
     GET  /api/superadmin/credits                         credit consumption across companies
+    GET  /api/superadmin/platform-cost?month=            per company: model $ (chat, migration), credits, margin
+    GET  /api/superadmin/platform-cost/{id}?month=       one company split by query type, agent, model, tool, day, run
 
 Everything here requires the superadmin role. Day-to-day data management is not exposed:
 the permission model would allow it, but this console onboards and observes, and giving it
@@ -27,7 +29,7 @@ from ...engines.auth import invitations as invite_engine
 from ...engines.auth import roles as role_engine
 from ...engines.auth import tokens as token_engine
 from ...engines.auth import usage as usage_engine
-from ...engines import value_ledger
+from ...engines import platform_cost, value_ledger
 from ...engines.energy.buildings import country_code_for
 from ...shared.approvals import PLATFORM_FEATURE, write_audit
 from .auth import require_superadmin
@@ -242,6 +244,29 @@ async def credits(
                            "credits_this_month": r["credits_this_month"]} for r in rows],
             "billing_note": ("Usage-led: platform activity, API requests and credits, with no "
                              "seat limit. More users simply consume more.")}
+
+
+@router.get("/platform-cost")
+async def platform_cost_by_company(
+    month: str | None = Query(None, pattern=r"^(this|last|\d{4}-\d{2})$", description="this (default), last, or YYYY-MM"),
+    session: AsyncSession = Depends(get_session),
+    _: token_engine.Principal = Depends(require_superadmin),
+):
+    """What each company cost to run in the month - chat and migration model spend, its share of
+    the infrastructure - against the credits it was billed (engines/platform_cost.py)."""
+    return await platform_cost.read_platform_cost(session, month=month)
+
+
+@router.get("/platform-cost/{organization_id}")
+async def platform_cost_for_company(
+    organization_id: UUID,
+    month: str | None = Query(None, pattern=r"^(this|last|\d{4}-\d{2})$"),
+    session: AsyncSession = Depends(get_session),
+    _: token_engine.Principal = Depends(require_superadmin),
+):
+    """One company's month split every way: query type, source, agent, model, tool, day, the costliest
+    turns, each migration run and stage, billing by kind, unit economics at the target margin."""
+    return await platform_cost.read_company_cost(session, str(organization_id), month=month)
 
 
 @router.get("/value")
