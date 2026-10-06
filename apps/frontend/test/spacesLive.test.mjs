@@ -92,6 +92,8 @@ test('vendor performance badge counts the vendors scored below 80 on their newes
   const v = m.byKey.vendors;
   assert.equal(v.badge, '2 below 80');
   assert.equal(v.count, 2);
+  // Apex is blocked AND below 80 - one vendor, counted once; SafeLift is below 80; the others need nothing.
+  assert.equal(v.actionRequired, 2, 'vendors needing action, for the navigator badge');
   assert.deepEqual(v.kpis.map((k) => k.label + ' ' + k.value), ['Vendors scored 3', 'Average score 51', 'Below 80 2', 'Blocked 1']);
 });
 
@@ -134,4 +136,15 @@ test('a svc-udr failure is reported without hiding the built-in spaces', () => {
   assert.equal(m.builtin.length, 4);
   assert.equal(m.savedLive, false);
   assert.equal(m.savedError, 'timed out after 15s');
+});
+
+test('a blocked vendor needs action even with a good score', () => {
+  const m = shapeSpaces({ home: null, vendors: { live: true, vendors: [{ id: 'a', name: 'A', score: 92, blocked: true }, { id: 'b', name: 'B', score: 95, blocked: false }] }, saved: null, sessions: [] });
+  assert.equal(m.byKey.vendors.actionRequired, 1);
+  assert.equal(m.byKey.vendors.badge, '0 below 80', 'the space keeps its own meaning');
+});
+
+test('before the vendor list has answered there is no count, so the navigator shows no number', () => {
+  const m = shapeSpaces({ home: null, vendors: { live: false, vendors: [] }, saved: null, sessions: [] });
+  assert.equal(m.byKey.vendors.actionRequired, null);
 });

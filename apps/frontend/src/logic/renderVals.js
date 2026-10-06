@@ -2590,7 +2590,8 @@ export const renderValsMethods = {
       navSections: s.role === "admin" ? [] : [
         { label: "Buildings", icon: "ph-buildings", key: "buildings_user", count: "" },
         { label: "Compliance", icon: "ph-shield-check", key: "compliance", count: spm.byKey.compliance.count === null ? "" : spm.byKey.compliance.badge.split(" ")[0] },
-        { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: spm.byKey.vendors.count === null ? "" : spm.byKey.vendors.badge.split(" ")[0] },
+        // Vendors is a notification count: vendors needing action (blocked or below 80), each once.
+        { label: "Vendors", icon: "ph-chart-line-up", key: "vendors", count: spm.byKey.vendors.actionRequired === null || spm.byKey.vendors.actionRequired === undefined ? "" : String(spm.byKey.vendors.actionRequired) },
         { label: "Energy", icon: "ph-lightning", key: "energy", count: spm.byKey.energy.count === null ? "" : spm.byKey.energy.badge.split(" ")[0] },
         { label: "Assets", icon: "ph-cube", key: "assets", count: this.asVals(s).asThreatN },
         { label: "Maintenance", icon: "ph-wrench", key: "ops", count: spm.byKey.ops.count === null ? "" : spm.byKey.ops.badge.split(" ")[0] }

@@ -37,7 +37,7 @@ const gbp = (v) => '£' + Math.round(v).toLocaleString('en-GB');
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
 
 const empty = (b) => ({ key: b.key, name: b.name, icon: b.icon, domain: b.domain, page: b.page, view: b.view || null, module: b.module || null,
-  badge: '—', count: null, tone: 'none', kpis: [], live: false, custom: false, sessions: 0 });
+  badge: '—', count: null, actionRequired: null, tone: 'none', kpis: [], live: false, custom: false, sessions: 0 });
 
 function compliance(b, c) {
   const out = empty(b);
@@ -84,6 +84,10 @@ function vendors(b, vm) {
   const below = scored.filter((v) => v.score < 80).length;
   const avg = scored.length ? Math.round(scored.reduce((q, v) => q + v.score, 0) / scored.length) : null;
   out.count = below;
+  // The navigator's Vendors badge is a notification count: the vendors that need action -
+  // blocked from work, or scoring below 80 on their newest card - each counted once (6 Oct
+  // 2026). It read "0" (below 80 only) beside a page showing 2 vendors blocked.
+  out.actionRequired = (vm.vendors || []).filter((v) => v.blocked || (num(v.score) !== null && v.score < 80)).length;
   out.badge = below + ' below 80';
   out.tone = below > 0 ? 'warn' : 'ok';
   out.live = true;
