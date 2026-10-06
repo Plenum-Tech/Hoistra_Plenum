@@ -201,7 +201,7 @@ function ppmRow(p) {
     // The denominator is either what the contract commits to or simply what got booked —
     // different claims, so the row says which rather than letting the reader assume.
     planCommitted: plan.plan_is_committed === true,
-    planNote: plan.plan_is_committed === true ? "against the committed plan" : "against visits booked",
+    planNote: plan.plan_is_committed === true ? "against the committed plan" : (plan.basis ? "against " + plan.basis : "against visits booked"),
     pct: pct === null ? "—" : Math.round(pct) + "%",
     bar: pct === null ? "0%" : Math.max(0, Math.min(100, Math.round(pct))) + "%",
     missed: num(r.missed) === null ? "—" : String(r.missed),

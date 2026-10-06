@@ -1069,6 +1069,65 @@ def ppm_state(*, missed: int, late: int, completion_pct: float | None) -> str:
     return PPM_STATE_TO_PLAN
 
 
+def ppm_contract_row(r: dict[str, Any], *, elapsed: float | None) -> dict[str, Any]:
+    """One contract's PPM row from its counts. Pure.
+
+    Done is measured against the visits DUE so far - booked with a scheduled date up to today -
+    in the same unit on both sides: one row per asset per visit. Until 6 Oct 2026 the plan was the
+    contract's visits_per_year, which counts visits to the SITE for the whole YEAR, while done
+    counted per-asset visits year to date; Bishopsgate read 196 of 125 (156.8%) because a
+    quarterly contract over 21 fan coil units books 63 visits by October against a "plan" of 4.
+
+    visits_per_year still matters, as a booking check: are as many visits booked as the contract
+    implies by now? It is read the lenient way, as the whole contract's count spread over the year
+    (``elapsed`` is the share of the year gone), because the column means per-asset on some
+    contracts and per-contract on others and nothing records which. Short only when fewer visits
+    are booked than even that reading allows - so no false alarm on a per-asset contract, and a
+    monthly contract with three visits booked by October is still caught.
+
+    visits_per_year = 0 is a call-out contract: reactive, no plan to be measured against, so its
+    row is kept for reference and left out of the PPM figures.
+    """
+    planned = int(r.get("planned") or 0)
+    due = int(r.get("due") or 0)
+    done_all = int(r.get("done") or 0)
+    done = int(r["done_due"]) if r.get("done_due") is not None else done_all
+    missed = int(r.get("missed") or 0)
+    late = int(r.get("late") or 0)
+    raw = r.get("visits_per_year")
+    agreed = int(raw) if raw is not None else None
+    call_out = agreed == 0
+    pct = round(done / due * 100, 1) if due else None
+    expected = round(agreed * elapsed, 1) if agreed and elapsed is not None else None
+    short_by = int(expected - due) if expected is not None and expected - due >= 1 else 0
+    state = ppm_state(missed=missed, late=late, completion_pct=pct)
+    if short_by and state == PPM_STATE_TO_PLAN:
+        state = PPM_STATE_WATCH
+    note = (f"{due} visits booked by now; the contract's {agreed} a year implies about "
+            f"{expected:g}" if short_by else None)
+    return {
+        "contract": r.get("contract"), "contract_id": r.get("contract_id"),
+        "vendor": r.get("vendor"), "country_code": r.get("country_code"),
+        "service_scope": r.get("service_scope"),
+        "kind": "call-out" if call_out else "planned",
+        "visits_to_plan": {"done": done, "plan": due, "plan_is_committed": False,
+                           "basis": "visits due so far"},
+        "booking": {"agreed_per_year": agreed, "expected_by_now": expected,
+                    "booked_by_now": due, "short_by": short_by,
+                    "reading": "whole contract, spread over the year"} if agreed else None,
+        "planned": planned, "due": due, "done": done, "done_ahead": max(0, done_all - done),
+        "missed": missed, "late": late,
+        "deferred": int(r.get("deferred") or 0),
+        "reports": int(r.get("reports") or 0),
+        "reports_to_done": {"filed": int(r.get("reports") or 0), "done": done},
+        "completion_pct": pct,
+        "next_due": r["next_due"].isoformat() if r.get("next_due") else None,
+        "buildings": int(r.get("buildings") or 0),
+        "state": state,
+        "note": note,
+    }
+
+
 async def ppm_health_by_contract(
     session: AsyncSession, *, building_ids: list[UUID] | None,
     year_to_date: bool = True, limit: int = 200,
@@ -1119,7 +1178,10 @@ async def ppm_health_by_contract(
                {c_scope}                                         AS service_scope,
                {c_plan}                                          AS visits_per_year,
                count(*)                                          AS planned,
+               count(*) FILTER (WHERE v.scheduled_date <= current_date)      AS due,
                count(*) FILTER (WHERE v.completed_date IS NOT NULL)          AS done,
+               count(*) FILTER (WHERE v.completed_date IS NOT NULL
+                                  AND v.scheduled_date <= current_date)      AS done_due,
                count(*) FILTER (WHERE v.completed_date IS NULL
                                   AND v.scheduled_date < current_date
                                   AND NOT {deferred})                        AS missed,
@@ -1152,60 +1214,46 @@ async def ppm_health_by_contract(
         return {"ok": False, "error": str(exc)[:200], "contracts": [],
                 "summary": _ppm_zero()}
 
-    out = []
-    for r in rows:
-        planned = int(r["planned"] or 0)
-        done = int(r["done"] or 0)
-        missed = int(r["missed"] or 0)
-        late = int(r["late"] or 0)
-        # The plan is what the contract commits to where that is agreed, and what was actually
-        # booked where it is not. Which one was used is stated, because 12 of 18 against an
-        # agreed plan and 12 of 18 against whatever got booked are different claims.
-        committed = int(r["visits_per_year"]) if r["visits_per_year"] else None
-        plan = committed or planned
-        pct = round(done / plan * 100, 1) if plan else None
-        out.append({
-            "contract": r["contract"], "contract_id": r["contract_id"],
-            "vendor": r["vendor"], "country_code": r["country_code"],
-            "service_scope": r["service_scope"],
-            "visits_to_plan": {"done": done, "plan": plan,
-                               "plan_is_committed": committed is not None},
-            "planned": planned, "done": done, "missed": missed, "late": late,
-            "deferred": int(r["deferred"] or 0),
-            "reports": int(r["reports"] or 0),
-            "reports_to_done": {"filed": int(r["reports"] or 0), "done": done},
-            "completion_pct": pct,
-            "next_due": r["next_due"].isoformat() if r["next_due"] else None,
-            "buildings": int(r["buildings"] or 0),
-            "state": ppm_state(missed=missed, late=late, completion_pct=pct),
-        })
-    out.sort(key=lambda c: ({PPM_STATE_BEHIND: 0, PPM_STATE_WATCH: 1,
-                             PPM_STATE_TO_PLAN: 2}[c["state"]], -c["missed"], c["contract"]))
+    # The share of the year gone, for the booking check. None outside a year-to-date window,
+    # where "how many should be booked by now" has no meaning.
+    if year_to_date:
+        days_in_year = (date(today.year + 1, 1, 1) - start).days
+        elapsed = ((today - start).days + 1) / days_in_year
+    else:
+        elapsed = None
+    out = [ppm_contract_row(dict(r), elapsed=elapsed) for r in rows]
+    order = {PPM_STATE_BEHIND: 0, PPM_STATE_WATCH: 1, PPM_STATE_TO_PLAN: 2}
+    out.sort(key=lambda c: (c["kind"] == "call-out", order[c["state"]], -c["missed"], c["contract"] or ""))
 
-    done = sum(c["done"] for c in out)
-    plan = sum(c["visits_to_plan"]["plan"] for c in out)
+    ppm = [c for c in out if c["kind"] == "planned"]
+    done = sum(c["done"] for c in ppm)
+    plan = sum(c["visits_to_plan"]["plan"] for c in ppm)
     return {
         "ok": True,
         "source": "ppm_visits",
         "window": {"year_to_date": year_to_date, "from": start.isoformat(),
                    "to": today.isoformat()},
         "summary": {
-            "contracts": len(out),
-            "done": done, "plan": plan,
+            "contracts": len(ppm),
+            "done": done, "plan": plan, "basis": "visits due so far",
             "completion_pct": round(done / plan * 100, 1) if plan else None,
-            "missed": sum(c["missed"] for c in out),
-            "late": sum(c["late"] for c in out),
-            "deferred": sum(c["deferred"] for c in out),
-            "reports": sum(c["reports"] for c in out),
-            "behind_plan": sum(1 for c in out if c["state"] == PPM_STATE_BEHIND),
-            "watch": sum(1 for c in out if c["state"] == PPM_STATE_WATCH),
-            "to_plan": sum(1 for c in out if c["state"] == PPM_STATE_TO_PLAN),
+            "missed": sum(c["missed"] for c in ppm),
+            "late": sum(c["late"] for c in ppm),
+            "deferred": sum(c["deferred"] for c in ppm),
+            "reports": sum(c["reports"] for c in ppm),
+            "behind_plan": sum(1 for c in ppm if c["state"] == PPM_STATE_BEHIND),
+            "watch": sum(1 for c in ppm if c["state"] == PPM_STATE_WATCH),
+            "to_plan": sum(1 for c in ppm if c["state"] == PPM_STATE_TO_PLAN),
+            "short_booked": sum(1 for c in ppm if c["booking"] and c["booking"]["short_by"]),
+            "call_out_contracts": len(out) - len(ppm),
         },
         "contracts": out[:limit],
         "rule": (
             f"behind plan at {BEHIND_MISSED}+ missed visits or under "
             f"{BEHIND_COMPLETION_PCT:g}% complete; watch at any missed, any late or under "
-            f"{WATCH_COMPLETION_PCT:g}%; to plan otherwise. A deferred visit is not a missed one."
+            f"{WATCH_COMPLETION_PCT:g}%; to plan otherwise. A deferred visit is not a missed one. "
+            "Measured against the visits due so far; watch also when fewer visits are booked than "
+            "the contract's yearly count implies by now. Call-out contracts are not counted."
         ),
     }
 
@@ -1380,9 +1428,12 @@ async def overview(
                 "missed": ps.get("missed", 0), "reports": ps.get("reports", 0),
                 "deferred": ps.get("deferred", 0),
                 "behind_plan": ps.get("behind_plan", 0),
-                "caption": (f"{ps.get('done', 0)} of {ps.get('plan', 0)} visits · "
+                "caption": (f"{ps.get('done', 0)} of {ps.get('plan', 0)} visits due · "
                             f"{ps.get('missed', 0)} missed · "
-                            f"{ps.get('reports', 0)} reports"),
+                            f"{ps.get('reports', 0)} reports"
+                            + (f" · {ps['short_booked']} under-booked"
+                               if ps.get("short_booked") else "")),
+                "short_booked": ps.get("short_booked", 0),
                 "year_to_date": True,
             },
         },
