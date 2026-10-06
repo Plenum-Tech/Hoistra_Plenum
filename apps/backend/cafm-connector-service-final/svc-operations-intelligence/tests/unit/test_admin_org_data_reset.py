@@ -79,6 +79,11 @@ def cols() -> dict[str, set[str]]:
     shape.setdefault("meter_readings", {"id", "organization_id", "meter_id", "reading_at"})
     shape.setdefault("compliance_certificates", {"id", "organization_id", "building_id"})
     shape["compliance_certificates"] |= {"asset_id", "vendor_id"}
+    # energy_building_id_rename.sql: the energy tables' site_id always held a building id and
+    # is building_id on the deployed databases.
+    for t in ("energy_meters", "energy_anomalies", "eui_snapshots", "building_energy_profiles"):
+        if "site_id" in shape.get(t, set()):
+            shape[t] = (shape[t] - {"site_id"}) | {"building_id"}
     for f in LIVE_FKS:
         shape.setdefault(f.child, {"id", "organization_id"}).add(f.column)
     return shape
@@ -238,3 +243,238 @@ def test_every_page_table_is_one_the_script_clears():
     assert left == {"document_chunks", "documents", "review_queue", "corrections_log",
                     "ingestion_audit_log", "claude_api_usage", "ingestion_documents",
                     "ops_email_log", "approval_action_tokens", "approvals_queue_items"}, sorted(left)
+
+
+# ── one building ────────────────────────────────────────────────────────────────────────
+# The same reset narrowed a third time, to a single building the admin picks. Bound twice:
+# every delete keeps its company filter and adds the building, so a building id from another
+# company matches nothing even if it got past the route.
+
+import re  # noqa: E402
+
+_BUILDING = re.compile(r":building\b")
+
+
+def building_plan(cols, areas=None, fks=LIVE_FKS):
+    return rs.plan_reset(cols, areas, fks, building=True)
+
+
+def test_a_building_reset_binds_every_delete_to_the_building_and_the_company(cols):
+    for areas in (None, ["energy"], ["compliance"], ["contracts"], ["maintenance"], ["assets", "maintenance"]):
+        plan = building_plan(cols, areas)
+        # Nothing on the Contracts page names a building in this schema: all company-wide.
+        assert plan.steps or areas == ["contracts"], areas
+        for s in plan.steps:
+            assert _BUILDING.search(s.where), f"{s.table} not narrowed to the building for {areas}"
+            assert ":org" in s.where or ":bids" in s.where, f"{s.table} lost its company for {areas}"
+        for d in plan.detaches:
+            assert _BUILDING.search(d.sql), f"{d.table}.{d.column} cleared beyond the building"
+
+
+def test_a_company_reset_never_names_a_single_building(cols):
+    plan = steps_for(cols)
+    assert not [s.table for s in plan.steps if _BUILDING.search(s.where)]
+    assert not plan.company_wide
+
+
+def test_a_building_reset_keeps_what_belongs_to_the_whole_company(cols):
+    plan = building_plan(cols)
+    deleted = {s.table for s in plan.steps}
+    for shared in ("vendors", "vendor_contacts", "sla_policies", "spare_parts", "technicians",
+                   "compliance_scan_runs", "vendor_monthly_scorecards"):
+        if shared in cols:
+            assert shared not in deleted, f"{shared} serves every building but is deleted"
+            assert plan.company_wide.get(shared), f"{shared} kept without saying so"
+    for per_building in ("assets", "work_orders", "energy_meters", "meter_readings",
+                         "compliance_certificates", "asset_readings", "work_order_tasks"):
+        assert per_building in deleted, f"{per_building} is per-building but not cleared"
+
+
+def _where(plan, table):
+    return next(s.where for s in plan.steps if s.table == table)
+
+
+def test_a_row_reaches_its_building_through_what_it_hangs_off(cols):
+    plan = building_plan(cols)
+    assert "plenum_cafm.energy_meters" in _where(plan, "meter_readings")
+    assert "plenum_cafm.work_orders" in _where(plan, "work_order_tasks")
+    assert "plenum_cafm.assets" in _where(plan, "asset_readings")
+    assert "plenum_cafm.maintenance_plans" in _where(plan, "scheduled_maintenance_parts")
+
+
+def test_a_row_with_its_own_building_is_not_claimed_through_a_link(cols):
+    # A work order filed on building B for an asset that sits in building A is B's. The link
+    # only decides for a row that names no building of its own.
+    where = _where(building_plan(cols, ["maintenance"]), "work_orders")
+    assert "building_id::text = :building" in where
+    assert "building_id IS NULL AND" in where
+    assert where.index("building_id::text = :building") < where.index("plenum_cafm.assets")
+
+
+def test_a_building_reset_deletes_children_first(cols):
+    plan = building_plan(cols)
+    first = {}
+    for i, s in enumerate(plan.steps):
+        first.setdefault(s.table, i)
+    for f in LIVE_FKS:
+        if f.child in first and f.parent in first and f.child != f.parent:
+            assert first[f.child] < first[f.parent], f"{f.child} after {f.parent}"
+    last = {s.table: i for i, s in enumerate(plan.steps)}
+    for i, s in enumerate(plan.steps):
+        if s.scoped_by.startswith("parent: "):
+            parent = s.scoped_by.split(": ", 1)[1]
+            if parent in last:
+                assert i < last[parent], f"{s.table} is matched through {parent} but deleted after it"
+
+
+def test_a_building_reset_takes_only_the_approvals_about_rows_it_deletes(cols):
+    plan = building_plan(cols, ["compliance"])
+    items = [i for i, s in enumerate(plan.steps) if s.table == "approvals_queue_items"]
+    assert items, "the certificates' approval items would outlive them"
+    where = plan.steps[items[0]].where
+    assert "related_entity_id" in where and "plenum_cafm.compliance_certificates" in where
+    assert "item_type" in where
+    # Read while the certificates are still there to be matched against.
+    cert = next(i for i, s in enumerate(plan.steps) if s.table == "compliance_certificates")
+    assert items[0] < cert
+
+
+def test_kept_rows_in_another_building_block_or_lose_their_link(cols):
+    # Assets and Maintenance both cleared for building A: a work order on building B naming
+    # an asset in A is kept. Its nullable link is cleared; a NOT NULL one blocks the reset.
+    plan = building_plan(cols, ["assets", "maintenance"])
+    cleared = {(d.table, d.column): d for d in plan.detaches}
+    assert ("work_orders", "asset_id") in cleared
+    assert "IS NOT TRUE" in cleared[("work_orders", "asset_id")].sql
+    blocking = {(b.table, b.column): b for b in plan.blocks}
+    # A work order's asset links go with the work order, so B's link to A's asset is kept.
+    assert ("work_order_assets", "asset_id") in blocking
+    assert "IS NOT TRUE" in blocking[("work_order_assets", "asset_id")].count_sql
+
+
+class _Rows:
+    def __init__(self, rows=(), scalar=0, rowcount=0):
+        self._rows, self._scalar, self.rowcount = list(rows), scalar, rowcount
+
+    def all(self):
+        return self._rows
+
+    def scalar(self):
+        return self._scalar
+
+
+class FakeSession:
+    """Answers the schema reads from the test shape and records every statement. Counts are
+    zero; no statement reaches a database."""
+
+    def __init__(self, shape, bids):
+        self.shape, self.bids, self.sql, self.committed = shape, bids, [], False
+
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        self.sql.append((sql, dict(params or {})))
+        if "information_schema.columns" in sql:
+            return _Rows([(t, c, "YES") for t, cs in self.shape.items() for c in cs])
+        if "pg_constraint" in sql:
+            return _Rows([tuple(f) for f in LIVE_FKS])
+        if "org_buildings" in sql:
+            return _Rows([(b,) for b in self.bids])
+        return _Rows()
+
+    async def commit(self):
+        self.committed = True
+
+    async def rollback(self):
+        pass
+
+
+ORG = "11111111-1111-5111-8111-111111111111"
+HARBOUR, ASHGROVE = "c343c566-0000-4000-8000-000000000001", "4a451a94-af44-486f-b660-8e19518cd19f"
+
+
+async def test_a_building_the_company_does_not_have_is_refused_before_anything_changes(cols):
+    s = FakeSession(cols, [HARBOUR])
+    with pytest.raises(rs.ResetForeignBuilding):
+        await rs.run_reset(s, ORG, areas=["assets"], apply=True, building_id=ASHGROVE)
+    assert not [q for q, _ in s.sql if q.lstrip().startswith(("DELETE", "UPDATE"))]
+    assert not s.committed
+
+
+async def test_a_building_dry_run_counts_that_building_only(cols):
+    s = FakeSession(cols, [HARBOUR, ASHGROVE])
+    out = await rs.run_reset(s, ORG, areas=["energy", "maintenance"], apply=False, building_id=HARBOUR)
+    assert out["building_id"] == HARBOUR and out["buildings"] == 1
+    counts = [(q, p) for q, p in s.sql if q.startswith("SELECT count(*) FROM plenum_cafm.")]
+    assert counts and all(p.get("building") == HARBOUR and p.get("org") == ORG for _, p in counts)
+    assert not s.committed
+    # What stays because it serves every building is said, page by page.
+    assert {"table": "spare_parts", "area": "maintenance", "label": "Maintenance"} in out["company_wide"]
+
+
+async def test_a_company_dry_run_is_unchanged_by_the_building_option(cols):
+    s = FakeSession(cols, [HARBOUR, ASHGROVE])
+    out = await rs.run_reset(s, ORG, areas=["contracts"], apply=False)
+    assert out["building_id"] is None and out["buildings"] == 2 and out["company_wide"] == []
+
+
+# ── review, 6 Oct 2026 ──────────────────────────────────────────────────────────────────
+
+def test_what_serves_every_building_stays_kept_even_with_a_building_column(cols):
+    # A column can appear at run time (the migration engine and the table editor add them).
+    # One building_id must not turn vendors or technicians into one building's rows — and
+    # with them, clear every other building's work orders' links to them.
+    shape = {t: set(c) for t, c in cols.items()}
+    for t in rs.COMPANY_WIDE:
+        if t in shape:
+            shape[t].add("building_id")
+    plan = building_plan(shape)
+    deleted = {s.table for s in plan.steps}
+    for t in rs.COMPANY_WIDE:
+        if t in shape and any(t in a.tables for a in rs.AREAS.values()):
+            assert t not in deleted, f"{t} became one building's"
+            assert t in plan.company_wide
+    detached = {(d.table, d.column) for d in plan.detaches}
+    assert ("work_orders", "assigned_technician") not in detached
+    assert ("work_orders", "assigned_vendor") not in detached
+
+
+def test_rows_elsewhere_are_only_ever_the_companys_own(cols):
+    # Another company's row naming one of ours is refused by its foreign key, as a company
+    # reset is — never quietly unlinked and described as "on another building".
+    company = {s.table: s.where for s in steps_for(cols, ["assets", "maintenance"]).steps}
+    plan = building_plan(cols, ["assets", "maintenance"])
+    where = {s.table: s.where for s in plan.steps}
+    d = next(d for d in plan.detaches if (d.table, d.column) == ("work_orders", "asset_id"))
+    assert d.sql.endswith(f" AND ({company['work_orders']}) AND ({where['work_orders']}) IS NOT TRUE")
+    for b in plan.blocks:
+        if b.elsewhere:
+            assert f"AND ({company[b.table]}) AND (" in b.count_sql, b.table
+
+
+def test_a_row_never_loses_the_only_link_that_makes_it_the_companys(cols):
+    # scheduled_tasks belongs to a company only through its plan. Kept on another building,
+    # clearing that link would leave it nobody's: unreachable by any later reset or export.
+    plan = building_plan(cols, ["assets", "maintenance"])
+    detached = {(d.table, d.column) for d in plan.detaches}
+    blocking = {(b.table, b.column) for b in plan.blocks}
+    rule = ox.plan_export(cols)[0]["scheduled_tasks"]
+    assert rule.kind == "parent" and rule.column == "maintenance_plan_id"
+    assert ("scheduled_tasks", "maintenance_plan_id") not in detached
+    assert ("scheduled_tasks", "maintenance_plan_id") in blocking
+
+
+def test_approval_items_are_matched_on_every_page_being_cleared_but_never_on_readings(cols):
+    plan = building_plan(cols, ["assets", "maintenance", "energy"])
+    items = {s.area: s.where for s in plan.steps if s.table == "approvals_queue_items"}
+    # A work-order item about an asset goes when both pages are cleared, as a company reset does.
+    assert "plenum_cafm.assets" in items["maintenance"]
+    for w in items.values():
+        assert "plenum_cafm.meter_readings" not in w and "plenum_cafm.asset_readings" not in w
+
+
+async def test_an_empty_building_id_is_refused_not_read_as_every_building(cols):
+    s = FakeSession(cols, [HARBOUR])
+    for bad in ("", "not-a-uuid"):
+        with pytest.raises(rs.ResetForeignBuilding):
+            await rs.run_reset(s, ORG, areas=["assets"], apply=True, building_id=bad)
+    assert not [q for q, _ in s.sql if q.lstrip().startswith(("DELETE", "UPDATE"))]

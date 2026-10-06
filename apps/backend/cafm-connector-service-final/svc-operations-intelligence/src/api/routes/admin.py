@@ -725,6 +725,29 @@ class DataReset(BaseModel):
     #: Which pages' data to clear: any of compliance, contracts, assets, energy, maintenance.
     #: Empty or absent means all five.
     areas: list[str] | None = None
+    #: Only the rows on this building, one of the company's. Absent means every building. The
+    #: confirmation is then the building's name.
+    building_id: UUID | None = None
+
+
+async def _reset_building(
+    session: AsyncSession, org: UUID, building_id: UUID | None,
+) -> dict | None:
+    """The chosen building, which must be this company's — checked before anything is counted."""
+    if building_id is None:
+        return None
+    building = (await _company_buildings(session, org)).get(str(building_id))
+    await session.rollback()
+    if building is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "ok": False, "reason": "building_not_found",
+            "error": "That building is not one of this company's."})
+    return building
+
+
+def _building_label(building: dict) -> str:
+    """What a building reset is confirmed with: its name, or its code or id when it has none."""
+    return str(building.get("name") or building.get("building_code") or building["id"])
 
 
 async def _reset_allowed(session: AsyncSession) -> None:
@@ -757,9 +780,16 @@ def _areas(raw: list[str] | None) -> list[str]:
             "areas": list(org_data_reset.AREAS)}) from exc
 
 
-async def _run(session: AsyncSession, org: UUID, areas: list[str], apply: bool) -> dict:
+async def _run(session: AsyncSession, org: UUID, areas: list[str], apply: bool,
+               building: dict | None = None) -> dict:
     try:
-        return await org_data_reset.run_reset(session, str(org), areas=areas, apply=apply)
+        return await org_data_reset.run_reset(session, str(org), areas=areas, apply=apply,
+                                               building_id=building["id"] if building else None)
+    except org_data_reset.ResetForeignBuilding as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "ok": False, "reason": "building_not_found",
+            "error": "That building is not one of this company's.",
+            "note": "Nothing was changed."}) from exc
     except org_data_reset.ResetBlocked as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
             "ok": False, "reason": "reset_blocked", "blocked": exc.blocked,
@@ -776,20 +806,25 @@ async def _run(session: AsyncSession, org: UUID, areas: list[str], apply: bool) 
 async def preview_data_reset(
     areas: str | None = Query(
         None, description="Comma-separated: compliance,contracts,assets,energy,maintenance. Default all."),
+    building_id: UUID | None = Query(
+        None, description="Only this building's rows. Default every building."),
     session: AsyncSession = Depends(get_session),
     scope: access.Scope = Depends(admin_scope),
 ):
     """The rows a reset of these areas would delete, per page and per table, for the caller's
-    company only; the links on kept pages it would clear; and any kept rows that would stop it
-    (``blocked`` - a real reset refuses while that list is not empty).
+    company only (or one of its buildings); the links on kept pages it would clear; and any
+    kept rows that would stop it (``blocked`` - a real reset refuses while that list is not
+    empty). For one building, ``company_wide`` names what is kept because it serves them all.
 
     Counted inside a transaction that is rolled back, so these are the figures a reset would
     act on now."""
     chosen = _areas([a for a in (areas or "").split(",") if a.strip()])
     await _reset_allowed(session)
     name = await _org_name(session, scope.organization_id)
-    out = await _run(session, scope.organization_id, chosen, apply=False)
-    return {"ok": True, "organization_name": name, "confirm_with": name, **out}
+    building = await _reset_building(session, scope.organization_id, building_id)
+    out = await _run(session, scope.organization_id, chosen, apply=False, building=building)
+    return {"ok": True, "organization_name": name, "building": building,
+            "confirm_with": _building_label(building) if building else name, **out}
 
 
 @router.post("/data-reset", summary="Delete this company's page data: compliance, contracts, assets, energy, maintenance")
@@ -809,12 +844,15 @@ async def apply_data_reset(
     chosen = _areas(body.areas)
     await _reset_allowed(session)
     name = await _org_name(session, scope.organization_id)
-    if body.confirm.strip() != name:
+    building = await _reset_building(session, scope.organization_id, body.building_id)
+    confirm_with = _building_label(building) if building else name
+    if body.confirm.strip() != confirm_with:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
             "ok": False, "reason": "confirm_mismatch",
-            "error": "Type the company name exactly to confirm the reset.",
-            "confirm_with": name})
-    out = await _run(session, scope.organization_id, chosen, apply=True)
+            "error": f"Type the {'building' if building else 'company'} name exactly to confirm "
+                     "the reset.",
+            "confirm_with": confirm_with})
+    out = await _run(session, scope.organization_id, chosen, apply=True, building=building)
     try:
         async with session.begin():
             await write_audit(
@@ -823,14 +861,15 @@ async def apply_data_reset(
                 action_type="organization.data_reset",
                 source_feature=PLATFORM_FEATURE,
                 organization_id=scope.organization_id,
-                input_payload={"organization_id": str(scope.organization_id), "areas": chosen},
+                input_payload={"organization_id": str(scope.organization_id), "areas": chosen,
+                               "building_id": building["id"] if building else None},
                 output_payload={"row_total": out["row_total"]},
-                detail={"areas": chosen,
+                detail={"areas": chosen, "building": building,
                         "deleted": {t["table"]: t["rows"] for a in out["areas"] for t in a["tables"]},
                         "links_cleared": out["links_cleared"], "buildings": out["buildings"]},
             )
     except Exception as exc:  # noqa: BLE001 - the delete is done; a lost audit row is logged
         log.error("org_data_reset.audit_failed", error=str(exc)[:200])
     log.info("org_data_reset.done", organization_id=str(scope.organization_id),
-             areas=chosen, rows=out["row_total"])
-    return {"ok": True, "organization_name": name, **out}
+             areas=chosen, building_id=building["id"] if building else None, rows=out["row_total"])
+    return {"ok": True, "organization_name": name, "building": building, **out}

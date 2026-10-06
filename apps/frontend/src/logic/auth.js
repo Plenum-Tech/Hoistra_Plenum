@@ -545,6 +545,10 @@ export const authMethods = {
       forgetSharedSession(leaving, ending);
     }
     this._vdToken = (this._vdToken || 0) + 1;
+    // Nor the Reset page data panel's choice of building, pages and typed name — cleared in
+    // the one write below: a write of its own here, still signed in, would store this tab's
+    // session over a shared slot that another account now holds.
+    const drPatch = typeof this.drResetPatch === 'function' ? this.drResetPatch() : {};
     // A viewAsCompany() override belongs to the session that chose it — never left
     // armed for whoever signs into this tab next.
     setActingOrg(null);
@@ -556,6 +560,7 @@ export const authMethods = {
     this._qTimer = null;
     this._qSeen = null;
     this.setState({
+      ...drPatch,
       account: null, accessToken: null, refreshToken: null, refreshTokenAt: null, signedIn: false, role: 'user',
       view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
       // The vendor drawer is a fixed overlay too; left open it showed a company's vendor,

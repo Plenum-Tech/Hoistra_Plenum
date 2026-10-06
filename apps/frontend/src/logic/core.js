@@ -136,6 +136,8 @@ export const coreMethods = {
     // The request itself is disowned by the orgEpoch stamp in api/client.js; releasing
     // the guard here is what lets the correctly-scoped read actually go out.
     IN_FLIGHT_GUARDS.forEach((k) => { this[k] = false; });
+    // Reset page data: a building chosen for one company must not sit, armed, under the next.
+    if (typeof this.drReset === 'function') this.drReset();
     clearTimeout(this._mgTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);

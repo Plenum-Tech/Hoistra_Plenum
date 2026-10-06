@@ -150,10 +150,20 @@ export default function Users({ vals }) {
                 <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--st-risk)" }}>{"Administration · data"}</div>
                 <h3 style={{ fontSize: "18px", margin: "5px 0 0" }}>{"Reset page data"}</h3>
                 <p style={{ fontSize: "12.5px", color: "var(--color-neutral-400)", margin: "6px 0 0", maxWidth: "92ch", lineHeight: "1.55" }}>
-                  {"Delete this company's data behind the pages you tick, so the next ingest starts from nothing. Only this company's rows are touched, and it cannot be undone. Tick a page to see exactly what would go."}
+                  {"Delete this company's data behind the pages you tick — for every building, or just one — so the next ingest starts from nothing. Only this company's rows are touched, and it cannot be undone. Tick a page to see exactly what would go."}
                 </p>
               </div>
             </div>
+            {vals.drScopeShow ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <span id="dr-scope-label" style={{ fontSize: "12px", color: "var(--color-neutral-400)" }}>{"Clear data for"}</span>
+                <select aria-labelledby="dr-scope-label" className="input" data-dr="scope" value={vals.drScope} onChange={vals.drSetScope} disabled={vals.drBusy}
+                  style={{ fontSize: "12.5px", padding: "7px 9px", borderRadius: "7px", border: `1px solid ${vals.drScope ? "var(--st-risk)" : "var(--color-divider)"}`, background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", width: "100%", maxWidth: "420px", minWidth: "0", boxSizing: "border-box" }}>
+                  {vals.drScopeOptions.map((o) => <option key={o.id || "all"} value={o.id}>{o.label}</option>)}
+                </select>
+                <span style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>{vals.drScopeNote}</span>
+              </div>
+            ) : null}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: "9px" }}>
               {(vals.drAreas || []).map((ar) => (
                 <div key={ar.key} role="checkbox" aria-checked={ar.on} data-area={ar.key} onClick={ar.pick} style={{ display: "flex", gap: "10px", alignItems: "flex-start", padding: "11px 12px", borderRadius: "9px", border: `1px solid ${ar.edge}`, background: ar.bg, color: ar.fg, cursor: "pointer" }}>
@@ -174,6 +184,7 @@ export default function Users({ vals }) {
             ) : null}
             {vals.drLoading ? <div style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}>{"Counting what would be deleted…"}</div> : null}
             {vals.drError ? <div data-dr="error" style={{ fontSize: "12px", color: "var(--st-risk)" }}>{vals.drError}</div> : null}
+            {vals.drScopeStale ? <div data-dr="stale" style={{ fontSize: "12px", color: "var(--color-neutral-400)" }}>{vals.drScopeStale}</div> : null}
             {vals.drDone ? <div data-dr="done" style={{ fontSize: "12px", color: "var(--st-ok)" }}>{vals.drDone}</div> : null}
             {vals.drHasPlan && !vals.drLoading ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -226,10 +237,16 @@ export default function Users({ vals }) {
                     ))}
                   </div>
                 ) : null}
+                {vals.drCompanyWide ? (
+                  <div data-dr="company-wide" style={{ fontSize: "11.5px", color: "var(--color-neutral-400)", lineHeight: "1.6" }}>
+                    <span style={{ color: "var(--color-neutral-300)" }}>{"Kept — shared by every building, not tied to this one: "}</span>
+                    <span style={{ fontFamily: "ui-monospace,monospace" }}>{vals.drCompanyWide}</span>
+                  </div>
+                ) : null}
                 <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)" }}>{vals.drKept}</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                   <span style={{ fontSize: "12px", color: "var(--color-neutral-400)" }}>{"Type "}<b style={{ color: "var(--color-text)" }}>{vals.drConfirmName}</b>{" to confirm"}</span>
-                  <input className="input" data-dr="confirm" value={vals.drConfirm} onChange={vals.drSetConfirm} placeholder={vals.drConfirmName} style={{ fontSize: "12.5px", padding: "7px 10px", borderRadius: "7px", border: `1px solid ${vals.drNameOk ? "var(--st-risk)" : "var(--color-divider)"}`, background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", minWidth: "240px" }} />
+                  <input className="input" data-dr="confirm" value={vals.drConfirm} onChange={vals.drSetConfirm} placeholder={vals.drConfirmName} style={{ fontSize: "12.5px", padding: "7px 10px", borderRadius: "7px", border: `1px solid ${vals.drNameOk ? "var(--st-risk)" : "var(--color-divider)"}`, background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", minWidth: "min(240px, 100%)", maxWidth: "100%", boxSizing: "border-box" }} />
                   <button type="button" data-dr="apply" disabled={!vals.drCanApply} onClick={vals.drApply} style={{ font: "inherit", fontSize: "12px", padding: "8px 15px", borderRadius: "8px", border: "none", background: vals.drCanApply ? "var(--st-risk)" : "var(--color-neutral-800)", color: vals.drCanApply ? "#fff" : "var(--color-neutral-500)", cursor: vals.drCanApply ? "pointer" : "not-allowed" }}>{vals.drApplyLabel}</button>
                 </div>
               </div>

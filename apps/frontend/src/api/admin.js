@@ -76,16 +76,18 @@ export const adminApi = {
     apiFetch(B, '/api/admin/export', { query: Object.assign({ preview: true }, orgQuery()), timeoutMs: 120000 }),
 
   // What clearing these pages' data would delete — counted in a transaction the service rolls
-  // back. areas: any of compliance, contracts, assets, energy, maintenance. → {row_total,
-  // areas[{area,label,rows,tables}], links_cleared[], blocked[], confirm_with, …}.
-  dataResetPreview: (areas) =>
-    apiFetch(B, '/api/admin/data-reset', { query: Object.assign({ areas: (areas || []).join(',') }, orgQuery()), timeoutMs: 120000 }),
+  // back. areas: any of compliance, contracts, assets, energy, maintenance; buildingId narrows
+  // it to that one building (absent: every building). → {row_total, areas[{area,label,rows,
+  // tables}], links_cleared[], blocked[], company_wide[], building, confirm_with, …}.
+  dataResetPreview: (areas, buildingId) =>
+    apiFetch(B, '/api/admin/data-reset', { query: Object.assign({ areas: (areas || []).join(',') }, buildingId ? { building_id: buildingId } : {}, orgQuery()), timeoutMs: 120000 }),
 
-  // IRREVERSIBLE. Deletes this company's rows behind those pages. `confirm` must be the
-  // company name exactly (the preview's confirm_with). 409 reset_blocked carries
-  // detail.blocked when kept rows depend on the ones going; nothing is changed then.
-  dataReset: (areas, confirm) =>
-    apiFetch(B, '/api/admin/data-reset', { method: 'POST', query: orgQuery(), body: { areas: areas, confirm: confirm }, timeoutMs: 600000 })
+  // IRREVERSIBLE. Deletes this company's rows behind those pages — or only that building's.
+  // `confirm` must be the preview's confirm_with exactly: the company name, or the building's.
+  // 409 reset_blocked carries detail.blocked when kept rows depend on the ones going; nothing
+  // is changed then.
+  dataReset: (areas, confirm, buildingId) =>
+    apiFetch(B, '/api/admin/data-reset', { method: 'POST', query: orgQuery(), body: Object.assign({ areas: areas, confirm: confirm }, buildingId ? { building_id: buildingId } : {}), timeoutMs: 600000 })
 };
 
 // The export itself. It cannot go through apiFetch: that parses every response as JSON and
