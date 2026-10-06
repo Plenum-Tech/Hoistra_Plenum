@@ -287,6 +287,11 @@ services:
       # be the only caller of deep-agents, through the gateway — and now the report
       # scheduler refreshes a card by asking the orchestrator itself.
       DEEP_AGENTS_BASE_URL: http://svc-deepagents:8008
+      # The schema mapper, as THIS container reaches it — same story: config.py defaults it to
+      # 127.0.0.1:8003, right only for the all-in-one image. Without it every workbook-extras
+      # read fails with "All connection attempts failed" (it fetches the stored upload from
+      # here), so a migration lands its tables but never its contract terms or invoices.
+      SCHEMA_MAPPER_BASE_URL: http://schema-mapper-app:8003
       PUBLIC_BASE_URL: http://localhost:3000/backend/ops-intelligence
       FRONTEND_PUBLIC_URL: http://localhost:3000
       OTEL_SDK_DISABLED: "true"
