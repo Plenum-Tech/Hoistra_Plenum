@@ -3,6 +3,7 @@ BE1 — UDR agent tools: direct database access for user lookup, schema discover
 and generic table queries.
 Two-gate SQL injection protection: regex + parameterised queries only.
 """
+import json
 import re
 import time
 from typing import Any

@@ -1327,6 +1327,11 @@ async def overview(
     # decisions() marks each row statutory or not (mark_statutory), so the chip and the card
     # agree by construction rather than by two counts happening to match.
     marked = sum(1 for d in dec.get("decisions", []) if d.get("statutory"))
+    # Whether the statutory card can be answered at all: the certificates that make a decision
+    # statutory could be read. 4fd3cd7 (4 Oct 2026) moved the marking into decisions() and took
+    # this lookup with it, leaving `statutory` unnamed below - every overview read then raised
+    # NameError and the four cards on the Maintenance page showed no figure until 6 Oct.
+    statutory = await statutory_assets(session, building_ids=building_ids)
 
     ins = await ii.panel(session, building_ids=building_ids)
     unconv = ins["cards"]["unconverted_recommendations"]

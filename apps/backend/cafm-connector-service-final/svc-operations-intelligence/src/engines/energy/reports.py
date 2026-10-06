@@ -460,7 +460,9 @@ async def generate_monthly_energy_report(
         action_type="energy.report.monthly",
         source_feature="C",
         organization_id=organization_id,
-        output_payload={"site_id": str(site_id), "report_month": report_month.isoformat()},
+        # The building the report is for; `site_id` was never defined here and every monthly report
+        # raised NameError after building its card, before the commit (found 6 Oct 2026).
+        output_payload={"building_id": str(building_id), "report_month": report_month.isoformat()},
     )
     await session.commit()
     return {
