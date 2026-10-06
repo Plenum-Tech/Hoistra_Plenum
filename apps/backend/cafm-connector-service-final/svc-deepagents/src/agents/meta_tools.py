@@ -360,9 +360,24 @@ class _TaskRunner:
             check_requirements,
             generate_compliance_report,
             *COMPLIANCE_ENGINE_TOOLS,
+            compact_context,
         ]
+
+        def _sub(name: str, *, tools: list, prompt: Any) -> Any:
+            """Every sub-agent manages its own context (agents/context_budget.py): it gets the
+            compact_context tool and the budget hook. Until 6 Oct 2026 only the orchestrator and
+            the fixed compliance agent had them, so the agents that actually read whole
+            registers - the per-question compliance agent, energy, vendors - never compacted:
+            the first Skill lab Measure recorded 0 compactions on 6 questions."""
+            tools = list(tools)
+            if compact_context not in tools:
+                tools.append(compact_context)
+            return create_react_agent(llm, tools=tools, prompt=prompt,
+                                      pre_model_hook=make_context_hook(agent=name, trim_max_tokens=None))
+
+        self._sub = _sub
         self._agents: dict[str, Any] = {
-            "migration": create_react_agent(llm, tools=[
+            "migration": _sub("migration", tools=[
                 start_migration, run_migration,
                 submit_pre_semantic, submit_field_mapping, submit_hierarchy,
                 get_migration_status, get_migration_mappings, list_migrations,
@@ -371,7 +386,7 @@ class _TaskRunner:
                 get_schema_mapping_status, continue_schema_mapping_gate,
                 start_fiix_ingestion, get_fiix_ingestion_status, list_fiix_ingestion_jobs,
             ], prompt=agent_system_prompt("migration")),
-            "doc_rag": create_react_agent(llm, tools=[
+            "doc_rag": _sub("doc_rag", tools=[
                 index_document, query_docs, semantic_search,
                 extract_text, get_document_metadata, delete_document,
                 # The structured answer to "which documents are linked to this building".
@@ -385,46 +400,37 @@ class _TaskRunner:
             # One list, owned by wo_engine_agent, so a tool added there reaches this sub-agent.
             # The four Maintenance-page tools sat in ALL_TOOLS for a week and not here, and
             # every question the router sent to wo_engine landed on an agent without them.
-            "wo_engine": create_react_agent(
-                llm, tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=agent_system_prompt("wo_engine")
+            "wo_engine": _sub(
+                "wo_engine", tools=list(WO_ENGINE_SUBAGENT_TOOLS), prompt=agent_system_prompt("wo_engine")
             ),
             # The same agent with its write tools removed: what run_phase2_engine_verbose runs
             # when the router hands a Maintenance-page QUESTION straight to the engine.
-            "maintenance": create_react_agent(
-                llm, tools=list(MAINTENANCE_READ_TOOLS), prompt=agent_system_prompt("wo_engine")
+            "maintenance": _sub(
+                "maintenance", tools=list(MAINTENANCE_READ_TOOLS), prompt=agent_system_prompt("wo_engine")
             ),
-            "compliance": create_react_agent(
-                llm,
-                tools=[
-                    # Legacy heuristics + Phase 2 Compliance Engine (A1–A5).
-                    # Main orchestrator ALL_TOOLS omits legacy tools to stay ≤128 OpenAI limit.
-                    check_requirements,
-                    generate_compliance_report,
-                    *COMPLIANCE_ENGINE_TOOLS,
-                    compact_context,
-                ],
+            # Legacy heuristics + Phase 2 Compliance Engine (A1–A5); the main orchestrator's
+            # ALL_TOOLS omits the legacy tools to stay under OpenAI's 128-tool limit.
+            "compliance": _sub(
+                "compliance", tools=self._compliance_tools,
                 prompt=agent_system_prompt("compliance", extra=COMPLIANCE_SUBAGENT_PROMPT),
-                # The compliance agent reads whole registers: measured 4.2 model calls and ~24k
-                # tokens of growth per question, up to 75k (agents/context_budget.py).
-                pre_model_hook=make_context_hook(agent="compliance", trim_max_tokens=None),
             ),
-            "contract_performance": create_react_agent(
-                llm,
+            "contract_performance": _sub(
+                "contract_performance",
                 tools=[*CONTRACT_PERFORMANCE_TOOLS],
                 prompt=agent_system_prompt(
                     "contract_performance", extra=CONTRACT_SUBAGENT_PROMPT
                 ),
             ),
-            "energy_intelligence": create_react_agent(
-                llm,
+            "energy_intelligence": _sub(
+                "energy_intelligence",
                 tools=[*ENERGY_INTELLIGENCE_TOOLS],
                 prompt=agent_system_prompt("energy_intelligence"),
             ),
             # Read-only by design: a question is answered with reads. udr_create_record /
             # udr_update_record / udr_delete_record stay on the orchestrator, where a write
             # needs an explicit instruction, not a sub-agent acting on an inferred intent.
-            "udr": create_react_agent(
-                llm,
+            "udr": _sub(
+                "udr",
                 tools=[
                     answer_from_records, replacement_candidates,
                     find_tables, table_card,
@@ -481,9 +487,7 @@ class _TaskRunner:
                 system = "\n\n---\n\n".join(
                     [p for p in ((shared.body if shared else ""), contract) if p]
                 )
-                runner = create_react_agent(
-                    self._llm, tools=self._compliance_tools, prompt=system
-                )
+                runner = self._sub("compliance", tools=self._compliance_tools, prompt=system)
             log.info(
                 "compliance.skills.selected",
                 source=selection.get("source"),
