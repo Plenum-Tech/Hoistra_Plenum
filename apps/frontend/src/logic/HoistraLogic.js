@@ -123,7 +123,7 @@ export class HoistraLogic extends Controller {
     // ships with; the organisation's own rule (plenum_cafm.asset_condition_rules, read back
     // on GET /api/energy/condition/assets) replaces them as soon as that read lands, and a
     // step writes them through PUT /api/energy/condition/rules — see logic/assetsCondition.js.
-    pq: "", asPct: 10, asWeeks: 3, asRuleSaving: false, asRuleError: "", asOpenB: [], asOpenS: [], iotOpen: null, asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {}, inspQ: "", inspDraft: "", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false, intExtra: [],
+    pq: "", asPct: 10, asWeeks: 3, asRuleSaving: false, asRuleError: "", asOpenB: [], asOpenS: [], iotOpen: null, asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {}, inspQ: "", inspDraft: "", eScope: [], enMatrixOpen: false, enRatingCc: "UK", enRulesOpen: false, enPosByCc: {}, enOpenB: "Bishopsgate Tower", inv: null, invStage: 0, invSrcDone: 0, intTab: 0, intQ: "", intOpen: [], intCat: null, intModal: null, intName: "", intUrl: "", intKeyShown: false,
     bkDate: "2026-09-16", bkWindow: "08:00–12:00",
     nv: { name: "", email: "", id: "", phone: "" }, nvSpec: "Lifts — LOLER",
     emTo: "", emSubject: "", emBody: "", emKicker: "", emKind: "",

@@ -40,7 +40,7 @@ export default function Integrations({ vals }) {
                 </span>
               </div>
               <p style={{ fontSize: "13px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "88ch", lineHeight: "1.55" }}>
-                {"Every system the portfolio already runs on — finance, ERP, CMMS, CAFM, IWMS, asset and news — landed into the Hoist Graph. A source is only listed with the tables it writes to, so what a connection buys you is visible before it is authorised. New tables mean new capabilities and new reports."}
+                {"Every system the portfolio runs on — finance, ERP, CMMS, CAFM, IWMS, asset and news — can land in the Hoist Graph. A source is only listed with the tables it writes to, so what a connection buys you is visible before it is authorised. New tables mean new capabilities and new reports."}
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
@@ -55,7 +55,7 @@ export default function Integrations({ vals }) {
                   {"Last sync"}
                 </span>
                 <span style={{ fontSize: "12.5px", fontVariantNumeric: "tabular-nums" }}>
-                  {"02:31 today"}
+                  {vals.intLastSync}
                 </span>
               </div>
             </div>
@@ -249,6 +249,11 @@ export default function Integrations({ vals }) {
                         </div>
                       </React.Fragment>
                     ))}
+                    {!(vals.intRows || []).length ? (
+                      <div data-int="connected-empty" style={{ padding: "18px 15px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", color: "var(--color-neutral-500)" }}>
+                        {vals.intConnEmpty}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
                 <div style={{ padding: "12px 15px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
@@ -288,7 +293,7 @@ export default function Integrations({ vals }) {
                     <p style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", margin: "7px 0 0", maxWidth: "96ch", lineHeight: "1.5" }}>
                       {g.blurb}
                     </p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: "10px", marginTop: "11px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: "10px", marginTop: "11px" }}>
                       {(g.items || []).map((i, $index) => (
                         <React.Fragment key={$index}>
                           <div className="hv1" style={{ display: "grid", gridTemplateColumns: "28px minmax(0,1fr) auto", gap: "11px", alignItems: "start", padding: "12px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", minWidth: "0" }}>
@@ -328,13 +333,13 @@ export default function Integrations({ vals }) {
                 </React.Fragment>
               ))}
               <div style={{ display: vals.intNoneShow, marginTop: "22px", padding: "26px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", fontSize: "12.5px", color: "var(--color-neutral-400)", lineHeight: "1.6", maxWidth: "70ch" }}>
-                {"Nothing in the catalogue matches that. Anything unlisted still connects through the custom API, an SFTP drop or a read replica — the graph only needs rows it can key and date."}
+                {"No source type matches that."}
               </div>
             </>
           ) : null}
           {vals.intTabApi ? (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "14px", alignItems: "start" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,340px),1fr))", gap: "14px", marginTop: "14px", alignItems: "start" }}>
                 <div style={{ minWidth: "0", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
                   <div style={{ padding: "11px 15px", borderBottom: "1px solid var(--color-divider)", fontSize: "12.5px" }}>
                     {"Credentials"}
@@ -345,7 +350,7 @@ export default function Integrations({ vals }) {
                         {"Base URL"}
                       </div>
                       <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "12px", marginTop: "5px" }}>
-                        {"https://api.hoistra.com/v1"}
+                        {vals.intBaseUrl}
                       </div>
                     </div>
                     <div>
@@ -361,34 +366,22 @@ export default function Integrations({ vals }) {
                         </span>
                       </div>
                       <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "5px", lineHeight: "1.45" }}>
-                        {"Rotated every 60 days. Last rotation 08 Aug 2026 by the platform team; the previous token stays valid for 24 hours after a rotation."}
+                        {vals.intKeyNote}
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: "9px" }}>
-                      <div style={{ padding: "9px 11px", borderRadius: "8px", background: "var(--color-bg)" }}>
-                        <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "15px" }}>
-                          {"10k"}
-                        </div>
-                        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
-                          {"rows per minute"}
-                        </div>
-                      </div>
-                      <div style={{ padding: "9px 11px", borderRadius: "8px", background: "var(--color-bg)" }}>
-                        <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "15px" }}>
-                          {"25 MB"}
-                        </div>
-                        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
-                          {"per document push"}
-                        </div>
-                      </div>
-                      <div style={{ padding: "9px 11px", borderRadius: "8px", background: "var(--color-bg)" }}>
-                        <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "15px" }}>
-                          {"99.9%"}
-                        </div>
-                        <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
-                          {"ingest availability"}
-                        </div>
-                      </div>
+                      {(vals.intLimits || []).map((l, $index) => (
+                        <React.Fragment key={$index}>
+                          <div style={{ padding: "9px 11px", borderRadius: "8px", background: "var(--color-bg)" }}>
+                            <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "15px" }}>
+                              {l.value}
+                            </div>
+                            <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
+                              {l.label}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      ))}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "7px" }}>
                       <div className="btn btn-primary" onClick={vals.intRotate} style={{ fontSize: "11.5px", padding: "6px 12px", cursor: "pointer" }}>
@@ -429,11 +422,16 @@ export default function Integrations({ vals }) {
                       </div>
                     </React.Fragment>
                   ))}
+                  {!(vals.intEndpoints || []).length ? (
+                    <div style={{ padding: "14px 15px", fontSize: "12px", color: "var(--color-neutral-500)" }}>
+                      {vals.intEndpointsEmpty}
+                    </div>
+                  ) : null}
                 </div>
                 <div style={{ minWidth: "0", gridColumn: "1/-1", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap", padding: "11px 15px", borderBottom: "1px solid var(--color-divider)" }}>
                     <span style={{ fontSize: "12.5px" }}>
-                      {"Field mapping — portfolio data lake"}
+                      {"Field mapping"}
                     </span>
                     <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", flex: "1", minWidth: "180px" }}>
                       {"a source field is only accepted once it resolves to a table and column, and declares which of them is the natural key"}
@@ -473,6 +471,11 @@ export default function Integrations({ vals }) {
                       </div>
                     </React.Fragment>
                   ))}
+                  {!(vals.intMapping || []).length ? (
+                    <div style={{ padding: "14px 15px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", color: "var(--color-neutral-500)" }}>
+                      {vals.intMappingEmpty}
+                    </div>
+                  ) : null}
                   <div style={{ padding: "12px 15px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                     {"This page is a saved report over the connection tables. The same thing can be asked in the query interface — ask which sources feed a table, or what a report would gain from a source that is not connected yet."}
                   </div>
