@@ -290,7 +290,10 @@ def card_tool_outputs() -> list[dict[str, Any]]:
 
 
 def begin(turn_id: str | None, session_id: str | None) -> Turn | None:
-    if not _ready:
+    from .replay_guard import is_replay
+    # A skill-lab replay is measured from its own ledger, not stored: a stored one would be
+    # billed to the company in Platform cost and listed in Hoist Traces.
+    if not _ready or is_replay():
         return None
     t = Turn(turn_id or ("turn-" + uuid.uuid4().hex[:16]), session_id)
     _turn.set(t)

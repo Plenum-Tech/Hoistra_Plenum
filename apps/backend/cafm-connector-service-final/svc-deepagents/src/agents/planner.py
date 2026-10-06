@@ -160,7 +160,9 @@ TOOL_NOTES: dict[str, str] = {
 
 def catalogue_line(name: str, description: str | None) -> str | None:
     """The planner's line for a tool, or None when the tool changes data and must not be planned."""
-    if WRITE_TOOL_RE.search(name or ""):
+    if WRITE_TOOL_RE.search(name or "") or name == "compact_context":
+        # compact_context manages the agent's own context (agents/context_budget.py); it is not
+        # a step towards an answer.
         return None
     first = (description or "").strip().splitlines()[0][:160] if description else name
     note = TOOL_NOTES.get(name)

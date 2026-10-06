@@ -199,6 +199,19 @@ class Settings(BaseSettings):
         48000,
         validation_alias=AliasChoices("ORCHESTRATOR_HISTORY_MAX_TOKENS"),
     )
+    # Self-managed context (agents/context_budget.py): the working part of a turn - every message
+    # after the system prompt - is held under this budget by the model compacting its own older
+    # tool results into notes. Measured 5 Oct 2026: the orchestrator loop and the compliance
+    # agent grew ~21-24k tokens inside one question, up to 75k.
+    context_budget_tokens: int = Field(
+        24000,
+        validation_alias=AliasChoices("CONTEXT_BUDGET_TOKENS"),
+    )
+    # Off restores the old behaviour exactly: oldest messages trimmed, nothing compacted.
+    context_self_manage: bool = Field(
+        True,
+        validation_alias=AliasChoices("CONTEXT_SELF_MANAGE"),
+    )
     # Phase 6 — optional object-storage connectors (stubs until drivers wired)
     azure_storage_connection_string: str = Field(
         "",

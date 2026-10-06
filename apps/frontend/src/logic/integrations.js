@@ -94,6 +94,13 @@ export const integrationsMethods = {
         chip: s.view === "traces" ? "var(--color-accent-900)" : "transparent",
         click: () => this.tpOpen()
       }, {
+        // Agent instructions measured on replayed questions (logic/skillLabPage.js). The badge is
+        // the rewrites waiting for approval once read.
+        label: "Skill lab", icon: "ph-flask", badge: s.slLoadedAt || s.slErr ? String((s.slProposals || []).filter((p) => p.status === "proposed").length) : "…",
+        color: s.view === "skilllab" ? "var(--color-accent)" : "var(--color-neutral-300)",
+        chip: s.view === "skilllab" ? "var(--color-accent-900)" : "transparent",
+        click: () => this.slOpen()
+      }, {
         label: "Audit trail", icon: "ph-scroll", badge: s.auLiveLoadedAt || s.auLiveError ? String(s.audit.length) : "…",
         color: s.view === "audit" ? "var(--color-accent)" : "var(--color-neutral-300)",
         chip: s.view === "audit" ? "var(--color-accent-900)" : "transparent",

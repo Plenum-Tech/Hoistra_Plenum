@@ -13,6 +13,7 @@ import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
 import { answerCards, hiddenFor } from './reportCards.js';
 import { ago, shapeSessionList, sessionIcon } from './sessions.js';
 import { memoriesPageVals } from './memoriesPage.js';
+import { skillLabVals } from './skillLabPage.js';
 import { tracesPageVals } from './tracesPage.js';
 import { correctionVals, railTurnIndex } from './corrections.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
@@ -1818,6 +1819,7 @@ export const renderValsMethods = {
       ...this.cronVals(),
       ...this.cronsPageVals(),
       ...memoriesPageVals(this),
+      ...skillLabVals(this),
       ...tracesPageVals(this),
       ...correctionVals(this),
       ...this.dmVals(),

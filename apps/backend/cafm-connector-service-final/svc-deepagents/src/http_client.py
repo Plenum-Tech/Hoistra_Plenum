@@ -227,6 +227,10 @@ async def request(
         httpx.HTTPStatusError: On 4xx or persistent 5xx after all attempts.
         httpx.TransportError:  On persistent connection/timeout failures.
     """
+    from .agents.replay_guard import READ_METHODS, ReplayRefusedWrite, is_replay
+    if is_replay() and str(method).upper() not in READ_METHODS:
+        # A skill-lab replay measures an answer; it never raises a work order or sends mail.
+        raise ReplayRefusedWrite(f"{method} {path} refused: this is a measurement replay")
     cb = _breaker(service)
 
     if service == "udr":

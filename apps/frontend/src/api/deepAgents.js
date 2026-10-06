@@ -85,6 +85,13 @@ export const deepAgentsApi = {
     { method: 'POST', body: body, query: orgOverride(), timeoutMs: 240000 }),
   // A teaching from the chat's correction drawer: remembered as a company correction.
   addMemory: (body) => apiFetch(B, '/api/memories', { method: 'POST', body: body, query: orgOverride(), timeoutMs: 12000 }),
+  // Skill lab (agents/skill_lab.py): instructions measured on replayed questions. Admin only.
+  skillLabRuns: () => apiFetch(B, '/api/skill-lab/runs', { query: orgOverride(), timeoutMs: 12000 }),
+  skillLabRun: (id) => apiFetch(B, '/api/skill-lab/runs/' + encodeURIComponent(id), { query: orgOverride(), timeoutMs: 15000 }),
+  skillLabStart: (body) => apiFetch(B, '/api/skill-lab/runs', { method: 'POST', body: Object.assign({}, body, orgOverride()), timeoutMs: 15000 }),
+  skillLabProposals: () => apiFetch(B, '/api/skill-lab/proposals', { timeoutMs: 12000 }),
+  skillLabReview: (id, decision) => apiFetch(B, '/api/skill-lab/proposals/' + encodeURIComponent(id) + '/' + decision, { method: 'POST', timeoutMs: 8000 }),
+  skillLabRevert: (skill, doc) => apiFetch(B, '/api/skill-lab/docs/' + encodeURIComponent(skill) + '/' + encodeURIComponent(doc) + '/revert', { method: 'POST', timeoutMs: 8000 }),
   traceExport: async (q) => {
     const params = new URLSearchParams(Object.assign({}, q || {}, orgOverride()));
     const res = await fetch(B + '/api/traces/export?' + params.toString(), { headers: { Authorization: 'Bearer ' + (accessToken() || '') } });
