@@ -161,6 +161,8 @@ from . import activity_log
 from . import contract_answer
 from . import llm_cost
 from .skills import fm_lens, prompt_doc
+from .context_budget import compact_context, make_hook as make_context_hook
+from ..services import skill_overlays
 from .migration_chooser import CHOICES as MIGRATION_CHOICES, CHOOSER_REPLY, is_bare_migration_request
 from .system_prompt import build_system_prompt
 from .udr_agent import (
@@ -853,11 +855,15 @@ class DeepAgentOrchestrator:
         self._model_id = model
         self._has_hitl = checkpointer is not None
         self._llm = create_chat_model(api_key=openai_api_key, model=model)
+        # The working context is self-managed (agents/context_budget.py): the model compacts
+        # tool results it has finished into notes; the old oldest-first trim stays inside the
+        # hook as the last resort, and is the whole behaviour with CONTEXT_SELF_MANAGE off.
         self._agent = create_react_agent(
             model=self._llm,
-            tools=ALL_TOOLS,
+            tools=[*ALL_TOOLS, compact_context],
             checkpointer=checkpointer,
-            pre_model_hook=_trim_history_hook,
+            pre_model_hook=make_context_hook(
+                agent="orchestrator", trim_max_tokens=settings.orchestrator_history_max_tokens),
         )
         init_meta_tools(openai_api_key=openai_api_key, model=model)
         log.info(
@@ -7300,6 +7306,8 @@ class DeepAgentOrchestrator:
         record_conversation_turn(session_id, "user", user_message)
         await chat_threads.record_question(session_id, user_message)
         session_state = get_session_state(session_id)
+        # Instruction rewrites an admin approved in the skill lab (services/skill_overlays.py).
+        await skill_overlays.refresh()
         msg_l = " ".join((user_message or "").strip().lower().split())
         route_intent = resolve_route_intent(msg_l, session_state, extra_context)
         if self._offers_migration_choice(user_message, extra_context, session_state):
@@ -7636,6 +7644,8 @@ class DeepAgentOrchestrator:
         await chat_threads.record_question(sid, user_message)
 
         session_state = get_session_state(sid)
+        # Instruction rewrites an admin approved in the skill lab (services/skill_overlays.py).
+        await skill_overlays.refresh()
         msg_l = " ".join((user_message or "").strip().lower().split())
         route_intent = resolve_route_intent(msg_l, session_state, extra_context)
         if self._offers_migration_choice(user_message, extra_context, session_state):

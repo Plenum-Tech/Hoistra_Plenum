@@ -16,6 +16,7 @@ import { queueLiveMethods } from './queueLive.js';
 import { cronMethods } from './crons.js';
 import { cronsPageMethods } from './cronsPage.js';
 import { memoriesPageMethods, memoriesPageVals } from './memoriesPage.js';
+import { skillLabMethods } from './skillLabPage.js';
 import { tracesPageMethods } from './tracesPage.js';
 import { correctionMethods } from './corrections.js';
 import { documentsRegisterMethods } from './documentsRegister.js';
@@ -328,4 +329,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, migrationMethods, emailHistoryMethods, renderValsMethods);

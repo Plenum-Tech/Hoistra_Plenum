@@ -130,7 +130,8 @@ def _title(question: str) -> str:
 async def record_question(session_id: str, question: str, *, building_id: str | None = None,
                           route: str | None = None) -> None:
     """The user's side of a turn: creates the thread on its first question."""
-    if not _ready or not session_id or not (question or "").strip():
+    from ..agents.replay_guard import is_replay
+    if not _ready or not session_id or not (question or "").strip() or is_replay():
         return
     p, org = _caller()
     if p is None:
@@ -169,6 +170,9 @@ async def record_answer(session_id: str, answer: str, *, tools: list | None = No
     answer twice (attach_route_to_result, then the closing write); when the newest turn already
     had it, the second write used to fill an OLDER unanswered turn (a stopped or gated one),
     putting this answer under a different question (found 5 Oct 2026). Now it is a no-op."""
+    from ..agents.replay_guard import is_replay
+    if is_replay():
+        return
     if not _ready or not session_id or not (answer or "").strip():
         return
     try:

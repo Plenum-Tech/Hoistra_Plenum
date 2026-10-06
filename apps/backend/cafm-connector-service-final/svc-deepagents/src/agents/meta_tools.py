@@ -36,6 +36,7 @@ from . import llm_cost
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+from .context_budget import compact_context, make_hook as make_context_hook
 
 log = structlog.get_logger(__name__)
 
@@ -400,8 +401,12 @@ class _TaskRunner:
                     check_requirements,
                     generate_compliance_report,
                     *COMPLIANCE_ENGINE_TOOLS,
+                    compact_context,
                 ],
                 prompt=agent_system_prompt("compliance", extra=COMPLIANCE_SUBAGENT_PROMPT),
+                # The compliance agent reads whole registers: measured 4.2 model calls and ~24k
+                # tokens of growth per question, up to 75k (agents/context_budget.py).
+                pre_model_hook=make_context_hook(agent="compliance", trim_max_tokens=None),
             ),
             "contract_performance": create_react_agent(
                 llm,

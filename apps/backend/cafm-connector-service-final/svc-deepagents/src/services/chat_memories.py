@@ -411,6 +411,9 @@ async def extract_and_store(session_id: str, question: str, answer: str, turn_no
 
 
 def learn_soon(session_id: str, question: str, answer: str, turn_no: int | None = None) -> None:
+    from ..agents.replay_guard import is_replay
+    if is_replay():  # a skill-lab replay's answer is not something the company said
+        return
     try:
         asyncio.get_running_loop().create_task(extract_and_store(session_id, question, answer, turn_no))
     except RuntimeError:

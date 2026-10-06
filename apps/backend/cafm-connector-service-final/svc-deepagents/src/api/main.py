@@ -34,6 +34,7 @@ from .routes.health import router as health_router
 from .routes.ingest_batch import router as ingest_batch_router
 from .routes.migration import router as migration_router
 from .routes.workflow import router as workflow_router
+from .routes.skill_lab import router as skill_lab_router
 from .routes.threads import router as threads_router
 from .routes.memories import router as memories_router
 from .routes.traces import router as traces_router
@@ -252,6 +253,7 @@ app.include_router(workflow_router)
 app.include_router(threads_router)
 app.include_router(memories_router)
 app.include_router(traces_router)
+app.include_router(skill_lab_router)
 app.include_router(ingest_batch_router)
 app.include_router(migration_router)
 app.include_router(documents_router)

@@ -265,6 +265,9 @@ async def record(
     turn_id: str | None = None,
 ) -> str | None:
     """Append one activity row. Returns the row id, or None when nothing was written."""
+    from .replay_guard import is_replay
+    if is_replay():
+        return None
     sid = session_id or _current_session.get()
     tid = thread_id or _current_thread.get() or sid
     turn = turn_id or _current_turn.get()
