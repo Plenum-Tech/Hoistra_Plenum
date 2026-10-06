@@ -157,7 +157,7 @@ export const maintenanceMethods = {
     }));
     const ps = m.ppmSummary;
     const mxPpmSummary = ps
-      ? N(ps.done) + " of " + N(ps.plan) + " planned visits done" + (ps.yearToDate ? " year to date" : "")
+      ? N(ps.done) + " of " + N(ps.plan) + " due visits done" + (ps.yearToDate ? " year to date" : "")
         + " · " + N(ps.missed) + " missed · " + N(ps.reports) + " reports on file · " + N(ps.deferred) + " deferrals"
       : live ? "No PPM visits on record for your buildings" : "Not loaded";
 

@@ -642,7 +642,7 @@ test('once the maintenance reads answer, the page is what they returned', () => 
   assert.equal(vals.mxPpm[0].state, 'behind plan');
   assert.equal(vals.mxPpm[0].missed, '4');
   assert.match(vals.mxPpm[0].deferrals, /2 deferred/);
-  assert.match(vals.mxPpmSummary, /12 of 18 planned visits done year to date/);
+  assert.match(vals.mxPpmSummary, /12 of 18 due visits done year to date/);
 
   // The filter row is what the backend says it holds, with counts.
   assert.deepEqual(vals.modFilters.map((f) => f.label), ['All', 'Blocked', 'Vendors']);
