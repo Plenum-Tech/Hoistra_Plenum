@@ -62,6 +62,26 @@ _SCHEMA = "plenum_cafm"
 _BUILDING_LINKED_TABLES = ("assets", "work_orders", "energy_meters", "building_sections",
                            "compliance_certificates")
 
+#: Company-wide master data: never filed under one building, even when the uploader selected one.
+#: The chat's building filter checks building_id first, so a vendor tagged with one building would
+#: vanish for every colleague allocated to another; a building or a user is not "in" a building.
+_COMPANY_WIDE_TABLES = frozenset({
+    "organizations", "buildings", "sites", "locations", "users", "roles", "permissions",
+    "user_roles", "role_permissions", "technicians", "vendors", "vendor_contacts",
+    "asset_categories",
+})
+
+
+def files_under_building(table: str, default_building: str | None) -> bool:
+    """Whether rows written to ``table`` carry a building_id. The five tables that always did,
+    and - when the uploader selected a building (6 Oct 2026) - every other table that is not
+    company-wide master data, a brand-new one included: a petty-cash sheet uploaded for
+    Bishopsgate is Bishopsgate's petty cash."""
+    t = str(table or "").lower()
+    if t in _BUILDING_LINKED_TABLES:
+        return True
+    return bool(default_building) and t not in _COMPANY_WIDE_TABLES
+
 #: Tables whose rows are READ for a building reference. meter_readings does not carry a
 #: building column of its own, but a reading sheet often names the site, and that is what
 #: decides whether a meter can be created for it.
@@ -187,9 +207,15 @@ def _build_migration_ddl_statements(
             col_defs = [f"    {pk_col} {_pk_custom.get('data_type', 'TEXT')} PRIMARY KEY"]
         else:
             col_defs = [f"    {pk_col} UUID PRIMARY KEY DEFAULT gen_random_uuid()"]
+        # Every table a migration creates says whose rows they are and where they belong
+        # (6 Oct 2026): without these a new table was readable by no company filter and
+        # placed in no building. A source column of the same name is not emitted again; the
+        # writer resolves a building name in the sheet into building_id.
+        col_defs.append("    organization_id UUID")
+        col_defs.append("    building_id UUID")
         # Case-insensitive collision guard; created_at/updated_at are appended below,
         # so reserve them too (a source column of the same name must not be re-emitted).
-        seen_lower: set[str] = {pk_lower, "created_at", "updated_at"}
+        seen_lower: set[str] = {pk_lower, "created_at", "updated_at", "organization_id", "building_id"}
         total_data_cols = 0
 
         # Include ALL T1+T2+human-mapped columns from the same source sheet.
@@ -397,6 +423,10 @@ async def write_node(state: MigrationState) -> MigrationState:
         sql_script = (state.get("output_sql_script") or "").strip()
         _routed = {str(v).lower() for v in (state.get("table_routing") or {}).values()}
         _needs = _routed & _NEEDS_RESOLUTION
+        if state.get("building_id"):
+            # A building selected at upload is applied to every table the file writes to, and
+            # only the schema-aligned path applies it: the SQL artifact writes literals.
+            _needs = set(_routed)
         # The schema-aligned path is the ONLY one that resolves a building from a site name or
         # a meter from a supply number, so for these tables it is chosen rather than reached.
         #
@@ -2145,10 +2175,18 @@ async def _apply_records_with_schema_alignment(
                 # Collect missing columns from normalized records and add them to DB first.
                 missing_columns: dict[str, str] = {}
                 normalized_records: list[dict] = []
+                # Filed under a building: the table gets the column before any row is written,
+                # and every row its building. A company column too, where a table made by an
+                # earlier migration has none - nothing would otherwise say whose rows they are.
+                _link = files_under_building(safe_table, _default_building)
+                if _link and "building_id" not in db_cols:
+                    missing_columns["building_id"] = "UUID"
+                if _link and "organization_id" not in db_cols and effective_org_id:
+                    missing_columns["organization_id"] = "UUID"
                 for row in records:
                     if not isinstance(row, dict):
                         continue
-                    _hint = building_hint(row) if safe_table in _BUILDING_HINT_TABLES else None
+                    _hint = building_hint(row) if (safe_table in _BUILDING_HINT_TABLES or _link) else None
                     normalized = _normalize_row_for_table(
                         safe_table, row, effective_org_id
                     )
@@ -2164,7 +2202,7 @@ async def _apply_records_with_schema_alignment(
                     # The building link. A hint that resolves becomes building_id; one that does
                     # not is removed rather than written into a UUID column as text. A work order
                     # with no hint of its own takes its asset's building.
-                    if safe_table in _BUILDING_LINKED_TABLES and "building_id" in db_cols \
+                    if _link and ("building_id" in db_cols or "building_id" in missing_columns) \
                             and not looks_like_uuid(safe_row.get("building_id")):
                         _bid = await _buildings.resolve(_hint) if _hint else None
                         if not _bid and safe_table in _BUILDING_VIA_ASSET_TABLES:
@@ -2288,8 +2326,9 @@ async def _apply_records_with_schema_alignment(
                         str(c).lower()
                         for c in (approved_new_columns or {}).get(safe_table, set())
                     }
-                    _keep = {c: t for c, t in missing_columns.items() if c.lower() in _approved}
-                    _drop = {c: t for c, t in missing_columns.items() if c.lower() not in _approved}
+                    _system = {"building_id", "organization_id"}
+                    _keep = {c: t for c, t in missing_columns.items() if c.lower() in _approved or c.lower() in _system}
+                    _drop = {c: t for c, t in missing_columns.items() if c.lower() not in _approved and c.lower() not in _system}
                     if _drop:
                         logger.warning(
                             f"[Node 9] Dropping {len(_drop)} unknown column(s) "
