@@ -891,6 +891,43 @@ async def list_energy_buildings(limit: int = 500) -> dict:
 
 
 @tool
+async def get_hoist_score() -> dict:
+    """C — The Hoist Score: the figure on the Home page's Hoist Score tile, and each building's.
+
+    Use for "what is the hoist score", "hoist score of each building", "how complete is the
+    platform", "what would raise the score". Returns:
+
+    - ``home_tile`` - the number the Home tile shows: the mean of its FOUR bars (contracts,
+      assets, meter consent, certificates), each bar the share of hoisted buildings with that
+      kind of record. (0 + 25 + 25 + 75) / 4 = 31 for a portfolio of four buildings where one has
+      an asset register, one a meter, three a certificate and none a contract;
+    - ``bars`` - all five kinds with ``covered`` of ``of`` buildings and the buildings missing it;
+    - ``rows`` - each building's own score: 20 points for each of the five kinds on record
+      (assets, compliance, contracts, energy, maintenance), with covered and missing;
+    - ``score`` - the mean of the per-building scores over all five, what the Buildings page
+      column averages to. It differs from ``home_tile`` because maintenance is counted.
+
+    Quote the Home figure as the Hoist Score and say which bars hold it down. Never read the
+    ``buildings.hoist_score`` column for this: it is a recorded override and is usually empty.
+    """
+    try:
+        resp = await _request("GET", _base(), "/api/energy/hoist-score", service=_SERVICE,
+                              timeout=_TIMEOUT, params={"include_rows": "true"})
+        out = resp.json()
+    except Exception as exc:
+        return _err(exc, "get_hoist_score")
+    if isinstance(out, dict):
+        bars = [d for d in (out.get("domains") or []) if isinstance(d, dict)]
+        drawn = [d["pct"] for d in bars
+                 if d.get("key") in ("contracts", "assets", "energy", "compliance")
+                 and isinstance(d.get("pct"), (int, float))]
+        out["home_tile"] = int(round(sum(drawn) / len(drawn))) if drawn else None
+        out["bars"] = bars
+        out.pop("domains", None)
+    return out
+
+
+@tool
 async def get_building_cost_drivers(building_id: str, limit: int = 25) -> dict:
     """C — What is actually costing money in one building, ranked. The "Investigate building"
     view.
@@ -1348,6 +1385,7 @@ ENERGY_INTELLIGENCE_TOOLS = [
     get_operating_hours,
     get_market_profiles,
     list_energy_buildings,
+    get_hoist_score,
     get_building_cost_drivers,
     get_anomaly_rollup,
     get_statutory_duties,

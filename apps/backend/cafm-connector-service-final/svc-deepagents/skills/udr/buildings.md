@@ -19,6 +19,11 @@ file.** A column that is not on the card is not in this deployment.
 
 ## 1. The tables
 
+> `buildings.hoist_score` is a recorded override and is usually empty. The Hoist Score itself is
+> derived (assets, compliance, contracts, energy, maintenance on file, 20 points each) and comes from
+> the energy agent's `get_hoist_score`. Never report a building's score as "not recorded"
+> because this column is empty.
+
 | Table | Grain | Key | What to read |
 |-------|-------|-----|--------------|
 | `buildings` | one building | `building_id` (uuid; **there is no `id` column**) | `building_code` ("B-301"), `name`, `primary_use` (an enum; cast with `::text`), `floors` (int, the recorded count), `gross_area_sqft`, `gross_internal_area_m2` (**varchar**; cast with `NULLIF(…,'')::numeric`), `eui_kwh_m2` (often null), `hoist_score`, `country_code`, `organization_id`, `site_id` (text, links to `sites`) |
