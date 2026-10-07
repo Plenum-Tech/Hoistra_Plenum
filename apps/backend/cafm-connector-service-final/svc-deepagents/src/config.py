@@ -207,6 +207,12 @@ class Settings(BaseSettings):
         24000,
         validation_alias=AliasChoices("CONTEXT_BUDGET_TOKENS"),
     )
+    # The compliance analyst reads the register as a digest (agents/register_digest.py): rows
+    # needing attention in full, every other certificate one line. Off sends every row in full.
+    compliance_register_digest: bool = Field(
+        True,
+        validation_alias=AliasChoices("COMPLIANCE_REGISTER_DIGEST"),
+    )
     # Off restores the old behaviour exactly: oldest messages trimmed, nothing compacted.
     context_self_manage: bool = Field(
         True,

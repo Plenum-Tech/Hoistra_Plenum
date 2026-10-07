@@ -162,6 +162,7 @@ from . import contract_answer
 from . import llm_cost
 from .skills import fm_lens, prompt_doc
 from .context_budget import compact_context, make_hook as make_context_hook
+from . import register_digest
 from ..services import skill_overlays
 from .migration_chooser import CHOICES as MIGRATION_CHOICES, CHOOSER_REPLY, is_bare_migration_request
 from .system_prompt import build_system_prompt
@@ -611,6 +612,15 @@ def _latest_user_message(input_: Any) -> str:
         if isinstance(message, HumanMessage) and isinstance(message.content, str):
             return message.content
     return ""
+
+
+def _register_digest_on() -> bool:
+    """The analyst reads the register digested (agents/register_digest.py) unless it is switched
+    off, or a Skill lab reference replay (context mode "trim") asks for the old pipeline whole."""
+    from .context_budget import MODE
+    if MODE.get() == "trim":
+        return False
+    return bool(getattr(settings, "compliance_register_digest", True))
 
 
 def _trim_history_hook(state: dict[str, Any]) -> dict[str, Any]:
@@ -2075,6 +2085,7 @@ class DeepAgentOrchestrator:
         so the omission is visible rather than inferred.
         """
         blocks: list[dict[str, Any]] = []
+        digest_on = _register_digest_on()
         for tc in tool_calls:
             if tc.get("tool") == "compliance_response":
                 continue  # our own typed output — never feed it back in
@@ -2091,6 +2102,9 @@ class DeepAgentOrchestrator:
                         ]
                         if tc.get("tool") == "list_country_pack" and key == "types":
                             rows = self._compact_pack_types(rows)
+                        elif digest_on:
+                            # Every certificate, sized by need (agents/register_digest.py).
+                            rows = register_digest.maybe_digest(rows)
                         pruned[key] = rows
                     else:
                         pruned[key] = value
