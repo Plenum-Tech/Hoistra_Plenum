@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, and_, cast, column, exists, func, or_, select, table
+from sqlalchemy import String, and_, cast, column, exists, func, or_, select, table, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
@@ -685,6 +685,59 @@ async def sent_email_history(
     return out
 
 
+_VENDOR_ROW = (
+    "SELECT v.id::text AS id, v.vendor_name, to_jsonb(v)->>'organization_id' AS organization_id"
+    " FROM plenum_cafm.vendors v WHERE v.id::text = :vid{scope} LIMIT 1"
+)
+
+
+async def vendor_contact(
+    session: AsyncSession,
+    *,
+    vendor_id: str | None,
+    organization_id: UUID | None,
+    building_ids: tuple[UUID, ...] | None,
+    is_superadmin: bool = False,
+) -> dict[str, Any]:
+    """Where a draft to this vendor may be sent — the Decision queue's drafts fill their To line
+    from it, and they are sent for real.
+
+    The address is the one ``vendor_contacts`` gives the Assets drafts: the primary contact, or
+    the only one; several and none marked primary is no address and the candidates, for the
+    reader to choose from. Reads only. A vendor in another company — or one whose row names no
+    company, which cannot be shown to be the caller's — answers exactly like a vendor that does
+    not exist, and so does one with no footprint on the buildings a restricted user may see.
+    """
+    from ..engines.auth import access
+    from ..engines.energy import asset_intelligence as ai  # local: avoids an import cycle
+
+    vid = str(vendor_id or "").strip()
+    # No company in scope is not "every company": only a superadmin reads across companies.
+    if not vid or (organization_id is None and not is_superadmin):
+        return {"ok": False, "reason": "not_found"}
+    scope_sql, params = access.vendor_predicate(building_ids, "v.id", prefix="vc")
+    try:
+        async with session.begin_nested():
+            row = (await session.execute(
+                text(_VENDOR_ROW.format(scope=scope_sql)), {"vid": vid, **params},
+            )).mappings().first()
+    except Exception as exc:  # noqa: BLE001 — a read that failed is not a vendor that is missing
+        log.warning("approvals.vendor_contact_unreadable", error=str(exc)[:200])
+        return {"ok": False, "reason": "unreadable"}
+    if not row:
+        return {"ok": False, "reason": "not_found"}
+    if organization_id is not None and str(row.get("organization_id") or "") != str(organization_id):
+        return {"ok": False, "reason": "not_found"}
+    found = await ai.vendor_contacts(session, row["id"])
+    return {
+        "ok": True,
+        "vendor": {"id": row["id"], "name": row.get("vendor_name")},
+        "email": found["email"],
+        "candidates": found["candidates"],
+        "written": False,
+    }
+
+
 async def send_platform_email(
     session: AsyncSession,
     *,
@@ -896,6 +949,14 @@ async def send_approval_email_draft(
     item = None
     if queue_item_id:
         item = await session.get(ApprovalsQueueItem, queue_item_id)
+        # The item is looked up by id alone, and what follows writes the recipient and the
+        # "sent" marks onto it and its siblings — so an id from another company is refused
+        # here, before anything is written or sent, rather than recorded against that company.
+        # An item naming no company is refused to a company too: its queue lists only items
+        # carrying its id, so such an item was never on its screen.
+        if (item is not None and org_id is not None
+                and str(item.organization_id or "") != str(org_id)):
+            return {"ok": False, "error": "That queue item is not in your company."}
         if item:
             org_id = org_id or item.organization_id
             # Persist chosen recipient on the draft for audit
@@ -1020,12 +1081,15 @@ async def send_approval_email_draft(
         )
         # Sync siblings (confirm + ladder) for same certificate so Bell Review state matches
         if item.related_entity_id is not None:
+            # Inside the item's own company: a vendor row is not always one company's, and
+            # this marks every sibling it finds as sent to this company's recipient.
             siblings = (
                 await session.execute(
                     select(ApprovalsQueueItem).where(
                         ApprovalsQueueItem.status == "pending",
                         ApprovalsQueueItem.related_entity_type == item.related_entity_type,
                         ApprovalsQueueItem.related_entity_id == item.related_entity_id,
+                        ApprovalsQueueItem.organization_id == item.organization_id,
                         ApprovalsQueueItem.id != item.id,
                     )
                 )

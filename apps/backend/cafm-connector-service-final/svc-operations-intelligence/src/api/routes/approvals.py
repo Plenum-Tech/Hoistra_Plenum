@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,6 +72,35 @@ async def sent_emails(
     "Reminder: " copies); the body is never returned - the log holds what went out."""
     org_id = access.organization_for(s, organization_id)
     return await approvals_svc.sent_email_history(session, subject=subject, organization_id=org_id)
+
+
+@router.get("/vendor-contact")
+async def vendor_contact(
+    vendor_id: str = Query(..., min_length=1, max_length=100),
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+) -> dict[str, Any]:
+    """Where a draft to this vendor may be sent: its primary contact, or its only one. Several
+    and none marked primary is no address, with the candidates for the reader to choose from -
+    never a guess, because the Decision queue's drafts are sent for real. Reads only.
+
+    404 for a vendor outside the caller's company (or, for a user restricted to some buildings,
+    one with no footprint on them); 503 when the vendor record could not be read just now."""
+    org_id = access.organization_for(s, organization_id)
+    out = await approvals_svc.vendor_contact(
+        session, vendor_id=vendor_id, organization_id=org_id, building_ids=s.building_ids,
+        is_superadmin=s.is_superadmin,
+    )
+    if not out.get("ok"):
+        unreadable = out.get("reason") == "unreadable"
+        raise HTTPException(status_code=503 if unreadable else 404, detail={
+            "ok": False,
+            "error": ("The vendor record could not be read just now." if unreadable
+                      else "No such vendor in your company."),
+            "reason": out.get("reason") or "not_found",
+        })
+    return out
 
 
 @router.post("/send-email")
