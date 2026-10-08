@@ -1780,6 +1780,55 @@ class DeepAgentOrchestrator:
         joiner = " OR " if str(logic).lower() == "or" else " AND "
         return "(" + joiner.join(parts) + ")", params
 
+    #: raw_metadata flags whose rows operations-intelligence leaves off the compliance page
+    #: (engines/compliance/certificates.py list_certificates), so the chat counts what it counts.
+    _PAGE_HIDDEN_FLAGS = ("a1_test_fixture", "superseded_duplicate", "archived")
+
+    @staticmethod
+    def _caller_company() -> str | None:
+        """The company this turn reads for: a superadmin's view-as company, else the caller's
+        own - the one the HTTP path reads - in the form uuid::text prints. An id named in
+        capitals, or a stray "None", would otherwise match nothing and read as empty."""
+        from ..http_client import caller_organization_id
+        from ..services.principal import caller_principal
+
+        p = caller_principal.get()
+        org = caller_organization_id.get() or (
+            str(p.organization_id) if p and p.organization_id else None
+        )
+        try:
+            return str(uuid.UUID(str(org))) if org else None
+        except ValueError:
+            return None
+
+    async def _company_clause(self, alias: str = "c") -> tuple[str, dict[str, Any]]:
+        """The caller's company, and the rows the compliance page hides, as a SQL condition.
+
+        The direct register read had no company filter: anyone the building rule does not
+        narrow - every admin and superadmin - read every company's certificates. It went
+        unnoticed only because on hoistra_test the read failed on every question and the
+        HTTP fallback, which operations-intelligence scopes, answered instead (7 Oct 2026).
+        The company is the one the HTTP path reads: a superadmin's view-as company, else the
+        caller's own. With no company, or no company column to match it on, this raises and
+        nothing is read, so the scoped fallback answers.
+        """
+        org = self._caller_company()
+        if not org:
+            raise RuntimeError("no company to scope the compliance register to")
+        allow = await self._compliance_column_allowlist()
+        # Text on both sides, like the joins: the column types differ between databases.
+        cols = [c for c in ("organization_id", "org_id") if c in allow]
+        if not cols:
+            raise RuntimeError("the compliance register has no company column")
+        sql = "(" + " OR ".join(f"{alias}.{c}::text = :scope_org" for c in cols) + ")"
+        if "raw_metadata" in allow:
+            for flag in self._PAGE_HIDDEN_FLAGS:
+                sql += (
+                    f" AND lower(COALESCE({alias}.raw_metadata->>'{flag}', ''))"
+                    " IN ('', 'false', '0', 'null')"
+                )
+        return sql, {"scope_org": str(org)}
+
     async def _fetch_compliance_table_direct(
         self,
         limit: int = 1000,
@@ -1810,6 +1859,8 @@ class DeepAgentOrchestrator:
 
         from .. import database
 
+        # The caller's company first: with none, nothing below is read (_company_clause).
+        company_sql, company_params = await self._company_clause("c")
         if database.AsyncSessionLocal is None:
             database.init_session_factory()
 
@@ -1838,19 +1889,20 @@ class DeepAgentOrchestrator:
                    d.status                   AS source_document_status,
                    d.eval_score               AS source_document_eval_score
             FROM plenum_cafm.compliance_certificates c
-            -- NOTE: the vendor_id / site_id / asset_id columns are uuid, but vendors.id,
-            -- sites.id and assets.id are varchar/text, so these joins must compare as text.
-            -- document_id and location_id already match their targets.
+            -- NOTE: every join compares as text on BOTH sides. The id types differ between
+            -- databases - vendors.id is varchar on production and uuid on hoistra_test - so
+            -- a join written for one fails on the other ("operator does not exist: uuid =
+            -- text"), and on hoistra_test this read failed on every question (7 Oct 2026).
             -- A building certificate's site link is site_id when the sites table is
             -- UUID-keyed and site_ref when it is not, so the join reads both; and the
             -- certificate's own building_name stands in as the site name when neither
             -- resolves, so a building certificate always says which building it is for.
             -- (No curly braces in this template outside the format placeholders below.)
-            LEFT JOIN plenum_cafm.vendors             v ON v.id = c.vendor_id::text
-            LEFT JOIN plenum_cafm.sites               s ON s.id = COALESCE(c.site_id::text, c.site_ref)
-            LEFT JOIN plenum_cafm.assets              a ON a.id = c.asset_id::text
-            LEFT JOIN plenum_cafm.locations           l ON l.id = a.location_id
-            LEFT JOIN plenum_cafm.ingestion_documents d ON d.id = c.document_id
+            LEFT JOIN plenum_cafm.vendors             v ON v.id::text = c.vendor_id::text
+            LEFT JOIN plenum_cafm.sites               s ON s.id::text = COALESCE(c.site_id::text, c.site_ref)
+            LEFT JOIN plenum_cafm.assets              a ON a.id::text = c.asset_id::text
+            LEFT JOIN plenum_cafm.locations           l ON l.id::text = a.location_id::text
+            LEFT JOIN plenum_cafm.ingestion_documents d ON d.id::text = c.document_id::text
             {where}
             ORDER BY {sort}
             LIMIT :limit
@@ -1879,16 +1931,17 @@ class DeepAgentOrchestrator:
                 direction = "DESC" if str(sort.get("dir")).lower() == "desc" else "ASC"
                 sort_sql = f"c.{sfield} {direction} NULLS LAST"
 
-        # The caller's buildings, appended after whatever the model asked for: building
-        # certificates on their buildings plus vendor accreditations, the rule the compliance
-        # list applies upstream. The model cannot widen this — it is not part of the spec.
+        # The caller's company and buildings, appended after whatever the model asked for:
+        # building certificates on their buildings plus vendor accreditations, the rule the
+        # compliance list applies upstream. The model cannot widen this — it is not part of
+        # the spec.
         from ..services.principal import certificate_clause
 
         bsql, bparams = certificate_clause("c")
-        if bsql:
-            where_sql = (where_sql + bsql) if where_sql else "WHERE " + bsql[len(" AND "):]
+        scope_sql = " AND " + company_sql + bsql
+        where_sql = (where_sql + scope_sql) if where_sql else "WHERE " + scope_sql[len(" AND "):]
         sql = _sql(sql_template.format(where=where_sql, sort=sort_sql))
-        params: dict[str, Any] = {"limit": limit, **where_params, **bparams}
+        params: dict[str, Any] = {"limit": limit, **where_params, **bparams, **company_params}
         async with database.AsyncSessionLocal() as session:
             result = await session.execute(sql, params)
             raw_rows = [dict(r) for r in result.mappings().all()]
@@ -2075,9 +2128,16 @@ class DeepAgentOrchestrator:
         so the omission is visible rather than inferred.
         """
         blocks: list[dict[str, Any]] = []
+        # Which blocks are a read narrowed to what the question asked (_ENGINE_FOCUS_KEYS on
+        # its input): those are the answer and the unfiltered reads are context, so they are
+        # shed last. Without this the fallback's vendor list, read before the building list,
+        # was the first thing cut, and two of five blocked vendors never reached the analyst.
+        asked: list[bool] = []
         for tc in tool_calls:
             if tc.get("tool") == "compliance_response":
                 continue  # our own typed output — never feed it back in
+            tin = tc.get("input")
+            asked.append(isinstance(tin, dict) and bool(self._ENGINE_FOCUS_KEYS & set(tin)))
             out = tc.get("output")
             payload = out
             if isinstance(out, dict) and isinstance(out.get("result"), dict):
@@ -2107,7 +2167,7 @@ class DeepAgentOrchestrator:
         priority = self._BLOCK_PRIORITY_TAXONOMY if taxonomy else {}
         order = sorted(
             range(len(blocks)),
-            key=lambda i: -priority.get(str(blocks[i].get("source")), 50),
+            key=lambda i: (-priority.get(str(blocks[i].get("source")), 50), asked[i]),
         )
         dropped: list[str] = []
         for idx in order:
@@ -3098,6 +3158,109 @@ class DeepAgentOrchestrator:
         out = [s_.title() for s_ in ("building", "vendor") if s_ in found]
         return tuple(out) or ("Building", "Vendor")
 
+    #: The engine-tool arguments that narrow a register read to what the question asked.
+    _ENGINE_FOCUS_KEYS = frozenset({"risk_filter", "status"})
+
+    @staticmethod
+    def _engine_tool_focus(plan: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+        """The plan's filters as engine-tool arguments, per register ("vendor", "building").
+
+        The engine-tool fallback used to read the first 200 rows of each register whatever
+        the question, so "Which vendors are blocked right now?" named the blocked vendors that
+        happened to be among them - three of five on 7 Oct 2026. Only exact equivalents are
+        mapped, and each is a superset of what the plan asked for (the engine's "blocked" also
+        keeps lapsed accreditations, its status match is lenient). A register is narrowed only
+        when every sub-question that reads it asks for the same narrowing with AND logic;
+        anything else keeps the whole register, which is the old behaviour.
+        """
+        asks: dict[str, list[dict[str, str]]] = {"vendor": [], "building": []}
+        for sq in (plan or {}).get("sub_questions") or []:
+            if not isinstance(sq, dict):
+                continue
+            query = sq.get("query") if isinstance(sq.get("query"), dict) else {}
+            scope = str(query.get("scope") or "").strip().lower()
+            either_or = str(query.get("logic") or "and").strip().lower() != "and"
+            for register in ((scope,) if scope in asks else tuple(asks)):
+                args: dict[str, str] = {}
+                for f in [] if either_or else (query.get("filters") or []):
+                    if not isinstance(f, dict) or str(f.get("op") or "").lower() != "eq":
+                        continue
+                    field = str(f.get("field") or "").strip().lower()
+                    value = str(f.get("value") or "").strip()
+                    # Vendor register only: on building certificates the engine's blocked
+                    # filter keeps lapsed ones, not the ones a blocked vendor signed.
+                    if field == "vendor_block_state" and value.lower() == "blocked" and register == "vendor":
+                        args["risk_filter"] = "blocked"
+                    elif field == "status" and value:
+                        args["status"] = value
+                asks[register].append(args)
+        return {
+            register: wanted[0]
+            for register, wanted in asks.items()
+            if wanted and wanted[0] and all(a == wanted[0] for a in wanted)
+        }
+
+    async def _register_via_engine_tools(
+        self, plan: dict[str, Any] | None, relaxed_notes: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """The register through the compliance engine tools, for when the direct read failed.
+
+        Each register is read with the plan's own filters where the engine can apply them
+        (_engine_tool_focus), so the rows the question asked for arrive whole instead of as
+        whatever of the first 200 survived the context budget. A narrowed read that finds
+        nothing is that register's answer, kept empty - unless every narrowed read found
+        nothing: then each is followed by its whole register and declared in relaxed_notes,
+        the way the direct path declares a widened filter, so the analyst answers "none" with
+        its evidence. Declaring "none" while another register's narrowed rows are in the
+        payload told the analyst the opposite of what it was looking at. A narrowed read that
+        fails is followed by the whole register without any claim.
+        """
+        from .compliance_engine_agent import (
+            get_compliance_saved_space_summary,
+            list_building_certificates,
+            list_vendor_accreditations,
+        )
+
+        focus = self._engine_tool_focus(plan)
+        summary = await get_compliance_saved_space_summary.ainvoke({})
+        tool_calls: list[dict[str, Any]] = [
+            {"tool": "get_compliance_saved_space_summary", "input": {}, "output": summary}
+        ]
+        reads: list[dict[str, Any]] = []
+        empty: list[dict[str, Any]] = []
+        for register, name, tool in (
+            ("vendor", "list_vendor_accreditations", list_vendor_accreditations),
+            ("building", "list_building_certificates", list_building_certificates),
+        ):
+            args: dict[str, Any] = {"limit": 200, **focus.get(register, {})}
+            out = await tool.ainvoke(args)
+            read = {"tool": name, "input": args, "output": out, "_register": register, "_tool": tool}
+            if len(args) > 1:
+                rows = out.get("certificates") if isinstance(out, dict) else None
+                if not isinstance(rows, list):
+                    read["input"] = {"limit": 200}
+                    read["output"] = await tool.ainvoke(read["input"])
+                elif not rows:
+                    empty.append(read)
+            reads.append(read)
+        narrowed = [r for r in reads if len(r["input"]) > 1]
+        if empty and len(empty) == len(narrowed):
+            for read in empty:
+                relaxed_notes.append(
+                    {
+                        "dropped": ", ".join(
+                            f"{k} {v}" for k, v in read["input"].items() if k != "limit"
+                        ),
+                        "kept": [f"cert_scope eq {read['_register']}"],
+                        "reason": "the engine found no row for the narrowed read",
+                    }
+                )
+                read["input"] = {"limit": 200}
+                read["output"] = await read["_tool"].ainvoke(read["input"])
+        for read in reads:
+            tool_calls.append({"tool": read["tool"], "input": read["input"], "output": read["output"]})
+        return tool_calls
+
     @staticmethod
     def _missing_type_offers(
         tool_calls: list[dict[str, Any]],
@@ -3313,25 +3476,34 @@ class DeepAgentOrchestrator:
 
         from .. import database
 
+        # The caller's company, as the register is read (_company_clause): the building rule
+        # alone narrows nobody above a plain user, so an admin was handed every company's open
+        # work orders. With no company, or no company column, the extra is skipped, not widened.
+        org = self._caller_company()
+        if not org:
+            raise RuntimeError("no company to scope the open work orders to")
         if database.AsyncSessionLocal is None:
             database.init_session_factory()
-        from ..services.principal import building_clause
+        from ..services import principal as _principal
 
-        bsql, bparams = building_clause("building_id")
-        sql = _sql(
-            f"""
-            SELECT id::text, work_order_id, title, status, priority, scheduled_date,
-                   vendor_id::text AS vendor_id,
-                   COALESCE(assigned_vendor, vendor) AS vendor_name,
-                   asset, location, site_id::text AS site_id
-            FROM plenum_cafm.work_orders
-            WHERE status IN ('Open','InProgress','In Progress','pending_approval'){bsql}
-            ORDER BY scheduled_date ASC NULLS LAST
-            LIMIT :limit
-            """
-        )
+        bsql, bparams = _principal.building_clause("building_id")
         async with database.AsyncSessionLocal() as session:
-            result = await session.execute(sql, {"limit": limit, **bparams})
+            if "organization_id" not in await _principal.table_columns(session, "work_orders"):
+                raise RuntimeError("work_orders has no company column to scope by")
+            sql = _sql(
+                f"""
+                SELECT id::text, work_order_id, title, status, priority, scheduled_date,
+                       vendor_id::text AS vendor_id,
+                       COALESCE(assigned_vendor, vendor) AS vendor_name,
+                       asset, location, site_id::text AS site_id
+                FROM plenum_cafm.work_orders
+                WHERE status IN ('Open','InProgress','In Progress','pending_approval')
+                  AND organization_id::text = :scope_org{bsql}
+                ORDER BY scheduled_date ASC NULLS LAST
+                LIMIT :limit
+                """
+            )
+            result = await session.execute(sql, {"limit": limit, "scope_org": org, **bparams})
             return [dict(r) for r in result.mappings().all()]
 
     @staticmethod
@@ -4738,11 +4910,7 @@ class DeepAgentOrchestrator:
             return None
 
         from .compliance_answer import build_deterministic_compliance_answer
-        from .compliance_engine_agent import (
-            get_compliance_saved_space_summary,
-            list_building_certificates,
-            list_vendor_accreditations,
-        )
+        from .compliance_engine_agent import get_compliance_saved_space_summary
 
         # Scope: honour an explicit vendor/building ask; otherwise cover both. Forgery questions
         # always span both levels so they can be split out.
@@ -5042,31 +5210,9 @@ class DeepAgentOrchestrator:
             source = "engine_tools"
             fetched_rows = []
             tool_calls = []
+            relaxed_notes = []
             try:
-                summary = await get_compliance_saved_space_summary.ainvoke({})
-                tool_calls.append(
-                    {
-                        "tool": "get_compliance_saved_space_summary",
-                        "input": {},
-                        "output": summary,
-                    }
-                )
-                vendors = await list_vendor_accreditations.ainvoke({"limit": 200})
-                tool_calls.append(
-                    {
-                        "tool": "list_vendor_accreditations",
-                        "input": {"limit": 200},
-                        "output": vendors,
-                    }
-                )
-                buildings = await list_building_certificates.ainvoke({"limit": 200})
-                tool_calls.append(
-                    {
-                        "tool": "list_building_certificates",
-                        "input": {"limit": 200},
-                        "output": buildings,
-                    }
-                )
+                tool_calls = await self._register_via_engine_tools(plan, relaxed_notes)
             except Exception as texc:  # noqa: BLE001
                 log.warning(
                     "orchestrator.compliance.posture_shortcut_failed",
