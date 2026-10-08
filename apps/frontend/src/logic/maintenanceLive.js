@@ -335,13 +335,13 @@ export function shapeLiveMaintenance(input, account, actingName) {
 // can see rather than the key it happens to be stored under.
 const READS = ['overview', 'decisions', 'intelligence', 'ppm', 'lastRead', 'inspections', 'chips'];
 const READ_LABEL = {
-  overview: '/maintenance/overview',
-  decisions: '/maintenance/decisions',
-  intelligence: '/maintenance/inspection-intelligence',
-  ppm: '/maintenance/ppm/contracts',
-  lastRead: '/maintenance/inspection-intelligence/last-read',
-  inspections: '/maintenance/inspections',
-  chips: '/maintenance/ask/suggestions'
+  overview: 'Overview',
+  decisions: 'Decisions',
+  intelligence: 'Inspection intelligence',
+  ppm: 'PPM contracts',
+  lastRead: 'Last inspection read',
+  inspections: 'Inspections',
+  chips: 'Suggested questions'
 };
 
 export const maintenanceLiveMethods = {
@@ -450,10 +450,10 @@ export const maintenanceLiveMethods = {
     return {
       mxLiveOn: m.live,
       mxLiveSourceLabel: m.live
-        ? 'Live · svc-work-order-management'
-          + (skew ? ' · ' + missing.length + ' routes not deployed'
+        ? 'Live'
+          + (skew ? ' · ' + missing.length + ' reads not available yet'
             : failed.length ? ' · ' + failed.length + ' of ' + total + ' reads failed' : '')
-        : s.mxLiveLoading ? 'Reading svc-work-order-management…'
+        : s.mxLiveLoading ? 'Reading…'
         : 'No data · maintenance backend unreachable',
       mxLiveSourceDot: m.live ? (failed.length ? 'var(--st-warn)' : 'var(--st-ok)')
         : s.mxLiveLoading ? 'var(--color-neutral-500)' : 'var(--st-warn)',
@@ -473,23 +473,22 @@ export const maintenanceLiveMethods = {
         : '',
       mxSkewShow: skew ? 'block' : 'none',
       mxSkewNote: skew
-        ? 'svc-work-order-management is running a build older than this page: '
-          + missing.length + (missing.length === 1 ? ' route it reads is' : ' routes it reads are')
-          + ' not deployed (' + missing.map(label).join(', ') + '). '
-          + 'The panels they fill are blank until the service is rebuilt from the current source — retrying will not change it.'
+        ? 'Part of this page is not available yet: '
+          + missing.length + (missing.length === 1 ? ' read it needs is' : ' reads it needs are')
+          + ' missing (' + missing.map(label).join(', ') + '). '
+          + 'The panels they fill stay blank until those reads are available — retrying will not change it. Contact support if it persists.'
         : '',
       // The whole page empty, as opposed to one panel of it.
       mxEmptyShow: m.live ? 'none' : 'block',
       mxBodyShow: m.live ? 'block' : 'none',
       mxEmptyTitle: s.mxLiveLoading ? 'Reading the maintenance records…'
-        : skew ? 'Maintenance routes not deployed'
+        : skew ? 'Maintenance data not available yet'
         : 'Maintenance backend unreachable',
       mxEmptyNote: s.mxLiveLoading
         ? 'Nothing is shown until it answers.'
         : skew
-        ? 'svc-work-order-management answered, but it does not serve the routes this page reads ('
-          + missing.map(label).join(', ') + '). It is running a build older than the current source; rebuilding it is what fills this page.'
-        : 'Every figure on this page is read from svc-work-order-management, and it did not answer'
+        ? 'This page’s data is not available yet — contact support if it persists.'
+        : 'The figures on this page could not be loaded'
           + (s.mxLiveError ? ': ' + s.mxLiveError : '') + '. Nothing is shown in its place.'
     };
   },

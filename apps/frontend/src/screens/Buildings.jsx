@@ -69,20 +69,9 @@ export default function Buildings({ vals }) {
               </div>
             </div>
             {vals.bcCanHoist ? (
-              <>
-                {/* Two different permissions, so two gates: hoisting a building is a role,
-                    adding data to one is the "Can ingest" toggle. An admin has both by
-                    default — the server folds the role into can_ingest — but one turned
-                    off explicitly must lose this and keep Hoist. */}
-                {vals.canIngest ? (
-                  <div className="btn" onClick={vals.ingestDocuments} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
-                    {"Ingest documents"}
-                  </div>
-                ) : null}
-                <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
-                  {"Hoist a building"}
-                </div>
-              </>
+              <div className="btn btn-primary" onClick={vals.addBuilding} style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0" }}>
+                {"Hoist a building"}
+              </div>
             ) : null}
           </div>
           <div style={{ display: vals.bldQueryShow, alignItems: "center", gap: "10px", padding: "9px 13px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "18px", maxWidth: "420px" }}>
@@ -380,16 +369,29 @@ export default function Buildings({ vals }) {
             </div>
           </div>
           <div style={{ marginTop: "34px" }}>
+            {/* Ingesting is what grows the graph, so it sits on the graph's headline, at the
+                right edge like Hoist a building in the page header. Gated on the "Can ingest"
+                toggle alone, not the Hoist role: an admin has it by default (the server folds
+                the role into can_ingest), but one turned off explicitly loses this and keeps
+                Hoist a building. */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px 24px", flexWrap: "wrap" }}>
+              <h2 style={{ fontSize: "23px", margin: "0", lineHeight: "1.15" }}>
+                {"Hoist Graph"}
+              </h2>
+              {vals.canIngest ? (
+                <button type="button" className="btn btn-primary" onClick={vals.ingestDocuments} title="Attach documents and file them against a building in the graph" style={{ fontSize: "12px", padding: "7px 13px", cursor: "pointer", flexShrink: "0", display: "flex", alignItems: "center", gap: "7px" }}>
+                  <i className="ph ph-file-arrow-up" style={{ fontSize: "13px" }}></i>
+                  <span>{"Ingest documents"}</span>
+                </button>
+              ) : null}
+            </div>
             <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "14px 24px" }}>
               <div style={{ minWidth: "0", flex: "1 1 340px" }}>
-                <h2 style={{ fontSize: "23px", margin: "0", lineHeight: "1.15" }}>
-                  {"Hoist Graph"}
-                </h2>
                 <div style={{ fontSize: "13px", color: "var(--color-accent)", marginTop: "5px" }}>
                   {"What a Hoisted Building resolves to"}
                 </div>
                 <p style={{ fontSize: "12px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "76ch", lineHeight: "1.5" }}>
-                  {"Every node is a table in plenum_cafm and every figure beside one is counted in it. A building's own key and floor count sit under its name; each satellite carries the relation and how many rows this building has on that branch. A branch nobody counted reads “?” rather than nought — the two are different facts, and only one of them is about the building."}
+                  {"Every node is a record type in your Hoist Graph and every figure beside one is counted in it. A building's own key and floor count sit under its name; each satellite carries the relation and how many rows this building has on that branch. A branch nobody counted reads “?” rather than nought — the two are different facts, and only one of them is about the building."}
                 </p>
                 <div style={{ fontSize: "11.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>
                   {vals.graphNote}

@@ -11,6 +11,7 @@ import { Children, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Database, FileText } from "lucide-react";
 
 import type { ColumnScoreBreakdown, MigrationPkConfirmation, UdrColumnIntelligence, UdrDuplicateTableGroup, UdrTableResolution } from "../../chat-api";
+import { plainAliasSource, plainMethodLabel, plainPkList } from "./migration-mapping-utils";
 
 export type DocInventoryTable = { table_name: string; row_count: number; column_count: number };
 export type DocInventoryFile = {
@@ -54,7 +55,7 @@ export function UniqueTablesPanelB7({ tables }: { tables: TableMeta[] }) {
         <span className="font-mono text-[10px] text-slate-400">B7.1</span>
         <span className="text-sm font-semibold text-slate-700">Unique table identification</span>
         <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700">
-          CoT
+          Analysis
         </span>
         <span className="ml-auto text-[11px] text-slate-400">
           {tables.length} table{tables.length === 1 ? "" : "s"} · name + metadata similarity
@@ -100,7 +101,7 @@ export function PrimaryKeyDetectionPanelB8({ tables }: { tables: TableMeta[] }) 
         <span className="font-mono text-[10px] text-slate-400">B8.1</span>
         <span className="text-sm font-semibold text-slate-700">Primary-key detection</span>
         <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700">
-          CoT
+          Analysis
         </span>
         <span className="ml-auto text-[11px] text-slate-400">
           null + unique tests · per table, no cross-table comparison
@@ -125,7 +126,7 @@ export function PrimaryKeyDetectionPanelB8({ tables }: { tables: TableMeta[] }) 
               const hasPk = !!pkCol;
               const candidates = t.columns.filter((c) => c.unique && !c.nullable);
               const tieBreak = !hasPk
-                ? "surrogate _udr_id"
+                ? "surrogate key"
                 : candidates.length > 1
                   ? pk && /(^|_)id$/i.test(pk)
                     ? "name rank *_id"
@@ -141,7 +142,7 @@ export function PrimaryKeyDetectionPanelB8({ tables }: { tables: TableMeta[] }) 
                       {hasPk ? "natural" : "surrogate"}
                     </span>
                   </td>
-                  <td className="px-4 py-2 font-mono text-slate-700">{pk || "_udr_id"}</td>
+                  <td className="px-4 py-2 font-mono text-slate-700">{pk || "surrogate key"}</td>
                   <td className="px-4 py-2 font-mono text-slate-500">{hasPk ? "1.00" : "—"}</td>
                   <td className="px-4 py-2 font-mono text-slate-500">{hasPk ? "0.00" : "—"}</td>
                   <td className="px-4 py-2 text-slate-500">{tieBreak}</td>
@@ -173,10 +174,10 @@ export function TableMappingDecisionsPanel({ rows }: { rows: TableRouting[] }) {
         <span className="font-mono text-[10px] text-slate-400">B9.1 · B10.1 · B11.1</span>
         <span className="text-sm font-semibold text-slate-700">Table mapping — final decisions</span>
         <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700">
-          CoA
+          Action
         </span>
         <span className="ml-auto text-[11px] text-slate-400">
-          deterministic → RAG/alias → semantic LLM
+          deterministic → alias match → AI match
         </span>
       </div>
       <div className="overflow-x-auto">
@@ -198,8 +199,8 @@ export function TableMappingDecisionsPanel({ rows }: { rows: TableRouting[] }) {
                 : conf >= 0.999
                   ? { label: "exact name", tone: "bg-emerald-100 text-emerald-700" }
                   : conf >= 0.95
-                    ? { label: "RAG / alias", tone: "bg-indigo-100 text-indigo-700" }
-                    : { label: "semantic LLM", tone: "bg-amber-100 text-amber-700" };
+                    ? { label: "Alias match", tone: "bg-indigo-100 text-indigo-700" }
+                    : { label: "AI match", tone: "bg-amber-100 text-amber-700" };
               return (
                 <tr key={r.source} className="border-t border-slate-100">
                   <td className="px-4 py-2 font-mono text-slate-700">{r.source}</td>
@@ -305,7 +306,7 @@ function StepCard({
             tone === "CoT" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"
           }`}
         >
-          {tone}
+          {tone === "CoT" ? "Analysis" : "Action"}
         </span>
         {meta ? <span className="ml-auto text-[11px] text-slate-400">{meta}</span> : null}
       </div>
@@ -575,7 +576,7 @@ export function EditablePkDetection({
                     <div className="flex flex-wrap items-center gap-1.5">
                       {selected.length === 0 ? (
                         <span className="inline-flex items-center rounded-md bg-blue-100 px-1.5 py-0.5 text-[10.5px] font-mono text-blue-700">
-                          _udr_id (surrogate)
+                          surrogate key
                         </span>
                       ) : (
                         selected.map((c) => {
@@ -900,7 +901,7 @@ export function TableResolutionPanels({
               return kept.map(({ p, label }) => [
                 <span className="font-mono text-slate-700">{label}</span>,
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 font-mono">{p.kind}</span>,
-                <span className="font-mono text-slate-700">{(p.primary_key ?? []).join(", ")}</span>,
+                <span className="font-mono text-slate-700">{plainPkList(p.primary_key)}</span>,
                 <span className="font-mono text-slate-500">{_two(p.uniqueness)}</span>,
                 <span className="font-mono text-slate-500">{_two(p.null_rate)}</span>,
                 <span className="text-slate-500">{p.tie_break}</span>,
@@ -1110,7 +1111,7 @@ export function TableResolutionPanels({
             head={["Source", "Method", "Destination", "Conf.", "Notes"]}
             rows={collapseBySource(det, groupByTable).map(({ item: d, label, group }) => [
               <DupSourceCell label={label} group={group} />,
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium font-mono ${_methodTone(d.method)}`}>{d.method}</span>,
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium font-mono ${_methodTone(d.method)}`}>{plainMethodLabel(d.method)}</span>,
               d.destination ? <span className="font-mono text-slate-700">{d.destination}</span> : <span className="text-slate-400">—</span>,
               <span className={`font-mono ${_confTone(d.confidence)}`}>{_two(d.confidence)}</span>,
               <span className="text-slate-500">{d.note}</span>,
@@ -1122,7 +1123,7 @@ export function TableResolutionPanels({
       {/* B10.1 — Deterministic RAG based matching. Always shown as a distinct step (even when
           empty) so the deterministic exact (B9.1) and RAG (B10.1) stages read as two steps. */}
       {showMapping && (det.length || rag.length) ? (
-        <StepCard code="B10.1" title="Deterministic RAG based matching" tone="CoA" stage="deterministic" meta="FM ontology + learned registry · auto-resolve ≥ 0.95">
+        <StepCard code="B10.1" title="Known-term matching" tone="CoA" stage="deterministic" meta="facilities-management vocabulary + terms learned from earlier imports · auto-resolve ≥ 0.95">
           {rag.length ? (
             <>
               <StepTable
@@ -1136,7 +1137,7 @@ export function TableResolutionPanels({
                   ),
                   d.destination ? <span className="font-mono text-slate-700">{d.destination}</span> : <span className="text-slate-400">—</span>,
                   <span className={`font-mono ${_confTone(d.confidence)}`}>{_two(d.confidence)}</span>,
-                  <span className="text-slate-500">{d.alias_source}</span>,
+                  <span className="text-slate-500">{plainAliasSource(d.alias_source)}</span>,
                 ])}
               />
               <p className="px-5 py-2 text-[10.5px] text-slate-400">
@@ -1145,7 +1146,7 @@ export function TableResolutionPanels({
             </>
           ) : (
             <p className="px-5 py-3 text-[11px] text-slate-400">
-              No RAG / alias matches — all tables resolved by exact / Levenshtein name match in B9.1.
+              No alias matches — all tables resolved by exact / Levenshtein name match in B9.1.
             </p>
           )}
         </StepCard>
@@ -1153,7 +1154,7 @@ export function TableResolutionPanels({
 
       {/* B11.1 — Semantic table mapping + top-3 candidates (Group B) */}
       {showMapping && (sem.length || final.length || (tableTopMatches && Object.keys(tableTopMatches).length)) ? (
-        <StepCard code="B11.1" title="Semantic table mapping" tone="CoA" stage="semantic" meta="LLM matcher · name + metadata signal · ≥ 70% suggested">
+        <StepCard code="B11.1" title="Semantic table mapping" tone="CoA" stage="semantic" meta="AI matcher · name + metadata signal · ≥ 70% suggested">
           {sem.length ? (
             <StepTable
               head={["Source", "Signal (columns)", "Destination", "Conf.", "Method"]}
@@ -1185,7 +1186,7 @@ export function TableResolutionPanels({
           than buried at the top above everything). Duplicate sheets co-routed to the same table
           (work_order + workorders → work_orders) collapse to one row with a ×count. */}
       {showMapping && routingConfirmed && final.length ? (
-        <StepCard code="B12.1" title="Table routing — confirmed" tone="CoA" stage="deterministic" meta="final destination per sheet · exact → RAG → semantic">
+        <StepCard code="B12.1" title="Table routing — confirmed" tone="CoA" stage="deterministic" meta="final destination per sheet · exact → alias → semantic">
           <StepTable
             head={["Source sheet", "Confirmed destination", "Method", "Confidence"]}
             rows={collapseBySource(final, groupByTable).map(({ item: f, label, group }) => [
@@ -1196,7 +1197,7 @@ export function TableResolutionPanels({
                 <span className="text-slate-400">— unmatched —</span>
               ),
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium font-mono ${_methodTone(f.method ?? "")}`}>
-                {f.method || "—"}
+                {f.method ? plainMethodLabel(f.method) : "—"}
               </span>,
               <span className={`font-mono ${_confTone(f.confidence)}`}>{_pctText(f.confidence)}</span>,
             ])}
@@ -1251,7 +1252,7 @@ function CollapsibleStepCard({
             tone === "CoT" ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700"
           }`}
         >
-          {tone}
+          {tone === "CoT" ? "Analysis" : "Action"}
         </span>
         {meta ? <span className="ml-auto text-[11px] text-slate-400">{meta}</span> : null}
       </button>
@@ -2079,7 +2080,7 @@ export function ColumnIntelligencePanels({
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">{rows.length} columns</span>
                 </summary>
                 <StepTable
-                  head={["Canonical key (renamed from)", "Dest UDR table", "Class", "Format", "Sample values (5)", "Matched destination column"]}
+                  head={["Canonical key (renamed from)", "Destination table", "Class", "Format", "Sample values (5)", "Matched destination column"]}
                   rows={rows.map(renderRow)}
                 />
               </details>
@@ -2177,7 +2178,7 @@ export function ColumnIntelligencePanels({
             ) : null}
           </div>
           <div className="px-5 pt-1 text-[10.5px] text-slate-500">
-            Auto-resolve requires <b>name AND value AND ontology</b> to agree (not name alone). When the
+            Auto-resolve requires <b>name AND value AND vocabulary</b> to agree (not name alone). When the
             destination column has data, the source values are checked against it — a name match with
             disjoint values (e.g. asset codes vs vendor ids) becomes a <b>new column</b>, not a merge.
           </div>
@@ -2239,7 +2240,7 @@ export function ColumnIntelligencePanels({
                 r.dest_table ? <span className="font-mono text-slate-600">{r.dest_table}</span> : <span className="text-slate-400">—</span>,
                 r.matched_column ? <span className="font-mono text-slate-700">{r.matched_column}</span> : <span className="text-slate-400">—</span>,
                 sc ? (
-                  <span className="font-mono text-[10px] text-slate-500" title="name · value · ontology · context → final">
+                  <span className="font-mono text-[10px] text-slate-500" title="name · value · vocabulary · context → final">
                     {pct(sc.name)}·
                     <span className={typeof sc.value === "number" && sc.value < 0.5 ? "font-semibold text-red-600" : undefined}>{pct(sc.value)}</span>·
                     {pct(sc.ontology)}·{pct(sc.context)}
@@ -2314,7 +2315,7 @@ export function ScoreBreakdownChips({ breakdown }: { breakdown?: ColumnScoreBrea
     ["Keyword", breakdown.keyword_score],
     ["Datatype", breakdown.datatype_score],
     ["Numeric pattern", breakdown.numeric_pattern_score],
-    ["Ontology", breakdown.ontology_score],
+    ["Vocabulary", breakdown.ontology_score],
   ];
   const tone = (v: number) =>
     v >= 0.85 ? "bg-emerald-500" : v >= 0.6 ? "bg-amber-500" : "bg-red-400";

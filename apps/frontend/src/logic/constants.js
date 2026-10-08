@@ -527,14 +527,16 @@ const CRONS = [
 const TONE = {
   risk: { color: "var(--st-risk)", bg: "var(--st-risk-bg)" },
   warn: { color: "var(--st-warn)", bg: "var(--st-warn-bg)" },
-  ok:   { color: "var(--st-ok)",   bg: "var(--st-ok-bg)" }
+  ok:   { color: "var(--st-ok)",   bg: "var(--st-ok-bg)" },
+  // A figure or a suggestion (platformNotices.js): neither good nor bad, so not green.
+  info: { color: "var(--color-neutral-400)", bg: "var(--color-neutral-900)" }
 };
 const t = (k) => TONE[k] || TONE.ok;
 
 const MODULES = {
   compliance: {
-    name: "Compliance", kicker: "Feature A · compliance-engine", icon: "ph-shield-check", answer: "compliance",
-    blurb: "Every statutory obligation in the building’s regulation pack, tracked against the ComplianceCertificate entity and the accreditation currency of the vendor who has to do the work.",
+    name: "Compliance", kicker: "Feature A · Compliance engine", icon: "ph-shield-check", answer: "compliance",
+    blurb: "Every statutory obligation in the building’s regulation pack, tracked against its certificate record and the accreditation currency of the vendor who has to do the work.",
     scanLabel: "Run compliance scan", exportLabel: "Export compliance pack",
     tableTitle: "Certificates by building and category",
     head: ["Building", "Certificate type", "Asset", "Expiry", "Status", "Responsible vendor"],
@@ -544,7 +546,7 @@ const MODULES = {
     asks: ["Which lapses void insurance?", "Show me every obligation with no contractor on record", "What did the 60-day ladder book last month?"]
   },
   energy: {
-    name: "Energy", kicker: "Feature C · energy-intelligence-engine", icon: "ph-lightning", answer: "energy",
+    name: "Energy", kicker: "Feature C · Energy intelligence engine", icon: "ph-lightning", answer: "energy",
     blurb: "Half-hourly MPAN and MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country — CIBSE TM46, Energy Star and ASHRAE 100, BCA, or a rolling portfolio benchmark — then priced before anything reaches you. Anomaly scan daily at 03:00.",
     scanLabel: "Run energy scan", exportLabel: "Export ESOS data pack",
     tableTitle: "Anomalies ranked by annualised cost impact",
@@ -555,7 +557,7 @@ const MODULES = {
     asks: ["Why did Bishopsgate spike on Saturday?", "Which buildings miss EPC B by 2031?", "Rank buildings by cost per m²"]
   },
   vendors: {
-    name: "Vendor performance", kicker: "Feature B · contract-performance-engine", icon: "ph-chart-line-up", answer: "vendors",
+    name: "Vendor performance", kicker: "Feature B · Contract performance engine", icon: "ph-chart-line-up", answer: "vendors",
     blurb: "SLA targets, rates and penalty clauses extracted from the contracts you ingested, then every completed work order scored against them. Failures on L1 assets carry 3× weight.",
     scanLabel: "Rebuild scorecards", exportLabel: "Export scorecard pack",
     tableTitle: "Monthly scorecard — August 2026",
@@ -566,7 +568,7 @@ const MODULES = {
     asks: ["Which vendor is costing me money?", "Show every invoice line flagged this quarter", "What service credits can I recover?"]
   },
   assets: {
-    name: "Assets", kicker: "Feature E · plenum_cafm.assets", icon: "ph-cube", answer: "energy",
+    name: "Assets", kicker: "Feature E · Assets register", icon: "ph-cube", answer: "energy",
     blurb: "Condition inferred from energy before a fault shows, for the buildings you are allocated to. A building's EUI is read against its reference to find where the load is; anomalies attributed to an asset say which one. Both signals together are a threat, one alone is a watch, and the asset's own health score can raise a band but never lower it. Where a panel has no backend behind it — the energy split below building level, asset replacement value, the vendor who holds the asset, reading bands and the failure model — it says so rather than showing a figure.",
     scanLabel: "Reload register", exportLabel: "Export asset register",
     tableTitle: "Buildings · EUI against reference, locations and assets beneath",
@@ -577,7 +579,7 @@ const MODULES = {
     asks: ["Which assets should I inspect before winter?", "What is the work order backlog on threat assets?", "Which assets have never been scored?"]
   },
   ops: {
-    name: "Maintenance", kicker: "Feature D · work-order-engine", icon: "ph-wrench", answer: "queue",
+    name: "Maintenance", kicker: "Feature D · Work order engine", icon: "ph-wrench", answer: "queue",
     blurb: "Work orders are not raised by the FM operative; they arrive here from triggers — a vendor blocked, a certificate expiring, an asset flagged, an anomaly priced — and wait for your decision. Completed orders bring inspection reports, which are read together rather than one at a time. Planned maintenance is checked against plan.",
     scanLabel: "Re-read inspection reports", exportLabel: "Open PPM calendar",
     tableTitle: "Live work orders",

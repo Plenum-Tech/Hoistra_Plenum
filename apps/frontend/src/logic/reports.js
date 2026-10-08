@@ -14,7 +14,9 @@
 // into HoistraLogic.prototype and `this` is the controller.
 import { reportsApi } from '../api/reports.js';
 import { fmtDateTime } from './homeLive.js';
-import { saveHidden, withHidden, withNoneHidden } from './reportCards.js';
+import { answerCards, saveHidden, withHidden, withNoneHidden } from './reportCards.js';
+import { overdueBars } from './complianceLive.js';
+import { reportPdf, reportPdfName } from './reportPdf.js';
 
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -113,59 +115,15 @@ export function flattenCards(reports) {
   return out;
 }
 
-const uniq = (xs) => (xs || []).filter((x, i, a) => x && a.indexOf(x) === i);
-const cell = (v) => String(v === null || v === undefined ? '' : v).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
-
-// The export. Markdown, because the answers are markdown; a structured compliance answer is
-// flattened into headings, a figure list and a certificate table. `card`/`run` are the
-// server's own shapes (card_to_dict / run_to_dict in engines/reports/cards.py).
-export function cardMarkdown(card, run) {
-  const lines = ['# ' + (card.name || 'Untitled report'), ''];
-  lines.push('_Custom report · asks “' + card.prompt + '” · ' + (card.refresh_label || '') + '_');
-  if (!run) {
-    lines.push('', 'This report has not run yet.');
-    return lines.join('\n') + '\n';
-  }
-  const calls = uniq((run.tool_calls || []).map((t) => (t && t.tool) || t));
-  lines.push('_Refreshed ' + fmtDateTime(run.ran_at) +
-    (typeof run.duration_ms === 'number' ? ' · ' + Math.round(run.duration_ms / 1000) + ' s' : '') +
-    (calls.length ? ' · tools: ' + calls.join(', ') : '') + '_', '');
-  if (run.error || run.ok === false) {
-    lines.push('**This refresh did not complete.** ' + (run.error || ''));
-    return lines.join('\n') + '\n';
-  }
-  const r = run.rich;
-  if (r) {
-    if (r.narrative) lines.push(String(r.narrative), '');
-    if ((r.kpis || []).length) {
-      lines.push('## Key figures', '');
-      r.kpis.forEach((k) => lines.push('- **' + cell(k.label) + '** ' + cell(k.count) + (k.unit ? ' ' + cell(k.unit) : '') + (k.sublabel ? ' — ' + cell(k.sublabel) : '')));
-      lines.push('');
-    }
-    if ((r.actions || []).length) {
-      lines.push('## Priority actions', '');
-      r.actions.forEach((a) => lines.push('- ' + [a.severity, a.scope].filter(Boolean).map(cell).join(' · ') + (a.severity || a.scope ? ': ' : '') + cell(a.title)));
-      lines.push('');
-    }
-    (r.groups || []).forEach((g) => {
-      lines.push('### ' + cell(g.owner) + (g.scope ? ' · ' + cell(g.scope) : ''), '');
-      if (g.headline) lines.push(cell(g.headline), '');
-      (g.points || []).forEach((p) => lines.push('- ' + cell(p)));
-      if ((g.points || []).length) lines.push('');
-    });
-    if ((r.insights || []).length) {
-      lines.push('## Insights', '');
-      r.insights.forEach((x) => lines.push('- ' + cell(x.text || x)));
-      lines.push('');
-    }
-    if ((r.certificates || []).length) {
-      lines.push('## Certificates in scope', '', '| Certificate | Holder | Scope | Status |', '| --- | --- | --- | --- |');
-      r.certificates.forEach((c) => lines.push('| ' + cell(c.name) + (c.reason ? ' (' + cell(c.reason) + ')' : '') + ' | ' + cell(c.company) + ' | ' + cell(c.scope) + ' | ' + cell(c.status) + ' |'));
-      lines.push('');
-    }
-  }
-  if (run.answer) lines.push(String(run.answer), '');
-  return lines.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
+// The question a report built from this session re-asks. A conversation's is the question it
+// started with. A task (an orchestrator action: an upload, an email, a request) has no question
+// of its own, so it is asked about — where it stands now. Either is shown in the builder and can
+// be reworded before the card is made.
+export function reportQuestionFor(rec) {
+  if (!rec) return '';
+  const title = String(rec.title || rec.label || '').trim();
+  if (rec.kind !== 'task') return title;
+  return title ? 'What is the latest on: ' + title + '?' : '';
 }
 
 function patchCardInReports(reports, cardId, patch) {
@@ -250,11 +208,32 @@ export const reportsMethods = {
   },
 
   // The navigator menu's Create report. Source = a chat session (its question is the prompt).
+  // The report builder, opened with a session already chosen (a session's ⋯ menu, or the
+  // navigator's +, which opens it with nothing chosen yet).
+  // From a session's menu that session is chosen; from the navigator's "+" the newest
+  // conversation is, as the old form did - one press to Create for the common case.
+  rpOpenBuilder(id) {
+    const s = this.state;
+    const me = s.account && s.account.email ? String(s.account.email).trim().toLowerCase() : null;
+    const rec = id ? (s.sessions || []).find((x) => x.id === id)
+      : (s.sessions || []).filter((q) => q && q.owner === me && (q.viewOrgId || null) === (s.viewOrgId || null))
+        .sort((a, b) => (b.at || 0) - (a.at || 0)).find((q) => q.kind !== 'task') || null;
+    this.setState({ reportMenu: true, reportName: '', reportQuery: '', reportFilter: 'all',
+      reportSrcId: rec ? rec.id : null, reportQuestion: rec ? reportQuestionFor(rec) : null });
+  },
+
   async rpCreate() {
     const s = this.state;
-    const chats = (s.sessions || []).filter((q) => q.kind === 'chat');
-    const src = chats.find((q) => q.id === s.reportSrcId) || chats[0] || null;
-    if (!src) return this.flash('Ask something first — a report card is built from a session’s question.');
+    // Only the signed-in account's own sessions, in the company it is looking at — the store is
+    // shared by every account that has used this browser (sessions.js).
+    const me = s.account && s.account.email ? String(s.account.email).trim().toLowerCase() : null;
+    const mine = (s.sessions || []).filter((q) => q && q.owner === me && (q.viewOrgId || null) === (s.viewOrgId || null));
+    // Nothing picked yet: the newest conversation, as before. A pick that is no longer listed is
+    // not silently swapped for another.
+    const src = s.reportSrcId ? (mine.find((q) => q.id === s.reportSrcId) || null) : (mine.find((q) => q.kind !== 'task') || null);
+    if (!src) return this.flash(mine.length ? 'Pick the session the report is built from.' : 'Ask something first — a report card is built from a session’s question.');
+    const question = String(s.reportQuestion !== undefined && s.reportQuestion !== null ? s.reportQuestion : reportQuestionFor(src)).trim();
+    if (!question) return this.flash('Say what the report should ask each time it refreshes.');
     const presets = (s.reportPresets && s.reportPresets.length) ? s.reportPresets : FALLBACK_PRESETS;
     const preset = presets[s.reportCad] || presets[0];
     if (!preset) return this.flash('Refresh options have not loaded yet — try again in a moment.');
@@ -263,16 +242,20 @@ export const reportsMethods = {
       if (!(s.reportDays || []).length) return this.flash('Pick at least one day for the refresh.');
       refresh = { days: s.reportDays.slice(), time: s.reportTime || '14:00' };
     }
-    const body = {
-      prompt: src.title,
-      name: (s.reportName || '').trim() || src.title,
+    const body = Object.assign({
+      prompt: question,
+      name: (s.reportName || '').trim() || src.title || question,
       refresh: refresh,
       timezone: browserTimezone(),
-      source_session_id: src.id,
       source_page: src.page,
-      run_now: true
-    };
-    this.setState({ reportMenu: false, reportName: '' });
+      // The first refresh is asked for below, on this service's own "run now" route — not
+      // left due "now" for whichever scheduler claims it first. Every deployment that shares
+      // the database runs one, some on older code, so the answer a card opens with is the
+      // answer this stack gives. (Which company the card reads is api/reports.js's to send.)
+      run_now: false
+    // A conversation is a server thread the card can point back to; a task never was one.
+    }, src.kind === 'task' ? {} : { source_session_id: src.id });
+    this.setState({ reportMenu: false, reportName: '', reportQuestion: null, reportQuery: '' });
     let out;
     try {
       out = await this.rpPostCard(body);
@@ -284,9 +267,13 @@ export const reportsMethods = {
     const card = out.card;
     this.flash(out.tzFellBack && cadenceIsClockBound(refresh)
       ? 'Report card created, but this server does not recognise your timezone (' + body.timezone + ') — the refresh time is read as UTC.'
-      : 'Report card created — the first refresh is running.');
+      : 'Report card created — the first answer is being worked out; it takes about a minute.');
     await this.rpLoad();
-    if (card && card.id) this.rpOpen(card.id);
+    if (card && card.id) {
+      this.rpOpen(card.id);
+      // Shows the card as refreshing, waits for the run (up to 3 minutes) and reloads it.
+      await this.rpRunCard(card.id);
+    }
   },
 
   // One create, with a single retry on a zone the server will not accept. A cadence that is
@@ -306,8 +293,11 @@ export const reportsMethods = {
   // Refresh now — hits the same route the server's own scheduler calls, so the result is
   // wired through the identical run_card() lifecycle (owner-scoped token, audit trail, etc).
   async rpRunCard(cardId) {
-    if (this._rpRunBusy) return;
-    this._rpRunBusy = cardId;
+    // Busy per card: one card refreshing must not swallow another's run - a new report's first
+    // answer depends on this call, and it was skipped while any other card was running.
+    const busy = this._rpRunning || (this._rpRunning = new Set());
+    if (busy.has(cardId)) return;
+    busy.add(cardId);
     this.setState((p) => ({ reports: patchCardInReports(p.reports, cardId, { status: 'running' }) }));
     try {
       await reportsApi.runCard(cardId);
@@ -316,7 +306,7 @@ export const reportsMethods = {
       // not a failure, and the reload below shows the run it is already doing.
       if (!(e && e.reason === 'already_running')) this.flash('Refresh failed — ' + ((e && e.message) || String(e)));
     } finally {
-      this._rpRunBusy = null;
+      busy.delete(cardId);
       await this.rpLoad();
     }
   },
@@ -452,19 +442,39 @@ export const reportsMethods = {
       : ok.length + ' report card' + (ok.length === 1 ? '' : 's') + ' deleted.');
   },
 
-  // Saves the run in view as a markdown file, client-side.
+  // A refresh's answer as the cards the report page draws - the page and the export read
+  // this one function, so the PDF never says something the page does not.
+  rpRunCards(run) {
+    if (!run || run.error) return [];
+    const rich = run.rich
+      ? Object.assign({}, run.rich, { overdue: overdueBars(run.rich.certificates || [], this.ccData()), offers: run.rich.offers || [] })
+      : null;
+    return answerCards(rich, run.answer);
+  },
+
+  // Saves the refresh in view as a PDF, built in the browser (logic/reportPdf.js).
   rpExport(cardId, runIdx) {
     const card = flattenCards(this.state.reports).find((c) => c.id === cardId);
     if (!card) return;
     const run = (card.runs || [])[runIdx || 0] || card.latest_run || null;
-    const md = cardMarkdown(card, run);
     if (typeof document === 'undefined' || typeof window === 'undefined' || !window.URL || !window.URL.createObjectURL) {
       return this.flash('Export needs a browser.');
     }
-    const url = window.URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' }));
+    const s = this.state;
+    let bytes = null;
+    try {
+      bytes = reportPdf(card, run, this.rpRunCards(run), {
+        exportedAt: new Date(),
+        exportedBy: (s.account && (s.account.full_name || s.account.email)) || '',
+        company: (s.viewOrgId && s.viewOrgName) || (s.account && s.account.organization_name) || ''
+      });
+    } catch (e) {
+      return this.flash('The PDF could not be made: ' + ((e && e.message) || 'unknown error') + '.');
+    }
+    const url = window.URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = (card.name || 'report').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() + '.md';
+    a.download = reportPdfName(card);
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     this.flash('Saved ' + a.download);

@@ -74,8 +74,8 @@ export const NODES = [
   { id: 6, name: 'Data preprocessing', blurb: 'Dedup, null handling, type coercion, validation' },
   { id: 7, name: 'Hierarchy detection', blurb: 'Foreign keys and containment between the tables' },
   { id: 8, name: 'Verify hierarchy', blurb: 'The relationships, confirmed by you' },
-  { id: 9, name: 'Output generation', blurb: 'JSON, CSV, SQL and the report, uploaded to blob storage' },
-  { id: 10, name: 'Write to database', blurb: 'The confirmed rows land in plenum_cafm' }
+  { id: 9, name: 'Output generation', blurb: 'JSON, CSV, SQL and the report, saved for download' },
+  { id: 10, name: 'Write to database', blurb: 'The confirmed rows land in the Hoist Graph' }
 ];
 
 // The node an open gate or step pause belongs to. The name says it exactly, where the
@@ -616,7 +616,7 @@ export const migrationMethods = {
         mgBusy: '',
         ccChat: (p.ccChat || []).concat([{
           role: 'bot', isNote: true,
-          text: names + ' is migrating as run ' + shortId(id) + ', started directly against the mapper because the orchestrator could not be reached. Every gate is below. It is not bound to a building and leaves no row in the ingestion audit trail — the orchestrator is what writes those.'
+          text: names + ' is migrating as run ' + shortId(id) + ', started directly with the data importer because the orchestrator could not be reached. Every gate is below. It is not bound to a building and leaves no row in the ingestion audit trail — the orchestrator is what writes those.'
         }])
       }));
       this.mgOpen(id);
@@ -1132,7 +1132,7 @@ export const migrationMethods = {
       // a gate waits for a person and may wait all day, and a finished or failed run is
       // not waiting for anything.
       mgStallNote: ((kind === 'running' || kind === 'step') && this._mgMovedAt && (now - this._mgMovedAt) > STALL_AFTER_MS)
-        ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. Steps that upload files or write rows report progress as they go, so a run this quiet is probably not being processed: answering a gate hands the run to the migration worker (arq src.worker.WorkerSettings), and if that worker is not running the job waits in the queue and nothing here will change.'
+        ? 'This run has not moved for ' + Math.round((now - this._mgMovedAt) / 60000) + ' minutes. Steps that upload files or write rows report progress as they go, so a run this quiet is probably not being processed — the service that carries out imports may not be running. Contact support rather than answering again: a second answer queues the same work twice.'
         : '',
       mgPrimary: primary,
       mgStages: stagesFor(doc),

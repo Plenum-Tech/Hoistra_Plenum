@@ -22,16 +22,16 @@ interface Step {
 
 /** User-facing 7-node pipeline aligned with product spec. */
 const STEPS: Step[] = [
-  { label: "File ingestion", sublabel: "Node 1 — overall summary", isGate: false, nodeNum: 1, stepKey: "step_1_ingest" },
-  { label: "Deterministic mapping", sublabel: "Node 2 — column/table mapping", isGate: false, nodeNum: 2, stepKey: "step_2_deterministic" },
+  { label: "File ingestion", sublabel: "Overall summary", isGate: false, nodeNum: 1, stepKey: "step_1_ingest" },
+  { label: "Deterministic mapping", sublabel: "Column/table mapping", isGate: false, nodeNum: 2, stepKey: "step_2_deterministic" },
   { label: "Human review gate (Semantic)", sublabel: "Pre-semantic — approve or send to semantic", isGate: true, gateKey: "pre_semantic" },
-  { label: "Semantic mapping", sublabel: "Node 3 — AI column/table resolution", isGate: false, nodeNum: 4, stepKey: "step_4_semantic" },
+  { label: "Semantic mapping", sublabel: "AI column/table resolution", isGate: false, nodeNum: 4, stepKey: "step_4_semantic" },
   { label: "Human review gate (Table structure)", sublabel: "Field mapping — flagged & unmapped fields", isGate: true, gateKey: "field_mapping" },
-  { label: "Data preprocessing", sublabel: "Node 4 — dup / null / empty checks", isGate: false, nodeNum: 6, stepKey: "step_6_preprocess" },
-  { label: "Hierarchy detection", sublabel: "Node 5 — FK & containment", isGate: false, nodeNum: 7, stepKey: "step_7_hierarchy" },
+  { label: "Data preprocessing", sublabel: "Duplicate / null / empty checks", isGate: false, nodeNum: 6, stepKey: "step_6_preprocess" },
+  { label: "Hierarchy detection", sublabel: "Foreign keys & containment", isGate: false, nodeNum: 7, stepKey: "step_7_hierarchy" },
   { label: "Hierarchy confirmation gate", sublabel: "Confirm relationships", isGate: true, gateKey: "hierarchy" },
-  { label: "Data artifacts", sublabel: "Node 6 — SQL, CSV, JSON export", isGate: false, nodeNum: 9, stepKey: "step_9_output" },
-  { label: "Write to plenum_cafm DB", sublabel: "Node 7 — target database handoff", isGate: true, gateKey: "final_confirmation" },
+  { label: "Data artifacts", sublabel: "SQL, CSV, JSON export", isGate: false, nodeNum: 9, stepKey: "step_9_output" },
+  { label: "Write to database", sublabel: "Final step — write to your database", isGate: true, gateKey: "final_confirmation" },
 ];
 
 type StepState = "waiting" | "running" | "paused" | "active" | "complete" | "error";
@@ -119,7 +119,7 @@ const PHASES: Phase[] = [
   { id: "preprocess", label: "Data preprocessing", sublabel: "Dedup, null handling, validation", stepIndices: [5], isHitlGate: false },
   { id: "hierarchy", label: "Hierarchy", sublabel: "Detection + confirmation gate", stepIndices: [6, 7], isHitlGate: false },
   { id: "artifacts", label: "Data artifacts", sublabel: "SQL, CSV, JSON export files", stepIndices: [8], isHitlGate: false },
-  { id: "write", label: "Write to DB", sublabel: "Hand off to plenum_cafm target database", stepIndices: [9], isHitlGate: true },
+  { id: "write", label: "Write to DB", sublabel: "Write the data to your database", stepIndices: [9], isHitlGate: true },
 ];
 
 function getPhaseState(phase: Phase, migration: MigrationStatusResponse): PhaseState {

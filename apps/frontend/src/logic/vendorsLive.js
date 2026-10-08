@@ -504,6 +504,9 @@ export function shapeLiveVendors(input, now) {
   const ids = [];
   Object.keys(latest).forEach((id) => { if (ids.indexOf(id) < 0) ids.push(id); });
   Object.keys(paramsByVendor).forEach((id) => { if (ids.indexOf(id) < 0) ids.push(id); });
+  // And every vendor that holds an accreditation: with Compliance's own vendor view gone, a
+  // vendor with no scorecard and no contract terms had nowhere to be seen (8 Oct 2026 review).
+  Object.keys(certsById).forEach((id) => { if (ids.indexOf(id) < 0) ids.push(id); });
 
   const newestMonth = Object.keys(latest).reduce((m, id) => (String(latest[id].score_month) > m ? String(latest[id].score_month) : m), "");
   const month = newestMonth ? monthLabel(newestMonth) : null;
@@ -543,7 +546,8 @@ export function shapeLiveVendors(input, now) {
     const bd = (card && card.component_breakdown) || {};
     const p = paramsByVendor[id] || (bd.contract_parameters_id && paramsById[String(bd.contract_parameters_id)]) || null;
     const anyCov = covById[id] ? covById[id][Object.keys(covById[id])[0]] : null;
-    const name = nameById[id] || (anyCov && anyCov.vendor_name) || (p && p.vendor_name) || "Vendor " + id.slice(-4);
+    const certName = (certsById[id] || []).map((c) => c.vendor_name).find(Boolean);
+    const name = nameById[id] || (anyCov && anyCov.vendor_name) || (p && p.vendor_name) || certName || "Vendor " + id.slice(-4);
     const certs = (certsById[id] || []).concat(certsByName[lower(name)] || []);
     const cov2 = covFor(covById[id], certs) || covFor(covByName[lower(name)], certs) || null;
 
@@ -805,7 +809,7 @@ export function shapeLiveVendors(input, now) {
       ", first-time fix " + weightOf(null, "first_fix_pct", 20) + ", recall rate " + weightOf(null, "recall_pct", 15) + ", accreditation " + weightOf(null, "accreditation_pct", 15) +
       ". L1 misses weigh 3×, L2 1.5×, L3 1×. A blocked vendor's published score is capped at " + cap +
       (num(weights.invoice_flag_adversary_gbp) !== null ? "; invoice lines flagged above " + gbp(weights.invoice_flag_adversary_gbp) + " are adversary-checked" : "") +
-      ". Read from svc-operations-intelligence."
+      "."
     : null;
 
   return {
@@ -814,7 +818,10 @@ export function shapeLiveVendors(input, now) {
     pendingCount: tiles.pending, kpis: (summary && summary.kpis) || null,
     // Always an array. A page that has to test for null before counting is a page that
     // will print "undefined" the first time a read fails.
-    conflicts: conflicts
+    conflicts: conflicts,
+    // The pending Feature B items themselves, for the Pending tasks / Pending critical lists
+    // (vendorsQueue.js). Empty when the read failed — the tile says "—" for that.
+    approvalItems: approvals || []
   };
 }
 

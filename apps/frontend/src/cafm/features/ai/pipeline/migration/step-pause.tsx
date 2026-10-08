@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useMigrationAdvance, type NodeInfo } from "../../chat-api";
 import { parseEnvelope } from "./migration-field-mapping-draft";
+import { plainTierWord } from "./migration-mapping-utils";
 
 interface Props {
   migrationId: string;
@@ -344,7 +345,7 @@ function Node2Deterministic({ payload }: { payload: Record<string, unknown> }) {
   };
 
   function tierLabel(tier: string) {
-    if (tier.startsWith("T1_")) return tier.slice(3).replace(/_/g, " ");
+    if (tier.startsWith("T1_")) return plainTierWord(tier.slice(3).replace(/_/g, " "));
     return tier.replace(/_/g, " ");
   }
 
@@ -1950,7 +1951,7 @@ function Node4FieldMapping({
                                 <span
                                   className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${TIER_META[tier] ?? "bg-slate-100 text-slate-600"}`}
                                 >
-                                  {tier.replace(/^T\d_/, "")}
+                                  {plainTierWord(tier.replace(/^T\d_/, ""))}
                                 </span>
                               )}
                             </div>

@@ -73,7 +73,7 @@ export function MigrationCanonicalTableSelect({
             }
             placeholder="e.g. custom_assets"
           />
-          <p className="mt-1 text-[10px] text-slate-500">Table will be created in plenum_cafm when you add columns below.</p>
+          <p className="mt-1 text-[10px] text-slate-500">The table will be created in your database when you add columns below.</p>
         </div>
       ) : null}
     </div>

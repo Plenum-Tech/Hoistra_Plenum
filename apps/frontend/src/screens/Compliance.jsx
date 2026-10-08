@@ -1,7 +1,7 @@
 // Compliance — compliance console
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
-
+import CertificateList from '../components/shell/CertificateList.jsx';
 
 export default function Compliance({ vals }) {
   return (
@@ -408,8 +408,13 @@ export default function Compliance({ vals }) {
                               </div>
                               {(r.cells || []).map((c, $index) => (
                                 <React.Fragment key={$index}>
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--color-divider)", borderRight: "1px solid var(--color-divider)", minHeight: "38px" }}>
-                                    <span title={c.tip} style={{ width: "22px", height: "22px", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,monospace", fontSize: "11px", background: c.bg, color: c.fg, border: c.border }}>
+                                  {/* Every cell but "Not required" asks the orchestrator what is behind it. */}
+                                  <div className={c.click ? "hv2" : undefined} role={c.click ? "button" : undefined} tabIndex={c.click ? 0 : undefined}
+                                    aria-label={c.click ? r.name + " — " + c.tip : undefined} title={c.tip}
+                                    onClick={c.click || undefined}
+                                    onKeyDown={c.click ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } } : undefined}
+                                    style={{ display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--color-divider)", borderRight: "1px solid var(--color-divider)", minHeight: "38px", cursor: c.click ? "pointer" : "default" }}>
+                                    <span style={{ width: "22px", height: "22px", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,monospace", fontSize: "11px", background: c.bg, color: c.fg, border: c.border }}>
                                       {c.glyph}
                                     </span>
                                   </div>
@@ -522,126 +527,9 @@ export default function Compliance({ vals }) {
                         ))}
                       </div>
                       {vals.ccPaneCerts ? (
-                        <>
-                          <div>
-                            {(vals.ccCertRows || []).map((c, $index) => (
-                              <React.Fragment key={$index}>
-                                <div style={{ padding: "12px 14px", borderBottom: c.hvOpen ? "none" : "1px solid var(--color-divider)", display: "flex", flexDirection: "column", gap: "8px" }}>
-                                  <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                                    <div style={{ flex: "1", minWidth: "0" }}>
-                                      <div title={c.nm} style={{ fontSize: "12.5px", fontWeight: 500, lineHeight: "1.35", color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                        {c.nm}
-                                      </div>
-                                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "3px", minWidth: "0" }}>
-                                        {c.issuer ? (
-                                          <span title={c.issuer} style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0" }}>
-                                            {c.issuer}
-                                          </span>
-                                        ) : null}
-                                        {c.noDoc ? (
-                                          <span title={"No file was ingested for this certificate — only its fields are on record"} style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", fontSize: "9.5px", borderRadius: "4px", padding: "1px 5px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)" }}>
-                                            {"No file"}
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                    </div>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
-                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", whiteSpace: "nowrap", background: c.riskBg, color: c.riskFg }}>
-                                        {c.risk}
-                                      </span>
-                                      <span style={{ textAlign: "right", fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap", lineHeight: "1.3" }}>
-                                        {c.exp}
-                                        <span style={{ display: "block", fontSize: "10px", color: "var(--color-neutral-500)" }}>
-                                          {c.rel}
-                                        </span>
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", rowGap: "6px", flex: "1", minWidth: "0" }}>
-                                    <span style={{ fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginRight: "-3px", lineHeight: "1" }}>
-                                      {"Document"}
-                                    </span>
-                                    <span title={"Authenticity — forensic check of the document itself"} style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", whiteSpace: "nowrap", background: c.authBg, color: c.authFg }}>
-                                      {c.auth}
-                                    </span>
-                                    <span style={{ width: "4px" }}></span>
-                                    <span style={{ fontSize: "9.5px", letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginRight: "-3px", lineHeight: "1" }}>
-                                      {"Register"}
-                                    </span>
-                                    <span title={c.verLine || ("Register check — " + c.ver)} style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", whiteSpace: "nowrap", maxWidth: "190px", overflow: "hidden", textOverflow: "ellipsis", background: c.verChipBg, color: c.verChipFg }}>
-                                      {c.verChip}
-                                    </span>
-                                    {c.verifyUrl ? (
-                                      <a className="hv23" href={c.verifyUrl} target="_blank" rel="noopener noreferrer" title={c.verifyTitle} style={{ fontSize: "11px", color: "var(--color-accent)", textDecoration: "none", whiteSpace: "nowrap" }}>
-                                        {"Verify ↗"}
-                                      </a>
-                                    ) : (
-                                      <span title={"This certificate type has no public register in the country pack"} style={{ fontSize: "11px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                                        {"No public register"}
-                                      </span>
-                                    )}
-                                    {c.hvShow ? (
-                                      <span className="hv23" onClick={c.hvToggle} title={c.hvTitle} style={{ fontSize: "11px", color: c.hvOpen ? "var(--color-text)" : "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                        {c.hvLabel}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-                                    {c.dlShow ? (
-                                      <span className="hv23" onClick={c.dl} title={c.dlTitle} aria-label={c.dlLabel} role="button" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "28px", height: "26px", borderRadius: "6px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: c.dlBusy ? "wait" : "pointer" }}>
-                                        <i className={c.dlBusy ? "ph ph-circle-notch" : "ph ph-download-simple"} style={{ fontSize: "14px" }}></i>
-                                      </span>
-                                    ) : null}
-                                    <span className="hv23" onClick={c.act} style={{ display: "flex", alignItems: "center", height: "26px", fontSize: "11px", padding: "0 11px", borderRadius: "6px", border: `1px solid ${c.actBorder}`, color: c.actFg, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      {c.actLabel}
-                                    </span>
-                                  </div>
-                                  </div>
-                                </div>
-                                  {c.hvOpen ? (
-                                  <div style={{ padding: "10px 13px 12px", borderBottom: "1px solid var(--color-divider)", background: "var(--color-bg)", fontSize: "11.5px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                                    <span style={{ color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
-                                      {c.hvHelp}
-                                      {c.verifyUrl ? (
-                                        <>
-                                          {" "}
-                                          <a href={c.verifyUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-accent)" }}>
-                                            {"Open the register ↗"}
-                                          </a>
-                                        </>
-                                      ) : null}
-                                    </span>
-                                    <span style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                                      {c.hvOutcomes.map((o, $i) => (
-                                        <span key={$i} className="hv23" onClick={o.pick} style={{ padding: "4px 10px", borderRadius: "6px", border: `1px solid ${o.border}`, color: o.fg, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                          {o.label}
-                                        </span>
-                                      ))}
-                                    </span>
-                                    <input value={c.hvNote} onChange={c.hvNoteSet} placeholder={c.hvPlaceholder} style={{ padding: "6px 9px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface, transparent)", color: "inherit", fontSize: "11.5px" }} />
-                                    {c.hvError ? (
-                                      <span style={{ color: "var(--st-risk)" }}>
-                                        {c.hvError}
-                                      </span>
-                                    ) : null}
-                                    <span style={{ display: "flex", gap: "8px" }}>
-                                      <span className="hv23" onClick={c.hvSave} style={{ padding: "4px 12px", borderRadius: "6px", border: "1px solid var(--color-accent)", color: "var(--color-accent)", cursor: c.hvBusy ? "wait" : "pointer" }}>
-                                        {c.hvBusy ? "Saving…" : "Save result"}
-                                      </span>
-                                      <span className="hv23" onClick={c.hvCancel} style={{ padding: "4px 12px", borderRadius: "6px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                                        {"Cancel"}
-                                      </span>
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </React.Fragment>
-                            ))}
-                            <div style={{ padding: "14px", fontSize: "11.5px", color: "var(--color-neutral-500)", display: vals.ccCertEmpty }}>
-                              {"Nothing on file in this scope."}
-                            </div>
-                          </div>
-                        </>
+                        <CertificateList rows={vals.ccCertRows} pageKey={vals.ccFocusName}
+                          intro={"Each certificate is held to three checks: the document is genuine, the public register confirms it, and it has not expired. Most urgent first."}
+                          emptyText={"Nothing on file in this scope."} />
                       ) : null}
                       {vals.ccPaneServed ? (
                         <>
@@ -698,7 +586,7 @@ export default function Compliance({ vals }) {
                       {vals.ccPaneVendors ? (
                         <>
                           <div style={{ padding: "11px 15px 0", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
-                            {"Coverage is the required accreditation types each vendor holds on file. A blocked vendor cannot be allocated regulated work here, whatever the building's own record says."}
+                            {"Coverage is the required accreditation types each vendor holds on file. At risk means an accreditation has lapsed or lapses within 30 days; a blocked vendor cannot be allocated regulated work here, whatever the building's own record says. Open a vendor to see its accreditations."}
                           </div>
                           <div style={{ overflowX: "auto", marginTop: "8px" }}>
                             <div style={{ minWidth: "560px" }}>
@@ -721,10 +609,12 @@ export default function Compliance({ vals }) {
                               </div>
                               {(vals.ccVendorRows || []).map((v, $index) => (
                                 <React.Fragment key={$index}>
-                                  <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.9fr 1.4fr 0.7fr", gap: "10px", padding: "9px 13px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", alignItems: "start" }}>
+                                  <div className="hv2" role="button" tabIndex={0} onClick={v.open} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); v.open(); } }} title={"Open " + v.name + " on the Vendors page — accreditations and buildings served"}
+                                    style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.9fr 1.4fr 0.7fr", gap: "10px", padding: "9px 13px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", alignItems: "start", cursor: "pointer" }}>
                                     <div style={{ minWidth: "0" }}>
-                                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                        {v.name}
+                                      <div style={{ display: "flex", alignItems: "center", gap: "5px", minWidth: "0" }}>
+                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</span>
+                                        <i className="ph ph-arrow-up-right" aria-hidden="true" style={{ fontSize: "11px", color: "var(--color-neutral-500)", flexShrink: 0 }}></i>
                                       </div>
                                       <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "1px 6px", background: v.bg, color: v.fg, display: "inline-block", marginTop: "3px" }}>
                                         {v.worst}
@@ -748,7 +638,8 @@ export default function Compliance({ vals }) {
                                       {v.gaps}
                                     </div>
                                     <span>
-                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: v.blockBg, color: v.blockFg, whiteSpace: "nowrap" }}>
+                                      <span title={v.blockTitle} style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: v.blockBg, color: v.blockFg, whiteSpace: "nowrap" }}>
+                                        {v.block === "At risk" ? <i className="ph ph-warning" aria-hidden="true" style={{ fontSize: "11px" }}></i> : v.block === "Blocked" ? <i className="ph ph-prohibit" aria-hidden="true" style={{ fontSize: "11px" }}></i> : null}
                                         {v.block}
                                       </span>
                                     </span>

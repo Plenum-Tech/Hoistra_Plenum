@@ -59,7 +59,8 @@ export const deepAgentsApi = {
   // the list the navigator shows, a thread's turns to reopen it, rename, and hide. Each is the
   // signed-in account's own, in the company it is acting for - the same two keys the browser
   // list has always filtered on - so the override rides as a query parameter.
-  threads: (q) => apiFetch(B, '/api/threads', { query: Object.assign({ limit: 60 }, q ? { q: q } : {}, orgOverride()), timeoutMs: 12000 }),
+  // A page of the caller's threads, newest first; `before` (an ISO time) continues after the last one.
+  threads: (q, before) => apiFetch(B, '/api/threads', { query: Object.assign({ limit: 200 }, q ? { q: q } : {}, before ? { before: before } : {}, orgOverride()), timeoutMs: 12000 }),
   thread: (id) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { query: orgOverride(), timeoutMs: 12000 }),
   renameThread: (id, title) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { method: 'PATCH', body: { title: title }, query: orgOverride(), timeoutMs: 8000 }),
   deleteThread: (id) => apiFetch(B, '/api/threads/' + encodeURIComponent(id), { method: 'DELETE', query: orgOverride(), timeoutMs: 8000 }),

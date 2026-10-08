@@ -83,7 +83,7 @@ export const ingestionMethods = {
     let askReason = false;
     if (s.ingPhase !== "setup") msgs.push({ who: "you", text: "Ingest “" + docLabel + "” into " + bName + "." });
     if (offline && s.ingPhase !== "setup") msgs.push({ who: "agent", text: "(offline demo) The validation service is unreachable, so this run is the canned walkthrough — nothing is checked or filed." });
-    if (s.ingPhase === "run") msgs.push({ who: "agent", text: "Reading the document and comparing it with " + bName + " and its ontology — vendors, assets, floors, contracts, certificates and UDR relationships already in the graph." });
+    if (s.ingPhase === "run") msgs.push({ who: "agent", text: "Reading the document and comparing it with " + bName + " and its ontology — vendors, assets, floors, contracts, certificates and the relationships already in the Hoist Graph." });
     if (s.ingPhase === "valid") {
       if (c) {
         m.bubbles.forEach((t) => msgs.push({ who: "agent", text: t }));

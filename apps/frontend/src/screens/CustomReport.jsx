@@ -161,7 +161,7 @@ export default function CustomReport({ vals }) {
               <div className="btn btn-primary" onClick={vals.reportRunning ? undefined : vals.runReport} style={{ ...BTN, opacity: vals.reportRunning ? "0.6" : "1", cursor: vals.reportRunning ? "default" : "pointer" }}>
                 {vals.reportRunning ? "Refreshing…" : "Run now"}
               </div>
-              <div onClick={vals.exportReport} title="Save this refresh as a markdown file" style={{ ...BTN, border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)" }}>{"Export"}</div>
+              <div onClick={vals.exportReport} title="Save this refresh as a PDF" style={{ ...BTN, border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)" }}>{"Export"}</div>
               <div onClick={vals.deleteReport} title={vals.deleteReportTitle} style={{ ...BTN, border: `1px solid ${vals.deleteReportArmed ? "var(--st-risk)" : "var(--color-divider)"}`, background: vals.deleteReportArmed ? "var(--st-risk)" : "transparent", color: vals.deleteReportArmed ? "var(--accent-ink)" : "var(--st-risk)" }}>{vals.deleteReportLabel}</div>
             </div>
           </div>

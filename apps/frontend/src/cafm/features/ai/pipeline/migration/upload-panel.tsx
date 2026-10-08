@@ -57,7 +57,7 @@ export default function UploadPanel({ orgId, onStarted }: Props) {
         <h2 className="text-xl font-bold text-slate-900">Data Migration</h2>
         <p className="text-sm text-slate-500 mt-1">
           Upload a CSV or Excel file from your existing CMMS to map and migrate it
-          into Plenum CAFM using a 9-node AI pipeline with HITL review gates.
+          into Hoistra, with AI-assisted mapping and review steps where you confirm each decision.
         </p>
       </div>
 

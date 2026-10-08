@@ -693,7 +693,7 @@ export function tableRoutingView(payload, dec) {
     const sg = (p.table_routing_suggestion_by_table || {})[r.key];
     const suggestion = match !== 'none' || !isObj(sg) ? null
       : sg.action === 'assign' && sg.target ? { label: 'Suggested: ' + sg.target, title: "Assign this sheet to the existing CAFM table '" + sg.target + "'", target: sg.target, isNew: false }
-      : sg.action === 'create' && sg.suggested_new_name ? { label: "Create new table '" + sg.suggested_new_name + "'", title: "No CAFM table matched — create a new table '" + sg.suggested_new_name + "' (FM ontology suggestion)", target: toSnakeCase(sg.suggested_new_name), isNew: true }
+      : sg.action === 'create' && sg.suggested_new_name ? { label: "Create new table '" + sg.suggested_new_name + "'", title: "No CAFM table matched — create a new table '" + sg.suggested_new_name + "' (suggested from facilities-management vocabulary)", target: toSnakeCase(sg.suggested_new_name), isNew: true }
       : null;
     const conf = num(confOf[r.key]);
     const best = {};
@@ -728,13 +728,17 @@ function tableResolutionPanels(p, routingConfirmed) {
   const pctOf = (x) => (num(x) === null ? '—' : Math.round(x * 100) + '%');
   const tone = (x) => (num(x) === null ? 'neutral' : x >= 0.9 ? 'ok' : x >= 0.7 ? 'warn' : 'risk');
   const mTone = (m) => /(exact|levenshtein)/i.test(m || '') ? 'ok' : /(rag|alias)/i.test(m || '') ? 'accent' : /(semantic|suggest)/i.test(m || '') ? 'warn' : 'neutral';
+  // The tone keys on the service's own code; the words are the reader's (as the wizard's
+  // migration-mapping-utils.ts plainMethodLabel / plainAliasSource).
+  const mWord = (m) => /^rag(\s*\/\s*alias|_alias)?$/i.test(String(m || '').trim()) ? 'alias match' : /^(semantic )?llm$/i.test(String(m || '').trim()) ? 'AI match' : m;
+  const aliasWord = (a) => (a === 'FM_TABLE_SYNONYMS' ? 'facilities-management vocabulary' : a);
   const sem = arr(tr.semantic).filter(isObj);
   return {
     pk: uniqueTablesView(p).pkRows,
-    deterministic: arr(tr.deterministic).filter(isObj).map((r) => ({ source: r.source, method: r.method || 'none', methodTone: mTone(r.method), dest: r.destination || '—', conf: pctOf(r.confidence), confTone: tone(r.confidence), note: r.note || '' })),
-    rag: arr(tr.rag_alias).filter(isObj).map((r) => ({ source: r.source, hit: r.alias_hit || '', dest: r.destination || '—', conf: pctOf(r.confidence), confTone: tone(r.confidence), aliasSource: r.alias_source || '' })),
+    deterministic: arr(tr.deterministic).filter(isObj).map((r) => ({ source: r.source, method: mWord(r.method) || 'none', methodTone: mTone(r.method), dest: r.destination || '—', conf: pctOf(r.confidence), confTone: tone(r.confidence), note: r.note || '' })),
+    rag: arr(tr.rag_alias).filter(isObj).map((r) => ({ source: r.source, hit: r.alias_hit || '', dest: r.destination || '—', conf: pctOf(r.confidence), confTone: tone(r.confidence), aliasSource: aliasWord(r.alias_source) || '' })),
     semantic: sem.map((r) => ({ source: r.source, signal: r.signal == null ? '' : String(r.signal), dest: r.destination || '—', conf: pctOf(r.confidence), confTone: tone(r.confidence), band: r.band === 'suggested' ? 'suggested — confirm' : 'review required', bandTone: r.band === 'suggested' ? 'warn' : 'neutral' })),
-    final: routingConfirmed ? arr(tr.final_decisions).filter(isObj).map((r) => ({ source: r.source, dest: r.destination || '— unmatched —', method: r.method || '', methodTone: mTone(r.method), conf: pctOf(r.confidence), confTone: tone(r.confidence) })) : [],
+    final: routingConfirmed ? arr(tr.final_decisions).filter(isObj).map((r) => ({ source: r.source, dest: r.destination || '— unmatched —', method: mWord(r.method) || '', methodTone: mTone(r.method), conf: pctOf(r.confidence), confTone: tone(r.confidence) })) : [],
     show: arr(tr.metadata_cards).length > 0 || arr(tr.final_decisions).length > 0
   };
 }
@@ -1130,12 +1134,12 @@ export function fieldMappingView(payload, dec) {
         scores: top.map((s) => ({ field: s.field, score: pctTxt(s.score), active: x.action === 'override' && x.mode === 'existing' && x.to === s.field })),
         tier: str(it.tier) || 'T2_semantic', conf: pctTxt(conf), confTone: toneOf(conf), confWidth: conf === null ? 0 : Math.round(conf * 100),
         rationale: str(it.rationale) || '',
-        breakdown: isObj(it.score_breakdown) ? [['Semantic', 'semantic'], ['Keyword', 'keyword'], ['Datatype', 'datatype'], ['Numeric pattern', 'numeric_pattern'], ['Ontology', 'ontology']]
+        breakdown: isObj(it.score_breakdown) ? [['Semantic', 'semantic'], ['Keyword', 'keyword'], ['Datatype', 'datatype'], ['Numeric pattern', 'numeric_pattern'], ['Vocabulary', 'ontology']]
           .map(([label, key]) => ({ label: label, v: num(it.score_breakdown[key]) ?? num(it.score_breakdown[key + '_score']) }))
           .filter((b) => b.v !== null).map((b) => ({ label: b.label, pct: Math.round(b.v * 100), tone: b.v >= 0.85 ? 'ok' : b.v >= 0.6 ? 'warn' : 'risk' })) : [],
         to: x.to, columnOptions: Array.from(new Set(sugs.map((s) => s.field).concat(cols))),
         name: x.name, nameSafe: safe, type: x.type, nullable: x.nullable,
-        preview: 'Creates plenum_cafm.' + (safeIdent(canon.table) || canon.table || '…') + '.' + (safe || '…') + ' on submit.',
+        preview: 'Creates the column ' + (safe || '…') + ' on ' + (safeIdent(canon.table) || canon.table || '…') + ' on submit.',
         destTable: canon.table
       };
     });

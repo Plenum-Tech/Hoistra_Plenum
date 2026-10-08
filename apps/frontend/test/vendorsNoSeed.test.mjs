@@ -53,12 +53,13 @@ beforeEach(() => {
 });
 const cleanup = () => { clearInterval(c._orchTick); clearTimeout(c._tt); clearTimeout(c._homeRetry); clearTimeout(c._ccRetry); clearTimeout(c._vpRetry); clearTimeout(c._vpRefresh); };
 
-test('nothing answered: no vendors, no counts, and the page says which service is missing', () => {
+test('nothing answered: no vendors, no counts, and the page says it could not load — without naming the service', () => {
   const v = c.renderVals();
   assert.deepEqual(v.vpList, []);                       // no seed directory behind the read
   assert.equal(v.vpEmptyShow, 'block');
   assert.equal(v.vpBodyShow, 'none');
-  assert.match(v.vpEmptyNote, /svc-operations-intelligence/);
+  assert.match(v.vpEmptyNote, /could not be loaded/);
+  assert.doesNotMatch(v.vpEmptyNote + v.vpSourceLabel, /svc-|operations-intelligence/, 'no internal service name on screen (7 Oct 2026)');
   assert.match(v.vpSourceLabel, /No data|Reading/);
   v.vpTiles.forEach((t) => assert.equal(t.value, '—', t.label + ' is not asserted'));
   v.vpStats.forEach((st) => {

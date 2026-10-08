@@ -21,6 +21,7 @@ import { tracesPageMethods } from './tracesPage.js';
 import { correctionMethods } from './corrections.js';
 import { documentsRegisterMethods } from './documentsRegister.js';
 import { vendorsLiveMethods } from './vendorsLive.js';
+import { vendorsQueueMethods } from './vendorsQueue.js';
 import { vendorsWriteMethods } from './vendorsWrite.js';
 import { CB_DEFAULTS, chatBuildingMethods } from './chatBuilding.js';
 import { CC_CASE_DEFAULTS, chatCaseMethods } from './chatCases.js';
@@ -54,6 +55,7 @@ import { migrationMethods } from './migration.js';
 import { superAdminLiveMethods } from './superAdminLive.js';
 import { platformCostMethods } from './platformCost.js';
 import { choiceMethods } from './choiceCards.js';
+import { supportMethods, SUPPORT_TOPICS } from './support.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -128,6 +130,17 @@ export class HoistraLogic extends Controller {
     bkDate: "2026-09-16", bkWindow: "08:00–12:00",
     nv: { name: "", email: "", id: "", phone: "" }, nvSpec: "Lifts — LOLER",
     emTo: "", emSubject: "", emBody: "", emKicker: "", emKind: "",
+    // A Decision-queue draft: the approvals item its send is recorded on (compliance engine
+    // drafts only), and the words its confirmation uses (queueDraft.js).
+    emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false,
+    // Support (logic/support.js): Support pressed and its first question not asked yet, the page
+    // it was pressed on, the help topic open, the answer a "Not yet" was said to, the Support
+    // space's Open/Resolved filter; and on a support email, the copy to the asker and the
+    // request the send is recorded on.
+    supportPending: false, supFrom: "", supTopic: SUPPORT_TOPICS[0].key, supNotYet: null, supFilter: null,
+    // The index's own question field, and the topic the next question was asked from.
+    supCustom: "", supAskedTopic: "",
+    emCc: "", emSupportId: null,
     vendors: [],
     cFreq: "Daily", cDate: "2026-09-02", cTime: "02:00",
     ccPanel: false, ccCountries: ["UK"], ccStates: [], ccBuildings: [], ccTile: null,
@@ -320,7 +333,7 @@ export class HoistraLogic extends Controller {
     // The rail's answer has its run (Correct, every step) whichever way it got on screen.
     if (prev.ccChat !== this.state.ccChat || prev.ccTraceIdx !== this.state.ccTraceIdx
       || prev.ccBusy !== this.state.ccBusy || prev.signedIn !== this.state.signedIn) this.crEnsureRun();
-    if (prev.sessions !== this.state.sessions) saveSessions(this.state.sessions);
+    if (prev.sessions !== this.state.sessions) saveSessions(this.state.sessions, undefined, this.state.sessionId);
     // Only a signed-in tab owns the stored session. A tab sitting on the gate writes nothing —
     // its animation ticks would otherwise erase the refresh token another tab is signed in with —
     // and the key is removed exactly once, on the way out. `prev` lets saveSession tell,
@@ -329,4 +342,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsQueueMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, supportMethods, migrationMethods, emailHistoryMethods, renderValsMethods);

@@ -451,7 +451,7 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
           <h2 className="text-lg font-bold text-slate-900">Hierarchy Verification</h2>
           <p className="text-sm text-slate-500 mt-0.5">
             {singleTableImport
-              ? "Your file has one table — review the Plenum default hierarchy and any column references on your data."
+              ? "Your file has one table — review the Hoistra default hierarchy and any column references on your data."
               : "Confirm or reject detected FK relationships and hierarchy structure."}
           </p>
         </div>
@@ -461,7 +461,7 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
         <div className="mb-6 rounded-xl border border-purple-200 bg-purple-50 px-5 py-4">
           <p className="text-sm font-semibold text-purple-900">Single-table import</p>
           <p className="text-sm text-purple-800 mt-1">
-            Cross-table FK detection is not available for a flat file. The system shows the default Plenum CAFM
+            Cross-table FK detection is not available for a flat file. The system shows the default Hoistra
             hierarchy
             {importTableName ? (
               <>
@@ -554,7 +554,7 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
         </div>
         <p className="mt-1.5 text-[10px] text-slate-400">
           Reflects the currently-opened version ({migrationId.slice(0, 8)}). The full package
-          bundles documents, tables, columns, PK/FK, hierarchy, ontology matches, semantic &amp;
+          bundles documents, tables, columns, PK/FK, hierarchy, vocabulary matches, semantic &amp;
           numeric scores, user overrides, and validation results.
         </p>
       </div>
@@ -562,7 +562,7 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
       {(payload.proposed_structure || singleTableImport) && (
         <div className="mb-6 rounded-lg bg-indigo-50 border border-indigo-200 px-4 py-3">
           <p className="text-xs font-semibold text-indigo-700 mb-1">
-            {singleTableImport ? "System default Plenum hierarchy" : "Proposed structure"}
+            {singleTableImport ? "System default Hoistra hierarchy" : "Proposed structure"}
           </p>
           <p className="text-sm text-indigo-800 font-mono">
             {payload.proposed_structure ?? "sites → locations → assets → work_orders → tasks"}
@@ -573,9 +573,9 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
       {referenceModelItems.length > 0 && (
         <div className="rounded-xl border border-purple-200 bg-purple-50/60 shadow-sm overflow-hidden mb-6">
           <div className="px-5 py-3.5 border-b border-purple-200">
-            <span className="text-sm font-semibold text-purple-900">Plenum reference model (informational)</span>
+            <span className="text-sm font-semibold text-purple-900">Hoistra reference model (informational)</span>
             <p className="text-xs text-purple-700 mt-0.5">
-              These relationships describe how data is organized in Plenum — they are not in your file.
+              These relationships describe how data is organised in Hoistra — they are not in your file.
             </p>
           </div>
           <div className="divide-y divide-purple-100">
@@ -798,7 +798,7 @@ export default function GateHierarchy({ migrationId, payload, onSubmitted, pipel
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-6 text-center text-slate-500 text-sm mb-6">
           {singleTableImport
-            ? "No column-level references need review. Accept the default Plenum hierarchy to continue."
+            ? "No column-level references need review. Accept the default Hoistra hierarchy to continue."
             : "No relationships require manual review. All hierarchies were auto-detected with high confidence."}
         </div>
       )}

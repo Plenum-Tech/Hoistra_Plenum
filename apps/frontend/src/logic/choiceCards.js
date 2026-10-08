@@ -10,15 +10,20 @@
 //   attach  open the file picker for those types and send what was picked. A spreadsheet sent
 //           with no text starts a migration; a document is ingested (orchSubmitNow).
 //   ask     send the card's text as the next question.
+//   draft   a next step under a requirement-matrix answer (logic/complianceCell.js): opens the
+//           draft it names in the dock — an email to check and send, or the upload card.
 
 import { accountCanIngest } from './auth.js';
+
+const DRAFTS = ['accreditation', 'renewal', 'upload', 'visit'];
 
 // Only what the chat can draw: a card with no title, or an action it does not know, is left out.
 export function validChoices(choices) {
   return (Array.isArray(choices) ? choices : []).filter((c) =>
     c && typeof c === 'object' && String(c.title || '').trim() && c.action
     && ((c.action.kind === 'attach' && String(c.action.accept || '').trim())
-      || (c.action.kind === 'ask' && String(c.action.text || '').trim())));
+      || (c.action.kind === 'ask' && String(c.action.text || '').trim())
+      || (c.action.kind === 'draft' && DRAFTS.indexOf(c.action.draft) > -1)));
 }
 
 // The view of each card; `pick(c)` runs it.
@@ -46,6 +51,7 @@ export const choiceMethods = {
     const a = (c && c.action) || {};
     if (this.state.ccBusy) return this.flash('Still answering — stop it first, or wait for it to finish.');
     if (a.kind === 'ask') return this.askScoped(String(a.text || ''));
+    if (a.kind === 'draft') return this.ccCellAction(a);
     if (a.kind !== 'attach' || typeof document === 'undefined') return undefined;
     // A picker of its own, filtered to the card's types: the composer's picker takes every type.
     const input = document.createElement('input');

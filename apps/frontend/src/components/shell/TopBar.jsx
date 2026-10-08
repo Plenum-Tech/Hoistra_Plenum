@@ -92,6 +92,12 @@ export default function TopBar({ vals }) {
             ) : null}
           </div>
         ) : null}
+        {/* Support is the orchestrator in a support session (logic/support.js) — help topics,
+            "did this sort it out?", and an email to Plenum when it did not. */}
+        <button type="button" className={"sup-top" + (vals.supTopActive ? " is-on" : "")} onClick={vals.openSupportTop} title="Get help from the orchestrator, or email the Plenum team">
+          <i className="ph ph-lifebuoy" aria-hidden="true"></i>
+          <span>{"Support"}</span>
+        </button>
         <i className="ph ph-cpu hv6" onClick={vals.openOrch} title="Open the orchestrator — ask anything beside this page" style={{ fontSize: "15px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
         <div style={{ position: "relative", flexShrink: "0" }}>
           <div className="hv3" onClick={vals.toggleAcct} title={vals.acctName} style={{ width: "28px", height: "28px", borderRadius: "50%", background: vals.acctBg, color: vals.acctFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12.5px", cursor: "pointer", border: `1px solid ${vals.acctEdge}` }}>

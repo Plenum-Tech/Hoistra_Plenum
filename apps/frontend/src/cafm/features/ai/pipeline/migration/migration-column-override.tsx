@@ -150,7 +150,7 @@ export function MigrationColumnOverride({ item, canonicalTable, draft, onChange,
             {columnsLoading ? (
               <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
                 <Loader2 size={12} className="animate-spin" />
-                Loading plenum_cafm columns…
+                Loading database columns…
               </div>
             ) : null}
             {columnsError ? (
@@ -244,7 +244,7 @@ export function MigrationColumnOverride({ item, canonicalTable, draft, onChange,
           </div>
           <p className={`text-slate-500 ${compact ? "text-[10px] sm:col-span-2" : "text-xs sm:col-span-2"}`}>
             Creates{" "}
-            <code className="font-mono bg-white px-1 rounded">plenum_cafm.{tableForColumns || "…"}.{draft.newColumnName || "…"}</code>{" "}
+            <code className="font-mono bg-white px-1 rounded">{tableForColumns || "…"}.{draft.newColumnName || "…"}</code>{" "}
             on submit.
           </p>
         </div>

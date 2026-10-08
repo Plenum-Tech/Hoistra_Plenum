@@ -16,6 +16,9 @@
 //              targets the bottom of the scroll area, so the marker is not required
 //   busy       true while a turn is being answered — a new turn re-engages following
 //   count      number of messages in the transcript — a new message re-engages following
+//
+// Returns { release } — stop following until the reader scrolls back down or the next message
+// arrives, for a caller about to scroll somewhere else on purpose.
 import { useEffect, useRef } from 'react';
 
 // "Near the bottom": within `threshold` pixels of the end of the scrollable content.
@@ -135,4 +138,6 @@ export function useFollowBottom({ container, end, busy, count }) { // eslint-dis
 
   // After every render, nudge the glide if it has stopped and there is new distance to cover.
   useEffect(() => { if (followRef.current) followRef.current(); });
+
+  return { release: () => { stuck.current = false; } };
 }

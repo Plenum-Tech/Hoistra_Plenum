@@ -38,8 +38,8 @@ export const ENGINES = [
   { key: 'planner', label: 'Plan it in steps' }
 ];
 export const DATE_FIELDS = [
-  { key: '', label: 'Keep the date field' }, { key: 'raised_at', label: 'Date by raised_at' },
-  { key: 'reported_at', label: 'Date by reported_at' }, { key: 'completed_at', label: 'Date by completed_at' }
+  { key: '', label: 'Keep the date field' }, { key: 'raised_at', label: 'Date by when raised' },
+  { key: 'reported_at', label: 'Date by when reported' }, { key: 'completed_at', label: 'Date by when completed' }
 ];
 
 const parse = (v) => { if (v === null || v === undefined) return null; if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return v; } } return v; };

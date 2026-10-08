@@ -256,7 +256,7 @@ test('auLiveLoad replaces the seed in place, newest first, and sends no organiza
   c.setState({ signedIn: true, view: 'audit', auRange: 'All' });
   const v = c.auditVals(c.state);
   assert.equal(v.auCount, '3');
-  assert.equal(v.auLiveSourceLabel, 'Live · svc-operations-intelligence');
+  assert.equal(v.auLiveSourceLabel, 'Live');
   assert.equal(v.auLiveRetryShow, 'none');
   assert.equal(v.auRows.length, 3);
   // The chip is a SERVER filter now (auditQuery.test.mjs pins what goes on the wire), so on

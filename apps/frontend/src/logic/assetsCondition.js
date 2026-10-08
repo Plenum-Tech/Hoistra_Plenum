@@ -199,7 +199,7 @@ export function vendorAccreditationLine(rows, now) {
 
 export const NOT_METERED = 'Not metered — no sub-meter or no area on record, which is not the same as no consumption';
 export const NO_SECTION_LINK = 'Not yet linked to a section';
-export const NO_SECTION_LINK_WHY = 'assets.section_id exists on the table but AssetResponse does not return it, so the link cannot be made in bulk';
+export const NO_SECTION_LINK_WHY = 'The asset register does not yet return each asset’s section, so the link cannot be made in bulk';
 export const NOT_COMPUTABLE = 'Not computable — needs a replacement value, a design life and an install date';
 export const UNGRADED = 'Ungraded — no band defined for this reading type';
 export const RULE_NOT_MODEL = 'A named rule over recorded signals, not a fitted model';
@@ -835,7 +835,7 @@ export const assetsConditionMethods = {
           + 'not on the section, because the condition read did not come back.');
       }
       if (x.anomaly) bits.push('An anomaly is attributed to this asset (' + (x.anomaly.anomaly_type || 'anomaly') + ', open ' + (x.anomalyDays === null ? 'unknown' : x.anomalyDays + ' days') + ').');
-      else bits.push('No anomaly is attributed to this asset; energy_anomalies.asset_id is set only where a meter names the asset.');
+      else bits.push('No anomaly is attributed to this asset; an anomaly is attributed to an asset only where a meter names it.');
       bits.push(x.score === null ? 'No health score on record — not the same as healthy.' : 'Health score ' + Math.round(x.score) + '/100.');
       return bits.join(' ');
     };
@@ -1111,7 +1111,7 @@ export const assetsConditionMethods = {
         open: uOpen, caret: uOpen ? 'ph-caret-down' : 'ph-caret-right',
         toggle: () => this.setState((p) => ({ asOpenB: (p.asOpenB || []).indexOf('__unidentified') > -1 ? (p.asOpenB || []).filter((y) => y !== '__unidentified') : (p.asOpenB || []).concat(['__unidentified']) })),
         eui: 'No EUI on record', delta: '—',
-        std: 'Their building_id matches nothing in the buildings register, the sections response or the locations register',
+        std: 'Their building reference matches nothing in the buildings register, the sections list or the locations register',
         pct: '0%', refPct: Math.round(100 / 1.5) + '%', barColor: 'var(--color-divider)',
         state: 'unidentified', stColor: 'var(--color-neutral-500)', stBg: 'var(--color-bg)',
         counts: nAssets + (nAssets === 1 ? ' asset' : ' assets') + ' that cannot be attributed to a building you hold',
@@ -1124,7 +1124,7 @@ export const assetsConditionMethods = {
           + '. Either the register is incomplete, or the asset read is returning beyond your allocation.',
         actions: '', actColor: 'var(--color-neutral-500)',
         sections: unknown.map((g) => Object.assign({}, g, {
-          name: g.name, eui: '—', delta: '—', meter: 'building_id ' + g.key, d: 0,
+          name: g.name, eui: '—', delta: '—', meter: 'Building reference ' + g.key, d: 0,
           flags: g.counts, state: 'unidentified', stColor: 'var(--color-neutral-500)', stBg: 'var(--color-bg)',
           pct: '0%', refPct: Math.round(100 / 1.5) + '%', barColor: 'var(--color-divider)',
           rows: g.sections.reduce((acc, sc) => acc.concat(sc.rows), [])
@@ -1229,10 +1229,10 @@ export const assetsConditionMethods = {
       asGroups: outGroups,
       asWithheldShow: withheld ? 'block' : 'none',
       asWithheldText: withheld + (withheld === 1 ? ' asset was' : ' assets were') + ' returned by the asset register but sit'
-        + ' outside the buildings your account holds, so they are not shown. Hiding them here does not stop the API'
-        + ' returning them — a count above zero means /api/assets is scoping differently from your login.',
+        + ' outside the buildings your account holds, so they are not shown. Hiding them here does not stop the register'
+        + ' returning them — a count above zero means the asset register is scoping differently from your login.',
       asEmpty: groups.length ? 'none' : 'block',
-      asEmptyText: s.asLiveLoading ? 'Reading plenum_cafm.assets…'
+      asEmptyText: s.asLiveLoading ? 'Reading the asset register…'
         : s.asLiveError ? 'Unreachable — ' + s.asLiveError
         : (s.asLive || []).length ? 'No asset in scope matches the “' + (f || 'All') + '” filter.'
         : 'No assets are in scope for your account.',
@@ -1295,7 +1295,7 @@ export const assetsConditionMethods = {
           { a: 'criticality', t: a.criticality || 'Not set' },
           { a: 'installed', t: a.installation_date ? String(a.installation_date) : 'Not on record' },
           { a: 'warranty', t: a.warranty_expiry ? 'to ' + String(a.warranty_expiry) : 'Not on record' },
-          { a: 'open work orders', t: String(nWo || 0) + ' · joined on work_orders.asset_id' },
+          { a: 'open work orders', t: String(nWo || 0) + ' · matched on the work order’s asset' },
           { a: 'value at risk', t: iv.value_at_risk != null ? '£' + Math.round(iv.value_at_risk).toLocaleString('en-GB') + ' — ' + (iv.basis || '') : (i.loading ? 'Reading…' : NOT_COMPUTABLE) },
           { a: 'remaining life', t: iv.remaining_life_months != null ? iv.remaining_life_months + ' months' : (i.loading ? 'Reading…' : 'Not computable') },
           // A named rule, not a fitted model: quoting accuracy without one invents evidence.
@@ -1308,7 +1308,7 @@ export const assetsConditionMethods = {
           { a: 'readings', t: (i.readings && i.readings.length)
               ? i.readings.slice(0, 6).map((r) => r.reading_type + ' ' + r.value + (r.unit ? ' ' + r.unit : '') + ' · ' + band(r)).join('; ')
               : (i.loading ? 'Reading…' : 'None on file') },
-          { a: 'work history', t: 'Reading svc-operations-intelligence…' },
+          { a: 'work history', t: 'Reading the work history…' },
           { a: 'certificates', t: 'Reading the compliance register…' },
           { a: 'vendor accreditation', t: 'Reading the compliance register…' }
         ],
@@ -1601,7 +1601,7 @@ export const assetsConditionMethods = {
         id: aid, name: a ? a.asset_name : 'Asset ' + aid.slice(0, 8) + '…',
         cls: (i.asset && i.asset.section) || (a && a.category_name) || 'No category set',
         b: b ? b.name : 'Unlinked', sec: (i.asset && i.asset.section) || NO_SECTION_LINK,
-        feed: 'plenum_cafm.asset_readings', sensors: String(readings.length),
+        feed: 'asset readings', sensors: String(readings.length),
         vendor: (i.asset && i.asset.vendor) || 'Open to read the vendor',
         open: open, caret: open ? 'ph-caret-down' : 'ph-caret-right',
         toggle: () => { this.setState((p) => ({ iotOpen: p.iotOpen === aid ? null : aid })); if (s.iotOpen !== aid) this.asCondLoadIntel(aid); },
@@ -1658,7 +1658,7 @@ export const assetsConditionMethods = {
           ? 'None of the assets read so far has readings on file. Open an asset to read its telemetry.'
           : 'Open an asset to read its telemetry, bands and failure assessment.',
       iotNote: cards.length
-        ? 'Live values from plenum_cafm.asset_readings, graded against plenum_cafm.asset_reading_bands. Open an asset to read its bands, its value-at-risk arithmetic and its failure assessment — a named rule over recorded signals, not a fitted model, so it carries drivers rather than an accuracy figure.'
+        ? 'Live sensor readings, graded against each asset’s reading bands. Open an asset to read its bands, its value-at-risk arithmetic and its failure assessment — a named rule over recorded signals, not a fitted model, so it carries drivers rather than an accuracy figure.'
         : ''
     };
   }

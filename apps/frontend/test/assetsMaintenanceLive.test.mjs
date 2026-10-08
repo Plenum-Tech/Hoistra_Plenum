@@ -559,7 +559,8 @@ test('the ops module renders with nothing loaded — empty, and no seed behind i
   assert.deepEqual(vals.mxPpm, []);
   assert.equal(vals.mxEmptyShow, 'block');
   assert.equal(vals.mxBodyShow, 'none');
-  assert.match(vals.mxEmptyNote, /svc-work-order-management/);
+  assert.match(vals.mxEmptyNote, /could not be loaded|not available yet|Reading/);
+  assert.doesNotMatch(vals.mxEmptyNote, /svc-|work-order-management/, 'no internal service name on screen (7 Oct 2026)');
   // Every card is a dash, and the "Last run" stamp with them — a fixed "02:14 today" used
   // to sit there whether or not anything had been read.
   vals.mxCards.forEach((card) => assert.equal(card.v, '—', card.l + ' is not asserted'));

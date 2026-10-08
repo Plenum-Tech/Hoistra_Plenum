@@ -46,7 +46,7 @@ export default function CorrectionDrawer({ vals }) {
   const note = (
     <div>
       <label htmlFor="cr-note" style={{ ...KICK, display: "block" }}>{vals.crMode === "plan" ? "How the plan should change" : vals.crMode === "route" ? "Or say why" : stage ? "What this agent should do differently" : evidence ? "Or say what was wrong" : "What was wrong"}</label>
-      <textarea id="cr-note" ref={noteRef} value={vals.crNote} onChange={vals.crSetNote} rows={evidence ? 2 : 5} placeholder={vals.crMode === "plan" ? "Use get_cost_savings directly instead of the maintenance engine for step 2…" : stage ? "Always include building certificates (DEC, FRA) in lapsed counts, not only vendor accreditations…" : "Cancelled jobs are not raised work; the DEC for Manchester Town Hall is missing…"}
+      <textarea id="cr-note" ref={noteRef} value={vals.crNote} onChange={vals.crSetNote} rows={evidence ? 2 : 5} placeholder={vals.crMode === "plan" ? "Answer step 2 from the cost-savings figures, not the maintenance engine…" : stage ? "Always include building certificates (DEC, FRA) in lapsed counts, not only vendor accreditations…" : "Cancelled jobs are not raised work; the DEC for Manchester Town Hall is missing…"}
         style={{ ...FIELD, marginTop: "6px", resize: "vertical", minHeight: "52px", maxHeight: "30vh", lineHeight: "1.45" }} />
       <input aria-label="Why" value={vals.crWhy} onChange={vals.crSetWhy} placeholder="Why — kept as the rule (optional)"
         style={{ ...FIELD, marginTop: "6px", fontSize: "12px", padding: "7px 10px" }} />

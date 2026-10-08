@@ -486,7 +486,7 @@ function RunDetails({ engine, steps }: { engine: string | null; steps: WizardSte
       </summary>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
         <dt className="text-slate-500">Engine</dt>
-        <dd className="text-slate-800">{engine === "go" ? "hoist-engine (Go)" : "Python"}</dd>
+        <dd className="text-slate-800">{engine === "go" ? "High-speed engine" : "Standard engine"}</dd>
         {timed.map((s) => (
           <div key={s.n} className="contents">
             <dt className="text-slate-500">

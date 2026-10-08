@@ -31,11 +31,12 @@ import DetailDrawer from './components/shell/DetailDrawer.jsx';
 import VendorDrawer from './components/shell/VendorDrawer.jsx';
 import CommandPalette from './components/shell/CommandPalette.jsx';
 import Toast from './components/shell/Toast.jsx';
+import ReportBuilder from './components/shell/ReportBuilder.jsx';
 
 export default function App() {
   const vals = useHoistra();
   return (
-    <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad, transition: "padding-left 0.2s ease" }}>
+    <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad }}>
       {vals.gated ? <Gate vals={vals} /> : null}
       {vals.signedIn ? (
         <>
@@ -50,6 +51,7 @@ export default function App() {
             </>
           ) : null}
           <Navigator vals={vals} />
+          <ReportBuilder vals={vals} />
           <TopBar vals={vals} />
           {vals.orchOpen ? <OrchestratorDock vals={vals} /> : null}
         </>

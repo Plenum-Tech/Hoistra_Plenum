@@ -54,6 +54,11 @@ export const opsApi = {
   // repeat draft into a reminder. Never returns a body.
   sentEmails: (subject) =>
     apiFetch(B, '/api/approvals/sent-emails', { query: withOrg({ subject }) }),
+  // Where a draft to this vendor may be sent: { vendor, email, candidates }. The primary contact
+  // or the only one; several and none marked primary is no email and the candidates. Reads only;
+  // 404 for a vendor outside the company in view.
+  vendorContact: (vendorId) =>
+    apiFetch(B, '/api/approvals/vendor-contact', { query: withOrg({ vendor_id: vendorId }), timeoutMs: 15000 }),
   sendEmail: (body) =>
     apiFetch(B, '/api/approvals/send-email', {
       method: 'POST',

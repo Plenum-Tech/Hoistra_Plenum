@@ -167,7 +167,7 @@ export const buildingsGraphMethods = {
     if (c.error) {
       return {
         show: "block", loading: false,
-        error: c.status === 404 ? "Cost drivers are not on this svc-operations-intelligence yet."
+        error: c.status === 404 ? "Cost drivers are not available on this platform yet."
           : "Could not read cost drivers — " + c.error,
         rows: [], totalsShow: "none", noteShow: "none", note: ""
       };

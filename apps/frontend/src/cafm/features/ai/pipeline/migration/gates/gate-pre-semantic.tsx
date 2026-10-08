@@ -19,6 +19,7 @@ import {
   ColumnIntelligencePanels,
 } from "../migration-metadata-view";
 import { usePipelineStageScrollSpy, pulsePipelineStage, setColumnStagesRevealed } from "../../pipeline-stage-link";
+import { plainTierWord } from "../migration-mapping-utils";
 
 /** SQL types offered for new-table columns. */
 const DATA_TYPES = [
@@ -157,7 +158,7 @@ function TierBadge({ tier }: { tier: string }) {
   };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${map[tier] ?? "bg-slate-100 text-slate-600"}`}>
-      {tier.replace("T1_", "")}
+      {plainTierWord(tier.replace("T1_", ""))}
     </span>
   );
 }
@@ -967,7 +968,7 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
         det.push({ source: src, method: "none", destination: null, confidence: null, note: target ? "no exact name match → next stage" : "no destination" });
       }
       if (mt !== "exact" && mt !== "new") {
-        rag.push({ source: src, alias_hit: null, destination: null, confidence: null, alias_source: "no alias → semantic (FM-ontology hits resolve on the server)" });
+        rag.push({ source: src, alias_hit: null, destination: null, confidence: null, alias_source: "no alias → AI matching (known-term matches are resolved on the server)" });
       }
       if (mt === "semantic") {
         sem.push({ source: src, signal: cols.map((c) => c.name).slice(0, 6).join(", "), destination: target || null, confidence: conf, method: "semantic LLM", band: conf >= 0.7 ? "suggested" : "review" });
@@ -1945,7 +1946,7 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
                               title={
                                 isAssign
                                   ? `Assign this sheet to the existing CAFM table '${name}'`
-                                  : `No CAFM table matched — create a new table '${name}' (FM ontology suggestion)`
+                                  : `No CAFM table matched — create a new table '${name}' (suggested from facilities-management vocabulary)`
                               }
                               onClick={() => applyTableTarget(tbl, name as string, !isAssign)}
                               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
@@ -1963,7 +1964,7 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
                       const pct = Math.round(conf * 100);
                       return (
                         <span
-                          title="Table match confidence (exact name = 100%, otherwise the LLM's match %)"
+                          title="Table match confidence (exact name = 100%, otherwise the AI match %)"
                           className={`text-xs font-mono font-semibold ${
                             pct >= 90 ? "text-green-600" : pct >= 70 ? "text-amber-600" : "text-red-500"
                           }`}
@@ -2133,7 +2134,7 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
         <div className="flex flex-wrap gap-1.5 mb-5">
           {Object.entries(tierCounts).sort((a, b) => b[1] - a[1]).map(([tier, count]) => (
             <span key={tier} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${TIER_COLORS[tier] ?? "bg-slate-100 text-slate-600"}`}>
-              {tier.replace("T1_", "")}: {count}
+              {plainTierWord(tier.replace("T1_", ""))}: {count}
             </span>
           ))}
         </div>
@@ -2828,7 +2829,7 @@ export default function GatePreSemantic({ migrationId, payload, onSubmitted, onF
                         <span className="font-mono text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">{item.target_field}</span>
                         {item.tier ? (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
-                            {item.tier === "T1_identity" ? "identity → id" : (item.tier || "").replace(/^T1_/, "")}
+                            {item.tier === "T1_identity" ? "identity → id" : plainTierWord((item.tier || "").replace(/^T1_/, ""))}
                           </span>
                         ) : null}
                         {(() => {

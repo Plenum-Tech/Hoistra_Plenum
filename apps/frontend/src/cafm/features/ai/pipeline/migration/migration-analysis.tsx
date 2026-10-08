@@ -11,6 +11,7 @@ import type {
   UdrTestResults,
 } from "../../chat-api";
 import { ColumnIntelligencePanels } from "./migration-metadata-view";
+import { plainAliasSource, plainMethodLabel, plainPkList } from "./migration-mapping-utils";
 
 /**
  * Migration Analysis — the transparent, step-by-step view of how the engine reached its
@@ -128,7 +129,7 @@ function Step({
             tone === "thought" ? COT : COA,
           )}
         >
-          {tone === "thought" ? "CoT" : "CoA"}
+          {tone === "thought" ? "Analysis" : "Action"}
         </span>
       </button>
       {open ? <div className="border-t border-slate-100 px-3 py-3">{children}</div> : null}
@@ -146,7 +147,7 @@ function CardGrid({ cards }: { cards: NonNullable<UdrTableResolution["metadata_c
             <span className="shrink-0 text-[10px] text-slate-400">cols {c.column_count}</span>
           </div>
           <div className="mt-0.5 text-[10px] text-slate-500">
-            PK <span className="font-mono text-slate-700">{(c.primary_key ?? []).join(", ") || "—"}</span>
+            PK <span className="font-mono text-slate-700">{plainPkList(c.primary_key) || "—"}</span>
             {c.primary_key_kind ? <span className="ml-1 text-slate-400">· {c.primary_key_kind}</span> : null}
           </div>
           <div className="mt-1.5 space-y-0.5">
@@ -209,7 +210,7 @@ export default function MigrationAnalysis({
     <div className="flex items-center justify-between rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px]">
       <span className="text-slate-600">{label}</span>
       {ok == null ? (
-        <span className="text-slate-400">runs during the UDR pass</span>
+        <span className="text-slate-400">runs during the mapping pass</span>
       ) : ok ? (
         <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
           <CheckCircle2 size={12} /> Passed
@@ -256,7 +257,7 @@ export default function MigrationAnalysis({
             rows={pk.map((p) => [
               <span className="font-mono">{p.table}</span>,
               <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{p.kind}</span>,
-              <span className="font-mono">{(p.primary_key ?? []).join(", ")}</span>,
+              <span className="font-mono">{plainPkList(p.primary_key)}</span>,
               two(p.uniqueness),
               two(p.null_rate),
               <span className="text-slate-500">{p.tie_break}</span>,
@@ -273,7 +274,7 @@ export default function MigrationAnalysis({
             columns={["Source", "Method", "Destination", "Conf.", "Notes"]}
             rows={det.map((d) => [
               <span className="font-mono">{d.source}</span>,
-              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", methodChip(d.method))}>{d.method}</span>,
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", methodChip(d.method))}>{plainMethodLabel(d.method)}</span>,
               d.destination ? <span className="font-mono text-indigo-700">{d.destination}</span> : <span className="text-slate-400">—</span>,
               <span className={confTone(d.confidence)}>{two(d.confidence)}</span>,
               <span className="text-slate-500">{d.note}</span>,
@@ -282,9 +283,9 @@ export default function MigrationAnalysis({
         </Step>
 
         {/* B10.1 — RAG / alias mapping */}
-        <Step code="B10.1" title="RAG / alias mapping" tone="action" done={rag.length > 0}>
+        <Step code="B10.1" title="Known-term matching" tone="action" done={rag.length > 0}>
           <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-            FM ontology + learned registry: native CMMS/CAFM terms → canonical UDR. Auto-resolve ≥ 0.95.
+            Facilities-management vocabulary + terms learned from earlier imports: native CMMS/CAFM terms → the Hoistra data model. Auto-resolve ≥ 0.95.
           </p>
           <Mini
             columns={["Source", "Alias hit", "Destination", "Conf.", "Source of alias"]}
@@ -297,7 +298,7 @@ export default function MigrationAnalysis({
               ),
               d.destination ? <span className="font-mono text-indigo-700">{d.destination}</span> : <span className="text-slate-400">—</span>,
               <span className={confTone(d.confidence)}>{two(d.confidence)}</span>,
-              <span className="text-slate-500">{d.alias_source}</span>,
+              <span className="text-slate-500">{plainAliasSource(d.alias_source)}</span>,
             ])}
           />
         </Step>
@@ -305,7 +306,7 @@ export default function MigrationAnalysis({
         {/* B11.1 — Semantic table mapping */}
         <Step code="B11.1" title="Semantic table mapping" tone="action" done={sem.length > 0 || final.length > 0}>
           <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-            LLM matcher using the FM persona — name + metadata (column names) as the signal; returns
+            AI matcher with facilities-management knowledge — name + metadata (column names) as the signal; returns
             target + 0–100% confidence. ≥ 70% is suggested for one-click confirm or override.
           </p>
           <Mini
@@ -334,7 +335,7 @@ export default function MigrationAnalysis({
             rows={final.map((d) => [
               <span className="font-mono">{d.source}</span>,
               d.destination ? <span className="font-mono text-indigo-700">{d.destination}</span> : <span className="text-slate-400">—</span>,
-              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", methodChip(d.method))}>{d.method}</span>,
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", methodChip(d.method))}>{plainMethodLabel(d.method)}</span>,
               <span className={confTone(d.confidence)}>{two(d.confidence)}</span>,
             ])}
           />
@@ -379,12 +380,12 @@ export default function MigrationAnalysis({
                 </div>
               </div>
               <p className="mt-2 text-[10px] text-slate-400">
-                Per-column source → destination detail (exact / semantic / numeric / ontology scores) is
+                Per-column source → destination detail (exact / semantic / numeric / vocabulary scores) is
                 recorded in the run's mapping decisions and the Activity Log.
               </p>
             </>
           ) : (
-            <p className="text-[11px] text-slate-400">Column mapping runs during the UDR pass.</p>
+            <p className="text-[11px] text-slate-400">Column mapping runs during the mapping pass.</p>
           )}
         </Step>
 
@@ -414,7 +415,7 @@ export default function MigrationAnalysis({
               )}
             </>
           ) : (
-            <p className="text-[11px] text-slate-400">Foreign-key detection runs during the UDR pass.</p>
+            <p className="text-[11px] text-slate-400">Foreign-key detection runs during the mapping pass.</p>
           )}
         </Step>
 
@@ -439,7 +440,7 @@ export default function MigrationAnalysis({
               </div>
             </>
           ) : (
-            <p className="text-[11px] text-slate-400">Hierarchy generation runs during the UDR pass.</p>
+            <p className="text-[11px] text-slate-400">Hierarchy generation runs during the mapping pass.</p>
           )}
         </Step>
 
@@ -454,7 +455,7 @@ export default function MigrationAnalysis({
         </Step>
 
         {/* B17.1 — Final UDR structure */}
-        <Step code="B17.1" title="Final UDR structure" tone="thought" done={finalTables.length > 0}>
+        <Step code="B17.1" title="Final data structure" tone="thought" done={finalTables.length > 0}>
           {finalTables.length ? (
             <div className="flex flex-wrap gap-1.5">
               {finalTables.map((t) => (
@@ -464,7 +465,7 @@ export default function MigrationAnalysis({
               ))}
             </div>
           ) : (
-            <p className="text-[11px] text-slate-400">The final UDR table set is assembled after all prior steps.</p>
+            <p className="text-[11px] text-slate-400">The final table set is assembled after all prior steps.</p>
           )}
         </Step>
       </div>

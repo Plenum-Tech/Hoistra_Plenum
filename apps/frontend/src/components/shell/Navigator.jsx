@@ -1,10 +1,22 @@
 // Navigator — rail / panel, role-scoped reports, spaces, sessions, new report
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import { dragHasSessions, readDroppedSessions, startSessionDrag } from './SessionList.jsx';
+
+// A space in the navigator takes sessions dropped on it — from the Sessions page or from the
+// recent sessions below (7 Oct 2026). The highlight is a class on the element itself, so the
+// panel needs no state of its own.
+const spaceDrop = (sp) => sp.drop ? {
+  onDragOver: (e) => { if (!dragHasSessions(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('nav-drop-over'); },
+  onDragLeave: (e) => e.currentTarget.classList.remove('nav-drop-over'),
+  onDrop: (e) => { e.currentTarget.classList.remove('nav-drop-over'); if (!dragHasSessions(e)) return; e.preventDefault(); const ids = readDroppedSessions(e); if (ids.length) sp.drop(ids); }
+} : {};
 
 export default function Navigator({ vals }) {
   return (
-      <div style={{ position: "fixed", left: "0", top: "0", bottom: "0", width: vals.navWidth, zIndex: "50", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", overflow: "hidden", transition: "width 0.2s ease" }}>
+      <div style={{ position: "fixed", left: "0", top: "0", bottom: "0", width: "248px", zIndex: "50", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", overflow: "hidden", clipPath: vals.navClip, transition: "clip-path 0.22s cubic-bezier(0.22, 1, 0.36, 1)" }}>
+        {/* Collapsed, the panel is clipped to its rail; this is the rail's own edge. */}
+        {vals.navClosed ? <div aria-hidden="true" style={{ position: "absolute", top: "0", bottom: "0", left: "51px", width: "1px", background: "var(--color-divider)" }}></div> : null}
         {vals.navClosed ? (
           <>
             <div style={{ flex: "1", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "14px 0 16px", width: "52px" }}>
@@ -49,77 +61,8 @@ export default function Navigator({ vals }) {
                 </span>
                 <i className="ph ph-plus hv6" onClick={vals.toggleReportMenu} title="New report" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
               </div>
-              {vals.reportMenu ? (
-                <>
-                  <div style={{ margin: "0 10px 12px", padding: "12px", borderRadius: "9px", background: "var(--color-neutral-900)", display: "flex", flexDirection: "column", gap: "8px" }}>
-                    <div style={{ fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                      {"Build from a session"}
-                    </div>
-                    {vals.reportSourcesEmpty ? (
-                      <div style={{ fontSize: "11px", lineHeight: "1.45", color: "var(--color-neutral-500)", padding: "2px 6px" }}>
-                        {"Ask something first — a report is built from a session's question and re-runs it."}
-                      </div>
-                    ) : null}
-                    {(vals.reportSources || []).map((r, $index) => (
-                      <React.Fragment key={$index}>
-                        <div className="hv8" onClick={r.pick} style={{ display: "flex", gap: "7px", alignItems: "flex-start", padding: "5px 6px", borderRadius: "6px", cursor: "pointer", background: r.chip }}>
-                          <i className={`ph ${r.tick}`} style={{ fontSize: "13px", color: r.color, marginTop: "1px", flexShrink: "0" }}></i>
-                          <span style={{ fontSize: "11.5px", lineHeight: "1.35", color: "var(--color-neutral-300)" }}>
-                            {r.label}
-                          </span>
-                        </div>
-                      </React.Fragment>
-                    ))}
-                    <div style={{ fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginTop: "3px" }}>
-                      {"Refresh"}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "3px", maxHeight: "150px", overflowY: "auto" }}>
-                      {(vals.reportCadences || []).map((c, $index) => (
-                        <React.Fragment key={$index}>
-                          <div className="hv8" onClick={c.pick} style={{ display: "flex", gap: "7px", alignItems: "center", padding: "5px 6px", borderRadius: "6px", cursor: "pointer", background: c.chip }}>
-                            <i className={`ph ${c.tick}`} style={{ fontSize: "13px", color: c.color, flexShrink: "0" }}></i>
-                            <span style={{ fontSize: "11.5px", lineHeight: "1.35", color: "var(--color-neutral-300)" }}>
-                              {c.label}
-                            </span>
-                          </div>
-                        </React.Fragment>
-                      ))}
-                    </div>
-                    <div style={{ display: vals.reportDaysShow, flexDirection: "column", gap: "6px", padding: "8px", borderRadius: "7px", background: "var(--color-surface)" }}>
-                      <div style={{ display: "flex", gap: "3px" }}>
-                        {(vals.reportDays || []).map((d, $index) => (
-                          <React.Fragment key={$index}>
-                            <div onClick={d.pick} title={d.title} style={{ flex: "1", textAlign: "center", fontFamily: "ui-monospace,monospace", fontSize: "10.5px", padding: "5px 0", borderRadius: "5px", border: `1px solid ${d.edge}`, background: d.bg, color: d.fg, cursor: "pointer" }}>
-                              {d.label}
-                            </div>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
-                        <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                          {"at"}
-                        </span>
-                        <input className="input" value={vals.reportTime} onChange={vals.setReportTime} placeholder="14:00" maxLength="5" style={{ flex: "1", minWidth: "0", boxSizing: "border-box", fontSize: "11.5px", padding: "5px 8px", borderRadius: "5px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "ui-monospace,monospace", outline: "none" }} />
-                        <span style={{ fontSize: "10px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>
-                          {"24h"}
-                        </span>
-                      </div>
-                    </div>
-                    <input className="input" value={vals.reportName} onChange={vals.setReportName} placeholder="Report name" style={{ width: "100%", boxSizing: "border-box", fontSize: "12px", padding: "7px 9px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", marginTop: "3px" }} />
-                    <div style={{ display: "flex", gap: "7px" }}>
-                      <div className="hv7" onClick={vals.createReport} style={{ flex: "1", textAlign: "center", padding: "7px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", fontSize: "12px", cursor: "pointer" }}>
-                        {"Create report"}
-                      </div>
-                      <div onClick={vals.cancelReport} style={{ padding: "7px 11px", borderRadius: "7px", border: "1px solid var(--color-divider)", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                        {"Cancel"}
-                      </div>
-                    </div>
-                    <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.45" }}>
-                      {vals.reportCadenceNote}
-                    </div>
-                  </div>
-                </>
-              ) : null}
+              {/* New report opens as a panel on the right (ReportBuilder.jsx, mounted in App.jsx) —
+                  every session, searchable, with room to read which is which. */}
               {(vals.navSections || []).map((n, $index) => (
                 <React.Fragment key={$index}>
                   <div className="hv2" onClick={n.click} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 8px", padding: "7px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "13px", color: n.color, background: n.chip }}>
@@ -173,7 +116,7 @@ export default function Navigator({ vals }) {
               {vals.navSpaceNew ? (
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", margin: "0 10px 8px" }}>
                   <input className="input" value={vals.navSpaceName} onChange={vals.setNavSpaceName} onKeyDown={vals.navSpaceKey} placeholder="Space name" autoFocus maxLength="120" disabled={!vals.navSpaceCanCreate} style={{ flex: "1", minWidth: "0", boxSizing: "border-box", fontSize: "12px", padding: "6px 9px", borderRadius: "6px", border: "1px solid var(--color-accent)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-                  <div className="hv7" onClick={vals.navSpaceCanCreate ? vals.navSpaceCreate : undefined} title="Saves to svc-udr (plenum_cafm.saved_spaces)" style={{ padding: "6px 9px", borderRadius: "6px", background: "var(--color-accent)", color: "var(--accent-ink)", fontSize: "11.5px", cursor: vals.navSpaceCanCreate ? "pointer" : "default", opacity: vals.navSpaceCanCreate ? "1" : "0.5" }}>
+                  <div className="hv7" onClick={vals.navSpaceCanCreate ? vals.navSpaceCreate : undefined} title="Saves this space to your account" style={{ padding: "6px 9px", borderRadius: "6px", background: "var(--color-accent)", color: "var(--accent-ink)", fontSize: "11.5px", cursor: vals.navSpaceCanCreate ? "pointer" : "default", opacity: vals.navSpaceCanCreate ? "1" : "0.5" }}>
                     {vals.navSpaceBusy ? "…" : "Save"}
                   </div>
                   <i className="ph ph-x hv6" onClick={vals.navSpaceCancel} title="Cancel" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
@@ -181,7 +124,7 @@ export default function Navigator({ vals }) {
               ) : null}
               {(vals.navSpaces || []).map((sp, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={sp.click} title={sp.title} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "12.5px", color: sp.active ? "var(--color-accent)" : "var(--color-neutral-300)", background: sp.active ? "var(--color-accent-900)" : "transparent" }}>
+                  <div className="hv2" onClick={sp.click} title={sp.drop ? sp.title + " · drop sessions here to add them" : sp.title} {...spaceDrop(sp)} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", fontSize: "12.5px", color: sp.active ? "var(--color-accent)" : "var(--color-neutral-300)", background: sp.active ? "var(--color-accent-900)" : "transparent" }}>
                     <i className={`ph ${sp.icon}`} style={{ fontSize: "14px", color: sp.active ? "var(--color-accent)" : "var(--color-neutral-500)" }}></i>
                     <span style={{ flex: "1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {sp.name}
@@ -207,7 +150,7 @@ export default function Navigator({ vals }) {
               ) : null}
               {(vals.navSessions || []).map((q, $index) => (
                 <React.Fragment key={$index}>
-                  <div className="hv2" onClick={q.click} title={q.label} style={{ display: "grid", gridTemplateColumns: "14px 1fr auto", gap: "8px", alignItems: "start", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", background: q.active ? "var(--color-accent-900)" : "transparent" }}>
+                  <div className="hv2" onClick={q.click} title={q.label + " — drag onto a space to add it there"} draggable={!!q.id} onDragStart={(e) => startSessionDrag(e, [q.id], q.label)} style={{ display: "grid", gridTemplateColumns: "14px 1fr auto", gap: "8px", alignItems: "start", margin: "0 8px", padding: "6px 10px", borderRadius: "7px", cursor: "pointer", background: q.active ? "var(--color-accent-900)" : "transparent" }}>
                     <i className={`ph ${q.icon}`} style={{ fontSize: "12px", color: q.active ? "var(--color-accent)" : "var(--color-neutral-500)", marginTop: "3px" }}></i>
                     <div style={{ display: "flex", flexDirection: "column", gap: "1px", minWidth: "0" }}>
                       <span style={{ fontSize: "12.5px", color: q.active ? "var(--color-accent)" : "var(--color-neutral-300)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

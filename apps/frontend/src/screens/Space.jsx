@@ -64,7 +64,7 @@ export default function Space({ vals }) {
                   ) : (
                     <>
                       <div onClick={p.startRename} style={{ ...BTN, border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)" }}>{"Rename"}</div>
-                      <div onClick={p.remove} title="Deletes the space in svc-udr; its sessions stay in the list" style={{ ...BTN, border: "1px solid var(--color-divider)", color: "var(--st-risk)" }}>{p.busy ? "Working…" : "Delete space"}</div>
+                      <div onClick={p.remove} title="Deletes the space; its sessions stay in the list" style={{ ...BTN, border: "1px solid var(--color-divider)", color: "var(--st-risk)" }}>{p.busy ? "Working…" : "Delete space"}</div>
                     </>
                   )
                 ) : null}
@@ -83,16 +83,27 @@ export default function Space({ vals }) {
             ) : null}
 
             <div style={{ display: "flex", alignItems: "center", gap: "11px", padding: "12px 15px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderBottom: "2px solid var(--color-accent)", marginTop: "22px" }}>
-              <i className="ph ph-sparkle" style={{ fontSize: "16px", color: "var(--color-accent)", flexShrink: "0" }}></i>
+              <i className={`ph ${p.isSupport ? "ph-lifebuoy" : "ph-sparkle"}`} style={{ fontSize: "16px", color: "var(--color-accent)", flexShrink: "0" }}></i>
               <input className="input" value={p.ask} onChange={p.setAsk} onKeyDown={p.askKey} placeholder={p.askPh} style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "14px", color: "var(--color-text)" }} />
               <button type="button" className="btn btn-primary" onClick={p.askRun} style={{ ...BARE, fontSize: "12px", padding: "7px 15px", whiteSpace: "nowrap", flexShrink: "0" }}>{"Ask"}</button>
             </div>
 
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: "26px" }}>
-              <div style={{ fontSize: "15px" }}>{"Sessions in this space"}</div>
-              <div className="hv6" onClick={p.back} style={{ fontSize: "11.5px", color: "var(--color-accent)", cursor: "pointer" }}>{"All sessions"}</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginTop: "26px" }}>
+              <div style={{ fontSize: "15px" }}>{p.isSupport ? "Your requests" : "Sessions in this space"}</div>
+              {p.isSupport ? (
+                // Open or resolved: the requests narrowed to where they stand.
+                <div className="sup-filters" role="group" aria-label="Show requests">
+                  {(p.statusFilters || []).map((f) => (
+                    <button key={f.label} type="button" className="sup-filter" aria-pressed={f.on} onClick={f.pick}>
+                      {f.label}<b>{f.n}</b>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="hv6" onClick={p.back} style={{ fontSize: "11.5px", color: "var(--color-accent)", cursor: "pointer" }}>{"All sessions"}</div>
+              )}
             </div>
-            <SessionList groups={p.groups} empty={p.empty} emptyText={p.emptyText} />
+            <SessionList groups={p.groups} empty={p.empty} emptyText={p.emptyText} spaces={p.spaces} onFile={p.fileMany} onDelete={p.deleteMany} />
           </>
         )}
       </div>

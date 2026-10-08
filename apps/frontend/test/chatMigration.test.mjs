@@ -356,7 +356,11 @@ test('a run whose document stops changing is reported as stalled, not as working
   await settle();
   const v = c.renderVals();
   assert.match(v.mgStallNote, /has not moved/, 'the reader is told it has stopped');
-  assert.match(v.mgStallNote, /worker/i, 'and what to look at');
+  assert.match(v.mgStallNote, /[Cc]ontact support/, 'and what to do about it');
+  // Not to answer again: in a running step there is no gate on screen, and a second answer
+  // queues the same work twice (8 Oct 2026 review).
+  assert.doesNotMatch(v.mgStallNote, /[Tt]ry answering/);
+  assert.doesNotMatch(v.mgStallNote, /arq|WorkerSettings|src\.worker/, 'without naming the job runner (7 Oct 2026)');
 });
 
 test('a document that moves clears the stall note', async () => {

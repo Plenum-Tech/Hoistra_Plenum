@@ -71,7 +71,8 @@ test('a genuinely dead upstream still says so', async () => {
   await c.askScoped('hello');
   await settle();
   const text = lastBotText();
-  assert.match(text, /not reachable at \/backend\/deep-agents/);
+  assert.match(text, /the assistant is not reachable right now/);
+  assert.doesNotMatch(text, /\/backend\/|svc-|LLM key/, 'no gateway path, service or ops instruction on screen (7 Oct 2026)');
   cleanup();
 });
 
@@ -86,6 +87,7 @@ test('a gateway 502 still reads as unreachable', async () => {
     });
   await c.askScoped('hello');
   await settle();
-  assert.match(lastBotText(), /not reachable at \/backend\/deep-agents/);
+  assert.match(lastBotText(), /the assistant is not reachable right now/);
+  assert.doesNotMatch(lastBotText(), /\/backend\/|svc-|LLM key/);
   cleanup();
 });

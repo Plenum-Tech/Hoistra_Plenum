@@ -17,9 +17,10 @@ test('a deployment that sends mail says nothing extra', () => {
   assert.equal(note({ live: true, dry_run: false, transport: 'graph' }), '');
 });
 
-test('dry run names the flag, because that is what has to be changed', () => {
+test('dry run says delivery is turned off — in words, not by the flag name (7 Oct 2026)', () => {
   const s = note({ live: false, dry_run: true, transport: 'graph' });
-  assert.match(s, /EMAIL_DRY_RUN/);
+  assert.match(s, /email delivery turned off/);
+  assert.doesNotMatch(s, /EMAIL_DRY_RUN/);
   assert.match(s, /written to the log/);
 });
 

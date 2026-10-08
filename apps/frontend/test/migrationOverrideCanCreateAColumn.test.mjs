@@ -81,7 +81,7 @@ test('a name cannot carry SQL out of the box', () => {
 test('the row tells the reviewer the name that will actually be created', () => {
   const r = fieldMappingView(PAYLOAD, newCol({ [K + '#name']: 'Asset Ref' })).tables[0].flagged[0];
   assert.equal(r.nameSafe, 'asset_ref');
-  assert.equal(r.preview, 'Creates plenum_cafm.assets.asset_ref on submit.');
+  assert.equal(r.preview, 'Creates the column asset_ref on assets on submit.');
 });
 
 test('the offered types are all types the service will accept', () => {
@@ -117,7 +117,7 @@ test('the table name is normalised the same way as the column', () => {
 test('the row says whether it will create a table or add to one', () => {
   const onNew = fieldMappingView(PAYLOAD, newCol({ 'ft:Assets': { table: 'asset_extras', isNew: true } })).tables[0];
   assert.equal(onNew.canonicalIsNew, true);
-  assert.equal(onNew.flagged[0].preview, 'Creates plenum_cafm.asset_extras.asset_ref on submit.');
+  assert.equal(onNew.flagged[0].preview, 'Creates the column asset_ref on asset_extras on submit.');
   const routed = fieldMappingView(PAYLOAD, newCol()).tables[0];
   assert.equal(routed.canonical, 'assets', 'with nothing chosen, the column goes where the sheet was routed');
 });

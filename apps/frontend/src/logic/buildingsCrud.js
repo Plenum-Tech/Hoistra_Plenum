@@ -173,7 +173,7 @@ export const buildingsCrudMethods = {
   // Opening Edit on a row. `bcTarget` carries the building_id the PATCH addresses and the
   // row's updated_at, read off the row so it can be sent back as expected_updated_at.
   bcOpenEdit(row) {
-    if (!row || !row.buildingId) return this.flash('This row has no building_id — it predates the building graph and cannot be edited here yet.');
+    if (!row || !row.buildingId) return this.flash('This row has no building reference — it predates the building graph and cannot be edited here yet.');
     // Kept outside state: they are the diff baseline, not something the form or a re-render
     // needs to read, and they must survive exactly as read even if `row` is later replaced.
     this._bcOriginal = formFromRow(row);
@@ -232,7 +232,9 @@ export const buildingsCrudMethods = {
   // the keyed-as line in the dock so the outcome is still on screen after the card goes.
   bcIngestNow() {
     const r = this.state.bcResult || {};
-    this.setState({ flow: 'ingest', flowDone: '', declFor: r.name || 'the new building', bcOpen: false });
+    // The new building's id too: with the name alone the filing resolved no building and the
+    // upload went out unfiled (8 Oct 2026 review). The card a later Upload armed is not this one.
+    this.setState({ flow: 'ingest', flowDone: '', declFor: r.name || 'the new building', declForId: r.buildingId || null, ingExpect: '', bcOpen: false });
   },
 
   bcLater() {

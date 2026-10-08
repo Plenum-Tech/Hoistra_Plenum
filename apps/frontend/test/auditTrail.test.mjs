@@ -305,7 +305,7 @@ test('a live read that found nothing says so, rather than claiming sample data',
   // at all: the screen read "Sample data · 0 of 0 entries", which says the read never
   // happened. It had; there is simply nothing to show yet.
   c.setState({ audit: [], auLiveLoadedAt: '2026-09-17T11:00:00Z', auLiveError: '', auLiveLoading: false });
-  assert.equal(v().auLiveSourceLabel, 'Live · svc-operations-intelligence');
+  assert.equal(v().auLiveSourceLabel, 'Live');
   assert.equal(v().auLiveRetryShow, 'none', 'nothing to retry — the read worked');
 });
 

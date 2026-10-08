@@ -262,12 +262,12 @@ export const buildingsLiveMethods = {
       buildingsOnSite: b.buildingsOnSite, missing: b.missing, euiN: b.euiN,
       // The human reference is the code; the uuid is the key edit and delete address it by.
       id: b.id, buildingId: b.buildingId, idText: b.code || b.id,
-      idTip: b.buildingId ? "building_id " + b.buildingId + (b.code ? " · building_code " + b.code : "") + (b.siteId ? " · site " + b.siteId : "")
-        : (b.code && b.code !== b.id ? "sites.site_id " + b.id + " · building_code " + b.code : "sites.site_id"),
+      idTip: b.buildingId ? "Building ID " + b.buildingId + (b.code ? " · code " + b.code : "") + (b.siteId ? " · site " + b.siteId : "")
+        : (b.code && b.code !== b.id ? "Site ID " + b.id + " · code " + b.code : "Site ID"),
       row: b,
       name: b.name, use: b.use,
       floors: typeof b.floors === "number" ? String(b.floors) : "—",
-      floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " rows in plenum_cafm.floors"
+      floorsTip: b.floorsSource === "floors_table" ? "Counted from " + b.floors + " floor records"
         : b.floorsSource === "buildings_recorded" ? "Recorded on the building row — no floor rows on record"
         : "No floors on record",
       area: b.area,
@@ -351,9 +351,9 @@ export const buildingsLiveMethods = {
       // sites where it does not, and the endpoint says which in `root`. Naming the wrong
       // one is not cosmetic: on a fresh database the header read "1 site" while
       // plenum_cafm.sites held nothing, which sends whoever is checking to an empty table.
-      bldSourceLabel: s.bldLive ? "Live · svc-operations-intelligence · " + rows.length + " " + ROOT_NOUN(s, rows.length)
+      bldSourceLabel: s.bldLive ? "Live · " + rows.length + " " + ROOT_NOUN(s, rows.length)
           + (s.bldError ? " · refresh failed" : "")
-        : s.bldLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
+        : s.bldLoading ? "Connecting…" : "Seed data · backend unreachable",
       bldSourceDot: s.bldLive ? (s.bldError ? "var(--st-warn)" : "var(--st-ok)") : s.bldLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       bldSourceDetail: s.bldError || (s.bldLoadedAt ? "register read " + fmtTime(s.bldLoadedAt) : ""),
       bldRetryShow: !s.bldLoading && (!s.bldLive || !!s.bldError) ? "inline" : "none",
@@ -375,19 +375,19 @@ export const buildingsLiveMethods = {
       bldPageNext: () => this.setState((p) => ({ bldPage: Math.min(pageCount - 1, (p.bldPage || 0) + 1) })),
 
       bldEmptyShow: filtered.length ? "none" : "block",
-      bldEmptyText: s.bldLoading ? "Reading plenum_cafm.sites…"
-        : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from plenum_cafm.sites."
+      bldEmptyText: s.bldLoading ? "Reading the buildings register…"
+        : s.bldError ? "No buildings shown: the backend could not be reached (" + s.bldError + "). This table only ever shows rows from the buildings register."
         // An empty allocation and an empty table look identical here, and the fix for each
         // is in a different place — one is an admin granting access, the other is hoisting a
         // building. Saying "the table has no rows yet" to someone who simply cannot see any
         // of them sends them hunting for missing data that is sitting right there.
         : !rows.length && isUnallocated(s.account)
           ? "You are not allocated to any building yet, so this table is empty for your account — the portfolio itself may be full. Ask an admin to allocate you, or to change your role to admin."
-        : !rows.length && s.bldLive ? "plenum_cafm.sites has no rows yet. Hoist a building or insert a site row; nothing is shown that is not in the table."
-        : !rows.length ? "Waiting for svc-operations-intelligence."
+        : !rows.length && s.bldLive ? "The buildings register has no rows yet. Hoist a building; nothing is shown that is not in the register."
+        : !rows.length ? "Waiting for the register."
         : "No buildings match “" + query + "”. Try a name, building ID, country or state.",
-      bldKicker: "Every row is a plenum_cafm." + ROOT_TABLE(s) + " record, keyed on "
-        + (ROOT_TABLE(s) === "buildings" ? "building_id" : "site_id")
+      bldKicker: "Every row is a " + ROOT_NOUN(s, 1) + " record, keyed on "
+        + (ROOT_TABLE(s) === "buildings" ? "building ID" : "site ID")
         + ", read against its country's regulation pack",
 
       // Five figures, all read. `buildings` and `bound documents` come from the rows already

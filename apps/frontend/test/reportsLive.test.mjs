@@ -118,12 +118,18 @@ test('a refresh-options reply the client cannot read leaves the fallback menu in
 test('creating a card reads the card out of the {ok, report, card} envelope and opens it', async () => {
   handlers['POST /backend/ops-intelligence/api/reports/cards'] = () => [201, { ok: true, report: REPORT, card: CARD }];
   handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { ok: true, count: 1, reports: [REPORT] }];
+  handlers['POST /backend/ops-intelligence/api/reports/cards/card-1/run'] = () => [200, { ok: true, card: CARD, run: null }];
   c.setState({ reportName: 'Risky buildings', reportCad: 1 });
   await c.rpCreate();
   const post = sent.find((r) => r.route === 'POST /backend/ops-intelligence/api/reports/cards');
   assert.equal(post.body.prompt, 'Which buildings put me at risk?');
   assert.equal(post.body.refresh, '1h', 'the preset key, which parse_refresh accepts verbatim');
-  assert.equal(post.body.run_now, true);
+  // The first answer comes from the service the card was made on — its own "run now" route —
+  // not from whichever scheduler claims a card due "now" first. A scheduler on another
+  // deployment of the same database answered with its own, older code (7 Oct 2026): the chat
+  // named three blocked vendors, the report built from it named none.
+  assert.equal(post.body.run_now, false, 'not left for any scheduler to claim');
+  assert.ok(sent.some((r) => r.route === 'POST /backend/ops-intelligence/api/reports/cards/card-1/run'), 'the first refresh is asked for here');
   assert.equal(c.state.view, 'report');
   assert.equal(c.state.reportKey, 'card-1', 'the id came from r.card.id, not from the envelope');
   assert.match(c.state.toast, /Report card created/);
@@ -151,6 +157,7 @@ test('a server that refuses the zone still gets the card made — retried on UTC
     return [201, { ok: true, report: REPORT, card: CARD }];
   };
   handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { ok: true, count: 1, reports: [REPORT] }];
+  handlers['POST /backend/ops-intelligence/api/reports/cards/card-1/run'] = () => [200, { ok: true, card: CARD, run: null }];
   c.setState({ reportCad: 1 });   // every 1 hour — arithmetic, so UTC changes nothing
   await c.rpCreate();
   assert.equal(attempt, 2, 'one retry, not a loop');
@@ -164,6 +171,7 @@ test('a clock cadence that falls back to UTC says so rather than moving the time
     ? [422, { detail: { ok: false, error: 'Unknown timezone', reason: 'bad_timezone' } }]
     : [201, { ok: true, report: REPORT, card: CARD }]);
   handlers['GET /backend/ops-intelligence/api/reports'] = () => [200, { ok: true, count: 1, reports: [REPORT] }];
+  handlers['POST /backend/ops-intelligence/api/reports/cards/card-1/run'] = () => [200, { ok: true, card: CARD, run: null }];
   c.setState({ reportCad: 5 });   // "Refresh daily at 02:00" — 02:00 in WHICH zone matters
   await c.rpCreate();
   assert.match(c.state.toast, /read as UTC/, 'the user is told their 02:00 moved');
@@ -337,5 +345,17 @@ test('a read issued for the previous account never lands on the next one', async
   await pending;
   assert.deepEqual(c.state.reports, [], 'the answer to the previous account\'s question is dropped');
   assert.equal(c.state.reportsOwner, null);
+  cleanup();
+});
+
+test("a failed refresh's error is shown without the platform's internals (8 Oct 2026 review)", () => {
+  const run = { ok: false, error: 'ConnectError: http://svc-deepagents:8000/api/chat refused; see engines/reports/cards.py' };
+  const card = Object.assign({}, CARD, { status: 'error', runs: [run], latest_run: run });
+  c.setState({ reports: [Object.assign({}, REPORT, { cards: [card] })], reportsOwner: OWNER, reportKey: card.id });
+  const v = c.renderVals();
+  for (const text of [v.reportFailedText, v.reportCards.find((x) => x.id === card.id).snippet]) {
+    assert.match(text, /ConnectError/);
+    assert.doesNotMatch(text, /svc-|\.py|:8000/);
+  }
   cleanup();
 });

@@ -42,8 +42,9 @@ test('the outcome is read from status, never from ok', () => {
 test('a dry run is reported as not delivered', () => {
   assert.match(SRC, /NOT delivered/,
     'a dry run must never read as a send');
-  assert.match(SRC, /EMAIL_DRY_RUN/,
-    'the reader is told which switch held it back');
+  assert.match(SRC, /the platform is in dry-run "\s*\+\s*"mode/,
+    'the reader is told it was held back on purpose — in words, not by the EMAIL_DRY_RUN switch name (7 Oct 2026)');
+  assert.doesNotMatch(SRC, /\(EMAIL_DRY_RUN\)|EMAIL_DELIVERY_MODE=/);
 });
 
 test('a failure keeps the draft on screen instead of reporting a send', () => {

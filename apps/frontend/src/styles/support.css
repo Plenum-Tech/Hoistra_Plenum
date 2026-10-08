@@ -1,0 +1,180 @@
+/* support — the orchestrator as a support session (logic/support.js, logic/supportVals.js,
+   screens/Chat.jsx): the help index that opens a request, "Did this sort it out?" under an
+   answer, the resolved line above the composer, the email to Plenum, and the status pills on
+   the Support space's rows (components/shell/SessionList.jsx). Classes rather than inline
+   styles for hover, focus and the narrow-screen fold. Tokens only — the Hoistway paper. */
+
+/* ── the help index ─────────────────────────────────────────────────────────
+   The old help centre's six topics, kept as a table of contents beside their questions:
+   pick a topic on the left, ask one of its questions on the right. */
+.sup-index {
+  display: grid; grid-template-columns: 212px minmax(0, 1fr); margin-top: 14px; max-width: 760px;
+  border-radius: 12px; background: var(--color-surface); box-shadow: var(--shadow-sm); overflow: hidden;
+}
+.sup-topics { display: flex; flex-direction: column; gap: 2px; padding: 8px; background: var(--color-neutral-900); }
+.sup-topic {
+  font: inherit; display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px;
+  background: transparent; color: var(--color-neutral-300); font-size: 12.5px; line-height: 1.3; text-align: left; cursor: pointer;
+  transition: background 140ms cubic-bezier(0.16, 1, 0.3, 1), color 140ms ease-out;
+}
+.sup-topic i { font-size: 15px; color: var(--color-neutral-500); flex-shrink: 0; transition: color 140ms ease-out; }
+.sup-topic:hover { background: var(--color-surface); color: var(--color-text); }
+.sup-topic[aria-selected="true"] { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-sm); }
+.sup-topic[aria-selected="true"] i { color: var(--color-accent); }
+
+.sup-panel { padding: 16px 18px 12px; min-width: 0; }
+.sup-panel-name { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: -0.005em; line-height: 1.3; }
+.sup-panel-blurb { margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--color-neutral-500); max-width: 60ch; }
+.sup-qs { display: flex; flex-direction: column; margin-top: 10px; border-top: 1px solid var(--color-divider); }
+.sup-q {
+  font: inherit; display: grid; grid-template-columns: minmax(0, 1fr) 16px; gap: 12px; align-items: center; width: 100%;
+  padding: 11px 4px; border: none; border-bottom: 1px solid var(--color-divider); background: transparent;
+  color: var(--color-text); font-size: 13.5px; line-height: 1.45; text-align: left; cursor: pointer;
+  transition: color 140ms ease-out;
+}
+.sup-q > span { transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+.sup-q:last-child { border-bottom: none; }
+.sup-q i { font-size: 14px; color: var(--color-ink-decorative); transition: color 140ms ease-out, transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+.sup-q:hover { color: var(--color-accent-600); }
+.sup-q:hover > span { transform: translateX(6px); }
+.sup-q:hover i { color: var(--color-accent); transform: translate(2px, -2px); }
+
+/* A question of your own, under the listed ones: a small composer inside the panel. */
+.sup-own { margin-top: 16px; }
+.sup-own-label { display: block; margin-bottom: 7px; font-size: 12.5px; color: var(--color-neutral-300); }
+.sup-own-box {
+  display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 10px;
+  border: 1px solid var(--color-divider); background: var(--color-bg);
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+.sup-own-box:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+.sup-own-input {
+  flex: 1; min-width: 0; min-height: 44px; padding: 5px 0; border: none; background: transparent; resize: none;
+  font: inherit; font-size: 13.5px; line-height: 1.5; color: var(--color-text); outline: none;
+}
+.sup-own-input::placeholder { color: var(--color-neutral-500); }
+/* The box's ring is the focus indicator; the app-wide outline would draw a second one inside it. */
+.sup-own-input:focus-visible { outline: none; }
+.sup-own-hint { margin-top: 5px; font-size: 10.5px; color: var(--color-neutral-500); }
+
+.sup-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 12px; font-size: 12px; color: var(--color-neutral-500); line-height: 1.5; }
+
+/* Buttons used across the support pieces. */
+.sup-btn {
+  font: inherit; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; white-space: nowrap;
+  border: 1px solid var(--color-divider); background: var(--color-surface); color: var(--color-text); font-size: 12px; cursor: pointer;
+  transition: border-color 140ms ease-out, background 140ms ease-out, color 140ms ease-out;
+}
+.sup-btn i { font-size: 14px; }
+.sup-btn:hover { border-color: var(--color-rule-strong); background: var(--color-bg); }
+.sup-btn.is-ok { color: var(--st-ok); }
+.sup-btn.is-ok:hover { border-color: var(--st-ok); background: var(--st-ok-bg); }
+.sup-btn.is-primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--accent-ink); }
+.sup-btn.is-primary:hover { background: var(--color-accent-600); border-color: var(--color-accent-600); }
+.sup-btn.is-quiet { border-color: transparent; background: transparent; color: var(--color-neutral-400); padding: 6px 8px; }
+.sup-btn.is-quiet:hover { color: var(--color-text); background: var(--color-neutral-900); }
+.sup-btn:disabled { opacity: 0.55; cursor: default; }
+.sup-link { font: inherit; border: none; background: transparent; padding: 0; color: var(--color-accent-600); font-size: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.sup-link:hover { color: var(--color-text); }
+
+.sup-topic:focus-visible, .sup-q:focus-visible, .sup-btn:focus-visible, .sup-link:focus-visible, .sup-filter:focus-visible, .sup-top:focus-visible {
+  outline: 2px solid var(--color-accent); outline-offset: 2px;
+}
+
+/* ── the request in the header ──────────────────────────────────────────── */
+.sup-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--color-accent-900); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; align-self: center; }
+.sup-mark i { font-size: 14px; color: var(--color-accent); }
+.sup-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--color-neutral-500); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sup-status {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 2px 9px; border-radius: 999px; font-size: 11px; line-height: 1.5; white-space: nowrap;
+  border: 1px solid var(--color-divider); color: var(--color-neutral-400); background: var(--color-surface);
+}
+.sup-status i { font-size: 11px; }
+.sup-status.is-open { border-color: var(--color-accent-700); color: var(--color-accent-600); background: var(--color-accent-900); }
+.sup-status.is-resolved { border-color: transparent; color: var(--st-ok); background: var(--st-ok-bg); }
+
+/* ── "Did this sort it out?" ────────────────────────────────────────────── */
+.sup-resolve {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--color-surface); box-shadow: var(--shadow-sm); animation: supIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sup-resolve-q { font-size: 12.5px; color: var(--color-text); margin-right: 2px; }
+.sup-resolve-gap { flex: 1; }
+.sup-resolve-note { flex-basis: 100%; font-size: 12px; line-height: 1.5; color: var(--color-neutral-400); }
+
+/* ── resolved, above the composer ───────────────────────────────────────── */
+.sup-closed {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 9px; padding: 9px 12px; border-radius: 9px;
+  background: var(--st-ok-bg); color: var(--color-text); font-size: 12px; line-height: 1.45; animation: supIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sup-closed > i { font-size: 15px; color: var(--st-ok); flex-shrink: 0; }
+.sup-closed > span { flex: 1; min-width: 0; }
+
+/* ── the email to Plenum ────────────────────────────────────────────────── */
+.sup-mail { margin-top: 4px; border-radius: 12px; background: var(--color-surface); box-shadow: var(--shadow-md); overflow: hidden; animation: supIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.sup-mail-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--color-divider); }
+.sup-mail-head i { font-size: 16px; color: var(--color-accent); }
+.sup-mail-title { margin: 0; flex: 1; font-size: 14px; font-weight: 500; line-height: 1.3; }
+.sup-mail-from { font-size: 11px; color: var(--color-neutral-500); }
+.sup-mail-fields { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; }
+.sup-mail-fields > label, .sup-mail-fields > span.sup-mail-k { padding: 0 0 0 16px; font-size: 11.5px; color: var(--color-neutral-500); }
+.sup-mail-fields > input, .sup-mail-fields > .sup-mail-v {
+  min-width: 0; padding: 9px 16px 9px 0; border: none; border-bottom: 1px solid var(--color-divider); background: transparent;
+  font: inherit; font-size: 13px; color: var(--color-text); outline: none;
+}
+.sup-mail-fields > label, .sup-mail-fields > span.sup-mail-k { align-self: stretch; display: flex; align-items: center; border-bottom: 1px solid var(--color-divider); }
+.sup-mail-v { color: var(--color-neutral-400) !important; font-size: 12px !important; }
+.sup-mail-fields > input:focus { border-bottom-color: var(--color-accent); box-shadow: inset 0 -1px 0 var(--color-accent); }
+.sup-mail-fields > input:focus-visible { outline: none; }
+.sup-mail-body {
+  display: block; width: 100%; box-sizing: border-box; min-height: 232px; padding: 13px 16px; border: none; resize: vertical;
+  background: transparent; font: inherit; font-size: 13px; line-height: 1.6; color: var(--color-text); outline: none;
+}
+.sup-mail-body:focus { background: var(--color-bg); }
+.sup-mail-body:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.sup-mail-prev { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 9px 16px; background: var(--st-warn-bg); font-size: 11.5px; line-height: 1.45; }
+.sup-mail-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 11px 16px; border-top: 1px solid var(--color-divider); }
+.sup-mail-note { flex: 1; min-width: 200px; font-size: 11px; line-height: 1.45; color: var(--color-neutral-500); }
+
+/* ── the Support space ──────────────────────────────────────────────────── */
+.sup-filters { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--color-divider); background: var(--color-surface); }
+.sup-filter {
+  font: inherit; display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: none; border-radius: 6px; background: transparent;
+  color: var(--color-neutral-500); font-size: 12px; cursor: pointer;
+}
+.sup-filter b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-neutral-400); }
+.sup-filter[aria-pressed="true"] { background: var(--color-text); color: var(--color-bg); }
+.sup-filter[aria-pressed="true"] b { color: inherit; }
+
+/* Rows: where the request stands, beside the title. */
+.ss-status { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 10px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.ss-status i { font-size: 10px; }
+.ss-status.is-open { background: var(--color-accent-900); color: var(--color-accent-600); }
+.ss-status.is-resolved { background: var(--st-ok-bg); color: var(--st-ok); }
+.ss-ref { flex-shrink: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: var(--color-neutral-500); font-variant-numeric: tabular-nums; }
+
+/* The top bar's Support. */
+.sup-top {
+  font: inherit; display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding: 5px 10px; border-radius: 7px; white-space: nowrap;
+  border: 1px solid var(--color-divider); background: transparent; color: var(--color-neutral-500); font-size: 11px; cursor: pointer;
+  transition: border-color 140ms ease-out, color 140ms ease-out;
+}
+.sup-top i { font-size: 12px; }
+.sup-top:hover { border-color: var(--color-rule-strong); color: var(--color-text); }
+.sup-top.is-on { border-color: var(--color-accent); color: var(--color-accent-600); background: var(--color-accent-900); }
+
+@keyframes supIn { from { opacity: 0.001; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 720px) {
+  .sup-index { grid-template-columns: minmax(0, 1fr); }
+  .sup-topics { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .sup-topic { width: auto; padding: 6px 9px; font-size: 12px; }
+  .sup-panel { padding: 14px 14px 10px; }
+  .sup-mail-fields { grid-template-columns: 56px minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sup-resolve, .sup-closed, .sup-mail { animation: none; }
+  .sup-q, .sup-q > span, .sup-q i, .sup-topic { transition: none; }
+  .sup-q:hover > span, .sup-q:hover i { transform: none; }
+}

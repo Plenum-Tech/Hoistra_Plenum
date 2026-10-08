@@ -99,7 +99,7 @@ export function vendorAuditModel(s, h) {
     vaError: s.vaError || "",
     vaRetry: () => h.load(),
     vaUnreadableNote: (s.vaUnreadable || []).length ? "Could not be read just now: " + s.vaUnreadable.join(", ") + "." : "",
-    vaSourceLabel: s.vaError ? "Not read — svc-operations-intelligence" : loaded ? "Live · svc-operations-intelligence" : "Reading…",
+    vaSourceLabel: s.vaError ? "Not read" : loaded ? "Live" : "Reading…",
     vaSourceDot: s.vaError ? "var(--st-risk)" : loaded ? "var(--st-ok)" : "var(--st-dormant)",
     vaQuery: s.vaQuery || "",
     vaSetQuery: (v) => h.query(v),

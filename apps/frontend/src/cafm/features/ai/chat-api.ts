@@ -60,7 +60,7 @@ function resolveBase(basePath: string) {
 
   const schemaMapperBase = env.schemaMapperBaseUrl.trim();
   if (!schemaMapperBase) {
-    throw new Error("Missing NEXT_PUBLIC_SCHEMA_MAPPER_BASE_URL. Set it in .env.local and restart the dev server.");
+    throw new Error("The import service address is not configured.");
   }
   const api = clean.startsWith("/") ? clean : `/${clean}`;
   return `${schemaMapperBase.replace(/\/+$/, "")}${api}`;

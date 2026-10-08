@@ -59,7 +59,7 @@ async function udrFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
-    let detail = `UDR request failed (${res.status})`;
+    let detail = `Saved-version request failed (${res.status})`;
     try {
       const body = (await res.json()) as {
         errors?: { message?: string }[];

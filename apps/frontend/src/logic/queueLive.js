@@ -17,13 +17,19 @@
 // (the Home page's pattern), so a cold start reads as loading rather than as empty.
 import { humanise, severityTone, fmtDateTime } from './homeLive.js';
 import { opsApi } from '../api/opsIntelligence.js';
+import { energyApi } from '../api/energy.js';
 import { isStaleScope } from '../api/client.js';
+import { addressLine } from './queueDraft.js';
+import { platformNotices } from './platformNotices.js';
+import { accountCanIngest } from './auth.js';
+import { adminApi } from '../api/admin.js';
+import { baseSubject } from './emailHistory.js';
 
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const gbp = (v) => "£" + Math.round(v).toLocaleString("en-GB");
 const AGENT = { A: "Compliance", B: "Vendors", C: "Energy", M: "Maintenance" };
 const ICON = { Compliance: "ph-shield-check", Vendors: "ph-chart-line-up", Energy: "ph-lightning", Maintenance: "ph-wrench" };
-const TONE_RANK = { risk: 0, warn: 1, ok: 2, none: 2 };
+const TONE_RANK = { risk: 0, warn: 1, ok: 2, none: 2, info: 3 };
 
 // The consequence tag on an approvals card: the priced figure when the payload carries
 // one, else the severity said plainly.
@@ -65,7 +71,14 @@ export function shapeLiveQueue(input, now) {
         icon: ICON[module],
         tone: severityTone(it.severity),
         title: it.summary || humanise(it.item_type),
-        meta: humanise(it.item_type) + " · raised " + fmtDateTime(it.created_at),
+        // An item whose email went out stays pending until it is decided; the card says the
+        // email went, so the one already handled does not read as untouched. Only a status of
+        // "sent" went out: the backend marks the item for a dry run too, and that reached nobody.
+        meta: humanise(it.item_type) + " · raised " + fmtDateTime(it.created_at)
+          + (!it.email_sent ? ""
+            : it.email_sent_status === "sent" && it.email_sent_at
+              ? " · email sent " + fmtDateTime(it.email_sent_at) + (it.email_sent_to ? " to " + it.email_sent_to : "")
+              : it.email_sent_status === "dry_run" ? " · email recorded, not delivered (dry run)" : ""),
         money: approvalMoney(it),
         moneyValue: num((it.payload || {}).financial_gbp) || Math.abs(num(((it.payload || {}).line || {}).delta_gbp) || 0) || null,
         at: isNaN(ms) ? 0 : ms,
@@ -119,6 +132,9 @@ export function shapeLiveQueue(input, now) {
     });
   });
 
+  // ── the platform's own: Hoist Score, crons, usage (platformNotices.js) — already shaped ──
+  (raw.platform || []).forEach((n) => items.push(n));
+
   items.sort((a, b) =>
     (TONE_RANK[a.tone] - TONE_RANK[b.tone])
     || ((b.moneyValue || 0) - (a.moneyValue || 0))
@@ -127,13 +143,15 @@ export function shapeLiveQueue(input, now) {
   const live = !!(raw.approvals || raw.anomalies || raw.decisionsAnswered);
   const byModule = {};
   items.forEach((i) => { byModule[i.module] = (byModule[i.module] || 0) + 1; });
-  return { live: live, count: live ? items.length : null, items: items, byModule: byModule, at: at };
+  // The badge is what waits on someone: a suggestion or a figure (`info`) is listed, not counted.
+  const pending = items.filter((i) => !i.info).length;
+  return { live: live, count: live ? pending : null, items: items, byModule: byModule, at: at };
 }
 
 //: The drawer's "Show" filter. Fixed order and always all four, zero or not — a chip that
 //: vanished when its module had nothing waiting would read as "this module is not wired",
 //: when "Vendors 0" is the fact worth seeing.
-export const QUEUE_FILTERS = ["All", "Energy", "Vendors", "Compliance", "Maintenance"];
+export const QUEUE_FILTERS = ["All", "Energy", "Vendors", "Compliance", "Maintenance", "Platform"];
 
 // The items the drawer shows under a filter. Pure.
 export function filterQueue(items, filter) {
@@ -218,18 +236,132 @@ export const queueLiveMethods = {
   // Shaped once per (homeRaw, mxRaw) pair — renderVals runs on every keystroke and the
   // approvals feed alone can be hundreds of rows.
   queueModel() {
-    const hr = this.state.homeRaw, mr = this.state.mxRaw;
+    const s = this.state;
+    const hr = s.homeRaw, mr = s.mxRaw;
+    // Everything the platform notices read, so the memo turns over when any of it does.
+    // The minute too, so "35 min ago" in a notice moves on rather than freezing in the memo.
+    const deps = [hr, mr, s.ccLive, s.cronJobs, s.cronLoadedAt, s.cronCanManage, s.usageRaw, s.account, s.viewOrgId, Math.floor(Date.now() / 60000)];
     const m = this._queueMemo;
-    if (m && m.hr === hr && m.mr === mr) return m.model;
+    if (m && m.deps.length === deps.length && m.deps.every((d, i) => d === deps[i])) return m.model;
     const mx = this.mxModel();
+    const hm = typeof this.homeModel === "function" ? this.homeModel() : null;
+    const role = String((s.account && s.account.role) || "").toLowerCase();
     const model = shapeLiveQueue({
       approvals: (hr && hr.approvals) || null,
       anomalies: (hr && hr.anomalies) || null,
       decisions: mx.live ? mx.decisions : [],
-      decisionsAnswered: mx.live
+      decisionsAnswered: mx.live,
+      platform: platformNotices({
+        score: hm && hm.live ? hm.score : null,
+        cronJobs: s.cronLoadedAt ? (s.cronJobs || []) : null,
+        me: s.account && s.account.email,
+        canManageCrons: !!s.cronCanManage,
+        canIngest: accountCanIngest(s),
+        isAdmin: role === "admin" || role === "superadmin",
+        usage: (s.usageRaw && s.usageRaw.totals) || null
+      })
     });
-    this._queueMemo = { hr: hr, mr: mr, model: model };
+    this._queueMemo = { deps: deps, model: model };
     return model;
+  },
+
+  // This month's credits for the Platform notice (admins: the route is admin-only). Quiet on
+  // failure: the notice simply is not there.
+  async usageLoad() {
+    const role = String((this.state.account && this.state.account.role) || "").toLowerCase();
+    if (!this.state.signedIn || (role !== "admin" && role !== "superadmin")) return;
+    try { this.setState({ usageRaw: await adminApi.usage() }); } catch (e) { if (!isStaleScope(e)) this.setState({ usageRaw: null }); }
+  },
+
+  // What a card's draft is written from (queueDraft.js): the pending approvals, for the
+  // engines' own drafts; the live compliance register — never the seed, whose names would
+  // address a real email to a sample company; the Vendors page's directory; and the company
+  // that signs it, as the Assets drafts are signed.
+  queueDraftCtx() {
+    const s = this.state;
+    const vendors = {};
+    (this.vpModel().vendors || []).forEach((v) => { if (v && v.id) vendors[v.id] = v.name; });
+    return {
+      approvals: ((s.homeRaw && s.homeRaw.approvals) || {}).items || [],
+      certs: (s.ccLive && s.ccLive.certs) || [],
+      vendors: vendors,
+      sender: s.viewOrgName || (s.account && (s.account.organization_name || s.account.org_name)) || null
+    };
+  },
+
+  // A card, acted on: its page opens, then the dock beside it with the draft (Hussain, 7 Oct
+  // 2026). When the draft has no address the vendor's record is read for one, and only after
+  // that does the log say whether this request already went out — the read can rewrite the
+  // greeting, and the reminder check stands down once the body has changed under it.
+  async queueRunPlan(plan) {
+    const nav = plan.page === "cc" ? { view: "cc" }
+      : plan.page === "vp" ? { view: "vp" }
+      : { view: "module", module: plan.page, filter: "All" };
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
+    // An insight-card list left open on the Vendors page would cover the vendor the plan opens.
+    const go = () => this.setState(Object.assign({ navOpen: true, detail: null, queueOpen: false, paletteOpen: false,
+      vpQueue: null, vpQueueOpenId: null }, nav, plan.focus || {}));
+    // A chat answer still streaming carries on in the dock: the task joins the conversation
+    // rather than resetting it, which a task opened from the new page would do.
+    if (this.state.ccBusy) { this.orch(plan.task, plan.ctx, plan.steps); go(); }
+    else { go(); this.orch(plan.task, plan.ctx, plan.steps); }
+    // The last draft's "already sent" note and reminder belong to that draft, not this one.
+    this.setState(Object.assign({ flow: "email", flowDone: "", fSpec: null, emPrev: null, emOrig: null, emReminder: false },
+      plan.draft));
+    const task = this.state.orchTask ? this.state.orchTask.id : null;
+    if (plan.lookup) await this.queueFillAddress(plan, task);
+    if ((this.state.orchTask ? this.state.orchTask.id : null) !== task || this.state.flow !== "email") return;
+    return this.emCheckHistory();
+  },
+
+  // The address a record holds for whoever the draft is to: the vendor's contact by id, or the
+  // vendor on the anomaly's asset. It fills an empty To line only — never one the reader typed —
+  // and the Worker line says where it came from or why there is none. A read that answers after
+  // the reader moved to another task, or closed the draft, changes nothing.
+  async queueFillAddress(plan, task) {
+    const lk = plan.lookup;
+    let found;
+    try {
+      if (lk.assetId) {
+        const r = await energyApi.assetVendor(lk.assetId);
+        const v = r && r.vendor;
+        const ct = (r && r.contacts) || {};
+        // A vendor record the read could not open is not an asset without a vendor.
+        const unread = ((r && r.unreadable) || []).some((x) => /vendor record/.test(String(x)));
+        found = v ? { vendor: v.name || null, email: ct.email || null, candidates: ct.candidates || [] }
+          : unread ? { failed: true, vendor: null } : { noVendor: true };
+      } else {
+        const r = await opsApi.vendorContact(lk.vendorId);
+        found = { vendor: (r && r.vendor && r.vendor.name) || lk.vendor || null,
+          email: (r && r.email) || null, candidates: (r && r.candidates) || [] };
+      }
+    } catch (e) {
+      // Only the route's own 404 (it carries a reason) means "not on a record you can see"; a bare
+      // 404 is a server that does not have the route yet - the read failed, the vendor did not.
+      found = e && e.status === 404 && e.reason ? { notFound: true, vendor: lk.vendor || null } : { failed: true, vendor: lk.vendor || null };
+    }
+    const st = this.state;
+    // Still this draft? Another task, a closed card, or another draft opened in the same task (the
+    // compliance chat's renewal offer opens one without a task) all leave the answer unused. A
+    // reminder of this draft is still this draft.
+    if (!st.orchTask || st.orchTask.id !== task || st.flow !== "email"
+      || baseSubject(st.emSubject) !== baseSubject(plan.draft.emSubject)) return;
+    const patch = {};
+    if (found.email && !String(st.emTo || "").trim()) patch.emTo = found.email;
+    // The asset read is what names an anomaly's vendor; the greeting takes the name unless the
+    // reader has already changed the draft.
+    if (found.vendor && st.emBody === plan.draft.emBody && st.emBody.indexOf("Hello,\n") === 0) {
+      patch.emBody = "Hello " + found.vendor + " team,\n" + st.emBody.slice("Hello,\n".length);
+      patch.fVendor = found.vendor;
+    }
+    // One record, shown in two places: the dock's task and its entry in the sessions list are
+    // the same object, and Recent tasks tells the current task apart by that identity.
+    const next = Object.assign({}, st.orchTask, {
+      steps: st.orchTask.steps.map((x, i) => (i === 2 ? { a: x.a, t: plan.workerLead + " " + addressLine(found) } : x))
+    });
+    patch.orchTask = next;
+    patch.sessions = (st.sessions || []).map((q) => (q && q.id === task ? next : q));
+    this.setState(patch);
   },
 
   // Restore the saved schedule and channels, then arm the timer. Called from loadLiveData,
@@ -298,8 +430,9 @@ export const queueLiveMethods = {
     const model = this.queueModel();
     if (!model.live) return model;
     if (!this._qSeen) { this.queueSeenInit(); return model; }
-    const fresh = model.items.filter((i) => !this._qSeen[i.key]);
-    fresh.forEach((i) => { this._qSeen[i.key] = true; });
+    // Only what waits on someone is announced: a figure or a suggestion (`info`) is listed, quietly.
+    const fresh = model.items.filter((i) => !this._qSeen[i.key] && !i.info);
+    model.items.forEach((i) => { this._qSeen[i.key] = true; });
     if (!fresh.length || (opts && opts.silent)) return model;
     const line = fresh.length + (fresh.length === 1 ? " new decision — " : " new decisions — newest: ") + fresh[0].title;
     if (this.state.channels.includes("In-platform")) this.flash("Decision queue: " + line);

@@ -1,6 +1,6 @@
 // OrchestratorDock — the agent dock and its flows
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import AnswerCards from './AnswerCards.jsx';
 import ChoiceCards from './ChoiceCards.jsx';
 import ComplianceAnswer from './ComplianceAnswer.jsx';
@@ -11,7 +11,15 @@ export default function OrchestratorDock({ vals }) {
   // The dock's transcript region scrolls on its own; follow the answer as it streams in,
   // and stop following while the reader has scrolled up.
   const scrollRef = useRef(null);
-  useFollowBottom({ container: scrollRef, end: null, busy: vals.orchBusy, count: (vals.orchChat || []).length });
+  const follow = useFollowBottom({ container: scrollRef, end: null, busy: vals.orchBusy, count: (vals.orchChat || []).length });
+  // A draft or card that opens sits above the conversation; bring it into view, even when it was
+  // opened from a button at the bottom of a long answer. Declared after the follow, so it wins.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!vals.orchFlowKey || !el) return;
+    follow.release();
+    if (el.scrollTo) el.scrollTo({ top: 0, behavior: "smooth" }); else el.scrollTop = 0;
+  }, [vals.orchFlowKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       {/* Drag the right edge to widen the dock. Widen only — it never goes below the
@@ -165,6 +173,11 @@ export default function OrchestratorDock({ vals }) {
               <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
                 {"Ingest documents"}
               </div>
+              {vals.iExpect ? (
+                <div style={{ fontSize: "12px", color: "var(--color-text)", lineHeight: "1.45", marginTop: "8px" }}>
+                  {"Upload the "}<strong style={{ fontWeight: 600 }}>{vals.iExpect}</strong>{" — required here and not on record."}
+                </div>
+              ) : null}
               <div style={{ display: "flex", flexDirection: "column", gap: "3px", marginTop: "10px" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {"Which building"}
@@ -449,9 +462,10 @@ export default function OrchestratorDock({ vals }) {
                 </div>
                 {/* The send is a real outbound call now, so the control says it is working
                     and stops accepting clicks while it does. A second click on a slow send
-                    is a second email to the same vendor. */}
-                <div className="hv7" onClick={vals.em.sendBusy ? undefined : vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.em.sendBusy ? "default" : "pointer", opacity: vals.em.sendBusy ? 0.6 : 1 }}>
-                  {vals.em.sendBusy ? "Sending…" : vals.em.prevIsReminder ? "Approve & send reminder" : "Approve & send"}
+                    is a second email to the same vendor. A sample card's draft is never sent,
+                    and the control says so rather than looking pressable. */}
+                <div className="hv7" onClick={vals.em.sendBusy ? undefined : vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.em.sendBusy || vals.em.sample ? "default" : "pointer", opacity: vals.em.sendBusy || vals.em.sample ? 0.6 : 1 }}>
+                  {vals.em.sendBusy ? "Sending…" : vals.em.sample ? "Sample — not sent" : vals.em.prevIsReminder ? "Approve & send reminder" : "Approve & send"}
                 </div>
                 <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
                   {"Cancel"}

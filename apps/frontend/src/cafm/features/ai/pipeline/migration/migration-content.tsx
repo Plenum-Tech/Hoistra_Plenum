@@ -266,7 +266,7 @@ function LiveNodeLogCard({ nodes }: { nodes?: NodeInfo[] }) {
   }, [lines.length]);
   if (!liveNode || lines.length === 0) return null;
   const label =
-    MIGRATION_NODE_LABELS[liveNode.node_id] ?? liveNode.node_name ?? `Node ${liveNode.node_id}`;
+    MIGRATION_NODE_LABELS[liveNode.node_id] ?? liveNode.node_name ?? `Step ${liveNode.node_id}`;
   return (
     <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-slate-50 text-left">
       <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
@@ -727,7 +727,7 @@ function CenterNodeHistory({
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
           <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Completed Steps</div>
           <div className="mt-1 text-xs text-slate-600">
-            Previous node outputs stay visible while the next node runs.
+            Earlier step outputs stay visible while the next step runs.
           </div>
         </div>
       )}
@@ -1180,7 +1180,7 @@ export default function MigrationContent({
   // Rewind the pipeline to a completed step and re-run forward (re-fires its gate to edit).
   const handleRerunStep = async (nodeNum?: number) => {
     if (nodeNum == null) return;
-    setRerunMsg(`Re-running from node ${nodeNum}… the step's gate will re-open for edits.`);
+    setRerunMsg(`Re-running from step ${nodeNum}… the step's review will re-open for edits.`);
     if (nodeNum === 1) {
       // Hard reset: hide the complete panel, wipe the in-memory snapshots so
       // the new run starts clean, and lock the restart guard until the next
@@ -1407,7 +1407,7 @@ export default function MigrationContent({
       // Prefer the node's own raw log lines; fall back to a mapping summary from its snapshot.
       const lines = rawLogs.length ? rawLogs : summarizeMappingPayload(snapshotByNode[n.node_id]?.payload);
       if (!lines.length) continue;
-      const label = NODE_TITLES[n.node_id] ?? n.node_name ?? `Node ${n.node_id}`;
+      const label = NODE_TITLES[n.node_id] ?? n.node_name ?? `Step ${n.node_id}`;
       const key = `${migrationId}:${n.node_id}:${lines.length}`;
       if (loggedNodeKeysRef.current.has(key)) continue;
       loggedNodeKeysRef.current.add(key);
@@ -1965,10 +1965,10 @@ export default function MigrationContent({
         <button
           type="button"
           onClick={() => void handleRerunStep(1)}
-          title="Discard all progress and re-run the whole pipeline from Node 1 (file ingestion)"
+          title="Discard all progress and re-run the whole migration from step 1 (file ingestion)"
           className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
         >
-          <RotateCcw size={12} /> Restart from Node 1
+          <RotateCcw size={12} /> Restart from step 1
         </button>
       </div>
       )}
@@ -2222,7 +2222,7 @@ export default function MigrationContent({
   const handleFinalSubmitted = () => {
     setStickyGate(null);
     setAutoAdvanceError(null);
-    beginGateTransition("Finalising migration… writing to plenum_cafm");
+    beginGateTransition("Finalising migration… writing to your database");
     onRefresh();
   };
 
@@ -2254,7 +2254,7 @@ export default function MigrationContent({
             <p className="text-sm text-slate-500">
               This migration was cancelled and will not continue. Start a new run with
               <span className="font-medium text-slate-700"> New migration</span>, or rewind with
-              <span className="font-medium text-slate-700"> Restart from Node 1</span> above — both
+              <span className="font-medium text-slate-700"> Restart from step 1</span> above — both
               begin a fresh execution.
             </p>
             <button
@@ -2284,14 +2284,14 @@ export default function MigrationContent({
         .find((n) => (n.logs?.length ?? 0) > 0);
       return Math.max(fromStep, lastWithLogs?.node_id ?? 0) || 1;
     })();
-    const failedName = NODE_TITLES[failedNode] ?? `Node ${failedNode}`;
+    const failedName = NODE_TITLES[failedNode] ?? `step ${failedNode}`;
     const totalNodes = 9;
     // The backend /rerun-from/{node} only rewinds to CHECKPOINT nodes {1,2,4,6,7,9} (not gate nodes
     // 3/5/8). If the failure was at a gate, retry from the nearest checkpoint at or before it — that
     // re-runs forward and re-opens the gate — so "Retry from step" is never a dead 400 button.
     const RERUNNABLE_NODES = [1, 2, 4, 6, 7, 9];
     const retryFromNode = RERUNNABLE_NODES.filter((n) => n <= failedNode).pop() ?? 1;
-    const retryFromName = NODE_TITLES[retryFromNode] ?? `Node ${retryFromNode}`;
+    const retryFromName = NODE_TITLES[retryFromNode] ?? `step ${retryFromNode}`;
     return wrapPipelineStep(
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-6">
           <div className="flex items-start gap-4">
@@ -2329,7 +2329,7 @@ export default function MigrationContent({
                               : "text-slate-400"
                         }
                       >
-                        {NODE_TITLES[n] ?? `Node ${n}`}
+                        {NODE_TITLES[n] ?? `Step ${n}`}
                       </span>
                       {state === "failed" ? (
                         <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 ring-[0.5px] ring-red-200">
@@ -2362,7 +2362,7 @@ export default function MigrationContent({
                   className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors"
                 >
                   <RotateCcw size={14} />
-                  Restart from Node 1
+                  Restart from step 1
                 </button>
                 <button
                   onClick={onReset}
@@ -2394,7 +2394,7 @@ export default function MigrationContent({
         <div>
           <h2 className="text-lg font-semibold text-slate-800">Restarting the migration pipeline…</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Rewinding to Node 1 (File ingestion). The first step will open once the backend has reset state.
+            Rewinding to step 1 (file ingestion). The first step will open once the server has reset the run.
           </p>
         </div>
       </div>,
@@ -2432,7 +2432,7 @@ export default function MigrationContent({
             <h2 className="text-base font-semibold text-slate-900">Migration complete</h2>
             <p className="text-sm text-slate-500 mt-0.5">
               {migration.cmms_name ? `${migration.cmms_name} ` : ""}data mapped and ingested into
-              Plenum CAFM · {coveragePct}% coverage · {totalMapped} fields mapped.
+              Hoistra · {coveragePct}% coverage · {totalMapped} fields mapped.
             </p>
             <p className="text-xs text-slate-400 mt-2">
               Mapping summary, downloads and full table data are under{" "}

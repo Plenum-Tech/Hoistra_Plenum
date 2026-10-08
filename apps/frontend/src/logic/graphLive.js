@@ -137,7 +137,7 @@ export const graphLiveMethods = {
       return {
         table: table, rows: null, columns: null, versions: [],
         why: payload
-          ? "plenum_cafm." + table + " is not in this database, so it has no rows to count."
+          ? "This record type is not in the database, so it has no rows to count."
           : "Reading the graph…",
         basis: (payload && payload.history_basis) || ""
       };

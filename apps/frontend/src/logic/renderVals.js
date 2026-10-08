@@ -9,13 +9,16 @@ import { COUNTRY_SHORT, fmtDateTime } from './homeLive.js';
 import { domainOf } from './chat.js';
 import { vendorsExtrasBanner } from './workbookExtras.js';
 import { historyNote } from './emailHistory.js';
-import { DAYS, cardStatusBadge, flattenCards } from './reports.js';
-import { answerCards, hiddenFor } from './reportCards.js';
-import { ago, shapeSessionList, sessionIcon } from './sessions.js';
+import { DAYS, cardStatusBadge, flattenCards, reportQuestionFor } from './reports.js';
+import { hiddenFor } from './reportCards.js';
+import { ago, shapeSessionList, sessionIcon, spaceKeyOf, questionCount } from './sessions.js';
 import { memoriesPageVals } from './memoriesPage.js';
+import { supportVals } from './supportVals.js';
+import { SUPPORT_SPACE_KEY } from './support.js';
 import { skillLabVals } from './skillLabPage.js';
 import { tracesPageVals } from './tracesPage.js';
 import { correctionVals, railTurnIndex } from './corrections.js';
+import { canRequest } from './accreditationRequest.js';
 import { filterBuildings, PAGE_SIZE } from './buildingsLive.js';
 import { openDocument } from '../api/docRag.js';
 import { opsApi } from '../api/opsIntelligence.js';
@@ -23,6 +26,7 @@ import { isSpreadsheet } from './migration.js';
 import { accountCanIngest } from './auth.js';
 import { evidencePane } from './vendorsEvidence.js';
 import { evidenceForMonth } from './vendorsLive.js';
+import { scrubInternal } from './publicText.js';
 
 // Stage → icon for the trace rail. The pipeline stages svc-deepagents emits; anything it
 // adds later falls back to a generic mark rather than disappearing from the run.
@@ -145,6 +149,23 @@ export const renderValsMethods = {
     return this.bldIsLive() ? buildingIdByName(this.bldData(), name) : null;
   },
 
+  // What the Ingest documents card can file against, as { name, id }: the live register once
+  // it has loaded (authoritative even when empty), else the account's own buildings. Never
+  // the seed list — it used to be prepended to everything, so a company with four buildings
+  // was offered thirteen, and picking a seed name filed the upload against no building.
+  iBuildingRows() {
+    if (this.bldIsLive()) {
+      return this.bldData().filter((b) => b && b.name).map((b) => ({ name: b.name, id: b.buildingId || b.building_id || null }));
+    }
+    const acc = this.state.account && this.state.account.buildings;
+    return (Array.isArray(acc) ? acc : []).filter((b) => b && typeof b === "object" && b.name).map((b) => ({ name: b.name, id: b.id || null }));
+  },
+  iBuildingIdFor(name) {
+    const want = String(name || "").trim().toLowerCase();
+    const hit = this.iBuildingRows().find((b) => String(b.name).trim().toLowerCase() === want);
+    return (hit && hit.id) || null;
+  },
+
   renderVals() {
     const D = this.D();
     const s = this.state;
@@ -260,6 +281,8 @@ export const renderValsMethods = {
     const N = (x) => (x === null || x === undefined ? "—" : String(x));
     const vpV = VD.vendors.find((x) => x.id === s.vpVendor) || VD.vendors[0] || null;
     const vpR = vpV ? (VD.V[vpV.id] || null) : null;
+    // The selected vendor as the Compliance register holds it (logic/compliance.js).
+    const vpCC = vpV ? this.ccVendorRecord(vpV) : { CC: this.ccData(), rec: null, certs: [] };
     // The Evidence tab's chosen month: the card on screen, or another month read on demand.
     const vpEvm = vpV && vpR ? evidenceForMonth(vpR, vpV.id, s.vpEv, s.vpEvMonths) : null;
     const vpScore = VD.score;
@@ -271,17 +294,42 @@ export const renderValsMethods = {
     const spm = this.spModel();
     const toneColor = (tone) => (tone && tone !== "none" ? t(tone).color : "var(--color-neutral-500)");
     const iso = (ms) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
+    // Where a session can be filed: the four built-in spaces, then the saved ones. A built-in
+    // space also holds every conversation its engine answered, so its count includes those.
+    const spaceTargets = spm.builtin.map((b) => ({ key: b.key, name: b.name, icon: b.icon, builtin: true }))
+      .concat(spm.custom.map((c) => ({ key: c.id, name: c.name, icon: "ph-folder-simple", builtin: false })));
+    // A support request is in the Support space, never in the engine space of whoever answered it.
+    const inSpace = (r, t) => r.spaceId === t.key || (t.builtin && r.kind === "chat" && !(r.support && r.support.status) && spaceKeyOf(r.domain) === t.key);
+    // Filing from the Sessions page, a space page or a drop on the navigator: one place, one
+    // message saying where they went.
+    const fileMany = (ids, key) => {
+      const list = (ids || []).filter(Boolean);
+      if (!list.length) return;
+      // Support lists support requests by their status; a session filed there is listed nowhere.
+      if (key === SUPPORT_SPACE_KEY) return this.flash("Support lists support requests — a session cannot be filed there.");
+      this.fileSessions(list, key || null);
+      const target = key ? spaceTargets.find((t) => t.key === key) : null;
+      this.flash(key
+        ? (list.length === 1 ? "Added to " : list.length + " sessions added to ") + (target ? target.name : "the space") + "."
+        : (list.length === 1 ? "Removed from its space." : list.length + " sessions removed from their spaces."));
+    };
     // One session row, as the Sessions page and a space page list them.
     const sessionRow = (r) => ({
       id: r.id, title: r.title, when: r.when, page: r.page, domain: r.domain, icon: r.icon,
       turns: r.turns ? r.turns + (r.turns === 1 ? " question" : " questions") : "",
+      // A support request's reference and where it stands (logic/support.js).
+      status: r.status || null, ref: r.ref || "", emailed: !!r.emailed,
       spaceName: r.spaceId && spm.byKey[r.spaceId] ? spm.byKey[r.spaceId].name : "",
       active: s.sessionId === r.id,
       open: () => this.openSession(r.id),
       remove: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.deleteSession(r.id); },
-      canFile: r.kind === "chat" && spm.custom.length > 0,
+      // Any session can be filed — a conversation or a task — in a built-in space or a saved one.
+      canFile: true,
+      makeReport: () => this.rpOpenBuilder(r.id),
+      kind: r.kind,
+      spaceKey: r.spaceId || null,
       fileValue: r.spaceId || "",
-      fileOptions: [{ value: "", label: "No space" }].concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
+      fileOptions: [{ value: "", label: "No space" }].concat(spaceTargets.map((t) => ({ value: t.key, label: t.name }))),
       fileTo: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.fileSession(r.id, e.target.value || null); }
     });
     const dayGroups = (groups) => groups.map((g) => ({ day: g.day, rows: g.rows.map(sessionRow) }));
@@ -312,6 +360,9 @@ export const renderValsMethods = {
     const docPageEnd = Math.min(docFiltered.length, (docPage + 1) * PAGE_SIZE);
     const docPageRows = docFiltered.slice(docPage * PAGE_SIZE, docPage * PAGE_SIZE + PAGE_SIZE);
 
+    // The conversation page as a support session (logic/supportVals.js).
+    const supV = supportVals(this);
+
     const vals = {
       // The signed-in account's real company, from login/refresh — never the seed
       // portfolio's name. Blank rather than a placeholder before the account has loaded.
@@ -340,7 +391,7 @@ export const renderValsMethods = {
         : s.chatLink === "unreachable" ? "Orchestrator unreachable — retry"
         : "",
       chatLinkDot: s.chatLink === "connected" ? "var(--st-ok)" : s.chatLink === "unreachable" ? "var(--st-risk)" : "var(--color-neutral-600)",
-      chatLinkTip: s.chatLink === "unreachable" ? (s.chatLinkError || "svc-deepagents did not answer at /backend/deep-agents") : "svc-deepagents · one conversation across every engine",
+      chatLinkTip: s.chatLink === "unreachable" ? (s.chatLinkError || "The orchestrator did not answer") : "One conversation across every engine",
       chatRetry: () => this.chatConnect(true),
       chatIntro: "Ask about compliance, energy, vendors, work orders or documents. The question goes to the engine that owns the answer, and how the answer was produced is shown with it — step by step.",
       queueOpen: s.queueOpen, paletteOpen: s.paletteOpen, detailOpen: !!detail,
@@ -381,16 +432,22 @@ export const renderValsMethods = {
         this.setState({ query: "" });
         this.askScoped(q);
       },
-      // Saved report cards first — they are the pinned runs proper, re-run on a cadence by
-      // the server — then the questions the portfolio is most often asked.
-      pinned: myCards.map((c) => ({
-        label: c.name,
-        run: () => this.rpOpen(c.id)
-      })).concat([
-        "Which buildings put me at risk this month?",
-        "What needs my approval today?",
-        "Which vendors are blocked right now?"
-      ].map((a) => ({ label: a, run: () => this.askScoped(a) }))),
+      // Saved report cards' questions first, then the questions the portfolio is most often
+      // asked. Every chip ASKS its question (Hussain, 8 Oct 2026): a card's chip used to open
+      // the report page, and the same question then showed twice - once a page, once a query.
+      // The report itself is under Reports in the navigator. One chip per question.
+      pinned: (() => {
+        const seen = new Set();
+        const key = (q) => String(q || "").trim().toLowerCase().replace(/[?.!\s]+$/, "");
+        return myCards.map((c) => ({ label: c.name || c.prompt, q: c.prompt || c.name }))
+          .concat([
+            "Which buildings put me at risk this month?",
+            "What needs my approval today?",
+            "Which vendors are blocked right now?"
+          ].map((a) => ({ label: a, q: a })))
+          .filter((p) => p.q && !seen.has(key(p.q)) && seen.add(key(p.q)))
+          .map((p) => ({ label: p.label, run: () => this.askScoped(p.q) }));
+      })(),
 
       signedIn: s.signedIn, gated: !s.signedIn,
       f1: { o: s.frame === 0 ? 1 : 0, y: s.frame === 0 ? "0px" : (s.frame === 1 ? "-10px" : "10px") },
@@ -433,7 +490,7 @@ export const renderValsMethods = {
       ],
 
       flowSteps: [
-        { n: "01", name: "Hoist Graph", body: "The property knowledge graph. Contracts, asset registers, certificates, invoices and half-hourly meter data enter through one door; a RAG relationships agent links each cell to the clause that governs it.", bar: "var(--color-accent)", fg: "var(--color-text)", arrow: "block" },
+        { n: "01", name: "Hoist Graph", body: "The property knowledge graph. Contracts, asset registers, certificates, invoices and half-hourly meter data enter through one door; a relationships agent links each cell to the clause that governs it.", bar: "var(--color-accent)", fg: "var(--color-text)", arrow: "block" },
         { n: "02", name: "Hoist Agents", body: "Compliance, energy, vendor, asset and work-order agents run against the graph on their own cadence and price what they find.", bar: "var(--color-accent)", fg: "var(--color-text)", arrow: "block" },
         { n: "03", name: "Hoisters", body: "Forward deployed engineers. We hoist buildings; Hoisters do the work — inside your operation, wiring the last feeds, resolving what the agents cannot, signing off the baseline.", bar: "var(--color-accent)", fg: "var(--color-text)", arrow: "block" },
         { n: "04", name: "Hoist Score", body: "How completely the portfolio is held in the graph. Coverage first, autonomy second: the score is what earns the agents more authority.", bar: "var(--st-ok)", fg: "var(--color-text)", arrow: "none" }
@@ -475,7 +532,7 @@ export const renderValsMethods = {
         };
       }),
       gateBlocks: [
-        { name: "Hoist Graph", what: "The property knowledge graph", body: "Contracts, asset registers, certificates, invoices and half-hourly meter data, ingested through one door and linked cell to clause by a RAG relationships agent." },
+        { name: "Hoist Graph", what: "The property knowledge graph", body: "Contracts, asset registers, certificates, invoices and half-hourly meter data, ingested through one door and linked cell to clause by a relationships agent." },
         { name: "Hoist Score", what: "Ingestion coverage → autonomy", body: "How completely your portfolio is represented in the Hoist Graph. The score is what earns the agents more authority: coverage first, autonomy second." },
         { name: "Hoisters", what: "Forward-deployed engineers", body: "We hoist buildings. Hoisters do the work — they sit inside your operation, wire up the feeds, and hand over a portfolio the agents can already read." }
       ],
@@ -521,17 +578,14 @@ export const renderValsMethods = {
       // server derived every live figure from the store; a module or head it could not
       // price arrives as "—" with its reason, never as an invented number.
       pnlSaved: hmPnl ? hm.pnl.saved : "£390k",
-      pvTotal: hmValue ? hm.value.total : "£800k",
+      pvTotal: hmValue ? hm.value.total : "£970k",
       pvTitle: "Platform value · " + (hmValue ? hm.value.year : "2026"),
       pvNote: hmValue
         ? "Live · " + hm.value.note
         : (s.homeLoading ? "Reading the operations backend…" : "Seed figures · the value read has not answered yet"),
       pvRows: hmValue
-        ? hm.value.rows.map((r) => ({
-            head: r.head, detected: r.detected, saved: r.saved,
-            color: r.counted ? t("ok").color : "var(--color-neutral-600)"
-          }))
-        : VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected, saved: r.saved, color: t(r.tone).color })),
+        ? hm.value.rows.map((r) => ({ head: r.head, detected: r.detected }))
+        : VALUE_LEDGER.map((r) => ({ head: r.mod, detected: r.detected })),
       pvOpen: () => this.orchWith("Platform value ledger · " + (hmValue ? hm.value.year : "2026"), "All modules", "value", {}),
       fValue: s.flow === "value",
       pvLedger: hmValue
@@ -785,12 +839,12 @@ export const renderValsMethods = {
           basis: t.basis,
           basisShow: t.versions.length > 1 ? "block" : "none",
           download: () => counted
-            ? this.flash(t.table + ".csv — " + NUM(rows) + " rows counted in plenum_cafm."
+            ? this.flash(t.table + ".csv — " + NUM(rows) + " rows counted in "
                 + t.table + ", every column resolved through the graph. Downloading now.")
             : this.flash("Nothing to export: " + t.why),
           downloadHistory: () => this.flash(t.versions.length > 1
             ? "Preparing " + t.table + " at each cutoff as one zip. Each is the set of rows "
-              + "whose created_at falls before that time — a reconstruction from the live "
+              + "created before that time — a reconstruction from the live "
               + "table, not a stored build."
             : "No history for " + t.table + " — " + (t.why || "nothing to reconstruct from.")),
           // Counted at each cutoff, not scaled from a percentage. A table nobody has
@@ -847,7 +901,7 @@ export const renderValsMethods = {
         } else {
           plan.push({ tag: "REPLACE", what: target + " with the newer issue", where: "documents — " + where });
           plan.push({ tag: "SUPERSEDE", what: "Previous version retained, marked superseded", where: "nothing is destroyed — the old build stays exportable" });
-          plan.push({ tag: "REBIND", what: "Re-vectorise and rebind to its column", where: "certificates.cert_type · re-scored" });
+          plan.push({ tag: "REBIND", what: "Re-vectorise and rebind to its column", where: "certificate type · re-scored" });
           plan.push({ tag: "RESCORE", what: "Expiry, risk band and Hoist Score", where: where + " · recomputed on apply" });
         }
         const TAGC = {
@@ -917,8 +971,8 @@ export const renderValsMethods = {
       // compliance console carries: nothing here is seed data, so when the service has not
       // answered the page says so rather than filling itself in.
       vpSourceLabel: vm.live
-        ? "Live · svc-operations-intelligence" + (s.vpError ? " · refresh failed" : "")
-        : s.vpLoading ? "Reading svc-operations-intelligence…" : "No data · backend unreachable",
+        ? "Live" + (s.vpError ? " · refresh failed" : "")
+        : s.vpLoading ? "Reading…" : "No data · backend unreachable",
       vpSourceDot: vm.live ? (s.vpError ? "var(--st-warn)" : "var(--st-ok)")
         : s.vpLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       vpSourceDetail: s.vpError || (s.vpLoadedAt ? "Read at " + fmtTime(s.vpLoadedAt) : ""),
@@ -933,18 +987,14 @@ export const renderValsMethods = {
       vpBodyShow: VD.vendors.length ? "grid" : "none",
       vpEmptyTitle: vm.live ? "No vendors on the register" : s.vpLoading ? "Reading the register…" : "Contract performance backend unreachable",
       vpEmptyNote: vm.live
-        ? "svc-operations-intelligence answered and holds no vendor with a scorecard or a contract parameter set for this company. Ingest a signed contract or run the monthly scoring job, and the directory fills from what it writes."
+        ? "No vendor with a scorecard or a contract parameter set is on record for this company. Ingest a signed contract or run the monthly scoring job, and the directory fills from what it writes."
         : s.vpLoading ? "Nothing is shown until it answers."
-        : "Every figure on this page is read from svc-operations-intelligence, and it did not answer" + (s.vpError ? ": " + s.vpError : "") + ". Nothing is shown in its place.",
+        : "The figures on this page could not be loaded" + (s.vpError ? ": " + s.vpError : "") + ". Nothing is shown in their place.",
       // The weights the engine scored against, or nothing. Quoting a set of numbers the
       // backend never sent would be the one place on this page a person cannot check.
       vpWeights: () => this.flash(vm.weightsText
-        || "Scoring weights are read from svc-operations-intelligence, and it has not answered — there are no weights to report."),
+        || "Scoring weights could not be loaded — there are no weights to report."),
       vpTiles: (() => {
-        const vendors = VD.vendors, V = VD.V;
-        const rec = (id) => V[id] || {};
-        const scored = vendors.filter((v) => V[v.id]);
-        const heldOf = (v) => (rec(v.id).invoices || []).filter((i) => i.status === "Held" || i.status === "Disputed").length;
         // Every figure is the model's, and the model leaves null whatever no read sourced.
         // A count is never inferred from an empty directory: "0 blocked" and "nothing has
         // loaded" are different statements and only the first is a fact about the register.
@@ -954,24 +1004,27 @@ export const renderValsMethods = {
         const L1 = vm.tiles.L1;
         const pending = vm.tiles.pending;
         const critical = vm.tiles.critical;
-        const worst = scored.slice().sort((a, b) => vpScore(a.id).score - vpScore(b.id).score)[0] || vendors[0] || null;
-        const thinnest = scored.slice().sort((a, b) => V[a.id].contract.read - V[b.id].contract.read)[0] || vendors[0] || null;
-        const firstBlocked = vendors.find(capOf) || worst;
-        const mostHeld = vendors.slice().sort((a, b) => heldOf(b) - heldOf(a))[0] || vendors[0] || null;
-        const idOf = (v) => (v ? v.id : firstId);
         // The rail keeps the tile's identity; the figure goes grey when there is no figure.
         // A red "—" reads as a red number at a glance, which is the opposite of what it says.
         const fg = (n, colour) => (n === null || n === undefined ? "var(--color-neutral-400)" : colour);
+        // A card opens its list in place, as the Compliance page's do (logic/vendorsQueue.js);
+        // the same card again, or "Back", closes it.
+        const card = (id, t) => Object.assign(t, {
+          click: () => this.vpQueueOpen(id), active: s.vpQueue === id,
+          bg: s.vpQueue === id ? "var(--color-accent-900)" : "var(--color-surface)",
+          edge: s.vpQueue === id ? "var(--color-accent)" : "transparent"
+        });
         return [
-          { value: N(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", fg: fg(blocked, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 3 }) },
-          { value: N(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", fg: fg(pending, "var(--st-warn)"), click: () => this.setState({ queueOpen: true }) },
-          { value: N(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", fg: fg(critical, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOr("v2", idOf(firstBlocked)), vpTab: 2 }) },
-          { value: N(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", fg: fg(L1, "var(--st-risk)"), click: () => this.setState({ vpVendor: idOf(worst), vpTab: 2 }) },
-          { value: N(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", fg: fg(held, "var(--st-warn)"), click: () => this.setState({ vpVendor: idOr("v1", idOf(mostHeld)), vpTab: 4 }) },
-          { value: N(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", fg: fg(defaults, "var(--st-warn)"), click: () => this.setState({ vpVendor: idOf(thinnest), vpTab: 1 }) }
+          card("blocked", { value: N(blocked), label: "Vendors blocked", hint: "ceiling of 60 applies", color: "var(--st-risk)", fg: fg(blocked, "var(--st-risk)") }),
+          card("pending", { value: N(pending), label: "Pending tasks", hint: "awaiting your decision", color: "var(--st-warn)", fg: fg(pending, "var(--st-warn)") }),
+          card("critical", { value: N(critical), label: "Pending critical", hint: "L1 assets · act first", color: "var(--st-risk)", fg: fg(critical, "var(--st-risk)") }),
+          card("l1", { value: N(L1), label: "L1 breaches", hint: "weighted 3× · this period", color: "var(--st-risk)", fg: fg(L1, "var(--st-risk)") }),
+          card("held", { value: N(held), label: "Invoice lines held", hint: "fail the rate schedule", color: "var(--st-warn)", fg: fg(held, "var(--st-warn)") }),
+          card("defaults", { value: N(defaults), label: "Terms on default", hint: "not in any contract", color: "var(--st-warn)", fg: fg(defaults, "var(--st-warn)") })
         ];
       })(),
 
+      ...this.vpQueueVals(),
       vpStats: (() => {
         const vendors = VD.vendors, V = VD.V;
         const rec = (id) => V[id] || {};
@@ -1098,14 +1151,38 @@ export const renderValsMethods = {
       }),
       // The count on each tab is the number of rows behind it. An empty tab counts 0 — it
       // never borrows the five components a scorecard would have had.
-      vpTabs: [["Scorecard", SC.rows.length], ["Contract terms", (vpR ? vpR.terms.length : 0)], ["Evidence", (vpEvm ? (vpEvm.status === "loading" && !vpEvm.jobs.length ? "…" : vpEvm.jobs.length) : 0)], ["Coverage", (vpR ? vpR.certs.length : 0)], ["Invoices", (vpR ? (vpR.invoicesError ? "—" : vpR.invoices.length) : 0)]].map((t, i) => ({
+      //
+      // Each tab carries its own id, so Accreditations (5) and Buildings served (6) sit beside
+      // Coverage on screen while every existing link into Invoices (4) keeps its number.
+      vpTabs: [["Scorecard", SC.rows.length, 0], ["Contract terms", (vpR ? vpR.terms.length : 0), 1], ["Evidence", (vpEvm ? (vpEvm.status === "loading" && !vpEvm.jobs.length ? "…" : vpEvm.jobs.length) : 0), 2], ["Coverage", (vpR ? vpR.certs.length : 0), 3], ["Accreditations", vpCC.live === false ? "—" : vpCC.certs.length, 5], ["Buildings served", vpCC.live === false ? "—" : vpCC.rec ? vpCC.rec.serves.length : 0, 6], ["Invoices", (vpR ? (vpR.invoicesError ? "—" : vpR.invoices.length) : 0), 4]].map((t) => ({
         label: t[0], n: String(t[1]),
-        edge: s.vpTab === i ? "var(--color-accent)" : "transparent",
-        fg: s.vpTab === i ? "var(--color-accent)" : "var(--color-neutral-500)",
-        pick: () => this.setState({ vpTab: i })
+        edge: s.vpTab === t[2] ? "var(--color-accent)" : "transparent",
+        fg: s.vpTab === t[2] ? "var(--color-accent)" : "var(--color-neutral-500)",
+        pick: () => this.setState({ vpTab: t[2] })
       })),
       vpPaneScore: s.vpTab === 0, vpPaneTerms: s.vpTab === 1, vpPaneEvidence: s.vpTab === 2,
       vpPaneCerts: s.vpTab === 3, vpPaneInv: s.vpTab === 4,
+      // The vendor's accreditations as the Compliance register holds them — each with the three
+      // checks — and the buildings it serves. One place for a vendor, not a second copy under
+      // Compliance (Hussain, 7 Oct 2026).
+      vpPaneAccred: s.vpTab === 5, vpPaneServed: s.vpTab === 6,
+      vpAccredRows: vpCC.certs.map((c) => this.ccCertRowVals(c, vpCC.CC)),
+      vpAccredKey: vpV ? "vendor:" + vpV.id : "",
+      vpCCPending: vpCC.live === false,
+      vpServedRows: (vpCC.rec ? vpCC.rec.serves : []).map((name) => {
+        const b = vpCC.CC.buildings.find((x) => x.name === name) || null;
+        const tone = !b ? "none" : b.blocked || b.high ? "risk" : b.med ? "warn" : "ok";
+        return {
+          name: name, state: b ? (b.state || "—") : "—",
+          cov: b ? b.cov + "%" : "—", frac: b ? b.on + "/" + b.req : "—",
+          covFg: !b ? "var(--color-neutral-500)" : b.cov >= 60 ? "var(--st-ok)" : b.cov >= 30 ? "var(--st-warn)" : "var(--st-risk)",
+          certs: b ? String(b.certs) : "—",
+          status: !b ? "Not in scope" : b.blocked ? b.blocked + " blocked" : b.high ? b.high + " high risk" : b.med ? b.med + " medium risk" : "Clear",
+          statusBg: tone === "none" ? "var(--color-neutral-900)" : "var(--st-" + tone + "-bg)",
+          statusFg: tone === "none" ? "var(--color-neutral-400)" : "var(--st-" + tone + ")",
+          open: () => { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); this.setState({ view: "cc", ccPivot: "buildings", ccFocus: { kind: "building", name: name }, ccTab: 0, ccQueue: null, ccQueueOpenId: null }); }
+        };
+      }),
       vp: (() => {
         const v = vpV, R = vpR;
         if (!v || !R) return {};
@@ -1284,10 +1361,10 @@ export const renderValsMethods = {
             ? evm.status === "loading"
               ? "Reading the work orders scored for " + evm.label + "…"
               : evm.status === "error"
-                ? "The work orders scored for " + evm.label + " could not be read (GET /api/contract-performance/wo-scores: " + evm.error + ")."
+                ? "The work orders scored for " + evm.label + " could not be read (" + evm.error + ")."
                 : "No scored work order came back for " + evm.label + ", though the engine published a card for it."
             : !R.evidenceRead
-            ? "The scored work orders could not be read (GET /api/contract-performance/wo-scores did not answer), so there is no evidence to show. The score above is the card the engine published."
+            ? "The scored work orders could not be read, so there is no evidence to show. The score above is the card the engine published."
             : v.score === null
               ? "No work order has been scored for this vendor yet. Rebuild scorecards scores the completed work orders once the vendor has a confirmed contract; each one then appears here with its hours against the contract."
               : R.evidenceTruncated
@@ -1301,10 +1378,14 @@ export const renderValsMethods = {
           certs: R.certs.map((c) => ({
             name: c.name, req: c.req, status: c.status, exp: c.exp, ver: c.ver,
             reqFg: c.req === "Preferred" ? "var(--color-neutral-500)" : "var(--color-accent-300)",
-            bg: tag(c.status)[0], fg: tag(c.status)[1]
+            bg: tag(c.status)[0], fg: tag(c.status)[1],
+            // Anything the vendor owes — never supplied, lapsed or running out — can be asked
+            // for from its own row: the email opens in the dock to check and send.
+            requestShow: canRequest(c),
+            request: () => this.vpRequestAccreditation(v, c)
           })),
           chase: () => this.runAction("Request evidence", v.name),
-          openCompliance: () => this.setState({ view: "cc", ccPivot: "vendors", ccFocus: { kind: "vendor", name: v.name }, ccTab: 0 }),
+          openCompliance: () => this.setState({ vpTab: 5 }),
           invoices: R.invoices.map((i) => ({
             ref: i.ref, period: i.period, line: i.line, charged: i.charged, should: i.should,
             delta: i.delta, deltaFg: i.delta === "—" ? "var(--color-neutral-500)" : "var(--st-risk)",
@@ -1315,7 +1396,7 @@ export const renderValsMethods = {
           // held — not that every line was checked and matched.
           invEmptyShow: R.invoices.length ? "none" : "block",
           invEmpty: R.invoicesError
-            ? "The held invoice lines could not be read (GET /api/contract-performance/approvals: " + R.invoicesError + "), so this tab cannot say whether any are held. Refresh to try again."
+            ? "The held invoice lines could not be read (" + R.invoicesError + "), so this tab cannot say whether any are held. Refresh to try again."
             : "No invoice line for this vendor is held. Only lines the rate check flags reach this queue, so matched lines are not listed here and no total is stated for them.",
           invTotal: R.invoices.some((i) => i.status === "Held" || i.status === "Disputed")
             ? "£" + invTotal.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—",
@@ -1404,8 +1485,8 @@ export const renderValsMethods = {
       roleFg: s.role === "admin" ? "var(--accent-ink)" : "var(--color-neutral-400)",
       docScope: s.role === "admin" ? "Everything ingested, per building" : "What you ingested, per building",
       docBlurb: s.role === "admin"
-        ? "Every document on the graph, per building, read from plenum_cafm.documents — and beside each, the certificates it evidences. A building with nothing filed says so rather than showing an empty list."
-        : "The documents on the graph for each building, read from plenum_cafm.documents, and the certificates they evidence. Source files stay with whoever ingested them.",
+        ? "Every document on the graph, per building — and beside each, the certificates it evidences. A building with nothing filed says so rather than showing an empty list."
+        : "The documents on the graph for each building, and the certificates they evidence. Source files stay with whoever ingested them.",
       docStats: (() => {
         const rows = this.glBuildings();
         const sum = (k) => rows.reduce((q, b) => {
@@ -1478,14 +1559,14 @@ export const renderValsMethods = {
             // is what there is, and it is what identifies the file in the graph. The "no
             // file" marker rides here too, so the distinction survives a screenshot rather
             // than living only in a tooltip.
-            meta: "document_id " + String(r.id).slice(0, 8) + a.note,
+            meta: "Document ID " + String(r.id).slice(0, 8) + a.note,
             by: "graph",
             // The id the download route is keyed on, kept beside the row so "Download all"
             // can reach it without re-deriving which of the two columns holds it.
             docId: r.document_id || r.id,
             // The flash carries the stored name in full — the trim above is for the row,
             // not a claim about what the file is called.
-            view: open || (() => this.flash(r.label + " — plenum_cafm.documents row " + r.id
+            view: open || (() => this.flash(r.label + " — document record " + r.id
               + (r.detail ? ", " + r.detail : "") + ", filed against " + b.name
               + ". Nothing is stored for it — no file and no extracted text — so this is a "
               + "record that the document exists, not a copy of it.")),
@@ -1549,13 +1630,13 @@ export const renderValsMethods = {
             // never offered on a row that would answer 404.
             const open = a.held
               ? () => openDocument(r.document_id, (e) => this.flash("Could not open the document: " + ((e && e.message) || e)))
-              : () => this.flash(r.label + " — plenum_cafm.compliance_certificates row "
+              : () => this.flash(r.label + " — certificate record "
                   + r.id + (r.detail ? ", " + r.detail : "")
                   + (a.evidenced
                       ? ", bound to a document on " + b.name + ". Nothing is stored for that "
                         + "document — no file and no extracted text — so there is nothing "
                         + "to open."
-                      : ". No document_id on the row: this certificate is recorded on "
+                      : ". No document is linked to this record: this certificate is recorded on "
                         + b.name + " with nothing filed against it."));
             return {
               ...a,
@@ -1635,8 +1716,8 @@ export const renderValsMethods = {
                 typeof nDocs === "number" && nDocs
                   ? nDocs + (nDocs === 1 ? " document is" : " documents are") + " recorded "
                     + "against " + b.name + ", none with a file behind it — there is nothing "
-                    + "to download. A row is downloadable once its original is in blob "
-                    + "storage or its text has been extracted."
+                    + "to download. A row is downloadable once its original file is "
+                    + "stored or its text has been extracted."
                   : "Nothing filed against " + b.name + " to download.");
             }
             ids.forEach((id, i) => setTimeout(
@@ -1681,7 +1762,7 @@ export const renderValsMethods = {
           building: b ? b.name : "No building on the register",
           rowKey: b ? (b.code || b.id) : "—",
           vectors: vecs(),
-          empty: b ? "" : "plenum_cafm.buildings has no rows in this deployment.",
+          empty: b ? "" : "The buildings register is empty.",
           emptyShow: b ? "none" : "block",
           pickParent: () => this.setState({ gTable: "building" }),
           parentBg: parentSel ? OK : "transparent",
@@ -1788,7 +1869,7 @@ export const renderValsMethods = {
       graphNote: this.glHubNote(),
       graphLegend: [
         { label: "selected — click any node to expand", fill: "var(--color-accent)", stroke: "0", radius: "50%" },
-        { label: "direct child · carries building_id", fill: "var(--color-bg)", stroke: "1.4px solid var(--color-accent)", radius: "50%" },
+        { label: "direct child · carries the building key", fill: "var(--color-bg)", stroke: "1.4px solid var(--color-accent)", radius: "50%" },
         { label: "shared by several buildings", fill: "var(--color-bg)", stroke: "1.2px solid var(--color-neutral-700)", radius: "50%" },
         { label: "reaches a building only indirectly", fill: "var(--color-accent-900)", stroke: "1.4px dashed var(--color-accent)", radius: "50%" },
         { label: "counts beside each node are read from the graph; “?” means that branch is not counted", fill: "var(--color-bg)", stroke: "1.2px dashed var(--color-neutral-700)", radius: "3px" }
@@ -1819,6 +1900,7 @@ export const renderValsMethods = {
       ...this.cronVals(),
       ...this.cronsPageVals(),
       ...memoriesPageVals(this),
+      ...supV,
       ...skillLabVals(this),
       ...tracesPageVals(this),
       ...correctionVals(this),
@@ -1829,10 +1911,16 @@ export const renderValsMethods = {
       ...this.bgVals(),
 
       navWidth: s.navOpen ? "248px" : "52px",
+      // The navigator is always 248px and is shown down to its 52px rail by clipping, not by
+      // resizing: a width animation re-laid out the page on every frame (8 Oct 2026). Clipped,
+      // the hidden part takes no clicks either.
+      navClip: s.navOpen ? "inset(0 0 0 0)" : "inset(0 196px 0 0)",
       orchWidth: orchW + "px",
       // The navigator behaves the same on every page, Home included: open, it sits beside the
       // content (never over it), and the dock sits beside the navigator.
       shellPad: !s.signedIn ? "0px" : ((s.navOpen ? 248 : 52) + (s.orchOpen ? orchW : 0)) + "px",
+      // The dock keeps `left` (not a transform): a transform would make it the containing block
+      // for the position:fixed click-catchers inside it (8 Oct 2026 review).
       orchLeft: (s.navOpen ? 248 : 52) + "px",
 
       // Drag the dock's right edge to widen it. Widen only: the floor is the flow's own
@@ -1886,6 +1974,10 @@ export const renderValsMethods = {
       orchTitle: s.orchTask ? s.orchTask.label : "Orchestrator",
       // The chat reports its own route per reply, so the scripted chain is not shown there.
       orchStepsShow: chatView && ((s.ccChat || []).length > 0 || s.ccBusy) ? "none" : "flex",
+      // Which draft or card the dock is showing above the conversation. It changes when a new one
+      // opens — never as the reader types in it — and the dock scrolls up to it then: a next step
+      // clicked under a long answer opens its draft at the top, out of sight (8 Oct 2026).
+      orchFlowKey: s.flow ? [s.flow, s.orchTask ? s.orchTask.id : "", s.emKicker || "", s.emCertId || "", s.fVendor || "", s.ingExpect || ""].join("|") : "",
       orchSteps: (s.orchTask ? s.orchTask.steps : []).map((st, i) => ({
         a: st.a, t: st.t,
         state: i < s.orchDone ? "done" : (i === s.orchDone ? "live" : "wait"),
@@ -1901,7 +1993,7 @@ export const renderValsMethods = {
       // the dock is a conversation. Elsewhere it stays the scripted task replay.
       orchKey: (e) => { if (e.key === "Enter") this.orchSubmitNow(); },
       orchSubmit: () => this.orchSubmitNow(),
-      orchPlaceholder: !chatView ? "" : ((s.ccChat || []).length ? "Ask a follow-up…"
+      orchPlaceholder: !chatView ? "" : supV.supOn ? supV.supPlaceholder : ((s.ccChat || []).length ? "Ask a follow-up…"
         : s.view === "cc" ? "Ask anything about compliance…"
         : s.view === "vp" ? "Ask anything about vendor performance…"
         : s.view === "buildings" ? "Ask anything about your buildings…"
@@ -2214,7 +2306,7 @@ export const renderValsMethods = {
                 ? "The migration is recorded against this building — the ingest is bound to it and the audit trail names it."
                 : "Each file is checked against this building before it is bound. Anything that does not belong is held and put back to you as a question.")
             : (kind === "sheets"
-                ? "No building selected — the migration still runs and its rows still land in plenum_cafm, but it binds to no building and leaves no row in the ingestion audit trail."
+                ? "No building selected — the migration still runs and its rows still land in the Hoist Graph, but it binds to no building and leaves no row in the ingestion audit trail."
                 : kind === "both"
                   ? "No building selected — the documents will be indexed and searchable but not validated, and neither they nor the migration will be filed against a building or recorded in the audit trail."
                   : "No building selected — the documents will be indexed and searchable, but not validated, not filed against a building, and not recorded in the audit trail."),
@@ -2266,24 +2358,28 @@ export const renderValsMethods = {
       // back on screen after the toggle was turned off.
       fIngest: s.flow === "ingest" && accountCanIngest(s),
       iBuilding: s.declFor || "",
-      iBuildingOpts: BUILDINGS.map((b) => b.name).concat(this.bldIsLive() ? this.bldData().map((b) => b.name).filter((n) => !BUILDINGS.some((sb) => sb.name === n)) : []),
+      // Opened from Upload on a Compliance "Not on record" type: the certificate it is for.
+      iExpect: s.ingExpect || "",
+      iBuildingOpts: this.iBuildingRows().map((b) => b.name),
       // The dropdown is a list of names because that is what a person picks from. The id
-      // is resolved here, once, from the live rows — so the thing that gets sent is the key
-      // and the thing on screen is the name.
+      // is resolved here, once, from the same rows the list came from — so the thing that
+      // gets sent is the key and the thing on screen is the name.
       setIBuilding: (e) => this.setState({
-        declFor: e.target.value, declForId: this.bldIdFor(e.target.value)
+        declFor: e.target.value, declForId: this.iBuildingIdFor(e.target.value)
       }),
       iClasses: ["Certificates and statutory evidence", "Contracts and framework agreements", "Asset registers and PPM schedules", "Meter data and consent — MPAN / MPRN", "Invoices and service charge records"],
       iCanRun: (s.ccFiles || []).length > 0 && !!s.declFor,
-      iHint: !(s.ccFiles || []).length ? "Attach at least one document first — certificates, contracts, asset registers, meter data or invoices."
+      iHint: !this.iBuildingRows().length ? "No buildings to file against yet — hoist a building first, then ingest its documents."
+        : !(s.ccFiles || []).length ? "Attach at least one document first — certificates, contracts, asset registers, meter data or invoices."
         : !s.declFor ? "Choose which building this is for."
         : "",
       iRun: () => {
         if (!(s.ccFiles || []).length) return this.flash("Attach at least one document first — certificates, contracts, asset registers, meter data or invoices.");
         if (!s.declFor) return this.flash("Choose which building this is for.");
         const n = (s.ccFiles || []).length;
-        this.setState({ flow: null, flowDone: "" });
-        this.askScoped("Ingest " + n + (n === 1 ? " document" : " documents") + " for " + s.declFor + ".");
+        const expect = s.ingExpect ? " It is the " + s.ingExpect + " the register has no record of." : "";
+        this.setState({ flow: null, flowDone: "", ingExpect: "" });
+        this.askScoped("Ingest " + n + (n === 1 ? " document" : " documents") + " for " + s.declFor + "." + expect);
       },
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
@@ -2292,10 +2388,12 @@ export const renderValsMethods = {
       // else it closes the card. Either way nothing stays armed for the next email.
       // A draft that is sending is not cancelled from under itself — the send decides where the
       // dock goes. The investigation branch clears flowDone: a "Not sent" belonged to the draft.
+      // A Decision-queue draft's item, wording and sample mark go with it.
       fCancel: () => this.setState((p) => (p.emSending ? {}
-        : p.emFromInv && p.inv && p.flow === "email"
+        : Object.assign(p.emFromInv && p.inv && p.flow === "email"
           ? { flow: "investigate", flowDone: "", emFromInv: false }
-          : { flow: null, flowDone: "", emFromInv: false })),
+          : { flow: null, flowDone: "", emFromInv: false },
+          { emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false }))),
       fNewVendor: () => this.setState({ flow: "new" }),
 
       bk: {
@@ -2386,8 +2484,14 @@ export const renderValsMethods = {
         // answers ok=true for a dry run as well as a real send, so "sent" and "queued but
         // not delivered" are only distinguishable there.
         sendBusy: !!s.emSending,
+        // A draft from a sample card (shown before the live queue answers) states facts no record
+        // holds; it is shown for its shape and never sent, whatever address is typed.
+        sample: !!s.emSample,
         send: async () => {
           if (s.emSending) return;
+          if (s.emSample) {
+            return this.setState({ flowDone: "Not sent — this draft comes from a sample card shown before the live queue loaded, so there is no real record behind it. Open the card again once the queue is live." });
+          }
           const to = (s.emTo || "").trim();
           if (!to) return this.flash("An address is needed before this can be sent.");
           const kind = s.emKind;
@@ -2397,9 +2501,17 @@ export const renderValsMethods = {
           const task0 = this.state.orchTask ? this.state.orchTask.id : null;
           const seq = (this._sendSeq = (this._sendSeq || 0) + 1);
           this.setState({ emSending: true });
+          // A Decision-queue draft the compliance engine wrote is sent against its queue item, so
+          // the item records that its email went (and to whom) the way the Approvals card's send
+          // always did.
+          const queueItemId = s.emQueueItemId || null;
           let res = null, err = null;
           try {
-            res = await opsApi.sendEmail({ to, subject, body: s.emBody || "" });
+            res = await opsApi.sendEmail(Object.assign({ to, subject, body: s.emBody || "" },
+              queueItemId ? { queue_item_id: queueItemId } : {},
+              // A support email copies the asker, so Plenum's reply reaches them. Only a support
+              // draft: emCc is never carried onto a vendor or contractor email.
+              kind === "support" && s.emCc ? { cc: s.emCc } : {}));
           } catch (e) {
             err = e;
           }
@@ -2414,9 +2526,11 @@ export const renderValsMethods = {
           const dry = !err && !failed && status === "dry_run";
           const handoff = !err && !failed && status === "handoff";
           const unconfirmed = !err && !failed && !sent && !dry && !handoff;
+          // The request remembers it went to Plenum — only once it really has.
+          if (sent && kind === "support" && s.emSupportId && typeof this.supMarkEmailed === "function") this.supMarkEmailed(s.emSupportId);
           const problem = err
             ? ((err && err.message) || "the mail service did not answer")
-            : failed ? ((res && res.error) || "the mail service reported a failure")
+            : failed ? ((res && res.error && scrubInternal(String(res.error))) || "the mail service reported a failure")
             : null;
           // A handoff keeps the draft too: a mailto is a URL, mail clients cut long ones
           // short, and nothing has been confirmed sent until the reader presses send there.
@@ -2425,13 +2539,13 @@ export const renderValsMethods = {
             ? "Not sent — " + problem + ". The draft is unchanged; correct it or retry."
             : unconfirmed
               ? "Not confirmed — the mail service reported \"" + (status || "no status")
-                + "\" rather than delivery. The draft is unchanged; retry, or check ops_email_log."
+                + "\" rather than delivery. The draft is unchanged; retry, or check the email log."
               : dry
                 ? "Recorded for " + to + " but NOT delivered: the platform is in dry-run "
-                  + "(EMAIL_DRY_RUN). It is in ops_email_log with everything it would have sent."
+                  + "mode. It is in the email log with everything it would have sent."
                 : handoff
                   ? "Opened in your mail client, addressed to " + to + " — the platform is in "
-                    + "handoff mode (EMAIL_DELIVERY_MODE=handoff) and sends nothing itself. "
+                    + "handoff mode and sends nothing itself. "
                     + "Press send there. The draft stays here in case your client cut the body short."
                   : null;   // sent: the spec's own wording is accurate once the mail has really gone
           // Handoff: the backend built the mailto; the reader's own client takes it from here.
@@ -2442,13 +2556,23 @@ export const renderValsMethods = {
           // (Hussain, 28 Sep 2026: email only), so the confirmation says exactly that. It fell
           // through to "Extension request sent to …" before — the wording of another flow.
           const about = s.fSubject ? " about " + s.fSubject : "";
-          const requestSent = kind === "wo"
-            ? "Work order request sent to " + to + about + ". It is recorded in ops_email_log. No work-order record was created in Hoistra."
+          // A Decision-queue draft brings its own confirmation (queueDraft.js): what it was, and
+          // what the send did and did not change in Hoistra. Without it every flow below that has
+          // no wording of its own would end on the extension request's "marked as contested".
+          const requestSent = s.emSentLabel
+            ? (s.emReminder ? "Reminder" : s.emSentLabel) + " sent to " + to + about + ". " + (s.emSentNote || "It is recorded in the email log.")
+            : kind === "wo"
+            ? "Work order request sent to " + to + about + ". It is recorded in the email log. No work-order record was created in Hoistra."
             : kind === "inspect"
-              ? "Inspection request sent to " + to + about + ". It is recorded in ops_email_log. No inspection or work-order record was created in Hoistra."
+              ? "Inspection request sent to " + to + about + ". It is recorded in the email log. No inspection or work-order record was created in Hoistra."
               : kind === "records"
-                ? "Records request sent to " + to + about + ". It is recorded in ops_email_log. No work-order record was created in Hoistra."
+                ? "Records request sent to " + to + about + ". It is recorded in the email log. No work-order record was created in Hoistra."
                 : kind === "investigate" ? "Sent to " + to + "." : null;
+          // The queue item's card re-reads, so it can say its email went out — whichever task
+          // the reader is on by now.
+          if (!keepDraft && queueItemId && typeof this.queueRefresh === "function") {
+            Promise.resolve(this.queueRefresh({ silent: true })).catch(() => {});
+          }
           if ((this.state.orchTask ? this.state.orchTask.id : null) !== task0) {
             if (this._sendSeq === seq) this.setState({ emSending: false });
             this.flash((subject ? subject + ": " : "") + (outcome || requestSent || ("Sent to " + to + ".")));
@@ -2462,6 +2586,10 @@ export const renderValsMethods = {
             return {
             emSending: false,
             emFromInv: keepDraft ? prev.emFromInv : false,
+            // A draft still on screen keeps its item, so its retry is recorded against it too.
+            emQueueItemId: keepDraft ? prev.emQueueItemId : null,
+            emSentLabel: keepDraft ? prev.emSentLabel : "",
+            emSentNote: keepDraft ? prev.emSentNote : "",
             // An approved evidence request is remembered against the certificate so its row
             // stops offering the same request again — but only once it has genuinely gone.
             ccRequested: sent && kind === "evidence" && s.emCertId
@@ -2540,7 +2668,7 @@ export const renderValsMethods = {
       // just hoisted. A fresh panel, same as opening any other task; nothing preselected.
       ingestDocuments: () => {
         this.ccChatReset();
-        this.orchWith('Ingest documents', this.ctxLabel(), 'ingest', { declFor: '' });
+        this.orchWith('Ingest documents', this.ctxLabel(), 'ingest', { declFor: '', ingExpect: '' });
       },
       allSessions: () => this.openSessions(null),
 
@@ -2550,11 +2678,20 @@ export const renderValsMethods = {
       navSpaces: spm.builtin.map((b) => ({
         name: b.name, n: b.badge, icon: b.icon, tone: toneColor(b.tone), title: b.live ? b.kpis.map((k) => k.label + " " + k.value).join(" · ") : "Waiting for the engine to answer",
         active: s.view === "space" && s.spaceKey === b.key,
-        click: () => this.openSpace(b.key)
-      })).concat(spm.custom.map((c) => ({
+        click: () => this.openSpace(b.key),
+        drop: (ids) => fileMany(ids, b.key)
+      })).concat([{
+        // Support: the requests themselves, not a place to file other sessions in.
+        name: spm.support.name, n: spm.support.open ? spm.support.open + " open" : "", icon: spm.support.icon,
+        tone: spm.support.open ? "var(--color-accent)" : "var(--color-neutral-500)",
+        title: spm.support.total ? spm.support.open + " open · " + spm.support.resolved + " resolved" : "Your support requests — none yet",
+        active: (s.view === "space" && s.spaceKey === SUPPORT_SPACE_KEY) || (s.view === "chat" && this.supIsOn()),
+        click: () => this.openSpace(SUPPORT_SPACE_KEY)
+      }]).concat(spm.custom.map((c) => ({
         name: c.name, n: c.sessions ? String(c.sessions) : "", icon: "ph-folder-simple", tone: "var(--color-neutral-500)", title: "Saved space" + (c.sessions ? " · " + c.sessions + (c.sessions === 1 ? " session" : " sessions") : ""),
         active: s.view === "space" && s.spaceKey === c.id,
-        click: () => this.openSpace(c.id)
+        click: () => this.openSpace(c.id),
+        drop: (ids) => fileMany(ids, c.id)
       }))),
       navSpaceNew: !!s.spNew,
       navSpaceName: s.spNewName || "",
@@ -2566,10 +2703,11 @@ export const renderValsMethods = {
       navSpaceCanCreate: spm.savedLive && !s.spBusy,
       navSpaceNote: spm.savedLive ? (spm.custom.length ? "" : "No saved spaces yet — add one with +.")
         : s.spLoading ? "Loading saved spaces…"
-        : s.spError ? "Saved spaces unavailable — svc-udr did not answer." : "",
+        : s.spError ? "Saved spaces unavailable — they could not be reached." : "",
       navSpaceNoteTip: s.spError || "",
 
       navSessions: mySessions.slice(0, 8).map((q) => ({
+        id: q.id,
         label: q.title || q.label,
         when: ago(q.at),
         icon: sessionIcon(q),
@@ -2631,9 +2769,34 @@ export const renderValsMethods = {
         const groups = shapeSessionList(mySessions, { query: s.sessionsQuery, space: filter, owner: myEmail });
         const chips = [{ key: null, label: "All" }]
           .concat(spm.builtin.map((b) => ({ key: b.key, label: b.name })))
+          .concat([{ key: SUPPORT_SPACE_KEY, label: spm.support.name }])
           .concat(spm.custom.map((c) => ({ key: c.id, label: c.name })));
+        const chats = mySessions.filter((r) => r.kind !== "task").length;
         return {
-          count: mySessions.length + (mySessions.length === 1 ? " session" : " sessions") + " · kept on the server, cached in this browser",
+          count: mySessions.length + (mySessions.length === 1 ? " session" : " sessions") + " — "
+            + chats + (chats === 1 ? " conversation, " : " conversations, ") + (mySessions.length - chats) + (mySessions.length - chats === 1 ? " task" : " tasks")
+            + (typeof s.sessionsServerCount !== "number" ? "."
+              : s.sessionsServerComplete ? ". Full history read from the server."
+              : ". The newest " + s.sessionsServerCount + " were read from the server — the rest could not be read just now."),
+          // Spaces as drop targets: drag a session (or the selection) onto one to file it there;
+          // pick one to list only its sessions.
+          spaces: [{ key: null, name: "All sessions", icon: "ph-stack", count: mySessions.length, all: true }]
+            .concat(spaceTargets.filter((t) => t.builtin).map((t) => ({ key: t.key, name: t.name, icon: t.icon, builtin: t.builtin, count: mySessions.filter((r) => inSpace(r, t)).length })))
+            // Support lists the requests; nothing is dropped into it.
+            .concat([{ key: SUPPORT_SPACE_KEY, name: spm.support.name, icon: spm.support.icon, builtin: true, noDrop: true, count: spm.support.total }])
+            .concat(spaceTargets.filter((t) => !t.builtin).map((t) => ({ key: t.key, name: t.name, icon: t.icon, builtin: t.builtin, count: mySessions.filter((r) => inSpace(r, t)).length })))
+            .map((t) => Object.assign(t, { on: (filter || null) === t.key, pick: () => this.setState({ sessionsFilter: t.key }) })),
+          unfiledCount: mySessions.filter((r) => !r.spaceId).length,
+          fileMany: fileMany,
+          deleteMany: (ids) => { this.deleteSessions(ids); this.flash((ids.length === 1 ? "Session" : ids.length + " sessions") + " deleted."); },
+          openSpace: (key) => this.openSpace(key),
+          newSpace: {
+            open: !!s.spNew, name: s.spNewName || "", busy: !!s.spBusy, canCreate: spm.savedLive && !s.spBusy,
+            toggle: () => this.spNewToggle(), set: (e) => this.spNewSet(e.target.value), create: () => this.spCreate(),
+            key: (e) => { if (e.key === "Enter") this.spCreate(); if (e.key === "Escape") this.spNewCancel(); },
+            cancel: () => this.spNewCancel(),
+            note: spm.savedLive ? "" : (s.spLoading ? "Loading saved spaces…" : "Saved spaces could not be reached — the built-in spaces still work.")
+          },
           query: s.sessionsQuery || "",
           setQuery: (e) => this.setState({ sessionsQuery: e.target.value }),
           chips: chips.map((c) => ({ label: c.label, on: filter === c.key, pick: () => this.setState({ sessionsFilter: c.key }) })),
@@ -2651,7 +2814,40 @@ export const renderValsMethods = {
         if (!e) {
           return {
             missing: true, name: "", kicker: "Space", icon: "ph-folder-simple", kpis: [], groups: [], empty: true,
-            emptyText: s.spLoading ? "Loading saved spaces…" : s.spError ? "Saved spaces unavailable — svc-udr did not answer." : "This space is not on record any more.",
+            emptyText: s.spLoading ? "Loading saved spaces…" : s.spError ? "Saved spaces unavailable — they could not be reached." : "This space is not on record any more.",
+            back: () => this.openSessions(null)
+          };
+        }
+        // Support: every request this account raised, narrowed to open or resolved; New support
+        // request and the ask bar both open the orchestrator in a fresh support session.
+        if (e.support) {
+          const filter = s.supFilter === "open" || s.supFilter === "resolved" ? s.supFilter : null;
+          const sg = shapeSessionList(mySessions, { space: SUPPORT_SPACE_KEY, status: filter, owner: myEmail });
+          return {
+            missing: false, isCustom: false, isSupport: true,
+            kicker: "Space · Support", name: e.name, icon: e.icon,
+            badge: e.badge, badgeColor: e.open ? "var(--color-accent)" : "var(--color-neutral-500)",
+            live: true,
+            sourceNote: "Every support request you have raised, open or resolved. Kept in this browser.",
+            kpis: e.kpis.map((k) => ({ label: k.label, value: String(k.value) })),
+            openLabel: "New support request",
+            openPage: () => this.openSupport({ fresh: true }),
+            statusFilters: [[null, "All", e.total], ["open", "Open", e.open], ["resolved", "Resolved", e.resolved]].map((f) => ({
+              label: f[1], n: f[2], on: filter === f[0], pick: () => this.setState({ supFilter: f[0] })
+            })),
+            ask: s.spaceAsk || "",
+            setAsk: (ev) => this.setState({ spaceAsk: ev.target.value }),
+            askKey: (ev) => { if (ev.key === "Enter") this.spaceAskRun(); },
+            askRun: () => this.spaceAskRun(),
+            askPh: "Describe what you need help with — it opens a new support request",
+            groups: dayGroups(sg),
+            empty: !sg.length,
+            emptyText: e.total
+              ? (filter === "open" ? "Nothing open. Every request you raised has been resolved." : "No resolved requests yet.")
+              : "No support requests yet. Ask how something works, or describe what went wrong, and it is listed here.",
+            spaces: spaceTargets,
+            fileMany: fileMany,
+            deleteMany: (ids) => { this.deleteSessions(ids); this.flash((ids.length === 1 ? "Request" : ids.length + " requests") + " deleted."); },
             back: () => this.openSessions(null)
           };
         }
@@ -2659,15 +2855,15 @@ export const renderValsMethods = {
         return {
           missing: false,
           isCustom: !!e.custom,
-          kicker: e.custom ? "Space · saved in svc-udr" : "Space · " + e.page,
+          kicker: e.custom ? "Space · saved" : "Space · " + e.page,
           name: e.name,
           icon: e.icon,
           badge: e.custom ? (e.sessions ? e.sessions + (e.sessions === 1 ? " session filed" : " sessions filed") : "Nothing filed yet") : e.badge,
           badgeColor: toneColor(e.tone),
           live: !!e.live,
           sourceNote: e.custom
-            ? "Created " + (e.createdAt ? fmtDateTime(e.createdAt) : "—") + (e.createdBy ? " by " + e.createdBy : "") + " · plenum_cafm.saved_spaces"
-            : (e.live ? "Figures read from svc-operations-intelligence" : "Waiting for the engine to answer"),
+            ? "Created " + (e.createdAt ? fmtDateTime(e.createdAt) : "—") + (e.createdBy ? " by " + e.createdBy : "")
+            : (e.live ? "Live figures" : "Waiting for the engine to answer"),
           kpis: e.kpis.map((k) => ({ label: k.label, value: String(k.value) })),
           openLabel: e.custom ? "" : "Open " + e.page,
           openPage: () => this.openSpacePage(e.key),
@@ -2687,28 +2883,36 @@ export const renderValsMethods = {
           askPh: e.custom ? "Ask something to file in " + e.name + "…" : "Ask about " + e.name.toLowerCase() + " — the answer is filed here",
           groups: dayGroups(groups),
           empty: !groups.length,
-          emptyText: e.custom ? "Nothing filed here yet. Ask below, or file a session from the Sessions page." : "No conversations with this engine yet. Ask below.",
+          emptyText: e.custom ? "Nothing filed here yet. Ask below, or drag a session here from the Sessions page." : "No conversations with this engine yet. Ask below.",
+          // The same row options as the Sessions page: move a session to another space, take it
+          // out of this one, delete it.
+          spaces: spaceTargets,
+          fileMany: fileMany,
+          deleteMany: (ids) => { this.deleteSessions(ids); this.flash((ids.length === 1 ? "Session" : ids.length + " sessions") + " deleted."); },
           back: () => this.openSessions(null)
         };
       })(),
 
       // The conversation page's header: which session this is and where it is filed.
-      chatSessionTitle: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return rec ? rec.title : ""; })(),
+      chatSessionTitle: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return rec ? rec.title : (supV.supOn ? "Support" : ""); })(),
       chatSessionMeta: (() => {
         const rec = mySessions.find((x) => x.id === s.sessionId);
         if (!rec) return "";
         const sp = rec.spaceId ? spm.byKey[rec.spaceId] : null;
         return ["Asked from " + rec.page, sp ? "filed in " + sp.name : null, ago(rec.at)].filter(Boolean).join(" · ");
       })(),
-      chatCanFile: !!s.sessionId && spm.custom.length > 0,
+      // Built-in spaces too: a session filed in one from the Sessions page read "Not in a space" here.
+      chatCanFile: !!s.sessionId,
       chatFileValue: (() => { const rec = mySessions.find((x) => x.id === s.sessionId); return (rec && rec.spaceId) || ""; })(),
-      chatFileOptions: [{ value: "", label: "Not in a space" }].concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
+      chatFileOptions: [{ value: "", label: "Not in a space" }]
+        .concat(spm.builtin.map((b) => ({ value: b.key, label: b.name })))
+        .concat(spm.custom.map((c) => ({ value: c.id, label: c.name }))),
       chatFileTo: (e) => { if (s.sessionId) this.fileSession(s.sessionId, e.target.value || null); },
       isCC: s.signedIn && s.view === "cc",
       ccScan: () => this.ccRunScan(),
       ccLastRun: s.ccScanning ? "scanning…" : s.ccLastScan ? fmtTime(s.ccLastScan) + " · scan" : s.ccLoadedAt ? fmtTime(s.ccLoadedAt) + " · register read" : (s.ccLoading ? "loading…" : "not yet · seed data"),
       ccLive: !!s.ccLive,
-      ccSourceLabel: s.ccScanning ? "Scanning the register…" : s.ccLive ? "Live · svc-operations-intelligence" + (s.ccError ? " · refresh failed" : "") : s.ccLoading ? "Connecting to svc-operations-intelligence…" : "Seed data · backend unreachable",
+      ccSourceLabel: s.ccScanning ? "Scanning the register…" : s.ccLive ? "Live" + (s.ccError ? " · refresh failed" : "") : s.ccLoading ? "Connecting…" : "Seed data · backend unreachable",
       ccSourceDot: s.ccScanning ? "var(--color-accent)" : s.ccLive ? (s.ccError ? "var(--st-warn)" : "var(--st-ok)") : s.ccLoading ? "var(--color-neutral-500)" : "var(--st-warn)",
       ccSourceDetail: s.ccScanMsg || s.ccError || "",
       ccRetryShow: !s.ccLoading && !s.ccScanning && (!s.ccLive || !!s.ccError) ? "inline" : "none",
@@ -2749,11 +2953,13 @@ export const renderValsMethods = {
       ccCols2: s.ccPivot === "matrix" ? "minmax(0,1fr)" : "repeat(auto-fit,minmax(360px,1fr))",
       ccIsMatrix: s.ccPivot === "matrix",
       ccIsList: s.ccPivot !== "matrix",
-      ccListTitle: s.ccPivot === "buildings" ? "Buildings in scope" : s.ccPivot === "vendors" ? "Vendors in scope" : "Requirement matrix",
-      ccPivots: [["buildings", "Buildings"], ["vendors", "Vendors"], ["matrix", "Matrix"]].map((p) => ({
+      // Buildings or the matrix. Vendors moved to the Vendors page (7 Oct 2026); a session still
+      // holding the old "vendors" pivot reads as buildings.
+      ccListTitle: s.ccPivot === "matrix" ? "Requirement matrix" : "Buildings in scope",
+      ccPivots: [["buildings", "Buildings"], ["matrix", "Matrix"]].map((p) => ({
         label: p[1],
-        bg: s.ccPivot === p[0] ? "var(--color-surface)" : "transparent",
-        fg: s.ccPivot === p[0] ? "var(--color-text)" : "var(--color-neutral-500)",
+        bg: (s.ccPivot === "matrix" ? "matrix" : "buildings") === p[0] ? "var(--color-surface)" : "transparent",
+        fg: (s.ccPivot === "matrix" ? "matrix" : "buildings") === p[0] ? "var(--color-text)" : "var(--color-neutral-500)",
         pick: () => this.setState({ ccPivot: p[0], ccTab: 0 })
       })),
       ccRows: cc.rows,
@@ -2767,8 +2973,8 @@ export const renderValsMethods = {
       ccFacts: cc.facts,
       ccTabs: cc.tabs,
       ccPaneCerts: s.ccTab === 0,
-      ccPaneVendors: s.ccTab === 1 && s.ccFocus.kind === "building",
-      ccPaneServed: s.ccTab === 1 && s.ccFocus.kind === "vendor",
+      ccPaneVendors: s.ccTab === 1,
+      ccPaneServed: false,
       ccPaneGaps: s.ccTab === 2,
       ccServedRows: cc.servedRows,
       ccServedEmpty: cc.servedRows.length ? "none" : "block",
@@ -2815,10 +3021,7 @@ export const renderValsMethods = {
       // side panel beside the grid. Hiding never touches the answer itself — Export still
       // writes every section — so nothing is ever actually lost.
       ...(() => {
-        const all = repRun && !repRun.error ? answerCards(
-          repRun.rich ? Object.assign({}, repRun.rich, { overdue: overdueBars((repRun.rich.certificates || []), this.ccData()), offers: repRun.rich.offers || [] }) : null,
-          repRun.answer
-        ) : [];
+        const all = this.rpRunCards(repRun);
         const hidden = rep ? hiddenFor(s.reportHidden, s.account, rep.id) : [];
         const isHidden = (c) => hidden.indexOf(c.key) > -1;
         const shown = all.filter((c) => !isHidden(c));
@@ -2855,7 +3058,7 @@ export const renderValsMethods = {
       reportRunning: !!rep && rep.status === "running",
       reportReady: !!repRun && !repRun.error && repRun.ok !== false,
       reportFailed: !!repRun && (!!repRun.error || repRun.ok === false),
-      reportFailedText: repRun && repRun.error ? repRun.error : "",
+      reportFailedText: repRun && repRun.error ? scrubInternal(String(repRun.error)) : "",
       reportHasRuns: !!rep && (rep.runs || []).length > 1,
       runReport: () => { if (rep) this.rpRunCard(rep.id); },
       exportReport: () => { if (rep) this.rpExport(rep.id, s.reportRunIdx || 0); },
@@ -2877,8 +3080,13 @@ export const renderValsMethods = {
       reportMenu: s.reportMenu,
       reportName: s.reportName,
       setReportName: (e) => this.setState({ reportName: e.target.value }),
-      toggleReportMenu: () => this.setState((p) => ({ reportMenu: !p.reportMenu, reportName: "" })),
+      // Opening goes through rpOpenBuilder so the newest conversation is already picked (8 Oct 2026).
+      toggleReportMenu: () => (this.state.reportMenu
+        ? this.setState({ reportMenu: false, reportName: "", reportQuery: "", reportSrcId: null, reportQuestion: null })
+        : this.rpOpenBuilder(null)),
       cancelReport: () => this.setState({ reportMenu: false, reportName: "" }),
+      // From a session's ⋯ menu: the builder opens with that session chosen.
+      openReportFor: (id) => this.rpOpenBuilder(id),
       createReport: () => this.rpCreate(),
       reportCadences: (s.reportPresets || []).map((c, k) => ({
         label: c.label,
@@ -2903,20 +3111,48 @@ export const renderValsMethods = {
       }),
       reportTime: s.reportTime,
       setReportTime: (e) => this.setState({ reportTime: e.target.value }),
-      reportCadenceNote: "The session's question is pinned and re-run by the server on this cadence — no browser tab needs to stay open. The first refresh runs as soon as the card is created.",
-      // Sources are the chat sessions in this browser — a report card is a pinned question.
-      reportSources: (() => {
-        const chats = mySessions.filter((q) => q.kind === "chat").slice(0, 5);
-        const cur = chats.some((q) => q.id === s.reportSrcId) ? s.reportSrcId : (chats[0] ? chats[0].id : null);
-        return chats.map((q) => ({
-          label: q.title || q.label,
-          tick: q.id === cur ? "ph-radio-button" : "ph-circle",
-          color: q.id === cur ? "var(--color-accent)" : "var(--color-neutral-500)",
-          chip: q.id === cur ? "var(--color-accent-900)" : "transparent",
-          pick: () => this.setState({ reportSrcId: q.id })
-        }));
+      reportCadenceNote: "The server re-asks the question on this schedule — no browser tab needs to stay open. The first answer is ready shortly after you create it.",
+      // Sources: every session — conversations and tasks — newest first, searchable (7 Oct 2026;
+      // it used to offer the newest five conversations only). A report re-asks one question; a
+      // conversation's is its own, a task's is a status question about it, and either can be
+      // reworded before the card is made (reportQuestionFor, logic/reports.js).
+      ...(() => {
+        const q = String(s.reportQuery || "").trim().toLowerCase();
+        const kind = s.reportFilter || "all";
+        const madeFrom = {};
+        myCards.forEach((c) => { if (c && c.source_session_id) madeFrom[c.source_session_id] = true; });
+        const all = mySessions;
+        const shown = all.filter((r) => (kind === "all" || (kind === "tasks" ? r.kind === "task" : r.kind !== "task"))
+          && (!q || String(r.title || "").toLowerCase().indexOf(q) > -1));
+        const cur = all.find((r) => r.id === s.reportSrcId) || null;
+        const n = (x) => x.length;
+        return {
+          reportSources: shown.map((r) => {
+            const on = !!cur && r.id === cur.id;
+            const asked = questionCount(r);
+            return {
+              id: r.id, label: r.title || r.label, on: on, task: r.kind === "task",
+              icon: sessionIcon(r),
+              meta: [r.kind === "task" ? "Task" : (asked ? asked + (asked === 1 ? " question" : " questions") : "Conversation"),
+                r.page ? "from " + r.page : "", ago(r.at)].filter(Boolean).join(" · "),
+              hasReport: !!madeFrom[r.id],
+              pick: () => this.setState({ reportSrcId: r.id, reportQuestion: reportQuestionFor(r), reportName: "" })
+            };
+          }),
+          reportSourcesEmpty: !all.length,
+          reportNoMatch: !!all.length && !shown.length,
+          reportQuery: s.reportQuery || "",
+          setReportQuery: (e) => this.setState({ reportQuery: e.target.value }),
+          reportFilters: [["all", "All", n(all)], ["chats", "Conversations", n(all.filter((r) => r.kind !== "task"))], ["tasks", "Tasks", n(all.filter((r) => r.kind === "task"))]]
+            .map(([k, label, count]) => ({ key: k, label: label, count: count, on: kind === k, pick: () => this.setState({ reportFilter: k }) })),
+          reportPicked: !!cur,
+          reportPickedTask: !!cur && cur.kind === "task",
+          reportQuestion: cur ? (s.reportQuestion !== undefined && s.reportQuestion !== null ? s.reportQuestion : reportQuestionFor(cur)) : "",
+          setReportQuestion: (e) => this.setState({ reportQuestion: e.target.value }),
+          reportNamePh: cur ? (cur.title || "Report name") : "Report name",
+          reportCanCreate: !!cur && !!String((s.reportQuestion !== undefined && s.reportQuestion !== null ? s.reportQuestion : reportQuestionFor(cur)) || "").trim()
+        };
       })(),
-      reportSourcesEmpty: !mySessions.some((q) => q.kind === "chat"),
 
       navReports: (s.role === "admin" ? [] : myCards).map((c) => {
         const active = s.view === "report" && s.reportKey === c.id;
@@ -2948,7 +3184,7 @@ export const renderValsMethods = {
       reportGridEmpty: !myReports.length,
       // No cards because the read failed is not "no report cards yet" — say which it is.
       reportGridFailed: !myReports.length && !!s.reportsError,
-      reportGridFailText: "Your report cards could not be read (GET /api/reports: " + (s.reportsError || "") + "). They are not gone — this page could not reach them. Refresh to try again.",
+      reportGridFailText: "Your report cards could not be read (" + (s.reportsError || "") + "). They are not gone — this page could not reach them. Refresh to try again.",
       reportSelectedCount: (s.reportSelected || []).length,
       reportAnySelected: (s.reportSelected || []).length > 0,
       reportAllSelected: myCards.length > 0 && (s.reportSelected || []).length === myCards.length,
@@ -2993,7 +3229,8 @@ export const renderValsMethods = {
       reportCards: myCards.map((c) => {
         const run = (c.runs || [])[0] || c.latest_run || null;
         const failed = run && (run.error || run.ok === false);
-        const snippet = run && !failed ? (run.answer || "").slice(0, 140) : (failed ? (run.error || "").slice(0, 140) : "");
+        // Scrubbed before it is cut, so a cut never leaves half an internal name behind.
+        const snippet = scrubInternal(run && !failed ? String(run.answer || "") : (failed ? String(run.error || "") : "")).slice(0, 140);
         return {
           id: c.id,
           name: c.name,
@@ -3021,8 +3258,8 @@ export const renderValsMethods = {
 
       // The Decision queue, live: pending approvals (compliance + vendor), open energy
       // anomalies and maintenance decisions owed, ranked by consequence (queueLive.js).
-      // Seed cards only until any of those reads answers. A live card opens the same
-      // detail drawer the record's own page opens.
+      // Seed cards only until any of those reads answers. A card opens the page it is about
+      // and the dock with the email that resolves it (queueDraft.js).
       queuePreview: (qlm.live ? qlm.items.slice(0, 3) : D.decisions.slice(0, 3)).map((d) => ({
         title: d.title, meta: d.meta, money: d.money, icon: d.icon,
         color: t(d.tone).color, bg: t(d.tone).bg, click: () => this.queueOpenItem(d)
@@ -3058,7 +3295,7 @@ export const renderValsMethods = {
       cronsLabel: hmLive && hm.crons.length > 0 ? "Live" : (s.homeLoading ? "Loading" : "Seed"),
       cronsDot: hmLive && hm.crons.length > 0 ? "var(--st-ok)" : "var(--color-neutral-600)",
       cronsTip: hmLive && hm.crons.length > 0
-        ? hm.crons.length + " entries from svc-operations-intelligence" + (s.homeLoadedAt ? " · read " + fmtTime(s.homeLoadedAt) : "")
+        ? hm.crons.length + " entries from the engines" + (s.homeLoadedAt ? " · read " + fmtTime(s.homeLoadedAt) : "")
         : (s.homeError ? "Operations backend unreachable — " + s.homeError : "Seed feed until the operations backend answers"),
       crons: (() => {
         const gone = s.cronsGone || [];

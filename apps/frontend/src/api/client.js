@@ -12,6 +12,8 @@
 // a replayed refresh token …) are reported through onTerminal so the shell can sign out.
 // The auth endpoints themselves pass `auth: false`: no header and no interception, so a
 // failing /login or /refresh can never trigger a refresh of its own.
+import { scrubInternal } from '../logic/publicText.js';
+
 const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
 const trim = (s) => String(s || '').replace(/\/+$/, '');
 
@@ -79,10 +81,17 @@ function envelopeError(data) {
   return first && typeof first === 'object' ? first : null;
 }
 
-// The message a FastAPI failure body carries. The auth router nests {ok, error, reason}
-// under `detail`; a 422 puts an array of field errors there; older routers use a string;
-// the work-order service puts it in errors[0].message.
+// The message a FastAPI failure body carries, as it may be shown: the services word their
+// errors for the people who run them ("plenum_cafm.sites does not exist", "svc-udr did not
+// answer"), and every page prints this into its own error line, so the platform's internal
+// names are taken out here, once (logic/publicText.js).
 export function errorMessage(data, res) {
+  return scrubInternal(rawErrorMessage(data, res));
+}
+
+// The auth router nests {ok, error, reason} under `detail`; a 422 puts an array of field
+// errors there; older routers use a string; the work-order service puts it in errors[0].message.
+function rawErrorMessage(data, res) {
   const d = data && data.detail;
   if (d && typeof d === 'object' && !Array.isArray(d)) {
     if (typeof d.error === 'string') return d.error;
@@ -101,11 +110,14 @@ export function errorMessage(data, res) {
 }
 
 export class ApiError extends Error {
-  constructor(message, status, body) {
+  // `message` is what may be shown; `rawMessage` is the service's own wording, for the activity
+  // log and anyone diagnosing it - not for the screen.
+  constructor(message, status, body, rawMessage) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    this.rawMessage = rawMessage || message;
     const d = body && body.detail;
     const env = envelopeError(body);
     this.reason = d && typeof d === 'object' && !Array.isArray(d) && typeof d.reason === 'string' ? d.reason
@@ -220,7 +232,7 @@ async function request(base, path, o, token) {
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
-    if (!res.ok) throw new ApiError(errorMessage(data, res), res.status, data);
+    if (!res.ok) throw new ApiError(errorMessage(data, res), res.status, data, rawErrorMessage(data, res));
     return data;
   } catch (e) {
     if (e && e.name === 'AbortError') {

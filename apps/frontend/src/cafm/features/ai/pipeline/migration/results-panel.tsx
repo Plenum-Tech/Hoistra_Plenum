@@ -44,7 +44,7 @@ export default function ResultsPanel({ migration, onReset, onRefresh, hideReset 
         <div>
           <h2 className="text-xl font-bold text-slate-900">Migration complete</h2>
           <p className="text-sm text-slate-500 mt-1">
-            {migration.cmms_name} data has been mapped and ingested into Plenum CAFM.
+            {migration.cmms_name} data has been mapped and ingested into Hoistra.
           </p>
         </div>
       </div>
@@ -160,7 +160,7 @@ export default function ResultsPanel({ migration, onReset, onRefresh, hideReset 
           {(migration.udr_relationship_report.inferred ?? []).length ? (
             <div className="mb-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-600 mb-1">
-                LLM-inferred relationships — review to promote
+                AI-suggested relationships — review to promote
               </p>
               <div className="space-y-1">
                 {(migration.udr_relationship_report.inferred ?? []).slice(0, 25).map((r, i) => (

@@ -659,3 +659,12 @@ test('an Overdue certificate not yet past its date is expiring, not a lapsed acc
   // ...and one past its date still lapses, whatever the label (the SafeLift fixture above).
   assert.equal(full().V[A3].certs.find((c) => c.name === 'LEIA Membership').status, 'Lapsed');
 });
+
+test('a vendor known only from its certificates is named from them, not "Vendor 1234"', () => {
+  // No card, no contract and no coverage row (a country with no pack): the certificate carries
+  // the vendor's name, and the directory used a made-up one (8 Oct 2026 review).
+  const ID = 'v-noco-0000-1234';
+  const m = shapeLiveVendors({ summary, contracts, approvals, coverage: [], packs,
+    certificates: certificates.concat([cert(ID, 'Nocov Electrical Ltd', 'NICEIC', 'NICEIC Approved Contractor', 'Current', '2027-02-01', 120, 'Electrical')]) }, NOW);
+  assert.equal(m.vendors.find((v) => v.id === ID).name, 'Nocov Electrical Ltd');
+});

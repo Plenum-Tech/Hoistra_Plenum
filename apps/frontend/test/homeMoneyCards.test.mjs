@@ -56,7 +56,7 @@ test('a live ledger formats what the store priced and dashes what it could not',
   const m = shapeLiveHome({ raw: { value } }, NOW);
   assert.equal(m.value.answered, true);
   assert.equal(m.value.year, 2026);
-  assert.equal(m.value.total, '£109k');
+  assert.equal(m.value.total, '£149k');            // the headline is the detected sum, not saved
   const rows = Object.fromEntries(m.value.rows.map((r) => [r.key, r]));
   assert.equal(rows.energy.detected, '£41k');
   assert.equal(rows.energy.saved, '£29k');

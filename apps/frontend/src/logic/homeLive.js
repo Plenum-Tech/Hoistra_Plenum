@@ -257,8 +257,8 @@ export function shapeLiveHome(input, now) {
     ? {
         answered: true,
         year: vs.year,
-        total: money(vs.ledger.total_saved),
-        totalDetected: money(vs.ledger.total_detected),
+        // The card's headline is everything the engines priced, summed across modules.
+        total: money(vs.ledger.total_detected),
         note: (vs.ledger.counted_modules || 0) + " of " + (vs.ledger.modules || []).length
           + " modules priced from the store",
         rows: (vs.ledger.modules || []).map((m) => ({
@@ -368,7 +368,7 @@ export const homeLiveMethods = {
       const pct = num(it.metric_pct), cost = num(it.financial_gbp), kwh = num(it.annualised_excess_kwh);
       return {
         module: "Energy", icon: "ph-lightning", tone: c.tone, title: c.text,
-        meta: "Detected " + fmtDateTime(it.detected_at) + " · " + humanise(it.status || "open") + " · svc-operations-intelligence / energy",
+        meta: "Detected " + fmtDateTime(it.detected_at) + " · " + humanise(it.status || "open") + " · energy engine",
         body: "Detected by the energy engine against this meter's own baseline" +
           (kwh !== null ? ", " + Math.round(kwh).toLocaleString("en-GB") + " kWh a year above it" : "") +
           (cost !== null ? ", priced at " + gbp(cost) + " a year at the meter's tariff" : "") +
@@ -400,7 +400,7 @@ export const homeLiveMethods = {
         (draft.to ? "A draft email is attached; nothing has been sent. " : "") +
         "Approving, editing or dismissing it is done where the record lives — this card only shows what was raised.",
       fields: [
-        { l: "Source", v: "svc-operations-intelligence · approvals queue" },
+        { l: "Source", v: "Approvals queue" },
         { l: "Type", v: humanise(it.item_type) },
         { l: "Severity", v: it.severity || "—" },
         { l: "Status", v: humanise(it.status || "pending") },

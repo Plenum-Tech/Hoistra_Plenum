@@ -220,8 +220,8 @@ function CustomDDLForm({
   const col = ddl.colName || "…";
   const nullStr = ddl.nullable ? "" : " NOT NULL";
   const sqlPreview = ddl.isNewTable
-    ? `CREATE TABLE plenum_cafm.${effectiveTable} (\n  ${ddl.newTablePk || "id"} UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  ${col} ${ddl.dataType}${nullStr}\n);`
-    : `ALTER TABLE plenum_cafm.${effectiveTable}\n  ADD COLUMN ${col} ${ddl.dataType}${nullStr};`;
+    ? `CREATE TABLE ${effectiveTable} (\n  ${ddl.newTablePk || "id"} UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  ${col} ${ddl.dataType}${nullStr}\n);`
+    : `ALTER TABLE ${effectiveTable}\n  ADD COLUMN ${col} ${ddl.dataType}${nullStr};`;
 
   return (
     <div className="rounded-xl bg-indigo-50 border border-indigo-200 p-4 space-y-3 mt-1">

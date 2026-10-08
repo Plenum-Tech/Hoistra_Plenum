@@ -4,6 +4,7 @@ import { GB, PACKS, CC_OF, ENC, ACTION_SPECS, TONE, t, MODULES } from './constan
 import { HOISTWAY } from '../data/hoistway-data.js';
 import { makeSession, newSessionId, trimSessions } from './sessions.js';
 import { flattenCards } from './reports.js';
+import { planQueueAction } from './queueDraft.js';
 
 // The re-entry guards loadLiveData()'s loaders set while a read is in flight. Instance
 // flags, not state — resetLiveData() has to release them together, or a company switch
@@ -12,7 +13,7 @@ import { flattenCards } from './reports.js';
 const IN_FLIGHT_GUARDS = [
   '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
   '_enLoading', '_enPosLoading', '_asLiveLoading', '_asCondLoading', '_asCondSeeded', '_mxLiveLoading', '_spLoading',
-  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading'
+  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading', '_cronLoading'
 ];
 
 export const coreMethods = {
@@ -25,9 +26,6 @@ export const coreMethods = {
       if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false, pwOpen: false });
     };
     window.addEventListener("keydown", this._key);
-    this._cronTimer = setInterval(() => {
-      if (this.state.signedIn) this.setState((p) => ({ cronPulse: (p.cronPulse + 1) % 24 }));
-    }, 1800);
     this._frameTimer = setInterval(() => {
       if (!this.state.signedIn) this.setState((p) => ({ frame: (p.frame + 1) % 4 }));
     }, 3200);
@@ -48,6 +46,10 @@ export const coreMethods = {
       // console loads on open (the account-menu item in auth.js), never here.
       this.usLiveLoad();
       this.auLiveLoad();
+      // The open conversation came back without its transcript - older than the newest few, it
+      // was stored shed (sessions.js trimSessions) - so its turns are read back from the server.
+      const open = this.state.sessionId ? (this.state.sessions || []).find((x) => x.id === this.state.sessionId) : null;
+      if (open && open.kind === "chat" && !(this.state.ccChat || []).length && (open.remote || open.serverTurns)) this.sessionHydrate(open.id);
     }
     this.rpStart();
     // A reload that lands on the conversation page re-checks the orchestrator link.
@@ -93,6 +95,8 @@ export const coreMethods = {
     this.homeLoad();
     // The company's scheduled jobs, for the Hoist Crons panel (crons.js).
     this.cronLoad();
+    // This month's credits, for the Platform notice in the Decision queue (admins only).
+    this.usageLoad();
     this.vpLoad();
     // What the server still holds. A document held in another browser — or before the chat
     // could answer one at all — is otherwise invisible: five were open on 21 Sep with
@@ -199,6 +203,8 @@ export const coreMethods = {
       // loadLiveData(); reportsOwner going null is what stops renderVals drawing them in
       // the moment in between.
       reports: [], reportsOwner: null, reportsLoading: false, reportsError: "", reportsLoadedAt: null,
+      // Hoist Crons and this month's usage: the Home panel and the Platform notices read them.
+      cronJobs: [], cronRuns: [], cronDaily: {}, cronStats: null, cronCanManage: false, cronLoadErr: "", cronLoadedAt: null, usageRaw: null,
       reportKey: null, reportRunIdx: 0, reportSelected: [], rpArmed: null
     });
   },
@@ -273,10 +279,13 @@ export const coreMethods = {
     if (record && !this.state.orchOpen && dockPage) this.ccChatReset();
     clearInterval(this._orchTick);
     // emFromInv: a draft opened from an investigation belongs to that investigation's task. A
-    // new task never inherits it, or its first send returns into the old investigation.
+    // new task never inherits it, or its first send returns into the old investigation. The
+    // same for a Decision-queue draft's item and its confirmation wording: a later draft's send
+    // must not be recorded against the queue item, nor confirmed in another flow's words.
     this.setState((p) => Object.assign({
       orchOpen: true, orchTask: entry, orchDone: 0,
-      paletteOpen: false, queueOpen: false, detail: null, emFromInv: false
+      paletteOpen: false, queueOpen: false, detail: null, emFromInv: false,
+      emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false
     }, record ? { sessions: trimSessions([entry].concat(p.sessions || [])) } : {}));
     this._orchTick = setInterval(() => {
       this.setState((p) => {
@@ -291,12 +300,14 @@ export const coreMethods = {
   // closing the dock mid-flow is the only place that stops it before its own completion
   // tick fires a stale result + a flash() toast at whoever is looking at the app by then.
   // (_scanTick went with the condition-scan flow, which read a fixture — see screens/Assets.jsx.)
-  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null }); },
+  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null, ingExpect: "" }); },
 
   // Opens the orchestrator AND arms a flow: booking draft, contractor swap, or an email.
+  // ingExpect (the certificate an Upload is for) belongs to the card that set it: a later card
+  // that does not name one starts without it.
   orchWith(task, ctx, flow, patch) {
     this.orch(task, ctx);
-    this.setState(Object.assign({ flow: flow, flowDone: "" }, patch || {}));
+    this.setState(Object.assign({ flow: flow, flowDone: "", ingExpect: "" }, patch || {}));
   },
 
 
@@ -359,10 +370,13 @@ export const coreMethods = {
 
   detailFromDecision(d) { this.setState({ detail: d, queueOpen: false }); },
 
-  // A Decision-queue card. A live one opens the same detail drawer the record's own page
-  // builds — cronDetail for approvals and anomalies, the Maintenance grid's for a decision.
-  // A seed card (no reads answered yet) keeps its scripted detail.
+  // A Decision-queue card opens the page it is about, and the dock beside it holding the email
+  // that resolves it, ready for Approve & send (queueDraft.js; Hussain, 7 Oct 2026). The
+  // drawers below are for a card that carries nothing to act on.
   queueOpenItem(d) {
+    if (d.kind === "platform") return this.platformOpen(d.action || {});
+    const plan = planQueueAction(d, this.queueDraftCtx());
+    if (plan) return this.queueRunPlan(plan);
     if (d.kind === "approval" || d.kind === "anomaly") {
       return this.setState({
         detail: this.cronDetail({ kind: d.kind, agent: d.module === "Vendors" ? "Vendor" : d.module, tone: d.tone, text: d.title, item: d.item }),
@@ -371,6 +385,28 @@ export const coreMethods = {
     }
     if (d.kind === "decision") return this.setState({ detail: this.mxDecisionDetail(d.d), queueOpen: false });
     return this.detailFromDecision(d);
+  },
+
+  // A Platform notice opens the place that acts on it (platformNotices.js).
+  platformOpen(a) {
+    const go = (patch) => { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); this.setState(Object.assign({ queueOpen: false, detail: null, navOpen: true }, patch)); };
+    if (a.type === "ingest") {
+      // The ordinary ingest card, on Home where the score is: the file is read, matched to its
+      // building and filed - what raises the score.
+      go({ view: "home" });
+      return this.orchWith("Ingest documents", "Hoist Score", "ingest", { declFor: "" });
+    }
+    if (a.type === "buildings") return go({ view: "buildings", role: "user" });
+    if (a.type === "cron") {
+      // The job's own page for whoever can manage it; Home's panel for everyone else.
+      if (!this.state.cronCanManage) return go({ view: "home" });
+      this.setState({ queueOpen: false });
+      this.cpOpen();
+      return this.cpOpenJob(a.id);
+    }
+    if (a.type === "schedule") { this.setState({ queueOpen: false }); return this.cronOpenBlank(); }
+    if (a.type === "usage") return go({ view: "users", role: "admin" });
+    return undefined;
   },
 
   detailFor(module, obj) {
@@ -396,7 +432,7 @@ export const coreMethods = {
         { l: "Deadline", v: w.due, editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Trigger: " + w.type.toLowerCase() + " → intent: work-order-engine" },
+        { a: "Orchestrator", t: "Trigger: " + w.type.toLowerCase() + " → Work orders" },
         { a: "Planner", t: "Classify WO type → fetch asset record → priority from criticality × severity → select contractor filtered by accreditation → estimate cost → draft" },
         { a: "Worker", t: "Fields pre-populated from Hoist Graph. Operative availability checked against ResourceSkill. Structured inspection form generated for this AssetType." },
         { a: "Quality", t: w.status === "Held" ? "Fired — contractor accreditation invalid for this AssetType. Dispatch blocked." : "Draft presented to you. You are the quality gate; no auto-dispatch at this cost band." }

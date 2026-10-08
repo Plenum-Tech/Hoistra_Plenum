@@ -197,3 +197,35 @@ export const MIGRATION_DATA_TYPES = [
   "JSONB",
   "UUID",
 ] as const;
+
+// ── Display wording for the service's method / tier codes ───────────────────────────────────
+// The codes stay exactly as the service sends them (logic and colour maps key on them); only
+// the words a customer reads change, so no internal tool or model name reaches the screen.
+
+/** A tier code's bare word ("llm", "registry", …) in plain words; any other word unchanged. */
+export function plainTierWord(word: string): string {
+  const w = word.trim().toLowerCase();
+  if (w === "llm") return "AI match";
+  if (w === "registry") return "learned term";
+  if (w === "ontology") return "known term";
+  return word;
+}
+
+/** A table-resolution method ("RAG/alias", "rag_alias", "semantic LLM", …) in plain words. */
+export function plainMethodLabel(method: string): string {
+  const m = method.trim().toLowerCase();
+  if (m === "rag/alias" || m === "rag / alias" || m === "rag_alias" || m === "rag") return "alias match";
+  if (m === "semantic llm" || m === "llm") return "AI match";
+  return method;
+}
+
+/** Where an alias came from, as the report names it (an internal table name), in plain words. */
+export function plainAliasSource(source: string | null | undefined): string | null | undefined {
+  if (source === "FM_TABLE_SYNONYMS") return "facilities-management vocabulary";
+  return source;
+}
+
+/** A primary-key list for display: the service's surrogate placeholder reads as "surrogate key". */
+export function plainPkList(cols: string[] | null | undefined): string {
+  return (cols ?? []).map((c) => (c === "_udr_id" ? "surrogate key" : c)).join(", ");
+}

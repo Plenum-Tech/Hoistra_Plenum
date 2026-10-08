@@ -188,3 +188,23 @@ test('a run that never turns up stops being asked for, and a click asks again', 
     deepAgentsApi.traceTurn = real;
   }
 });
+
+test('a reload whose open conversation was shed from storage reads its turns back', async (t) => {
+  // Older than the newest 60, the open conversation is stored without its transcript; the
+  // constructor put back an empty chat and nothing re-read it (8 Oct 2026 review).
+  const c = reloaded([]);
+  c.state.sessions = [{ id: 's1', kind: 'chat', title: 'Old question', turns: [], remote: true, turnCount: 2, at: 1 }];
+  const hydrated = [];
+  c.sessionHydrate = async (id) => { hydrated.push(id); };
+  t.after(() => stop(c));
+  c.componentDidMount();
+  assert.deepEqual(hydrated, ['s1']);
+  // A transcript that came back whole is not read again.
+  const d = reloaded(FIRST);
+  d.state.sessions = [{ id: 's1', kind: 'chat', title: 'Q', turns: FIRST, at: 1 }];
+  const again = [];
+  d.sessionHydrate = async (id) => { again.push(id); };
+  t.after(() => stop(d));
+  d.componentDidMount();
+  assert.deepEqual(again, []);
+});

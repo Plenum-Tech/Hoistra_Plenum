@@ -11,6 +11,7 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { cronsApi } from '../api/crons.js';
 import { isStaleScope } from '../api/client.js';
+import { scrubInternal } from './publicText.js';
 
 // The catalogue as the service names it; read from GET /api/crons/catalogue when it answers,
 // this copy only labels the card until then.
@@ -401,9 +402,6 @@ export const cronMethods = {
   }
 };
 
-const STATUS_TONE = { ready: 'var(--st-ok)', running: 'var(--color-accent)', pending: 'var(--color-neutral-400)',
-  error: 'var(--st-risk)', paused: 'var(--color-neutral-600)' };
-
 const whenShort = (iso, now) => {
   if (!iso) return '';
   const t = new Date(iso).getTime();
@@ -423,6 +421,14 @@ export function cronVals(c) {
   (cat || []).forEach((j) => { byKey[j.key] = j; });
   const now = Date.now();
   const jobs = (s.cronJobs || []);
+  // Yours: the jobs this account scheduled (the email in whatever case it was stored).
+  const me = String((s.account && s.account.email) || '').trim().toLowerCase();
+  const mine = jobs.filter((j) => String((j.created_by && j.created_by.email) || j.owner_email || '').trim().toLowerCase() === me);
+  // Yours first when you have crons of your own; otherwise the company's. A plain user cannot
+  // create one, and a super-admin viewing as a company did not create that company's, so a
+  // "Yours" default would always be empty for them (8 Oct 2026 review).
+  const scope = s.cronScope === 'all' || s.cronScope === 'mine' ? s.cronScope : (mine.length ? 'mine' : 'all');
+  const shown = scope === 'all' ? jobs : mine;
   return {
     cronOpen: !!s.cronOpen,
     cronBusy: !!s.cronBusy,
@@ -468,36 +474,120 @@ export function cronVals(c) {
     cronClose: () => c.cronClose(),
     cronCreateLabel: s.cronBusy ? 'Scheduling…' : 'Create ' + ((f.jobs || []).length || '') + ((f.jobs || []).length === 1 ? ' job' : ' jobs'),
     cronZone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return 'UTC'; } })(),
-    // the Hoist Crons panel
-    cronHas: jobs.length > 0,
+    // The Hoist Crons panel on Home, as information (Hussain with Aasim, 8 Oct 2026): for each of
+    // YOUR crons - the checks you set up for yourself - what it watches, whether it is running
+    // successfully and what it found; the company's one switch away. Running, pausing and
+    // removing are on the Hoist Crons page, which a row opens. Everything the engines raised is
+    // in Notifications, so the panel no longer repeats it.
+    cronHas: shown.length > 0,
     cronCanManage: !!s.cronCanManage,
     cronSchedule: () => c.cronOpenBlank(),
     cronAllJobs: () => c.cpOpen(),
-    cronRows: jobs.map((j) => {
-      const last = (j.runs || [])[0];
+    cronScopeOpts: [['mine', 'Yours', mine.length], ['all', 'Company', jobs.length]].map(([key, label, n]) => ({
+      key: key, label: label, n: String(n), on: scope === key, pick: () => c.setState({ cronScope: key })
+    })),
+    cronSummary: summaryOf(shown),
+    cronSummaryFull: (() => {
+      const f = shown.filter((j) => { const l = (j.runs || [])[0]; return j.enabled && l && !l.ok; });
+      return f.length ? f.length + ' of ' + shown.length + ' failed ' + (f.length === 1 ? 'its' : 'their') + ' last run: ' + f.map((j) => j.name).join(', ')
+        : summaryOf(shown);
+    })(),
+    cronEmpty: s.cronLoadErr && !s.cronLoadedAt ? 'Hoist Crons could not be read — ' + s.cronLoadErr
+      : !s.cronLoadedAt ? 'Reading your Hoist Crons…'
+      : !jobs.length ? 'No Hoist Crons yet — schedule the checks you want every day' + (s.cronCanManage ? '.' : '; an admin sets them up.')
+      : !shown.length ? 'None of yours yet — ' + jobs.length + (jobs.length === 1 ? ' company cron is' : ' company crons are') + ' under Company.'
+      : '',
+    cronRows: shown.map((j) => {
+      const last = (j.runs || [])[0] || null;
+      const h = healthOf(j, last);
+      const p = j.params || {};
+      const nm = j.name || j.label || '';
+      const where = p.building_name && !nm.endsWith(p.building_name) ? p.building_name : '';
+      const line = oneLiner(j, last, h.label, now);
+      const by = (j.created_by && j.created_by.email) || j.owner_email || '';
       return {
-        id: j.id, name: j.name, module: j.module, cadence: j.refresh_label,
-        status: j.enabled ? j.status : 'paused', tone: STATUS_TONE[j.enabled ? j.status : 'paused'] || 'var(--color-neutral-400)',
-        next: j.enabled && j.next_run_at ? whenShort(j.next_run_at, now) : 'paused',
-        last: last ? (last.ok ? summaryLine(last.summary) || 'ran' : 'failed: ' + String(last.error || '').slice(0, 80)) +
-          ' · ' + whenShort(last.finished_at, now) : 'not run yet',
-        lastOk: last ? !!last.ok : null,
-        by: (j.created_by && j.created_by.email) || j.owner_email || '',
-        lastBy: last ? (last.requested_by || '') : '',
-        // The last 14 days, oldest first: green all ran, amber some failed, red all failed, grey none ran.
-        days: ((s.cronDaily || {})[j.id] || []).map((d) => ({
-          date: d.date,
-          tone: d.status === 'ok' ? 'var(--st-ok)' : d.status === 'failed' ? 'var(--st-risk)' : d.status === 'partial' ? 'var(--st-warn)' : 'var(--color-divider)',
-          title: d.date + ': ' + (d.runs ? d.runs + (d.runs === 1 ? ' run' : ' runs') + (d.failed ? ', ' + d.failed + ' failed' : ', all ok') +
-            (d.last_summary ? ' · ' + summaryLine(d.last_summary) : '') : 'no run')
-        })),
-        running: s.cronRunning === j.id,
-        run: () => c.cronRun(j.id),
-        pause: () => c.cronPause(j.id, !j.enabled), pauseLabel: j.enabled ? 'Pause' : 'Resume',
-        remove: () => c.cronRemove(j.id), removeArmed: s.cronRemoveArmed === j.id
+        id: j.id, name: j.name || j.label, where: where, health: h.label, tone: h.tone, line: line, failed: h.label === 'Failed',
+        // The hover: the same, with what it is set to and who set it, in sentences.
+        title: (j.name || j.label) + (where ? ', ' + where : '') + (p.prompt ? ' — asks “' + p.prompt + '”' : '')
+          + ' — ' + (j.refresh_label || 'on its schedule') + '. ' + line + '.' + (by ? ' Scheduled by ' + by + '.' : ''),
+        // Its page: every run, who did what, and the controls - for whoever can manage it.
+        open: s.cronCanManage ? () => { c.cpOpen(); c.cpOpenJob(j.id); } : null
       };
     })
   };
+}
+
+// A cron's state as one sentence (Hussain, 8 Oct 2026: "a clear one liner that gives me all
+// info"): what it found, when it ran, when it runs next - or why it is not running.
+function oneLiner(j, last, health, now) {
+  // A run stamped a moment ahead of this clock (server skew) ran "just now", not "in 0 min".
+  const ago = last ? (Date.parse(last.finished_at) > now ? 'just now' : whenShort(last.finished_at, now)) : '';
+  const next = j.enabled && j.next_run_at ? whenShort(j.next_run_at, now) : '';
+  if (health === 'Paused') {
+    if (!last) return 'Paused before its first run';
+    return 'Paused — last run ' + ago + (last.ok ? ' found ' + findingsOf(last.summary) : ' failed');
+  }
+  if (health === 'Running') return 'Running now';
+  if (health === 'Not run yet') return next ? 'First run ' + next : 'Waiting for its first run';
+  if (health === 'Failed') return 'Failed ' + ago + ': ' + scrubInternal(String(last.error || 'no reason given')).slice(0, 160);
+  const f = findingsOf(last.summary);
+  const mail = mailTrouble(last.summary);
+  return f.charAt(0).toUpperCase() + f.slice(1) + ' — ran ' + ago + (next ? ', next ' + next : '') + (mail ? '; ' + mail : '');
+}
+
+// A run that went fine but whose email did not: said on the row, because for an "email me" job
+// the email is the point (8 Oct 2026 review). summaryLine said so before the rows were rewritten.
+function mailTrouble(summary) {
+  const sm = summary && typeof summary === 'object' ? summary : {};
+  if (sm.email_status !== 'failed' && sm.email_status !== 'partial') return '';
+  return 'email to ' + (sm.email_failed || sm.emailed_to || 'its recipients') + ' failed';
+}
+
+// The figures a run reports, in plain words. A route's summary is its own top-level numbers
+// (engines/crons summarise), named for the code - blocks_set, past_sla, due_in_24h. What needs
+// someone comes first, at most three; what it looked at is said only when nothing needs anyone.
+const ATTENTION = /block|alert|lapse|expir|past|breach|overdue|miss|fail|due|anomal|gap|reorder|low|held|flag|risk|critical|late/;
+const PHRASE = {
+  blocks_set: (n) => n + (n === 1 ? ' vendor blocked' : ' vendors blocked'),
+  alerts_created: (n) => n + (n === 1 ? ' alert raised' : ' alerts raised'),
+  past_sla: (n) => n + ' past SLA',
+  due_in_24h: (n) => n + ' due within 24 h',
+  expiring_soon: (n) => n + ' expiring soon'
+};
+const MAIL_KEYS = ['ok', 'tools', 'rich', 'emailed_to', 'email_status', 'email_error', 'email_failed'];
+const plainFigure = (k, n) => (PHRASE[k] ? PHRASE[k](n) : n.toLocaleString('en-GB') + ' ' + k.replace(/_/g, ' '));
+
+export function findingsOf(summary) {
+  const sm = summary && typeof summary === 'object' ? summary : {};
+  const nums = Object.entries(sm).filter(([k, v]) => !MAIL_KEYS.includes(k) && typeof v === 'number' && isFinite(v));
+  const attention = nums.filter(([k, v]) => ATTENTION.test(k) && v > 0).slice(0, 3).map(([k, v]) => plainFigure(k, v));
+  if (attention.length) return attention.join(', ');
+  const looked = nums.find(([k, v]) => !ATTENTION.test(k) && v > 0);
+  if (looked) return 'nothing needs attention (' + plainFigure(looked[0], looked[1]) + ')';
+  if (sm.tools !== undefined) return 'answered';
+  return nums.length ? 'nothing needs attention' : 'ran, with nothing to report';
+}
+
+// A job's health from its state and last run.
+function healthOf(j, last) {
+  if (!j.enabled) return { label: 'Paused', tone: 'var(--color-neutral-600)' };
+  if (j.status === 'running') return { label: 'Running', tone: 'var(--color-accent)' };
+  if (!last) return { label: 'Not run yet', tone: 'var(--color-neutral-400)' };
+  if (!last.ok) return { label: 'Failed', tone: 'var(--st-risk)' };
+  return mailTrouble(last.summary) ? { label: 'Email failed', tone: 'var(--st-warn)' } : { label: 'Healthy', tone: 'var(--st-ok)' };
+}
+
+// One line over the jobs shown: what failed first, else how they stand.
+function summaryOf(list) {
+  if (!list.length) return '';
+  const n = { Healthy: 0, Failed: 0, 'Email failed': 0, Paused: 0, 'Not run yet': 0, Running: 0 };
+  list.forEach((j) => { n[healthOf(j, (j.runs || [])[0] || null).label] += 1; });
+  // Short: it shares a line with the Yours / Company switch in a 250px column. The full
+  // sentence is the line's tooltip (cronSummaryFull).
+  if (n.Failed) return n.Failed + ' of ' + list.length + ' failed' + (n.Paused ? ' · ' + n.Paused + ' paused' : '');
+  if (n.Healthy === list.length) return list.length === 1 ? 'Running fine' : 'All ' + list.length + ' running fine';
+  return [['Healthy', 'healthy'], ['Email failed', 'email failed'], ['Running', 'running now'], ['Not run yet', 'not run yet'], ['Paused', 'paused']]
+    .filter(([k]) => n[k]).map(([k, w]) => n[k] + ' ' + w).join(' · ');
 }
 
 // One line for a run's figures: {meters_scanned: 58, alerts_created: 3} → "58 meters scanned · 3 alerts created".

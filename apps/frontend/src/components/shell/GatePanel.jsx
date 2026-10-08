@@ -104,9 +104,6 @@ export default function GatePanel({ vals }) {
       <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.55", marginTop: "20px" }}>
         {"No FM cooperation required. Meter consent is captured at onboarding for MPAN and MPRN feeds."}
       </div>
-      <a href="Hoistway Customer Journey.dc.html" style={{ fontSize: "11.5px", display: "inline-block", marginTop: "22px" }}>
-        {"Read the customer journey →"}
-      </a>
     </div>
   );
 }

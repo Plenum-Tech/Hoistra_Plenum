@@ -11,6 +11,7 @@
 import React from 'react';
 import { parseBlocks } from '../../logic/markdownBlocks.js';
 import { inline } from './markdownInline.jsx';
+import { scrubInternal } from '../../logic/publicText.js';
 
 // ── blocks ────────────────────────────────────────────────────────────────────
 // The block parser lives in logic/markdownBlocks.js (shared with the dashboard layout).
@@ -35,7 +36,7 @@ export function MarkdownBlocks({ blocks }) {
         if (b.t === 'code') {
           return (
             <pre key={k} style={{ margin: '0', overflowX: 'auto', background: 'var(--color-bg)', borderRadius: '6px', padding: '8px 9px', fontFamily: 'ui-monospace,monospace', fontSize: '10.5px', lineHeight: '1.5' }}>
-              {b.body}
+              {scrubInternal(b.body, { code: true })}
             </pre>
           );
         }

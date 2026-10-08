@@ -104,7 +104,7 @@ export default function UdrTestsPanel({
         <p className="text-sm font-semibold text-slate-700">Quality tests</p>
         <p className="mt-1 text-xs text-slate-500">
           Test 1 (chunk → primary key) and Test 2 (overlap → foreign key) run automatically during
-          the UDR pass. Results and remediation actions appear here once the run reaches them.
+          the mapping pass. Results and remediation actions appear here once the run reaches them.
         </p>
       </div>
     );
@@ -117,7 +117,7 @@ export default function UdrTestsPanel({
     if (report.blocked)
       return (
         <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">
-          <XCircle size={10} /> blocks UDR
+          <XCircle size={10} /> blocks the import
         </span>
       );
     return (
@@ -180,7 +180,7 @@ export default function UdrTestsPanel({
               ) : null}
             </>
           ) : (
-            <p className="mt-1 text-xs text-slate-400">{t1.reason ?? "No vector chunks in this run."}</p>
+            <p className="mt-1 text-xs text-slate-400">{t1.reason ?? "No document chunks in this run."}</p>
           )}
         </div>
       ) : null}

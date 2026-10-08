@@ -148,7 +148,7 @@ export default function HoistBuildingCard({ vals }) {
 
           {edit ? (
             <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "9px" }}>
-              {"Only the fields above that you change are sent — PATCH leaves the rest of the record exactly as it was, including anything in raw_metadata."}
+              {"Only the fields above that you change are sent — the rest of the record stays exactly as it was."}
             </div>
           ) : null}
 
@@ -166,13 +166,13 @@ export default function HoistBuildingCard({ vals }) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "10px" }}>
             <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"buildings"}</span>{" · primary key "}<span style={MONO}>{"building_id"}</span>{" — name, country, region, use, floors, area"}
+              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"Buildings"}</span>{" · primary key "}<span style={MONO}>{"building ID"}</span>{" — name, country, region, use, floors, area"}
             </div>
             <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"floors"}</span>{" · primary key "}<span style={MONO}>{"floor_id"}</span>{" — foreign key "}<span style={MONO}>{"building_id"}</span>{", use, area"}
+              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"Floors"}</span>{" · primary key "}<span style={MONO}>{"floor ID"}</span>{" — foreign key "}<span style={MONO}>{"building ID"}</span>{", use, area"}
             </div>
             <div style={{ padding: "8px 10px", borderRadius: "7px", background: "var(--color-surface)", fontSize: "10.5px", lineHeight: "1.5" }}>
-              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"documents"}</span>{" · foreign key "}<span style={MONO}>{"building_id"}</span>{" — every certificate, contract and reading resolves back here"}
+              <span style={{ ...MONO, color: "var(--color-accent-300)" }}>{"Documents"}</span>{" · foreign key "}<span style={MONO}>{"building ID"}</span>{" — every certificate, contract and reading resolves back here"}
             </div>
           </div>
           {/* Warnings are not failures — "stored as Retail", "no regulation pack for this

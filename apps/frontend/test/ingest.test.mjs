@@ -30,6 +30,7 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
+const { shapeLiveBuildings } = await import('../src/logic/buildingsLive.js');
 
 const RUN_WITH_FILES = 'POST /backend/deep-agents/api/workflow/run-stateful-with-files';
 
@@ -129,4 +130,58 @@ test('the file tray is shared with the composer — attaching from either shows 
   c.renderVals().ingestDocuments();
   assert.equal(c.renderVals().orchFiles.length, 1, 'the ingest card sees the same staged file');
   cleanup();
+});
+
+// ── the building picker offers real buildings only ───────────────────────────
+// It used to prepend the nine seed demo names (constants.js BUILDINGS) to whatever was live,
+// so a company with four buildings saw thirteen, and picking a demo name filed the upload
+// against no building at all (no id resolves for it).
+
+const SEED = ['Kingsway House', 'Town Hall', 'Meridian Quay', 'AN Other House', 'Riverside Court', 'Marina Heights', 'Northgate Mall', 'Raffles Link'];
+
+test('the ingest picker lists exactly the live register — none of the seed demo buildings', () => {
+  // Shaped by the real loader, the way GET /api/energy/buildings rows reach state.
+  c.setState({ bldLive: shapeLiveBuildings({ buildings: [
+    { building_id: 'b-301', site_id: 'S-301', code: 'B-301', name: 'Bishopsgate Tower', country_code: 'UK', region: 'Greater London' },
+    { building_id: 'b-303', site_id: 'S-303', code: 'B-303', name: 'Manchester Town Hall', country_code: 'UK', region: 'North West' },
+    { building_id: 'b-01', site_id: 'S-01', code: 'B-01', name: 'sams tower', country_code: 'AE', region: 'dubai' }
+  ] }) });
+  c.renderVals().ingestDocuments();
+  const v = c.renderVals();
+  assert.deepEqual(v.iBuildingOpts, ['Bishopsgate Tower', 'Manchester Town Hall', 'sams tower']);
+  for (const name of SEED) assert.ok(!v.iBuildingOpts.includes(name), name + ' is a seed name, not a building');
+  v.setIBuilding({ target: { value: 'Manchester Town Hall' } });
+  assert.equal(c.state.declForId, 'b-303', 'the picked name resolves to its real id');
+  cleanup();
+});
+
+test('before the register loads, the picker offers the account’s own buildings, each with its real id', () => {
+  c.setState({ bldLive: null, account: { id: 'u-1', email: 'a@b.c', buildings: [{ id: 'u-b01', name: 'sams tower', building_code: 'B-01' }] } });
+  c.renderVals().ingestDocuments();
+  const v = c.renderVals();
+  assert.deepEqual(v.iBuildingOpts, ['sams tower']);
+  v.setIBuilding({ target: { value: 'sams tower' } });
+  assert.equal(c.state.declForId, 'u-b01');
+  cleanup();
+});
+
+test('with no buildings anywhere the picker is empty and says why — the seed is never the fallback', () => {
+  c.setState({ bldLive: [], account: { id: 'u-1', email: 'a@b.c', buildings: [{ id: 'u-b01', name: 'sams tower' }] } });
+  assert.deepEqual(c.renderVals().iBuildingOpts, [], 'a loaded, empty register wins outright');
+  c.setState({ bldLive: null, account: { id: 'u-1', email: 'a@b.c' } });
+  c.renderVals().ingestDocuments();
+  const v = c.renderVals();
+  assert.deepEqual(v.iBuildingOpts, []);
+  assert.match(v.iHint, /No buildings/);
+  cleanup();
+});
+
+test('"Ingest documents now" after hoisting a building files against that building', () => {
+  const c = new HoistraLogic({});
+  c.setState({ signedIn: true, bcResult: { name: 'Harbour Point', buildingId: 'bld-hp', code: 'B-301' }, ingExpect: 'Gas Safety' });
+  c.bcIngestNow();
+  assert.equal(c.state.declForId, 'bld-hp');
+  assert.equal(c.state.declFor, 'Harbour Point');
+  assert.equal(c.state.ingExpect, '', 'an earlier Upload\'s certificate type is not this card\'s');
+  clearInterval(c._orchTick); clearTimeout(c._tt); clearTimeout(c._homeRetry); clearTimeout(c._ccRetry); clearTimeout(c._vpRetry); clearTimeout(c._qTimer); clearTimeout(c._homeRefresh);
 });

@@ -8,7 +8,7 @@ globalThis.window = globalThis.window || { location: { origin: 'http://test.loca
 
 const {
   ago, makeSession, syncTurns, spaceKeyOf, sessionIcon, trimSessions,
-  loadSessions, saveSessions, shapeSessionList, MAX_TURNS, MAX_SESSIONS, SESSIONS_KEY
+  loadSessions, saveSessions, shapeSessionList, MAX_TURNS, MAX_SESSIONS, SESSIONS_KEY, FULL_SESSIONS, questionCount
 } = await import('../src/logic/sessions.js');
 
 // 07 Sep 2026, 14:00 local.
@@ -72,12 +72,28 @@ test('spaceKeyOf maps engine domains to the built-in spaces and nothing else', (
   assert.equal(spaceKeyOf('Orchestrator'), null);
 });
 
-test('trimSessions keeps the newest 60', () => {
+test('every session is kept; only the newest keep their transcript here (7 Oct 2026)', () => {
+  // The list used to stop at 60, and each orchestrator task pushed an older conversation out.
+  const turns = [{ role: 'you', text: 'q1' }, { role: 'bot', text: 'a1' }, { role: 'you', text: 'q2' }];
   const list = [];
-  for (let i = 0; i < 70; i++) list.push(makeSession({ id: 's' + i, title: 't', page: 'Home', at: NOW - i * MIN }));
+  for (let i = 0; i < 150; i++) {
+    const r = makeSession({ id: 's' + i, title: 't' + i, page: 'Home', at: NOW - i * MIN, kind: i % 3 ? 'chat' : 'task' });
+    if (r.kind === 'chat') r.turns = turns.slice();
+    else r.steps = [{ a: 'Orchestrator', t: 'Intent' }];
+    list.push(r);
+  }
   const out = trimSessions(list.slice().reverse());
-  assert.equal(out.length, MAX_SESSIONS);
+  assert.equal(out.length, 150, 'nothing dropped');
+  assert.ok(MAX_SESSIONS >= 1000);
   assert.equal(out[0].id, 's0');
+  const old = out[FULL_SESSIONS + 1].kind === 'chat' ? out[FULL_SESSIONS + 1] : out[FULL_SESSIONS + 2];
+  assert.deepEqual(old.turns, [], 'an older conversation sheds its transcript');
+  assert.equal(old.remote, true, 'and reads it back from the server when opened');
+  assert.equal(questionCount(old), 2, 'its question count survives');
+  const newest = out.find((r) => r.kind === 'chat');
+  assert.equal(newest.turns.length, 3, 'the newest keep theirs');
+  const oldTask = out.slice(FULL_SESSIONS).find((r) => r.kind === 'task');
+  assert.equal(oldTask.steps.length, 1, 'a task has no server copy, so it is kept whole');
 });
 
 test('sessions round-trip through storage and bad rows are dropped', () => {
@@ -176,4 +192,23 @@ test('shapeSessionList groups by day, newest first, and filters by text, space a
 
   assert.deepEqual(shapeSessionList([s1, s2, s3], { nowMs: NOW }), [], 'no owner given shows nothing, never everyone\'s');
   assert.deepEqual(shapeSessionList([s1, s2, s3], { nowMs: NOW, owner: 'nobody@example.com' }), [], 'a non-matching owner shows nothing too');
+});
+
+test('a conversation kept only on the server is still one after a reload, so it opens with its turns', () => {
+  const st = memStorage();
+  const r = makeSession({ id: 'srv', title: 'Old boiler question', page: 'Home', at: NOW });
+  r.remote = true; r.turnCount = 4; r.serverTurns = 4; r.spaceId = 'energy';
+  saveSessions([r], st);
+  const back = loadSessions(st)[0];
+  assert.equal(back.remote, true);
+  assert.equal(questionCount(back), 4);
+  assert.equal(back.spaceId, 'energy', 'a built-in space key is a space too');
+});
+
+test('a task can be filed in a space and listed there', () => {
+  const t = makeSession({ id: 't1', title: 'Request ISO 14001', page: 'Vendors', at: NOW, kind: 'task', owner: 'pm@x.com' });
+  t.spaceId = 'vendors';
+  const rows = shapeSessionList([t], { space: 'vendors', owner: 'pm@x.com', nowMs: NOW });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].rows[0].id, 't1');
 });

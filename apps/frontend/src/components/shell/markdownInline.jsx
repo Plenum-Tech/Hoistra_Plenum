@@ -5,6 +5,7 @@
 import React from 'react';
 import { isSafeHref } from './markdownSafety.js';
 import { documentIdFromHref, openDocument } from '../../api/docRag.js';
+import { scrubInternal } from '../../logic/publicText.js';
 
 // ── inline ────────────────────────────────────────────────────────────────────
 // Ordered so the greedier tokens (**, ``) are tried before the single-char ones.
@@ -36,22 +37,25 @@ export function inline(text, keyBase) {
         : m.index;
       if (!best || markerAt < best.at) best = { at: markerAt, m: m, kind: t.kind };
     }
-    if (!best) { out.push(rest); break; }
+    // The answer's prose can carry the platform's own names - a service, a table, a skill
+    // document the agent read - so every run of text is scrubbed (logic/publicText.js). A
+    // link's target is not: it is how a document link opens.
+    if (!best) { out.push(scrubInternal(rest)); break; }
 
-    if (best.at > 0) out.push(rest.slice(0, best.at));
+    if (best.at > 0) out.push(scrubInternal(rest.slice(0, best.at)));
     const k = keyBase + '-' + n++;
     const g = best.m;
 
     if (best.kind === 'code') {
       out.push(
-        <code key={k} style={{ fontFamily: 'ui-monospace,monospace', fontSize: '0.92em', background: 'var(--color-bg)', borderRadius: '4px', padding: '1px 4px' }}>{g[1]}</code>
+        <code key={k} style={{ fontFamily: 'ui-monospace,monospace', fontSize: '0.92em', background: 'var(--color-bg)', borderRadius: '4px', padding: '1px 4px' }}>{scrubInternal(g[1], { code: true })}</code>
       );
     } else if (best.kind === 'strong') {
       // Inline marks inside bold still render: "**[View Certificate](https://…)**" is a link,
       // not the literal brackets and URL it showed before (5 Oct 2026).
       out.push(<strong key={k} style={{ fontWeight: '600' }}>{inline(g[1], k)}</strong>);
     } else if (best.kind === 'em') {
-      out.push(<em key={k}>{g[1]}</em>);
+      out.push(<em key={k}>{scrubInternal(g[1])}</em>);
     } else if (best.kind === 'link') {
       // The target came from the orchestrator's answer, not from a trusted author — see
       // markdownSafety.js. Anything other than a confirmed safe scheme renders as its own
@@ -61,10 +65,10 @@ export function inline(text, keyBase) {
       const docId = documentIdFromHref(g[2]);
       out.push(
         docId
-          ? <a key={k} href="#" onClick={(e) => { e.preventDefault(); openDocument(docId); }} style={{ color: 'var(--color-accent)' }}>{g[1]}</a>
+          ? <a key={k} href="#" onClick={(e) => { e.preventDefault(); openDocument(docId); }} style={{ color: 'var(--color-accent)' }}>{scrubInternal(g[1])}</a>
           : isSafeHref(g[2])
-            ? <a key={k} href={g[2]} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--color-accent)' }}>{g[1]}</a>
-            : g[1]
+            ? <a key={k} href={g[2]} target="_blank" rel="noreferrer noopener" style={{ color: 'var(--color-accent)' }}>{scrubInternal(g[1])}</a>
+            : scrubInternal(g[1])
       );
     }
 

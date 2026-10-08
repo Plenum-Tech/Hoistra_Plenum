@@ -333,7 +333,7 @@ export function investigationContext(inv) {
     note = " (per-day and per-week detail removed to fit)";
     if (json.length > CONTEXT_CAP) { json = json.slice(0, CONTEXT_CAP); note = " (cut at " + CONTEXT_CAP.toLocaleString("en-GB") + " characters — say so if an answer needs what was cut)"; }
   }
-  return "An investigation of " + (inv.title || "this asset") + " is open in the dock. Its three datasets, as svc-operations-intelligence returned them"
+  return "An investigation of " + (inv.title || "this asset") + " is open in the dock. Its three datasets, as Hoistra returned them"
     + " (bms-trend, utility-bill, degree-days)" + note + ": " + json + ". Answer questions about the BMS readings, the metered consumption"
     + " or the weather from these. A dataset with status not_found has nothing on record and one with status unreadable could not be read —"
     + " say so rather than guessing. utility_bill is metered consumption standing in for the bill, not a bill."

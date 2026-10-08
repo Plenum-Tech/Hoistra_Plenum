@@ -1,6 +1,6 @@
 // The Decision queue ("N Pending") shaped from the live reads: pending approvals, open
 // energy anomalies and maintenance decisions owed — ranked by consequence, seed until any
-// read answers, each live card opening the record's own detail drawer.
+// read answers, each card opening its page and the dock's email draft (queueDraftFlow.test.mjs).
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -90,12 +90,14 @@ test('the drawer keeps its seed cards until a read answers, then shows the live 
   assert.equal(v.queueItems[0].module, 'Energy');            // £38,400/yr outranks £230
   assert.equal(v.queuePreview.length, 2);
 
-  // A live card opens the record's own detail drawer and closes the queue.
+  // A live card opens the page it is about with its email in the dock, and closes the queue
+  // (Hussain, 7 Oct 2026 — it used to open a read-only drawer; queueDraftFlow.test.mjs).
   c.setState({ queueOpen: true });
   v.queueItems[1].click();
   assert.equal(c.state.queueOpen, false);
-  assert.equal(c.state.detail.module, 'Vendor');
-  assert.match(c.state.detail.title, /INV-2847/);
+  assert.equal(c.state.view, 'vp');
+  assert.equal(c.state.flow, 'email');
+  assert.match(c.state.emSubject, /INV-2847/);
   clearTimeout(c._homeRetry); clearTimeout(c._vpRetry); clearTimeout(c._ccRetry); clearInterval(c._orchTick);
 });
 
@@ -110,7 +112,7 @@ test('live with nothing waiting says so instead of an empty drawer', () => {
   clearTimeout(c._homeRetry); clearTimeout(c._vpRetry); clearTimeout(c._ccRetry); clearInterval(c._orchTick);
 });
 
-test('a maintenance decision in the queue opens the same drawer the Maintenance grid opens', () => {
+test('a maintenance decision in the queue opens Maintenance with its email in the dock', () => {
   const c = new HoistraLogic({});
   c.setState({ mxRaw: { decisions: { decisions: [{
     work_order: 'WO-B-101-32', asset: 'Chiller 2 — roof plant (standby)', building: 'Harbour Point',
@@ -123,8 +125,11 @@ test('a maintenance decision in the queue opens the same drawer the Maintenance 
   c.setState({ queueOpen: true });
   v.queueItems[0].click();
   assert.equal(c.state.queueOpen, false);
-  assert.equal(c.state.detail.module, 'Maintenance');
-  assert.equal(c.state.detail.fields.find((f) => f.l === 'Work order').v, 'WO-B-101-32');
+  assert.equal(c.state.view, 'module');
+  assert.equal(c.state.module, 'ops');
+  assert.equal(c.state.flow, 'email');
+  assert.equal(c.state.emSubject, 'On hold — WO-B-101-32 · Chiller 2 — roof plant (standby), Harbour Point');
+  assert.match(c.state.emBody, /^Hello Meridian Mechanical Ltd team,/);
   clearTimeout(c._homeRetry); clearTimeout(c._vpRetry); clearTimeout(c._ccRetry); clearInterval(c._orchTick);
 });
 
@@ -305,7 +310,7 @@ test('the Show chips filter the drawer by module; the badge keeps the full count
   } });
   let v = c.renderVals();
   assert.deepEqual(v.queueFilterOpts.map((o) => o.label + ' ' + o.n),
-    ['All 4', 'Energy 2', 'Vendors 1', 'Compliance 1', 'Maintenance 0']);
+    ['All 4', 'Energy 2', 'Vendors 1', 'Compliance 1', 'Maintenance 0', 'Platform 0']);
   v.queueFilterOpts.find((o) => o.label === 'Energy').pick();
   v = c.renderVals();
   assert.equal(v.queueItems.length, 2);

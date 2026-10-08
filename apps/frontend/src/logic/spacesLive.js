@@ -17,6 +17,7 @@
 // HoistraLogic.prototype and `this` is the controller.
 import { spacesApi } from '../api/spaces.js';
 import { spaceKeyOf, BUILTIN_SPACE_KEYS } from './sessions.js';
+import { shapeSupportSpace, supportStatus } from './support.js';
 import { isStaleScope } from '../api/client.js';
 
 const RETRY_MS = 30000;
@@ -140,7 +141,8 @@ export function shapeSpaces(input) {
   const home = inp.home || {};
   const owner = inp.owner ? String(inp.owner).trim().toLowerCase() : null;
   const sessions = (inp.sessions || []).filter((s) => !!owner && s && s.owner === owner);
-  const chats = sessions.filter((s) => s && s.kind === 'chat');
+  // A support request is counted in the Support space, not under the engine that answered it.
+  const chats = sessions.filter((s) => s && s.kind === 'chat' && !supportStatus(s));
   const builtin = BUILTIN_SPACES.map((b) => {
     const e = b.key === 'compliance' ? compliance(b, home.compliance)
       : b.key === 'energy' ? energy(b, home.anomalies)
@@ -158,11 +160,15 @@ export function shapeSpaces(input) {
       icon: 'ph-folder-simple', custom: true, live: true, tone: 'none', kpis: [], badge: '', count: null,
       sessions: sessions.filter((s) => s && s.spaceId === String(r.id)).length
     }));
+  // Support (logic/support.js): every request this account raised, open or resolved. Beside
+  // the four engines, not one of them — the asker's own requests in the company in view.
+  const support = shapeSupportSpace(inp.sessions || [], { owner: owner, viewOrgId: inp.viewOrgId || null });
   const byKey = {};
   builtin.forEach((b) => { byKey[b.key] = b; });
+  byKey[support.key] = support;
   custom.forEach((c) => { byKey[c.id] = c; });
   return {
-    builtin: builtin, custom: custom, byKey: byKey,
+    builtin: builtin, support: support, custom: custom, byKey: byKey,
     savedLive: savedLive, savedError: inp.savedError || '', savedLoading: !!inp.savedLoading
   };
 }
@@ -177,10 +183,10 @@ export const spacesMethods = {
     // owner is in the memo key too — an account switch in the same tab (view-as-company
     // included) must invalidate the cached model, not keep showing the previous
     // account's spaces and session counts until something else happens to change.
-    const key = [s.homeRaw, vm, s.spaces, s.sessions, s.spError, s.spLoading, owner];
+    const key = [s.homeRaw, vm, s.spaces, s.sessions, s.spError, s.spLoading, owner, s.viewOrgId || null];
     const m = this._spMemo;
     if (m && m.key.every((k, i) => k === key[i])) return m.model;
-    const model = shapeSpaces({ home: s.homeRaw, vendors: vm, saved: s.spaces, sessions: s.sessions || [], savedError: s.spError, savedLoading: s.spLoading, owner: owner });
+    const model = shapeSpaces({ home: s.homeRaw, vendors: vm, saved: s.spaces, sessions: s.sessions || [], savedError: s.spError, savedLoading: s.spLoading, owner: owner, viewOrgId: s.viewOrgId || null });
     this._spMemo = { key: key, model: model };
     return model;
   },
@@ -219,7 +225,7 @@ export const spacesMethods = {
     const name = String(this.state.spNewName || '').trim();
     if (!name) return;
     if (this.state.spBusy) return;
-    if (!Array.isArray(this.state.spaces)) return this.flash('Saved spaces are unavailable — svc-udr did not answer.');
+    if (!Array.isArray(this.state.spaces)) return this.flash('Saved spaces are unavailable right now.');
     this.setState({ spBusy: true });
     try {
       // The account's real, server-verified email — not state.email, the sign-in form
@@ -276,6 +282,12 @@ export const spacesMethods = {
   // sessionEnsure). An empty bar just opens the conversation page.
   spaceAskRun() {
     const q = String(this.state.spaceAsk || '').trim();
+    // The Support space: a question there is a new support request (logic/support.js).
+    if (this.state.spaceKey === 'support') {
+      this.setState({ spaceAsk: '' });
+      this.openSupport({ fresh: true });
+      return q ? this.askScoped(q) : undefined;
+    }
     if (!q) return this.ccOpenChat();
     this.setState({ spaceAsk: '' });
     this.askScoped(q);

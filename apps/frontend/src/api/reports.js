@@ -2,15 +2,26 @@
 // cards, refreshed on a cadence by the server's own scheduler (engines/reports).
 // Routes: apps/backend/.../svc-operations-intelligence/src/api/routes/reports.py.
 // Mounted behind the gateway at /backend/ops-intelligence/. Every row is the caller's
-// own — no org scoping query needed, unlike admin.js.
-import { BASES, apiFetch } from './client.js';
+// own, so reading and changing them needs no org scoping query, unlike admin.js.
+//
+// Creating does. A report or card is stored under the company of the request's scope and
+// every refresh reads that company's data, so a superadmin viewing as a company has to name
+// it here — the same override the chat sends (deepAgents.js orgOverride). Without it the card
+// was stored under their home company, the platform company, and on 7 Oct 2026 a report made
+// from a chat that had named three blocked vendors refreshed against another company's
+// register and named none.
+import { BASES, apiFetch, getActingOrg } from './client.js';
 
 const B = BASES.opsIntelligence;
+
+// A superadmin's viewAsCompany() override, and only that: null for everybody else, who are
+// scoped to their own company and would be refused for naming any other.
+function orgOverride() { const o = getActingOrg(); return o ? { organization_id: o } : {}; }
 
 export const reportsApi = {
   // The caller's reports, each with its cards and their latest runs.
   list: () => apiFetch(B, '/api/reports'),
-  create: (name) => apiFetch(B, '/api/reports', { method: 'POST', body: { name } }),
+  create: (name) => apiFetch(B, '/api/reports', { method: 'POST', body: { name }, query: orgOverride() }),
   rename: (reportId, name) => apiFetch(B, '/api/reports/' + encodeURIComponent(reportId), { method: 'PATCH', body: { name } }),
   remove: (reportId) => apiFetch(B, '/api/reports/' + encodeURIComponent(reportId), { method: 'DELETE' }),
 
@@ -19,7 +30,7 @@ export const reportsApi = {
 
   // Pin a question as a card. body: {prompt, name?, report_id?, refresh, timezone?,
   // source_session_id?, source_page?, source_message_id?, seed?, run_now}.
-  createCard: (body) => apiFetch(B, '/api/reports/cards', { method: 'POST', body }),
+  createCard: (body) => apiFetch(B, '/api/reports/cards', { method: 'POST', body, query: orgOverride() }),
   getCard: (cardId) => apiFetch(B, '/api/reports/cards/' + encodeURIComponent(cardId)),
   patchCard: (cardId, body) => apiFetch(B, '/api/reports/cards/' + encodeURIComponent(cardId), { method: 'PATCH', body }),
   deleteCard: (cardId) => apiFetch(B, '/api/reports/cards/' + encodeURIComponent(cardId), { method: 'DELETE' }),

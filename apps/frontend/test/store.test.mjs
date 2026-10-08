@@ -276,10 +276,13 @@ test('the navigator behaves the same on Home as everywhere else: it stays as it 
   let v = c.renderVals();
   assert.equal(v.navOverlay, undefined, 'no scrim over Home');
   assert.equal(v.orchLeft, '248px', 'the dock sits beside the open navigator');
+  // The navigator is shown whole by its clip, not by animating its width (8 Oct 2026).
+  assert.equal(v.navClip, 'inset(0 0 0 0)');
   assert.equal(v.shellPad, (248 + 280) + 'px');
   c.setState({ navOpen: false });
   v = c.renderVals();
   assert.equal(v.orchLeft, '52px');
+  assert.equal(v.navClip, 'inset(0 196px 0 0)', 'clipped to the 52px rail');
   assert.equal(v.shellPad, (52 + 280) + 'px');
   cleanup();
 });

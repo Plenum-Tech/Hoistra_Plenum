@@ -335,7 +335,7 @@ export default function Assets({ vals }) {
             {vals.asEmptyText}
           </div>
           <div style={{ fontSize: "11px", color: "var(--color-neutral-600)", marginTop: "12px", lineHeight: "1.55" }}>
-            {"Building bar is EUI against its regulation-pack reference (GET /api/energy/buildings); the marker is the reference, and buildings are ranked worst first. The tier beneath a building is its real locations (assets.location_id) — meters carry building_id and asset_id but never a location, so a location has no energy of its own and its bar stays empty. Condition combines the energy rule with the asset's own health score, which can raise a band but never lower one. Asset value and the vendor who holds the asset are not on the record, so neither is shown."}
+            {"Building bar is EUI against its regulation-pack reference; the marker is the reference, and buildings are ranked worst first. The tier beneath a building is its real locations, as recorded on each asset — meters carry a building and an asset but never a location, so a location has no energy of its own and its bar stays empty. Condition combines the energy rule with the asset's own health score, which can raise a band but never lower one. Asset value and the vendor who holds the asset are not on the record, so neither is shown."}
           </div>
         </div>
       </div>

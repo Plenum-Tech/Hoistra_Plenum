@@ -181,7 +181,7 @@ export const auditMethods = {
         // Samples fill only a trail that was never read; after a successful read the rows
         // are the record itself, and the label says only that the refresh failed.
         : s.auLiveError ? "Unreachable — " + s.auLiveError + (s.auLiveLoadedAt ? "" : " · showing sample data")
-        : live ? "Live · svc-operations-intelligence"
+        : live ? "Live"
         // Nothing read and nothing held. Not "Sample data", which would be a claim about
         // rows that are not there, and not an empty trail either — the register has simply
         // not answered yet.

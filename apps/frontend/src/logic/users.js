@@ -64,11 +64,11 @@ export const usersMethods = {
         { value: "Building", label: "Access boundary", hint: "every query filtered by it", color: "var(--color-neutral-300)" }
       ],
       // The live/seed source pill next to the table, with the loader's manual retry.
-      usLiveSourceLabel: s.usLiveLoading ? "Reading /api/admin/users…"
+      usLiveSourceLabel: s.usLiveLoading ? "Reading users…"
         // Samples fill only a table that was never read; after a successful read the rows
         // on screen are the company's own, and the label says only that the refresh failed.
         : s.usLiveError ? "Unreachable — " + s.usLiveError + (s.usLiveLoadedAt ? "" : " · showing sample data")
-        : live ? "Live · svc-operations-intelligence"
+        : live ? "Live"
         : unread ? "Not read yet"
         : "Sample data — backend not read yet",
       usLiveSourceDot: s.usLiveError ? "var(--st-risk)" : live ? "var(--st-ok)" : "var(--color-neutral-600)",

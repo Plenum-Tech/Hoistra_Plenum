@@ -58,11 +58,30 @@ export default function Chat({ vals }) {
             </button>
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "16px", flexWrap: "wrap", marginTop: "16px", paddingBottom: "14px", borderBottom: "1px solid var(--color-divider)" }}>
+            {vals.supOn ? (
+              // A support session: the request, its reference and where it stands.
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "0", flex: "1" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "0" }}>
+                  <span className="sup-mark" aria-hidden="true"><i className="ph ph-lifebuoy"></i></span>
+                  <span style={{ fontSize: "20px", letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0" }} title={vals.chatSessionTitle || ""}>{vals.chatSessionTitle || "Support"}</span>
+                  {vals.supRef ? <span className="sup-ref">{vals.supRef}</span> : null}
+                  {/* No status until the first question makes it a request. */}
+                  {vals.supStatus !== "new" ? (
+                    <span className={"sup-status is-" + vals.supStatus}>
+                      <i className={`ph ${vals.supStatus === "resolved" ? "ph-check" : "ph-circle"}`} aria-hidden="true"></i>
+                      {vals.supStatusLabel}
+                    </span>
+                  ) : null}
+                </div>
+                <span style={{ fontSize: "12px", color: "var(--color-neutral-500)", paddingLeft: "34px" }}>{vals.supMeta || "Support from the orchestrator — every request is kept in the Support space"}</span>
+              </div>
+            ) : (
             <div style={{ display: "flex", alignItems: "baseline", gap: "10px", minWidth: "0", flex: "1" }}>
               <span style={{ fontSize: "20px", letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "48ch" }} title={vals.chatSessionTitle || ""}>{vals.chatSessionTitle || "Orchestrator"}</span>
               <span style={{ fontSize: "12px", color: "var(--color-neutral-500)", whiteSpace: "nowrap" }}>{vals.chatSessionMeta || "One conversation across the portfolio"}</span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+            )}
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px 14px", minWidth: "0" }}>
               {vals.chatCanFile ? (
                 <select value={vals.chatFileValue} onChange={vals.chatFileTo} title="File this session in a saved space" style={{ fontFamily: "var(--font-body)", fontSize: "11px", padding: "4px 7px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-neutral-400)", maxWidth: "170px" }}>
                   {(vals.chatFileOptions || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -72,7 +91,19 @@ export default function Chat({ vals }) {
                 <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: vals.chatLinkDot }}></span>
                 <span>{vals.chatLinkLabel}</span>
               </button>
-              {vals.orchChatHasAny ? (
+              {vals.supOn ? (
+                <>
+                  <button type="button" className="sup-btn" onClick={vals.supContact} title="Send this conversation to the Plenum team">
+                    <i className="ph ph-envelope-simple" aria-hidden="true"></i>{"Email Plenum"}
+                  </button>
+                  <button type="button" className="sup-link" onClick={vals.supOpenSpace} style={{ fontSize: "11px", whiteSpace: "nowrap" }}>{"All requests"}</button>
+                  {vals.supStatus !== "new" ? (
+                    <button type="button" className="hv11" onClick={vals.supNew} style={{ ...BARE, fontSize: "11px", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
+                      {"New request"}
+                    </button>
+                  ) : null}
+                </>
+              ) : vals.orchChatHasAny ? (
                 <button type="button" className="hv11" onClick={vals.orchChatReset} style={{ ...BARE, fontSize: "11px", color: "var(--color-accent)", whiteSpace: "nowrap" }}>
                   {"New thread"}
                 </button>
@@ -86,13 +117,58 @@ export default function Chat({ vals }) {
           <div style={{ flex: "1", display: "flex", flexDirection: "column", gap: "16px", padding: "22px 0 18px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start" }}>
               <div style={{ width: "30px", height: "30px", borderRadius: "8px", background: "var(--color-accent-900)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <i className="ph ph-cpu" style={{ fontSize: "15px", color: "var(--color-accent)" }}></i>
+                <i className={`ph ${vals.supOn ? "ph-lifebuoy" : "ph-cpu"}`} style={{ fontSize: "15px", color: "var(--color-accent)" }}></i>
               </div>
               <div style={{ minWidth: "0" }}>
-                <div style={KICKER}>{"Orchestrator"}</div>
+                <div style={KICKER}>{vals.supOn ? "Support" : "Orchestrator"}</div>
                 <div style={{ fontSize: "13.5px", lineHeight: "1.6", color: "var(--color-neutral-200)", marginTop: "5px", maxWidth: "72ch", textWrap: "pretty" }}>
-                  {vals.chatIntro}
+                  {vals.supOn
+                    ? "Ask how anything in Hoistra works, or tell me what went wrong. I answer from the Hoistra guide and, where it helps, from your own records. If it is still not sorted, Email Plenum sends this conversation to the Plenum team."
+                    : vals.chatIntro}
                 </div>
+                {/* The old help centre, as questions: a topic on the left, its questions on the
+                    right. Each one is asked as written. */}
+                {vals.supShowTopics ? (
+                  <>
+                    <div className="sup-index">
+                      <div className="sup-topics" role="tablist" aria-label="Help topics">
+                        {(vals.supTopics || []).map((t) => (
+                          <button key={t.key} type="button" role="tab" id={"sup-tab-" + t.key} aria-selected={t.on} aria-controls="sup-panel" className="sup-topic" onClick={t.pick}>
+                            <i className={`ph ${t.icon}`} aria-hidden="true"></i>
+                            <span>{t.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="sup-panel" role="tabpanel" id="sup-panel" aria-labelledby={"sup-tab-" + vals.supTopic.key}>
+                        <h3 className="sup-panel-name">{vals.supTopic.name}</h3>
+                        <div className="sup-panel-blurb">{vals.supTopic.blurb}</div>
+                        <div className="sup-qs">
+                          {vals.supTopic.prompts.map((q) => (
+                            <button key={q.text} type="button" className="sup-q" onClick={q.ask}>
+                              <span>{q.text}</span>
+                              <i className="ph ph-arrow-up-right" aria-hidden="true"></i>
+                            </button>
+                          ))}
+                        </div>
+                        {/* A question of your own, asked under the topic on screen. */}
+                        <form className="sup-own" onSubmit={(e) => { e.preventDefault(); vals.supCustomAsk(); }}>
+                          <label htmlFor="sup-own-q" className="sup-own-label">{"Not listed? Ask your own question"}</label>
+                          <div className="sup-own-box">
+                            <textarea id="sup-own-q" className="sup-own-input" rows="2" value={vals.supCustom} onChange={vals.setSupCustom} onKeyDown={vals.supCustomKey} placeholder={vals.supCustomPh}></textarea>
+                            <button type="submit" className="sup-btn is-primary" disabled={!vals.supCustomCanAsk}>
+                              <i className="ph ph-paper-plane-right" aria-hidden="true"></i>{"Ask"}
+                            </button>
+                          </div>
+                          <div className="sup-own-hint">{"Enter to ask · Shift + Enter for a new line"}</div>
+                        </form>
+                      </div>
+                    </div>
+                    <div className="sup-foot">
+                      <span>{"Rather talk to a person?"}</span>
+                      <button type="button" className="sup-link" onClick={vals.supContact}>{"Email Plenum now"}</button>
+                    </div>
+                  </>
+                ) : null}
               </div>
             </div>
 
@@ -222,6 +298,70 @@ export default function Chat({ vals }) {
               </React.Fragment>
             ))}
 
+            {/* Support: once an answer is in, the user says whether it sorted it. Yes closes
+                the request; Not yet keeps it open and shows the way to a person. */}
+            {vals.supResolveShow ? (
+              <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start" }}>
+                <span></span>
+                <div className="sup-resolve" role="group" aria-label="Did this sort it out?">
+                  <span className="sup-resolve-q">{"Did this sort it out?"}</span>
+                  <button type="button" className="sup-btn is-ok" onClick={vals.supResolve}>
+                    <i className="ph ph-thumbs-up" aria-hidden="true"></i>{"Yes, it's sorted"}
+                  </button>
+                  {vals.supNotYetShow ? null : (
+                    <button type="button" className="sup-btn" onClick={vals.supNotYet}>
+                      <i className="ph ph-thumbs-down" aria-hidden="true"></i>{"Not yet"}
+                    </button>
+                  )}
+                  <span className="sup-resolve-gap"></span>
+                  <button type="button" className={vals.supNotYetShow ? "sup-btn is-primary" : "sup-btn is-quiet"} onClick={vals.supContact}>
+                    <i className="ph ph-envelope-simple" aria-hidden="true"></i>{"Email Plenum"}
+                  </button>
+                  {vals.supNotYetShow ? (
+                    <span className="sup-resolve-note" role="status">{"Say what is still wrong below and I will try again — or send this conversation to the Plenum team."}</span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {/* The email to Plenum: the conversation, the reference and who is asking, to check
+                and send. The send is the dock's — it reports what really happened. */}
+            {vals.supDraftOpen ? (
+              <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start" }}>
+                <div style={{ width: "30px", height: "30px", borderRadius: "8px", background: "var(--color-accent-900)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <i className="ph ph-envelope-simple" style={{ fontSize: "15px", color: "var(--color-accent)" }}></i>
+                </div>
+                <section className="sup-mail" aria-labelledby="sup-mail-title">
+                  <div className="sup-mail-head">
+                    <h3 className="sup-mail-title" id="sup-mail-title">{"Email to Plenum support"}</h3>
+                    <span className="sup-mail-from">{"Draft — nothing is sent until you press Send"}</span>
+                  </div>
+                  <div className="sup-mail-fields">
+                    <label htmlFor="sup-mail-to">{"To"}</label>
+                    <input id="sup-mail-to" type="email" value={vals.em.to} onChange={vals.em.setTo} autoComplete="off" />
+                    {vals.supDraftCc ? <span className="sup-mail-k">{"Copy"}</span> : null}
+                    {vals.supDraftCc ? <span className="sup-mail-v">{vals.supDraftCc + " — you, so the reply reaches you"}</span> : null}
+                    <label htmlFor="sup-mail-subject">{"Subject"}</label>
+                    <input id="sup-mail-subject" type="text" value={vals.em.subject} onChange={vals.em.setSubject} />
+                  </div>
+                  <textarea className="sup-mail-body" aria-label="Message" value={vals.em.body} onChange={vals.em.setBody} rows="12"></textarea>
+                  {vals.em.prevShow === "block" ? (
+                    <div className="sup-mail-prev">
+                      <span style={{ flex: "1", minWidth: "0" }}>{vals.em.prevNote}</span>
+                      <button type="button" className="sup-link" onClick={vals.em.prevSwitch}>{vals.em.prevSwitchLabel}</button>
+                    </div>
+                  ) : null}
+                  <div className="sup-mail-foot">
+                    <span className="sup-mail-note">{"Sent from Hoistra's mail service and kept in the email log."}</span>
+                    <button type="button" className="sup-btn is-quiet" onClick={vals.fCancel} disabled={vals.em.sendBusy}>{"Cancel"}</button>
+                    <button type="button" className="sup-btn is-primary" onClick={vals.em.send} disabled={vals.em.sendBusy} aria-busy={vals.em.sendBusy}>
+                      <i className={`ph ${vals.em.sendBusy ? "ph-circle-notch" : "ph-paper-plane-tilt"}`} aria-hidden="true"></i>{vals.em.sendBusy ? "Sending…" : "Send"}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            ) : null}
+
             {/* Hoisting a building is an instruction to the platform, so it is carried out
                 where the instruction was given rather than on a page of its own. */}
             {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
@@ -312,6 +452,13 @@ export default function Chat({ vals }) {
 
           {/* ── composer ─────────────────────────────────────────────────── */}
           <div style={{ position: "sticky", bottom: "0", background: "var(--color-bg)", padding: "10px 0 18px", borderTop: "1px solid var(--color-divider)" }}>
+            {vals.supResolved ? (
+              <div className="sup-closed" role="status">
+                <i className="ph ph-check-circle" aria-hidden="true"></i>
+                <span>{vals.supResolvedText}</span>
+                <button type="button" className="sup-link" onClick={vals.supReopen}>{"Reopen"}</button>
+              </div>
+            ) : null}
             <div style={{ display: vals.orchAttachShow || "none", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
               {(vals.orchFiles || []).map((f) => (
                 <React.Fragment key={f.key}>
@@ -329,7 +476,7 @@ export default function Chat({ vals }) {
             <div style={{ display: vals.orchMigrateShow || "none", alignItems: "center", gap: "9px", flexWrap: "wrap", marginBottom: "9px", padding: "8px 11px", borderRadius: "9px", border: "1px solid var(--color-divider)", background: "var(--color-surface)" }}>
               <i className="ph ph-file-xls" style={{ fontSize: "14px", color: "var(--color-accent)", flexShrink: "0" }}></i>
               <span style={{ flex: "1", minWidth: "0", fontSize: "12px", lineHeight: "1.4" }}>
-                {"Spreadsheets go through the migration pipeline. Send with nothing typed and the run opens below at its first gate — every gate is answered here, and nothing reaches plenum_cafm until the last one."}
+                {"Spreadsheets go through the migration pipeline. Send with nothing typed and the run opens below at its first gate — every gate is answered here, and nothing reaches the Hoist Graph until the last one."}
               </span>
               {/* What the run is labelled with, and what the mapper picks its alias pack
                   from. Free text, as the migration page had it: the service takes any
@@ -419,7 +566,9 @@ export default function Chat({ vals }) {
               </button>
             </div>
             <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.45", marginTop: "8px" }}>
-              {"Every question is stored as a session, whichever page it was raised from. Nothing is written back without your decision."}
+              {vals.supOn
+                ? "Every support request is kept in the Support space, open or resolved. Email Plenum sends this conversation to the Plenum team."
+                : "Every question is stored as a session, whichever page it was raised from. Nothing is written back without your decision."}
             </div>
           </div>
         </div>

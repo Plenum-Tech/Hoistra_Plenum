@@ -208,7 +208,7 @@ export const maintenanceMethods = {
         ? "The maintenance service has not answered."
         : m.unallocated
           ? "You are allocated to no buildings, so no contract is in scope for you."
-          : "No planned visit is on record for your buildings in this window. Loading the PPM visit history is what fills this table — the endpoint is there.",
+          : "No planned visit is on record for your buildings in this window. Loading the PPM visit history is what fills this table.",
       mxPpmSummary: mxPpmSummary,
       mxPpmRule: m.ppmRule || "",
 
@@ -216,7 +216,7 @@ export const maintenanceMethods = {
       inspQ: s.mxAsked || "",
       inspTitle: !ans ? "" : ans.understood ? (ans.matched || ans.question || "") : "Not a question these records can answer",
       inspTake: !ans ? "" : (ans.answer || ""),
-      inspSource: ans && ans.source ? "Read from " + ans.source.endpoint + " · " + (ans.source.scope || "") : "",
+      inspSource: ans && ans.source ? "Read from the maintenance records · " + (ans.source.scope || "") : "",
       inspSourceShow: ans && ans.source ? "block" : "none",
       inspRowsA: !ans ? [] : (ans.understood ? (ans.data || []) : (ans.can_answer || [])).map((r) => ({
         t: typeof r === "string" ? r : (r.question || r.headline || r.contract || r.asset_name || JSON.stringify(r))

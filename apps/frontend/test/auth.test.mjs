@@ -642,7 +642,7 @@ test('login 422 and a network failure get the gate\'s own one-liners', async () 
   assert.equal(c.state.authError, 'Enter a valid email address and password.');
   delete handlers['POST ' + A + '/login'];
   await c.authSignIn();
-  assert.equal(c.state.authError, "Couldn't reach the sign-in service. Check the backend is running.");
+  assert.equal(c.state.authError, "Couldn't reach the sign-in service. Try again in a moment.");
 });
 
 test('the SSO button is inert: a toast, no sign-in', () => {

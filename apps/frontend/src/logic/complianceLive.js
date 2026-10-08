@@ -17,6 +17,8 @@ import { bcIsHoistRequest } from './buildingsCrud.js';
 import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 import { errorFromAnswer } from './chat.js';
 import { isStaleScope } from '../api/client.js';
+import { scrubInternal } from './publicText.js';
+import { withoutCellDuplicates } from './complianceCell.js';
 
 // The backend spells the Emirates "UAE"; the shell spells it "AE" (PACKS, CC_OF).
 const COUNTRY = {
@@ -170,6 +172,21 @@ function riskOf(days, blocked) {
   return { risk: "OK", sev: "ok" };
 }
 
+function packTypesOf(packs) {
+  const out = {};
+  Object.keys(packs).forEach((cc) => (packs[cc] || []).forEach((t) => {
+    const code = t && t.certificate_type_code;
+    if (!code || out[code]) return;
+    out[code] = {
+      name: t.certificate_type_name || code,
+      scope: String(t.certificate_scope || "").toLowerCase() === "vendor" ? "vendor" : "building",
+      trade: t.trade_category || null,
+      requires: t.required_contractor_accreditation || null
+    };
+  }));
+  return out;
+}
+
 // Pure: API payloads -> the seed's shape. Exported so it can be tested without a store.
 //   certificates: rows from GET /api/compliance/certificates
 //   coverage:     { [cc]: { buildings: [...], vendors: [...] } }  (GET /coverage/*)
@@ -229,6 +246,10 @@ export function shapeLiveCompliance(input) {
       verifyNote: (r.verify_link && r.verify_link.note) || null,
       verState: verStateOf(r),
       verChip: verChipOf(r),
+      // When the register was last checked, by the platform or by a person, and by whom —
+      // both write checked_at onto raw_metadata.verification. Shown, never computed from.
+      verWhen: verificationOf(r).checked_at ? fmtDate(String(verificationOf(r).checked_at).slice(0, 10)) : null,
+      verBy: verificationOf(r).checked_by_label || null,
       issuer: r.issuing_body || null,
       // Is there a source document behind this certificate, or only fields someone typed?
       // A certificate with no document cannot be re-read, cannot be scored by forensics and
@@ -424,6 +445,11 @@ export function shapeLiveCompliance(input) {
     vendors: vendors.sort((a, b) => b.certs - a.certs || a.name.localeCompare(b.name)),
     certs: rows,
     mxTypes: mxCodes.map(nameOf),
+    // The column's code, for a clicked cell to look its certificates up by (complianceCell.js).
+    mxCodes: mxCodes,
+    // Every pack type's trade and the contractor accreditation it requires, first country wins:
+    // how a building type is matched to the vendors who do its work (complianceCell.js).
+    packTypes: packTypesOf(packs),
     mxShort: mxCodes.map((code) => String(code).replace(/_/g, " ").slice(0, 8)),
     mx: mx,
     mxLabel: HOISTRA_CC.mxLabel,
@@ -721,13 +747,17 @@ export const complianceLiveMethods = {
   // when the backend answered; an honest note when it did not.
   chatContext() {
     const s = this.state;
+    // A support session is told it is support and given the Hoistra guide (logic/support.js),
+    // wherever it was opened from.
+    if (typeof this.supIsOn === "function" && this.supIsOn()) return this.supContextNow();
     if (s.view === "vp") {
       const vm = this.vpModel();
       const parts = ["The user is on the Hoistra vendors page (contract performance)."];
       if (vm.live) {
         const sel = vm.vendors.find((v) => v.id === s.vpVendor) || vm.vendors[0] || null;
-        const tabs = ["Scorecard", "Contract terms", "Evidence", "Coverage", "Invoices"];
-        parts.push("It is showing live scorecards from svc-operations-intelligence: " + vm.vendors.length +
+        // By tab id: 5 and 6 (Accreditations, Buildings served) were added after Invoices (4).
+        const tabs = ["Scorecard", "Contract terms", "Evidence", "Coverage", "Invoices", "Accreditations", "Buildings served"];
+        parts.push("It is showing live scorecards: " + vm.vendors.length +
           (vm.vendors.length === 1 ? " vendor" : " vendors") + (vm.month ? ", " + vm.month + " scorecard" : "") + " — " +
           vm.vendors.map((v) => v.name + " " + (v.score === null ? "unscored" : v.score + "/100") + " (" + v.accred.toLowerCase() + (v.blocked ? ", blocked" : "") + ")").join("; ") + ".");
         if (sel) parts.push("Selected vendor: " + sel.name + ", tab: " + (tabs[s.vpTab] || tabs[0]) + ".");
@@ -742,16 +772,16 @@ export const complianceLiveMethods = {
     if (s.view === "buildings") {
       const rows = this.bldData();
       const parts = ["The user is on the Hoistra buildings page."];
-      if (this.bldIsLive()) parts.push("The building table shows " + rows.length + " plenum_cafm sites live from svc-operations-intelligence (GET /api/energy/buildings).");
+      if (this.bldIsLive()) parts.push("The building table shows " + rows.length + " buildings, live from the buildings register.");
       else parts.push("The building table has not loaded from the backend yet.");
       const b = this.glSelected();
       if (b) {
-        parts.push("Selected building: " + b.name + " (" + (b.buildingId ? "building_id " + b.buildingId : "sites.site_id " + b.id) + ").");
+        parts.push("Selected building: " + b.name + " (" + (b.buildingId ? "building ID " + b.buildingId : "site ID " + b.id) + ").");
         const counted = Object.entries(b.counts || {}).map(([k, n]) => n + " " + k);
         if (counted.length) parts.push("On record: " + counted.join(", ") + ".");
       }
       const t = this.glTable(s.gTable);
-      if (t) parts.push("Selected table: plenum_cafm." + t.table + (typeof t.rows === "number" ? " (" + t.rows + " rows)" : "") + ".");
+      if (t) parts.push("Selected record type: " + String(t.table).replace(/_/g, " ") + (typeof t.rows === "number" ? " (" + t.rows + " rows)" : "") + ".");
       return parts.join(" ");
     }
     if (this.isEnergyDock()) {
@@ -761,13 +791,13 @@ export const complianceLiveMethods = {
       if (this.bldIsLive()) {
         const withEui = bs.filter((b) => typeof b.euiN === "number").length;
         const withCc = bs.filter((b) => b.cc && b.cc !== "—").length;
-        parts.push("Live from svc-operations-intelligence: " + bs.length + " buildings on record, " +
+        parts.push("Live: " + bs.length + " buildings on record, " +
           withEui + " with an EUI reading, " + withCc + " with a country attributed.");
       } else {
         parts.push("The buildings register has not loaded from the backend yet, so it is showing seed data.");
       }
       if (this.enAnomIsLive()) {
-        parts.push(en.length + " open anomal" + (en.length === 1 ? "y" : "ies") + " from GET /api/energy/anomalies" +
+        parts.push(en.length + " open anomal" + (en.length === 1 ? "y" : "ies") + " on record" +
           (en.length ? ": " + en.slice(0, 6).map((a) => a.type + " at " + a.building + " (" + a.impact + "/yr)").join("; ") + "." : "."));
       } else {
         parts.push("Anomalies have not loaded from the backend yet.");
@@ -786,7 +816,7 @@ export const complianceLiveMethods = {
         const assets = s.asLive || [];
         const wos = s.asLiveWos || [];
         parts.push(assets.length || wos.length
-          ? "Live from svc-work-order-management: " + assets.length + " assets and " + wos.length +
+          ? "Live: " + assets.length + " assets and " + wos.length +
             " work orders on record."
           : s.asLiveError
             // A page-load failure is about the PAGE, not the data. Said as a bare fact, the
@@ -804,7 +834,7 @@ export const complianceLiveMethods = {
         }
       } else if (s.module === "ops") {
         parts.push(this.mxIsLive()
-          ? "The maintenance register is live from svc-work-order-management."
+          ? "The maintenance register is live."
           : "The maintenance register has not loaded from the backend yet.");
         parts.push(this.mxInspContext());
       }
@@ -823,18 +853,20 @@ export const complianceLiveMethods = {
       ].filter(Boolean).join(" · ");
       return "The user is on the Hoistra compliance console." +
         (this.ccIsLive()
-          ? " It is showing the live register from svc-operations-intelligence: " +
+          ? " It is showing the live register: " +
             ((d.certs || []).length) + " certificates, " + ((d.buildings || []).length) + " buildings, " +
             ((d.vendors || []).length) + " vendors."
           : " The backend is unreachable, so it is showing seed data.") +
-        (scope ? " Current scope filter — " + scope + "." : " No scope filter is applied.");
+        (scope ? " Current scope filter — " + scope + "." : " No scope filter is applied.") +
+        // The requirement-matrix cell this conversation was opened from (compliance.js ccCellAsk).
+        (s.ccCell && s.ccCell.sessionId === s.sessionId ? " " + s.ccCell.context : "");
     }
     if (s.view === "space") {
       const e = this.spaceEntry(s.spaceKey);
       if (e && e.custom) return "The user is in “" + e.name + "”, a saved space they created in Hoistra to file conversations under. Answer the question on its own terms.";
       if (e) {
         return "The user is in the Hoistra “" + e.name + "” space — questions here are about " + e.page.toLowerCase() + "." +
-          (e.live && e.kpis.length ? " Live figures from svc-operations-intelligence: " + e.kpis.map((k) => k.label.toLowerCase() + " " + k.value).join(", ") + "." : " The engine has not answered yet, so no live figures are on the page.");
+          (e.live && e.kpis.length ? " Live figures: " + e.kpis.map((k) => k.label.toLowerCase() + " " + k.value).join(", ") + "." : " The engine has not answered yet, so no live figures are on the page.");
       }
     }
     const h = this.homeModel();
@@ -845,7 +877,7 @@ export const complianceLiveMethods = {
       parts.push("The orchestrator dock is open on the task “" + s.orchTask.label + "”.");
     }
     if (h.hero.buildings !== null) {
-      parts.push("Live register from svc-operations-intelligence: " + h.hero.buildings + " buildings, " +
+      parts.push("Live register: " + h.hero.buildings + " buildings, " +
         h.hero.certificates + " certificates, " + h.hero.vendors + " vendors" +
         (h.hero.countries.length ? " across " + h.hero.countries.join(", ") : "") + ".");
     }
@@ -889,7 +921,7 @@ export const complianceLiveMethods = {
       this.setState({ ccScanning: false, ccLastScan: new Date().toISOString(), ccScanMsg: msg });
       this.flash(msg);
     } catch (e) {
-      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Compliance scan failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "scan" } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Compliance scan failed", ok: false, error: String((e && (e.rawMessage || e.message)) || e), latency_ms: Date.now() - t0, payload: { action: "scan" } });
       const msg = "The scan could not be run: " + ((e && e.message) || e) +
         ". Showing " + (this.ccIsLive() ? "the last loaded register" : "seed data") + ".";
       this.setState({ ccScanning: false, ccScanMsg: msg });
@@ -925,8 +957,8 @@ export const complianceLiveMethods = {
   async ccVerify(c, subject) {
     this.orch("Verify register", subject, [
       { a: "Orchestrator", t: "Intent: verify certificate against its register · " + c.nm },
-      { a: "Planner", t: "Channel from compliance_verification_sources: public API → weekly dump → register bot → Verify-now link" },
-      { a: "Worker", t: "POST /api/compliance/certificates/{id}/verify" },
+      { a: "Planner", t: "Channel from the verification sources: public API → weekly dump → register bot → Verify-now link" },
+      { a: "Worker", t: "Verifying the certificate" },
       { a: "Quality", t: "Verdict written to the certificate record; the register re-reads" }
     ]);
     const t0 = Date.now(); const turn = newTurn();
@@ -940,7 +972,7 @@ export const complianceLiveMethods = {
       this.setState({ flow: null, flowDone: "Verification returned “" + String(st).replace(/_/g, " ") + "” for " + c.nm + " — " + c.holder + (ch ? " via " + String(ch).replace(/_/g, " ") : "") + "." + (url ? " Register: " + url : "") });
       this.ccLoad();
     } catch (e) {
-      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Verify register failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Verify register failed", ok: false, error: String((e && (e.rawMessage || e.message)) || e), latency_ms: Date.now() - t0, payload: { action: "verify", certificate_id: c.id } });
       this.setState({ flow: null, flowDone: "Verification failed: " + ((e && e.message) || e) });
     }
   },
@@ -1000,7 +1032,7 @@ export const complianceLiveMethods = {
     this.orch("Draft renewal email", subject, [
       { a: "Orchestrator", t: "Intent: renewal email · " + c.nm + " — " + c.holder },
       { a: "Planner", t: "Alert ladder step for " + relDays(c.days, true) + " → responsible party, tone, deadline" },
-      { a: "Worker", t: "POST /api/compliance/certificates/renewal-email — drafted, not sent" },
+      { a: "Worker", t: "Drafting the renewal email — drafted, not sent" },
       { a: "Quality", t: "Queued on the approvals card. Nothing leaves the platform until you send it." }
     ]);
     const t0 = Date.now(); const turn = newTurn();
@@ -1013,7 +1045,7 @@ export const complianceLiveMethods = {
       this.setState({ flow: null, flowDone: (r && r.message) || "Renewal email drafted and queued for approval.", emTo: d.to || "", emSubject: d.subject || "", emBody: d.body || "" });
       this.ccLoad();
     } catch (e) {
-      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Renewal email failed", ok: false, error: String((e && e.message) || e), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id } });
+      deepAgentsApi.logActivity({ turn_id: turn, stage: "action", direction: "error", summary: "Renewal email failed", ok: false, error: String((e && (e.rawMessage || e.message)) || e), latency_ms: Date.now() - t0, payload: { action: "renewal_email", certificate_id: c.id } });
       this.setState({ flow: null, flowDone: "Renewal email could not be drafted: " + ((e && e.message) || e) });
     }
   },
@@ -1023,7 +1055,7 @@ export const complianceLiveMethods = {
     this.orch("Change contractor", subject, [
       { a: "Orchestrator", t: "Intent: find an accredited alternative · " + c.nm },
       { a: "Planner", t: "Required accreditation is the certificate type on the record: " + c.code },
-      { a: "Worker", t: "POST /api/compliance/contractors/recommend — vendors holding the type, blocked vendors excluded" },
+      { a: "Worker", t: "Recommending contractors — vendors holding the type, blocked vendors excluded" },
       { a: "Quality", t: "Accreditation currency is read from the register record, not from the vendor's own claim" }
     ]);
     try {
@@ -1046,7 +1078,7 @@ export const complianceLiveMethods = {
     this.orch("Escalate", subject, [
       { a: "Orchestrator", t: "Intent: escalate the remedial position · " + c.nm + " — " + c.holder },
       { a: "Planner", t: "Remedial status on the certificate record moves to Open" },
-      { a: "Worker", t: "PATCH /api/compliance/certificates/{id}/remedial-status" },
+      { a: "Worker", t: "Updating the remedial status" },
       { a: "Quality", t: "Written to the compliance audit trail with actor and timestamp; the register re-reads" }
     ]);
     try {
@@ -1067,7 +1099,7 @@ export const complianceLiveMethods = {
     this.orch("Request evidence from vendor", subject, [
       { a: "Orchestrator", t: "Intent: evidence pack · " + (scoped ? c.holder : "whole portfolio") },
       { a: "Planner", t: "Certificates, verification verdicts and approvals for the scope, rendered as one bundle" },
-      { a: "Worker", t: "GET /api/compliance/evidence-pack" + (scoped ? "?vendor_id=…" : "") + " — application/pdf" },
+      { a: "Worker", t: "Building the evidence pack" + (scoped ? " for this vendor" : "") + " (PDF)" },
       { a: "Quality", t: "The pack states what is on file and what is missing; nothing is asserted without a record behind it" }
     ]);
     try {
@@ -1136,7 +1168,7 @@ export const complianceLiveMethods = {
     this.orch("Acknowledge", subject, [
       { a: "Orchestrator", t: "Intent: confirm the draft certificate · " + c.nm },
       { a: "Planner", t: "Clear the draft flag and link the source document to every target that resolves" },
-      { a: "Worker", t: "POST /api/compliance/certificates/{id}/confirm" },
+      { a: "Worker", t: "Confirming the certificate" },
       { a: "Quality", t: "Confirmation is a deliberate act by a named PM — it is logged as one" }
     ]);
     try {
@@ -1160,10 +1192,18 @@ export const complianceLiveMethods = {
   //
   // Scope is passed as context so "which buildings put me at risk" means the scope the
   // page is showing, not the whole graph.
-  async ccAsk(q) {
+  //
+  // opts.nextSteps — a requirement-matrix cell's next steps ({ text, choices, code }; compliance.js
+  // ccCellAsk). They follow the answer as their own message, whatever the answer was: they come
+  // from the register, not from the reply.
+  async ccAsk(q, opts) {
     // One turn at a time on one session: a second question mid-answer would race the first
     // on the server. Stop the running one (or edit it) first.
     if (this.state.ccBusy) return this.flash("Still answering — stop it first, or wait for it to finish.");
+    // Support answers some messages itself (logic/support.js): "I need support" opens it, a
+    // request for a person opens the email to Plenum, and a message after a request was
+    // resolved starts a new request. Before the context is read — it may be a support one now.
+    if (typeof this.supIntercept === "function" && this.supIntercept(q)) return;
     const context = this.chatContext();
 
     if (this.dockAnswers()) {
@@ -1236,7 +1276,10 @@ export const complianceLiveMethods = {
     // metering route; a model cannot invent those and must not guess them. Saying "hoist a
     // building" therefore opens the form here — under the sentence that asked for it —
     // rather than starting a conversation about what the building might be.
-    if (!files.length && bcIsHoistRequest(q)) {
+    // In Support the reader is asking HOW to do these, and the guide answers; the hoist form and
+    // the schedule card below open only outside it (8 Oct 2026).
+    const inSupport = typeof this.supIsOn === "function" && this.supIsOn();
+    if (!files.length && !inSupport && bcIsHoistRequest(q)) {
       // The same affordance the Buildings page uses. HOIST_ROLES is not a permission —
       // the service authorises neither route — but opening a form here for an account
       // whose own screens omit it would have them fill in a record on the strength of
@@ -1261,7 +1304,7 @@ export const complianceLiveMethods = {
     // "Run an energy anomaly scan every hour" asks the platform to do something on a clock,
     // and the clock is the service's (engines/crons). The card opens under the sentence, ticked
     // from it; nothing goes to the orchestrator, which has no way to keep a cadence anyway.
-    if (!files.length && isScheduleRequest(q)) {
+    if (!files.length && !inSupport && isScheduleRequest(q)) {
       if (!['admin', 'superadmin'].includes(String(this.state.role || ''))) {
         this.setState((p) => ({
           ccBusy: false,
@@ -1278,6 +1321,8 @@ export const complianceLiveMethods = {
     }
 
     const t0 = Date.now();
+    const next = (opts && opts.nextSteps) || null;
+    const sid0 = this.state.sessionId;
     // The rail's clock. Stream events are bursty — without this the elapsed reading would
     // sit still through a long tool call and read as a hung run.
     clearInterval(this._ccTick);
@@ -1336,6 +1381,16 @@ export const complianceLiveMethods = {
         throw Object.assign(new Error(engineError + (via.length ? " — returned by " + via.join(", ") : "")), { engine: true });
       }
 
+      // Structured payload when the compliance preflight answered; null otherwise,
+      // in which case the reply falls back to rendering the markdown answer.
+      const rich = extractComplianceAnswer(calls) || (r && r._partial ? {
+        narrative: r._partial.zones.narrative || "",
+        sections: r._partial.zones.sections || [], groups: r._partial.zones.groups || [],
+        kpis: r._partial.zones.kpis || [], actions: r._partial.zones.actions || [],
+        insights: r._partial.zones.insights || [], certificates: r._partial.zones.certificates || [],
+        pending: r._partial.zones.pending || [], offers: r._partial.zones.offers || [],
+        validation: null, steps: r._partial.steps || [], cost: null
+      } : null);
       this.setState((p) => ({
         ccBusy: false,
         ccChat: (p.ccChat || []).concat([{
@@ -1349,16 +1404,8 @@ export const complianceLiveMethods = {
           // Named tools behind this reply, so the route is visible per message.
           calls: calls.map((t) => t.tool).filter(Boolean),
           interrupted: !!(r && r.interrupted),
-          // Structured payload when the compliance preflight answered; null otherwise,
-          // in which case the reply falls back to rendering the markdown answer.
-          rich: extractComplianceAnswer(calls) || (r && r._partial ? {
-            narrative: r._partial.zones.narrative || "",
-            sections: r._partial.zones.sections || [], groups: r._partial.zones.groups || [],
-            kpis: r._partial.zones.kpis || [], actions: r._partial.zones.actions || [],
-            insights: r._partial.zones.insights || [], certificates: r._partial.zones.certificates || [],
-            pending: r._partial.zones.pending || [], offers: r._partial.zones.offers || [],
-            validation: null, steps: r._partial.steps || [], cost: null
-          } : null),
+          // A cell's own next steps replace the reply's buttons for the same certificate.
+          rich: next ? withoutCellDuplicates(rich, next.choices, next.code) : rich,
           // The run's sequence of thoughts, kept per turn so the trace rail can show an
           // older answer's route. Empty on the POST path, which reports no events.
           trace: (r && r._trace) || [],
@@ -1406,9 +1453,10 @@ export const complianceLiveMethods = {
           // A timeout must never be retried automatically: the run may still be completing
           // server-side, and a second upload would be a second migration.
           unreachable: unreachable,
-          text: "Could not answer: " + msg +
+          // The message is the server's or the engine's own, and can name the platform's parts.
+          text: "Could not answer: " + scrubInternal(msg) +
             (unreachable
-              ? " — svc-deepagents is not reachable at /backend/deep-agents. Start that service and give it an LLM key; the compliance register is unaffected."
+              ? " — the assistant is not reachable right now; the compliance register is unaffected."
               : timedOut
                 ? " — the service was reached but did not answer in time, and the run may still be completing on the server. Document ingests call document search and contract extraction in turn, so a long contract can outlast this wait. Check the Ingestion audit trail before sending the same file again."
                 : "")
@@ -1418,6 +1466,10 @@ export const complianceLiveMethods = {
       clearInterval(this._ccTick);
       this._ccTick = null;
       if (this._ccAbort === ctrl) this._ccAbort = null;
+      // Only into the conversation that asked — not one started while this answer ran.
+      if (next && next.choices.length && this.state.sessionId === sid0) {
+        this.setState((p) => ({ ccChat: (p.ccChat || []).concat([{ role: "bot", text: next.text, choices: next.choices }]) }));
+      }
     }
   },
 
@@ -1595,6 +1647,9 @@ export const complianceLiveMethods = {
         const d = (r && r.email_draft) || {};
         // Hand the real draft to the shell's email panel so the address is editable and
         // nothing leaves the platform until it is approved.
+        // This opens a draft without starting a task (see above), so a Decision-queue draft
+        // still open in the dock has its item and wording cleared here — this send is not that
+        // queue item's.
         this.setState({
           flow: "email",
           emKind: "renewal",
@@ -1602,7 +1657,8 @@ export const complianceLiveMethods = {
           emKicker: "Draft renewal email",
           emTo: d.to || "",
           emSubject: d.subject || ("Renewal required — " + name),
-          emBody: d.body || ""
+          emBody: d.body || "",
+          emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false
         });
         note("Renewal email drafted for " + who + ". It is open above — check the address, then approve to queue it.");
         return;

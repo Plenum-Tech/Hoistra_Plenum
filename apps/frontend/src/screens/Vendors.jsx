@@ -1,6 +1,7 @@
 // Vendors — contract performance
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import CertificateList from '../components/shell/CertificateList.jsx';
 
 export default function Vendors({ vals }) {
   return (
@@ -68,7 +69,7 @@ export default function Vendors({ vals }) {
               <div className="hv4" onClick={vals.vpWeights} style={{ fontSize: "12px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer", whiteSpace: "nowrap" }}>
                 {"Scoring weights"}
               </div>
-              <div title={"When the scorecards were last cut. No read endpoint returns that time yet, so it is shown as — rather than guessed."} style={{ padding: "8px 13px", borderRadius: "9px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "2px", whiteSpace: "nowrap" }}>
+              <div title={"When the scorecards were last cut. That time is not recorded yet, so it is shown as — rather than guessed."} style={{ padding: "8px 13px", borderRadius: "9px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", display: "flex", flexDirection: "column", gap: "2px", whiteSpace: "nowrap" }}>
                 <span style={{ fontSize: "9.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                   {"Last rebuild"}
                 </span>
@@ -139,7 +140,7 @@ export default function Vendors({ vals }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(152px,1fr))", gap: "11px", marginTop: "11px" }}>
             {(vals.vpTiles || []).map((t, $index) => (
               <React.Fragment key={$index}>
-                <div className="hv1" onClick={t.click} style={{ padding: "13px 14px 13px 16px", borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", position: "relative", overflow: "hidden", minWidth: "0", cursor: "pointer" }}>
+                <div className="hv1" role="button" tabIndex={0} aria-pressed={!!t.active} onClick={t.click} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t.click(); } }} style={{ padding: "13px 14px 13px 16px", borderRadius: "10px", background: t.bg || "var(--color-surface)", boxShadow: t.active ? "0 0 0 1px var(--color-accent), var(--shadow-sm)" : "var(--shadow-sm)", position: "relative", overflow: "hidden", minWidth: "0", cursor: "pointer" }}>
                   <div style={{ position: "absolute", left: "0", top: "11px", bottom: "11px", width: "3px", borderRadius: "0 3px 3px 0", background: t.color }}></div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
                     <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "23px", lineHeight: "1.1", color: t.fg || t.color }}>
@@ -157,6 +158,68 @@ export default function Vendors({ vals }) {
               </React.Fragment>
             ))}
           </div>
+          {vals.vpQueueShow ? (
+            <div style={{ marginTop: "22px" }}>
+              <div className="hv6" role="button" tabIndex={0} onClick={vals.vpQClose} onKeyDown={(e) => { if (e.key === "Enter") vals.vpQClose(); }} style={{ display: "inline-flex", alignItems: "center", gap: "7px", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
+                <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
+                <span>{"Back to vendor overview"}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "12px 20px", marginTop: "14px" }}>
+                <div style={{ minWidth: "0", flex: "1 1 320px" }}>
+                  <div style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
+                    {"Pending · "}{vals.vpQCount}
+                  </div>
+                  <div style={{ fontSize: "22px", marginTop: "6px", lineHeight: "1.2" }}>
+                    {vals.vpQTitle}
+                  </div>
+                  <div style={{ fontSize: "12.5px", color: "var(--color-neutral-400)", marginTop: "7px", lineHeight: "1.55", maxWidth: "82ch" }}>
+                    {vals.vpQHint}
+                  </div>
+                </div>
+                {vals.vpQNote ? (
+                  <div style={{ fontSize: "11px", color: "var(--color-neutral-500)", maxWidth: "36ch" }}>{vals.vpQNote}</div>
+                ) : null}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "18px", maxWidth: "1000px" }}>
+                {(vals.vpQRows || []).map((q) => (
+                  <div key={q.key} style={{ borderRadius: "10px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+                    <div className="hv2" role="button" tabIndex={0} aria-expanded={q.open} onClick={q.toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); q.toggle(); } }}
+                      style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: "14px", alignItems: "center", padding: "13px 16px", cursor: "pointer" }}>
+                      <div style={{ minWidth: "0" }}>
+                        <div style={{ fontSize: "13.5px", lineHeight: "1.35" }}>{q.title}</div>
+                        <div style={{ fontSize: "11.5px", color: "var(--color-neutral-400)", marginTop: "3px" }}>{q.sub}</div>
+                        {q.meta ? <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>{q.meta}</div> : null}
+                      </div>
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center", flexShrink: "0" }}>
+                        {(q.chips || []).map((c, $i) => (
+                          <span key={$i} style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>{c.label}</span>
+                        ))}
+                      </div>
+                      <i className={`ph ${q.caret}`} style={{ fontSize: "13px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
+                    </div>
+                    {q.open ? (
+                      <div style={{ display: "flex", gap: "7px", flexWrap: "wrap", padding: "0 16px 14px", alignItems: "center" }}>
+                        <span style={{ fontSize: "10px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", marginRight: "3px" }}>
+                          {"Act on this"}
+                        </span>
+                        {(q.actions || []).map((a, $i) => (
+                          <button key={$i} type="button" className="hv4" onClick={a.run}
+                            style={{ fontFamily: "inherit", fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: `1px solid ${a.border}`, background: a.bg, color: a.fg, cursor: "pointer", whiteSpace: "nowrap" }}>
+                            {a.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                {vals.vpQEmpty ? (
+                  <div style={{ padding: "22px 2px", fontSize: "12px", color: "var(--color-neutral-500)" }}>{vals.vpQEmpty}</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {vals.vpBrowse !== false ? (
+            <>
           <div style={{ display: "flex", alignItems: "baseline", gap: "10px", marginTop: "20px" }}>
             <span style={{ fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
               {"Stats"}
@@ -210,7 +273,9 @@ export default function Vendors({ vals }) {
               {"Try the read again"}
             </div>
           </div>
-          <div style={{ display: vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start" }}>
+            </>
+          ) : null}
+          <div style={{ display: vals.vpQueueShow ? "none" : vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start" }}>
             <div style={{ minWidth: "0", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "11px 15px", borderBottom: "1px solid var(--color-divider)" }}>
                 <span style={{ fontSize: "12.5px", flex: "1" }}>
@@ -301,7 +366,9 @@ export default function Vendors({ vals }) {
                     </span>
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: "2px", padding: "0 16px", borderBottom: "1px solid var(--color-divider)", overflowX: "auto" }}>
+                {/* Seven tabs since Accreditations and Buildings served moved here: they wrap to a second
+                    line in a narrow panel rather than hiding Invoices off the edge. */}
+                <div style={{ display: "flex", flexWrap: "wrap", columnGap: "2px", padding: "0 16px", borderBottom: "1px solid var(--color-divider)" }}>
                   {(vals.vpTabs || []).map((t, $index) => (
                     <React.Fragment key={$index}>
                       <div onClick={t.pick} style={{ padding: "9px 11px", fontSize: "12px", cursor: "pointer", whiteSpace: "nowrap", borderBottom: "2px solid transparent", borderBottomColor: t.edge, color: t.fg }}>
@@ -723,7 +790,7 @@ export default function Vendors({ vals }) {
                     <div style={{ padding: "11px 16px 0", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
                       {vals.vp.covNote}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) 0.6fr 0.8fr 0.8fr 1fr", gap: "10px", padding: "9px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)", marginTop: "9px", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) 0.6fr 0.8fr 0.8fr 1fr 74px", gap: "10px", padding: "9px 16px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)", marginTop: "9px", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
                       <span>
                         {"Accreditation"}
                       </span>
@@ -739,10 +806,11 @@ export default function Vendors({ vals }) {
                       <span>
                         {"Verification"}
                       </span>
+                      <span></span>
                     </div>
                     {(vals.vp.certs || []).map((c, $index) => (
                       <React.Fragment key={$index}>
-                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) 0.6fr 0.8fr 0.8fr 1fr", gap: "10px", alignItems: "center", padding: "9px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "11.5px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) 0.6fr 0.8fr 0.8fr 1fr 74px", gap: "10px", alignItems: "center", padding: "9px 16px", borderBottom: "1px solid var(--color-divider)", fontSize: "11.5px" }}>
                           <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {c.name}
                           </span>
@@ -760,6 +828,13 @@ export default function Vendors({ vals }) {
                           <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {c.ver}
                           </span>
+                          {c.requestShow ? (
+                            <button type="button" className="hv23" onClick={c.request} title={"Email the vendor for the " + c.name}
+                              style={{ justifySelf: "end", display: "inline-flex", alignItems: "center", gap: "4px", height: "24px", padding: "0 9px", borderRadius: "6px", border: "1px solid var(--color-accent)", background: "transparent", fontFamily: "inherit", fontSize: "11px", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                              <i className="ph ph-envelope-simple" aria-hidden="true" style={{ fontSize: "12px" }}></i>
+                              {"Request"}
+                            </button>
+                          ) : <span></span>}
                         </div>
                       </React.Fragment>
                     ))}
@@ -768,9 +843,41 @@ export default function Vendors({ vals }) {
                         {"Ask for the missing certificates"}
                       </div>
                       <div className="hv4" onClick={vals.vp.openCompliance} style={{ fontSize: "11.5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-400)", cursor: "pointer" }}>
-                        {"See this vendor in Compliance"}
+                        {"Check each accreditation"}
                       </div>
                     </div>
+                  </>
+                ) : null}
+                {vals.vpPaneAccred ? (
+                  <CertificateList rows={vals.vpAccredRows} pageKey={vals.vpAccredKey}
+                    intro={"Every accreditation this vendor holds, each held to three checks: the document is genuine, the public register confirms it, and it has not expired. Most urgent first."}
+                    emptyText={vals.vpCCPending ? "The compliance register has not loaded yet — its accreditations show here once it has." : "No accreditation certificate is on record for this vendor."} />
+                ) : null}
+                {vals.vpPaneServed ? (
+                  <>
+                    <div style={{ padding: "11px 16px", fontSize: "11.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", borderBottom: "1px solid var(--color-divider)" }}>
+                      {"The buildings whose certificates name this vendor. Open one to see its own record in Compliance."}
+                    </div>
+                    {(vals.vpServedRows || []).map((b, $index) => (
+                      <button key={$index} type="button" className="hv2" onClick={b.open} title={"Open " + b.name + " in Compliance"}
+                        style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 0.9fr 0.7fr auto 14px", gap: "12px", alignItems: "center", width: "100%", padding: "11px 16px", border: "none", borderBottom: "1px solid var(--color-divider)", background: "transparent", fontFamily: "inherit", textAlign: "left", color: "inherit", cursor: "pointer" }}>
+                        <span style={{ minWidth: "0" }}>
+                          <span style={{ display: "block", fontSize: "12.5px", fontWeight: 500, color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.name}</span>
+                          <span style={{ display: "block", fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.state}</span>
+                        </span>
+                        <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
+                          <span style={{ fontFamily: "ui-monospace,monospace", color: b.covFg }}>{b.cov}</span>{" coverage · " + b.frac}
+                        </span>
+                        <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>{b.certs + " certificates"}</span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", background: b.statusBg, color: b.statusFg, whiteSpace: "nowrap" }}>{b.status}</span>
+                        <i className="ph ph-caret-right" aria-hidden="true" style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
+                      </button>
+                    ))}
+                    {(vals.vpServedRows || []).length ? null : (
+                      <div style={{ padding: "14px 16px", fontSize: "11.5px", color: "var(--color-neutral-500)" }}>
+                        {vals.vpCCPending ? "The compliance register has not loaded yet — the buildings show here once it has." : "No building on record names this vendor yet."}
+                      </div>
+                    )}
                   </>
                 ) : null}
                 {vals.vpPaneInv ? (

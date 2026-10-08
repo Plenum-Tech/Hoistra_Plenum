@@ -90,7 +90,8 @@ test('a backend without this route yet says so plainly, distinct from a real fai
   c.bgToggle(ID);
   await settle();
   const g = c.bgVals().bgFor({ id: ID });
-  assert.match(g.cost.error, /not on this svc-operations-intelligence yet/);
+  assert.match(g.cost.error, /not available on this platform yet/);
+  assert.doesNotMatch(g.cost.error, /svc-/);
   cleanup();
 });
 

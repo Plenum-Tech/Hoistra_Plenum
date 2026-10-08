@@ -1,15 +1,16 @@
 // Sessions — every conversation with the orchestrator and every orchestrator task, from the
-// navigator's "All sessions". The list is this browser's (svc-deepagents keeps the threads but
-// has no route that lists them), searchable and filterable by space. `vals` is the view model
-// from useHoistra(); the page reads vals.sessionsPage.
+// navigator's "All sessions": the whole history, read page by page from the server's threads
+// and cached in this browser (logic/sessions.js). Searchable; the Spaces panel beside the list
+// filters it and takes drops — drag a session, or the ones ticked, onto a space to file them
+// there (7 Oct 2026). `vals` is the view model from useHoistra(); the page reads vals.sessionsPage.
 import React from 'react';
-import SessionList from '../components/shell/SessionList.jsx';
+import SessionList, { SpaceTargets } from '../components/shell/SessionList.jsx';
 
 export default function Sessions({ vals }) {
   const p = vals.sessionsPage || { chips: [], groups: [] };
   return (
     <div style={{ flex: "1", display: "flex", justifyContent: "center", padding: "0 32px 80px" }}>
-      <div style={{ width: "100%", maxWidth: "960px", animation: "fadeUp 0.28s ease both" }}>
+      <div style={{ width: "100%", maxWidth: "1180px", animation: "fadeUp 0.28s ease both" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "24px 0 0" }}>
           <div className="hv6" onClick={vals.goHome} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--color-neutral-400)", cursor: "pointer" }}>
             <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>
@@ -32,17 +33,14 @@ export default function Sessions({ vals }) {
 
         <div style={{ display: "flex", alignItems: "center", gap: "11px", padding: "10px 14px", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", marginTop: "20px" }}>
           <i className="ph ph-magnifying-glass" style={{ fontSize: "15px", color: "var(--color-neutral-500)", flexShrink: "0" }}></i>
-          <input className="input" value={p.query} onChange={p.setQuery} placeholder="Search questions…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13.5px", color: "var(--color-text)" }} />
+          <input className="input" value={p.query} onChange={p.setQuery} placeholder="Search sessions…" style={{ flex: "1", minWidth: "0", background: "transparent", border: "none", outline: "none", fontFamily: "var(--font-body)", fontSize: "13.5px", color: "var(--color-text)" }} />
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px" }}>
-          {(p.chips || []).map((c, i) => (
-            <div key={i} className="hv4" onClick={c.pick} style={{ fontSize: "11.5px", padding: "5px 11px", borderRadius: "7px", border: `1px solid ${c.on ? "var(--color-accent)" : "var(--color-divider)"}`, color: c.on ? "var(--color-accent)" : "var(--color-neutral-400)", background: c.on ? "var(--color-accent-900)" : "transparent", cursor: "pointer" }}>
-              {c.label}
-            </div>
-          ))}
+        <div className="ss-layout">
+          <div style={{ minWidth: "0" }}>
+            <SessionList groups={p.groups} empty={p.empty} emptyText={p.emptyText} spaces={(p.spaces || []).filter((t) => !t.all && !t.noDrop)} onFile={p.fileMany} onDelete={p.deleteMany} />
+          </div>
+          <SpaceTargets spaces={p.spaces} unfiledCount={p.unfiledCount} onFile={p.fileMany} newSpace={p.newSpace} />
         </div>
-
-        <SessionList groups={p.groups} empty={p.empty} emptyText={p.emptyText} />
       </div>
     </div>
   );

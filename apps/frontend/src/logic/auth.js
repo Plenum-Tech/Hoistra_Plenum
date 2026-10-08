@@ -132,7 +132,7 @@ export const AUTH_DEFAULTS = {
   pwOpen: false, pwCurrent: '', pwNext: '', pwBusy: false, pwError: ''
 };
 
-const NETWORK_MSG = "Couldn't reach the sign-in service. Check the backend is running.";
+const NETWORK_MSG = "Couldn't reach the sign-in service. Try again in a moment.";
 const SCHEMA_MSG = 'Enter a valid email address and password.';
 const SSO_MSG = 'Single sign-on is not available yet — sign in with your email and password.';
 
@@ -838,7 +838,7 @@ export const authMethods = {
     const d = (this.state.authConfig || {}).email_delivery;
     if (!d || d.live !== false) return '';
     return d.dry_run
-      ? ' This environment has email delivery turned off (EMAIL_DRY_RUN), so the code was '
+      ? ' This environment has email delivery turned off, so the code was '
         + 'written to the log rather than sent.'
       : ' This environment has no mail transport configured, so the code was written to the '
         + 'log rather than sent.';
@@ -988,7 +988,8 @@ export const authMethods = {
           click: () => { this.setState({ acctOpen: false }); if (typeof this.exitViewAsCompany === 'function') this.exitViewAsCompany(); }
         } : null,
         { label: 'Pricing', icon: 'ph-tag', click: () => this.setState({ acctOpen: false }, () => this.flash('Pricing and plan usage open in the billing workspace — seats, buildings hoisted and ingest volume.')) },
-        { label: 'Support', icon: 'ph-lifebuoy', click: () => this.setState({ acctOpen: false }, () => this.flash('Support: a Hoister is on call for this portfolio. Every request carries the page and the graph state you were on.')) },
+        // Support is the orchestrator in a support session, not a page (logic/support.js).
+        { label: 'Support', icon: 'ph-lifebuoy', click: () => this.setState({ acctOpen: false }, () => this.openSupport()) },
         /* The platform operator's console, not a company surface: superadmin only —
            canAdmin is deliberately not enough. Opening it fires the on-open companies
            load (superAdminLive.js); nothing superadmin reads at mount. Always leaves any

@@ -768,7 +768,7 @@ export const energyMethods = {
         { l: "Action", v: "Create inspection work order", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Daily energy scan 03:00 → intent: energy-intelligence-engine" },
+        { a: "Orchestrator", t: "Daily energy scan 03:00 → Energy" },
         { a: "Planner", t: "Fetch MeterReading → compute EUI → run 13 anomaly rules → translate to £ → check WO threshold" },
         { a: "Worker", t: "Half-hourly readings aggregated. Sub-meter attribution " + (a.asset === "Whole building" ? "unavailable — building-level metering only, cause inferred" : "available at asset level") + "." },
         { a: "Quality", t: "Not fired — display-only. The gate applies only if the anomaly auto-dispatches a work order." }
@@ -800,9 +800,9 @@ export const energyMethods = {
         { l: "Status", v: a.status }
       ],
       chain: [
-        { a: "Scheduler", t: "energy_anomaly_scan · daily 08:00 · scan_all_active_meters()" },
+        { a: "Scheduler", t: "Daily anomaly scan · 08:00 · every active meter" },
         { a: "Detector", t: (a.ruleId ? "Rule “" + a.ruleId + "” — " : "") + a.type + ", evaluated against the meter's own reading history" },
-        { a: "Worker", t: a.assetResolved ? "Resolved to " + a.asset + " via plenum_cafm.equipment" : "No equipment resolved — " + (a.meterType ? "meter-level reading only" : "no meter or asset on record") },
+        { a: "Worker", t: a.assetResolved ? "Resolved to " + a.asset + " via the equipment register" : "No equipment resolved — " + (a.meterType ? "meter-level reading only" : "no meter or asset on record") },
         { a: "Quality", t: "Not fired — display-only. Nothing dispatches automatically from an anomaly." }
       ],
       refinement: "Ask the orchestrator to check every open anomaly of this type across the portfolio.",

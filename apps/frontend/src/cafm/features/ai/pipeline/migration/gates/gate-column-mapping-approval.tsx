@@ -92,7 +92,7 @@ export default function GateColumnMappingApproval({ migrationId, payload, onSubm
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-[11px] text-slate-400">B14.1</span>
           <span className="text-lg font-semibold text-slate-800">Confirm column mapping</span>
-          <span className="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">CoA</span>
+          <span className="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">Action</span>
           <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Human approval required</span>
           <span className="ml-auto text-[11px] text-slate-400">{rows.length} columns</span>
         </div>

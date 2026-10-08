@@ -212,11 +212,11 @@ export function DeepAgentMigrationPanel({
             type="button"
             onClick={onBackToUdr}
             className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-medium text-cyan-700 hover:bg-cyan-100 transition-colors"
-            aria-label="Back to Saved UDR script"
+            aria-label="Back to saved import script"
           >
             <ChevronLeft size={11} />
             <Database size={10} />
-            Back to UDR script
+            Back to import script
           </button>
         ) : null}
         {/* Compact single-row header: title + run-id (left) · version controls (right).
@@ -240,7 +240,7 @@ export function DeepAgentMigrationPanel({
             <span className="shrink-0 text-xs font-semibold text-slate-800">Migration ingest</span>
             <span
               className="truncate font-mono text-[10px] text-slate-400"
-              title={`${label} — same gates as Migration Ingestor: pre-semantic, semantic edit, field mapping, hierarchy.`}
+              title={`${label} — the same review steps as a standard import: pre-semantic, semantic edit, field mapping, hierarchy.`}
             >
               · {label}
             </span>
