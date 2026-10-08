@@ -233,3 +233,34 @@ def test_the_routes_need_a_signed_in_caller_and_refuse_another_company(monkeypat
 
     monkeypatch.setattr(ct, "get_thread", fake_get)
     assert c.get("/api/threads/nope").status_code == 404
+
+
+def test_the_list_pages_on_from_the_last_thread_it_returned(db):
+    # The Sessions page reads the whole history a page at a time (7 Oct 2026): `before` is the
+    # last row's last_message_at, and the next page starts AT it: threads sharing that time with
+    # the last row were skipped by a strict "<" (8 Oct 2026). The client drops the repeats.
+    p = _principal()
+    caller_principal.set(p)
+    caller_organization_id.set(None)
+    asyncio.run(ct.list_threads(limit=200, before="2026-10-01T09:30:00+00:00"))
+    sql, params = db["sql"][-1]
+    assert "last_message_at <= CAST(:before AS timestamptz)" in sql
+    # Bound as a datetime: asyncpg types the parameter as timestamptz from the CAST and refuses
+    # a string ("expected a datetime.date or datetime.datetime instance"), so a string cursor
+    # was a 500 on every second page and the history stopped at the newest 200 (8 Oct 2026).
+    from datetime import datetime, timezone
+    assert params["before"] == datetime(2026, 10, 1, 9, 30, tzinfo=timezone.utc)
+    assert isinstance(params["before"], datetime) and params["lim"] == 200
+    asyncio.run(ct.list_threads(limit=200, before="2026-10-01T09:30:00Z"))
+    assert db["sql"][-1][1]["before"] == datetime(2026, 10, 1, 9, 30, tzinfo=timezone.utc)
+    asyncio.run(ct.list_threads(limit=200))
+    sql, params = db["sql"][-1]
+    assert ":before" not in sql and "before" not in params
+
+
+def test_a_cursor_that_is_not_a_time_is_ignored(db):
+    caller_principal.set(_principal())
+    caller_organization_id.set(None)
+    asyncio.run(ct.list_threads(before="not-a-time'; drop table x;--"))
+    sql, params = db["sql"][-1]
+    assert ":before" not in sql and "before" not in params

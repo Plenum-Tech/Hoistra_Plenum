@@ -1,6 +1,6 @@
 """The caller's conversations, kept on the server (services/chat_threads.py).
 
-    GET    /api/threads?limit=&q=     the caller's threads in the company they are acting for
+    GET    /api/threads?limit=&q=&before=   the caller's threads in the company they are acting for, a page at a time
     GET    /api/threads/{id}          one thread with its turns
     PATCH  /api/threads/{id}          rename
     DELETE /api/threads/{id}          hide it from the list (the rows are kept)
@@ -33,10 +33,12 @@ def _act(principal: Principal, organization_id: str | None) -> None:
 
 @router.get("")
 async def list_threads(limit: int = Query(60, ge=1, le=200), q: str | None = Query(None, max_length=120),
+                       before: str | None = Query(None, max_length=40),
                        organization_id: str | None = Query(None),
                        principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     _act(principal, organization_id)
-    return {"ok": True, "available": chat_threads.ready(), "threads": await chat_threads.list_threads(limit=limit, q=q)}
+    return {"ok": True, "available": chat_threads.ready(),
+            "threads": await chat_threads.list_threads(limit=limit, q=q, before=before)}
 
 
 @router.get("/{thread_id}")

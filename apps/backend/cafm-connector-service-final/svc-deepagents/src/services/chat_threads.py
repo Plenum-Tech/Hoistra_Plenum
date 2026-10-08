@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -413,7 +413,11 @@ def _owner_sql(p: Principal, org: str | None) -> tuple[str, dict[str, Any]]:
     return "user_id = CAST(:uid AS uuid) AND organization_id IS NULL", params
 
 
-async def list_threads(*, limit: int = 60, q: str | None = None) -> list[dict[str, Any]]:
+async def list_threads(*, limit: int = 60, q: str | None = None, before: str | None = None) -> list[dict[str, Any]]:
+    """The caller's threads, newest first. `before` pages on: only threads whose last message is
+    no newer than that time - the last row of the previous page - so a client can read the whole
+    history and not just the newest `limit`. Inclusive, so threads sharing the boundary time are
+    not skipped; the client drops the repeats. A cursor that is not a time is ignored."""
     if not _ready:
         return []
     p, org = _caller()
@@ -423,6 +427,19 @@ async def list_threads(*, limit: int = 60, q: str | None = None) -> list[dict[st
     if q and q.strip():
         where += " AND (title ILIKE :q OR summary ILIKE :q)"
         params["q"] = "%" + q.strip() + "%"
+    cursor: datetime | None = None
+    if before:
+        try:
+            cursor = datetime.fromisoformat(str(before).replace("Z", "+00:00"))
+        except ValueError:
+            cursor = None
+    if cursor is not None:
+        # Bound as the datetime, never the string: asyncpg types the parameter as timestamptz
+        # from the CAST and refuses a str, which made every second page a 500 (8 Oct 2026).
+        if cursor.tzinfo is None:
+            cursor = cursor.replace(tzinfo=timezone.utc)
+        where += " AND last_message_at <= CAST(:before AS timestamptz)"
+        params["before"] = cursor
     params["lim"] = max(1, min(int(limit), 200))
     from ..database import _get_engine
 
