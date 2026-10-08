@@ -326,6 +326,53 @@ async def migration_append_node_log_auto(
             )
 
 
+#: The node outputs _sync_run_activity reads (nodes 1, 2, 6, 7, 9 — see below); nothing else of an
+#: entry's output, and none of its log lines, reaches the activity entry.
+_ACTIVITY_OUTPUT_KEYS = (
+    "parsed_tables", "table_names", "cafm_table_matches", "table_routing",
+    "overall_confidence", "confidence", "mapping_confidence", "avg_confidence", "table_matches",
+    "hierarchy_count", "total_cleaned_rows", "total_original_rows", "warning_count",
+    "artifacts_uploaded", "table_count",
+)
+
+_ACTIVITY_LOGS_SQL = """
+SELECT jsonb_typeof(j.node_logs) AS kind,
+       (SELECT coalesce(jsonb_agg(
+                 CASE WHEN jsonb_typeof(e) <> 'object' THEN e
+                      WHEN jsonb_typeof(e->'output') = 'object' THEN jsonb_set(e - 'logs', '{output}',
+                          coalesce((SELECT jsonb_object_agg(o.k, o.v) FROM jsonb_each(e->'output') AS o(k, v)
+                                     WHERE o.k = ANY(CAST(:keys AS text[]))), '{}'::jsonb))
+                      ELSE e - 'logs' END
+                 ORDER BY t.i), '[]'::jsonb)
+          FROM jsonb_array_elements(CASE WHEN jsonb_typeof(j.node_logs) = 'array' THEN j.node_logs
+                                         ELSE '[]'::jsonb END) WITH ORDINALITY AS t(e, i)) AS logs
+  FROM {table} j WHERE j.id = :id
+"""
+
+
+async def _node_logs_for_activity(s, job_id) -> list:
+    """The job's node_logs as _sync_run_activity reads them: every entry in order, without its log
+    lines and with only the output keys it reads (_ACTIVITY_OUTPUT_KEYS). The whole array is ~2 MB
+    by the late gates and the sync runs ~40 times a run (2 Oct 2026)."""
+    from sqlalchemy import select, text
+
+    from ...models.migration import MigrationJob
+
+    if s.get_bind().dialect.name != "postgresql":
+        row = (await s.execute(select(MigrationJob.node_logs).where(MigrationJob.id == job_id))).first()
+        return (row[0] if row else None) or []
+    row = (await s.execute(
+        text(_ACTIVITY_LOGS_SQL.replace("{table}", MigrationJob.__table__.fullname)),
+        {"id": job_id, "keys": list(_ACTIVITY_OUTPUT_KEYS)},
+    )).first()
+    if row is None or row[0] is None:
+        return []
+    if row[0] != "array":  # not a list (never written so): read it as it is, as before
+        full = (await s.execute(select(MigrationJob.node_logs).where(MigrationJob.id == job_id))).first()
+        return (full[0] if full else None) or []
+    return row[1]
+
+
 async def _sync_run_activity(
     migration_id: str, *, caller: str = "?", force: bool = False
 ) -> "str | None":
@@ -354,9 +401,16 @@ async def _sync_run_activity(
         summary_metrics_from_column_intelligence,
     )
 
+    from sqlalchemy.orm import defer
+
     sf = get_async_session_factory()
     async with sf() as s:
-        res = await s.execute(select(MigrationJob).where(MigrationJob.id == _UUID(migration_id)))
+        # node_logs (MBs late in a run) is read trimmed below; field_mapping_draft is not read here.
+        res = await s.execute(
+            select(MigrationJob)
+            .options(defer(MigrationJob.node_logs), defer(MigrationJob.field_mapping_draft))
+            .where(MigrationJob.id == _UUID(migration_id))
+        )
         job = res.scalar_one_or_none()
         if job is None:
             logger.warning("[run-activity] sync(%s) migration=%s: job not found", caller, migration_id)
@@ -381,7 +435,7 @@ async def _sync_run_activity(
             )
             return None
 
-        node_logs = job.node_logs or []
+        node_logs = await _node_logs_for_activity(s, job.id)
         done_ids: set[int] = set()
         node_meta: dict[int, dict] = {}
         tables = 0

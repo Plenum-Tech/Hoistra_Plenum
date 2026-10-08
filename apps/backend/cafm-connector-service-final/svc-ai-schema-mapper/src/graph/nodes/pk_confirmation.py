@@ -13,6 +13,7 @@ dict shuffling so it stays unit-testable.
 from __future__ import annotations
 
 from typing import Any
+from ...udr.memo import memo_scoped
 
 # Candidate stats are for an interactive gate, not the authoritative report (that still
 # runs over the full rows in table_resolution). Sampling keeps a 1.8M-row file from
@@ -21,6 +22,7 @@ _STATS_SAMPLE_ROWS = 5000
 _MAX_TABLES = 40
 
 
+@memo_scoped
 def build_pk_confirmation(
     tables: dict[str, Any],
     *,

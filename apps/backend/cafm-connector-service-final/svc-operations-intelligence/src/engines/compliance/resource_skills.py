@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import ResourceSkill
@@ -84,10 +84,25 @@ async def list_vendor_operative_skills(
     vendor_id: UUID | None = None,
     *,
     limit: int = 200,
+    organization_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
+    """Operative skills held against vendors. ``organization_id=None`` is unrestricted, so an
+    internal caller and a superadmin keep the cross-company view."""
     q = select(ResourceSkill).order_by(ResourceSkill.updated_at.desc()).limit(limit)
     if vendor_id is not None:
         q = q.where(ResourceSkill.vendor_id == vendor_id)
+    if organization_id is not None:
+        # A skill row names a vendor, and the vendor names the company. There is no vendors
+        # model in this service, and the two sides disagree on type — vendors.id is character
+        # varying while vendor_id is uuid — so the comparison is made as text, the same way
+        # scoping is written everywhere else here.
+        q = q.where(
+            sa_text(
+                "resource_skills.vendor_id::text IN ("
+                " SELECT v.id::text FROM plenum_cafm.vendors v"
+                " WHERE v.organization_id::text = :skill_scope_org)"
+            ).bindparams(skill_scope_org=str(organization_id))
+        )
     rows = list((await session.execute(q)).scalars().all())
     return [_to_dict(r) for r in rows]
 

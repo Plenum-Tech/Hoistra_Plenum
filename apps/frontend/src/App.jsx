@@ -6,51 +6,81 @@ import TopBar from './components/shell/TopBar.jsx';
 import OrchestratorDock from './components/shell/OrchestratorDock.jsx';
 import Home from './screens/Home.jsx';
 import Answer from './screens/Answer.jsx';
+import Chat from './screens/Chat.jsx';
 import Vendors from './screens/Vendors.jsx';
 import Module from './screens/Module.jsx';
 import Compliance from './screens/Compliance.jsx';
 import CustomReport from './screens/CustomReport.jsx';
+import InspectionReports from './screens/InspectionReports.jsx';
+import Sessions from './screens/Sessions.jsx';
+import Space from './screens/Space.jsx';
 import Integrations from './screens/Integrations.jsx';
 import ConnectModal from './components/shell/ConnectModal.jsx';
+import PasswordModal from './components/shell/PasswordModal.jsx';
 import Buildings from './screens/Buildings.jsx';
+import Users from './screens/Users.jsx';
+import Crons from './screens/Crons.jsx';
+import Memories from './screens/Memories.jsx';
+import SkillLab from './screens/SkillLab.jsx';
+import Traces from './screens/Traces.jsx';
+import AuditTrail from './screens/AuditTrail.jsx';
+import IngestionAgentModal from './components/shell/IngestionAgentModal.jsx';
+import SuperAdminOverlay from './components/shell/SuperAdminOverlay.jsx';
 import DecisionQueue from './components/shell/DecisionQueue.jsx';
 import DetailDrawer from './components/shell/DetailDrawer.jsx';
+import VendorDrawer from './components/shell/VendorDrawer.jsx';
 import CommandPalette from './components/shell/CommandPalette.jsx';
 import Toast from './components/shell/Toast.jsx';
+import ReportBuilder from './components/shell/ReportBuilder.jsx';
 
 export default function App() {
   const vals = useHoistra();
   return (
-    <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad, transition: "padding-left 0.2s ease" }}>
+    <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad }}>
       {vals.gated ? <Gate vals={vals} /> : null}
       {vals.signedIn ? (
         <>
-          {vals.navOverlay ? (
-            <>
-              <div onClick={vals.closeNav} style={{ position: "fixed", inset: "0", background: "var(--scrim)", zIndex: "45" }}></div>
-            </>
-          ) : null}
           {vals.acctOpen ? (
             <>
               <div onClick={vals.closeAcct} style={{ position: "fixed", inset: "0", zIndex: "30" }}></div>
             </>
           ) : null}
+          {vals.bldOpen ? (
+            <>
+              <div onClick={vals.bldClose} style={{ position: "fixed", inset: "0", zIndex: "30" }}></div>
+            </>
+          ) : null}
           <Navigator vals={vals} />
+          <ReportBuilder vals={vals} />
           <TopBar vals={vals} />
           {vals.orchOpen ? <OrchestratorDock vals={vals} /> : null}
         </>
       ) : null}
       {vals.isHome ? <Home vals={vals} /> : null}
       {vals.isAnswer ? <Answer vals={vals} /> : null}
+      {vals.isChat ? <Chat vals={vals} /> : null}
       {vals.isVP ? <Vendors vals={vals} /> : null}
       {vals.isModule ? <Module vals={vals} /> : null}
       {vals.isCC ? <Compliance vals={vals} /> : null}
       {vals.isReport ? <CustomReport vals={vals} /> : null}
+      {vals.isInsp ? <InspectionReports vals={vals} /> : null}
+      {vals.isSessions ? <Sessions vals={vals} /> : null}
+      {vals.isSpace ? <Space vals={vals} /> : null}
       {vals.isInteg ? <Integrations vals={vals} /> : null}
       {vals.intModalOn ? <ConnectModal vals={vals} /> : null}
+      {vals.pwOpen ? <PasswordModal vals={vals} /> : null}
       {vals.isBuildings ? <Buildings vals={vals} /> : null}
+      {vals.isUsers ? <Users vals={vals} /> : null}
+      {vals.isCrons ? <Crons vals={vals} /> : null}
+      {vals.isMemories ? <Memories vals={vals} /> : null}
+      {vals.isSkillLab ? <SkillLab vals={vals} /> : null}
+      {vals.isTraces ? <Traces vals={vals} /> : null}
+      {vals.isAudit ? <AuditTrail vals={vals} /> : null}
+      {vals.ingOn ? <IngestionAgentModal vals={vals} /> : null}
+      {vals.saOn ? <SuperAdminOverlay vals={vals} /> : null}
       {vals.queueOpen ? <DecisionQueue vals={vals} /> : null}
       {vals.detailOpen ? <DetailDrawer vals={vals} /> : null}
+      {vals.vendorDrawerOpen ? <VendorDrawer vals={vals} /> : null}
       {vals.paletteOpen ? <CommandPalette vals={vals} /> : null}
       {vals.toastOn ? <Toast vals={vals} /> : null}
     </div>

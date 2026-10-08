@@ -285,8 +285,12 @@ def build_conversation_context(session_id: str, *, max_turns: int = CONVERSATION
     return "\n".join(lines)
 
 
-def build_session_runtime_context(session_id: str) -> str:
-    """Inject into every stateful turn so the LLM retains session facts."""
+def build_session_runtime_context(session_id: str, conversation: str | None = None) -> str:
+    """Inject into every stateful turn so the LLM retains session facts.
+
+    `conversation` is the thread as the server keeps it (services/chat_threads.py: summary of the
+    older turns plus the last few verbatim); when given it replaces the process-local block,
+    which only knows the turns this replica saw since it started."""
     s = get_session_state(session_id)
     ws_lines: list[str] = []
     sid = resolve_active_schema_mapping_id(session_id)
@@ -311,7 +315,7 @@ def build_session_runtime_context(session_id: str) -> str:
     mig_ids = resolve_session_migration_ids(session_id)
     if mig_ids:
         ws_lines.append(f"- **migration_ids (session):** {', '.join(mig_ids)}")
-    conv = build_conversation_context(session_id)
+    conv = conversation if conversation is not None else build_conversation_context(session_id)
     if not conv and not ws_lines:
         return ""
     parts: list[str] = []
@@ -840,6 +844,28 @@ def score_udr_intent(msg_l: str) -> float:
     return min(score, 1.0)
 
 
+#: Openers that make a message a QUESTION about work orders rather than a request to raise one.
+#: The bare noun used to be enough for intake, and an intake route short-circuits phase-2 engine
+#: selection — so on 16 Sep 2026 "how many work orders were scored for SafeLift, and what's the
+#: average?" was classified as "create/triage a maintenance work order", never reached the
+#: scoring engine, and was answered from vendor scorecard rows: "7 work orders" that were seven
+#: monthly scorecards belonging to a different vendor.
+#:
+#: A read cue wins outright. Nobody reporting a fault opens with "how many" or "compare", and a
+#: misrouted question is silent — it returns a confident answer built from the wrong table —
+#: while a misrouted fault report is visible the moment the reply comes back.
+_WO_READ_CUES = (
+    "how many", "how much", "how long", "what is the", "what's the", "what are the",
+    "which ", "show me", "list ", "compare", "average", "total ", "breakdown", "count of",
+    "report on", "summarise", "summarize",
+)
+
+
+def _asks_about_work_orders(msg_l: str) -> bool:
+    """True when the message is asking about work orders, not asking for one."""
+    return any(cue in msg_l for cue in _WO_READ_CUES)
+
+
 def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
     if any(
         t in msg_l
@@ -894,7 +920,7 @@ def classify_route_intent(msg_l: str, session_state: dict[str, Any]) -> str:
         return ROUTE_FIIX_SYNC
     if sum(1 for k in ("subdomain", "app key", "access key", "secret key") if k in msg_l) >= 2:
         return ROUTE_FIIX_SYNC
-    if "work order" in msg_l or "create wo" in msg_l:
+    if ("work order" in msg_l or "create wo" in msg_l) and not _asks_about_work_orders(msg_l):
         return ROUTE_WO_INTAKE
     if session_state.get("pending_wo_clarification"):
         return ROUTE_WO_CLARIFY
@@ -987,8 +1013,12 @@ def workflow_stream_completion_payload(
     *,
     answer: str,
     tool_calls: list[dict[str, Any]] | None = None,
+    choices: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Enrich WebSocket workflow_completed with REST-parity fields for the orchestrator UI."""
+    """Enrich WebSocket workflow_completed with REST-parity fields for the orchestrator UI.
+
+    ``choices`` are option cards the chat renders under the answer (agents/migration_chooser.py);
+    absent unless a reply offers them."""
     tcs = tool_calls or []
     if tcs:
         sync_schema_mapping_from_tool_calls(session_id, tcs)
@@ -1001,14 +1031,22 @@ def workflow_stream_completion_payload(
         s = str(sid).strip()
         if s and s not in schema_ids:
             schema_ids.append(s)
-    return {
+    # The turn's id in the trace store (agents/trace.py), so the chat's rail can load the run -
+    # its spans, queries and rows - and offer corrections against it.
+    from . import activity_log as _activity
+
+    out = {
         "type": "workflow_completed",
         "answer": answer,
         "session_id": session_id,
+        "turn_id": _activity.current_turn(),
         "tool_calls": tcs,
         "workspace_status": ws,
         "ingested_schema_mapping_ids": schema_ids,
     }
+    if choices:
+        out["choices"] = choices
+    return out
 
 
 def sync_schema_mapping_from_tool_calls(
@@ -1035,6 +1073,20 @@ def sync_schema_mapping_from_tool_calls(
                 set_pending_schema_gate_confirm(session_id, schema_mapping_id=sid)
 
 
+# The chat's presentation calls: appended after the tools that did the work.
+PRESENTATION_TOOLS = frozenset({"compliance_pipeline", "compliance_response", "planner"})
+
+
+def last_working_tool(tool_calls: list | None) -> str:
+    """The last tool that did the turn's work - not the run panel or the cards appended after it,
+    which would otherwise decide the turn's domain (5 Oct 2026: a wo_engine answer read as meta)."""
+    for t in reversed(tool_calls or []):
+        name = str((t or {}).get("tool") or "") if isinstance(t, dict) else ""
+        if name and name not in PRESENTATION_TOOLS:
+            return name
+    return ""
+
+
 def attach_route_to_result(
     result: dict[str, Any],
     session_id: str,
@@ -1051,8 +1103,7 @@ def attach_route_to_result(
     if tool and not domain:
         domain = "meta"
     if tool_calls and not tool:
-        last = tool_calls[-1]
-        tool = str(last.get("tool") or "")
+        tool = last_working_tool(tool_calls)
     if not intent:
         intent = classify_route_intent(
             " ".join((result.get("answer") or "").lower().split()), state
@@ -1067,6 +1118,24 @@ def attach_route_to_result(
     result["route_metadata"] = meta
     result["workspace_status"] = workspace_snapshot(session_id)
     answer = str(result.get("answer") or "").strip()
+    # The answer as a dashboard, whichever route produced it: a scheduled question must come
+    # back as KPI cards every day, not only when the planner or the compliance engine ran
+    # (4 Oct 2026). Built from the tool outputs, never from the prose; nothing when none fit.
+    if answer and tool_calls:
+        try:
+            from . import llm_cost, planner
+            ledger = llm_cost.current()
+            built = planner.cards_from_tool_calls("", tool_calls, answer, cost=ledger.log_summary(answer[:120]) if ledger else None)
+            if built:
+                response, pipeline = built
+                tool_calls = list(tool_calls) + [{"tool": "compliance_pipeline", "input": {}, "output": pipeline},
+                                                 {"tool": "compliance_response", "input": {}, "output": response}]
+                result["tool_calls"] = tool_calls
+        except Exception as exc:  # noqa: BLE001 - cards are a presentation, never the answer
+            log.warning("cards.attach_failed", error=str(exc)[:200])
     if answer:
         record_conversation_turn(session_id, "assistant", answer)
+        # The durable copy (every run_stateful path ends here; the stream path records its own).
+        from ..services import chat_threads
+        chat_threads.record_answer_soon(session_id, answer, tools=tool_calls)
     return result

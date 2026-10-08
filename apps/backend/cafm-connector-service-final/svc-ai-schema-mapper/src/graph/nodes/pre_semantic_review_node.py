@@ -460,6 +460,8 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 tier1_mappings_by_table,      # authoritative — drives the write path
                 review_items_by_table,        # display copy (reviewable rows)
                 auto_approved_by_table,        # display copy (auto-approved rows)
+                dest_columns_by_table=_cols_by_tbl,
+                dest_table_by_source=_dest_table,
             )
             if _aligned:
                 state["tier1_mappings_by_table"] = tier1_mappings_by_table

@@ -12,6 +12,7 @@ Handles:
 import asyncio
 import io
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -30,6 +31,18 @@ from ..event_enrich import append_event
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
+
+
+#: Sheets a single end-to-end workbook carries for engines that run AFTER the write: the
+#: contract terms (-> contract parameter sets) and the invoices (-> invoice verification).
+#: The plant telemetry and weather (-> the chiller, degree-day and BMS stores the energy
+#: engines read). A README sheet is a note, not a table. Matched case- and separator-insensitively.
+POST_WRITE_SHEETS = frozenset({"contractterms", "invoices", "invoicelines", "readme",
+                               "chillerdesignspecs", "chillerreadings", "weatherdegreedays", "bmstrends"})
+
+
+def _is_post_write_sheet(sheet_name: str) -> bool:
+    return "".join(ch for ch in str(sheet_name).lower() if ch.isalnum()) in POST_WRITE_SHEETS
 
 
 def _sanitize_column_names(df: pd.DataFrame) -> pd.DataFrame:
@@ -87,6 +100,205 @@ def _sanitize_records(records: list) -> list:
     return [{k: _clean(v) for k, v in row.items()} for row in records]
 
 
+@dataclass
+class ParsedSource:
+    """What ingest's parse makes of the uploaded bytes (steps 2–4)."""
+
+    detected_file_format: str            # "csv" | "excel"
+    source_encoding: str
+    source_delimiter: str
+    parsed_tables: dict                  # {table: [first 10 records]}
+    full_tables: "dict | None"           # {table: [every record]}; None when the engine holds them
+    set_aside_sheets: list = field(default_factory=list)  # sheets the post-write engines read
+    # From hoist-engine parse (engine/steps.go_parse): the rows per table, and the null scan and
+    # duplicate merge it ran over the full tables. None on a Python parse, which runs them below.
+    row_counts: "dict | None" = None
+    nan_report: "dict | None" = None
+    duplicate_column_report: "dict | None" = None
+
+
+class SourceParseError(ValueError):
+    """Neither the CSV reader nor the Excel reader could read the file (the Excel reader's message)."""
+
+
+def parse_source_tables(file_content: bytes, migration_id: str = "") -> ParsedSource:
+    """Steps 2–4 of ingest: detect the encoding (chardet) and the delimiter, read the file as CSV
+    and, when that fails, as a workbook; return the preview rows and every row of every table."""
+    _mid = migration_id
+    # ── Step 2: Detect encoding ────────────────────────────────────
+    detected = chardet.detect(file_content)
+    encoding = detected.get("encoding", "utf-8")
+    if not encoding:
+        encoding = "utf-8"
+    logger.info(f"[Node 1] Detected encoding: {encoding} (confidence: {detected.get('confidence', 0):.2f})")
+    source_encoding = encoding
+
+    # Decode to string
+    try:
+        file_str = file_content.decode(encoding)
+    except (UnicodeDecodeError, LookupError):
+        logger.warning(f"[Node 1] Encoding {encoding} failed, trying utf-8")
+        file_str = file_content.decode("utf-8", errors="replace")
+        source_encoding = "utf-8"
+
+    # ── Step 3: Detect file format and delimiter ───────────────────
+    # Sample first 4KB for analysis
+    sample = file_str[:4096]
+
+    # Detect delimiter (CSV)
+    delimiter = _detect_delimiter(sample)
+    logger.info(f"[Node 1] Detected delimiter: {repr(delimiter)}")
+
+    # ── Step 4: Parse into pandas DataFrames ──────────────────────
+    parsed_tables: dict = {}
+    set_aside: list[str] = []
+
+    # Try CSV first
+    try:
+        logger.info("[Node 1] Attempting CSV parse (top 10 rows only for column/table matching)...")
+        # First pass: get actual row count from full file
+        with profiling.span(_mid, "ingest.csv.read_full"):
+            df_full = pd.read_csv(
+                io.StringIO(file_str),
+                delimiter=delimiter,
+                dtype=str,
+                nrows=None,  # Read all to get accurate count
+            )
+        df_full = _sanitize_column_names(df_full)
+        actual_row_count = len(df_full)
+        actual_col_count = len(df_full.columns)
+
+        # Second pass: only the TOP 10 rows feed column/table matching + the panel preview.
+        # The full file (df_full above → full_tables) is what gets the finalized
+        # column renames and is pushed to the DB at the write phase.
+        # PROFILING NOTE: this is a SECOND full parse of the same bytes (the Excel path below
+        # avoids it via df_full.head(10)); the harness measures it as ingest.csv.read_preview so
+        # the redundant-parse cost is visible before optimizing.
+        with profiling.span(_mid, "ingest.csv.read_preview"):
+            df = pd.read_csv(
+                io.StringIO(file_str),
+                delimiter=delimiter,
+                dtype=str,
+                nrows=10,  # ← TOP 10 ROWS FOR COLUMN/TABLE MATCHING + DISPLAY
+            )
+        df = _sanitize_column_names(df)
+        parsed_tables["data"] = _sanitize_records(df.to_dict(orient="records"))
+
+        # STORE FULL FILE separately for Node 5+ processing.
+        full_tables = {}
+        with profiling.span(_mid, "ingest.csv.sanitize_full"):
+            full_tables["data"] = _sanitize_records(df_full.to_dict(orient="records"))
+        profiling.emit_report(_mid, logger)
+
+        logger.info(f"[Node 1] CSV parsed: {actual_row_count:,} rows × {actual_col_count} columns (analyzing first {len(df)} rows)")
+        return ParsedSource("csv", source_encoding, delimiter, parsed_tables, full_tables, set_aside)
+    except Exception as e:
+        logger.warning(f"[Node 1] CSV parse failed: {e}")
+        # Try Excel
+        try:
+            logger.info("[Node 1] Attempting Excel parse (python-calamine) — top 10 rows for matching, full sheet stored for later...")
+            # Open the workbook ONCE (calamine loads it a single time; each sheet read reuses it).
+            with profiling.span(_mid, "ingest.excel.open"):
+                wb = ExcelWorkbook(io.BytesIO(file_content))
+            parsed_tables = {}
+            full_tables = {}
+            for sheet_name in wb.sheet_names:
+                # Sheets another engine reads after the write, not tables to migrate: contract
+                # terms go to the contract ingest and invoice lines to the invoice matcher
+                # (POST /api/contract-performance/migration/{id}/workbook-extras). Written here
+                # they would land as rows with no vendor and no matching - invoice lines the
+                # Vendors page cannot reach and never held for a decision.
+                if _is_post_write_sheet(sheet_name):
+                    logger.info(f"[Node 1] Sheet {sheet_name}: set aside for the post-write engines, not migrated")
+                    set_aside.append(sheet_name)
+                    continue
+                # Detect which row is actually the header — skip banner / title rows so we don't
+                # end up with "Unnamed: N" columns spread across what was really blank padding.
+                header_row = wb.header_row(sheet_name)
+                if header_row > 0:
+                    logger.info(
+                        f"[Node 1] Sheet {sheet_name}: skipping {header_row} banner row(s) "
+                        f"before real header at row {header_row}"
+                    )
+
+                with profiling.span(_mid, "ingest.excel.read_sheet"):
+                    df_full = wb.read(sheet_name, header=header_row, dtype=str)
+                df_full = _sanitize_column_names(df_full)
+                actual_row_count = len(df_full)
+                actual_col_count = len(df_full.columns)
+
+                # Only the TOP 10 rows feed column/table matching + the panel preview — sliced
+                # from the full frame (no second parse). The full sheet (→ full_tables)
+                # gets the finalized column renames and is pushed to the DB at the write phase.
+                df = df_full.head(10)
+                parsed_tables[sheet_name] = _sanitize_records(df.to_dict(orient="records"))
+
+                # STORE FULL FILE separately for Node 5+ processing.
+                with profiling.span(_mid, "ingest.excel.sanitize_full"):
+                    full_tables[sheet_name] = _sanitize_records(df_full.to_dict(orient="records"))
+
+                logger.info(f"[Node 1] Sheet {sheet_name}: {actual_row_count:,} rows × {actual_col_count} columns (analyzing first {len(df)} rows)")
+
+            wb.close()
+            profiling.emit_report(_mid, logger)
+            return ParsedSource("excel", source_encoding, delimiter, parsed_tables, full_tables, set_aside)
+        except Exception as e2:
+            logger.error(f"[Node 1] Excel parse failed: {e2}")
+            raise SourceParseError(str(e2)) from e2
+
+
+#: How long Node 1 keeps asking Blob for a source the app is still uploading (seconds between asks).
+_SOURCE_RETRY_DELAYS_S = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+
+
+class _NoBlobStorage(RuntimeError):
+    """The source is only in Blob and no Blob is configured."""
+
+
+async def _read_source(state: dict) -> bytes:
+    """The stored source file: the app's copy on the shared volume when it is there, else Blob
+    (authenticated by the connection string, so a private container works too) — asked again
+    while the app's background upload may still be landing."""
+    from ...engine import store as _engine_store
+
+    migration_id = str(state.get("migration_id") or "")
+    source_blob_path = str(state.get("source_blob_path") or "")
+    name = source_blob_path.rsplit("/", 1)[-1]
+    try:
+        local = _engine_store.source_path(migration_id, name)
+    except ValueError:
+        local = None
+    if local is not None and local.is_file():
+        content = await asyncio.to_thread(local.read_bytes)
+        logger.info(f"[Node 1] Read the uploaded source from the shared volume ({len(content):,} bytes)")
+        return content
+    from ...config import get_settings as _gs
+    _settings = _gs()
+    conn = getattr(_settings, "azure_storage_connection_string", "") or ""
+    container = getattr(_settings, "azure_blob_container_name", "") or "plenum-agentic-ai-attachments"
+    if not conn:
+        raise _NoBlobStorage()
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.storage.blob.aio import BlobServiceClient as _BSC
+
+    # Only a background upload can still be landing; otherwise the app stored the file before the
+    # run was queued, and a missing blob is gone for good.
+    delays = list(_SOURCE_RETRY_DELAYS_S) if _engine_store.background_uploads() else []
+    while True:
+        try:
+            async with _BSC.from_connection_string(conn) as svc:
+                bc = svc.get_blob_client(container=container, blob=source_blob_path)
+                stream = await bc.download_blob()
+                content = await stream.readall()
+            break
+        except ResourceNotFoundError:
+            if not delays:
+                raise
+            await asyncio.sleep(delays.pop(0))
+    logger.info(f"[Node 1] Re-pulled source from blob path {source_blob_path} ({len(content):,} bytes)")
+    return content
+
+
 async def ingest_node(state: MigrationState) -> MigrationState:
     """
     Node 1: Download, parse, and analyze uploaded CMMS export.
@@ -123,169 +335,60 @@ async def ingest_node(state: MigrationState) -> MigrationState:
             file_content: bytes = source_file_bytes
             logger.info(f"[Node 1] Using directly-uploaded file bytes ({len(file_content):,} bytes)")
         elif source_blob_path:
-            # Re-run path: re-pull the persisted source from Blob, authenticated via the
-            # connection string (works even on a private container).
-            from ...config import get_settings as _gs
-            _settings = _gs()
-            conn = getattr(_settings, "azure_storage_connection_string", "") or ""
-            container = getattr(_settings, "azure_blob_container_name", "") or "plenum-agentic-ai-attachments"
-            if not conn:
+            try:
+                file_content = await _read_source(state)
+            except _NoBlobStorage:
                 logger.error("[Node 1] source_blob_path set but Azure storage is not configured")
                 state["error_message"] = "Source is stored in Blob but Azure storage is not configured for re-download."
                 state["error_node"] = 1
                 return state
-            from azure.storage.blob.aio import BlobServiceClient as _BSC
-            async with _BSC.from_connection_string(conn) as svc:
-                bc = svc.get_blob_client(container=container, blob=source_blob_path)
-                stream = await bc.download_blob()
-                file_content = await stream.readall()
-            logger.info(
-                f"[Node 1] Re-pulled source from blob path {source_blob_path} ({len(file_content):,} bytes)"
-            )
         else:
             # Fallback: download from a full Azure Blob URL (legacy / SAS)
             logger.info(f"[Node 1] Downloading file from Blob: {source_blob_url[:60]}...")
-            async with BlobClient.from_blob_url(source_blob_url) as blob_client:
-                file_bytes = await blob_client.download_blob()
-                file_content = await file_bytes.readall()
+            # With the account's credentials: the container is private (blob_links.py).
+            from ...blob_links import read_blob_url
+            from ...config import get_settings as _gs_blob
+
+            file_content = await read_blob_url(source_blob_url, getattr(_gs_blob(), "azure_storage_connection_string", "") or "")
             logger.info(f"[Node 1] Downloaded {len(file_content):,} bytes from Blob")
 
         state["source_file_bytes"] = file_content  # Transient; will be cleared before checkpoint
 
-        # ── Step 2: Detect encoding ────────────────────────────────────
-        detected = chardet.detect(file_content)
-        encoding = detected.get("encoding", "utf-8")
-        if not encoding:
-            encoding = "utf-8"
-        logger.info(f"[Node 1] Detected encoding: {encoding} (confidence: {detected.get('confidence', 0):.2f})")
-        state["source_encoding"] = encoding
-
-        # Decode to string
+        # ── Steps 2–4: encoding, delimiter, CSV-then-Excel parse (parse_source_tables) ──
+        # A Go run parses on the engine (its rows stay in the engine's data set); a missing or
+        # crashed engine makes it a Python run, parsed below. The Python parse runs off the event
+        # loop: a 120k-row file would otherwise block the single API event loop and starve the
+        # status polls for the length of ingestion.
+        from ...engine.selection import uses_go
+        parsed = None
+        on_engine = uses_go(state, "parse")
+        # The invocation running this node pauses after ingest only if it started as a Python run;
+        # a parse that falls back to Python below does not change the pauses it was given.
+        started_on_engine = on_engine
         try:
-            file_str = file_content.decode(encoding)
-        except (UnicodeDecodeError, LookupError):
-            logger.warning(f"[Node 1] Encoding {encoding} failed, trying utf-8")
-            file_str = file_content.decode("utf-8", errors="replace")
-            state["source_encoding"] = "utf-8"
-
-        # ── Step 3: Detect file format and delimiter ───────────────────
-        # Sample first 4KB for analysis
-        sample = file_str[:4096]
-
-        # Detect delimiter (CSV)
-        delimiter = _detect_delimiter(sample)
-        state["source_delimiter"] = delimiter
-        logger.info(f"[Node 1] Detected delimiter: {repr(delimiter)}")
-
-        # ── Step 4: Parse into pandas DataFrames ──────────────────────
-        # Load ONLY first 5 rows (+ header) for analysis
-        parsed_tables = {}
-        total_rows = 0
-        total_columns = 0
-        actual_row_count = 0  # Track full file row count
-        actual_col_count = 0
-
-        # Try CSV first
-        try:
-            logger.info("[Node 1] Attempting CSV parse (top 10 rows only for column/table matching)...")
-            # First pass: get actual row count from full file
-            # Run the full-file parse OFF the event loop (asyncio.to_thread). This node otherwise
-            # blocks the single API event loop while it parses 120k+ rows, which starves the status
-            # polls / other requests to this service (they pend for the duration of ingestion).
-            _mid = str(state.get("migration_id") or "")
-            with profiling.span(_mid, "ingest.csv.read_full"):
-                df_full = await asyncio.to_thread(
-                    pd.read_csv,
-                    io.StringIO(file_str),
-                    delimiter=delimiter,
-                    dtype=str,
-                    nrows=None,  # Read all to get accurate count
+            if on_engine:
+                from ...engine.steps import go_parse
+                parsed = await go_parse(state, file_content)
+                on_engine = parsed is not None
+            if parsed is None:
+                parsed = await asyncio.to_thread(
+                    parse_source_tables, file_content, str(state.get("migration_id") or "")
                 )
-            df_full = _sanitize_column_names(df_full)
-            actual_row_count = len(df_full)
-            actual_col_count = len(df_full.columns)
-
-            # Second pass: only the TOP 10 rows feed column/table matching + the panel preview.
-            # The full file (df_full above → state["full_tables"]) is what gets the finalized
-            # column renames and is pushed to the DB at the write phase.
-            # PROFILING NOTE: this is a SECOND full parse of the same bytes (the Excel path below
-            # avoids it via df_full.head(10)); the harness measures it as ingest.csv.read_preview so
-            # the redundant-parse cost is visible before optimizing.
-            with profiling.span(_mid, "ingest.csv.read_preview"):
-                df = pd.read_csv(
-                    io.StringIO(file_str),
-                    delimiter=delimiter,
-                    dtype=str,
-                    nrows=10,  # ← TOP 10 ROWS FOR COLUMN/TABLE MATCHING + DISPLAY
-                )
-            df = _sanitize_column_names(df)
-            parsed_tables["data"] = _sanitize_records(df.to_dict(orient="records"))
-
-            # STORE FULL FILE separately for Node 5+ processing. Building the full-file records is
-            # pure-Python over EVERY row (120k+) — the single longest CPU stretch here — so run it
-            # off the event loop too, keeping the service responsive during ingestion.
-            full_tables = {}
-            with profiling.span(_mid, "ingest.csv.sanitize_full"):
-                full_tables["data"] = await asyncio.to_thread(
-                    lambda: _sanitize_records(df_full.to_dict(orient="records"))
-                )
-            state["full_tables"] = full_tables
-            profiling.emit_report(_mid, logger)
-
-            state["detected_file_format"] = "csv"
-            logger.info(f"[Node 1] CSV parsed: {actual_row_count:,} rows × {actual_col_count} columns (analyzing first {len(df)} rows)")
-        except Exception as e:
-            logger.warning(f"[Node 1] CSV parse failed: {e}")
-            # Try Excel
-            try:
-                logger.info("[Node 1] Attempting Excel parse (python-calamine) — top 10 rows for matching, full sheet stored for later...")
-                # Open the workbook ONCE (calamine loads it a single time; each sheet read reuses it).
-                _mid = str(state.get("migration_id") or "")
-                with profiling.span(_mid, "ingest.excel.open"):
-                    wb = ExcelWorkbook(io.BytesIO(file_content))
-                full_tables = {}
-                for sheet_name in wb.sheet_names:
-                    # Detect which row is actually the header — skip banner / title rows so we don't
-                    # end up with "Unnamed: N" columns spread across what was really blank padding.
-                    header_row = wb.header_row(sheet_name)
-                    if header_row > 0:
-                        logger.info(
-                            f"[Node 1] Sheet {sheet_name}: skipping {header_row} banner row(s) "
-                            f"before real header at row {header_row}"
-                        )
-
-                    # Parse the FULL sheet off the event loop (see CSV note) so a large workbook
-                    # doesn't starve other requests. Reuses the loaded workbook — no re-parse.
-                    with profiling.span(_mid, "ingest.excel.read_sheet"):
-                        df_full = await asyncio.to_thread(wb.read, sheet_name, header=header_row, dtype=str)
-                    df_full = _sanitize_column_names(df_full)
-                    actual_row_count = len(df_full)
-                    actual_col_count = len(df_full.columns)
-
-                    # Only the TOP 10 rows feed column/table matching + the panel preview — sliced
-                    # from the full frame (no second parse). The full sheet (→ state["full_tables"])
-                    # gets the finalized column renames and is pushed to the DB at the write phase.
-                    df = df_full.head(10)
-                    parsed_tables[sheet_name] = _sanitize_records(df.to_dict(orient="records"))
-
-                    # STORE FULL FILE separately for Node 5+ processing (records build off-loop).
-                    with profiling.span(_mid, "ingest.excel.sanitize_full"):
-                        full_tables[sheet_name] = await asyncio.to_thread(
-                            lambda df=df_full: _sanitize_records(df.to_dict(orient="records"))
-                        )
-
-                    logger.info(f"[Node 1] Sheet {sheet_name}: {actual_row_count:,} rows × {actual_col_count} columns (analyzing first {len(df)} rows)")
-
-                wb.close()
-                # Store full tables for later nodes
-                state["full_tables"] = full_tables
-                state["detected_file_format"] = "excel"
-                profiling.emit_report(_mid, logger)
-            except Exception as e2:
-                logger.error(f"[Node 1] Excel parse failed: {e2}")
-                state["error_message"] = f"Could not parse file: {str(e2)}"
-                state["error_node"] = 1
-                return state
+        except SourceParseError as e2:
+            state["error_message"] = f"Could not parse file: {str(e2)}"
+            state["error_node"] = 1
+            return state
+        state["source_encoding"] = parsed.source_encoding
+        state["source_delimiter"] = parsed.source_delimiter
+        if parsed.full_tables is not None:
+            state["full_tables"] = parsed.full_tables
+        state["detected_file_format"] = parsed.detected_file_format
+        parsed_tables = parsed.parsed_tables
+        # Each table's full row count, in table order (the engine reports them; a Python parse
+        # has the rows).
+        row_counts = parsed.row_counts if parsed.row_counts is not None else {
+            _t: (len(_r) if isinstance(_r, list) else 0) for _t, _r in (parsed.full_tables or {}).items()
+        }
 
         # ── Step 5: Analyze data quality (on sample only, but report full file size) ──────────────────────────────
         state["parsed_tables"] = parsed_tables
@@ -298,12 +401,10 @@ async def ingest_node(state: MigrationState) -> MigrationState:
         # sheet in the combined workbook) it stamped one file's row count onto every
         # table and the dataset totals showed a single file instead of the aggregate.
         # Include ALL tables, even empty ones, so the user sees every sheet's completeness.
-        full_tables = state.get("full_tables") or {}
         table_health = {}
         for table_name, records in parsed_tables.items():
             # ACTUAL full-file row count for THIS specific table/sheet.
-            _full = full_tables.get(table_name)
-            tbl_row_count = len(_full) if isinstance(_full, list) else 0
+            tbl_row_count = row_counts.get(table_name, 0)
 
             if not records:
                 # Empty sample → 0 columns; still report the real row count.
@@ -499,7 +600,10 @@ async def ingest_node(state: MigrationState) -> MigrationState:
         from .nan_scan import scan_nan_values, summarize_nan_report
         # Full-dataset cell pass — run off the event loop (like the sanitize step above)
         # so a large file doesn't block status polls / other requests during ingestion.
-        nan_report = await asyncio.to_thread(scan_nan_values, state.get("full_tables") or {})
+        if parsed.nan_report is not None:
+            nan_report = parsed.nan_report  # the engine scanned the full tables as it parsed
+        else:
+            nan_report = await asyncio.to_thread(scan_nan_values, state.get("full_tables") or {})
         state["nan_report"] = nan_report
         _nan_log_lines = summarize_nan_report(nan_report)
         for _ln in _nan_log_lines:
@@ -514,11 +618,16 @@ async def ingest_node(state: MigrationState) -> MigrationState:
             merge_duplicate_columns,
             summarize_duplicate_column_report,
         )
-        _merged_tables, dup_col_report = await asyncio.to_thread(
-            merge_duplicate_columns, state.get("full_tables") or {}
-        )
+        if parsed.duplicate_column_report is not None:
+            # The engine merged as it parsed: its data set lists only the kept columns.
+            _merged_tables, dup_col_report = None, parsed.duplicate_column_report
+        else:
+            _merged_tables, dup_col_report = await asyncio.to_thread(
+                merge_duplicate_columns, state.get("full_tables") or {}
+            )
         if dup_col_report.get("total_merges"):
-            state["full_tables"] = _merged_tables
+            if _merged_tables is not None:
+                state["full_tables"] = _merged_tables
             # parsed_tables is the SAMPLED view of the same sheets — replay the same drops so the
             # sample and the full data don't disagree about which columns exist.
             state["parsed_tables"] = apply_merge_decisions(
@@ -581,26 +690,29 @@ async def ingest_node(state: MigrationState) -> MigrationState:
                 migration_id, "1_ingest",
                 total_fields=state.get("column_count", 0),
             )
-            await write_step_pause(
-                migration_id,
-                "step_1_ingest",
-                {
-                    "node": 1,
-                    "label": "Ingest & Configure",
-                    "rows": state.get("row_count", 0),
-                    "columns": state.get("column_count", 0),
-                    "tables": list((state.get("full_tables") or {}).keys()),
-                    "format": state.get("detected_file_format", "unknown"),
-                    "table_health": state.get("table_health", {}),
-                    "overall_summary": state.get("overall_summary", {}),
-                    # Excel sheet → plenum_cafm table comparison (incl. LLM matches
-                    # like sites_2 → sites) for the ingest card.
-                    "cafm_table_matches": state.get("cafm_table_matches", {}),
-                    # First data-quality step — NaN scan report. Drives the "NaN values
-                    # cleaned" section in the Query Space ingest card (affected rows).
-                    "nan_report": state.get("nan_report", {}),
-                },
-            )
+            # A Go run does not pause after ingest (the proxy runs it on), so its node log below
+            # carries what this payload would have.
+            if not started_on_engine:
+                await write_step_pause(
+                    migration_id,
+                    "step_1_ingest",
+                    {
+                        "node": 1,
+                        "label": "Ingest & Configure",
+                        "rows": state.get("row_count", 0),
+                        "columns": state.get("column_count", 0),
+                        "tables": list(row_counts),
+                        "format": state.get("detected_file_format", "unknown"),
+                        "table_health": state.get("table_health", {}),
+                        "overall_summary": state.get("overall_summary", {}),
+                        # Excel sheet → plenum_cafm table comparison (incl. LLM matches
+                        # like sites_2 → sites) for the ingest card.
+                        "cafm_table_matches": state.get("cafm_table_matches", {}),
+                        # First data-quality step — NaN scan report. Drives the "NaN values
+                        # cleaned" section in the Query Space ingest card (affected rows).
+                        "nan_report": state.get("nan_report", {}),
+                    },
+                )
             # Per-table source→canonical match lines for the processing log, labelled by
             # METHOD: confidence 1.0 = deterministic exact-name match; <1.0 = semantic
             # search (Haiku) over the column names; None = no canonical match.
@@ -633,14 +745,9 @@ async def ingest_node(state: MigrationState) -> MigrationState:
             try:
                 from ...udr.run_activity import build_partial_table_resolution
 
-                _full_tables = state.get("full_tables") or {}
-                _row_counts = {
-                    _t: (len(_r) if isinstance(_r, list) else 0)
-                    for _t, _r in _full_tables.items()
-                }
                 _partial_table_resolution = build_partial_table_resolution(
                     state.get("parsed_tables") or {},
-                    row_counts=_row_counts,
+                    row_counts=dict(row_counts),
                 )
             except Exception as _e:  # pragma: no cover — additive, never fatal to ingestion
                 logger.warning(f"[Node 1] partial B7.1 table cards failed: {_e}")
@@ -651,8 +758,8 @@ async def ingest_node(state: MigrationState) -> MigrationState:
                 migration_id, 1, "File Ingestion", _node_started_at, datetime.utcnow(),
                 output={"row_count": state.get("row_count", 0),
                         "column_count": state.get("column_count", 0),
-                        "table_count": len(state.get("full_tables") or {}),
-                        "tables": list((state.get("full_tables") or {}).keys()),
+                        "table_count": len(row_counts),
+                        "tables": list(row_counts),
                         "detected_format": state.get("detected_file_format", "unknown"),
                         "overall_summary": state.get("overall_summary", {}),
                         "cafm_table_matches": state.get("cafm_table_matches", {}),
@@ -662,8 +769,13 @@ async def ingest_node(state: MigrationState) -> MigrationState:
                         # Only attach when non-empty so the status field stays None until there
                         # are real cards (avoids rendering an empty B7.1 block mid-ingest).
                         **({"udr_table_resolution": _partial_table_resolution}
-                           if _partial_table_resolution else {})},
-                logs=[f"Parsed {state.get('row_count', 0)} rows × {state.get('column_count', 0)} columns",
+                           if _partial_table_resolution else {}),
+                        # A Go run has no step pause: its table health and format live here.
+                        **({"engine": "go", "table_health": state.get("table_health", {}),
+                            "format": state.get("detected_file_format", "unknown")}
+                           if on_engine else {})},
+                logs=[f"Parsed {state.get('row_count', 0)} rows × {state.get('column_count', 0)} columns"
+                      + (" (engine)" if on_engine else ""),
                       f"Detected format: {state.get('detected_file_format', 'unknown')}",
                       f"EL-M.1: {'PASSED' if state.get('el_m1_passed') else 'FAILED'}"]
                      + _nan_log_lines

@@ -9,6 +9,7 @@ from typing import Any, Dict
 import httpx
 
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -154,8 +155,7 @@ async def render_email_html(
                         {"role": "system", "content": _SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": 0.3,
-                    "max_tokens": 2000,
+                    **completion_kwargs(model, 2000, temperature=0.3),
                 },
             )
             resp.raise_for_status()

@@ -77,6 +77,11 @@ class TestRegistry:
         ("connect Fiix and sync the assets", "migration"),
         ("show me all spare parts below reorder level", "udr"),
         ("how many assets do we have per site", "udr"),
+        ("tell me about the building profile of Bishopsgate Tower", "udr"),
+        ("what is the gross internal area and how many floors does B-301 have", "udr"),
+        ("show the asset register for Bishopsgate by asset category", "udr"),
+        ("which assets have a condition grade of 3 or worse", "udr"),
+        ("which assets are past their design life and what is the replacement value", "udr"),
     ],
 )
 def test_questions_route_to_their_owner(question, expected):
@@ -208,3 +213,23 @@ class TestSchemaGuardrails:
             assert "site_ref" in agent_system_prompt(agent) or "varchar" in (
                 agent_system_prompt(agent)
             )
+
+
+class TestBuildingsAndAssets:
+    """The Buildings and Assets pages have no engine of their own; UDR answers them, with a
+    reference document for each page's tables loaded behind its skill."""
+
+    def test_udr_prompt_carries_both_page_documents(self):
+        prompt = agent_system_prompt("udr")
+        assert "# Buildings" in prompt and "# Assets" in prompt
+        assert "Assets never join through `sites`" in prompt
+
+    def test_a_building_word_does_not_pull_udr_into_a_compliance_question(self):
+        decision = route("which building certificates are lapsed at Tower A?")
+        assert decision["primary_agent"] == "compliance"
+        assert "udr" not in [a["agent"] for a in decision["also_relevant"]]
+
+    def test_asset_condition_bands_stay_with_energy(self):
+        assert route("which assets are a threat by asset condition")["primary_agent"] == (
+            "energy_intelligence"
+        )

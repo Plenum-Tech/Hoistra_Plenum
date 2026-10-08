@@ -30,6 +30,7 @@ from itertools import combinations
 from typing import Callable
 
 from .mapping_decision import entity_prefix_conflict, score_column_mapping
+from .memo import memo_scoped
 from .primitives import (
     THRESHOLDS,
     classify_columns,
@@ -409,6 +410,7 @@ def synthesize_shared_attribute_table(
     }
 
 
+@memo_scoped
 def build_column_intelligence(
     tables: dict[str, dict],
     *,

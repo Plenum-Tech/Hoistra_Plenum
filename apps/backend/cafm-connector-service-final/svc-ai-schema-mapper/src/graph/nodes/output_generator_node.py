@@ -34,6 +34,7 @@ from ...export import (
     build_intermediate_schema,
 )
 from ..state import MigrationState
+from ...engine.selection import uses_go
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
@@ -123,6 +124,211 @@ def build_structure_markdown(
         lines.append("")
 
     return "\n".join(lines)
+
+
+#: Text artefacts are sent gzip-encoded under their own names: Blob serves them with
+#: ``Content-Encoding: gzip`` and browsers (and every HTTP client) hand back the plain file. JSON,
+#: SQL and CSV shrink 8–12×, which is what makes the output step bytes-bound no more: a 280k-row
+#: workbook's ~185 MB of artefacts took nine minutes from a laptop uplink (runs ee83c4b4,
+#: 71151cfa, fcb2dd75 — 30 Sep / 1 Oct 2026). The workbook (a zip already) and the report go as
+#: they are. Only these types are encoded — anything read back with the Blob SDK gets raw bytes.
+_GZIP_CONTENT_TYPES = {
+    ".json": "application/json",
+    ".sql": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+}
+
+
+def encode_artefact(filename: str, content) -> "tuple[bytes, object | None, int]":
+    """The bytes to send for one artefact, its blob content settings (None = as-is) and its raw size."""
+    import gzip
+    import os
+
+    from ...engine.steps import EngineFile
+
+    content_type = _GZIP_CONTENT_TYPES.get(os.path.splitext(filename)[1].lower())
+    if isinstance(content, EngineFile):
+        # The engine wrote it already encoded as this name is sent: text gzip-compressed (level 6),
+        # the workbook as it is. Sent as it is, with the settings the name gets.
+        with open(content.path, "rb") as fh:
+            data = fh.read()
+        raw_len = int(content.raw_len)
+    else:
+        raw = content.encode("utf-8") if isinstance(content, str) else bytes(content)
+        data, raw_len = (raw if content_type is None else gzip.compress(raw, compresslevel=6)), len(raw)
+    if content_type is None:
+        return data, None, raw_len
+    from azure.storage.blob import ContentSettings
+
+    # Saved, not opened: typed as JSON or SQL text a 75 MB output.json would open in the
+    # browser tab the link targets; as octet-stream (before compression) it downloaded.
+    return (
+        data,
+        ContentSettings(content_type=content_type, content_encoding="gzip",
+                        content_disposition=f'attachment; filename="{os.path.basename(filename)}"'),
+        raw_len,
+    )
+
+
+async def upload_artefacts(svc, container: str, base_path: str, artefacts: dict,
+                           beat, log) -> "tuple[dict[str, str], int]":
+    """Upload each artefact to ``{base_path}/{filename}``; returns (urls by filename, count).
+
+    Text artefacts go gzip-encoded (encode_artefact); every block sent counts towards ``beat``
+    (a ProgressBeat), so the run card can tell working from stalled. A file that fails is logged
+    and skipped; the rest still go.
+    """
+    # Encoded one at a time — a raw copy of a large run's artefacts is ~185 MB, and holding a
+    # second one of all of them doubled the worker's peak. The gzip copies kept here are an
+    # order of magnitude smaller, and the total counts the bytes that actually go over the wire.
+    # Off the event loop: ~185 MB takes over a second to gzip, a second in which the worker
+    # would answer nothing, its progress beats included.
+    import asyncio
+
+    payloads = await asyncio.to_thread(
+        lambda: [(filename, *encode_artefact(filename, content)) for filename, content in artefacts.items()]
+    )
+    total = sum(len(data) for _, data, _, _ in payloads)
+    sent = 0
+    urls: dict[str, str] = {}
+    for filename, data, settings, raw_len in payloads:
+        before = sent
+
+        async def _hook(current, _file_total, _before=before):
+            await beat.tick(_before + (current or 0), total)
+
+        try:
+            client = svc.get_blob_client(container=container, blob=f"{base_path}/{filename}")
+            await client.upload_blob(data, overwrite=True, progress_hook=_hook, content_settings=settings)
+            urls[filename] = client.url
+            size = f"{raw_len:,} bytes" + (f", sent {len(data):,} gzip" if settings is not None else "")
+            log(f"  ✅ Uploaded: {filename} ({size}) → {client.url}")
+        except Exception as e:
+            log(f"  ⚠️  Failed to upload {filename}: {e}")
+        sent = before + len(data)
+        await beat.tick(sent, total)
+    return urls, len(urls)
+
+
+async def upload_all(migration_id, artefacts: dict, log, lo: float = 80.0) -> "tuple[dict[str, str], int]":
+    """Every artefact to migrations/{migration_id}/ in Blob, the beat moving lo → 88."""
+    from ...config import get_settings as _get_settings
+
+    _settings = _get_settings()
+    blob_connection_string = _settings.azure_storage_connection_string
+    if not blob_connection_string:
+        log("⚠️  AZURE_STORAGE_CONNECTION_STRING not set — skipping blob upload, URLs will be empty")
+        return {}, 0
+    from ..progress_beat import ProgressBeat
+
+    async with BlobServiceClient.from_connection_string(blob_connection_string) as svc:
+        return await upload_artefacts(
+            svc, _settings.azure_blob_container_name, f"migrations/{migration_id}", artefacts,
+            ProgressBeat(migration_id, lo, 88.0), log,
+        )
+
+
+def check_el_m8(schema_dict: dict) -> None:
+    """EL-M.8: the IntermediateSchema has its required keys, entities and confidence are dicts."""
+    required_fields = ["ingestion_id", "source_type", "agent_id", "entities", "confidence", "audit"]
+    missing_fields = [f for f in required_fields if f not in schema_dict]
+    if missing_fields:
+        raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+    entities = schema_dict.get("entities", {})
+    if not isinstance(entities, dict):
+        raise ValueError(f"entities must be dict, got {type(entities)}")
+    confidence = schema_dict.get("confidence", {})
+    if not isinstance(confidence, dict):
+        raise ValueError(f"confidence must be dict, got {type(confidence)}")
+    if "overall" not in confidence:
+        raise ValueError("confidence.overall is required")
+
+
+# ── The artefacts, as pure functions (the engine's `outputs` command reproduces each) ──────
+
+def routed_records(records_tables: dict, routing: dict, log=None) -> dict:
+    """Route each SOURCE table to its DESTINATION and UNION co-routed / duplicate source tables
+    into ONE table, so CSV + SQL emit a single plenum_cafm.work_orders (both files' rows) instead
+    of source-named splits. Union keeps every row; a shared PK dedupes at insert."""
+    routed: dict = {}
+    for src, rows in records_tables.items():
+        dest = routing.get(src) or src
+        if dest in routed:
+            routed[dest].extend(list(rows or []))
+            if log:
+                log(f"  Merged '{src}' → '{dest}' ({len(rows or [])} rows, union of duplicate/co-routed tables)")
+        else:
+            routed[dest] = list(rows or [])
+    return routed
+
+
+def csv_exports_for(routed: dict) -> "dict[str, str]":
+    """One CSV per destination table that has rows."""
+    return {name: pd.DataFrame(rows).to_csv(index=False) for name, rows in routed.items() if rows}
+
+
+def lookup_ddl_blocks(state) -> "list[str]":
+    tables = ((state.get("column_intelligence") or {}).get("shared_attribute_tables") or [])
+    return [t.get("ddl_block") for t in tables if isinstance(t, dict) and t.get("ddl_block")]
+
+
+def sql_script_for(routed: dict, confirmed_hierarchies, ddl_blocks: "list[str]") -> str:
+    """export_to_sql over the routed tables, then the B22.1 lookup blocks under their banner."""
+    sql_script = export_to_sql(routed, confirmed_hierarchies)
+    if ddl_blocks:
+        sql_script = (
+            sql_script
+            + "\n\n-- ============================================================\n"
+            + f"-- SECTION: Shared-attribute lookup tables ({len(ddl_blocks)}) + FK rewrites (B22.1)\n"
+            + "-- Attribute promoted to a lookup PK; source columns rewritten as FKs.\n"
+            + "-- ============================================================\n\n"
+            + "\n\n".join(ddl_blocks)
+            + "\n"
+        )
+    return sql_script
+
+
+def output_json_for(nested_json: dict, records_tables: dict, generated_at: str) -> str:
+    """output.json: the nested hierarchy kept for older readers, and every table's records."""
+    return json.dumps({
+        "nested_hierarchy": nested_json,
+        "tables": records_tables,
+        "table_count": len(records_tables),
+        "tables_included": sorted(records_tables.keys()),
+        "generated_at": generated_at,
+    }, indent=2)
+
+
+def excel_bytes_for(df_tables: dict, records_tables: dict) -> "tuple[bytes | None, str]":
+    """output.xlsx: one sheet per table. Returns (bytes, "N sheet(s)") or (None, the error)."""
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)  # remove default empty sheet
+        for table_name, df in df_tables.items():
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            sheet_name = table_name[:31]  # Excel sheet name limit
+            ws = wb.create_sheet(title=sheet_name)
+            ws.append(list(df.columns))
+            for row in df.itertuples(index=False, name=None):
+                ws.append(list(row))
+        if not wb.sheetnames and records_tables:
+            for table_name, records in records_tables.items():
+                if not records:
+                    continue
+                df_tmp = pd.DataFrame(records)
+                sheet_name = table_name[:31]
+                ws = wb.create_sheet(title=sheet_name)
+                ws.append(list(df_tmp.columns))
+                for row in df_tmp.itertuples(index=False, name=None):
+                    ws.append(list(row))
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue(), f"{len(wb.sheetnames)} sheet(s)"
+    except Exception as e:  # noqa: BLE001 — the workbook is optional; the run goes on without it
+        return None, str(e)
 
 
 async def output_generator_node(state: MigrationState) -> MigrationState:
@@ -302,6 +508,11 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
     except Exception as _tg_exc:  # pragma: no cover — additive, never fatal
         logger.warning(f"[Node 8] type-compatibility guard skipped: {_tg_exc}")
 
+    if uses_go(state, "outputs"):
+        from ...engine.steps import go_outputs
+
+        return await go_outputs(state, log, execution_logs, _node_started_at)
+
     log(f"Starting output generation for migration {migration_id}")
 
     if not cleaned_tables:
@@ -354,9 +565,11 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
             # Download from Azure Blob
             log("Downloading FULL source file from Blob for complete export...")
             try:
-                async with BlobClient.from_blob_url(source_blob_url) as blob_client:
-                    file_bytes_dl = await blob_client.download_blob()
-                    file_content = await file_bytes_dl.readall()
+                # With the account's credentials: the container is private (blob_links.py).
+                from ...blob_links import read_blob_url
+                from ...config import get_settings as _gs_blob
+
+                file_content = await read_blob_url(source_blob_url, getattr(_gs_blob(), "azure_storage_connection_string", "") or "")
                 log(f"Downloaded FULL file: {len(file_content):,} bytes")
 
                 detected = chardet.detect(file_content)
@@ -373,7 +586,10 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
                 except Exception as csv_err:
                     log(f"CSV parse failed: {csv_err}; trying Excel...")
                     wb = ExcelWorkbook(io.BytesIO(file_content))  # calamine, workbook opened once
+                    from .ingest_node import _is_post_write_sheet
                     for sheet_name in wb.sheet_names:
+                        if _is_post_write_sheet(sheet_name):
+                            continue      # read by the post-write engines, not a migrated table
                         df_full = wb.read(sheet_name, dtype=str)
                         records_tables[sheet_name] = df_full.to_dict(orient="records")
                         df_tables[sheet_name] = df_full
@@ -406,15 +622,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         # files' rows) instead of source-named splits. The intermediate/nested JSON already merges by
         # routed entity (build_intermediate_schema extends records per entity_type), so it is left on
         # the source-keyed set. Union keeps every row; a shared PK dedupes at insert.
-        _routing = state.get("table_routing") or {}
-        routed_records_tables: dict = {}
-        for _src, _rows in records_tables.items():
-            _dest = _routing.get(_src) or _src
-            if _dest in routed_records_tables:
-                routed_records_tables[_dest].extend(list(_rows or []))
-                log(f"  Merged '{_src}' → '{_dest}' ({len(_rows or [])} rows, union of duplicate/co-routed tables)")
-            else:
-                routed_records_tables[_dest] = list(_rows or [])
+        routed_records_tables = routed_records(records_tables, state.get("table_routing") or {}, log)
 
         # ── Step 2: Export to CSV — one file per DESTINATION table (duplicates merged) ──
         log(f"Exporting {len(routed_records_tables)} destination table(s) to CSV...")
@@ -422,12 +630,11 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         total_csv_rows = 0
 
         try:
+            csv_exports = csv_exports_for(routed_records_tables)
             for table_name, records in routed_records_tables.items():
                 if records:
-                    df_tmp = pd.DataFrame(records)
-                    csv_exports[table_name] = df_tmp.to_csv(index=False)
-                    total_csv_rows += len(df_tmp)
-                    log(f"  Exported '{table_name}': {len(df_tmp):,} rows")
+                    total_csv_rows += len(records)
+                    log(f"  Exported '{table_name}': {len(records):,} rows")
             log(f"✅ CSV export complete: {total_csv_rows:,} total rows across {len(csv_exports)} file(s)")
         except Exception as e:
             log(f"❌ CSV export failed: {e}")
@@ -442,23 +649,13 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         try:
             # Uses the routed+union set built above, so work_order + workorders emit a SINGLE
             # plenum_cafm.work_orders insert (both files' rows) rather than two source-named tables.
-            sql_script = export_to_sql(routed_records_tables, confirmed_hierarchies)
-            # B22.1 — append the shared-attribute lookup tables (attribute → new PK table) + FK
-            # rewrites to the output SQL. Each block is idempotent (CREATE IF NOT EXISTS, INSERT ON
-            # CONFLICT DO NOTHING) and its FK ALTERs are wrapped in error-swallowing DO blocks, so it
-            # is safe to apply. Sourced from the column-intelligence report already in state.
-            _lookup_tables = ((state.get("column_intelligence") or {}).get("shared_attribute_tables") or [])
-            _ddl_blocks = [t.get("ddl_block") for t in _lookup_tables if isinstance(t, dict) and t.get("ddl_block")]
+            # B22.1 — the shared-attribute lookup tables (attribute → new PK table) + FK rewrites go
+            # after the inserts. Each block is idempotent (CREATE IF NOT EXISTS, INSERT ON CONFLICT DO
+            # NOTHING) and its FK ALTERs are wrapped in error-swallowing DO blocks, so it is safe to
+            # apply. Sourced from the column-intelligence report already in state.
+            _ddl_blocks = lookup_ddl_blocks(state)
+            sql_script = sql_script_for(routed_records_tables, confirmed_hierarchies, _ddl_blocks)
             if _ddl_blocks:
-                sql_script = (
-                    sql_script
-                    + "\n\n-- ============================================================\n"
-                    + f"-- SECTION: Shared-attribute lookup tables ({len(_ddl_blocks)}) + FK rewrites (B22.1)\n"
-                    + "-- Attribute promoted to a lookup PK; source columns rewritten as FKs.\n"
-                    + "-- ============================================================\n\n"
-                    + "\n\n".join(_ddl_blocks)
-                    + "\n"
-                )
                 log(f"✅ Appended {len(_ddl_blocks)} shared-attribute lookup table(s) to SQL output")
             sql_lines = sql_script.count('\n')
             log(f"✅ SQL script generated: {len(sql_script):,} bytes, {sql_lines:,} lines")
@@ -476,10 +673,10 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
             pdf_bytes = generate_pdf_report(
                 migration_id=str(migration_id),
                 cmms_name=cmms_name,
-                t1_count=len(tier1_mappings),
-                t2_auto_count=len(tier2_auto_mappings),
-                t2_human_count=len(tier2_human_decisions),
-                t2_unmappable=tier2_unmappable,
+                tier1_count=len(tier1_mappings),
+                tier2_auto_count=len(tier2_auto_mappings),
+                tier2_human_count=len(tier2_human_decisions),
+                tier2_unmappable=tier2_unmappable,
                 overall_confidence=overall_confidence,
                 data_quality_warnings=data_quality_warnings,
                 tier1_mappings=tier1_mappings,
@@ -487,7 +684,6 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
                 tier2_human_decisions=tier2_human_decisions,
                 confirmed_hierarchies=confirmed_hierarchies,
                 hierarchy_cycles=hierarchy_cycles,
-                orphaned_records=orphaned_records,
             )
             log(f"✅ PDF report generated: {len(pdf_bytes):,} bytes")
         except Exception as e:
@@ -528,38 +724,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
 
         try:
             schema_dict = intermediate_schema.dict()
-
-            # Validate required fields
-            required_fields = [
-                "ingestion_id",
-                "source_type",
-                "agent_id",
-                "entities",
-                "confidence",
-                "audit",
-            ]
-
-            missing_fields = []
-            for field in required_fields:
-                if field not in schema_dict:
-                    missing_fields.append(field)
-
-            if missing_fields:
-                raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
-
-            # Validate entity structure
-            entities = schema_dict.get("entities", {})
-            if not isinstance(entities, dict):
-                raise ValueError(f"entities must be dict, got {type(entities)}")
-
-            # Validate confidence structure
-            confidence = schema_dict.get("confidence", {})
-            if not isinstance(confidence, dict):
-                raise ValueError(f"confidence must be dict, got {type(confidence)}")
-
-            if "overall" not in confidence:
-                raise ValueError("confidence.overall is required")
-
+            check_el_m8(schema_dict)
             state["el_m8_passed"] = True
             log(f"✅ EL-M.8 PASSED: IntermediateSchema validates")
 
@@ -574,52 +739,17 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         # ── Step 7: Upload to Azure Blob ─────────────────────────────
         log("Uploading artefacts to Azure Blob...")
 
-        from ...config import get_settings as _get_settings
-        _settings = _get_settings()
-        blob_connection_string = _settings.azure_storage_connection_string
-        blob_container = _settings.azure_blob_container_name
-        blob_base_path = f"migrations/{migration_id}"
 
         # Keep backward-compatible nested output while also including full per-table
         # records so downloads reflect all flow tables, not only "sites" hierarchy.
-        output_json_payload = {
-            "nested_hierarchy": nested_json,
-            "tables": records_tables,
-            "table_count": len(records_tables),
-            "tables_included": sorted(records_tables.keys()),
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-        }
+        output_json_text = output_json_for(nested_json, records_tables, datetime.utcnow().isoformat() + "Z")
 
         # Build Excel workbook: one sheet per table
-        excel_bytes: bytes | None = None
-        try:
-            import openpyxl
-            wb = openpyxl.Workbook()
-            wb.remove(wb.active)  # remove default empty sheet
-            for table_name, df in df_tables.items():
-                if not isinstance(df, pd.DataFrame) or df.empty:
-                    continue
-                sheet_name = table_name[:31]  # Excel sheet name limit
-                ws = wb.create_sheet(title=sheet_name)
-                ws.append(list(df.columns))
-                for row in df.itertuples(index=False, name=None):
-                    ws.append(list(row))
-            if not wb.sheetnames and records_tables:
-                for table_name, records in records_tables.items():
-                    if not records:
-                        continue
-                    df_tmp = pd.DataFrame(records)
-                    sheet_name = table_name[:31]
-                    ws = wb.create_sheet(title=sheet_name)
-                    ws.append(list(df_tmp.columns))
-                    for row in df_tmp.itertuples(index=False, name=None):
-                        ws.append(list(row))
-            buf = io.BytesIO()
-            wb.save(buf)
-            excel_bytes = buf.getvalue()
-            log(f"✅ Excel workbook built: {len(wb.sheetnames)} sheet(s), {len(excel_bytes):,} bytes")
-        except Exception as e:
-            log(f"❌ Excel workbook generation failed: {e}")
+        excel_bytes, _excel_error = excel_bytes_for(df_tables, records_tables)
+        if excel_bytes is not None:
+            log(f"✅ Excel workbook built: {_excel_error}, {len(excel_bytes):,} bytes")
+        else:
+            log(f"❌ Excel workbook generation failed: {_excel_error}")
 
         # Recommended finalized DB structure (Feature 4a) — a human-readable
         # Locations→Sites→Assets→… summary derived from the confirmed hierarchy
@@ -636,7 +766,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
             structure_md = None
 
         artefacts: dict[str, bytes | str] = {
-            "output.json": json.dumps(output_json_payload, indent=2),
+            "output.json": output_json_text,
             "output.sql": sql_script,
         }
         if structure_md:
@@ -648,24 +778,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         for table_name, csv_content in csv_exports.items():
             artefacts[f"table_{table_name}.csv"] = csv_content
 
-        uploaded_count = 0
-        urls_generated: dict[str, str] = {}
-
-        if not blob_connection_string:
-            log("⚠️  AZURE_STORAGE_CONNECTION_STRING not set — skipping blob upload, URLs will be empty")
-        else:
-            async with BlobServiceClient.from_connection_string(blob_connection_string) as svc:
-                for filename, content in artefacts.items():
-                    blob_path = f"{blob_base_path}/{filename}"
-                    try:
-                        blob_client = svc.get_blob_client(container=blob_container, blob=blob_path)
-                        data: bytes = content.encode("utf-8") if isinstance(content, str) else content
-                        await blob_client.upload_blob(data, overwrite=True)
-                        urls_generated[filename] = blob_client.url
-                        uploaded_count += 1
-                        log(f"  ✅ Uploaded: {filename} ({len(data):,} bytes) → {blob_client.url}")
-                    except Exception as e:
-                        log(f"  ⚠️  Failed to upload {filename}: {e}")
+        urls_generated, uploaded_count = await upload_all(migration_id, artefacts, log)
 
         log(f"✅ Uploaded {uploaded_count}/{len(artefacts)} artefacts to Blob")
 

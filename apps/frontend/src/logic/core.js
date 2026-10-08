@@ -2,6 +2,19 @@
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
 import { GB, PACKS, CC_OF, ENC, ACTION_SPECS, TONE, t, MODULES } from './constants.js';
 import { HOISTWAY } from '../data/hoistway-data.js';
+import { makeSession, newSessionId, trimSessions } from './sessions.js';
+import { flattenCards } from './reports.js';
+import { planQueueAction } from './queueDraft.js';
+
+// The re-entry guards loadLiveData()'s loaders set while a read is in flight. Instance
+// flags, not state — resetLiveData() has to release them together, or a company switch
+// leaves the register showing the previous company's rows. A loader added with a new
+// guard and not listed here is a register that will silently fail to switch.
+const IN_FLIGHT_GUARDS = [
+  '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
+  '_enLoading', '_enPosLoading', '_asLiveLoading', '_asCondLoading', '_asCondSeeded', '_mxLiveLoading', '_spLoading',
+  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading', '_cronLoading'
+];
 
 export const coreMethods = {
   componentDidMount() {
@@ -10,21 +23,191 @@ export const coreMethods = {
         e.preventDefault();
         this.setState((s) => ({ paletteOpen: !s.paletteOpen }));
       }
-      if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false });
+      if (e.key === "Escape") this.setState({ paletteOpen: false, detail: null, queueOpen: false, pwOpen: false });
     };
     window.addEventListener("keydown", this._key);
-    this._cronTimer = setInterval(() => {
-      if (this.state.signedIn) this.setState((p) => ({ cronPulse: (p.cronPulse + 1) % 24 }));
-    }, 1800);
     this._frameTimer = setInterval(() => {
       if (!this.state.signedIn) this.setState((p) => ({ frame: (p.frame + 1) % 4 }));
     }, 3200);
-    // Pull the compliance register from the backend; the seed stays until it answers.
-    this.ccLoad();
-    this.bldLoad();
+    this.authBoot();
+    // Every account-scoped register: compliance, home tiles, vendor scorecards, buildings,
+    // energy, assets, maintenance, saved spaces. Shared with authEnter, which calls the same
+    // loadLiveData() whenever a fresh sign-in swaps the account within one tab.
+    //
+    // Only for a shell that loadSession() restored as signed in. On the gate there is no
+    // token to send: every read 401'd missing_token, asked for a refresh there was nothing
+    // to refresh with, and armed its own retry — six rounds, 30s apart, of noise against a
+    // tab the person is still signing into. authEnter fires the same set once they are in.
+    if (this.state.signedIn) {
+      this.loadLiveData();
+      // The admin surfaces: users + audit read /api/admin eagerly like everything above —
+      // a non-admin's 403 lands in the error slice and deliberately arms no retry timer,
+      // and authEnter re-kicks both the moment an admin account signs in. The Super Admin
+      // console loads on open (the account-menu item in auth.js), never here.
+      this.usLiveLoad();
+      this.auLiveLoad();
+      // The open conversation came back without its transcript - older than the newest few, it
+      // was stored shed (sessions.js trimSessions) - so its turns are read back from the server.
+      const open = this.state.sessionId ? (this.state.sessions || []).find((x) => x.id === this.state.sessionId) : null;
+      if (open && open.kind === "chat" && !(this.state.ccChat || []).length && (open.remote || open.serverTurns)) this.sessionHydrate(open.id);
+    }
+    this.rpStart();
+    // A reload that lands on the conversation page re-checks the orchestrator link.
+    if (this.state.view === "chat") this.chatConnect();
+    // A reload that lands on the Orchestrator resumes following the run it had open. mgId
+    // is persisted, so without this the card renders from the id alone and never reads the
+    // document: "Not loaded", every node hollow, and a blurb claiming the pipeline is
+    // working. The Migration page did this on arrival; deleting the page deleted the line
+    // and left this comment standing over nothing.
+    if (this.state.view === "chat" && this.state.mgId) this.mgPoll(true);
+    // The constructor puts the transcript back without setState, so the run behind the
+    // rail's answer is asked for here; without it a reload dropped every Correct.
+    if (typeof this.crEnsureRun === "function") this.crEnsureRun();
   },
 
-  componentWillUnmount() { window.removeEventListener("keydown", this._key); clearInterval(this._frameTimer); clearInterval(this._cronTimer); clearTimeout(this._ccRetry); clearTimeout(this._bldRetry); },
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._key);
+    this.authStop();
+    clearInterval(this._frameTimer); clearInterval(this._cronTimer);
+    clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._spRetry); this.rpStop();
+    clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
+    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh);
+    clearTimeout(this._usLiveRetry); clearTimeout(this._usLiveRefresh);
+    clearTimeout(this._auLiveRetry);
+    clearTimeout(this._saLiveRetry); clearTimeout(this._saLiveRefresh);
+    clearInterval(this._ingT);
+    clearTimeout(this._mgTimer);
+    clearTimeout(this._qTimer);
+  },
+
+  // The account-scoped reads: the Buildings table, compliance register, home tiles,
+  // vendor scorecards, energy anomalies/meters/ratings, the Assets and Maintenance
+  // pages' live registers, and saved spaces. Fired once at mount, and again by
+  // authEnter for a fresh sign-in — both call sites must fire the same set, or a
+  // page reload and an in-tab account switch would load different data.
+  loadLiveData() {
+    // The Decision queue's saved schedule and channels (queueLive.js) — restored before the
+    // reads so the timer cadence is the reader's own from the first tick.
+    this.queueBoot();
+    this.ccLoad();
+    this.homeLoad();
+    // The company's scheduled jobs, for the Hoist Crons panel (crons.js).
+    this.cronLoad();
+    // This month's credits, for the Platform notice in the Decision queue (admins only).
+    this.usageLoad();
+    this.vpLoad();
+    // What the server still holds. A document held in another browser — or before the chat
+    // could answer one at all — is otherwise invisible: five were open on 21 Sep with
+    // nothing in the UI pointing at any of them. Silent if it fails.
+    if (typeof this.ccCaseSync === 'function') this.ccCaseSync();
+    // buildingsLive.js loads the per-table graph counts once bldLoad answers.
+    this.bldLoad();
+    this.energyLoad();
+    this.enPositionLoad();
+    this.asLiveLoad();
+    this.asCondLoad();
+    this.mxLiveLoad();
+    this.spLoad();
+    // Reports are personal rather than per-company, but they are still somebody's: a
+    // sign-in that swaps accounts in this tab has to re-read them here, not wait up to
+    // POLL_MS for rpStart's timer to come round and correct the navigator.
+    this.rpLoad();
+    // The conversations kept on the server for this account and company (sessions.js):
+    // what another device or browser asked, and what this one asked before a clear.
+    if (typeof this.sessionsSyncFromServer === 'function') this.sessionsSyncFromServer();
+    // The refresh-cadence menu. Not company-scoped, but it needs a token, and rpStart no
+    // longer reads it from the sign-in gate — this is where a fresh sign-in picks it up.
+    if (typeof this.rpLoadPresets === 'function') this.rpLoadPresets();
+  },
+
+  // Clears every register loadLiveData() fills, and cancels any retry/refresh timer
+  // still armed from whoever was signed in before, so a sign-in that swaps accounts
+  // in the same tab never shows — even for a moment — a register scoped to the
+  // previous account (e.g. its buildings, its compliance certificates). Not called on
+  // a reload's silent token refresh (authEnter's keepView): componentDidMount already
+  // loads fresh at mount, and the account there never changes.
+  resetLiveData() {
+    // Every loader below guards re-entry with an INSTANCE flag (this._bldLoading and the
+    // rest) — not the state.*Loading mirrors reset further down, which only drive the
+    // spinners. Left set, each loader returns at its own guard and loadLiveData() becomes
+    // a no-op: the switch fires no read at all for that register, and whatever was already
+    // in flight lands and repaints the PREVIOUS company's rows. That is the whole of the
+    // bug where Buildings showed 619 buildings belonging to another company while the
+    // header named the one being viewed as — Buildings has the longest read timeout
+    // (30s), so it was the register most often still in flight when the company changed.
+    // The request itself is disowned by the orgEpoch stamp in api/client.js; releasing
+    // the guard here is what lets the correctly-scoped read actually go out.
+    IN_FLIGHT_GUARDS.forEach((k) => { this[k] = false; });
+    // Reset page data: a building chosen for one company must not sit, armed, under the next.
+    if (typeof this.drReset === 'function') this.drReset();
+    clearTimeout(this._mgTimer);
+    clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
+    clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
+    clearTimeout(this._enRetry); clearTimeout(this._enPosRetry);
+    clearTimeout(this._asLiveRetry); clearTimeout(this._mxLiveRetry); clearTimeout(this._mxLiveRefresh); clearTimeout(this._spRetry);
+    // A debounced rule write belongs to the company whose steppers were moved. Left armed,
+    // it would land on the next company — writing one company's threshold onto another's,
+    // which is the one mistake this control must never make. The token bump also disowns a
+    // write already on the wire, so its answer cannot seed the new company's steppers.
+    clearTimeout(this._asRuleTimer);
+    this._asRuleToken = (this._asRuleToken || 0) + 1;
+    this._asRulePending = false;
+    // An Evidence month read still in flight belongs to the old company: drop its reply.
+    this._vpEvReq = {};
+    // So does an open investigation: its datasets, its summary on the wire, the walk's timer
+    // and the row its drafts address. Left in place it reopened on the next company's Assets
+    // page and fed the previous company's readings into that company's chat.
+    clearInterval(this._invTick);
+    this._invToken = (this._invToken || 0) + 1;
+    // The vendor drawer names one company's vendors and would move an asset to one of them.
+    this._vdToken = (this._vdToken || 0) + 1;
+    this._vaToken = (this._vaToken || 0) + 1;
+    this._asInvRow = null;
+    if (this.state.flow === 'investigate') this.setState({ flow: null });
+    this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
+    this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
+    this._mxLiveAttempts = 0; this._spAttempts = 0;
+    this.setState({
+      ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
+      homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
+      vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null, vpEv: null, vpEvMonths: {},
+      bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
+      enAnomLive: null, enMetersLive: null, enFloorsLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
+      asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
+      inv: null, invStage: 0, invSrcDone: 0,
+      vdOpen: false, vd: null, vdConfirm: false, vdSaving: false,
+      // Back to the Ingestion tab: a Vendor tab left showing an emptied trail read nothing until
+      // it was clicked again (pre-push review, 29 Sep 2026).
+      auTab: "ingestion", vaEvents: null, vaLoading: false, vaError: "", vaUnreadable: [], vaOpen: null,
+      asLocations: [], asAnoms: [], asReadings: [], asSections: [], asVar: null, asIntel: {},
+      asLocationsError: "", asAnomsError: "", asReadingsError: "", asSectionsError: "", asVarError: "", asCondLoadedAt: null,
+      // The condition rule is per organisation, so none of it survives a company switch:
+      // the bands, the thresholds they were decided by, and the steppers all go back to the
+      // page's own defaults until the new company's read seeds them.
+      asCondBands: [], asCondRules: null, asCondBandsError: "", asCondSummary: null,
+      asCondBuildings: [], asCondLastRun: null, asCondSummaryError: "", asCondFilter: null,
+      asPct: 10, asWeeks: 3, asRuleSaving: false, asRuleError: "",
+      asLiveOpenB: [], asLiveCost: {},
+      mxRaw: null, mxLiveLoading: false, mxLiveError: "", mxLiveLoadedAt: null,
+      mxGroup: "State", mxOpenG: null, mxAnswer: null, mxAsked: "", mxAskBusy: false, mxAskError: "",
+      spaces: null, spLoading: false, spError: "",
+      // A migration belongs to the company it was uploaded into; the next company starts
+      // on the upload panel with its own recent runs.
+      mgId: null, mgStatus: null, mgError: "", mgDec: {}, mgArmed: false, mgList: null, mgListError: "",
+      // A report card belongs to the person who pinned it, not to the company, so it is the
+      // one register a company switch leaves alone — but a sign-in that swaps ACCOUNTS in
+      // this tab must not leave the previous person's cards in the navigator, on the home
+      // page's pinned runs, or open on the Reports page. Cleared here, re-read by
+      // loadLiveData(); reportsOwner going null is what stops renderVals drawing them in
+      // the moment in between.
+      reports: [], reportsOwner: null, reportsLoading: false, reportsError: "", reportsLoadedAt: null,
+      // Hoist Crons and this month's usage: the Home panel and the Platform notices read them.
+      cronJobs: [], cronRuns: [], cronDaily: {}, cronStats: null, cronCanManage: false, cronLoadErr: "", cronLoadedAt: null, usageRaw: null,
+      reportKey: null, reportRunIdx: 0, reportSelected: [], rpArmed: null
+    });
+  },
 
   D() { return HOISTWAY; },
 
@@ -56,21 +239,54 @@ export const coreMethods = {
 
   // Any action that makes the orchestrator DO something (not just show data)
   // goes through here: opens the dock, logs the task as a session, plays the chain.
-  orch(task, ctx, chain) {
+  // `opts.record === false` skips the session record — the chat records its own question
+  // as a chat session and only borrows the dock's title.
+  orch(task, ctx, chain, opts) {
     const label = ctx ? task + " — " + ctx : task;
+    // A task that brings no chain of its own shows its intent and nothing more. The scripted
+    // Planner / Worker / Quality lines ticked to green checks for actions that make no call at
+    // all — "Rotate the ingest token", "Sync every connected source" — and said a write had been
+    // executed and validated when none was (review, 28 Sep 2026).
     const steps = chain || [
-      { a: "Orchestrator", t: "Intent: " + task.toLowerCase() + (ctx ? " · scope: " + ctx : "") },
-      { a: "Planner", t: "Resolved the Hoist Graph cells this touches and the agents that own them" },
-      { a: "Worker", t: "Executing against the live graph — every write logged with actor and timestamp" },
-      { a: "Quality", t: "Validation gate armed: the result is checked before it is written back" }
+      { a: "Orchestrator", t: "Intent: " + task.toLowerCase() + (ctx ? " · scope: " + ctx : "") }
     ];
-    const entry = { label, when: "Just now", k: null, kind: "task", steps };
+    // A task is a session record (logic/sessions.js): `task`/`ctx` keep the raw
+    // instruction so Recent tasks can re-run it exactly, and `at` is a real timestamp.
+    const entry = makeSession({ id: newSessionId(), title: label, kind: "task", task: task, ctx: ctx || null, steps: steps, page: this.ctxLabel(), at: Date.now(), owner: this.state.account && this.state.account.email, viewOrgId: this.state.viewOrgId || null });
+    const record = !(opts && opts.record === false);
+    // A new task is a new conversation, so the dock opens empty.
+    //
+    // This made a session record and opened the dock, and left ccChat exactly as it was.
+    // Pressing "Approve booking" on a certificate therefore logged a fresh session in the
+    // sidebar and then showed the PREVIOUS one's transcript underneath it — a migration
+    // result and an unrelated question about an electricity meter, sitting above an
+    // approval the reader had just asked for. Two sessions listed, one body, and no way to
+    // tell which reply belonged to which.
+    //
+    // It also drops sessionId, so the next message starts a new orchestrator thread rather
+    // than inheriting the last one's context and answering in it.
+    //
+    // A TASK opening a CLOSED dock starts a new conversation; nothing else resets. The
+    // failure this fixes was a closed dock opening onto the last conversation's transcript.
+    // A dock that is open is a conversation the reader is in, and an action beside it (a
+    // refinement chip, a cron action, "Request evidence") joins it rather than deleting it
+    // and killing a reply still streaming. A QUESTION (record:false — ccAsk) never resets:
+    // closing the dock does not end a conversation (closeOrch keeps ccChat and sessionId),
+    // so a follow-up typed after pressing × reopens it with its history. And on the chat
+    // page the conversation IS the page — dockAnswers() is false there — so no action
+    // wipes it. The question itself is appended after this call, either way.
+    const dockPage = typeof this.dockAnswers !== "function" || this.dockAnswers();
+    if (record && !this.state.orchOpen && dockPage) this.ccChatReset();
     clearInterval(this._orchTick);
-    this.setState((p) => ({
+    // emFromInv: a draft opened from an investigation belongs to that investigation's task. A
+    // new task never inherits it, or its first send returns into the old investigation. The
+    // same for a Decision-queue draft's item and its confirmation wording: a later draft's send
+    // must not be recorded against the queue item, nor confirmed in another flow's words.
+    this.setState((p) => Object.assign({
       orchOpen: true, orchTask: entry, orchDone: 0,
-      sessions: [entry].concat(p.sessions).slice(0, 12),
-      paletteOpen: false, queueOpen: false, detail: null
-    }));
+      paletteOpen: false, queueOpen: false, detail: null, emFromInv: false,
+      emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false
+    }, record ? { sessions: trimSessions([entry].concat(p.sessions || [])) } : {}));
     this._orchTick = setInterval(() => {
       this.setState((p) => {
         const n = p.orchDone + 1;
@@ -80,13 +296,18 @@ export const coreMethods = {
     }, 900);
   },
 
-  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null }); },
-
+  // _invTick is a dock-flow ticker owned by another module, not by componentWillUnmount:
+  // closing the dock mid-flow is the only place that stops it before its own completion
+  // tick fires a stale result + a flash() toast at whoever is looking at the app by then.
+  // (_scanTick went with the condition-scan flow, which read a fixture — see screens/Assets.jsx.)
+  closeOrch() { clearInterval(this._orchTick); clearInterval(this._invTick); this.setState({ orchOpen: false, flow: null, inv: null, ingExpect: "" }); },
 
   // Opens the orchestrator AND arms a flow: booking draft, contractor swap, or an email.
+  // ingExpect (the certificate an Upload is for) belongs to the card that set it: a later card
+  // that does not name one starts without it.
   orchWith(task, ctx, flow, patch) {
     this.orch(task, ctx);
-    this.setState(Object.assign({ flow: flow, flowDone: "" }, patch || {}));
+    this.setState(Object.assign({ flow: flow, flowDone: "", ingExpect: "" }, patch || {}));
   },
 
 
@@ -96,10 +317,8 @@ export const coreMethods = {
     const low = label.toLowerCase();
     const spec = ACTION_SPECS.find((sp) => sp.m && sp.m.some((rx) => rx.test(low)));
     const ven = vendorName || "the responsible vendor";
-    if (/^hoist building/.test(low)) {
-      if (this.state.role !== "admin") { this.orch(label, subject); return this.setState({ flow: null, flowDone: "Hoisting a building is an admin action. Ingestion has to be deliberate — one owner for what enters the Hoist Graph. Ask your workspace admin, or upload documents against a building that already exists." }); }
-      return this.orchWith(label, subject, "declare", { declStep: 0 });
-    }
+    // Re-running the recorded task reopens the form, not just the trace.
+    if (/^hoist building/.test(low)) return this.bcOpenForm();
     if (/^ingest documents/.test(low)) return this.orchWith(label, subject, "ingest", {});
     if (/^update the graph/.test(low)) return this.orchWith(label, subject, "update", { ugText: "", ugParsed: false });
     if (spec && spec.custom) return this.orchWith(label, subject, spec.custom, { bkLocked: true, fSubject: subject, fVendor: ven });
@@ -122,9 +341,13 @@ export const coreMethods = {
     if (s.view === "cc") return "Compliance";
     if (s.view === "vp") return "Vendors";
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
-    if (s.view === "report") { const r = s.reports.find((x) => x.key === s.reportKey); return r ? r.name : "Reports"; }
+    if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
+    if (s.view === "insp") return "Inspection reports";
     if (s.view === "answer") return "Query";
+    if (s.view === "chat") return "Orchestrator";
+    if (s.view === "sessions") return "Sessions";
+    if (s.view === "space") { const sp = this.spaceEntry(s.spaceKey); return sp ? sp.name : "Spaces"; }
     return "Home";
   },
 
@@ -147,6 +370,45 @@ export const coreMethods = {
 
   detailFromDecision(d) { this.setState({ detail: d, queueOpen: false }); },
 
+  // A Decision-queue card opens the page it is about, and the dock beside it holding the email
+  // that resolves it, ready for Approve & send (queueDraft.js; Hussain, 7 Oct 2026). The
+  // drawers below are for a card that carries nothing to act on.
+  queueOpenItem(d) {
+    if (d.kind === "platform") return this.platformOpen(d.action || {});
+    const plan = planQueueAction(d, this.queueDraftCtx());
+    if (plan) return this.queueRunPlan(plan);
+    if (d.kind === "approval" || d.kind === "anomaly") {
+      return this.setState({
+        detail: this.cronDetail({ kind: d.kind, agent: d.module === "Vendors" ? "Vendor" : d.module, tone: d.tone, text: d.title, item: d.item }),
+        queueOpen: false
+      });
+    }
+    if (d.kind === "decision") return this.setState({ detail: this.mxDecisionDetail(d.d), queueOpen: false });
+    return this.detailFromDecision(d);
+  },
+
+  // A Platform notice opens the place that acts on it (platformNotices.js).
+  platformOpen(a) {
+    const go = (patch) => { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); this.setState(Object.assign({ queueOpen: false, detail: null, navOpen: true }, patch)); };
+    if (a.type === "ingest") {
+      // The ordinary ingest card, on Home where the score is: the file is read, matched to its
+      // building and filed - what raises the score.
+      go({ view: "home" });
+      return this.orchWith("Ingest documents", "Hoist Score", "ingest", { declFor: "" });
+    }
+    if (a.type === "buildings") return go({ view: "buildings", role: "user" });
+    if (a.type === "cron") {
+      // The job's own page for whoever can manage it; Home's panel for everyone else.
+      if (!this.state.cronCanManage) return go({ view: "home" });
+      this.setState({ queueOpen: false });
+      this.cpOpen();
+      return this.cpOpenJob(a.id);
+    }
+    if (a.type === "schedule") { this.setState({ queueOpen: false }); return this.cronOpenBlank(); }
+    if (a.type === "usage") return go({ view: "users", role: "admin" });
+    return undefined;
+  },
+
   detailFor(module, obj) {
     const D = this.D();
     const found = D.decisions.find((d) => d.title.includes(obj.key || "@@"));
@@ -156,7 +418,7 @@ export const coreMethods = {
 
   woDetail(w) {
     return {
-      module: "Vendor operations", icon: "ph-wrench", tone: w.tone,
+      module: "Maintenance", icon: "ph-wrench", tone: w.tone,
       title: w.id + " — " + w.asset + ", " + w.building,
       meta: w.type + " · " + w.priority + " · " + w.status + " · " + w.vendor,
       body: "Generated by the work-order engine, not raised by the operative. " + w.due + ". Estimate " + w.est + " built from the contracted rates in the Contract entity. " + (w.status === "Held" ? "Allocation is locked because the assigned vendor's accreditation for this asset type is not current." : "The structured inspection form for this asset type has been generated and will be completed by the operative on site."),
@@ -170,7 +432,7 @@ export const coreMethods = {
         { l: "Deadline", v: w.due, editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Trigger: " + w.type.toLowerCase() + " → intent: work-order-engine" },
+        { a: "Orchestrator", t: "Trigger: " + w.type.toLowerCase() + " → Work orders" },
         { a: "Planner", t: "Classify WO type → fetch asset record → priority from criticality × severity → select contractor filtered by accreditation → estimate cost → draft" },
         { a: "Worker", t: "Fields pre-populated from Hoist Graph. Operative availability checked against ResourceSkill. Structured inspection form generated for this AssetType." },
         { a: "Quality", t: w.status === "Held" ? "Fired — contractor accreditation invalid for this AssetType. Dispatch blocked." : "Draft presented to you. You are the quality gate; no auto-dispatch at this cost band." }

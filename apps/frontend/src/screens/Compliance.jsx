@@ -1,6 +1,7 @@
 // Compliance — compliance console
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
+import CertificateList from '../components/shell/CertificateList.jsx';
 
 export default function Compliance({ vals }) {
   return (
@@ -407,8 +408,13 @@ export default function Compliance({ vals }) {
                               </div>
                               {(r.cells || []).map((c, $index) => (
                                 <React.Fragment key={$index}>
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--color-divider)", borderRight: "1px solid var(--color-divider)", minHeight: "38px" }}>
-                                    <span title={c.tip} style={{ width: "22px", height: "22px", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,monospace", fontSize: "11px", background: c.bg, color: c.fg, border: c.border }}>
+                                  {/* Every cell but "Not required" asks the orchestrator what is behind it. */}
+                                  <div className={c.click ? "hv2" : undefined} role={c.click ? "button" : undefined} tabIndex={c.click ? 0 : undefined}
+                                    aria-label={c.click ? r.name + " — " + c.tip : undefined} title={c.tip}
+                                    onClick={c.click || undefined}
+                                    onKeyDown={c.click ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } } : undefined}
+                                    style={{ display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--color-divider)", borderRight: "1px solid var(--color-divider)", minHeight: "38px", cursor: c.click ? "pointer" : "default" }}>
+                                    <span style={{ width: "22px", height: "22px", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "ui-monospace,monospace", fontSize: "11px", background: c.bg, color: c.fg, border: c.border }}>
                                       {c.glyph}
                                     </span>
                                   </div>
@@ -521,66 +527,9 @@ export default function Compliance({ vals }) {
                         ))}
                       </div>
                       {vals.ccPaneCerts ? (
-                        <>
-                          <div style={{ overflowX: "auto" }}>
-                            <div style={{ minWidth: "560px" }}>
-                              <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.7fr 0.8fr 0.8fr auto", gap: "10px", padding: "8px 13px", background: "var(--color-bg)", borderBottom: "1px solid var(--color-divider)", fontSize: "9.5px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                                <span>
-                                  {"Certificate"}
-                                </span>
-                                <span>
-                                  {"Expiry"}
-                                </span>
-                                <span>
-                                  {"Risk"}
-                                </span>
-                                <span>
-                                  {"Authenticity"}
-                                </span>
-                                <span>
-                                  {"Verification"}
-                                </span>
-                                <span>
-                                  {"Action"}
-                                </span>
-                              </div>
-                              {(vals.ccCertRows || []).map((c, $index) => (
-                                <React.Fragment key={$index}>
-                                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.7fr 0.8fr 0.8fr auto", gap: "10px", padding: "9px 13px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", alignItems: "center" }}>
-                                    <span style={{ minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                      {c.nm}
-                                    </span>
-                                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "11px", whiteSpace: "nowrap" }}>
-                                      {c.exp}
-                                      <span style={{ display: "block", fontSize: "10px", color: "var(--color-neutral-500)" }}>
-                                        {c.rel}
-                                      </span>
-                                    </span>
-                                    <span>
-                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: c.riskBg, color: c.riskFg }}>
-                                        {c.risk}
-                                      </span>
-                                    </span>
-                                    <span>
-                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: c.authBg, color: c.authFg }}>
-                                        {c.auth}
-                                      </span>
-                                    </span>
-                                    <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                      {c.ver}
-                                    </span>
-                                    <span className="hv23" onClick={c.act} style={{ fontSize: "10.5px", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${c.actBorder}`, color: c.actFg, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      {c.actLabel}
-                                    </span>
-                                  </div>
-                                </React.Fragment>
-                              ))}
-                              <div style={{ padding: "14px", fontSize: "11.5px", color: "var(--color-neutral-500)", display: vals.ccCertEmpty }}>
-                                {"Nothing on file in this scope."}
-                              </div>
-                            </div>
-                          </div>
-                        </>
+                        <CertificateList rows={vals.ccCertRows} pageKey={vals.ccFocusName}
+                          intro={"Each certificate is held to three checks: the document is genuine, the public register confirms it, and it has not expired. Most urgent first."}
+                          emptyText={"Nothing on file in this scope."} />
                       ) : null}
                       {vals.ccPaneServed ? (
                         <>
@@ -637,7 +586,7 @@ export default function Compliance({ vals }) {
                       {vals.ccPaneVendors ? (
                         <>
                           <div style={{ padding: "11px 15px 0", fontSize: "11px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
-                            {"Coverage is the required accreditation types each vendor holds on file. A blocked vendor cannot be allocated regulated work here, whatever the building's own record says."}
+                            {"Coverage is the required accreditation types each vendor holds on file. At risk means an accreditation has lapsed or lapses within 30 days; a blocked vendor cannot be allocated regulated work here, whatever the building's own record says. Open a vendor to see its accreditations."}
                           </div>
                           <div style={{ overflowX: "auto", marginTop: "8px" }}>
                             <div style={{ minWidth: "560px" }}>
@@ -660,10 +609,12 @@ export default function Compliance({ vals }) {
                               </div>
                               {(vals.ccVendorRows || []).map((v, $index) => (
                                 <React.Fragment key={$index}>
-                                  <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.9fr 1.4fr 0.7fr", gap: "10px", padding: "9px 13px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", alignItems: "start" }}>
+                                  <div className="hv2" role="button" tabIndex={0} onClick={v.open} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); v.open(); } }} title={"Open " + v.name + " on the Vendors page — accreditations and buildings served"}
+                                    style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 0.9fr 1.4fr 0.7fr", gap: "10px", padding: "9px 13px", borderBottom: "1px solid var(--color-divider)", fontSize: "12px", alignItems: "start", cursor: "pointer" }}>
                                     <div style={{ minWidth: "0" }}>
-                                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                        {v.name}
+                                      <div style={{ display: "flex", alignItems: "center", gap: "5px", minWidth: "0" }}>
+                                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</span>
+                                        <i className="ph ph-arrow-up-right" aria-hidden="true" style={{ fontSize: "11px", color: "var(--color-neutral-500)", flexShrink: 0 }}></i>
                                       </div>
                                       <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "1px 6px", background: v.bg, color: v.fg, display: "inline-block", marginTop: "3px" }}>
                                         {v.worst}
@@ -687,7 +638,8 @@ export default function Compliance({ vals }) {
                                       {v.gaps}
                                     </div>
                                     <span>
-                                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: v.blockBg, color: v.blockFg, whiteSpace: "nowrap" }}>
+                                      <span title={v.blockTitle} style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 6px", background: v.blockBg, color: v.blockFg, whiteSpace: "nowrap" }}>
+                                        {v.block === "At risk" ? <i className="ph ph-warning" aria-hidden="true" style={{ fontSize: "11px" }}></i> : v.block === "Blocked" ? <i className="ph ph-prohibit" aria-hidden="true" style={{ fontSize: "11px" }}></i> : null}
                                         {v.block}
                                       </span>
                                     </span>

@@ -11,6 +11,7 @@ from ...models.work_order import WorkOrder
 from ...models.asset import Asset
 from ...api.schemas.journey import DashboardStats
 from ...core.exceptions import DatabaseError
+from ...services.principal import Principal, current_principal, scope_select
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -25,11 +26,13 @@ log = get_logger(__name__)
         "counts by priority, counts by source, created today, and assets by category."
     ),
 )
-async def get_dashboard_stats(session: AsyncSession = Depends(get_session)):
+async def get_dashboard_stats(session: AsyncSession = Depends(get_session),
+                              principal: Principal = Depends(current_principal)):
     log.debug("dashboard.stats.start")
     try:
         wo_result = await session.execute(
-            select(WorkOrder).where(WorkOrder.work_order_id.isnot(None))
+            scope_select(select(WorkOrder).where(WorkOrder.work_order_id.isnot(None)),
+                         principal, WorkOrder.building_id)
         )
         work_orders: list[WorkOrder] = wo_result.scalars().all()
     except SQLAlchemyError as exc:
@@ -52,7 +55,7 @@ async def get_dashboard_stats(session: AsyncSession = Depends(get_session)):
     # assets_by_category — group by asset category name where available
     assets_by_category: dict[str, int] = {}
     try:
-        asset_result = await session.execute(select(Asset))
+        asset_result = await session.execute(scope_select(select(Asset), principal, Asset.building_id))
         for asset in asset_result.scalars().all():
             category = getattr(asset, "category", None) or getattr(asset, "asset_type", None) or "Unknown"
             assets_by_category[category] = assets_by_category.get(category, 0) + 1

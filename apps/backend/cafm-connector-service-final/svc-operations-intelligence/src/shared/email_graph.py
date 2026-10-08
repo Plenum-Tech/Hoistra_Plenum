@@ -50,10 +50,13 @@ async def send_via_microsoft_graph(
     body: str,
     cc_address: str | None = None,
     attachments: list[dict[str, str]] | None = None,
+    html: bool = False,
 ) -> dict[str, Any]:
     """Send mail as OUTLOOK_USER_MAIL via Graph /users/{id}/sendMail.
 
     attachments: optional list of {name, content_type, content_base64}
+    html: body is HTML rather than plain text (Graph's own contentType switch — no MIME
+    multipart to build, unlike the SMTP path in shared/approvals.py).
     """
     token = await graph_access_token()
     sender = settings.outlook_user_mail.strip()
@@ -71,7 +74,7 @@ async def send_via_microsoft_graph(
         ]
     message: dict[str, Any] = {
         "subject": subject,
-        "body": {"contentType": "Text", "content": body},
+        "body": {"contentType": "HTML" if html else "Text", "content": body},
         "toRecipients": to_recipients,
     }
     if cc_recipients:

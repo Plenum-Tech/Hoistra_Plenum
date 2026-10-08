@@ -114,6 +114,7 @@ async def start_migration(
     file_path: str,
     cmms_name: str = "Custom",
     organization_id: str = "00000000-0000-0000-0000-000000000001",
+    building_id: str | None = None,
 ) -> dict:
     """Upload a CSV or Excel file and start the schema mapper pipeline.
 
@@ -129,6 +130,10 @@ async def start_migration(
         file_path: Absolute path to the CSV/Excel file on the local machine.
         cmms_name: Source CMMS name hint (e.g. 'Maximo', 'Fiix', 'Generic').
         organization_id: UUID of the customer organization (default: test org).
+        building_id: The building the user had selected when they attached the file.
+            Used only for rows that name no site of their own. A CMMS export names its
+            site in a column; a half-hourly meter export names an MPAN and nothing else,
+            so without this there is nothing to place its meter against.
 
     Returns dict with migration_id (UUID), status, progress_pct, message.
     """
@@ -181,7 +186,8 @@ async def start_migration(
         async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
             resp = await client.post(
                 "/api/migration/start-with-upload",
-                data={"cmms_name": cmms_name, "organization_id": organization_id},
+                data={"cmms_name": cmms_name, "organization_id": organization_id,
+                      **({"building_id": building_id} if building_id else {})},
                 files={"file": (path.name, file_bytes, mime_type)},
             )
             resp.raise_for_status()
@@ -218,6 +224,7 @@ async def start_migration_multi(
     file_paths: list[str],
     cmms_name: str = "Custom",
     organization_id: str = "00000000-0000-0000-0000-000000000001",
+    building_id: str | None = None,
 ) -> dict:
     """Upload SEVERAL CSV/Excel files and start ONE migration covering all of them.
 
@@ -234,6 +241,10 @@ async def start_migration_multi(
         file_paths: Absolute paths to the CSV/Excel files on the local machine.
         cmms_name: Source CMMS name hint (e.g. 'Maximo', 'Fiix', 'Generic').
         organization_id: UUID of the customer organization (default: test org).
+        building_id: The building the user had selected when they attached the file.
+            Used only for rows that name no site of their own. A CMMS export names its
+            site in a column; a half-hourly meter export names an MPAN and nothing else,
+            so without this there is nothing to place its meter against.
 
     Returns dict with migration_id (UUID), status, progress_pct, message.
     """
@@ -271,7 +282,8 @@ async def start_migration_multi(
         async with httpx.AsyncClient(base_url=_BASE, timeout=_TIMEOUT_UPLOAD, follow_redirects=True) as client:
             resp = await client.post(
                 "/api/migration/start-with-upload-multi",
-                data={"cmms_name": cmms_name, "organization_id": organization_id},
+                data={"cmms_name": cmms_name, "organization_id": organization_id,
+                      **({"building_id": building_id} if building_id else {})},
                 files=upload_files,
             )
             resp.raise_for_status()

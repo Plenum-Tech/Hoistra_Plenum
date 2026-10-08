@@ -1,0 +1,17 @@
+/* certchecks — the three checks on a Compliance vault row (screens/Compliance.jsx).
+   Document, Register and Expiry sit side by side while the row has room, and stack once it
+   does not: two-and-one left a hollow cell. Sized by the row, not the window, because the
+   vault is a side pane whose width moves with the layout around it. */
+.cc-cert { container-type: inline-size; }
+.cc-checks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--color-divider);
+  border: 1px solid var(--color-divider);
+  border-radius: 8px;
+  overflow: hidden;
+}
+@container (max-width: 480px) {
+  .cc-checks { grid-template-columns: 1fr; }
+}

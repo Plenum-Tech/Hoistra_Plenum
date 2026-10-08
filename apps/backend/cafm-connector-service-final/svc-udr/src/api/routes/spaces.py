@@ -16,12 +16,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db import get_session
 from ...config import settings
 from ...core.logging import get_logger
+from ...services.principal import Principal, current_principal, organization_for
 
 router = APIRouter()
 log = get_logger(__name__)
 
 _SCHEMA = settings.db_schema
 _COLS = "id, organization_id, name, kind, created_by, created_at"
+
+
+def _visible(principal: Principal) -> tuple[str, dict[str, Any]]:
+    """The predicate that limits saved spaces to ones this caller may see.
+
+    A superadmin sees all of them. Everyone else sees their own company's, plus the rows
+    that carry no company at all: those predate this scoping and were visible to everyone,
+    and hiding them would empty the panel for every existing user rather than protect
+    anything. New spaces are stamped with the caller's company, so the null set does not grow.
+    """
+    if principal.is_superadmin:
+        return "", {}
+    return (" AND (organization_id = CAST(:scope_org AS UUID) OR organization_id IS NULL)",
+            {"scope_org": str(principal.organization_id) if principal.organization_id else None})
 
 
 class SavedSpaceCreateRequest(BaseModel):
@@ -49,27 +64,42 @@ def _row_to_dict(row: Any) -> dict:
 
 @router.get("", summary="List customer-named saved spaces")
 async def list_spaces(
-    organization_id: str | None = Query(None),
+    organization_id: str | None = Query(
+        None, description="Superadmin only; anyone else gets their own company."),
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
-    if organization_id:
-        sql = text(
-            f"SELECT {_COLS} FROM {_SCHEMA}.saved_spaces "
-            f"WHERE organization_id = CAST(:org AS UUID) ORDER BY created_at DESC"
-        )
-        params: dict[str, Any] = {"org": organization_id}
-    else:
-        sql = text(
-            f"SELECT {_COLS} FROM {_SCHEMA}.saved_spaces "
-            f"WHERE organization_id IS NULL ORDER BY created_at DESC"
-        )
-        params = {}
+    """The caller's saved spaces.
+
+    The company used to come from the query string, so asking for another one returned it.
+    It now comes from the token; naming a different company is 403 unless you are a
+    superadmin, rather than silently answered.
+    """
+    organization_for(principal, organization_id)
+    clause, params = _visible(principal)
+    if principal.is_superadmin and organization_id:
+        clause = " AND organization_id = CAST(:scope_org AS UUID)"
+        params = {"scope_org": organization_id}
+    sql = text(
+        f"SELECT {_COLS} FROM {_SCHEMA}.saved_spaces WHERE TRUE{clause} ORDER BY created_at DESC"
+    )
     rows = (await session.execute(sql, params)).fetchall()
     return {"spaces": [_row_to_dict(r) for r in rows]}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a customer-named saved space")
-async def create_space(body: SavedSpaceCreateRequest, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_space(
+    body: SavedSpaceCreateRequest,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Create a saved space in the caller's company.
+
+    ``organization_id`` in the body is honoured only for a superadmin; for anyone else it
+    must be their own company or absent. ``created_by`` is the signed-in caller, not a
+    string the request chose for itself.
+    """
+    org = organization_for(principal, body.organization_id)
     space_id = str(uuid.uuid4())
     row = (
         await session.execute(
@@ -82,9 +112,9 @@ async def create_space(body: SavedSpaceCreateRequest, session: AsyncSession = De
             ),
             {
                 "id": space_id,
-                "org": body.organization_id,
+                "org": str(org) if org else None,
                 "name": body.name.strip(),
-                "created_by": body.created_by,
+                "created_by": principal.email or str(principal.user_id),
             },
         )
     ).first()
@@ -98,14 +128,18 @@ async def rename_space(
     space_id: str,
     body: SavedSpaceRenameRequest,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
+    """Rename a saved space the caller may see. One in another company is 404, not 403 —
+    the answer to "does this id exist elsewhere" is not the caller's to have."""
+    clause, params = _visible(principal)
     row = (
         await session.execute(
             text(
                 f"UPDATE {_SCHEMA}.saved_spaces SET name = :name "
-                f"WHERE id = CAST(:id AS UUID) RETURNING {_COLS}"
+                f"WHERE id = CAST(:id AS UUID){clause} RETURNING {_COLS}"
             ),
-            {"id": space_id, "name": body.name.strip()},
+            {"id": space_id, "name": body.name.strip(), **params},
         )
     ).first()
     if row is None:
@@ -115,10 +149,16 @@ async def rename_space(
 
 
 @router.delete("/{space_id}", summary="Delete a saved space")
-async def delete_space(space_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def delete_space(
+    space_id: str,
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Delete a saved space the caller may see. One in another company is 404."""
+    clause, params = _visible(principal)
     res = await session.execute(
-        text(f"DELETE FROM {_SCHEMA}.saved_spaces WHERE id = CAST(:id AS UUID)"),
-        {"id": space_id},
+        text(f"DELETE FROM {_SCHEMA}.saved_spaces WHERE id = CAST(:id AS UUID){clause}"),
+        {"id": space_id, **params},
     )
     await session.commit()
     if res.rowcount == 0:

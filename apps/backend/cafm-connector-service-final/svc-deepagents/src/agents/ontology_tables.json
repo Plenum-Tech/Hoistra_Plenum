@@ -1,0 +1,967 @@
+{
+ "activity_actions": {
+  "answers": "What actions are pending resolution or overdue across our activities? | Who chose which option for a specific activity decision, and when was it resolved?",
+  "grain": "one action or decision point logged within an activity workflow",
+  "purpose": "This table records discrete actions, approvals, or decision steps that occur during facility management activities or processes. Each row captures what decision was needed, what options were available, which option was chosen, and the resolution timeline."
+ },
+ "activity_log_action": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Old activity-log schema (singular names): an action within a logged step. Superseded by activity_actions / activity_log_entries."
+ },
+ "activity_log_entries": {
+  "answers": "What activities has our organization triggered through the platform, and what was the outcome? | Which agent tasks are pending human review or have failed?",
+  "grain": "one action or task executed by the agentic platform, with its outcome and processing details",
+  "purpose": "This table records every activity triggered through the deep agents platform—such as document ingestion, data mapping runs, or UDR (Unified Data Repository) operations—along with their status, outcome, and audit trail."
+ },
+ "activity_log_entry": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Old activity-log schema: one logged agent run. Superseded by activity_log_entries."
+ },
+ "activity_log_refinement": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Old activity-log schema: a user's refinement of a logged run."
+ },
+ "activity_log_step": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Old activity-log schema: one step within a logged run."
+ },
+ "agent_activity_log": {
+  "answers": "Why did an agent fail to answer a compliance question, and what was the error? | How long did it take the compliance agent to respond to a user query?",
+  "grain": "one log entry for one agent action or message in one conversation turn",
+  "purpose": "Every tool call the chat agents make, with inputs and outcome - the Activity log."
+ },
+ "agent_audit_log": {
+  "answers": "Did the agent's answer pass validation and confidence checks for this task? | How many parallel runs did the agent execute, and did they agree?",
+  "grain": "one execution of an AI agent task, with validation and confidence tracking across multiple model runs",
+  "purpose": "This table records every invocation of a deep learning agent used to process facilities data, capturing the agent's reasoning outputs, validation results, and confidence scores across parallel runs."
+ },
+ "approval_action_tokens": {
+  "answers": "Which approval tokens are still valid and unused? | Has a specific queue item's approval token been redeemed, and when?",
+  "grain": "one approval or action token issued for a queue item",
+  "purpose": "This table tracks single-use tokens generated to grant time-limited permission for specific actions (such as approving or acknowledging a queue item). Each token is tied to a queue item and records when it was created, when it expires, and whether it has been redeemed."
+ },
+ "approvals_queue_items": {
+  "answers": "What compliance certificates are pending confirmation or review? | How many approval queue items are still pending versus already approved or dismissed?",
+  "grain": "one approval or review task queued for a facilities manager or compliance officer",
+  "purpose": "This table tracks compliance and operational items awaiting human decision or action—such as certificate confirmations, energy anomalies, and cost variances."
+ },
+ "asset_categories": {
+  "answers": "What asset categories does our organization use? | Is 'Fire Safety' a subcategory of 'Fire Systems'?",
+  "grain": "one asset category (e.g. HVAC, Electrical, Plumbing) within an organization, optionally nested under a parent category.",
+  "purpose": "This table defines the taxonomy of asset types that your facility manages—the bins into which you sort equipment and systems. Each category can have a parent category, allowing you to build hierarchies (e.g., 'Fire Systems' as a parent of 'Fire Safety')."
+ },
+ "asset_condition_rules": {
+  "answers": "What thresholds does our organization use to classify asset condition? | At what percentage over reference does an asset trigger a condition alert?",
+  "grain": "one pair of condition-scoring thresholds for one organization",
+  "purpose": "This table stores the two numeric thresholds that the condition engine uses to band assets into condition states (e.g., good, fair, poor) for each organization."
+ },
+ "asset_condition_runs": {
+  "answers": "When was the last condition scan run, and how long did it take? | How many assets were flagged as threats or on watch in the most recent scan?",
+  "grain": "one automated condition assessment scan of assets across a portfolio or building set",
+  "purpose": "This table records the execution and results of each asset condition scan—when it ran, how many assets it evaluated, and how many fell into threat, watch, or control categories."
+ },
+ "asset_condition_scores": {
+  "answers": "What is the current condition score of asset SMK-CH-02? | Which assets have a 'Poor' condition rating and need urgent repair?",
+  "grain": "one condition assessment of one asset at one point in time",
+  "purpose": "This table stores AI-deduced and heuristic condition scores for physical assets, translating inspection signals and reports into a numeric health rating (1–5 scale) and human-readable label."
+ },
+ "asset_condition_verdicts": {
+  "answers": "Which assets are currently in threat or watch status, and why? | How has a specific asset's condition band changed over the last few scans?",
+  "grain": "one asset's health band and anomaly signals from a single diagnostic scan run",
+  "purpose": "This table records the condition verdict assigned to each asset after each meter scan, capturing whether the asset is in threat, watch, or in_control status based on section performance and anomaly detection."
+ },
+ "asset_criticality": {
+  "answers": "What is the criticality level of asset AHU-01? | Which assets are classified as L1 (highest criticality)?",
+  "grain": "one asset's assigned criticality level within an organization",
+  "purpose": "This table records the operational criticality classification (L1, L2, L3) assigned to each mechanical, electrical, or IT asset—such as chillers, AHUs, and databases—to help operations prioritize maintenance, spare parts, and response times."
+ },
+ "asset_documents": {
+  "answers": "What documents are attached to this piece of equipment? | Where can I find the manual or warranty for asset X?",
+  "grain": "one document or file attachment linked to one asset",
+  "purpose": "This table stores references to documents, files, and attachments associated with physical assets (equipment, meters, building systems)."
+ },
+ "asset_failure_assessments": {
+  "answers": "What is the current failure probability for a specific asset? | Which assets have the highest failure risk within the next 30 days?",
+  "grain": "one failure probability assessment for one asset, computed at one point in time by one named rule",
+  "purpose": "This table records failure risk predictions for individual assets, calculated by applying signal-based assessment rules without fitted model validation. Each row captures the computed probability, time horizon, assessment method, and contributing signal drivers at a specific moment."
+ },
+ "asset_offline_log": {
+  "answers": "When did asset X go offline and come back online? | How much downtime did asset X experience during a specific period?",
+  "grain": "one offline-to-online event for one asset",
+  "purpose": "This table records when assets go offline and come back online, including the reason for each state change and any associated work order. It tracks downtime duration to help facilities managers understand asset availability and maintenance impact."
+ },
+ "asset_reading_bands": {
+  "answers": "What are the acceptable temperature limits for chilled water supply lines? | What low and high thresholds should trigger an alert for a specific HVAC unit?",
+  "grain": "One acceptable low–high limit range for a reading type, scoped to an asset, category, or system-wide default.",
+  "purpose": "This table defines the normal operating bounds (alarm thresholds) for meter readings such as temperature, pressure, or humidity. A facilities manager uses these bands to flag when a sensor reading falls outside acceptable limits."
+ },
+ "asset_readings": {
+  "answers": "What was the temperature reading on the supply line of HVAC unit 301 on April 25? | Which asset readings have been flagged as anomalies?",
+  "grain": "one sensor measurement from one asset at one point in time",
+  "purpose": "Records individual meter and sensor readings (temperature, pressure, vibration, voltage) captured from building assets like HVAC units and equipment. Links readings to specific assets and organizations to track operational performance and detect anomalies over time."
+ },
+ "asset_types": {
+  "answers": "",
+  "grain": "",
+  "purpose": "A company's own list of asset types, beneath the category tree. Empty."
+ },
+ "asset_warranties": {
+  "answers": "Which assets have active warranties right now? | When does the warranty on this equipment expire?",
+  "grain": "one warranty contract covering one asset",
+  "purpose": "Tracks warranty coverage for physical assets—who provides it, when it starts and expires, and what it covers. Links to the assets table to identify which equipment or infrastructure is under warranty, helping operations teams manage coverage gaps and renewal deadlines."
+ },
+ "assets": {
+  "answers": "What equipment do we have at this site or building, and what is its current status? | When was this asset installed, and when does its warranty expire?",
+  "grain": "one physical or logical asset (equipment, system, or component) installed at a site or building",
+  "purpose": "The assets table is the master inventory of all equipment, machinery, and systems a facilities manager operates and maintains across their portfolio. It records what each asset is, where it is, who made it, when it was installed, and its current operational state."
+ },
+ "audit_logs": {
+  "answers": "Who made changes to a specific asset or work order, and when? | What actions did a particular user perform on a given date?",
+  "grain": "one action performed by one user on one entity within an organization",
+  "purpose": "This table records all user actions taken within the CAFM system—such as creates, updates, deletes, and other operations—along with who performed them, what they acted on, and when."
+ },
+ "auth_otp_codes": {
+  "answers": "Has a user successfully verified their email with an OTP code? | How many failed attempts has a user made on a particular OTP code?",
+  "grain": "one one-time password code issued to a user or email address for a single authentication purpose",
+  "purpose": "One-time sign-in codes sent by email; deleted once used."
+ },
+ "auth_role_changes": {
+  "answers": "When was user X granted or promoted to role Y? | Who changed this user's access role, and why?",
+  "grain": "one role assignment or change event for one user",
+  "purpose": "Log of every change to a user's role."
+ },
+ "auth_sessions": {
+  "answers": "Which users are currently logged in, and from which IP addresses? | When did a specific user last access the system?",
+  "grain": "one login session for one user, identified by a refresh token",
+  "purpose": "Signed-in sessions; checked on every request."
+ },
+ "bms_trends": {
+  "answers": "What was the heating and cooling load in zone L1 East over the past week? | Is a particular zone consistently running above or below its temperature setpoint?",
+  "grain": "one BMS (building management system) reading for one zone in one building at one point in time",
+  "purpose": "BMS trend points per zone (heating/cooling valve, temperatures) used to detect simultaneous heating and cooling."
+ },
+ "bom_group_parts": {
+  "answers": "What parts are included in this BOM group? | How many units of each part does this BOM require?",
+  "grain": "one part line item within a bill of materials group",
+  "purpose": "This table records the individual parts and quantities that make up a bill of materials (BOM) group. It links parts to BOM groups, allowing you to define what components are needed for a maintenance task, repair job, or asset configuration. The table is currently sparsely populated."
+ },
+ "bom_groups": {
+  "answers": "What BOM groups has our organization defined? | What is the description or purpose of a specific BOM group?",
+  "grain": "one bill-of-materials group defined by an organization",
+  "purpose": "This table defines logical groupings of parts and assemblies used to organize spare parts inventory and equipment maintenance kits."
+ },
+ "building_country_packs": {
+  "answers": "Which compliance pack version is active at this site? | What country's regulations apply to a given site?",
+  "grain": "one compliance pack activated for one site in one country.",
+  "purpose": "This table tracks which regulatory compliance packs have been activated at each site, organized by country. It records when a specific version of a country's compliance requirements became active at a location, linking sites to their applicable regulatory frameworks through the organizations that op…"
+ },
+ "building_energy_profiles": {
+  "answers": "What is the TM46 electricity benchmark for this building? | What is the TM46 gas benchmark for this building?",
+  "grain": "One building's energy performance benchmarks and operating assumptions.",
+  "purpose": "This table stores industry-standard energy consumption benchmarks (TM46 electricity and gas) for each building, along with the gross internal area and operational assumptions used to calculate them."
+ },
+ "building_sections": {
+  "answers": "What are all the sub-metered zones in this building and their sizes? | What is the energy benchmark (reference EUI) for the server room or car park in this building?",
+  "grain": "one metered zone within a building, with its own energy intensity benchmark",
+  "purpose": "Zones within a building (plant room, tenant floor, common area), each with its floor area and reference EUI."
+ },
+ "buildings": {
+  "answers": "What buildings do we own or manage, and what are their names and codes? | How many floors and what gross area does each building have?",
+  "grain": "one building asset in the portfolio",
+  "purpose": "The master registry of all buildings under management. Every building record anchors compliance assessments, energy performance, asset condition, and operational metrics. Buildings link upward to sites and organizations for portfolio rollup, and to locations for regulatory scoring context."
+ },
+ "canonical_registry": {
+  "answers": "What vendor column names does our schema mapper recognize for the 'make' field? | How many canonical fields were in the registry as of a specific date?",
+  "grain": "one version of the canonical field-mapping registry that normalizes vendor column names across ingested data sources",
+  "purpose": "This table tracks the evolution of the schema mapper's canonical registry—a lookup that translates incoming vendor-specific column names (e.g., 'manufacturer', 'xmanufacturer', 'herst') into standardized facility management fields (e.g., 'make')."
+ },
+ "charge_departments": {
+  "answers": "What cost centers or charge codes does our organization use? | Which department should this maintenance work be billed to?",
+  "grain": "one cost center or billing department within an organization",
+  "purpose": "This table defines the departments to which facility maintenance costs, asset purchases, and work orders are charged for accounting purposes."
+ },
+ "chiller_design_specs": {
+  "answers": "What is the design cooling capacity (in tons of refrigeration) of chiller X? | What is the design efficiency (kW/RT) of a specific chiller?",
+  "grain": "One chiller unit's nameplate design specifications.",
+  "purpose": "Each chiller's design capacity and efficiency, the baseline its readings are compared against."
+ },
+ "chiller_performance_readings": {
+  "answers": "What was chiller X's power input and cooling load on a specific date? | How has a chiller's efficiency (cooling output vs. power input) trended over time?",
+  "grain": "one chiller's operational reading at a point in time",
+  "purpose": "Chiller readings over time (load, kW, COP) used to spot a chiller running below design."
+ },
+ "claude_api_usage": {
+  "answers": "How much did we spend on Claude API calls for a specific ingestion job? | Which queries are consuming the most tokens or costing the most?",
+  "grain": "one Claude API call made during document ingestion or query processing",
+  "purpose": "This table records every call to the Claude API made by the document ingestion and RAG query services, capturing token usage, cost, and performance metrics."
+ },
+ "claude_budget_config": {
+  "answers": "What is our monthly budget limit for document ingestion services? | At what spending percentage should we trigger a cost alert?",
+  "grain": "one spending limit and alert policy for a billing period",
+  "purpose": "This table stores the budget control settings for document ingestion and RAG service costs, including monthly spending caps, alert thresholds, and auto-pause rules."
+ },
+ "compliance_certificates": {
+  "answers": "Which of our vendors have current public liability insurance, and when do their policies expire? | What is the energy performance certificate rating for a specific building, and when was it last assessed?",
+  "grain": "one compliance certificate held by one organization, vendor, site, or building",
+  "purpose": "This table records all compliance certificates—insurance policies, safety certifications, energy performance ratings, and inspection results—that apply to your organization, vendors, sites, and buildings."
+ },
+ "compliance_risk_snapshots": {
+  "answers": "How many vendors were blocked for our organization on a specific date? | What was the trend in high-risk compliance items over the past month?",
+  "grain": "One compliance risk summary for one organization on one date.",
+  "purpose": "This table records point-in-time snapshots of vendor and compliance risk metrics by organization and date. It tracks the count of blocked vendors and the number of high- and medium-risk items within defined time windows, allowing facilities and operations teams to monitor compliance posture trends a…"
+ },
+ "compliance_scan_runs": {
+  "answers": "When was the last compliance scan run, and did it complete successfully? | How many buildings and vendors were checked in a given scan?",
+  "grain": "one compliance scan execution across buildings and/or vendors",
+  "purpose": "This table records the execution history and results of automated compliance scans that check building certificates and vendor accreditations for lapse, risk, and alert conditions."
+ },
+ "compliance_vector_membership_audit": {
+  "answers": "When was a specific compliance document removed from tracking? | Who removed a compliance document, and what was the result?",
+  "grain": "one audit event recording a change to a compliance document's membership or status",
+  "purpose": "This table logs all modifications to compliance vector memberships—primarily removals of documents from compliance tracking. It records who performed each action, when, and technical details of the operation outcome."
+ },
+ "compliance_verification_register_rows": {
+  "answers": "Is a contractor or vendor currently licensed or certified for a specific credential type? | What is the expiry date of a particular license or certificate?",
+  "grain": "one certificate or license record matched to a lookup key, ingested from a compliance data source",
+  "purpose": "Public register data (BAFE, HSE asbestos licences, WA contractor licences) the verification checks look numbers up in."
+ },
+ "compliance_verification_sources": {
+  "answers": "Where do we verify fire pump certificates in the UAE? | Which compliance certificates have an available API for automated refresh?",
+  "grain": "one certificate type's verification source and refresh strategy in one country",
+  "purpose": "Which register or website each certificate type is verified against, and the result of each check."
+ },
+ "contract_documents": {
+  "answers": "What documents are attached to a specific vendor contract? | Which contracts have insurance certificates or other proof documents on file?",
+  "grain": "one document attached to or extracted from a vendor contract",
+  "purpose": "This table tracks documents associated with vendor contracts—such as insurance certificates, SLAs, or scanned agreements—along with their extraction status and parsed fields."
+ },
+ "contract_sla_parameters": {
+  "answers": "What are the response time SLAs for P1/P2/P3/P4 issues under vendor X's contract? | What is the labour day rate, overtime rate, and call-out rate for a given contract?",
+  "grain": "one set of service-level agreement parameters and pricing terms extracted from a vendor contract document",
+  "purpose": "Each contract's SLA targets (response, completion, first-fix) that vendor scores are measured against."
+ },
+ "corrections_log": {
+  "answers": "What fields in ingested documents required manual correction? | Which documents had data quality issues that needed reviewer intervention?",
+  "grain": "one data correction made to one field during document ingestion review",
+  "purpose": "This table records manual corrections applied to extracted document data during the ingestion and migration process. Each row captures what was wrong in the raw extraction, what it was changed to, and who reviewed it."
+ },
+ "cost_variance_alerts": {
+  "answers": "Which vendors have breached our cost variance threshold this month? | How many work orders from a specific vendor exceeded budget by more than 15% in a given month?",
+  "grain": "one cost variance alert for one vendor in one calendar month",
+  "purpose": "This table flags vendors whose work orders systematically exceed estimated costs by a threshold percentage within a month."
+ },
+ "country_certificate_packs": {
+  "answers": "What certificates does a UK building need to hold under the current compliance pack? | How often must an EICR be renewed, and who is authorized to issue it?",
+  "grain": "one certificate type required in one country under one compliance pack version",
+  "purpose": "This table defines the universe of certificate types that facilities must hold, organized by country and compliance pack. It specifies what each certificate is for (building or vendor scope), how often it must be renewed, who can issue it, what data must be captured, and when to alert on expiry or l…"
+ },
+ "document_chunks": {
+  "answers": "What does the compliance document say about asset DXB-001? | Find all maintenance notes related to chiller CH-3.",
+  "grain": "one text segment (chunk) extracted from an ingested document, with its position, semantic embedding, and source metadata.",
+  "purpose": "This table stores vectorized text fragments from uploaded compliance documents, maintenance logs, and asset records. Each row represents a searchable chunk of a document that has been split, embedded for semantic search, and tagged with its source location and content type."
+ },
+ "document_generation_log": {
+  "answers": "What documents has a specific user requested to be generated? | How many tokens and what cost was incurred to generate a particular document?",
+  "grain": "one document generation request processed by the RAG/ingestion pipeline",
+  "purpose": "This table logs every attempt to generate or ingest a document through the automated document generation system, recording what was requested, how the system planned to fulfill it, whether validation and quality checks passed, and the computational cost."
+ },
+ "documents": {
+  "answers": "What compliance certificates or contracts have been uploaded for a specific building? | When was a particular document (e.g., an EICR or asbestos licence) uploaded to the system?",
+  "grain": "one uploaded document file associated with a building or organizational entity",
+  "purpose": "This table stores metadata and access information for documents ingested into the system—such as compliance certificates, contracts, and invoices."
+ },
+ "duty_holders": {
+  "answers": "",
+  "grain": "",
+  "purpose": "The legally responsible person or organisation for a building's compliance duties (for example the Responsible Person for fire safety). Empty."
+ },
+ "energy_anomalies": {
+  "answers": "What energy anomalies have been detected in my building this month? | Which meter is showing a baseline drift, and how much excess kWh is it consuming?",
+  "grain": "one energy anomaly detected on one meter, asset, or building during one time window",
+  "purpose": "This table records automated detections of unusual energy consumption patterns—such as baseline drift, asset spikes, simultaneous heating and cooling, or weekend anomalies—flagged by the operations intelligence service."
+ },
+ "energy_meters": {
+  "answers": "Which meters are installed at a specific building? | What is the current electricity or gas tariff for a given meter?",
+  "grain": "one energy meter (electricity or gas) serving a building, asset, or section",
+  "purpose": "Registers the physical energy meters installed across the portfolio, their utility identifiers (MPAN/MPRN), tariff rates, and carbon intensity. Links meters to buildings and assets to enable consumption tracking and cost allocation."
+ },
+ "energy_monthly_reports": {
+  "answers": "What was the total excess energy cost for building X in August? | Which anomalies were detected in the building's energy use last month, and how much did they cost?",
+  "grain": "one month's energy performance summary for one building",
+  "purpose": "This table stores monthly energy intelligence reports that synthesize consumption, cost, and carbon data against benchmarks for a building."
+ },
+ "energy_ratings": {
+  "answers": "Is this building compliant with LL97 emissions limits for the current period? | What is the building's Energy Star score and how far short of certification is it?",
+  "grain": "one energy performance rating for one building under one certification scheme for one measurement period",
+  "purpose": "This table records energy performance assessments against regulatory or voluntary schemes (LL97, Energy Star) for each building, including actual consumption-based scores, compliance status, and penalty exposure."
+ },
+ "energy_recommendations": {
+  "answers": "What energy recommendations have been generated for a specific building? | Which assets have the lowest condition scores and need repair or replacement?",
+  "grain": "one energy efficiency or maintenance recommendation for a building or asset",
+  "purpose": "This table stores energy-related recommendations generated for buildings and assets, including efficiency improvements, repair or replacement actions, and their associated costs and condition metrics."
+ },
+ "equipment": {
+  "answers": "What equipment is installed at a specific asset or building? | Who manufactures the equipment we have, and what model is it?",
+  "grain": "one piece of equipment or device associated with an asset",
+  "purpose": "This table records the physical equipment and devices installed at properties, including manufacturer details, model information, and installation dates."
+ },
+ "eui_snapshots": {
+  "answers": "What is the EUI (kWh/m²) for building X during July 2026? | Which buildings exceeded their energy benchmark in the last quarter, and by how much?",
+  "grain": "one energy intensity measurement for one building over one billing period and meter type",
+  "purpose": "This table records Energy Use Intensity (EUI) snapshots—normalized energy consumption per square meter—for buildings across specified periods. It captures actual consumption (kWh), building area (GIA), calculated EUI, performance against benchmarks, and financial impact."
+ },
+ "fiix_ingestion_jobs": {
+  "answers": "Did our last Fiix data import succeed, and how many records made it in? | What errors occurred during the most recent ingestion job?",
+  "grain": "one data ingestion job from an external CAFM system into an organization's schema",
+  "purpose": "Tracks the lifecycle and results of bulk data imports from Fiix (or similar CAFM sources) into the plenum system. Each row records a single ingestion attempt—what was fetched, preprocessed, written, and any errors encountered—allowing facilities teams to audit data migration quality and troubleshoot…"
+ },
+ "fiix_schema_cache": {
+  "answers": "What is the current schema structure of our Fiix instance (how many tables and columns)? | When was our Fiix schema last cached and analyzed?",
+  "grain": "One cached schema snapshot from a Fiix tenant, capturing its table and field structure at a point in time.",
+  "purpose": "This table stores a snapshot of the Fiix CMMS database schema—table counts, column counts, and field-to-vendor-alias mappings—used by the schema mapper service to understand and translate incoming Fiix data during ingestion and migration."
+ },
+ "files": {
+  "answers": "What documents has a specific vendor uploaded, and when? | Where can I download a vendor's EPA 608 certification or HSE asbestos licence?",
+  "grain": "one document file attached to a vendor or other entity",
+  "purpose": "Stores metadata and access paths for uploaded documents—such as licenses, certificates, and compliance records—associated with vendors and other facility entities. Files are linked to work order tasks and can be retrieved via blob_url for download or review."
+ },
+ "floors": {
+  "answers": "What floors exist in a given building? | What is the gross area of a specific floor?",
+  "grain": "one floor within a building",
+  "purpose": "This table records the physical floors that make up a building, including their sequence level and total area. It serves as the parent record for spaces and building sections, allowing property managers to organize and measure building components by floor."
+ },
+ "fm_report_staleness": {
+  "answers": "When did vendor X last submit an FM report to us? | Which vendors have not submitted reports recently?",
+  "grain": "one FM report submission from one vendor to one organization",
+  "purpose": "Tracks the freshness and timeliness of facilities management reports submitted by vendors. Records when each vendor last submitted a report to an organization, what date the data covers, and any notes about the submission."
+ },
+ "ingestion_audit_events": {
+  "answers": "What documents were ingested or reassigned on a given date? | Who approved or rejected a document ingestion, and when?",
+  "grain": "one audit event from a document ingestion or migration workflow",
+  "purpose": "This table logs every step in the document ingestion and reassignment pipeline—who triggered an action, what document was affected, which building it was assigned to, and the outcome."
+ },
+ "ingestion_audit_log": {
+  "answers": "What processing steps were applied to a specific ingested document? | Which documents failed rule validation during ingestion, and what violations were found?",
+  "grain": "one audit event logged during document ingestion processing",
+  "purpose": "This table records the processing history and quality checks applied to documents as they flow through the ingestion pipeline. It tracks what model processed each document, what rules were checked, evaluation scores, and any corrections made by reviewers."
+ },
+ "ingestion_documents": {
+  "answers": "Which documents have been uploaded and are ready to search? | What is the processing status of a specific document (indexed, extracting, error)?",
+  "grain": "one document uploaded for AI extraction and indexing",
+  "purpose": "Tracks documents ingested into the doc-rag system for automated content extraction and search indexing. Records the file metadata, processing status, AI model usage (tokens, cost, latency), and links to audit logs, corrections, and review queues so facilities teams can monitor what documents have be…"
+ },
+ "ingestion_validation_cases": {
+  "answers": "What claims were extracted from a specific document during ingestion? | Which building was assigned to a document, and who made that decision?",
+  "grain": "one validation decision on a document during ingestion, with extracted claims and building assignment",
+  "purpose": "This table records the results of automated and manual validation checks performed on documents as they are ingested into the system."
+ },
+ "inspection_read_runs": {
+  "answers": "When did the inspection reports last get re-read and processed? | How many inspection reports were successfully parsed in the most recent run?",
+  "grain": "One execution of the inspection report re-read process, capturing its timing and aggregate findings.",
+  "purpose": "This table records when the inspection report ingestion pipeline ran, how long it took, and what it discovered across all reports processed in that run."
+ },
+ "inspections": {
+  "answers": "What inspections have been performed on asset HVAC-301, and what did the inspector find? | Which inspections identified high-risk conditions that require corrective action?",
+  "grain": "one inspection event performed on one asset on one date",
+  "purpose": "This table records the results of individual inspections—routine checks, load tests, and condition assessments—performed on building assets by inspectors. It captures what was found, the risk level, and whether a recommendation was issued and later converted into a work order."
+ },
+ "inventory_transactions": {
+  "answers": "What is the complete history of movements for a specific part? | How much did we spend on a particular part over time?",
+  "grain": "one inventory movement event for one part (receipt, issue, adjustment, or return).",
+  "purpose": "This table records every transaction that changes inventory quantity and cost for parts tracked in the facilities management system."
+ },
+ "invitations": {
+  "answers": "Which users have been invited to our organization but have not yet accepted? | When does this invitation expire?",
+  "grain": "one pending or accepted invitation to join an organization, sent to one email address",
+  "purpose": "Pending invitations to join a company."
+ },
+ "invoice_lines": {
+  "answers": "Which invoice lines have labour rates that exceed the contract rate? | What discrepancies were found on a specific vendor's invoice?",
+  "grain": "one line item on a vendor invoice, matched to a work order and flagged for discrepancies",
+  "purpose": "Invoice line items, checked against contract rates."
+ },
+ "invoice_verifications": {
+  "answers": "Which invoices from this vendor have labour rate overages or cost discrepancies? | How many line items on this invoice are flagged for review, and what are the total financial deltas?",
+  "grain": "one invoice submitted by a vendor, analyzed for compliance against contracted rates and work orders",
+  "purpose": "This table records the results of automated verification checks run on vendor invoices, comparing claimed labour rates, parts costs, and hours against contracted terms and completed work orders."
+ },
+ "leases": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Lease agreements on a building or space: tenant, dates, rent. Empty."
+ },
+ "locations": {
+  "answers": "What buildings and floors do we have at a given site? | What is the geographic address and timezone for a location?",
+  "grain": "one location (site, campus, building, floor, or region) within an organization's hierarchy",
+  "purpose": "Locations define the physical and organizational hierarchy where assets, work orders, and technicians operate. Each location has a type, geographic details, and parent-child relationships that structure how a facility manager navigates their portfolio from region down to individual floors."
+ },
+ "maintenance_history": {
+  "answers": "What maintenance has been done on this HVAC unit, and when? | Who performed maintenance on asset AST-CHILLER-102, and what did they do?",
+  "grain": "one maintenance action performed on one asset at one point in time",
+  "purpose": "This table records the completion details of maintenance work performed on building assets—who did it, when, and what was done. It connects to the assets being maintained and the technicians who performed the work, and may link to formal work orders when maintenance is ticket-driven."
+ },
+ "maintenance_plans": {
+  "answers": "What preventive maintenance plans are active for a given asset? | How often should maintenance be performed on this equipment (frequency and interval)?",
+  "grain": "one preventive maintenance plan assigned to one asset",
+  "purpose": "This table defines the preventive maintenance (PM) schedules and templates applied to building assets. It records what maintenance work is required, how often it should occur, and the operational details (priority, department, task group) needed to execute and track that work."
+ },
+ "maintenance_types": {
+  "answers": "What maintenance types does our organization have defined? | What is the description or scope of a specific maintenance type?",
+  "grain": "one category or classification of maintenance work that an organization performs",
+  "purpose": "This table defines the types of maintenance activities your organization carries out—such as preventive maintenance, corrective repairs, or inspections. It serves as a lookup that maintenance plans reference to specify what kind of work should be scheduled and tracked across your properties."
+ },
+ "manufacturers": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Manufacturer names that assets reference. Empty."
+ },
+ "mapping_templates": {
+  "answers": "What mapping templates does our organization have active for CAFM data ingestion? | How do we map vendor field names to our canonical asset category fields?",
+  "grain": "one data mapping template for a source system table within an organization",
+  "purpose": "This table stores configuration templates that define how to map fields from external CAFM systems (or other source systems) into the organization's canonical data schema."
+ },
+ "meter_reading_gaps": {
+  "answers": "Which meters have missing reading data and for what time periods? | How many meters currently have open gaps in their reading records?",
+  "grain": "one period of missing readings for one meter",
+  "purpose": "This table tracks intervals during which a meter failed to record readings. It records the start and end time of each gap, how many reading periods were missed, and the current status of recovery efforts (retry count, escalation)."
+ },
+ "meter_reading_units": {
+  "answers": "What units of measurement does our organization use for meter readings? | What is the symbol and precision for a specific meter unit (e.g., kWh with 2 decimal places)?",
+  "grain": "one unit of measurement used to record meter readings within an organization",
+  "purpose": "This table defines the units (such as kWh, gallons, psi) in which meter values are expressed and stored. It establishes the measurement standard for all meter readings across a facility, linking units to organizations and optionally to specific inspection events or sites."
+ },
+ "meter_readings": {
+  "answers": "What was the energy consumption on meter X between date A and date B? | How much kWh did building Y use in the last 24 hours?",
+  "grain": "one energy consumption reading from one meter at one point in time",
+  "purpose": "This table records timestamped kWh consumption readings collected from meters across the portfolio. Each row captures the energy used during a specific interval (typically 30 minutes), along with data quality flags and the source of the reading (CSV import, simulator, or seed data)."
+ },
+ "meters": {
+  "answers": "What meters are installed at this building? | What is the MPAN or MPRN for a specific meter?",
+  "grain": "one utility meter installed at one building",
+  "purpose": "Records the identity and configuration of utility meters (electricity, gas, etc.) that measure consumption at buildings. Each meter is assigned a unique identifier, utility type, and measurement unit."
+ },
+ "migration_field_mappings": {
+  "answers": "Which source fields are being mapped to a specific target field in this migration? | What is the confidence level that a particular field mapping is correct?",
+  "grain": "one source field mapped to one target field during a data migration",
+  "purpose": "This table records how fields from source systems are mapped to target schema fields during data ingestion migrations. It tracks the mapping logic, confidence scores, and review decisions for each field transformation, helping facilities teams understand data lineage and validate that migrated recor…"
+ },
+ "migration_hierarchy": {
+  "answers": "What foreign-key relationships were inferred during a specific migration job? | Which source and target table pairs were matched in this migration?",
+  "grain": "one inferred foreign-key relationship between a source table and target table within a single data migration job",
+  "purpose": "This table documents the schema mapping logic applied during data migration, recording which columns in source tables correspond to which columns in target tables and whether those relationships are valid."
+ },
+ "migration_jobs": {
+  "answers": "What is the status and progress of a data migration we started on [date]? | How many fields from our CMMS export were automatically mapped versus requiring manual review?",
+  "grain": "one data migration job from a source CMMS system into the facilities schema",
+  "purpose": "Tracks the end-to-end ingestion and transformation of facilities data from external CMMS exports (CSV, Excel) into standardized plenum tables. Records the pipeline status, field mapping decisions, data quality metrics, and output artifacts for each upload."
+ },
+ "misc_cost_types": {
+  "answers": "What miscellaneous cost types does our organization use? | What categories can we assign to a misc cost record?",
+  "grain": "one category or classification of miscellaneous cost that an organization tracks",
+  "purpose": "This table defines the types or categories of miscellaneous costs that can be logged against a facility or work order. It serves as a lookup table that misc_costs records reference to standardize cost categorization across the organization, ensuring consistent reporting and budgeting of non-standard…"
+ },
+ "misc_costs": {
+  "answers": "What miscellaneous charges were added to this work order? | How much did we spend on permits or fees for a particular job?",
+  "grain": "one miscellaneous cost line item charged to one work order",
+  "purpose": "This table records ad-hoc expenses and supplementary charges applied to work orders—such as permits, disposal fees, or material surcharges—that fall outside standard labor and equipment costs."
+ },
+ "notifications": {
+  "answers": "What notifications have been sent to a specific user? | Which notifications remain unread by a user?",
+  "grain": "one notification event sent to or generated for one user within an organization",
+  "purpose": "This table records system notifications—alerts, messages, and updates—that are generated for users and tracked by read status. It links to organizations to scope notifications by tenant and to users to target specific recipients, enabling audit trails of what information was delivered and when."
+ },
+ "ops_audit_log": {
+  "answers": "Who approved or rejected this certificate or work order, and when? | What compliance scans have run on our organization, and what were the results?",
+  "grain": "one immutable record of an operational action taken by an actor (user or system) on a compliance or business object",
+  "purpose": "This table records every significant operation—approvals, certificate updates, scoring, verification, compliance scans—performed across the facilities and compliance platform. It serves as a complete audit trail for regulatory review, dispute resolution, and system debugging."
+ },
+ "ops_email_log": {
+  "answers": "Was a compliance alert email successfully delivered to this recipient on this date? | Why did a compliance notification fail to send, and what was the error?",
+  "grain": "one compliance alert email sent or attempted to a recipient",
+  "purpose": "Every email the platform sent (or dry-ran): recipient, subject, status. Drives the 'already sent - send a reminder' check."
+ },
+ "orchestration_audit_log": {
+  "answers": "What decisions did the orchestration agent make for asset X, and did they pass safety and confidence checks? | Which hard rules fired when the agent processed this request?",
+  "grain": "one decision or recommendation made by an orchestration agent for one asset, with validation and cost tracking",
+  "purpose": "This table records every decision, validation check, and cost incurred when the orchestration agent processes an asset or request. It tracks whether the agent's output passed confidence and safety gates, how many validation runs agreed, which hard rules fired, and the LLM cost."
+ },
+ "organizations": {
+  "answers": "Which organizations are currently active in the system? | What is the timezone and country for a given organization?",
+  "grain": "one tenant or customer organization in the CAFM system",
+  "purpose": "This table records the top-level organizations (tenants) that use the CAFM platform. Each organization is a separate customer or business unit with its own assets, accounts, and activity records. It serves as the root entity that all accounts, assets, approvals, and audit logs are scoped to."
+ },
+ "permissions": {
+  "answers": "What permissions exist in the system? | What is the description or purpose of a specific permission?",
+  "grain": "one permission that can be assigned to roles",
+  "purpose": "This table defines the individual permissions (capabilities or access rights) that can be granted to users through roles. It serves as a reference catalog of all available actions or resource access that the system recognizes, which are then linked to roles via the role_permissions table to control…"
+ },
+ "pinned_run": {
+  "answers": "",
+  "grain": "",
+  "purpose": "A chat or report run the user pinned to keep. Empty."
+ },
+ "platform_usage_events": {
+  "answers": "How many credits has a specific user consumed this month? | Which users are running the most queries against the platform?",
+  "grain": "one platform query or action performed by one user at one moment",
+  "purpose": "Billable usage events per company (the Super Admin console's billing record)."
+ },
+ "portfolios": {
+  "answers": "What portfolios do we manage, and who owns each one? | What is the reporting currency for a given portfolio?",
+  "grain": "one portfolio (a named grouping of sites under an owner entity)",
+  "purpose": "Records the top-level portfolio entities that organize and own collections of sites. Each portfolio has an owner entity and a reporting currency, and serves as the parent container for sites (linked via sites.portfolio_id)."
+ },
+ "ppm_visits": {
+  "answers": "Was the AHU-01 service completed on the scheduled date, and by how many days? | How many PPM visits to this asset were missed or deferred in the last quarter?",
+  "grain": "one scheduled or completed preventive maintenance visit to one asset by one vendor",
+  "purpose": "Planned maintenance visits per contract and asset: due, done, late."
+ },
+ "priorities": {
+  "answers": "What priority levels does our organization use for maintenance work? | In what order should priority levels be displayed in our maintenance system?",
+  "grain": "one priority level defined by an organization",
+  "purpose": "This table stores the priority classifications (e.g., Critical, High, Medium, Low) that an organization uses to rank maintenance work. Each priority has a display order and optional color coding. Maintenance plans reference these priorities to indicate urgency."
+ },
+ "projects": {
+  "answers": "What projects are currently active or planned in our organization? | Which assets or maintenance plans belong to a specific project?",
+  "grain": "one capital project or initiative within an organization",
+  "purpose": "This table records planned projects—such as renovations, upgrades, or facility improvements—that are scoped to an organization and optionally tied to a specific site."
+ },
+ "prompt_ab_tests": {
+  "answers": "Which prompt template performed better in our most recent A/B test? | How many documents have we processed through A/B testing so far?",
+  "grain": "one A/B test comparing two prompt templates for document ingestion",
+  "purpose": "This table tracks experiments that compare alternative prompt templates used by the document ingestion pipeline to extract or classify facility information from uploaded documents."
+ },
+ "prompt_templates": {
+  "answers": "What prompt and schema does the ingestion agent use to extract data from lease documents? | Which document extraction templates are currently active in production?",
+  "grain": "one prompt template configuration for extracting data from a specific document type using a specific agent",
+  "purpose": "This table stores the LLM prompts and extraction schemas used by the document ingestion service to parse and extract structured data from uploaded documents."
+ },
+ "purchase_order_line_items": {
+  "answers": "What items are on a specific purchase order? | What is the total value of a purchase order line item (quantity × unit price)?",
+  "grain": "one line item on a purchase order, specifying a part or asset to be ordered",
+  "purpose": "This table records the individual line items that make up each purchase order—what is being ordered, how much, and at what cost. It links to purchase_orders to show which PO each line belongs to, and optionally to assets (for capital equipment) or parts (for consumables or components)."
+ },
+ "purchase_order_statuses": {
+  "answers": "What purchase order statuses are available in our organization? | Which statuses mark a purchase order as complete or closed?",
+  "grain": "one purchase order status definition (e.g. 'Draft', 'Approved', 'Received') owned by an organization",
+  "purpose": "Defines the lifecycle states that purchase orders can occupy within an organization's procurement workflow. Each status record establishes a named state, whether it represents a closed/terminal state, and display order."
+ },
+ "purchase_orders": {
+  "answers": "What is the status of purchase order PO-12345? | Which purchase orders are still open or pending receipt?",
+  "grain": "one purchase order issued by the organization to a supplier",
+  "purpose": "This table records the header-level details of purchase orders: their status, financial totals, billing terms, and the site and department they charge to. It serves as the parent record for line items (what was ordered), additional costs, receipts (what arrived), and audit logs."
+ },
+ "query_audit_log": {
+  "answers": "Which documents were consulted to answer a specific user query? | What was the token consumption and cost for a particular query?",
+  "grain": "one query submitted to a document retrieval system, with its classification, retrieval details, and performance metrics",
+  "purpose": "This table records every query executed against the document RAG system, capturing what was asked, how it was classified, which documents were consulted, and the cost and performance of the response."
+ },
+ "rca_actions": {
+  "answers": "What corrective actions are available in our organization's RCA program? | What is the description of a specific corrective action by ID?",
+  "grain": "one corrective action defined for a root cause analysis within an organization",
+  "purpose": "This table stores corrective actions that are prescribed as responses to root cause analyses. It serves as a reference library of actions that can be grouped and assigned to RCA investigations."
+ },
+ "rca_causes": {
+  "answers": "What root cause categories does our organization use for incident investigations? | Which root causes are available to assign when documenting an RCA?",
+  "grain": "one root cause category defined by an organization for incident analysis",
+  "purpose": "This table stores the standardized root cause types that an organization uses when investigating and documenting failures or incidents in their facilities."
+ },
+ "rca_grouping_actions": {
+  "answers": "Which corrective actions are part of this RCA investigation? | Who is assigned to complete this corrective action within the RCA?",
+  "grain": "one corrective action assigned to one root cause analysis grouping",
+  "purpose": "This table links corrective actions to RCA groupings, tracking which actions belong to which root cause analysis investigation."
+ },
+ "rca_grouping_causes": {
+  "answers": "Which root causes are included in a specific RCA grouping? | What groupings does a particular root cause belong to?",
+  "grain": "one root cause assigned to one RCA grouping",
+  "purpose": "This table records which root causes belong to each RCA (root cause analysis) grouping, establishing a many-to-many relationship between causes and groupings. It supports organizing and categorizing root causes for incident or failure analysis workflows."
+ },
+ "rca_groupings": {
+  "answers": "What root cause groupings exist for a given work order? | Which problems have been analyzed with grouped causes and actions?",
+  "grain": "one grouping of related root causes and corrective actions tied to a work order and problem",
+  "purpose": "This table organizes root cause analysis (RCA) findings by grouping causes and actions together within the context of a specific work order and problem."
+ },
+ "rca_problems": {
+  "answers": "What root causes have we identified across our facilities? | Which problems are associated with a specific RCA investigation or grouping?",
+  "grain": "one root cause or problem identified during a failure investigation within an organization",
+  "purpose": "This table stores root cause analysis (RCA) problems—the underlying issues discovered when investigating facility failures or incidents."
+ },
+ "readme": {
+  "answers": "",
+  "grain": "",
+  "purpose": "A notes table; not used by any code."
+ },
+ "receipt_line_items": {
+  "answers": "How many units of a part were received on a specific receipt? | Did we receive the full quantity ordered on this PO line?",
+  "grain": "one line item on a goods receipt, linking a received quantity to a purchase order line",
+  "purpose": "This table records the detail of what was actually received against each purchase order line item. It tracks quantities received versus ordered, and notes any discrepancies or issues."
+ },
+ "receipts": {
+  "answers": "When did we receive the order for [purchase order number]? | Who signed for the delivery at [site]?",
+  "grain": "one receipt of goods against one purchase order at one site",
+  "purpose": "This table records the arrival and acceptance of purchased goods, linking each receipt to its originating purchase order and tracking who received the shipment and when. It serves as the receiving checkpoint in the procurement workflow, with line-item details stored separately in receipt_line_items."
+ },
+ "regulation_packs": {
+  "answers": "What compliance standards apply to a given location? | Which certificate types must a building hold to satisfy a particular regulation pack?",
+  "grain": "one compliance standard or benchmark framework that applies to a group of locations",
+  "purpose": "This table defines the regulatory and benchmarking standards that locations must comply with or measure against. Each pack specifies which certificate types are required, the standing of the standard (mandatory, guidance, etc.), and the source of any benchmark."
+ },
+ "regulatory_filings": {
+  "answers": "What is the filing status of building X under the LL84 scheme for 2025? | Which buildings have a Green Mark Gold certification and when does it expire?",
+  "grain": "one regulatory filing or certification submission for one building under one scheme in one year",
+  "purpose": "This table tracks compliance filings and certifications for buildings across regulatory schemes such as LL84, BCA Benchmarking, and Green Mark."
+ },
+ "report_card_runs": {
+  "answers": "When was a specific report card last run, and did it succeed? | How often is a report card failing, and what error messages are we seeing?",
+  "grain": "one execution of a report card query or assessment",
+  "purpose": "Each run of a report card and its result."
+ },
+ "report_cards": {
+  "answers": "Which report cards does a specific user own or have saved? | Is a report card currently enabled and what is its execution status?",
+  "grain": "one saved AI-generated report card owned by one user within one organization",
+  "purpose": "Saved report cards on the Reports page."
+ },
+ "reports": {
+  "answers": "What reports exist in our organization? | Who owns or created a specific report?",
+  "grain": "one report template or configuration owned by a user within an organization",
+  "purpose": "This table stores the metadata for reports—their names, owners, and lifecycle timestamps. It serves as the parent record for report_cards, which hold the actual card or section definitions that make up a report."
+ },
+ "resource_skills": {
+  "answers": "What certifications or skills does this worker or equipment have? | Is this resource's certification still valid, or when does it expire?",
+  "grain": "one skill or certification held by one resource (worker or equipment) at one vendor",
+  "purpose": "Tracks skills, certifications, and licenses required for work execution—such as trade qualifications, safety certifications, or equipment endorsements."
+ },
+ "resources": {
+  "answers": "Who are all the certified electricians or plumbers on staff? | Which engineers or technicians are assigned to a specific site?",
+  "grain": "one person (engineer or technician) who can be assigned to work orders or maintenance tasks",
+  "purpose": "Records the skilled workforce available within your organization—engineers, technicians, and trades people—along with their certifications and site assignments."
+ },
+ "review_queue": {
+  "answers": "Which extracted document fields are pending review? | What fields were flagged as low-confidence during ingestion?",
+  "grain": "one extracted field from one ingested document awaiting or completed human review",
+  "purpose": "This table queues document fields extracted during ingestion for human review and decision-making. It tracks which fields need verification (due to low confidence or routing rules), who reviewed them, what corrections were made, and the final decision."
+ },
+ "role_permissions": {
+  "answers": "What permissions does a specific role have? | Which roles have a particular permission?",
+  "grain": "one permission assigned to one role",
+  "purpose": "This table maps permissions to roles, establishing what actions or access rights each role can perform within the facilities management system."
+ },
+ "roles": {
+  "answers": "What roles exist in our organization? | Who can be assigned the 'Operations Manager' role?",
+  "grain": "one job title or access level defined within an organization",
+  "purpose": "This table defines the roles (job titles and permission levels) that exist within your organization. Each role can be assigned to multiple staff members via user_roles, and each role can hold multiple permissions via role_permissions."
+ },
+ "saved_space": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Old saved-workspace schema (singular). Superseded by saved_spaces."
+ },
+ "saved_space_item": {
+  "answers": "",
+  "grain": "",
+  "purpose": "An item inside an old saved workspace."
+ },
+ "saved_spaces": {
+  "answers": "What saved space views has our organization created? | Who created this saved space and when?",
+  "grain": "one saved space filter or view configuration within an organization",
+  "purpose": "This table stores user-defined space groupings or saved search filters that facilities managers create for reporting and analysis."
+ },
+ "schedule_triggers": {
+  "answers": "When is the next scheduled run for a given maintenance plan? | What triggers this maintenance plan—is it time-based, meter-based, or something else?",
+  "grain": "one trigger condition that determines when a maintenance plan should be executed",
+  "purpose": "This table stores the scheduling rules for preventive maintenance plans—whether they run on a fixed interval (e.g., every 90 days), a meter-based threshold (e.g., when equipment reaches 5,000 operating hours), or another cadence."
+ },
+ "scheduled_maintenance_assets": {
+  "answers": "Which assets are covered by this maintenance plan? | What maintenance plans apply to a specific piece of equipment?",
+  "grain": "one asset assigned to one preventive maintenance plan",
+  "purpose": "This table records which physical assets (equipment, systems, building components) are subject to each preventive maintenance plan. It links maintenance plans to the specific assets they govern, enabling work order management to know what equipment requires scheduled upkeep and when."
+ },
+ "scheduled_maintenance_parts": {
+  "answers": "What parts are required to complete this maintenance plan? | How many units of each part do we need for this scheduled maintenance task?",
+  "grain": "one part required for one scheduled maintenance plan",
+  "purpose": "This table specifies which parts are needed to complete work defined in a maintenance plan. It bridges maintenance plans to the parts inventory, allowing work order management to know what materials must be on hand or procured before scheduled maintenance can be executed."
+ },
+ "scheduled_maintenance_users": {
+  "answers": "Which users are assigned to a specific maintenance plan? | What maintenance plans is a given user responsible for?",
+  "grain": "one user assigned to receive notifications or perform tasks for one preventive maintenance plan",
+  "purpose": "This table records which users are linked to scheduled maintenance plans, typically to route work orders, send notifications, or assign responsibility for preventive maintenance tasks."
+ },
+ "scheduled_tasks": {
+  "answers": "What tasks are included in a given maintenance plan? | How many hours should a particular maintenance task take?",
+  "grain": "one scheduled maintenance task within a plan or group",
+  "purpose": "This table defines individual maintenance tasks that are part of preventive maintenance plans or task groups. Each row represents a discrete work item—such as an inspection, cleaning, or component replacement—that facilities staff must perform on a specific asset or as part of a coordinated maintena…"
+ },
+ "schema_mapping_field_mappings": {
+  "answers": "Which source fields from our legacy system map to the location_code field in the target schema? | What is the confidence score for the mapping of [source field] to [target field]?",
+  "grain": "one field mapping rule from a source system field to a target facilities database field",
+  "purpose": "This table records how individual data fields from external source systems (legacy CMMS, asset management, or imported spreadsheets) are matched and transformed into the standard facilities data model."
+ },
+ "schema_mapping_jobs": {
+  "answers": "What is the status of our Fiix data import and how far along is it? | How many tables and fields did we detect from the uploaded CMMS export?",
+  "grain": "one schema mapping job from an external CMMS system into Plenum",
+  "purpose": "Tracks the progress and status of data schema ingestion jobs, where external maintenance management systems (CMMS) are analyzed, mapped to standard Plenum tables and fields, and converted into SQL."
+ },
+ "site_occupancy_logs": {
+  "answers": "When did occupancy increase or decrease at a specific building? | What was the occupancy state of a building on a given date?",
+  "grain": "one occupancy state change event at one building",
+  "purpose": "This table records when and how a building's occupancy level changes—such as increases or decreases in staff presence—along with the reason and source of the report."
+ },
+ "sites": {
+  "answers": "What sites does my organization operate, and where are they located? | How many floors and square meters does a specific site have?",
+  "grain": "one operational site or building location within an organization",
+  "purpose": "Sites is the master registry of all physical locations managed by the organization—offices, towers, campuses, and mixed-use buildings. It holds core identity, geography, size, occupancy pattern, and energy performance metadata."
+ },
+ "sla_policies": {
+  "answers": "What is the target response time for a P1 priority issue? | How long do we allow for resolution of a P3 severity request?",
+  "grain": "one service-level agreement policy tier defined for an organization",
+  "purpose": "This table records the response and resolution time commitments that your organization has established for different priority levels of vendor or contractor work."
+ },
+ "spaces": {
+  "answers": "What spaces exist in a given building or floor? | What is the gross area of a specific room or zone?",
+  "grain": "one physical space or room within a building or floor",
+  "purpose": "This table records individual spaces (rooms, areas, zones) within your portfolio, including their location, type, and size. It connects spaces to their parent floor and building, forming the foundation for tracking occupancy, tenancy, and space utilization across your sites."
+ },
+ "spare_parts": {
+  "answers": "What spare parts do we stock, and what is the current quantity on hand? | Which parts are below their reorder level and need to be replenished?",
+  "grain": "one spare part type stocked by the organization",
+  "purpose": "This table maintains the master inventory of replacement parts available for maintenance and repair work. It records the part's identity, cost, current stock level, reorder thresholds, and the supplier relationship."
+ },
+ "task_groups": {
+  "answers": "What task groups has our organization defined? | What tasks are included in a specific task group?",
+  "grain": "one named collection of related maintenance or work tasks defined by an organization",
+  "purpose": "Task groups are templates or logical groupings that bundle related work tasks together for reuse across maintenance plans, scheduled tasks, and work orders."
+ },
+ "technician_skills": {
+  "answers": "What skills does technician X have, and at what level? | Which technicians are certified or expert in HVAC systems?",
+  "grain": "one skill proficiency held by one technician",
+  "purpose": "Records the technical skills and competency levels of maintenance technicians in your workforce. Links each technician to their certified and demonstrated abilities—such as HVAC, electrical systems, or preventive maintenance—so you can match the right person to work orders and plan training needs."
+ },
+ "technicians": {
+  "answers": "Which technicians are currently available for dispatch? | What is a technician's primary and secondary skill set?",
+  "grain": "one technician assigned to a base location within an organization",
+  "purpose": "This table maintains the roster of technicians available for work order assignment, including their skills, availability, performance metrics, and cost."
+ },
+ "tenants": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Occupier organisations in a building. Empty."
+ },
+ "udr_canonical_column": {
+  "answers": "What datatype should column X in table Y be? | What are the valid values or format for a specific canonical column?",
+  "grain": "one column definition in the canonical data model, with its expected datatype, format, and classification",
+  "purpose": "This table documents the schema and metadata for every column in the canonical (standardized) tables used across the facilities platform."
+ },
+ "udr_canonical_table": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR ontology: the canonical table a source table is mapped to. Empty."
+ },
+ "udr_entity_relationships": {
+  "answers": "What columns link assets to sites in our ingested data? | Which relationships were discovered with high confidence (>0.95) in a given ingestion run?",
+  "grain": "one discovered or declared foreign-key relationship between two data entities",
+  "purpose": "This table records data lineage and entity relationships discovered during ingestion runs, mapping which columns in source entities reference columns in destination entities."
+ },
+ "udr_mapping_decision": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: a recorded decision mapping a source field to a canonical one. Empty."
+ },
+ "udr_ontology_chunk": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: ontology text chunks for retrieval. Empty."
+ },
+ "udr_relationship": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR ontology: a relationship between canonical tables. Empty."
+ },
+ "udr_run_graph": {
+  "answers": "What tables and columns were included in a specific data ingestion run? | How many relationships (foreign keys) were detected between tables during ingestion?",
+  "grain": "one data ingestion run's graph snapshot for one organization, capturing table and relationship metadata",
+  "purpose": "This table records metadata about UDR (Unified Data Repository) ingestion runs—the structure, columns, and relationships discovered when data was loaded into the system. It tracks what tables were processed, how many relationships exist between them, and sample column values from each run."
+ },
+ "udr_run_versions": {
+  "answers": "What versions of a migration session have been created, and when? | Which documents and batches were included in a specific version?",
+  "grain": "one versioned snapshot of a data migration session, capturing a point-in-time state of ingested documents, batches, and mappings",
+  "purpose": "This table tracks discrete versions created during a data migration or ingestion workflow, recording which documents, batches, and migrations were included in each version along with their processing status."
+ },
+ "udr_script": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: a saved query script. Empty."
+ },
+ "udr_script_version": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: a version of a saved query script. Empty."
+ },
+ "udr_synonym": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: synonyms for table and column names used when matching a question. Empty."
+ },
+ "udr_table_catalog": {
+  "answers": "What tables exist in the Plenum CAFM system and what domain does each belong to? | Which table should I query to answer a user's question about [topic]?",
+  "grain": "one table in the Plenum CAFM data catalog, with its metadata and semantic documentation",
+  "purpose": "This table is a self-documenting registry of all tables in the Plenum CAFM system. It stores the grain, purpose, answerable questions, row counts, column definitions, foreign key relationships, and AI-generated semantic embeddings for each table."
+ },
+ "udr_test_result": {
+  "answers": "",
+  "grain": "",
+  "purpose": "UDR: the result of a saved script's test run. Empty."
+ },
+ "user_buildings": {
+  "answers": "Which buildings can a specific user access? | Who has access to a particular building?",
+  "grain": "one user's access grant to one building",
+  "purpose": "Which buildings each user may see - the only access allocation."
+ },
+ "user_certifications": {
+  "answers": "What certifications does a specific staff member hold? | When does a user's certification expire?",
+  "grain": "one professional certification or qualification held by one user",
+  "purpose": "This table records professional certifications, licenses, and qualifications earned by individual staff members—such as safety certifications, trade licenses, or compliance training."
+ },
+ "user_roles": {
+  "answers": "What roles does a specific user have? | Which users are assigned to a particular role?",
+  "grain": "one role assignment to one user",
+  "purpose": "This table records which roles are assigned to each user in the facilities management system. It links users to their access permissions and responsibilities by joining the users table with the roles table, enabling role-based access control across the CAFM platform."
+ },
+ "users": {
+  "answers": "Who are all the active users in my organization, and what are their job roles? | Which users have not yet verified their email or activated their account?",
+  "grain": "one user account in the CAFM system, belonging to one organization",
+  "purpose": "Records all user accounts across the platform, including their identity, contact details, job role, and access permissions. Tracks authentication state (email verification, login history, account locks) and platform privileges (superadmin/admin/user)."
+ },
+ "vendor_contacts": {
+  "answers": "Who is the primary contact at this vendor? | What is the phone number or email for vendor X's representative?",
+  "grain": "one contact person associated with one vendor",
+  "purpose": "This table stores individual contact details for people representing vendors—names, email addresses, phone numbers, and job titles. It allows facilities and operations teams to reach the right person at a vendor for inquiries, service requests, or contract matters."
+ },
+ "vendor_contracts": {
+  "answers": "What contracts does our organization have active right now? | When do our vendor contracts expire?",
+  "grain": "one service contract between an organization and a vendor",
+  "purpose": "This table records the master terms of vendor service contracts—who provides what, for how long, at what cost, and under what service-level commitments. It links organizations to vendors and establishes the contractual framework that governs maintenance and emergency work across facilities."
+ },
+ "vendor_monthly_scorecards": {
+  "answers": "What was vendor X's overall performance score in June 2026? | How has vendor Y's score trended over the past three months?",
+  "grain": "one vendor's performance scorecard for one calendar month",
+  "purpose": "This table records monthly performance ratings for vendors across multiple dimensions—SLA compliance, first-fix rates, PPM adherence, and invoice matching—calculated from work orders and contract parameters."
+ },
+ "vendor_score_weight_config": {
+  "answers": "What percentage weight does SLA response time carry in our vendor score calculation? | What is the cost variance threshold that triggers an alert for a vendor?",
+  "grain": "one scoring configuration profile (global or per-organization) that weights vendor performance metrics",
+  "purpose": "This table stores the weighting rules and thresholds used to calculate vendor performance scores across SLA compliance, first-fix rates, accreditation, and cost control."
+ },
+ "vendor_wo_scores": {
+  "answers": "What is vendor X's overall performance score for work order WO-UKRI-2938-202309-0143? | Did vendor X meet their SLA response and completion targets in September 2023?",
+  "grain": "one vendor's performance scorecard for a work order in a given month",
+  "purpose": "This table records how well a vendor performed on a specific work order, measured against SLA targets, first-fix rates, recalls, and accreditation status. It captures both qualitative performance (met/unmet SLAs, quality metrics) and financial performance (actual vs. estimated cost, variance)."
+ },
+ "vendors": {
+  "answers": "Who are all our active vendors and what are their contact details? | Which vendors are currently blocked from work, and why (missing accreditation)?",
+  "grain": "one vendor or contractor service provider",
+  "purpose": "Records the master list of vendors and contractors engaged for maintenance, repairs, and facility services. Stores vendor contact details, trade specialties, SLA response commitments, hourly rates, and compliance blocking status."
+ },
+ "weather_degree_days": {
+  "answers": "How many heating degree days did building X experience in January? | What was the cooling load (CDD) for a building during summer months?",
+  "grain": "One month's heating and cooling degree days for one building.",
+  "purpose": "Weekly heating and cooling degree days per building, to weather-correct consumption."
+ },
+ "wo_approval_requests": {
+  "answers": "Is this work order waiting for approval, and from whom? | How long has this approval request been pending?",
+  "grain": "one approval request for one work order at one authorization level",
+  "purpose": "Tracks approval workflows for work orders, recording who must authorize each request, at what level, and whether they have approved or are still pending. This table sits between work_orders and the approval chain, capturing the status and timing of sign-offs needed before work can proceed."
+ },
+ "wo_approval_rules": {
+  "answers": "What priority levels require the highest approval weight? | How much does a work order's cost range affect its approval routing?",
+  "grain": "one approval routing rule that scores work orders by a single dimension (priority, cost, building, or work type).",
+  "purpose": "This table defines the scoring rules that determine which approvers or approval chains a work order must follow. Each rule assigns a weight based on matching a work order's attribute (priority level, cost range, building, or work type) against a condition."
+ },
+ "wo_approval_suggestions": {
+  "answers": "Which approval chain was suggested for a specific work order, and was it accepted? | What is the confidence level and risk score of the approval suggestion for this work order?",
+  "grain": "one auto-generated approval chain suggestion for one work order",
+  "purpose": "This table stores system-generated recommendations for who should approve each work order, along with confidence scores and whether the suggestion was accepted."
+ },
+ "wo_approval_thresholds": {
+  "answers": "Who needs to approve a work order with a risk score of 55? | What are the approval thresholds for work orders in this facility?",
+  "grain": "one approval authority level defined by work order risk score range",
+  "purpose": "This table defines the approval chain for work orders by mapping risk score bands to required reviewer roles. It establishes who must sign off on a work order based on its calculated risk score, ensuring that higher-risk or higher-cost work gets appropriate management oversight before execution."
+ },
+ "wo_approver_routing": {
+  "answers": "Who approves work orders for HVAC systems? | Which asset categories does a specific user approve?",
+  "grain": "one approval routing rule: a user assigned to approve work orders for a specific asset category",
+  "purpose": "This table defines the approval chain for work orders by mapping users to asset categories and their approval roles. When a work order is created for a particular asset type (HVAC, Plumbing, Electrical, etc.), the system uses these rules to route it to the correct approver."
+ },
+ "wo_chat_sessions": {
+  "answers": "What conversations has a user had with the work order chatbot? | When did a particular chat session start and when was it last active?",
+  "grain": "one conversation session between a user and the work order management chatbot",
+  "purpose": "This table records chat sessions where facilities managers, technicians, and staff interact with an AI assistant to report issues, request maintenance, and create work orders."
+ },
+ "wo_journey_logs": {
+  "answers": "What stage is work order WO-20240427093000 currently in, and which milestones have been completed? | How long did the actual work take compared to the estimated duration for a given work order?",
+  "grain": "one work order's journey through its lifecycle stages, from initiation through completion",
+  "purpose": "This table records the step-by-step progression and state of a work order as it moves through approval, preparation, execution, and closure. It captures milestones reached, timeline expectations versus actuals, assigned technician and team details, cost tracking, and quality metrics."
+ },
+ "wo_status_history": {
+  "answers": "When did this work order move from pending_approval to active? | Who approved this work order and when?",
+  "grain": "One status transition event for one work order.",
+  "purpose": "This table records the complete audit trail of work order lifecycle changes—from creation through closure—capturing who changed the status, when, and why."
+ },
+ "work_order_assets": {
+  "answers": "Which assets are included in this work order? | What work orders have touched this asset?",
+  "grain": "one asset assigned to one work order",
+  "purpose": "This table records which assets are involved in or affected by each work order. It links work orders to the specific equipment, systems, or building components that maintenance or repairs target, enabling tracking of asset-level work history and maintenance dependencies."
+ },
+ "work_order_attachments": {
+  "answers": "What files or photos have been uploaded for this work order? | Who uploaded this attachment and when?",
+  "grain": "one file or document attached to a work order or work order task",
+  "purpose": "This table stores references to files, documents, and media uploaded in relation to work orders and their individual tasks. It tracks what was uploaded, by whom, and when, linking attachments to either the overall work order or a specific task within it."
+ },
+ "work_order_comments": {
+  "answers": "What notes or updates were added to this work order? | Who commented on this work order and when?",
+  "grain": "one comment or note attached to one work order",
+  "purpose": "This table records the audit trail and communication history for work orders, capturing what was discussed, decided, or observed during execution."
+ },
+ "work_order_history": {
+  "answers": "When did this work order move from 'pending' to 'in progress'? | Who changed the status of this work order, and what notes did they leave?",
+  "grain": "one status change event on one work order",
+  "purpose": "This table records the audit trail of work order lifecycle transitions—when a work order moved from one status to another, who made the change, and when."
+ },
+ "work_order_parts": {
+  "answers": "What parts were used to complete work order WO-20240401080000? | Which parts have active warranty coverage and until when?",
+  "grain": "one spare part consumed or fitted during one work order on one asset",
+  "purpose": "This table records which spare parts were used to complete maintenance work orders, including the quantity, cost, and installation date. It links work orders to the specific parts drawn from inventory and installed on assets, and tracks warranty coverage for parts that were fitted."
+ },
+ "work_order_resources": {
+  "answers": "",
+  "grain": "",
+  "purpose": "Labour or equipment resources booked onto a work order. Empty."
+ },
+ "work_order_statuses": {
+  "answers": "What statuses are available for work orders in our organization? | Which statuses count as 'closed' or completed for reporting purposes?",
+  "grain": "one work order status definition within an organization",
+  "purpose": "This table defines the lifecycle states that work orders can occupy—such as Open, In Progress, On Hold, Completed, or Cancelled. Each organization maintains its own set of status definitions, allowing customization of workflow stages."
+ },
+ "work_order_tasks": {
+  "answers": "What tasks make up this work order, and what is the status of each? | Who is assigned to this task, and when was it completed?",
+  "grain": "one discrete task within a work order",
+  "purpose": "This table breaks down work orders into individual tasks, each with its own assignment, status, and time tracking. It connects a work order to its component activities, allowing facilities teams to manage and monitor progress on specific work items rather than treating each order as a monolith."
+ },
+ "work_order_users": {
+  "answers": "Who is assigned to this work order? | How many hours has a specific technician spent on a work order?",
+  "grain": "one user assigned to one work order, with time tracking",
+  "purpose": "Records which staff members are assigned to each work order and tracks hours they spend on it. Links work orders to the users table to identify technicians, supervisors, or other personnel involved in completing maintenance or repair tasks."
+ },
+ "work_orders": {
+  "answers": "What work orders are currently active or blocked on a given asset or building? | Which work orders are overdue or approaching their scheduled date?",
+  "grain": "one maintenance or repair task assigned to a specific asset at a location",
+  "purpose": "This table records all work orders—corrective repairs, planned maintenance, and inspections—issued against assets across your portfolio. It tracks who requested the work, which technician or vendor is assigned, scheduling and cost estimates, approval status, and completion details."
+ },
+ "workbook_extras_runs": {
+  "answers": "",
+  "grain": "",
+  "purpose": "One row per migration run: whether the workbook's extra sheets (contract terms, invoice lines, telemetry) were applied after the migration, and with what counts."
+ }
+}

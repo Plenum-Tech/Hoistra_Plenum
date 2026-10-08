@@ -1,0 +1,1002 @@
+{
+  "version": "1.0",
+  "note": "What every ingested document is read for, per domain. A document is not one kind of thing: an FM contract names a vendor, the assets it covers, the PPM frequency it commits to and the certificates it requires — four domains in one file. The pipeline used to pick ONE winner from the filename and run ONE extractor, so three of those four were never read. Every domain here is tested against every document, and a domain that is absent is recorded as absent WITH THE REASON rather than silently skipped. `lands` names the real column a field is destined for, so a rule that points nowhere is visible as a bug instead of quietly extracting into nothing.",
+  "confidence": {
+    "accept": 0.85,
+    "review": 0.6,
+    "note": "At or above accept, a fact may be written. Between review and accept it becomes a draft for a person. Below review it is reported and discarded — a low-confidence figure written into a domain table is indistinguishable from a measured one once it is a row."
+  },
+  "domains": {
+    "compliance": {
+      "label": "Compliance",
+      "handler": "compliance.upsert_certificate",
+      "handler_note": "Defers to the existing certificate pipeline, which owns type packs, country rules and the expiry ladder. This catalogue only says what to look for.",
+      "signals": {
+        "strong": [
+          "certificate number",
+          "certificate no",
+          "date of issue",
+          "expiry date",
+          "valid until",
+          "next inspection due",
+          "satisfactory",
+          "unsatisfactory",
+          "remedial action",
+          "accreditation number",
+          "eicr",
+          "epc",
+          "gas safe",
+          "niceic",
+          "fire risk assessment",
+          "legionella risk assessment",
+          "lifting equipment",
+          "loler",
+          "puwer",
+          "insurance certificate"
+        ],
+        "weak": [
+          "inspection",
+          "compliance",
+          "certificate",
+          "assessor",
+          "engineer",
+          "issued by",
+          "regulation"
+        ]
+      },
+      "fields": [
+        {
+          "name": "certificate_number",
+          "question": "The certificate or report reference number",
+          "lands": "compliance_certificates.certificate_number",
+          "type": "text",
+          "aliases": [
+            "certificate no",
+            "cert number",
+            "cert ref",
+            "certificate ref",
+            "report number"
+          ]
+        },
+        {
+          "name": "certificate_type_code",
+          "question": "Which statutory certificate type this is (EICR, EPC, GAS_SAFETY, FRA, LOLER, PAT, LEGIONELLA, INSURANCE, other)",
+          "lands": "compliance_certificates.certificate_type_code",
+          "type": "text",
+          "aliases": [
+            "certificate type",
+            "cert type",
+            "document type"
+          ]
+        },
+        {
+          "name": "issuer",
+          "question": "The organisation that issued the certificate",
+          "lands": "compliance_certificates.issuer",
+          "type": "text",
+          "aliases": [
+            "issued by",
+            "issuing body",
+            "certifying body",
+            "awarding body"
+          ]
+        },
+        {
+          "name": "issue_date",
+          "question": "The date the certificate was issued",
+          "lands": "compliance_certificates.issue_date",
+          "type": "date",
+          "aliases": [
+            "date issued",
+            "issued",
+            "date of issue"
+          ]
+        },
+        {
+          "name": "expiry_date",
+          "question": "The date the certificate expires",
+          "lands": "compliance_certificates.expiry_date",
+          "type": "date",
+          "aliases": [
+            "expires",
+            "valid until",
+            "expiry",
+            "valid to"
+          ]
+        },
+        {
+          "name": "next_due_date",
+          "question": "The date the next inspection is due, if stated separately from expiry",
+          "lands": "compliance_certificates.next_due_date",
+          "type": "date",
+          "aliases": [
+            "next inspection",
+            "next due",
+            "retest date",
+            "next test"
+          ]
+        },
+        {
+          "name": "inspector_name",
+          "question": "The named inspector or assessor",
+          "lands": "compliance_certificates.inspector_name",
+          "type": "text",
+          "aliases": [
+            "assessor",
+            "inspected by",
+            "engineer name",
+            "surveyor"
+          ]
+        },
+        {
+          "name": "inspector_accreditation_number",
+          "question": "The inspector's accreditation or registration number",
+          "lands": "compliance_certificates.inspector_accreditation_number",
+          "type": "text",
+          "aliases": [
+            "accreditation number",
+            "registration number",
+            "membership number"
+          ]
+        },
+        {
+          "name": "result",
+          "question": "The overall outcome, e.g. satisfactory or unsatisfactory",
+          "lands": "compliance_certificates.result",
+          "type": "text",
+          "aliases": [
+            "outcome",
+            "status",
+            "verdict",
+            "assessment"
+          ]
+        },
+        {
+          "name": "defects_found",
+          "question": "Defects or non-conformities recorded",
+          "lands": "compliance_certificates.defects_found",
+          "type": "text",
+          "aliases": [
+            "defects",
+            "non conformities",
+            "observations",
+            "issues"
+          ]
+        },
+        {
+          "name": "remedial_actions",
+          "question": "Remedial actions required and by when",
+          "lands": "compliance_certificates.remedial_actions",
+          "type": "text",
+          "aliases": [
+            "remedials",
+            "actions required",
+            "corrective actions"
+          ]
+        }
+      ]
+    },
+    "vendors": {
+      "label": "Vendors and contracts",
+      "handler": "contract_performance.extract_contract_parameters",
+      "handler_note": "The contract extractor resolves or creates the vendor itself. These fields are what a document of ANY kind can say about a supplier — an invoice and a certificate name one too.",
+      "signals": {
+        "strong": [
+          "service agreement",
+          "framework agreement",
+          "master services",
+          "statement of work",
+          "purchase order",
+          "contract value",
+          "contract period",
+          "service level agreement",
+          "invoice number",
+          "vat registration",
+          "company registration",
+          "remittance",
+          "payment terms",
+          "supplier"
+        ],
+        "weak": [
+          "contractor",
+          "vendor",
+          "provider",
+          "agreement",
+          "contract",
+          "invoice",
+          "quotation",
+          "company"
+        ]
+      },
+      "fields": [
+        {
+          "name": "vendor_name",
+          "question": "The supplier, contractor or service provider named",
+          "lands": "vendors.vendor_name",
+          "type": "text",
+          "aliases": [
+            "supplier",
+            "supplier name",
+            "contractor",
+            "company",
+            "company name",
+            "provider"
+          ]
+        },
+        {
+          "name": "vendor_code",
+          "question": "The supplier's account or reference code, if any",
+          "lands": "vendors.vendor_code",
+          "type": "text",
+          "aliases": [
+            "supplier code",
+            "account number",
+            "account no",
+            "supplier ref"
+          ]
+        },
+        {
+          "name": "address",
+          "question": "The supplier's registered address",
+          "lands": "vendors.address",
+          "type": "text"
+        },
+        {
+          "name": "city",
+          "question": "The supplier's city",
+          "lands": "vendors.city",
+          "type": "text"
+        },
+        {
+          "name": "postal_code",
+          "question": "The supplier's postcode",
+          "lands": "vendors.postal_code",
+          "type": "text"
+        },
+        {
+          "name": "country",
+          "question": "The supplier's country",
+          "lands": "vendors.country",
+          "type": "text"
+        },
+        {
+          "name": "phone",
+          "question": "The supplier's telephone number",
+          "lands": "vendors.phone",
+          "type": "text"
+        },
+        {
+          "name": "website",
+          "question": "The supplier's website",
+          "lands": "vendors.website",
+          "type": "text"
+        },
+        {
+          "name": "contract_name",
+          "question": "The title of the agreement",
+          "lands": "vendor_contracts.contract_name",
+          "type": "text",
+          "aliases": [
+            "agreement",
+            "agreement name",
+            "contract title",
+            "contract ref"
+          ]
+        },
+        {
+          "name": "contract_start",
+          "question": "The date the agreement starts",
+          "lands": "vendor_contracts.contract_start",
+          "type": "date",
+          "aliases": [
+            "start date",
+            "commencement",
+            "effective from"
+          ]
+        },
+        {
+          "name": "contract_end",
+          "question": "The date the agreement ends",
+          "lands": "vendor_contracts.contract_end",
+          "type": "date",
+          "aliases": [
+            "end date",
+            "expiry",
+            "expires",
+            "termination date"
+          ]
+        },
+        {
+          "name": "contract_value",
+          "question": "The total contract value with its currency",
+          "lands": "vendor_contracts.contract_value",
+          "type": "money",
+          "aliases": [
+            "value",
+            "annual value",
+            "contract sum",
+            "total value"
+          ]
+        },
+        {
+          "name": "sla_terms",
+          "question": "Response and rectification times, service credits, KPIs",
+          "lands": "vendor_contracts.sla_terms",
+          "type": "text",
+          "aliases": [
+            "sla",
+            "service level",
+            "response time",
+            "kpi"
+          ]
+        },
+        {
+          "name": "service_scope",
+          "question": "What services the agreement covers",
+          "lands": "vendor_contracts.service_scope",
+          "type": "text",
+          "aliases": [
+            "scope",
+            "services",
+            "scope of works"
+          ]
+        },
+        {
+          "name": "visits_per_year",
+          "question": "How many planned visits per year the agreement commits to",
+          "lands": "vendor_contracts.visits_per_year",
+          "type": "number",
+          "aliases": [
+            "visits",
+            "annual visits",
+            "number of visits",
+            "visits pa"
+          ]
+        }
+      ]
+    },
+    "energy": {
+      "label": "Energy",
+      "handler": null,
+      "handler_note": "Writes through engines/ingestion/domain_writers.py. The target is energy_meters, NOT plenum_cafm.meters: meter_readings.meter_id carries a foreign key to energy_meters.id, and `meters` is a vestigial 18-row table nothing references for readings. That was found by a real insert failing, not by reading the schema — the column names on `meters` look right and the rows land nowhere.",
+      "signals": {
+        "strong": [
+          "mpan",
+          "mprn",
+          "msn",
+          "kwh",
+          "kva",
+          "supply number",
+          "meter reading",
+          "half hourly",
+          "standing charge",
+          "day rate",
+          "night rate",
+          "p/kwh",
+          "climate change levy",
+          "therms",
+          "rt.h",
+          "district cooling",
+          "billing period"
+        ],
+        "weak": [
+          "meter",
+          "electricity",
+          "gas",
+          "consumption",
+          "tariff",
+          "energy",
+          "supply",
+          "utility"
+        ]
+      },
+      "fields": [
+        {
+          "name": "mpan",
+          "question": "The MPAN — the electricity supply number",
+          "lands": "energy_meters.mpan",
+          "type": "text",
+          "aliases": [
+            "mpan",
+            "mpan core",
+            "supply number",
+            "electricity supply number",
+            "msn"
+          ]
+        },
+        {
+          "name": "meter_serial",
+          "question": "The meter serial or device identifier",
+          "lands": "energy_meters.dcc_device_id",
+          "type": "text",
+          "aliases": [
+            "meter serial",
+            "meter number",
+            "meter no",
+            "device id",
+            "msn"
+          ],
+          "note": "The device identifier, which is what a serial is. It no longer shares a column with the supply number."
+        },
+        {
+          "name": "meter_type",
+          "question": "Whether this is an electricity, gas, water, heat or cooling meter",
+          "lands": "energy_meters.meter_type",
+          "type": "text",
+          "aliases": [
+            "utility",
+            "fuel",
+            "commodity",
+            "meter category"
+          ]
+        },
+        {
+          "name": "unit",
+          "question": "The unit consumption is measured in (kWh, m3, therms, RTh)",
+          "lands": null,
+          "type": "text",
+          "aliases": [
+            "uom",
+            "unit of measure",
+            "units"
+          ],
+          "note": "energy_meters has no unit column; consumption is held in kWh by the column name itself (meter_readings.consumption_kwh), so a stated unit is read and shown rather than stored somewhere it would be ignored."
+        },
+        {
+          "name": "period_start",
+          "question": "The first date of the billing or reading period",
+          "lands": null,
+          "type": "date",
+          "aliases": [
+            "from",
+            "start date",
+            "read from",
+            "period from",
+            "billing start"
+          ],
+          "note": "meter_readings stamps one reading_at, which period_end fills. A period has two ends and the table holds one; period_start is extracted and shown rather than silently overwriting the other end of the same row."
+        },
+        {
+          "name": "period_end",
+          "question": "The last date of the billing or reading period",
+          "lands": "meter_readings.reading_at",
+          "type": "date",
+          "aliases": [
+            "to",
+            "end date",
+            "read to",
+            "period to",
+            "billing end",
+            "read date",
+            "reading date"
+          ],
+          "note": "The reading is stamped at the end of its period."
+        },
+        {
+          "name": "consumption",
+          "question": "Total consumption over the period, in the stated unit",
+          "lands": "meter_readings.consumption_kwh",
+          "type": "number",
+          "aliases": [
+            "kwh",
+            "usage",
+            "units consumed",
+            "total consumption",
+            "energy",
+            "consumption kwh"
+          ]
+        },
+        {
+          "name": "unit_rate",
+          "question": "The unit rate charged per kWh or per unit, with its currency",
+          "lands": "energy_meters.tariff_gbp_per_kwh",
+          "type": "money",
+          "note": "The contracted rate on the meter. Previously aimed at energy_anomalies.tariff_used, which is the rate a FINDING was priced at — a different fact about a different row.",
+          "aliases": [
+            "rate",
+            "p/kwh",
+            "unit price",
+            "tariff rate"
+          ]
+        },
+        {
+          "name": "standing_charge",
+          "question": "The standing or fixed charge for the period",
+          "lands": null,
+          "type": "money",
+          "note": "No column anywhere holds a standing charge. Extracted and returned so the figure is visible, never written, and named here as the gap it is rather than dropped from the catalogue.",
+          "aliases": [
+            "standing",
+            "fixed charge",
+            "daily charge"
+          ]
+        },
+        {
+          "name": "supplier_name",
+          "question": "The energy supplier named on the document",
+          "lands": "vendors.vendor_name",
+          "type": "text",
+          "aliases": [
+            "supplier",
+            "energy supplier",
+            "retailer",
+            "utility company"
+          ]
+        },
+        {
+          "name": "mprn",
+          "question": "The MPRN — the gas supply number",
+          "lands": "energy_meters.mprn",
+          "type": "text",
+          "aliases": [
+            "mprn",
+            "gas supply number",
+            "gas meter point"
+          ]
+        }
+      ]
+    },
+    "assets": {
+      "label": "Assets and parts",
+      "handler": null,
+      "handler_note": "No extractor existed. An asset created from a document nobody checked is a register entry with no provenance, so these are held for confirmation rather than inserted.",
+      "signals": {
+        "strong": [
+          "serial number",
+          "model number",
+          "asset tag",
+          "plant number",
+          "manufacturer",
+          "date of manufacture",
+          "commissioning date",
+          "warranty expires",
+          "warranty period",
+          "nameplate",
+          "duty",
+          "rated capacity",
+          "refrigerant charge",
+          "o&m manual",
+          "spare part",
+          "part number"
+        ],
+        "weak": [
+          "asset",
+          "equipment",
+          "plant",
+          "unit",
+          "chiller",
+          "boiler",
+          "ahu",
+          "pump",
+          "lift",
+          "generator",
+          "model",
+          "capacity"
+        ]
+      },
+      "fields": [
+        {
+          "name": "asset_name",
+          "question": "The name or description of the equipment",
+          "lands": "assets.asset_name",
+          "type": "text",
+          "aliases": [
+            "equipment",
+            "equipment name",
+            "description",
+            "asset description",
+            "item"
+          ]
+        },
+        {
+          "name": "asset_code",
+          "question": "The asset tag, plant number or equipment reference",
+          "lands": "assets.asset_code",
+          "type": "text",
+          "aliases": [
+            "asset tag",
+            "equipment number",
+            "equip#",
+            "equip no",
+            "plant number",
+            "plant no",
+            "tag",
+            "asset id",
+            "asset ref"
+          ]
+        },
+        {
+          "name": "serial_number",
+          "question": "The equipment serial number",
+          "lands": "assets.serial_number",
+          "type": "text",
+          "aliases": [
+            "serial",
+            "serial no",
+            "sn",
+            "equipment serial"
+          ]
+        },
+        {
+          "name": "manufacturer",
+          "question": "The manufacturer",
+          "lands": "assets.manufacturer",
+          "type": "text",
+          "aliases": [
+            "make",
+            "oem",
+            "brand"
+          ]
+        },
+        {
+          "name": "model_number",
+          "question": "The model number",
+          "lands": "assets.model_number",
+          "type": "text",
+          "aliases": [
+            "model",
+            "model no",
+            "type number"
+          ]
+        },
+        {
+          "name": "installation_date",
+          "question": "The installation or commissioning date",
+          "lands": "assets.installation_date",
+          "type": "date",
+          "aliases": [
+            "installed",
+            "install date",
+            "commissioned",
+            "commissioning date",
+            "date installed",
+            "in service date"
+          ]
+        },
+        {
+          "name": "warranty_expiry",
+          "question": "The date the equipment warranty expires",
+          "lands": "assets.warranty_expiry",
+          "type": "date",
+          "aliases": [
+            "warranty end",
+            "warranty until",
+            "guarantee expiry"
+          ]
+        },
+        {
+          "name": "criticality",
+          "question": "The stated criticality or priority level of the asset",
+          "lands": "assets.criticality",
+          "type": "text",
+          "aliases": [
+            "priority",
+            "asset criticality",
+            "risk rating",
+            "importance"
+          ]
+        },
+        {
+          "name": "replacement_value",
+          "question": "The replacement or capital value with its currency",
+          "lands": "assets.replacement_value",
+          "type": "money",
+          "aliases": [
+            "capital value",
+            "asset value",
+            "replacement cost",
+            "crv"
+          ]
+        },
+        {
+          "name": "design_life_years",
+          "question": "The expected or design life in years",
+          "lands": "assets.design_life_years",
+          "type": "number",
+          "aliases": [
+            "expected life",
+            "useful life",
+            "life expectancy"
+          ]
+        },
+        {
+          "name": "part_name",
+          "question": "A spare part named as fitted or supplied",
+          "lands": "spare_parts.part_name",
+          "type": "text",
+          "aliases": [
+            "part description",
+            "spare",
+            "spare part",
+            "item name"
+          ]
+        },
+        {
+          "name": "part_code",
+          "question": "The part number of a spare part",
+          "lands": "spare_parts.part_code",
+          "type": "text",
+          "aliases": [
+            "part number",
+            "part no",
+            "sku",
+            "stock code",
+            "material number"
+          ]
+        },
+        {
+          "name": "part_warranty_months",
+          "question": "The warranty period in months on a fitted part",
+          "lands": "spare_parts.warranty_months",
+          "type": "number",
+          "aliases": [
+            "part warranty",
+            "warranty months"
+          ]
+        },
+        {
+          "name": "location_code",
+          "question": "The location, room or area the asset is in",
+          "lands": "assets.location_id",
+          "type": "text",
+          "aliases": [
+            "location",
+            "location code",
+            "room",
+            "area",
+            "floor",
+            "space",
+            "position"
+          ],
+          "note": "Resolved to a location_id by the importer; the sheet carries a human code."
+        },
+        {
+          "name": "parent_asset",
+          "question": "The parent asset this one sits under, if any",
+          "lands": "assets.parent_asset_id",
+          "type": "text",
+          "aliases": [
+            "parent",
+            "parent asset",
+            "belongs to",
+            "part of",
+            "sub asset of"
+          ],
+          "note": "Resolved to an asset id by the importer."
+        }
+      ]
+    },
+    "maintenance": {
+      "label": "Maintenance",
+      "handler": null,
+      "handler_note": "No extractor existed. A visit or a finding invented from a misread document becomes evidence of work that may not have happened, so these are held.",
+      "signals": {
+        "strong": [
+          "planned preventative",
+          "ppm",
+          "service visit",
+          "visit report",
+          "job sheet",
+          "work order",
+          "job number",
+          "fault reported",
+          "remedial works",
+          "next service due",
+          "service frequency",
+          "quarterly service",
+          "annual service",
+          "engineer attended",
+          "corrective action",
+          "recommendation"
+        ],
+        "weak": [
+          "maintenance",
+          "service",
+          "visit",
+          "inspection",
+          "repair",
+          "fault",
+          "attended",
+          "engineer",
+          "technician",
+          "schedule"
+        ]
+      },
+      "fields": [
+        {
+          "name": "ppm_ref",
+          "question": "The planned maintenance visit reference",
+          "lands": "ppm_visits.ppm_ref",
+          "type": "text",
+          "aliases": [
+            "ppm reference",
+            "visit ref",
+            "schedule ref",
+            "pm code",
+            "sm code"
+          ]
+        },
+        {
+          "name": "frequency",
+          "question": "The service frequency committed to, e.g. quarterly or annual",
+          "lands": "ppm_visits.frequency",
+          "type": "text",
+          "aliases": [
+            "service frequency",
+            "interval",
+            "schedule interval",
+            "periodicity",
+            "recurrence"
+          ]
+        },
+        {
+          "name": "scheduled_date",
+          "question": "The date the visit was scheduled for",
+          "lands": "ppm_visits.scheduled_date",
+          "type": "date",
+          "aliases": [
+            "due date",
+            "planned date",
+            "next due",
+            "target date"
+          ]
+        },
+        {
+          "name": "completed_date",
+          "question": "The date the visit was actually carried out",
+          "lands": "ppm_visits.completed_date",
+          "type": "date",
+          "aliases": [
+            "completion date",
+            "date completed",
+            "actual date",
+            "closed date",
+            "date closed"
+          ]
+        },
+        {
+          "name": "wo_code",
+          "question": "The work order or job number",
+          "lands": "work_orders.wo_code",
+          "type": "text",
+          "aliases": [
+            "work order",
+            "work order number",
+            "wo number",
+            "job number",
+            "job no",
+            "job ref",
+            "ticket"
+          ]
+        },
+        {
+          "name": "title",
+          "question": "A short description of the work carried out or requested",
+          "lands": "work_orders.title",
+          "type": "text",
+          "aliases": [
+            "work description",
+            "job description",
+            "task",
+            "summary",
+            "subject"
+          ]
+        },
+        {
+          "name": "maintenance_type",
+          "question": "Whether the work was planned, reactive or corrective",
+          "lands": "work_orders.maintenance_type",
+          "type": "text",
+          "aliases": [
+            "wo type",
+            "work type",
+            "job type",
+            "type"
+          ]
+        },
+        {
+          "name": "inspector",
+          "question": "The engineer or technician who attended",
+          "lands": "inspections.inspector",
+          "type": "text",
+          "aliases": [
+            "engineer",
+            "technician",
+            "attended by",
+            "operative",
+            "assigned to"
+          ]
+        },
+        {
+          "name": "inspection_date",
+          "question": "The date of the inspection or attendance",
+          "lands": "inspections.inspection_date",
+          "type": "date",
+          "aliases": [
+            "visit date",
+            "attendance date",
+            "date attended",
+            "date"
+          ]
+        },
+        {
+          "name": "observations",
+          "question": "What was observed or found",
+          "lands": "inspections.observations",
+          "type": "text",
+          "aliases": [
+            "findings",
+            "notes",
+            "comments",
+            "remarks",
+            "observation"
+          ]
+        },
+        {
+          "name": "risk_level",
+          "question": "The risk or severity assigned to a finding",
+          "lands": "inspections.risk_level",
+          "type": "text",
+          "aliases": [
+            "severity",
+            "risk",
+            "priority level",
+            "grade"
+          ]
+        },
+        {
+          "name": "recommendation",
+          "question": "What the report recommends be done next",
+          "lands": "inspections.recommendation",
+          "type": "text",
+          "aliases": [
+            "recommended action",
+            "advice",
+            "next steps",
+            "recommendations"
+          ]
+        },
+        {
+          "name": "corrective_action",
+          "question": "Whether corrective action is required (true or false)",
+          "lands": "inspections.corrective_action",
+          "type": "boolean",
+          "aliases": [
+            "remedial required",
+            "action required",
+            "follow up required"
+          ]
+        },
+        {
+          "name": "site",
+          "question": "The building or site the work relates to",
+          "lands": "work_orders.building_id",
+          "type": "text",
+          "aliases": [
+            "site",
+            "building",
+            "property",
+            "premises",
+            "site name",
+            "building name"
+          ],
+          "note": "Resolved to a building_id by the importer; the sheet carries a name or code."
+        },
+        {
+          "name": "asset_code_ref",
+          "question": "The asset the visit or work order is against",
+          "lands": "ppm_visits.asset_code",
+          "type": "text",
+          "aliases": [
+            "asset",
+            "asset code",
+            "equipment",
+            "plant",
+            "asset tag"
+          ]
+        }
+      ]
+    }
+  },
+  "aliases_note": "What a real CMMS export calls each field. Derived variants of the field name itself (asset_code -> 'asset code', 'assetcode') are computed by the matcher and are NOT listed here; these are the ones no rule could guess — EQUIP#, MPAN, 'p/kWh', 'attended by'. A header that matches none of them is reported as unmapped, never guessed into a column."
+}
