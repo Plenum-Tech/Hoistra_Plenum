@@ -1,12 +1,22 @@
 ---
 name: energy-intelligence
 agent: energy_intelligence
-description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Also owns ASSET INTELLIGENCE — which assets need investigating and why, an asset's own anomalies, readings, operating hours and condition, chiller/AHU/boiler/HVAC performance and COP, and asset health ranked worst-first. This agent also owns the ASSETS PAGE: every asset banded Threat / Watch / In control from its section's EUI and its anomalies, the health score (0–100) on the register and which assets have NEVER BEEN SCORED, asset value at risk, and the condition rules. "Which assets have never been scored", "which assets are a threat", "what is on watch", "not scored" are this agent's questions, not a table lookup. Asset criticality (L1/L2/L3) lives here too. A question about an asset's CONDITION or HEALTH cannot be answered from this register alone — the inspector's condition grades are wo_engine's — so name wo_engine under also for those; a cost, consumption, anomaly, tariff, benchmark, criticality or operating-hours question is this agent's alone and has no also. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift", "which assets need investigating", "worst condition", "asset health", "chiller performance", "HVAC".
+description: Energy and utilities across four markets — half-hourly MPAN/MPRN readings aggregated into EUI per building, benchmarked against the regulation pack for each country (CIBSE TM46, Energy Star/ASHRAE 100/LL97, Estidama, BCA), consumption anomalies priced at the local tariff, statutory duties (MEES, LL97, BCA), asset condition versus consumption, carbon exposure and the monthly energy report. Also owns ASSET INTELLIGENCE — which assets need investigating and why, an asset's own anomalies, readings, operating hours and condition, chiller/AHU/boiler/HVAC performance and COP, and asset health ranked worst-first. This agent also owns the ASSETS PAGE and every "assets at risk" question, by building or not: every asset banded Threat / Watch / In control from its section's EUI and its anomalies, the health score (0–100) on the register and which assets have NEVER BEEN SCORED, asset value at risk, and the condition rules. "Which assets have never been scored", "which assets are a threat", "what is on watch", "not scored" are this agent's questions, not a table lookup. Asset criticality (L1/L2/L3) lives here too. A question about an asset's CONDITION or HEALTH cannot be answered from this register alone — the inspector's condition grades are wo_engine's — so name wo_engine under also for those; a cost, consumption, anomaly, tariff, benchmark, criticality or operating-hours question is this agent's alone and has no also. Use for "energy", "consumption", "kWh", "meter", "MPAN", "electricity", "gas", "benchmark", "EUI", "spike", "anomaly", "carbon", "which market", "which building", "baseline drift", "which assets need investigating", "worst condition", "asset health", "chiller performance", "HVAC". ALSO owns the HOIST SCORE, the platform's and each building's: get_hoist_score returns the Home tile's figure (mean of four bars: contracts, assets, meter consent, certificates - each the share of buildings with that record) and each building's own score (20 points for each of assets, compliance, contracts, energy, maintenance on record). Use for "hoist score", "how complete is each building".
 references:
   - anomalies
   - assets
   - costs
 triggers:
+  - assets at risk
+  - asset at risk
+  - at-risk assets
+  - at risk assets
+  - assets are at risk
+  - asset is at risk
+  - assets at threat
+  - threat band
+  - hoist score
+  - hoist
   - energy
   - consumption
   - kwh
@@ -80,19 +90,25 @@ triggers:
   - condition rules
 ---
 
-# Energy Intelligence — consumption, benchmarks and anomalies
+## Hoist Score
 
-You turn half-hourly meter data into three things a PM can act on: **how a building compares to
-its own benchmark**, **what changed**, and **what it costs**. You never create work orders.
+The Hoist Score says how completely the portfolio is held in the platform, not how well it
+performs. Call `get_hoist_score` - it reads what the Home tile reads.
 
-Three shapes of question arrive, and they take different tools. Read which one you have before
-reaching for anything.
+- `home_tile` - THE Hoist Score the user sees on Home: the mean of four bars, **Contracts**,
+  **Assets**, **Meter consent**, **Certificates**, each the share of hoisted buildings with
+  that kind of record. Four buildings with 0 / 1 / 1 / 3 of them covered read 0, 25, 25, 75
+  and so 31. Below 60 the band is "Ingestion in progress", 60-84 "Supervised autonomy", 85+
+  "Delegated autonomy".
+- `bars` - each kind with `covered` of `of` and `missing_buildings` (maintenance is the fifth,
+  not drawn on Home).
+- `rows` - one per building: `score` (20 points for each of the five kinds on record),
+  `covered`, `missing`.
 
-| The question is about | Start with | Never |
-|---|---|---|
-| a COUNTRY or the portfolio | `get_market_profiles` | add figures across markets |
-| a BUILDING | `list_energy_buildings` then `get_building_cost_drivers` | quote an EUI without its reference |
-| an ANOMALY | `get_anomaly_rollup` then `list_energy_anomalies` | sum the detectors |
+Answer with the Home figure first, then the per-building table, then which missing records
+would lift it most. Never answer from the `buildings.hoist_score` column: it is a recorded
+override and is usually empty, which once produced "Not recorded" for every building while
+Home showed 31.
 
 ## Every answer ends with cost-saving options
 

@@ -162,8 +162,10 @@ from . import contract_answer
 from . import llm_cost
 from .skills import fm_lens, prompt_doc
 from .context_budget import compact_context, make_hook as make_context_hook
+from . import register_digest
 from ..services import skill_overlays
 from .migration_chooser import CHOICES as MIGRATION_CHOICES, CHOOSER_REPLY, is_bare_migration_request
+from . import domain_chooser
 from .system_prompt import build_system_prompt
 from .udr_agent import (
     get_schema,
@@ -611,6 +613,15 @@ def _latest_user_message(input_: Any) -> str:
         if isinstance(message, HumanMessage) and isinstance(message.content, str):
             return message.content
     return ""
+
+
+def _register_digest_on() -> bool:
+    """The analyst reads the register digested (agents/register_digest.py) unless it is switched
+    off, or a Skill lab reference replay (context mode "trim") asks for the old pipeline whole."""
+    from .context_budget import MODE
+    if MODE.get() == "trim":
+        return False
+    return bool(getattr(settings, "compliance_register_digest", True))
 
 
 def _trim_history_hook(state: dict[str, Any]) -> dict[str, Any]:
@@ -2133,6 +2144,7 @@ class DeepAgentOrchestrator:
         # shed last. Without this the fallback's vendor list, read before the building list,
         # was the first thing cut, and two of five blocked vendors never reached the analyst.
         asked: list[bool] = []
+        digest_on = _register_digest_on()
         for tc in tool_calls:
             if tc.get("tool") == "compliance_response":
                 continue  # our own typed output — never feed it back in
@@ -2151,6 +2163,9 @@ class DeepAgentOrchestrator:
                         ]
                         if tc.get("tool") == "list_country_pack" and key == "types":
                             rows = self._compact_pack_types(rows)
+                        elif digest_on:
+                            # Every certificate, sized by need (agents/register_digest.py).
+                            rows = register_digest.maybe_digest(rows)
                         pruned[key] = rows
                     else:
                         pruned[key] = value
@@ -3975,6 +3990,95 @@ class DeepAgentOrchestrator:
         "run mapping over the uploaded files". Not when the session already holds uploads, a
         Fiix connection or a schema mapping: then that route has something to run over."""
         return is_bare_migration_request(user_message, extra_context) and not workspace_has_ingestion(session_state or {})
+
+    #: A message that starts like a new question is one, even right after the assistant asked
+    #: the user something: it is routed, not treated as the reply.
+    _STANDALONE = re.compile(
+        r"^\s*(what|which|how|who|when|where|why|show|list|give|is|are|can|could|do|does|find|get|"
+        r"rank|compare|summari[sz]e)\b", re.I)
+
+    async def _conversation_step(self, sid: str, user_message: str, extra_context: str | None,
+                                 session_state: dict[str, Any]) -> dict[str, Any]:
+        """What this message is, in the conversation, before any router reads it (7 Oct 2026).
+
+        rewritten  a typed choice ("maintenance", "all of them") after the six-area question:
+                   the original question, narrowed, is what gets answered;
+        continue   the previous answer asked the user for something and this is the reply: it
+                   goes to the orchestrator loop, which has the conversation - routed alone it
+                   read as a question about nothing and was asked back, twice;
+        choose     a general question with no area: answered with the six-area option cards;
+        followup   "these assets", "each one of them": the previous question and answer go to
+                   the router, the planner and the engines, which never saw the conversation;
+        route      everything else, unchanged.
+        """
+        out: dict[str, Any] = {"kind": "route", "message": user_message, "context": extra_context,
+                               "router_context": extra_context}
+        pending = session_state.pop("pending_domain_question", None) if isinstance(session_state, dict) else None
+        if pending:
+            doms = domain_chooser.pick_domains(user_message)
+            if doms:
+                out.update(kind="rewritten", message=domain_chooser.question_for(pending, doms))
+                return out
+        prev = await chat_threads.last_turn(sid)
+        prev_answer = str((prev or {}).get("answer") or "")
+        prev_block = ("PREVIOUS QUESTION: " + str((prev or {}).get("question") or "")[:400]
+                      + "\nPREVIOUS ANSWER (the user's message follows it): " + prev_answer[-4000:]) if prev_answer else ""
+        joined = ((extra_context + "\n\n") if extra_context else "")
+        if (prev_answer and domain_chooser.asks_back(prev_answer)
+                and not self._STANDALONE.search(user_message or "")
+                and not domain_chooser.is_general(user_message, extra_context)):
+            out.update(kind="continue", context=joined + prev_block)
+            return out
+        if domain_chooser.is_general(user_message, extra_context):
+            out["kind"] = "choose"
+            return out
+        if prev_block and (thread_scope.is_followup(user_message) or domain_chooser.refers_back(user_message)):
+            out.update(kind="followup", context=joined + prev_block, previous_answer=prev_answer[-6000:],
+                       router_context=joined + "PREVIOUS QUESTION: " + str((prev or {}).get("question") or "")[:300])
+        return out
+
+    _CONTINUE = {"agent": None, "also": [], "source": "conversation",
+                 "reason": "a follow-up to the previous answer; the orchestrator carries the conversation"}
+
+    def _ask_back(self, kind: str, routing: dict[str, Any] | None,
+                  user_message: str) -> tuple[str | None, str | None]:
+        """Whether this turn asks the user before answering, and how (7 Oct 2026).
+
+        ("cards", reason)  the six-area option cards: a general question, or one the router
+                           could not place that names no area at all;
+        ("text", line)     the router's own one-line question with the readings it saw, for a
+                           question that names its area but can be read more than one way
+                           (the 3 Oct repurchase case) - six area cards would ask the wrong thing;
+        (None, None)       answer. A follow-up is never asked back: "go ahead and plan emails
+                           for each one of the assets" named assets and leaned on the table just
+                           given, and was answered with the area cards because the router found
+                           no agent that drafts emails. It goes to the orchestrator loop, which
+                           has the conversation.
+        """
+        if kind == "choose":
+            return "cards", None
+        if kind not in ("route", "followup"):
+            return None, None
+        line = self._clarify_reply(routing, user_message)
+        if not line or kind == "followup":
+            return None, None
+        if domain_chooser.names_domain(user_message):
+            return "text", line
+        return "cards", (routing or {}).get("reason")
+
+    @staticmethod
+    def _domain_choice(sid: str, question: str, session_state: dict[str, Any],
+                       reason: str | None = None) -> dict[str, Any]:
+        """The six-area question as a result with option cards; the question is kept so a typed
+        choice next turn is answered against it."""
+        if isinstance(session_state, dict):
+            session_state["pending_domain_question"] = question
+        result = {"session_id": sid, "answer": domain_chooser.reply_text(reason), "tool_calls": [],
+                  "success": True, "error": None, "interrupted": False, "interrupt_payload": None,
+                  "choices": domain_chooser.choices(question)}
+        trace.on_plan(planner.one_step_plan("clarify", reason or "a general question with no area named",
+                                            source="router"), source="router")
+        return attach_route_to_result(result, sid, intent=ROUTE_GENERAL, domain="orchestrator")
 
     @staticmethod
     def _clarify_reply(routing: dict[str, Any] | None, user_message: str) -> str | None:
@@ -6264,7 +6368,7 @@ class DeepAgentOrchestrator:
         for tools in PHASE2_ENGINE_TOOLS.values():
             for t in tools:
                 if t.name not in out:
-                    line = planner.catalogue_line(t.name, t.description)
+                    line = planner.catalogue_line(t.name, t.description, getattr(t, "args", None))
                     if line:
                         out[t.name] = line
         return out
@@ -6335,7 +6439,8 @@ class DeepAgentOrchestrator:
                     return await t.ainvoke(args)
         raise ValueError(f"unknown tool {name}")
 
-    async def _stream_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], t0: float):
+    async def _stream_planned_turn(self, sid: str, user_message: str, plan: dict[str, Any], t0: float,
+                                   previous: str | None = None):
         """plan -> act -> verify, streamed: the plan first, then each step's tool events as they
         happen, then the answer. Every stage is a span (agents/planner.py, agents/trace.py)."""
         yield {"type": "reasoning", "label": "Plan", "text": planner.describe(plan), "domain": "orchestrator"}
@@ -6350,7 +6455,7 @@ class DeepAgentOrchestrator:
         ws = thread_scope.active_scope.get()
         exec_task = asyncio.create_task(planner.execute(
             plan, run_engine=run_engine, run_tool=self._run_planned_tool,
-            scope_hint=thread_scope.describe(ws) if ws else "", on_event=on_event,
+            scope_hint=thread_scope.describe(ws) if ws else "", given=(previous or "")[-3500:], on_event=on_event,
             question=user_message, replan=self._replan_after_gates, check=self._check_step))
         pending_get = asyncio.create_task(queue.get())
         try:
@@ -6366,6 +6471,10 @@ class DeepAgentOrchestrator:
         results = await exec_task
         plan = (results.get("__plan__") or {}).get("output") or plan
         tool_calls = [tc for k, r in results.items() if k != "__plan__" for tc in (r.get("tool_calls") or [])]
+        if previous:
+            # The writer sees the answer this turn follows as a result of its own, so "these
+            # assets" are the assets just listed and their figures trace (7 Oct 2026).
+            results = {"previous_answer": {"output": previous, "tool_calls": [], "ok": True, "error": None}, **results}
         answer, check = await self._write_planned_answer(user_message, plan, results)
         tool_calls = tool_calls + self._planned_cards(user_message, plan, results, answer)
         result = {"session_id": sid, "answer": answer, "tool_calls": tool_calls, "success": True, "error": None, "interrupted": False,
@@ -7487,15 +7596,28 @@ class DeepAgentOrchestrator:
         _turn_catalogue_via_task.set(False)
         chat_memories.turn_recall.set("")
         if engine is None and route_intent not in core_routes:
-            routing = await select_agent(user_message, extra_context)
-            clarify = self._clarify_reply(routing, user_message)
-            if clarify:
+            step = await self._conversation_step(session_id, user_message, extra_context, session_state)
+            user_message, extra_context = step["message"], step["context"]
+            msg_l = " ".join((user_message or "").strip().lower().split())
+            if step["kind"] == "choose":
+                return self._domain_choice(session_id, user_message, session_state)
+            if step["kind"] == "continue":
+                routing = {"agent": None, "also": [], "source": "conversation",
+                           "reason": "the previous answer asked for this; continuing that conversation"}
+            else:
+                routing = await select_agent(user_message, step["router_context"])
+            ask_how, ask_what = self._ask_back(step["kind"], routing, user_message)
+            if ask_how == "cards":
+                return self._domain_choice(session_id, user_message, session_state, ask_what)
+            if ask_how == "text":
                 trace.on_plan(planner.one_step_plan("clarify", routing.get("reason"), source="router"), source="router")
                 return attach_route_to_result(
-                    {"session_id": session_id, "answer": clarify, "tool_calls": [], "success": True, "error": None,
+                    {"session_id": session_id, "answer": ask_what, "tool_calls": [], "success": True, "error": None,
                      "interrupted": False, "interrupt_payload": None},
                     session_id, intent=ROUTE_GENERAL, domain="orchestrator",
                 )
+            if step["kind"] == "followup" and routing.get("clarify"):
+                routing = dict(self._CONTINUE)
             engine, routing_note = self._decide_dispatch(routing, msg_l)
             self._claim_turn_for_page_engines(routing)
             # Keyword routing missed (paraphrase / typo / natural phrasing). Fall back to an LLM
@@ -7921,19 +8043,50 @@ class DeepAgentOrchestrator:
             # question to the contract agent while the model that could read the sentence
             # was never asked.
             llm_cost.begin_turn(sid)
-            routing = await select_agent(user_message, extra_context)
-            clarify = self._clarify_reply(routing, user_message)
-            if clarify:
-                # The router could not place the question: ask, as one turn, before any register is read.
+            step = await self._conversation_step(sid, user_message, extra_context, session_state)
+            user_message, extra_context = step["message"], step["context"]
+            msg_l = " ".join((user_message or "").strip().lower().split())
+            if step["kind"] == "rewritten":
+                yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
+                       "text": "Your choice answers the earlier question → " + user_message}
+            if step["kind"] == "continue":
+                yield {"type": "reasoning", "label": "Conversation", "domain": "orchestrator",
+                       "text": "The previous answer asked you for this → continuing that conversation, not routing a new question."}
+                routing = {"agent": None, "also": [], "source": "conversation",
+                           "reason": "the previous answer asked for this; continuing that conversation"}
+            elif step["kind"] == "choose":
+                routing = {"clarify": True, "reason": None}
+            else:
+                routing = await select_agent(user_message, step["router_context"])
+            ask_how, ask_what = self._ask_back(step["kind"], routing, user_message)
+            if ask_how == "text":
+                # The question names its area but reads more than one way: the router's own
+                # one-line question, before any register is read.
                 trace.on_plan(planner.one_step_plan("clarify", routing.get("reason"), source="router"), source="router")
                 yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
                        "text": "Read the question → it can be taken more than one way (" + str(routing.get("reason") or "")
                                + "). Asking before reading any register."}
-                result = {"session_id": sid, "answer": clarify, "tool_calls": [], "success": True, "error": None,
+                result = {"session_id": sid, "answer": ask_what, "tool_calls": [], "success": True, "error": None,
                           "interrupted": False, "interrupt_payload": None}
                 attach_route_to_result(result, sid, intent=ROUTE_GENERAL, domain="orchestrator")
                 await self._close_streamed_turn(sid, result, _stream_t0)
-                yield workflow_stream_completion_payload(sid, answer=clarify, tool_calls=[])
+                yield workflow_stream_completion_payload(sid, answer=ask_what, tool_calls=[])
+                return
+            if step["kind"] == "followup" and routing.get("clarify"):
+                yield {"type": "reasoning", "label": "Conversation", "domain": "orchestrator",
+                       "text": "A follow-up to the previous answer → the orchestrator answers it with the conversation, not by asking back."}
+                routing = dict(self._CONTINUE)
+            if ask_how == "cards":
+                # A general question, or one the router could not place: ask which area, with the
+                # six areas as option cards, before any register is read.
+                result = self._domain_choice(sid, user_message, session_state, ask_what)
+                yield {"type": "reasoning", "label": "Domain routing", "domain": "orchestrator",
+                       "text": "Read the question → it does not say which area it is about"
+                               + (" (" + str(routing.get("reason")) + ")" if routing.get("reason") else "")
+                               + ". Asking which area before reading any register."}
+                await self._close_streamed_turn(sid, result, _stream_t0)
+                yield workflow_stream_completion_payload(sid, answer=result["answer"], tool_calls=[],
+                                                         choices=result.get("choices"))
                 return
             phase2_engine, routing_note = self._decide_dispatch(routing, msg_l)
             self._claim_turn_for_page_engines(routing)
@@ -7944,11 +8097,14 @@ class DeepAgentOrchestrator:
                 ws_now = thread_scope.active_scope.get()
                 plan_ctx = ("WORKING SET (hard filter): " + thread_scope.describe(ws_now) + "\n") if ws_now else ""
                 if extra_context:
-                    plan_ctx += "PAGE CONTEXT: " + str(extra_context)[:600] + "\n"
+                    # On a follow-up this carries the previous question and answer, so "these
+                    # assets" plans against the assets just listed (7 Oct 2026).
+                    plan_ctx += "CONTEXT: " + str(extra_context)[:(4600 if step["kind"] == "followup" else 600)] + "\n"
                 plan, why = await planner.make_plan(user_message, context=plan_ctx, tools=self._planner_tools(), llm=self._planner_llm)
                 if plan is not None:
                     trace.on_plan(plan, source="planner")
-                    async for ev in self._stream_planned_turn(sid, user_message, plan, _stream_t0):
+                    async for ev in self._stream_planned_turn(sid, user_message, plan, _stream_t0,
+                                                              previous=step.get("previous_answer")):
                         yield ev
                     return
                 trace.on_plan(None, source="planner", rejected=why)

@@ -289,6 +289,25 @@ def format_context(summary: str | None, turns: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+async def last_turn(session_id: str) -> dict[str, Any] | None:
+    """The newest ANSWERED turn of this thread - the one the user's new message follows - or None.
+    The question just recorded for this turn has no answer yet, so it is never returned."""
+    if not _ready or not session_id:
+        return None
+    try:
+        from ..database import _get_engine
+
+        async with _get_engine().connect() as conn:
+            row = (await conn.execute(text(f"""
+                SELECT question, answer, turn_no FROM {TURNS}
+                 WHERE thread_id = :tid AND answer IS NOT NULL
+                 ORDER BY turn_no DESC LIMIT 1"""), {"tid": session_id})).mappings().first()
+        return dict(row) if row else None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chat_threads.last_turn_failed", session_id=session_id, error=str(exc)[:300])
+        return None
+
+
 async def conversation_context(session_id: str) -> str | None:
     """None when the store is unavailable (the caller falls back to its process-local block)."""
     if not _ready or not session_id:

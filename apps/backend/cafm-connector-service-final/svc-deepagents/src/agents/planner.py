@@ -158,15 +158,23 @@ TOOL_NOTES: dict[str, str] = {
 }
 
 
-def catalogue_line(name: str, description: str | None) -> str | None:
-    """The planner's line for a tool, or None when the tool changes data and must not be planned."""
+def catalogue_line(name: str, description: str | None, params: Any = None) -> str | None:
+    """The planner's line for a tool, or None when the tool changes data and must not be planned.
+
+    ``params`` is the tool's argument schema (a LangChain tool's ``.args``); its names close the
+    line. Until 7 Oct 2026 the line was the description's first 160 characters and no more, so
+    the planner chose list_asset_conditions for "assets at risk", wrote "Threat band" in the
+    step's ask, and left args empty - it had never been told the tool takes ``band``. All 61
+    assets came back, and the re-plan that followed swapped the right tool for a wider search."""
     if WRITE_TOOL_RE.search(name or "") or name == "compact_context":
         # compact_context manages the agent's own context (agents/context_budget.py); it is not
         # a step towards an answer.
         return None
     first = (description or "").strip().splitlines()[0][:160] if description else name
     note = TOOL_NOTES.get(name)
-    return first + (f" Not for: {note}" if note else "")
+    names = [k for k in (params or {}) if k not in ("question", "runtime", "config", "state")]
+    return (first + (f" Not for: {note}" if note else "")
+            + (f" Args: {', '.join(names)}." if names else ""))
 
 
 def _catalogue_text(tools: dict[str, str]) -> tuple[str, str]:
@@ -385,7 +393,9 @@ def inspect_step(step: dict[str, Any], result: dict[str, Any]) -> list[dict[str,
         count, total = o.get("count"), o.get("total")
         if isinstance(count, int) and isinstance(total, int) and total > 0 and count == total and count > 1:
             out.append({"kind": "filter_did_nothing",
-                        "detail": f"the ask narrows ('{_QUALIFIER.search(ask).group(0)}...') but the tool returned every row: {count} of {total}"})
+                        "detail": f"the ask narrows ('{_QUALIFIER.search(ask).group(0)}...') but the tool returned every row: "
+                                  f"{count} of {total}. Keep this tool and pass the narrowing as one of its Args in `args` "
+                                  "(the ask text is not a filter); do not swap it for a wider search"})
     if rows:
         for phrase in fields_asked(ask):
             if not _has_key(rows, FIELD_KEYS[phrase]):
@@ -459,6 +469,7 @@ def _has_dependents(plan: dict[str, Any], sid: str) -> bool:
 
 async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[tuple[str, list]]],
                   run_tool: Callable[[str, dict], Awaitable[Any]], scope_hint: str = "",
+                  given: str = "",
                   on_event: Callable[[dict], Awaitable[None]] | None = None,
                   question: str = "",
                   replan: Callable[[str, dict[str, Any], dict[str, list[dict[str, str]]], dict[str, dict[str, Any]]], Awaitable[dict[str, Any] | None]] | None = None,
@@ -482,6 +493,11 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
             ask = f"{ask}\n\nUse these results from earlier steps as given facts:\n{ctx}"
         if scope_hint:
             ask = f"{ask}\n\nScope (hard filter): {scope_hint}"
+        if given:
+            # A follow-up ("for each of these assets"): the answer it follows is the list the
+            # step works on. Without it every step searched afresh and said the list was gone.
+            ask = (f"{ask}\n\nThe previous answer in this conversation - the items 'these' / 'each one' "
+                   f"refer to; use it as given facts:\n{given}")
         run_id = trace.on_step_open(step["id"], f"{step['id']}: {step['target']}", {"kind": step["kind"], "target": step["target"],
                                                                                    "ask": ask, "depends_on": step["depends_on"], "why": step["why"]})
         if on_event:
@@ -493,7 +509,7 @@ async def execute(plan: dict[str, Any], *, run_engine: Callable[..., Awaitable[t
             else:
                 args = dict(step.get("args") or {}) or {"question": ask}
                 # Earlier steps' results and the hard filter travel in the question when the tool takes one.
-                if "question" in args and (step["depends_on"] or scope_hint):
+                if "question" in args and (step["depends_on"] or scope_hint or given):
                     args["question"] = ask
                 if on_event:
                     await on_event({"type": "tool_started", "tool": step["target"], "domain": "orchestrator", "input": args})
