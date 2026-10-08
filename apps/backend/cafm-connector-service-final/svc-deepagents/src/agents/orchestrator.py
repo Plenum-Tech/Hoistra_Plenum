@@ -154,7 +154,7 @@ from .session_workspace import (
     append_pending_batch,
 )
 from .phase2_intents import Phase2AgentId, resolve_phase2_engine
-from .agent_router import as_phase2_engine, select_agent
+from .agent_router import as_phase2_engine, is_support_session, select_agent
 from .compliance_facts import compute_pack_facts
 from .compliance_router import compliance_skill_path_enabled
 from . import activity_log
@@ -7455,8 +7455,13 @@ class DeepAgentOrchestrator:
         # Instruction rewrites an admin approved in the skill lab (services/skill_overlays.py).
         await skill_overlays.refresh()
         msg_l = " ".join((user_message or "").strip().lower().split())
-        route_intent = resolve_route_intent(msg_l, session_state, extra_context)
-        if self._offers_migration_choice(user_message, extra_context, session_state):
+        # A support session asks how to USE Hoistra and carries the guide that answers it: the
+        # general loop takes it, past every shortcut keyed on the question's words - the
+        # migration chooser, the work-order prompt, the UDR gates, the compliance preflight and
+        # the second classifier each answered "how do I ..." as a request to do it (8 Oct 2026).
+        support = is_support_session(extra_context)
+        route_intent = ROUTE_GENERAL if support else resolve_route_intent(msg_l, session_state, extra_context)
+        if not support and self._offers_migration_choice(user_message, extra_context, session_state):
             trace.on_plan(planner.one_step_plan("clarify", "migration request names no method", source="router"), source="router")
             return attach_route_to_result(
                 {"session_id": session_id, "answer": CHOOSER_REPLY, "tool_calls": [], "success": True, "error": None,
@@ -7473,7 +7478,7 @@ class DeepAgentOrchestrator:
             ROUTE_WO_INTAKE,
             ROUTE_WO_CLARIFY,
         }
-        engine = preferred_engine
+        engine = None if support else preferred_engine
         routing_note: str | None = None
         # A new turn opens the catalogue again before anything decides otherwise: a keyword
         # route or a preferred engine skips select_agent, and a claim from the previous turn
@@ -7498,7 +7503,7 @@ class DeepAgentOrchestrator:
             # Not when the router made a decision the engines cannot take — wo_engine or udr is
             # an answer, and a second classifier re-reading "statutory" into compliance is how
             # a maintenance question left this function as a certificate question.
-            if engine is None and routing_note is None:
+            if engine is None and routing_note is None and not support:
                 engine = await self._llm_classify_engine(user_message)
         if engine is not None and route_intent not in core_routes:
             # Any compliance data question is answered from the WHOLE portfolio: the shortcut
@@ -7527,6 +7532,13 @@ class DeepAgentOrchestrator:
                 session_id=session_id,
                 extra_context=extra_context,
             )
+
+        if support:
+            input_ = await self._build_stateful_input(
+                session_id, user_message, self._with_routing_note(extra_context, routing_note)
+            )
+            log.info("orchestrator.run_stateful.start", session_id=session_id, support=True)
+            return await self._invoke(input_, session_id, session_id, routing_note=routing_note)
 
         wo_clarification_confirmed = False
         asks_udr_run = route_intent == ROUTE_UDR_MAP or (
@@ -7793,8 +7805,10 @@ class DeepAgentOrchestrator:
         # Instruction rewrites an admin approved in the skill lab (services/skill_overlays.py).
         await skill_overlays.refresh()
         msg_l = " ".join((user_message or "").strip().lower().split())
-        route_intent = resolve_route_intent(msg_l, session_state, extra_context)
-        if self._offers_migration_choice(user_message, extra_context, session_state):
+        # Support goes to the general loop and its guide, past every shortcut (run_stateful).
+        support = is_support_session(extra_context)
+        route_intent = ROUTE_GENERAL if support else resolve_route_intent(msg_l, session_state, extra_context)
+        if not support and self._offers_migration_choice(user_message, extra_context, session_state):
             trace.on_plan(planner.one_step_plan("clarify", "migration request names no method", source="router"), source="router")
             yield {"type": "reasoning", "label": "Domain routing", "domain": "migration",
                    "text": "A request to migrate that names no method -> offering CSV/Excel, documents or a direct database connection."}
@@ -7833,7 +7847,7 @@ class DeepAgentOrchestrator:
             await zone_queue.put((key, value))
 
         preflight = asyncio.create_task(
-            self._stateful_preflight_shortcut(
+            asyncio.sleep(0, result=None) if support else self._stateful_preflight_shortcut(
                 user_message, sid, session_state, route_intent, msg_l, on_zone=_push_zone
             )
         )
@@ -7926,7 +7940,7 @@ class DeepAgentOrchestrator:
             # A question that needs decomposition is planned, run step by step and verified
             # (agents/planner.py); a single-engine question keeps the direct path but records
             # the one-step plan, so every run says why it went where it went.
-            if planner.is_multi_part(user_message):
+            if not support and planner.is_multi_part(user_message):
                 ws_now = thread_scope.active_scope.get()
                 plan_ctx = ("WORKING SET (hard filter): " + thread_scope.describe(ws_now) + "\n") if ws_now else ""
                 if extra_context:

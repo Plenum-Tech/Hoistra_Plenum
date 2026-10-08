@@ -46,6 +46,18 @@ def llm_routing_enabled() -> bool:
     return str(os.getenv(_FLAG, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: The sentence the app's Support opens its page context with (apps/frontend/src/logic/
+#: support.js supportContext). That context carries the Hoistra guide and the rule not to ask
+#: which data area a question is about, but the router reads the question first: "Is there an
+#: API or webhooks?", one of Support's own suggested questions, names no register and was asked
+#: back with the router's reason (7 Oct 2026). Changing the sentence there breaks this.
+SUPPORT_SESSION_MARK = "This is a Hoistra support session"
+
+
+def is_support_session(context_note: str | None) -> bool:
+    return (context_note or "").lstrip().startswith(SUPPORT_SESSION_MARK)
+
+
 _PROMPT = (
     "You route one question to the agent that should answer it. You are not answering it.\n\n"
     "Read the question for what it is ASKING, not for the words it contains. A question "
@@ -87,6 +99,11 @@ async def select_agent(question: str, context_note: str | None = None) -> dict:
     ``source`` is ``"llm"``, ``"keyword"`` (fell back) or ``"disabled"``. ``agent`` is None
     when nothing should short-circuit and the orchestrator loop should run as it does today.
     """
+    if is_support_session(context_note):
+        # The orchestrator loop answers: it has the guide in the context and every tool for a
+        # question about the user's own records. Never one engine, never asked back.
+        return {"agent": None, "also": [], "source": "support",
+                "reason": "a support session: answered from the Hoistra guide and the user's records"}
     if not llm_routing_enabled():
         eng = resolve_phase2_engine(user_message=question, context_note=context_note)
         return {"agent": eng, "also": [], "reason": "llm routing disabled", "source": "disabled"}
