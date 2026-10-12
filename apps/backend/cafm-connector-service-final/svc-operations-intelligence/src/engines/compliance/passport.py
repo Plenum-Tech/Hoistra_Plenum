@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
 from ...shared.approvals import enqueue_approval, write_audit
+from ...shared.vendor_identity import live_vendor_sql
 from . import certificates as cert_svc
 from . import resource_skills as skill_svc
 from .coverage import vendor_coverage
@@ -62,19 +63,22 @@ def _posture(accreditations: list[dict[str, Any]], block_state: str) -> dict[str
 
 
 async def _load_vendor(session: AsyncSession, vendor_id: str) -> dict[str, Any] | None:
+    """The vendor a passport is about — never a retired one (Hussain, 12 Oct 2026). A deleted
+    vendor has no passport to build, share or serve: it would read "cleared for engagement"
+    for a supplier the company has stopped using."""
     try:
         async with session.begin_nested():
             row = (
                 await session.execute(
                     text(
-                        """
+                        f"""
                         SELECT id::text AS id, vendor_name, vendor_code, status,
                                coalesce(block_state, 'Clear') AS block_state,
                                block_reason, blocked_accreditation_type, block_date,
                                phone, website, city, country, notes
-                        FROM plenum_cafm.vendors
-                        WHERE id::text = :vid
-                           OR vendor_code = :vid
+                        FROM plenum_cafm.vendors v
+                        WHERE (id::text = :vid OR vendor_code = :vid)
+                          AND {live_vendor_sql('v')}
                         LIMIT 1
                         """
                     ),
@@ -270,6 +274,15 @@ async def passport_from_share_token(
     if not vendor_id_raw:
         return {"ok": False, "error": "passport share missing vendor_id"}
     live = await build_vendor_passport(session, str(vendor_id_raw))
+    if not live.get("ok"):
+        # The vendor was deleted after the link went out. The recipient is outside the
+        # company, so the answer is only that the passport has gone — nothing of the old
+        # snapshot is served with it.
+        return {
+            "ok": False,
+            "reason": "passport_unavailable",
+            "error": "This vendor passport is no longer available.",
+        }
     live["share"] = {
         "token": token,
         "expires_at": peeked.get("expires_at"),

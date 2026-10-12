@@ -48,7 +48,10 @@ import re
 import uuid
 from typing import Any, NamedTuple
 
+from ...core.logging import get_logger
 from . import org_export
+
+log = get_logger(__name__)
 
 _SAFE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
@@ -94,6 +97,9 @@ AREAS: dict[str, Area] = {
         "invoice_verifications", "invoice_lines", "invoices",
         "vendor_monthly_scorecards",
         "contract_sla_parameters", "vendor_contacts", "vendor_contracts",
+        # A vendor's building assignments go with it; a one-building reset clears that
+        # building's (compliance/vendor_buildings.py, 12 Oct 2026).
+        "vendor_buildings",
         "sla_policies", "vendors",
     ), ("contract_%", "overlapping_contracts_tie", "invoice_flag%", "vendor_risk",
         "vendor_email", "cost_variance_alert", "block_ack", "block_lift", "passport_share")),
@@ -125,6 +131,9 @@ _HINTS: tuple[tuple[str, str, str], ...] = (
 #: building_id column appears on one (the migration engine and the table editor add columns):
 #: deleting one building's vendors would clear every other building's work orders' links.
 COMPANY_WIDE = frozenset({
+    # A vendor's building assignments are an admin's decisions, not ingested data: a one-building
+    # reset keeps them (company resets still clear them, with the vendors). Second review.
+    "vendor_buildings",
     "vendors", "vendor_contacts", "vendor_contracts", "sla_policies", "vendor_monthly_scorecards",
     "contract_sla_parameters", "spare_parts", "technicians", "resources", "inventory_transactions",
     "bom_group_parts", "purchase_orders", "purchase_order_line_items", "receipts",
@@ -501,15 +510,67 @@ class ResetBlocked(RuntimeError):
         self.blocked = blocked
 
 
+#: How many of the deleted vendors the trail entry names; the count covers them all.
+_TRAIL_NAMES = 200
+
+
+async def _vendors_going(session: Any, where: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """The vendors this reset deletes, read before they go — afterwards there is nothing left
+    to name them by. ``where`` is the vendors step's own filter, so these are exactly its rows."""
+    from sqlalchemy import text
+
+    try:
+        rows = (await session.execute(text(
+            "SELECT id::text, to_jsonb(vendors)->>'vendor_name', to_jsonb(vendors)->>'vendor_code'"
+            f" FROM plenum_cafm.vendors WHERE {where}"
+            f" ORDER BY 2 NULLS LAST, 1 LIMIT {_TRAIL_NAMES}"), params)).all()
+    except Exception as exc:  # noqa: BLE001 - reported as the table that refused
+        # The database's own text names tables and driver classes: logged, never shown
+        # (12 Oct 2026, review R2).
+        log.warning("org_data_reset.vendors_unreadable", error=str(exc).split("\n")[0][:300])
+        raise ResetFailed("vendors", "The vendors to delete could not be read, so nothing was "
+                                     "deleted.") from exc
+    return [{"id": r[0], "name": r[1], "code": r[2]} for r in rows]
+
+
+async def _record_vendor_deletes(session: Any, org: str, going: list[dict[str, Any]], count: int,
+                                 actor: str | None, building: str | None) -> None:
+    """ONE vendor.deleted entry for the run, in its transaction, so the Vendor audit trail shows
+    that a reset deleted these vendors (Hussain, 12 Oct 2026). If it cannot be written the reset
+    is undone: a deletion nobody can trace must not happen."""
+    from ...shared.approvals import PLATFORM_FEATURE, write_audit
+    from ..auth import vendor_audit
+    from .vendor_delete import actor_snapshot
+
+    # Who ran it, as they were (12 Oct 2026, review R1/V2): the entry still names them after
+    # their user record is scrubbed, with their company role. Best-effort, in a savepoint.
+    by = await actor_snapshot(session, actor, None)
+    try:
+        await write_audit(
+            session, actor=actor or "system:data_reset", action_type=vendor_audit.DELETED,
+            source_feature=PLATFORM_FEATURE, organization_id=uuid.UUID(org),
+            detail={"mode": "reset", "vendors": going, "count": count, "source": "data_reset",
+                    "building_id": building, "by": by},
+        )
+    except Exception as exc:  # noqa: BLE001 - the reset is rolled back by the caller
+        log.warning("org_data_reset.trail_unwritten", error=str(exc).split("\n")[0][:300])
+        raise ResetFailed("ops_audit_log", "The vendor audit trail could not be written, so "
+                                           "nothing was deleted.") from exc
+
+
 async def run_reset(session: Any, organization_id: str, *, areas: list[str] | None = None,
-                    apply: bool, building_id: str | None = None) -> dict[str, Any]:
+                    apply: bool, building_id: str | None = None,
+                    actor: str | None = None) -> dict[str, Any]:
     """Count - and with ``apply``, delete - one organization's rows in the chosen areas, or
     only those on ``building_id``.
 
     A dry run does the counting in a transaction that is rolled back, so its figures are the
     ones a real run would change. Kept rows that would block the reset are reported in the
     dry run and raise :class:`ResetBlocked` in a real one, before anything changes. A building
-    that is not the company's raises :class:`ResetForeignBuilding`, also before anything."""
+    that is not the company's raises :class:`ResetForeignBuilding`, also before anything.
+
+    A real run that deletes vendors records them in the Vendor audit trail as ``actor`` (the
+    admin's user id; "system:data_reset" when the caller names no one)."""
     from sqlalchemy import text
 
     chosen = parse_areas(areas)
@@ -549,6 +610,12 @@ async def run_reset(session: Any, organization_id: str, *, areas: list[str] | No
         if blocked and apply:
             raise ResetBlocked(blocked)
 
+        # The vendors a real run deletes, named for the trail before any row changes.
+        vendors_step = next((s for s in plan.steps if s.table == "vendors"), None)
+        going = await _vendors_going(session, vendors_step.where, params) \
+            if apply and vendors_step else []
+        vendors_deleted = 0
+
         detached = []
         for d in plan.detaches:
             if apply:
@@ -580,7 +647,11 @@ async def run_reset(session: Any, organization_id: str, *, areas: list[str] | No
                 by_area.setdefault(step.area, []).append(
                     {"table": step.table, "rows": int(n), "scoped_by": step.scoped_by})
                 total += int(n)
+                if step.table == "vendors":
+                    vendors_deleted = int(n)
         if apply:
+            if vendors_deleted:
+                await _record_vendor_deletes(session, org, going, vendors_deleted, actor, building)
             await session.commit()
         else:
             await session.rollback()

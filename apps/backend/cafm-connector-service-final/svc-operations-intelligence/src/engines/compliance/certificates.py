@@ -10,10 +10,16 @@ from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .human_verification import certificate_verify_link
-from ...shared.vendor_identity import find_vendor_id
+from ...shared.vendor_identity import (
+    DELETED_STATUS,
+    find_vendor_id,
+    is_deleted_vendor,
+    live_vendor_sql,
+    vendor_link_refusal,
+)
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
-from ...shared.approvals import enqueue_approval, write_audit
+from ...shared.approvals import enqueue_approval, retired_vendor_refusal, write_audit
 from . import epc_rating
 from .country_pack import effective_alert_thresholds, get_pack_type, list_pack_types
 from .lifecycle import (
@@ -743,12 +749,17 @@ async def _enrich_certificate_rows(
     if vendor_ids:
 
         async def _load_vendors():
+            # Retired vendors are read too: a certificate is history and keeps naming the
+            # vendor it was issued to (whose name now carries the mark). ``vendor_deleted``
+            # says so, and the row stays on record, so Hoist vendors never takes the
+            # certificate for an unregistered supplier and offers to create it again
+            # (Hussain, 12 Oct 2026).
             stmt = text(
                 """
-                SELECT id, vendor_name, block_state, blocked_accreditation_type,
-                       block_reason, block_date
-                FROM plenum_cafm.vendors
-                WHERE id::text IN :ids
+                SELECT v.id, v.vendor_name, v.block_state, v.blocked_accreditation_type,
+                       v.block_reason, v.block_date, to_jsonb(v)->>'status' AS status
+                FROM plenum_cafm.vendors v
+                WHERE v.id::text IN :ids
                 """
             ).bindparams(bindparam("ids", expanding=True))
             vrows = (
@@ -765,6 +776,15 @@ async def _enrich_certificate_rows(
                         v["block_date"].isoformat() if v.get("block_date") else None
                     ),
                 }
+                if str(v.get("status") or "").strip().lower() == DELETED_STATUS:
+                    # Retiring leaves block_state as it was. A block on a vendor the company
+                    # no longer works with is not a blocked vendor today: carried, it badged
+                    # the vendor's building certificates Blocked and the chat counted it
+                    # (review, 12 Oct 2026). The badge comes from expiry alone.
+                    meta[str(v["id"])].update(
+                        vendor_deleted=True, vendor_block_state=None,
+                        blocked_accreditation_type=None, block_reason=None, block_date=None,
+                    )
             return meta
 
         vendor_meta = (
@@ -1109,12 +1129,12 @@ async def _supersede_prior_vendor_certs(
         )
 
     def _same_vendor(cand: ComplianceCertificate) -> bool:
-        if (
-            cert.vendor_id is not None
-            and cand.vendor_id is not None
-            and str(cand.vendor_id) == str(cert.vendor_id)
-        ):
-            return True
+        if cert.vendor_id is not None and cand.vendor_id is not None:
+            # Two ids say who each certificate belongs to; a shared extracted name (register
+            # twins) must not supersede another vendor's certificate, which the scan then
+            # stops chasing (review, 12 Oct 2026). The name is the fallback only when an id
+            # is missing.
+            return str(cand.vendor_id) == str(cert.vendor_id)
         cand_name = (_meta_dict(cand.raw_metadata).get("vendor_name") or "").strip().lower()
         return bool(vendor_name) and cand_name == vendor_name
 
@@ -1438,7 +1458,9 @@ async def upsert_certificate(
     cert.cert_scope = scope
     cert.asset_id = _parse_uuid(data.get("asset_id"))
     cert.site_id = _parse_uuid(data.get("site_id"))
-    cert.vendor_id = _keep_vendor_id(_parse_uuid(data.get("vendor_id")), _prior_vendor_id)
+    cert.vendor_id = await _linkable_vendor_id(
+        session, _parse_uuid(data.get("vendor_id")), _prior_vendor_id
+    )
     # Vendor scope: resolve FK from company name when not provided (A3 ingest)
     if scope == "Vendor" and cert.vendor_id is None:
         from .contractors import resolve_or_create_vendor
@@ -2806,12 +2828,15 @@ async def resolve_link_candidates(
     # ── Vendor ──
     vname = meta.get("vendor_name") or meta.get("company_name") or meta.get("contractor_name")
     if vname:
+        # Never a retired vendor (Hussain, 12 Oct 2026): picking one would link a document to
+        # a supplier that has been deleted. Its marked name still matches the ILIKE.
         rows = await _safe_exec(
             session,
             lambda: _search(
-                """SELECT id::text AS id, vendor_name AS name, NULL AS code
-                   FROM plenum_cafm.vendors
-                   WHERE vendor_name ILIKE :q OR vendor_name ILIKE :first
+                f"""SELECT id::text AS id, vendor_name AS name, NULL AS code
+                   FROM plenum_cafm.vendors v
+                   WHERE (vendor_name ILIKE :q OR vendor_name ILIKE :first)
+                     AND {live_vendor_sql('v')}
                    ORDER BY vendor_name LIMIT 40""",
                 vname,
             ),
@@ -2896,7 +2921,29 @@ async def link_certificate_document(
 
     only: set[str] = set()
     if vendor_id:
-        cert.vendor_id = vendor_id
+        # The column is uuid. Parsed first, so the check and the stored value are the same
+        # canonical id: an upper-case spelling missed the status check and was stored anyway,
+        # re-linking a retired vendor (review, 12 Oct 2026). A legacy id ("V-01") cannot be
+        # held here at all.
+        try:
+            picked_vendor = UUID(str(vendor_id).strip())
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "reason": "invalid_vendor_id",
+                "error": "That vendor id cannot be linked to a certificate.",
+            }
+        # A deleted vendor takes no new documents (Hussain, 12 Oct 2026), and neither does one
+        # removed since the page was opened, another company's, or one whose record cannot be
+        # read: this write links data to the vendor, and guessing is how a document would
+        # land on a retired or missing row.
+        refused = await vendor_link_refusal(
+            session, picked_vendor, cert.organization_id or getattr(cert, "org_id", None),
+            what="nothing new can be linked to it. Pick another vendor, or add the supplier again",
+        )
+        if refused:
+            return refused
+        cert.vendor_id = picked_vendor
         only.add("vendor")
     if site_id:
         # A non-UUID key used to be assigned straight onto the UUID column, which fails at
@@ -3094,6 +3141,21 @@ async def create_vendor_for_certificate(
         session, name, organization_id=(cert.organization_id or cert.org_id)
     )
     existing = {"id": _matched_id} if _matched_id else None
+    # A match kept under an older, non-uuid id ("V-07") cannot be written to the certificate's
+    # uuid column: the flush failed and the caller got a 500 on every retry (pre-push review,
+    # 12 Oct 2026). Refused in words, with the certificate left as it was.
+    if existing:
+        try:
+            UUID(str(existing["id"]))
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "reason": "legacy_vendor_id",
+                "error": (
+                    f"{name} is already in your vendor list under an older record that cannot be "
+                    "linked to a certificate. Ask Plenum to update that vendor's record."
+                ),
+            }
     # Merge form/profile fields into a whitelist-guarded column set (trade_category → trade).
     prof = dict(profile or {})
     if trade_category and not prof.get("trade"):
@@ -3103,6 +3165,11 @@ async def create_vendor_for_certificate(
         val = prof.get(col)
         if isinstance(val, str) and val.strip():
             extra_cols[col] = val.strip()[:255]
+    # A vendor is retired by the admin's delete only — it unassigns, closes and records what
+    # it did. Filling an empty status with "deleted" here would retire a vendor with none of
+    # that (Hussain, 12 Oct 2026).
+    if extra_cols.get("status", "").lower() == DELETED_STATUS:
+        extra_cols.pop("status")
 
     if existing:
         vendor_id = str(existing["id"])
@@ -3349,6 +3416,21 @@ async def draft_renewal_email(
     status = cert.status or ""
     org_id = cert.organization_id or cert.org_id
     critical = status in ("Critical", "Lapsed")
+
+    if cert.cert_scope == "Vendor":
+        # A deleted vendor is not emailed (Hussain, 12 Oct 2026). Its certificates stay as
+        # history; a renewal is a request to someone the company no longer works with. A
+        # status that cannot be read refuses too: the draft is new data queued to the vendor
+        # (review, 12 Oct 2026).
+        refused = await retired_vendor_refusal(
+            session, cert.vendor_id, what="no renewal email was drafted")
+        if refused and refused["reason"] == "vendor_deleted":
+            refused["error"] = (
+                "This certificate's vendor has been deleted, so no renewal email was drafted. "
+                "If the supplier is still used, add it again and upload its renewed certificate."
+            )
+        if refused:
+            return refused
 
     if cert.cert_scope == "Vendor":
         vendor_name, vendor_email = "Vendor", None
@@ -3625,15 +3707,25 @@ async def saved_space_summary(
     async def _load_block_states():
         if not v_ids:
             return {}
+        # A retired vendor reads as its own state, never "Blocked" (Hussain, 12 Oct 2026):
+        # deleting a blocked vendor is not a vendor blocked today, and its certificates are
+        # history rather than accreditations — they are left out of the vendor buckets below.
         stmt = text(
             """
-            SELECT id::text AS id, block_state
-            FROM plenum_cafm.vendors
-            WHERE id::text IN :ids
+            SELECT v.id::text AS id, v.block_state, to_jsonb(v)->>'status' AS status
+            FROM plenum_cafm.vendors v
+            WHERE v.id::text IN :ids
             """
         ).bindparams(bindparam("ids", expanding=True))
         vrows = (await session.execute(stmt, {"ids": v_ids})).mappings().all()
-        return {str(v["id"]): (v.get("block_state") or "Clear") for v in vrows}
+        return {
+            str(v["id"]): (
+                DELETED_STATUS
+                if str(v.get("status") or "").strip().lower() == DELETED_STATUS
+                else (v.get("block_state") or "Clear")
+            )
+            for v in vrows
+        }
 
     vendor_block = (
         await _safe_exec(
@@ -3646,9 +3738,12 @@ async def saved_space_summary(
     )
 
     blocked_vendor_keys: set[str] = set()
+    retired_vendor_keys: set[str] = set()
     for vid, state in vendor_block.items():
         if str(state).strip().lower() == "blocked":
             blocked_vendor_keys.add(vid)
+        elif state == DELETED_STATUS:
+            retired_vendor_keys.add(vid)
 
     dirty = False
     for c in rows:
@@ -3661,6 +3756,8 @@ async def saved_space_summary(
             else None
         )
         if not bucket:
+            continue
+        if bucket is vendor and str(c.vendor_id or "") in retired_vendor_keys:
             continue
 
         meta = c.raw_metadata or {}
@@ -3781,9 +3878,10 @@ async def saved_space_summary(
     async def _count_blocked_table():
         result = await session.execute(
             text(
-                """
-                SELECT COUNT(*) FROM plenum_cafm.vendors
+                f"""
+                SELECT COUNT(*) FROM plenum_cafm.vendors v
                 WHERE lower(coalesce(block_state, '')) = 'blocked'
+                  AND {live_vendor_sql('v')}
                 """
             )
         )
@@ -3959,9 +4057,37 @@ def _parse_uuid(val: Any) -> UUID | None:
 # is for, and it goes through its own path.
 
 
-def _keep_vendor_id(incoming: UUID | None, prior: UUID | None) -> UUID | None:
-    """The vendor on the record, unless this write names a different one."""
-    return incoming or prior
+def _keep_vendor_id(
+    incoming: UUID | None, prior: UUID | None, *, prior_deleted: bool = False
+) -> UUID | None:
+    """The vendor on the record, unless this write names a different one — or the vendor
+    on the record has since been deleted, which is not carried onto new data."""
+    return incoming or (None if prior_deleted else prior)
+
+
+async def _linkable_vendor_id(
+    session: AsyncSession, incoming: UUID | None, prior: UUID | None
+) -> UUID | None:
+    """The vendor an upsert may set: ``_keep_vendor_id``, minus any retired vendor.
+
+    A re-upload of a deleted vendor's certificate, or a payload still naming it, must not
+    re-link the certificate to the retired row (Hussain, 12 Oct 2026). With neither left,
+    the caller resolves the vendor by name — which never matches a retired vendor, so a
+    supplier that is still used is registered afresh. A status that cannot be read counts
+    as deleted: this links new data, and refusing is safer than guessing.
+    """
+    if incoming is not None and await is_deleted_vendor(
+        session, incoming, unreadable_is_deleted=True
+    ):
+        log.info("cert.vendor_deleted_not_linked", vendor_id=str(incoming), source="payload")
+        incoming = None
+    # The prior only matters when this write names no vendor of its own.
+    prior_deleted = incoming is None and prior is not None and await is_deleted_vendor(
+        session, prior, unreadable_is_deleted=True
+    )
+    if prior_deleted and incoming is None:
+        log.info("cert.vendor_deleted_not_linked", vendor_id=str(prior), source="prior")
+    return _keep_vendor_id(incoming, prior, prior_deleted=prior_deleted)
 
 
 def _keep_vendor_meta(

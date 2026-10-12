@@ -1600,7 +1600,9 @@ class DeepAgentOrchestrator:
     # resolved against compliance_certificates via information_schema.
     _SPEC_JOIN_FIELDS: dict[str, str] = {
         "vendor_name": "v.vendor_name",
-        "vendor_block_state": "v.block_state",
+        # A retired vendor keeps block_state, but is not "blocked" any more (12 Oct 2026):
+        # the same expression as the SELECT below.
+        "vendor_block_state": "CASE WHEN lower(to_jsonb(v)->>'status') = 'deleted' THEN NULL ELSE v.block_state END",
         "vendor_status": "v.status",
         # Same expression the SELECT uses, so filtering by building name finds the
         # buildings that are named on a certificate but not registered as a site.
@@ -1879,7 +1881,9 @@ class DeepAgentOrchestrator:
             """
             SELECT c.*,
                    v.vendor_name              AS vendor_name_ref,
-                   v.block_state              AS vendor_block_state,
+                   -- A retired vendor's block_state stays 'Blocked'; it is history, not
+                   -- a blocked supplier, so it reads as no block (12 Oct 2026).
+                   CASE WHEN lower(to_jsonb(v)->>'status') = 'deleted' THEN NULL ELSE v.block_state END AS vendor_block_state,
                    v.blocked_accreditation_type,
                    v.status                   AS vendor_status,
                    COALESCE(s.site_name, c.building_name) AS site_name,

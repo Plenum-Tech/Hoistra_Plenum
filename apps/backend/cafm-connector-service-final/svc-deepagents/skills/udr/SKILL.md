@@ -102,7 +102,7 @@ Run the shared five-step loop: **RESOLVE → LOCATE → PULL → JOIN → SUMMAR
 | `sites` | the CMMS site record behind a building | `site_id` (varchar PK), `site_name`, `site_code`, `city`, `country`, `gfa_sqm`, `manager`, `region` | `site_id` → `buildings.site_id` only. **Never** to `assets.site_id` (a uuid, empty) |
 | `locations` | location tree node | `id`, `name`, `type`, `parent_location_id`, `level`, `city` | `id` → assets.location_id |
 | `asset_categories` | category tree | `id`, `name`, `parent_id` | `id` → assets.category_id |
-| `vendors` | one contractor | `id` (varchar), `vendor_name`, `vendor_code`, `specialty`, `trade`, `status`, `block_state`, `block_reason` | `id` → contracts, certificates, scorecards, invoices |
+| `vendors` | one contractor | `id` (varchar), `vendor_name`, `vendor_code`, `specialty`, `trade`, `status` (`'deleted'` = a deleted vendor, name ends "(deleted)": leave it out of lists, counts and suggestions unless asked about history), `block_state`, `block_reason` | `id` → contracts, certificates, scorecards, invoices |
 | `vendor_contracts` | one contract | `id`, `vendor_id`, `contract_name`, `contract_start`, `contract_end`, `contract_value`, `status` | `vendor_id` |
 | `spare_parts` | one stock line | `id`, `part_code`, `part_name`, `stock_quantity`, `reorder_level`, `unit_price`, `supplier_id`, `bom_group_id` | `id` → work_order_parts, inventory_transactions |
 | `inventory_transactions` | one stock movement | `id`, `part_id`, `transaction_type`, `quantity`, `unit_cost`, `created_at` | `part_id` |

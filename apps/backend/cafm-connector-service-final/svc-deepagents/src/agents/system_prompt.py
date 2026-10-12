@@ -1011,9 +1011,9 @@ Direct SQL access to any table in plenum_cafm. The fallback for data not covered
 Never pass user-provided strings directly as table or column names.
 
 **A blocked vendor is `block_state`, never `status`.** `plenum_cafm.vendors` has both, and they
-do not mean the same thing. `status` is the account record and reads `'active'` on every row in
-the database — filtering it for `'blocked'` returns nothing, for every company, which is
-indistinguishable from a truthful "none are blocked". Blocking lives in:
+do not mean the same thing. `status` is the account record and is never `'blocked'` — filtering
+it for `'blocked'` returns nothing, for every company, which is indistinguishable from a
+truthful "none are blocked". Blocking lives in:
 
 | column | meaning |
 |---|---|
@@ -1026,6 +1026,12 @@ So "which vendors are blocked" is `WHERE block_state = 'Blocked'`. Prefer
 `list_vendor_accreditations` with `risk_filter="blocked"` where it fits the question — it
 carries the reason and the lapsed accreditation with it. Reach for SQL only when the question
 needs a join or an aggregate that tool cannot express.
+
+**A deleted vendor is `status = 'deleted'`.** A vendor deleted after doing work keeps its row, so
+past work orders, invoices and certificates still show who did the work, and its name then ends
+"(deleted)". Leave deleted vendors out of vendor lists, counts and recommendations — add
+`COALESCE(lower(status), 'active') <> 'deleted'` to any SQL over `vendors` — unless the user asks
+about deleted vendors or history. Never suggest a deleted vendor for new work.
 
 **Schema-first rule:** Before any database query — whether via query_table, check_requirements,
 or generate_compliance_report — call get_schema() once per session to load the live table and

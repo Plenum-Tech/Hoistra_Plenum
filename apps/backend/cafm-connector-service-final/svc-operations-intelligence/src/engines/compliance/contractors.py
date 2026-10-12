@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...shared.vendor_identity import _org_clause, find_vendor_id
+from ...shared.vendor_identity import _org_clause, find_vendor_id, live_vendor_sql
 from ...core.logging import get_logger
 
 log = get_logger(__name__)
@@ -107,6 +107,10 @@ async def recommend_contractors(
     contact_order = "vc.is_primary DESC NULLS LAST, " if await _has_is_primary(session) else ""
 
     org_filter = " AND v.organization_id::text = :org" if organization_id is not None else ""
+    # A retired vendor is never recommended (Hussain, 12 Oct 2026). Its vendor-scope
+    # certificates are archived on delete, but a recommendation feeds renewal drafts and
+    # booking requests that are emailed for real, so the vendor's own state decides it.
+    live = live_vendor_sql("v")
     params: dict[str, Any] = {
         "acc": required_accreditation,
         "acc_like": f"%{required_accreditation}%",
@@ -136,6 +140,7 @@ async def recommend_contractors(
             OR CAST(cc.raw_metadata AS text) ILIKE :acc_like
          )
         WHERE COALESCE(v.block_state, 'Clear') <> 'Blocked'
+          AND {live}
           AND (cc.days_to_expiry IS NULL OR cc.days_to_expiry > 0)
           AND (cc.status IS NULL OR cc.status <> 'Lapsed')
           {org_filter}
@@ -169,6 +174,7 @@ async def recommend_contractors(
                                 OR cc.cert_type ILIKE :acc
                              )
                             WHERE COALESCE(v.block_state, 'Clear') <> 'Blocked'
+                              AND {live}
                               AND (cc.days_to_expiry IS NULL OR cc.days_to_expiry > 0)
                               {org_filter}
                             ORDER BY cc.days_to_expiry DESC NULLS LAST
@@ -229,13 +235,17 @@ async def resolve_or_create_vendor(
             return _as_linkable_uuid(matched, name=name)
         like_binds = {"like": f"%{name[:40]}%"}
         like_org = _org_clause(organization_id, like_binds)
+        # The substring match is the one the " (deleted)" mark cannot stop — "%Acme Lifts%"
+        # finds "Acme Lifts (deleted)". A retired vendor is never matched (Hussain, 12 Oct
+        # 2026): the supplier falls through to the INSERT below and is registered afresh.
         async with session.begin_nested():
             row = (
                 await session.execute(
                     text(
                         f"""
-                        SELECT id FROM plenum_cafm.vendors
+                        SELECT id FROM plenum_cafm.vendors v
                         WHERE vendor_name ILIKE :like
+                          AND {live_vendor_sql('v')}
                           {like_org}
                         ORDER BY created_at NULLS LAST, id
                         LIMIT 1

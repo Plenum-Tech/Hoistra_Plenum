@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
+from cafm_connector.api.security import Principal, _detail, current_principal
 from cafm_connector.api.schemas.plenum_cafm import (
     OrganizationCreate, OrganizationResponse, OrganizationUpdate,
     UserCreate, UserResponse, UserUpdate,
@@ -71,7 +72,19 @@ async def update_organization(
 
 
 @router.delete("/organizations/{org_id}", status_code=200, tags=["Organizations"])
-async def delete_organization(org_id: str, db: AsyncSession = Depends(get_plenum_db)):
+async def delete_organization(
+    org_id: str,
+    caller: Principal = Depends(current_principal),
+    db: AsyncSession = Depends(get_plenum_db),
+):
+    # Superadmin only (12 Oct 2026). Deleting an organisation cascades to every one of its
+    # vendors (vendors_organization_id_fkey ON DELETE CASCADE) with no vendor-trail entry, and
+    # the Organization row has no company column for the session guard to narrow on — so this
+    # was any signed-in user deleting any company. Refused before the row is read. Nothing in
+    # the repository calls this route.
+    if not caller.is_superadmin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=_detail(
+            "Only a platform superadmin can delete an organisation.", "superadmin_required"))
     obj = await db.get(Organization, org_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Organization not found")

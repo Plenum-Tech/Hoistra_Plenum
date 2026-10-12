@@ -15,6 +15,7 @@ from ...engines.compliance import country_pack as pack_svc
 from ...engines.compliance import scan as scan_svc
 from ...engines.compliance import verification as verify_svc
 from ...engines.compliance import verification_sources as sources_svc
+from ...engines.compliance import vendor_buildings as vb_svc
 from ...engines.compliance import ccc_verify as ccc_verify_svc
 from ...engines.compliance import document_forensics as forensics_svc
 from ...engines.compliance import extract as extract_svc
@@ -427,20 +428,56 @@ async def certificate_link_candidates(
     return {"ok": True, **(await cert_svc.resolve_link_candidates(session, cert))}
 
 
+# A write refused over the vendor it would link to, answered by what the refusal is (review,
+# 12 Oct 2026): a vendor removed or not the caller's is not found, a retired one conflicts
+# with the vendor's state, an unreadable one is worth retrying.
+_VENDOR_REFUSAL_STATUS = {"vendor_not_found": 404, "invalid_vendor_id": 400,
+                          "vendor_deleted": 409, "vendor_unreadable": 503}
+
+
+def _raise_vendor_refusal(out: dict) -> None:
+    code = _VENDOR_REFUSAL_STATUS.get(str(out.get("reason") or ""))
+    if code and out.get("ok") is False:
+        raise HTTPException(status_code=code, detail={"ok": False, **out})
+
+
+# Hoist vendors' two writes (frontend logic/vendorHoist.js) are an admin's, on their own
+# company's certificate. They asked for no scope at all, so any signed-in caller could name
+# another company's certificate and create a vendor in that company or re-point its
+# certificate (pre-push review, 12 Oct 2026). A superadmin viewing a company acts in it.
+async def _hoist_guard(session: AsyncSession, s: access.Scope, certificate_id: UUID) -> None:
+    access.assert_admin(s, action="hoist a vendor or relink a certificate")
+    await access.assert_owned(session, s, "compliance_certificates", certificate_id, action="change")
+
+
 @router.post("/certificates/{certificate_id}/link")
 async def link_certificate_document(
     certificate_id: UUID,
     body: LinkCertificateDocumentRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Auto-link the cert's document_id to the PM-chosen vendor/site/asset rows."""
-    return await cert_svc.link_certificate_document(
+    await _hoist_guard(session, s, certificate_id)
+    # The asset is written onto the certificate and given the document, so it must be the
+    # caller's too. (The vendor is checked by the engine's vendor_link_refusal.)
+    if body.asset_id:
+        await access.assert_owned(session, s, "assets", body.asset_id, action="change")
+    # A uuid site id is written to the certificate as its site: the caller's too (second review).
+    # A varchar site key goes to site_ref, resolved within the certificate's company.
+    if body.site_id and vb_svc._canon_uuid(body.site_id):
+        await access.assert_owned(session, s, "sites", body.site_id, action="change")
+    out = await cert_svc.link_certificate_document(
         session,
         certificate_id,
         vendor_id=body.vendor_id,
         site_id=body.site_id,
         asset_id=body.asset_id,
     )
+    # A deleted vendor takes no new documents; that is a conflict with the vendor's state,
+    # not a bad request.
+    _raise_vendor_refusal(out)
+    return out
 
 
 @router.post("/certificates/{certificate_id}/create-vendor")
@@ -448,9 +485,11 @@ async def create_vendor_for_certificate(
     certificate_id: UUID,
     body: CreateVendorForCertificateRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Create a vendor row from the chat form (vendor cert with no extractable name) and link
     this certificate + its document to the new vendor, populating the rich profile fields."""
+    await _hoist_guard(session, s, certificate_id)
     profile = {
         k: v
         for k, v in {
@@ -1136,7 +1175,9 @@ async def upsert_resource_skill(
 ):
     data = body.model_dump()
     data["organization_id"] = access.organization_for(s, body.organization_id)
-    return await skill_svc.upsert_resource_skill(session, data)
+    out = await skill_svc.upsert_resource_skill(session, data)
+    _raise_vendor_refusal(out)
+    return out
 
 
 @router.get("/resource-skills")
@@ -1296,6 +1337,77 @@ async def evidence_pack_post(
     )
 
 
+# ── vendor ↔ building assignments (engines/compliance/vendor_buildings.py) ──────────────────
+
+class AssignVendorBuildingsRequest(BaseModel):
+    building_ids: list[UUID]
+    source: str = "manual"
+
+
+_ASSIGN_STATUS = {"not_set_up": 503, "no_buildings": 400, "building_not_found": 404,
+                  "not_assigned": 404, **_VENDOR_REFUSAL_STATUS}
+
+
+def _assign_out(out: dict) -> dict:
+    code = _ASSIGN_STATUS.get(str(out.get("reason") or ""))
+    if code and out.get("ok") is False:
+        raise HTTPException(status_code=code, detail=out)
+    return out
+
+
+@router.get("/vendor-buildings")
+async def list_vendor_buildings(
+    vendor_id: str | None = None,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """The company's vendor ↔ building assignments; a caller allocated to some buildings sees
+    those buildings' only. ``available: false`` on a database not set up for them yet."""
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return await vb_svc.list_assignments(session, organization_id=org, vendor_id=vendor_id,
+                                         building_ids=s.building_ids)
+
+
+@router.post("/vendors/{vendor_id}/buildings")
+async def assign_vendor_buildings(
+    vendor_id: str,
+    body: AssignVendorBuildingsRequest,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """Assign the vendor to buildings. An admin's, in their own company (a superadmin viewing
+    one acts in it); the vendor and every building must be the company's, and live."""
+    access.assert_admin(s, action="assign a vendor to buildings")
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return _assign_out(await vb_svc.assign(
+        session, organization_id=org, vendor_id=vendor_id,
+        building_ids=[str(b) for b in body.building_ids], user_id=s.user_id, source=body.source))
+
+
+@router.delete("/vendors/{vendor_id}/buildings/{building_id}")
+async def unassign_vendor_building(
+    vendor_id: str,
+    building_id: UUID,
+    organization_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
+):
+    """End the vendor's assignment to the building (kept as history)."""
+    access.assert_admin(s, action="take a vendor off a building")
+    org = access.organization_for(s, organization_id)
+    if org is None:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "No company in scope."})
+    return _assign_out(await vb_svc.unassign(
+        session, organization_id=org, vendor_id=vendor_id, building_id=str(building_id),
+        user_id=s.user_id))
+
+
 @router.get("/vendors/{vendor_id}/passport")
 async def vendor_passport(
     vendor_id: str,
@@ -1335,7 +1447,11 @@ async def vendor_passport_by_token(
     session: AsyncSession = Depends(get_session),
 ):
     """Public/read-only passport resolve from share token."""
-    return await passport_svc.passport_from_share_token(session, token)
+    out = await passport_svc.passport_from_share_token(session, token)
+    # The vendor was deleted after the link was shared: gone, not merely not found.
+    if out.get("reason") == "passport_unavailable":
+        raise HTTPException(status_code=410, detail={"ok": False, **out})
+    return out
 
 
 @router.get("/approvals/one-click/{token}")

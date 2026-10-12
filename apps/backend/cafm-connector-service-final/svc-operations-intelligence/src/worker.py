@@ -75,6 +75,7 @@ async def weekly_verification_dumps(ctx: dict) -> dict:
 
 async def monthly_vendor_scorecards(ctx: dict) -> dict:
     from .engines.contract_performance.scoring import generate_monthly_scorecard
+    from .shared.vendor_identity import deleted_vendor_ids_sql
 
     today = date.today()
     first_this = date(today.year, today.month, 1)
@@ -90,11 +91,13 @@ async def monthly_vendor_scorecards(ctx: dict) -> dict:
         try:
             rows = (
                 await session.execute(
+                    # A deleted vendor is never carded again (12 Oct 2026).
                     text(
-                        """
+                        f"""
                         SELECT DISTINCT vendor_id, organization_id
                         FROM plenum_cafm.vendor_wo_scores
                         WHERE score_month = :m AND vendor_id IS NOT NULL
+                          AND vendor_id::text NOT IN ({deleted_vendor_ids_sql()})
                         ORDER BY vendor_id, organization_id NULLS LAST
                         """
                     ),

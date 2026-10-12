@@ -37,6 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import live_vendor_sql
 from . import invoice as invoice_svc
 from . import parameters as params_svc
 from . import scoring as score_svc
@@ -128,10 +129,14 @@ def _f(v: Any) -> float | None:
 
 
 async def _vendor(session: AsyncSession, org: UUID, code: Any, name: Any) -> tuple[str, str] | None:
+    # A deleted vendor is not on record for a re-uploaded workbook: its terms and invoices are
+    # skipped as "vendor not on record" rather than filed against it (Hussain, 12 Oct 2026).
     row = (await session.execute(text(
-        """SELECT id::text, vendor_name FROM plenum_cafm.vendors
-            WHERE organization_id = :o AND (vendor_code = :c OR lower(vendor_name) = lower(:n))
-            ORDER BY (vendor_code = :c) DESC LIMIT 1"""),
+        f"""SELECT v.id::text, v.vendor_name FROM plenum_cafm.vendors v
+            WHERE v.organization_id = :o
+              AND (v.vendor_code = :c OR lower(v.vendor_name) = lower(:n))
+              AND {live_vendor_sql("v")}
+            ORDER BY (v.vendor_code = :c) DESC LIMIT 1"""),
         {"o": org, "c": str(code or ""), "n": str(name or "")})).first()
     return (row[0], row[1]) if row else None
 

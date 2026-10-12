@@ -77,20 +77,28 @@ async def extract_contract(
 async def reconcile_migration(
     body: dict | None = None,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Post-migration repair — deduplicate and vendor-link rows a migration just wrote.
 
     Body: ``{"vendor_links": {"work_orders": {wo_code: vendor_name}, ...}}``. Tables that
-    keep vendor_name on the row resolve themselves and need no input.
+    keep vendor_name on the row resolve themselves and need no input. Names are matched to
+    the caller's company's vendors only, and never to a deleted one.
     """
     from ...engines.contract_performance.post_migration import (
         reconcile_feature_b_migration,
     )
 
     payload = body or {}
-    return await reconcile_feature_b_migration(
-        session, vendor_links=payload.get("vendor_links") or None
+    out = await reconcile_feature_b_migration(
+        session, vendor_links=payload.get("vendor_links") or None,
+        organization_id=access.organization_for(s, None),
     )
+    # The engine reconciles one company's rows only and refuses a call naming none (review,
+    # 12 Oct 2026); that is the caller's error, not a 200.
+    if out.get("reason") == "no_company":
+        raise HTTPException(status_code=400, detail=out)
+    return out
 
 
 async def _migration_org(session: AsyncSession, migration_id: UUID, org_id: UUID | None) -> UUID:
@@ -703,13 +711,18 @@ async def decide_approval(
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    return await approvals_svc.decide_queue_item(
+    out = await approvals_svc.decide_queue_item(
         session,
         item_id,
         decision=body.decision,
         pm_notes=body.pm_notes,
         prepare_email_handoff=body.prepare_email_handoff,
     )
+    # Approving an item about a deleted vendor is refused (it can still be dismissed): a conflict
+    # with the vendor's state, answered as /api/approvals answers it.
+    if not out.get("ok") and out.get("reason") == approvals_svc.VENDOR_DELETED:
+        raise HTTPException(status_code=409, detail=out)
+    return out
 
 
 # ── B Cross-cutting: WO conflict resolution (FR-039) ────────────────

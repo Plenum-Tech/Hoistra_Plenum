@@ -10,6 +10,10 @@
     GET    /api/admin/usage                      per-building and per-user usage
     GET    /api/admin/ingestion-audit            the audit trail, filterable by outcome
     GET    /api/admin/vendor-audit               vendor reassignments, blocks and clears
+    GET    /api/admin/vendors/{id}/delete        what deleting a vendor would do: remove it, or
+                                                 retire it when it has history
+    POST   /api/admin/vendors/{id}/delete        delete it, for good (confirm by name; recorded
+                                                 in the vendor audit trail)
     GET    /api/admin/data-reset                 what a reset would delete, table by table
     POST   /api/admin/data-reset                 delete the company's page data: compliance, contracts,
                                                  assets, energy, maintenance - any of them (confirm by name)
@@ -25,7 +29,7 @@ import io
 import json
 import zipfile
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -37,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...db import get_session
 from ...config import settings
-from ...engines.admin import org_data_reset, org_export
+from ...engines.admin import org_data_reset, org_export, vendor_delete
 from ...engines.auth import access
 from ...engines.auth import ingestion_audit
 from ...engines.auth import vendor_audit
@@ -781,10 +785,11 @@ def _areas(raw: list[str] | None) -> list[str]:
 
 
 async def _run(session: AsyncSession, org: UUID, areas: list[str], apply: bool,
-               building: dict | None = None) -> dict:
+               building: dict | None = None, actor: str | None = None) -> dict:
     try:
         return await org_data_reset.run_reset(session, str(org), areas=areas, apply=apply,
-                                               building_id=building["id"] if building else None)
+                                               building_id=building["id"] if building else None,
+                                               actor=actor)
     except org_data_reset.ResetForeignBuilding as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
             "ok": False, "reason": "building_not_found",
@@ -852,7 +857,9 @@ async def apply_data_reset(
             "error": f"Type the {'building' if building else 'company'} name exactly to confirm "
                      "the reset.",
             "confirm_with": confirm_with})
-    out = await _run(session, scope.organization_id, chosen, apply=True, building=building)
+    # The admin is named so the vendor-trail entry for any vendors this deletes is theirs.
+    out = await _run(session, scope.organization_id, chosen, apply=True, building=building,
+                     actor=str(principal.user_id) if getattr(principal, "user_id", None) else None)
     try:
         async with session.begin():
             await write_audit(
@@ -873,3 +880,97 @@ async def apply_data_reset(
     log.info("org_data_reset.done", organization_id=str(scope.organization_id),
              areas=chosen, building_id=building["id"] if building else None, rows=out["row_total"])
     return {"ok": True, "organization_name": name, "building": building, **out}
+
+
+# ── deleting a vendor ───────────────────────────────────────────────────────────────────
+
+
+class VendorDelete(BaseModel):
+    #: The vendor's name as the plan showed it (``confirm_with``). A delete cannot be undone, so
+    #: it is not enough to click: the admin has to say which vendor they mean.
+    confirm: str = Field(min_length=1, max_length=300)
+    #: What the plan said would happen. If a record naming the vendor arrived since, the delete
+    #: refuses and answers with the plan as it now stands, rather than doing what nobody saw.
+    expect: Literal["remove", "retire"]
+    #: Why, in the admin's words: kept in the trail and on what the delete closes and archives.
+    reason: str | None = Field(None, max_length=vendor_delete.REASON_MAX)
+
+
+_NOTHING = "Nothing was changed."
+
+
+def _vendor_delete_refused(exc: vendor_delete.VendorDeleteError) -> HTTPException:
+    """A refusal as its status and a sentence a person can act on. Nothing in it names a table,
+    a route or a service: ``step`` is a key for the client, the label is for people."""
+    def refuse(code: int, reason: str, error: str, **extra: Any) -> HTTPException:
+        return HTTPException(status_code=code, detail={"ok": False, "reason": reason,
+                                                       "error": error, **extra})
+
+    if isinstance(exc, vendor_delete.VendorDeleteBadId):
+        return refuse(400, "bad_vendor_id", "That is not a vendor id.")
+    if isinstance(exc, vendor_delete.VendorNotFound):
+        return refuse(404, "vendor_not_found", "No such vendor in this company.")
+    if isinstance(exc, vendor_delete.VendorConfirmMismatch):
+        return refuse(400, "confirm_mismatch",
+                      "Type the vendor's name exactly as shown to confirm the delete.",
+                      confirm_with=exc.confirm_with)
+    if isinstance(exc, vendor_delete.VendorPlanChanged):
+        return refuse(409, "plan_changed",
+                      "What deleting this vendor would do has changed since it was shown. "
+                      "Check it again before deleting.", plan=exc.plan, note=_NOTHING)
+    if isinstance(exc, vendor_delete.VendorBusy):
+        return refuse(409, "vendor_busy",
+                      "Someone else is changing this vendor right now. Try again in a moment.",
+                      note=_NOTHING)
+    if isinstance(exc, vendor_delete.VendorNotRecorded):
+        return refuse(503, "not_recorded",
+                      "The delete could not be recorded in the vendor audit trail, so it was "
+                      "undone. Try again in a moment.", note=_NOTHING)
+    step = getattr(exc, "step", None)
+    label = str(getattr(exc, "label", None) or "the vendor record").lower()
+    return refuse(409, "delete_refused",
+                  f"The delete could not finish ({label}), so it was undone. Try again; if it "
+                  "keeps happening, contact support.", step=step, note=_NOTHING)
+
+
+@router.get("/vendors/{vendor_id}/delete", summary="What deleting this vendor would do")
+async def preview_vendor_delete(
+    vendor_id: str,
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """The plan the delete dialog shows: whether the vendor would be removed (no history) or
+    retired (history kept, marked deleted), and, group by group, what would be unassigned,
+    closed, expired, ended, removed, archived and kept - with ``confirm_with``, the name the
+    admin types to confirm. Counted inside a transaction that is rolled back.
+
+    The company is the verified scope's, never the URL's: a superadmin viewing a company sees
+    that company's vendor, and an admin naming another company is refused by ``admin_scope``."""
+    try:
+        return await vendor_delete.run(session, organization_id=scope.organization_id,
+                                       vendor_id=vendor_id, apply=False,
+                                       user_id=scope.user_id, role=scope.role)
+    except vendor_delete.VendorDeleteError as exc:
+        raise _vendor_delete_refused(exc) from exc
+
+
+@router.post("/vendors/{vendor_id}/delete",
+             summary="Delete this vendor: removed if it has no history, otherwise retired")
+async def apply_vendor_delete(
+    vendor_id: str,
+    body: VendorDelete,
+    session: AsyncSession = Depends(get_session),
+    scope: access.Scope = Depends(admin_scope),
+):
+    """Delete one of the company's vendors, for good (Hussain, 12 Oct 2026). Admin and
+    superadmin only, own company only. One transaction with its vendor audit trail entry,
+    recorded as the person who did it - a superadmin viewing a company is recorded as
+    themselves, in that company's trail. If anything refuses, nothing changes."""
+    try:
+        return await vendor_delete.run(session, organization_id=scope.organization_id,
+                                       vendor_id=vendor_id, apply=True,
+                                       user_id=scope.user_id, role=scope.role,
+                                       confirm=body.confirm, expect=body.expect,
+                                       reason=body.reason)
+    except vendor_delete.VendorDeleteError as exc:
+        raise _vendor_delete_refused(exc) from exc

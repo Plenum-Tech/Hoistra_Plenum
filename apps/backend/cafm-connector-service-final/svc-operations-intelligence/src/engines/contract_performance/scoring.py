@@ -20,7 +20,14 @@ from ...models.contract_performance import (
     VendorScoreWeightConfig,
     VendorWoScore,
 )
-from ...shared.approvals import enqueue_approval, write_audit
+from ...shared.approvals import (
+    VENDOR_DELETED,
+    enqueue_approval,
+    not_retired_vendor,
+    retired_vendor_refusal,
+    write_audit,
+)
+from ...shared.vendor_identity import deleted_vendor_ids_sql, vendor_link_refusal
 from .conflicts import _CONFLICT_FIELDS, _differs, detect_and_flag_wo_conflict
 from .parameters import CRITICALITY_SLA_WEIGHT, effective_criticality
 
@@ -397,7 +404,10 @@ async def _load_confirmed_params(
 
     q = (
         select(ContractSlaParameters)
-        .where(ContractSlaParameters.status == "confirmed")
+        .where(ContractSlaParameters.status == "confirmed",
+               # A deleted vendor's contract governs nothing — not its own scores, and not the
+               # any-contract fallback below when no vendor is named (Hussain, 12 Oct 2026).
+               not_retired_vendor(ContractSlaParameters.vendor_id))
         .order_by(
             nulls_last(ContractSlaParameters.signed_date.desc()),
             ContractSlaParameters.confirmed_at.desc(),
@@ -744,6 +754,16 @@ async def score_completed_work_orders(
     allow_default_parameters: bool = False,
 ) -> dict[str, Any]:
     """Score ingested completed WOs against confirmed contract SLA."""
+    # A deleted vendor keeps its history but is never measured again (Hussain, 12 Oct 2026).
+    # Asked before the weights, whose first read creates and commits a row. Scores are new rows
+    # written against the vendor, so a status that cannot be read refuses too (review, 12 Oct
+    # 2026): a retired vendor's scores written during a statement timeout would put it back on
+    # the Vendors page. The month-end job retries next run.
+    refused = await retired_vendor_refusal(session, vendor_id, what="it was not scored")
+    if refused:
+        if refused["reason"] == VENDOR_DELETED:
+            refused["error"] = "This vendor has been deleted, so it is no longer scored."
+        return {**refused, "vendor_id": str(vendor_id), "scored": 0}
     weights = await get_or_create_weights(session, organization_id)
     params = await _load_confirmed_params(session, vendor_id)
 
@@ -1183,6 +1203,14 @@ async def generate_monthly_scorecard(
         first_this = date(today.year, today.month, 1)
         score_month = (first_this - timedelta(days=1)).replace(day=1)
 
+    # Its past cards stay; no new one is cut (Hussain, 12 Oct 2026) — nor while its status
+    # cannot be read (review, 12 Oct 2026).
+    refused = await retired_vendor_refusal(session, vendor_id, what="no scorecard was cut")
+    if refused:
+        if refused["reason"] == VENDOR_DELETED:
+            refused["error"] = "This vendor has been deleted, so no scorecard is cut for it."
+        return {**refused, "vendor_id": str(vendor_id), "score_month": score_month.isoformat()}
+
     # A card cut for a company reads that company's scores, and one cut for no company reads
     # the company-less ones — the scope re-scoring replaces in. Reading every company's rows
     # when none was named counted a company's jobs beside the company-less copies of them
@@ -1402,9 +1430,11 @@ async def generate_scorecards_for_month(
 
     month = score_month or previous_month()
     pred, params = _access.vendor_predicate(building_ids, "s.vendor_id", prefix="sc")
+    # A deleted vendor's scores stay as history and are never carded again.
     rows = (await session.execute(text(
         "SELECT DISTINCT s.vendor_id FROM plenum_cafm.vendor_wo_scores s"
-        " WHERE s.score_month = :m AND s.vendor_id IS NOT NULL AND s.organization_id = :o" + pred),
+        " WHERE s.score_month = :m AND s.vendor_id IS NOT NULL AND s.organization_id = :o"
+        f" AND s.vendor_id::text NOT IN ({deleted_vendor_ids_sql()})" + pred),
         {"m": month, "o": organization_id, **params})).scalars().all()
     made, skipped, failed = [], [], []
     for vid in rows:
@@ -1434,7 +1464,10 @@ async def list_scorecards(
     # The caller's buildings: scorecards of the vendors with a footprint there.
     building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    q = select(VendorMonthlyScorecard).order_by(VendorMonthlyScorecard.score_month.desc()).limit(limit)
+    # The Vendors directory and its KPIs read these: a deleted vendor's cards stay in the table
+    # as history and are not listed (Hussain, 12 Oct 2026).
+    q = (select(VendorMonthlyScorecard).where(not_retired_vendor(VendorMonthlyScorecard.vendor_id))
+         .order_by(VendorMonthlyScorecard.score_month.desc()).limit(limit))
     if building_ids is not None:
         from ..auth import access as _access
 
@@ -1488,6 +1521,13 @@ async def upsert_fm_staleness(
     organization_id: UUID | None = None,
 ) -> dict[str, Any]:
     """PRD Q5 Option A — flag only when FM reports are stale."""
+    # New data about a vendor, and possibly an approval about it: refused for a deleted vendor,
+    # and for one whose status cannot be read (Hussain, 12 Oct 2026), and for an id with no
+    # vendor on record in the company (review, 12 Oct 2026).
+    refused = await vendor_link_refusal(
+        session, vendor_id, organization_id, what="no report date was recorded for it")
+    if refused:
+        return refused
     row = FmReportStaleness(
         id=uuid4(),
         organization_id=organization_id,
@@ -1718,6 +1758,13 @@ async def _build_udr_wo_query(
         )
         params["vid"] = str(vendor_id) if vendor_id else None
 
+    # A deleted vendor's closed work stays as history and is never scored again (Hussain,
+    # 12 Oct 2026). Judged on the vendor the scorer attributes the job to — the same COALESCE
+    # the SELECT reads — so a job is left out exactly when it would be scored to that vendor.
+    who = _coalesce(cols, "vendor_id", "assigned_vendor", cast="text")
+    if who:
+        where.append(f"({who} IS NULL OR {who} NOT IN ({deleted_vendor_ids_sql()}))")
+
     # Only filter on organization when it is a UUID; an integer organization_id
     # belongs to a different key space and would exclude every row.
     if cols.get("organization_id") == "uuid":
@@ -1842,6 +1889,8 @@ async def list_udr_score_months(
             FROM plenum_cafm.work_orders wo
             WHERE wo.completed_at IS NOT NULL
               AND wo.vendor_id IS NOT NULL
+              -- A deleted vendor's closed work stays as history; it is not re-scored.
+              AND wo.vendor_id::text NOT IN ({deleted_vendor_ids_sql()})
               AND (CAST(:vid AS uuid) IS NULL OR wo.vendor_id = CAST(:vid AS uuid))
               {org_clause}
             GROUP BY 1, 2

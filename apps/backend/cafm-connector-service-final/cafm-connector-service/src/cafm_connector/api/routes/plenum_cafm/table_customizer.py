@@ -31,11 +31,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cafm_connector.api.routes.plenum_cafm.deps import get_plenum_db
-from cafm_connector.api.security import require_admin
+from cafm_connector.api.routes.plenum_cafm.maintenance_vendors import (
+    DELETED_STATUS,
+    USE_VENDOR_DELETE,
+)
+from cafm_connector.api.security import _detail, require_admin
 
 # ── Sub-application (inner — mounted at /table-editor in the main connector app) ─
 
@@ -168,6 +172,91 @@ def _redact(table: str, row: dict) -> dict:
     return {k: v for k, v in row.items() if k not in blocked}
 
 
+#: A vendor's row is edited here like any other, except for its lifecycle (Hussain, 12 Oct
+#: 2026). Deleting a vendor — or reviving one — goes through the Vendors page, where the delete
+#: is checked, the vendor's assignments are cleared and the vendor audit trail is written; this
+#: editor does none of that. So it does not delete a vendor row, does not set its status to deleted,
+#: and does not edit a retired vendor at all: that row is history, kept so the work and
+#: invoices that name it still resolve.
+_VENDORS = "vendors"
+
+
+def _vendor_status(value: Any) -> str:
+    # NULL is live and case is ignored, as in operations-intelligence's live_vendor_sql.
+    return "active" if value is None else str(value).lower()
+
+
+async def _refuse_vendor_lifecycle_edit(db: AsyncSession, row_id: str, data: dict) -> None:
+    """Raise if this PATCH would edit a retired vendor, or retire one.
+
+    Read with the UPDATE's own predicate, so it sees exactly the row the UPDATE would write,
+    and locked, so the vendor delete cannot retire it between this read and that write.
+    """
+    rows = await db.execute(
+        text(f"SELECT to_jsonb(v)->>'status' FROM {_quote(_SCHEMA)}.{_quote(_VENDORS)} v "
+             "WHERE v.id = :_row_id FOR UPDATE"),
+        {"_row_id": row_id},
+    )
+    current = [_vendor_status(s) for s in rows.scalars().all()]
+    if DELETED_STATUS in current:
+        raise HTTPException(409, _detail(
+            "This vendor has been deleted. Its record is kept as history and cannot be edited.",
+            "vendor_deleted"))
+    # Only retiring is refused (reviving is the 409 above). active <-> inactive is an ordinary
+    # edit, and this editor and svc-udr are the only places it can be made (12 Oct 2026).
+    if "status" in data and _vendor_status(data["status"]).strip() == DELETED_STATUS:
+        raise HTTPException(403, _detail(
+            "A vendor cannot be marked deleted here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
+
+
+#: Columns that name a vendor, in whichever table carries them (12 Oct 2026). A value written
+#: into one of these links new work, a contact or a contract to that vendor, which the spec
+#: refuses for a retired vendor on every path — the editor included.
+_VENDOR_REF_COLUMNS = frozenset({"vendor_id", "assigned_vendor", "supplier_id", "contractor_id"})
+
+
+async def _refuse_retired_vendor_refs(db: AsyncSession, data: dict) -> None:
+    """Raise 409 if a vendor column in ``data`` names a retired vendor, 503 if unreadable.
+
+    One status read for every vendor named. The id is compared as lower-cased text, because
+    production vendor ids are varchar with legacy values and a uuid may arrive in any case, and
+    the rows are read FOR SHARE so a write racing the vendor delete waits for it.
+    """
+    ids = sorted({str(v).strip().lower() for k, v in data.items()
+                  if k in _VENDOR_REF_COLUMNS and v is not None and str(v).strip()})
+    if not ids:
+        return
+    try:
+        rows = await db.execute(
+            text(f"SELECT to_jsonb(v)->>'status' FROM {_quote(_SCHEMA)}.{_quote(_VENDORS)} v "
+                 "WHERE lower(v.id::text) = ANY(:_vendor_ids) FOR SHARE"),
+            {"_vendor_ids": ids},
+        )
+        statuses = [_vendor_status(s) for s in rows.scalars().all()]
+    except SQLAlchemyError as exc:
+        raise HTTPException(503, _detail(
+            "We could not confirm this vendor is still current, so nothing was saved. "
+            "Try again in a moment.", "vendor_check_failed")) from exc
+    if DELETED_STATUS in statuses:
+        raise HTTPException(409, _detail(
+            "This vendor has been deleted, so nothing new can be linked to it. "
+            "Choose a current vendor.", "vendor_deleted"))
+
+
+#: The audit trails are append-only records written by the actions they describe (12 Oct
+#: 2026). The vendor audit trail is read from ops_audit_log and trusts what a row says, so an
+#: entry inserted here would be a "deleted" record nobody made. Reading them stays open.
+_AUDIT_TABLES = frozenset({"ops_audit_log", "audit_logs"})
+
+
+def _refuse_audit_write(table: str) -> None:
+    if table in _AUDIT_TABLES:
+        raise HTTPException(403, _detail(
+            "The audit trail cannot be edited here. Its entries are written by the actions "
+            "they record.", "audit_trail_read_only"))
+
+
 async def _valid_columns(table: str, db: AsyncSession) -> set[str]:
     rows = await db.execute(
         text(
@@ -275,12 +364,14 @@ async def create_row(
     body: RowBody,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    _refuse_audit_write(table)
     await _require_table(table, db)
     valid_cols = await _valid_columns(table, db)
     data = {k: v for k, v in body.data.items() if k in valid_cols}
     if not data:
         raise HTTPException(422, "No valid columns provided")
     _refuse_protected_writes(table, data)
+    await _refuse_retired_vendor_refs(db, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     col_list = ", ".join(_quote(c) for c in data)
@@ -307,12 +398,16 @@ async def update_row(
     body: RowBody,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    _refuse_audit_write(table)
     await _require_table(table, db)
     valid_cols = await _valid_columns(table, db)
     data = {k: v for k, v in body.data.items() if k in valid_cols and k != "id"}
     if not data:
         raise HTTPException(422, "No valid columns to update")
     _refuse_protected_writes(table, data)
+    if table == _VENDORS:
+        await _refuse_vendor_lifecycle_edit(db, row_id, data)
+    await _refuse_retired_vendor_refs(db, data)
 
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     set_clause = ", ".join(f"{_quote(c)} = :{c}" for c in data)
@@ -340,6 +435,11 @@ async def delete_row(
     row_id: str,
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before any statement: a raw DELETE here would remove a vendor with no check, no
+    # unassigning and no trail entry.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(USE_VENDOR_DELETE, "use_vendor_delete"))
+    _refuse_audit_write(table)
     await _require_table(table, db)
     schema_table = f"{_quote(_SCHEMA)}.{_quote(table)}"
     result = await db.execute(
@@ -375,6 +475,13 @@ async def add_column(
     confirm: bool = Query(False),
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before anything else (12 Oct 2026): dropping vendors.status reads every retired vendor
+    # as live again, in every company, and the vendor delete then refuses to retire anything.
+    # The vendors table's shape belongs to the vendor delete and its migrations, not this editor.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(
+            "The vendors table's columns cannot be changed here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
     if not confirm:
         raise HTTPException(
             400,
@@ -411,6 +518,13 @@ async def drop_column(
     confirm: bool = Query(False),
     db: AsyncSession = Depends(get_plenum_db),
 ) -> dict:
+    # Before anything else (12 Oct 2026): dropping vendors.status reads every retired vendor
+    # as live again, in every company, and the vendor delete then refuses to retire anything.
+    # The vendors table's shape belongs to the vendor delete and its migrations, not this editor.
+    if table == _VENDORS:
+        raise HTTPException(403, _detail(
+            "The vendors table's columns cannot be changed here. " + USE_VENDOR_DELETE,
+            "use_vendor_delete"))
     if not confirm:
         raise HTTPException(
             400,

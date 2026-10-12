@@ -334,3 +334,50 @@ def test_the_overlap_is_not_taken_off_when_the_invoice_half_could_not_be_read():
            "variance": {"alerts": 1, "detected": 900.0},
            "vendor_overlap": {"overlap": 400.0}}
     assert module(shape(raw), "vendors")["detected"] == 900.0
+
+
+# ── a deleted vendor's flagged lines (review, 12 Oct 2026) ───────────────────────────────
+#
+# Deleting a vendor closes its invoice-flag approvals and its Invoices tab goes with it, so no
+# screen can decide its lines any more; 'Awaiting decision' waited forever.
+
+
+def test_a_retired_vendors_undecided_line_says_the_vendor_was_deleted():
+    raw = {"invoice_lines": {"flagged": 2, "detected": 4300.0},
+           "variance": {"alerts": 0, "detected": 0.0},
+           "invoice_items": [
+               {"what": "Over-rate labour", "amount": 4200.0, "pm_decision": None, "vendor_retired": True},
+               {"what": "Parts mark-up", "amount": 100.0, "pm_decision": None, "vendor_retired": False},
+               {"what": "Held line", "amount": 50.0, "pm_decision": "reject", "vendor_retired": True}]}
+    items = module(shape(raw), "vendors")["items"]
+    assert [i["action"] for i in items] == [
+        "Vendor deleted — not decided", "Awaiting decision", "Rejected — held"]
+
+
+async def test_the_flagged_lines_read_says_whose_vendor_is_retired():
+    from src.engines import value_ledger as vl
+    from src.shared.vendor_identity import live_vendor_sql
+
+    class _Nested:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _S:
+        def __init__(self):
+            self.sql = []
+
+        def begin_nested(self):
+            return _Nested()
+
+        async def execute(self, stmt, params=None):
+            self.sql.append(" ".join(str(stmt).split()))
+            raise RuntimeError("no database")
+
+    s = _S()
+    await vl.read_value_summary(s, organization_id=None)
+    items_sql = next(q for q in s.sql if "pm_decision, created_at AS at" in q or "AS vendor_retired" in q)
+    assert "AS vendor_retired" in items_sql and live_vendor_sql("dv") in items_sql
+    assert "dv.id::text = invoice_lines.vendor_id::text" in items_sql

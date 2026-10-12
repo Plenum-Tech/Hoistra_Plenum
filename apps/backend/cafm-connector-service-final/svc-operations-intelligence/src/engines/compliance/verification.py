@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import live_vendor_sql
 from .country_pack import get_pack_type, load_pack_json
 
 log = get_logger(__name__)
@@ -444,6 +445,8 @@ async def check_vendor_registration_compliance(
 
     vendor_row: dict[str, Any] | None = None
     cert_row: dict[str, Any] | None = None
+    # A retired vendor is not on the platform (Hussain, 12 Oct 2026): the supplier reads as
+    # not yet registered, which is what it is until it is taken on again.
     if name and len(name) >= 2:
         try:
             async with session.begin_nested():
@@ -469,6 +472,7 @@ async def check_vendor_registration_compliance(
                                    LOWER(TRIM(v.vendor_name)) = LOWER(TRIM(:name))
                                 OR v.vendor_name ILIKE :like
                             )
+                              AND {live_vendor_sql('v')}
                             {org_clause}
                             ORDER BY
                               CASE WHEN LOWER(TRIM(v.vendor_name)) = LOWER(TRIM(:name))

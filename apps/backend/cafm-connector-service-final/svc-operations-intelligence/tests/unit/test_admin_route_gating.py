@@ -64,6 +64,7 @@ def as_(p: Principal):
 ADMIN_ROUTES = [
     ("GET", "/api/admin/users"), ("GET", "/api/admin/buildings"), ("GET", "/api/admin/usage"),
     ("GET", "/api/admin/ingestion-audit"), ("GET", "/api/admin/vendor-audit"),
+    ("GET", "/api/admin/vendors/V-01/delete"), ("POST", "/api/admin/vendors/V-01/delete"),
 ]
 SUPER_ROUTES = [
     ("GET", "/api/superadmin/companies"), ("GET", "/api/superadmin/credits"),
@@ -181,7 +182,8 @@ def test_the_new_routes_are_all_registered():
               "/api/superadmin/value",
               "/api/admin/users", "/api/admin/users/invite", "/api/admin/users/{user_id}",
               "/api/admin/buildings", "/api/admin/usage", "/api/admin/ingestion-audit",
-              "/api/admin/vendor-audit", "/api/auth/invitations/accept"):
+              "/api/admin/vendor-audit", "/api/admin/vendors/{vendor_id}/delete",
+              "/api/auth/invitations/accept"):
         assert p in paths, p
 
 

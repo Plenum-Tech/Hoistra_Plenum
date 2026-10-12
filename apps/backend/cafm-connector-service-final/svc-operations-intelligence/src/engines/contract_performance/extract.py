@@ -427,6 +427,13 @@ async def _resolve_contract_vendor(
     unlinked draft rather than losing the extraction.
     """
     if vendor_id:
+        # A deleted vendor is not one to file a contract under (Hussain, 12 Oct 2026); the reply
+        # says so (svc-deepagents vendor_note_for). Read the way a read is — the ingest that
+        # follows refuses an unreadable status itself, at the write.
+        from ...shared.vendor_identity import is_deleted_vendor
+
+        if await is_deleted_vendor(session, vendor_id):
+            return {"vendor_id": None, "vendor_name": vendor_name, "status": "vendor_deleted"}
         return {"vendor_id": vendor_id, "vendor_name": vendor_name, "status": "supplied"}
 
     name = str(vendor_name or "").strip()
@@ -606,6 +613,10 @@ async def extract_contract_parameters(
         )
         response["ingest"] = ingested
         response["parameters_id"] = (ingested.get("parameters") or {}).get("id")
+        if ingested.get("ok") is False:
+            # Refused — the vendor was deleted, or could not be checked. Nothing was recorded,
+            # so there is nothing waiting for a PM to confirm.
+            response["requires_pm_confirmation"] = False
 
     return response
 
@@ -897,6 +908,11 @@ async def extract_and_verify_invoice(
         labour_hour_rate=labour_hour_rate,
         parts_pricing_json=parts_pricing_json,
     )
+    if verification.get("ok") is False:
+        # Refused, not verified: a deleted vendor, or one whose status could not be read.
+        # Wrapped in ok: true it read as an invoice that had been checked.
+        return {**verification, "parsed_lines": parsed, "work_orders_loaded": len(wos),
+                "vendor_id": str(vendor_id) if vendor_id else None, "verification": None}
     return {
         "ok": True,
         "parsed_lines": parsed,

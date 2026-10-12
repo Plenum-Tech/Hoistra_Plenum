@@ -117,14 +117,16 @@ SYNONYMS = {
     "inspections": ["inspection", "load test", "condition check", "condition grade", "service report"],
 }
 BLOCKED_VALUES_RE = r"block|suspend|on[\s_-]?hold|\bhold\b|\bheld\b|fail|non[\s_-]?compl|reject|revok|invalid|withdrawn|quarantin"
-BUILDER_VERSION = "5-svc1"          # bump when build logic changes -> cached ontology is rebuilt
+BUILDER_VERSION = "7-svc1"          # bump when build logic changes -> cached ontology is rebuilt
 ORG_COLUMN_RE = re.compile(r"^(organization|organisation|org|tenant|company|account|workspace)_id$", re.I)
 STATE_COL_RE = re.compile(r"(status|stage)$|_state$", re.I)
 STATE_LIKE_COL_RE = re.compile(r"(status|stage|result|outcome)$|_state$", re.I)
 SCOPE_WORDS = {"asset": "assets", "equipment": "assets", "building": "buildings", "site": "sites",
                "floor": "floors", "space": "spaces", "vendor": "vendors", "contractor": "vendors",
                "supplier": "vendors"}
-CLOSED_VALUES_RE = r"closed|complete|cancel|done|resolved|finished|rejected|void|archived|superseded"
+#: 'deleted' is a vendor deleted after doing work (Hussain, 12 Oct 2026): the row stays for its
+#: history, and an "open" vendor must leave it out. Builder 6 added it, so caches rebuild.
+CLOSED_VALUES_RE = r"closed|complete|cancel|done|resolved|finished|rejected|void|archived|superseded|deleted"
 LAPSED_VALUES_RE = r"laps|expired|overdue|out[\s_-]?of[\s_-]?date"
 BLOCKED_VALUES_RE_EXTRA = r"unsatisf|not[\s_-]?compliant|condemn|immediately[\s_-]?dangerous|at[\s_-]?risk"
 CANONICAL_CLOSED = ["Closed", "Completed", "Complete", "Cancelled", "Canceled", "Resolved", "Done"]
@@ -524,6 +526,11 @@ async def build_ontology(session, schema=BASE_SCHEMA):
             values = [v for v, _ in counts]
             first = not any(s.get("attribute") == c for s in states.values())
             prefix = "" if not states else col_base(c) + "_"
+            # vendors.status 'deleted' is finished whether or not the sample saw it: the
+            # ontology is cached on the schema, not the values, so one built before the first
+            # vendor delete would otherwise never have a closed state (12 Oct 2026).
+            if t == "vendors" and c == "status" and not any(str(v).lower() == "deleted" for v in values):
+                values = values + ["deleted"]
             closed = [v for v in values if re.search(CLOSED_VALUES_RE, v, re.I)]
             blocked = [v for v in values if re.search(BLOCKED_VALUES_RE, v, re.I)]
             if first and not prefix:
@@ -2863,6 +2870,36 @@ def apply_pinned(onto, plan: dict, pinned: dict | None) -> list[str]:
     return notes
 
 
+#: A question about vendors that are gone, or about the past (12 Oct 2026).
+_VENDOR_HISTORY_RE = re.compile(r"\b(delet\w*|retired?|removed|former|ex-|history|historic\w*|past|previous\w*)\b", re.I)
+
+
+def pin_live_vendors(onto, plan: dict, question: str) -> list[str]:
+    """Pin a Vendor focus to live vendors: status not in ['deleted'] (12 Oct 2026).
+
+    A retired vendor keeps its row so past work still names it; 'how many vendors do we have'
+    must not count it. Applied by code, like the reader's pins, because the planner is never
+    told. Left off when the question is about deleted vendors or history, or the plan already
+    asks for finished vendors or filters on status itself."""
+    focus = plan.get("focus") or {}
+    c = onto.concepts.get(focus.get("concept"))
+    if c is None or c.table != "vendors":
+        return []
+    try:
+        c.col("status")
+    except OntologyError:
+        return []
+    if _VENDOR_HISTORY_RE.search(question or ""):
+        return []
+    if any(s != "open" for s in (focus.get("states") or [])):
+        return []
+    filters = focus.setdefault("filters", [])
+    if any(isinstance(f, dict) and f.get("attribute") == "status" for f in filters):
+        return []
+    filters.append({"attribute": "status", "op": "not_in", "value": ["deleted"], "pinned": True})
+    return ["Deleted vendors are left out."]
+
+
 async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     """The whole pipeline for one question, read inside the caller's scope."""
     if principal is None:
@@ -2877,6 +2914,7 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     grouped = ensure_grouping(onto, plan, question)
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
+    grouped.extend(pin_live_vendors(onto, plan, question))
     async with ScopedReader(principal) as r:
         plan = await add_missing_codes(r, onto, plan, question)
         plan, notes, unresolved = await resolve_plan(r, onto, plan)

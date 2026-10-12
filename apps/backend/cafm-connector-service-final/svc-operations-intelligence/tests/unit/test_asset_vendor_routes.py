@@ -102,7 +102,7 @@ def test_an_asset_outside_your_buildings_is_404(monkeypatch):
 
 
 @pytest.mark.parametrize("reason,code", [("vendor_not_found", 404), ("blocked", 409), ("inactive", 409),
-                                         ("different_trade", 409),
+                                         ("different_trade", 409), ("deleted", 409),
                                          ("legacy_id", 422), ("not_recorded", 503), ("not_changed", 503)])
 def test_each_refusal_answers_as_what_it_is(monkeypatch, reason, code):
     c, _ = _client(monkeypatch, "admin", change_result={"ok": False, "reason": reason, "error": "why"})

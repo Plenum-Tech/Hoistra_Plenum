@@ -73,11 +73,31 @@ REFERENCES: dict[str, tuple[tuple[str, ...], str, tuple[str, ...]]] = {
     ),
 }
 
+#: table -> the predicate (on alias ``t``) a row must pass to be linked to or matched on.
+#:
+#: Deleting a vendor that has history RETIRES it (Hussain, 12 Oct 2026): the row keeps its id,
+#: its status becomes 'deleted' and its name gains " (deleted)". Matched as before, a workbook
+#: re-uploaded afterwards put its new work orders, visits and contracts on a vendor that is gone
+#: from every list — by id, by a code left on the row, or by the marked name an export of
+#: history carries verbatim. The status is the authority; the mark only defends in depth.
+#: Source of truth: ops-intelligence src/shared/vendor_identity.py live_vendor_sql.
+LIVE_ROW: dict[str, str] = {
+    "vendors": "COALESCE(lower(to_jsonb(t)->>'status'), 'active') <> 'deleted'",
+}
+
 LOOKUP_SQL = """
-SELECT id::text FROM {schema}.{table}
+SELECT id::text FROM {schema}.{table} t
  WHERE organization_id::text = :org
-   AND ({match})
+   AND ({match}){live}
  LIMIT 2
+"""
+
+#: Does an id the file already carries name a row that may not be linked to? A count, so the
+#: answer is always one row: an empty answer can only mean the read itself failed.
+RETIRED_SQL = """
+SELECT count(*) FROM {schema}.{table} t
+ WHERE lower(t.id::text) = :k
+   AND NOT ({live})
 """
 
 
@@ -109,6 +129,7 @@ class ReferenceResolver:
         self._org = str(organization_id or "")
         self._schema = schema
         self._cache: dict[tuple[str, str], str | None] = {}
+        self._linkable: dict[tuple[str, str], bool] = {}
         self.reads = 0
         self.resolved = 0
         self.ambiguous: list[str] = []
@@ -127,9 +148,10 @@ class ReferenceResolver:
         _names, table, match_cols = spec
         match = " OR ".join(f"lower(coalesce({c}::text, '')) = :k" for c in match_cols)
         match += " OR id::text = :k"
+        live = f"\n   AND {LIVE_ROW[table]}" if table in LIVE_ROW else ""
         self.reads += 1
         rows = await self._fetch(
-            LOOKUP_SQL.format(schema=self._schema, table=table, match=match),
+            LOOKUP_SQL.format(schema=self._schema, table=table, match=match, live=live),
             {"org": self._org, "k": key[1]},
         )
         ids = sorted({str(r[0]) for r in rows if r and r[0]})
@@ -152,6 +174,38 @@ class ReferenceResolver:
         if found is not None:
             self._cache[key] = found
         return found
+
+    async def linkable(self, column: str, carried: object) -> bool:
+        """Whether an id the file already carries may be written as it stands.
+
+        A row carrying a uuid never reaches ``resolve`` — there is nothing to look up. But a
+        retired vendor keeps its id, so a workbook exported before the delete still carries
+        it, and written through it attached new work to a vendor that no longer exists for
+        anybody. Such an id is refused and reported with the references that could not be
+        placed. An id naming no row at all is kept: it may be a vendor this same file writes.
+
+        A check that could not be read refuses too. Linking new work to a vendor nobody could
+        confirm is live is the one mistake this exists to prevent, and the run says which
+        lookup failed. Only a definite answer is remembered, so a failed read is asked again.
+        """
+        spec = REFERENCES.get(column)
+        value = str(carried).strip() if carried not in (None, "") else ""
+        if not spec or not value or spec[1] not in LIVE_ROW:
+            return True
+        key = (column, value.lower())
+        ok = self._linkable.get(key)
+        if ok is None:
+            self.reads += 1
+            rows = await self._fetch(
+                RETIRED_SQL.format(schema=self._schema, table=spec[1], live=LIVE_ROW[spec[1]]),
+                {"k": key[1]},
+            )
+            ok = bool(rows) and bool(rows[0]) and int(rows[0][0] or 0) == 0
+            if rows:
+                self._linkable[key] = ok
+        if not ok:
+            self.unresolved.setdefault(column, set()).add(value)
+        return ok
 
     def report(self) -> dict:
         return {

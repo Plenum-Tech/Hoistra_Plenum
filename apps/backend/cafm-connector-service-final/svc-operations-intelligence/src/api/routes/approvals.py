@@ -22,6 +22,14 @@ router = APIRouter(prefix="/api/approvals", tags=["approvals"],
                    dependencies=[Depends(scope)])
 
 
+def _refused_for_deleted_vendor(out: dict[str, Any]) -> dict[str, Any]:
+    """A send or approval about a deleted vendor is a conflict with the vendor's state, not a
+    success carrying ok: false — the dock shows the error a failed request carries."""
+    if not out.get("ok") and out.get("reason") == approvals_svc.VENDOR_DELETED:
+        raise HTTPException(status_code=409, detail=out)
+    return out
+
+
 class SendEmailDraftRequest(BaseModel):
     to: str = Field(..., description="PM email address")
     subject: str
@@ -85,8 +93,9 @@ async def vendor_contact(
     and none marked primary is no address, with the candidates for the reader to choose from -
     never a guess, because the Decision queue's drafts are sent for real. Reads only.
 
-    404 for a vendor outside the caller's company (or, for a user restricted to some buildings,
-    one with no footprint on them); 503 when the vendor record could not be read just now."""
+    404 for a vendor outside the caller's company, or one that has been deleted (or, for a user
+    restricted to some buildings, one with no footprint on them); 503 when the vendor record
+    could not be read just now."""
     org_id = access.organization_for(s, organization_id)
     out = await approvals_svc.vendor_contact(
         session, vendor_id=vendor_id, organization_id=org_id, building_ids=s.building_ids,
@@ -109,9 +118,10 @@ async def send_email_draft(
     session: AsyncSession = Depends(get_session),
     s: access.Scope = Depends(scope),
 ) -> dict[str, Any]:
-    """Send a compliance alert draft to the PM email entered in the UI."""
+    """Send a compliance alert draft to the PM email entered in the UI. 409 when the item is
+    about a deleted vendor: nothing is sent."""
     org_id = access.organization_for(s, body.organization_id)
-    return await approvals_svc.send_approval_email_draft(
+    return _refused_for_deleted_vendor(await approvals_svc.send_approval_email_draft(
         session,
         to_address=body.to,
         subject=body.subject,
@@ -119,7 +129,7 @@ async def send_email_draft(
         cc_address=body.cc,
         queue_item_id=body.queue_item_id,
         organization_id=org_id,
-    )
+    ))
 
 
 @router.post("/{item_id}/decide")
@@ -128,8 +138,9 @@ async def decide_any_approval(
     body: QueueDecisionRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Approve | Edit | Dismiss — same contract for A/B/C."""
-    return await approvals_svc.decide_queue_item(
+    """Approve | Edit | Dismiss — same contract for A/B/C. 409 when approving an item about a
+    deleted vendor; it can still be dismissed."""
+    return _refused_for_deleted_vendor(await approvals_svc.decide_queue_item(
         session,
         item_id,
         decision=body.decision,
@@ -137,4 +148,4 @@ async def decide_any_approval(
         edited_payload=body.edited_payload,
         decided_by=body.decided_by,
         prepare_email_handoff=body.prepare_email_handoff,
-    )
+    ))

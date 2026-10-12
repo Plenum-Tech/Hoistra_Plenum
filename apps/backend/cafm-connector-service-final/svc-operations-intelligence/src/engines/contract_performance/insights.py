@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.contract_performance import InvoiceVerification, VendorWoScore
+from src.shared.approvals import not_retired_vendor
 
 
 async def compute_insights(
@@ -33,7 +34,9 @@ async def compute_insights(
     - period: {from_date, to_date}
     """
     # --- Query VendorWoScore rows for the period ---
-    q = select(VendorWoScore)
+    # A deleted vendor's scores and invoices stay as history and are not counted here
+    # (Hussain, 12 Oct 2026).
+    q = select(VendorWoScore).where(not_retired_vendor(VendorWoScore.vendor_id))
     if vendor_id is not None:
         q = q.where(VendorWoScore.vendor_id == vendor_id)
     if organization_id is not None:
@@ -107,9 +110,9 @@ async def compute_insights(
         )
 
     # --- Matched/flagged trend from InvoiceVerification ---
-    iv_q = select(InvoiceVerification.matched_flagged_ratio).order_by(
-        InvoiceVerification.created_at
-    )
+    iv_q = (select(InvoiceVerification.matched_flagged_ratio)
+            .where(not_retired_vendor(InvoiceVerification.vendor_id))
+            .order_by(InvoiceVerification.created_at))
     if vendor_id is not None:
         iv_q = iv_q.where(InvoiceVerification.vendor_id == vendor_id)
     if organization_id is not None:

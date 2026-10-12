@@ -271,7 +271,10 @@ async def test_the_list_returns_the_rate_card_so_the_panel_can_show_it():
                 def all(self_inner):
                     if "rate_card_json" in sql and "information_schema" not in sql:
                         return [{"id": str(row.id), "rate_card_json": card}]
-                    if "FROM plenum_cafm.vendors" in sql or "ingestion_documents" in sql:
+                    # The vendor-name lookup — not the list itself, whose retired-vendor filter
+                    # also reads plenum_cafm.vendors (12 Oct 2026).
+                    if sql.startswith("SELECT id::text AS id, vendor_name FROM plenum_cafm.vendors") \
+                            or "ingestion_documents" in sql:
                         return []
                     return [row]
                 def first(self_inner): return None

@@ -12,6 +12,7 @@ from ...config import settings
 from ...core.logging import get_logger
 from ...models import ApprovalsQueueItem, ComplianceCertificate
 from ...shared.approvals import apply_pm_action_track, send_platform_email, write_audit
+from ...shared.vendor_identity import is_deleted_vendor
 from .contractors import resolve_site_display
 
 log = get_logger(__name__)
@@ -101,7 +102,31 @@ async def fulfill_booking_on_approve(
     - Track on certificate metadata (still no WO)
     """
     payload = dict(item.payload or {})
-    contact = pick_contractor_contact(payload)
+    # The recommendation is a snapshot taken when the scan raised the booking. A vendor deleted
+    # since is not emailed (Hussain, 12 Oct 2026): it is passed over for the next one, and with
+    # none left nothing is sent — falling back to the PM would read as a booking made.
+    recommended = payload.get("recommended_vendors") or []
+    still_live: list[Any] = []
+    for rec in recommended if isinstance(recommended, list) else []:
+        if isinstance(rec, dict) and await is_deleted_vendor(session, rec.get("vendor_id")):
+            continue
+        still_live.append(rec)
+    if recommended and not still_live:
+        note = (
+            "Booking not sent: the recommended contractor has since been deleted. "
+            "Choose another contractor for this renewal."
+        )
+        payload["booking_request_sent"] = False
+        payload["pm_action_status"] = note
+        item.payload = payload
+        log.info("booking.contractor_deleted", queue_item_id=str(item.id))
+        return {
+            "ok": False,
+            "reason": "vendor_deleted",
+            "error": note,
+            "booking": {"booking_request_sent": False, "reason": "vendor_deleted", "note": note},
+        }
+    contact = pick_contractor_contact({**payload, "recommended_vendors": still_live})
     to_addr = (contact.get("email") or "").strip() or None
     # Fall back to PM so booking is never silently dropped when vendor email missing
     if not to_addr:

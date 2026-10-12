@@ -59,6 +59,7 @@ PLAN: list[tuple[str, list[str]]] = [
     ]),
     ("maintenance · vendors and contracts", [
         "contract_sla_parameters", "vendor_contacts", "vendor_contracts",
+        "vendor_buildings",
         "sla_policies", "vendors",
     ]),
     ("energy", [

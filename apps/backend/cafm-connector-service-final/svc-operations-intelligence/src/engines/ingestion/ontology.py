@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import live_vendor_sql
 
 log = get_logger(__name__)
 
@@ -208,11 +209,14 @@ async def load(session: AsyncSession, building_id: UUID | str) -> BuildingOntolo
 
     # Vendors reach a building four ways, and a vendor known by any of them is a vendor
     # known here: a certificate filed against it, a work order raised on it, a contract whose
-    # document is filed against it, or an invoice verified against it.
-    vendors = await _rows(session, """
+    # document is filed against it, or an invoice verified against it. A deleted vendor is not:
+    # its history stays on the building, but it no longer vouches for a new document there
+    # (Hussain, 12 Oct 2026).
+    vendors = await _rows(session, f"""
         SELECT DISTINCT v.vendor_name
           FROM plenum_cafm.vendors v
-         WHERE v.id::text IN (
+         WHERE {live_vendor_sql("v")}
+           AND v.id::text IN (
                  SELECT vendor_id::text FROM plenum_cafm.compliance_certificates
                   WHERE building_id = CAST(:b AS uuid) AND vendor_id IS NOT NULL
            UNION SELECT vendor_id::text FROM plenum_cafm.work_orders
@@ -278,11 +282,11 @@ async def portfolio(
 
 async def vendor_buildings(session: AsyncSession, vendor_name: str) -> list[dict[str, Any]]:
     """Which buildings this vendor is actually known at. The answer to "this certificate is
-    for a firm that does not work here — where does it belong?"."""
-    return await _rows(session, """
+    for a firm that does not work here — where does it belong?". Never a deleted vendor."""
+    return await _rows(session, f"""
         SELECT DISTINCT b.building_id::text AS building_id, b.name
           FROM plenum_cafm.buildings b
-          JOIN plenum_cafm.vendors v ON lower(v.vendor_name) = lower(:v)
+          JOIN plenum_cafm.vendors v ON lower(v.vendor_name) = lower(:v) AND {live_vendor_sql("v")}
          WHERE b.building_id IN (
                  SELECT building_id FROM plenum_cafm.compliance_certificates WHERE vendor_id::text = v.id::text
            UNION SELECT building_id FROM plenum_cafm.work_orders WHERE vendor_id::text = v.id::text

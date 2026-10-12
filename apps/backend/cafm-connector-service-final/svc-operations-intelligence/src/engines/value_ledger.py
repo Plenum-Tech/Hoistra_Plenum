@@ -37,6 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import get_logger
+from ..shared.vendor_identity import live_vendor_sql
 from .auth import access
 
 log = get_logger(__name__)
@@ -256,7 +257,12 @@ async def read_value_summary(
 
     raw["invoice_items"] = await _grab_rows(session, f"""
         SELECT COALESCE(description, invoice_ref, wo_code) AS what,
-               delta_gbp AS amount, pm_decision, created_at AS at
+               delta_gbp AS amount, pm_decision, created_at AS at,
+               -- A retired vendor's flag is closed and its Invoices tab gone: an undecided
+               -- line of it can no longer be decided (review, 12 Oct 2026).
+               EXISTS (SELECT 1 FROM plenum_cafm.vendors dv
+                        WHERE dv.id::text = invoice_lines.vendor_id::text
+                          AND NOT ({live_vendor_sql('dv')})) AS vendor_retired
           FROM plenum_cafm.invoice_lines
          WHERE match_status = 'flagged' AND delta_gbp IS NOT NULL
            AND created_at >= :y0 AND created_at < :y1{org}{vpred}
@@ -512,8 +518,11 @@ def _vendors_module(lines: dict[str, Any], variance: dict[str, Any], items: Any,
         "items": [{
             "what": str(r.get("what") or "Flagged line"),
             "action": {"reject": "Rejected — held", "challenge": "Under challenge",
-                       "approve": "Approved to pay"}.get(str(r.get("pm_decision") or ""),
-                                                         "Awaiting decision"),
+                       "approve": "Approved to pay"}.get(
+                           str(r.get("pm_decision") or ""),
+                           # Nothing can decide a deleted vendor's line any more.
+                           "Vendor deleted — not decided" if r.get("vendor_retired")
+                           else "Awaiting decision"),
             "detected": _num(r.get("amount")),
             "saved": _num(r.get("amount")) if r.get("pm_decision") == "reject" else None,
             "basis": "invoice line outside the contract's rate schedule",

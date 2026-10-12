@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import get_logger
 from ..shared.approvals import write_audit
+from ..shared.vendor_identity import live_vendor_sql
 from .value_ledger import _grab_rows
 
 log = get_logger(__name__)
@@ -148,10 +149,37 @@ async def list_documents(session: AsyncSession, *, building_id: UUID, organizati
             "types": doc_types()}
 
 
+async def _linkable_vendor(session: AsyncSession, vendor_id: str, organization_id: UUID | None) -> None:
+    """Refuses a vendor link unless the vendor exists, is the caller's company's and is not deleted.
+
+    The link took any id: a vendor that never existed, another company's, or a deleted one whose
+    links the delete had just ended (Hussain, 12 Oct 2026). Another company's vendor, or one
+    naming no company, answers exactly like one that does not exist. A vendor that cannot be
+    checked is not linked: the link is new data, and it may be the vendor just deleted."""
+    try:
+        async with session.begin_nested():
+            row = (await session.execute(text(
+                "SELECT to_jsonb(v)->>'organization_id' AS organization_id, ("
+                + live_vendor_sql("v") + ") AS live FROM plenum_cafm.vendors v"
+                " WHERE v.id::text = :vid LIMIT 1"), {"vid": vendor_id})).mappings().first()
+    except Exception as exc:  # noqa: BLE001 — a read that failed is not a vendor that is missing
+        log.warning("document_register.vendor_unreadable", error=str(exc)[:200])
+        raise RegisterError("vendor_unreadable", "This vendor's record could not be checked just now, "
+                                                 "so the document was not linked. Try again in a moment.") from None
+    if not row or (organization_id is not None
+                   and str(row.get("organization_id") or "") != str(organization_id)):
+        raise RegisterError("not_found", "No such vendor in your company.")
+    if not row.get("live"):
+        raise RegisterError("vendor_deleted",
+                            "This vendor has been deleted, so documents can no longer be linked to it.")
+
+
 async def link(session: AsyncSession, *, document_id: str, entity_type: str, entity_id: str, relation: str | None,
                organization_id: UUID | None, user_id: UUID | None) -> dict[str, Any]:
     if entity_type not in LINKABLE:
         raise RegisterError("bad_entity", f"A document links to one of: {', '.join(LINKABLE)}.")
+    if entity_type == "vendor":
+        await _linkable_vendor(session, str(entity_id), organization_id)
     existing = (await session.execute(text("""
         SELECT id FROM plenum_cafm.document_links WHERE document_id::text = :d AND entity_type = :t
            AND entity_id = :e AND removed_at IS NULL"""), {"d": document_id, "t": entity_type, "e": str(entity_id)})).first()

@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models.contract_performance import AssetCriticality, ContractSlaParameters
-from ...shared.approvals import enqueue_approval, write_audit
+from ...shared.approvals import (
+    enqueue_approval,
+    not_retired_vendor,
+    retired_vendor_refusal,
+    write_audit,
+)
+from ...shared.vendor_identity import vendor_link_refusal
 from ..compliance.certificates import default_org_native
 from ..compliance.contractors import resolve_or_create_vendor
 
@@ -348,6 +354,22 @@ async def ingest_contract_parameters(
                     vendor_name=name[:80],
                     had_org=bool(vendor_org),
                 )
+
+    # A deleted vendor takes no new contract (Hussain, 12 Oct 2026): one filed against it would
+    # put it back on the Vendors page and govern its scoring again. Checked on whichever id this
+    # ended up with — supplied by the caller, or resolved from the name above — because every
+    # caller reaches the write through here. A status that cannot be read refuses too.
+    # A supplied id must also name a vendor on record in the company (review, 12 Oct 2026).
+    if vendor_resolved_as is None:
+        refused = await vendor_link_refusal(
+            session, vendor_id, organization_id, what="no contract was recorded against it")
+    else:
+        refused = await retired_vendor_refusal(
+            session, vendor_id, what="no contract was recorded against it")
+    if refused:
+        log.warning("contract.ingest_refused_vendor", vendor_id=str(vendor_id)[:100],
+                    reason=refused["reason"])
+        return refused
 
     # contract_ref precedence: what the DOCUMENT says wins. The caller supplies a fallback
     # derived from the filename, and that was overriding the extracted value — so this
@@ -761,7 +783,10 @@ async def list_contract_parameters(
     # invoice there). None = every contract in the company.
     building_ids: tuple[UUID, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    q = select(ContractSlaParameters).order_by(ContractSlaParameters.created_at.desc()).limit(limit)
+    # A deleted vendor's contracts stay as history and leave the list (Hussain, 12 Oct 2026). A
+    # contract that never named a vendor is still listed.
+    q = (select(ContractSlaParameters).where(not_retired_vendor(ContractSlaParameters.vendor_id))
+         .order_by(ContractSlaParameters.created_at.desc()).limit(limit))
     if building_ids is not None:
         from ..auth import access as _access
 

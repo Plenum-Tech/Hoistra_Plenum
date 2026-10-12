@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import DELETED_MARK, live_vendor_sql
 from ..auth import access
 
 log = get_logger(__name__)
@@ -235,6 +236,46 @@ async def ppm_due(session: AsyncSession, *, organization_id: UUID, building_ids:
     return out
 
 
+# ── a deleted vendor ──────────────────────────────────────────────────────────────
+#
+# A retired vendor (Hussain, 12 Oct 2026) keeps its history: its closed work orders and its
+# missed visits still carry its id and its unmarked name. The watch reads that history, but
+# must not send the PM back to the vendor (review, 12 Oct 2026): 'Rebook the visit with the
+# vendor' and 'Review with the vendor at the monthly meeting' named a vendor that is gone.
+
+#: What a retired vendor's missed visit asks for instead.
+REBOOK_ELSEWHERE = "Rebook the visit with another vendor — its vendor was deleted."
+
+
+def _retired_vendor_sql(row: str, name_expr: str, org_param: str = ":o") -> str:
+    """True when the row's vendor is retired: by its vendor_id where it has one, else by its
+    name equal to a retired vendor's unmarked name in the company — and no live vendor of that
+    name, so a supplier registered afresh under the same name is not taken for the old one.
+
+    Each test is an uncorrelated subquery over the company's vendors, so Postgres reads the
+    vendors once per statement and hashes them. Correlated EXISTS ran once per work order
+    before the GROUP BY — every work order in the company, since the month is only a FILTER —
+    and the casts kept any index out of it (pre-push review, 12 Oct 2026).
+
+    The company parameter is cast to uuid first: Postgres types a parameter where it first reads
+    it, the select list comes before the WHERE clause's ``organization_id = :o`` (a uuid), and a
+    bare text cast there made the whole statement fail as uuid = text (second review)."""
+    mark = DELETED_MARK.replace("'", "''")
+    unmarked = (f"CASE WHEN right(dv.vendor_name, {len(DELETED_MARK)}) = '{mark}' "
+                f"THEN left(dv.vendor_name, -{len(DELETED_MARK)}) ELSE dv.vendor_name END")
+    return f"""coalesce(CASE WHEN {row}.vendor_id IS NOT NULL THEN {row}.vendor_id::text IN (
+                   SELECT dv.id::text FROM plenum_cafm.vendors dv WHERE NOT ({live_vendor_sql('dv')}))
+               ELSE lower(btrim({name_expr})) IN (
+                   SELECT lower(btrim({unmarked})) FROM plenum_cafm.vendors dv
+                    WHERE dv.organization_id::text = CAST(CAST({org_param} AS uuid) AS text)
+                      AND dv.vendor_name IS NOT NULL AND NOT ({live_vendor_sql('dv')}))
+                AND lower(btrim({name_expr})) NOT IN (
+                   SELECT lower(btrim(lv.vendor_name)) FROM plenum_cafm.vendors lv
+                    WHERE lv.organization_id::text = CAST(CAST({org_param} AS uuid) AS text)
+                      AND lv.vendor_name IS NOT NULL AND {live_vendor_sql('lv')})
+               END, false)"""
+
+
 # ── 3. missed PPM follow-up ───────────────────────────────────────────────────────
 
 async def ppm_missed(session: AsyncSession, *, organization_id: UUID, building_ids: tuple[UUID, ...] | None = None,
@@ -247,8 +288,10 @@ async def ppm_missed(session: AsyncSession, *, organization_id: UUID, building_i
         SELECT v.id, v.ppm_ref, coalesce(v.task, v.ppm_ref, '') AS task, v.asset_code, v.status, v.scheduled_date,
                v.deferred_to, v.deferral_reason, v.vendor_name, v.building_code,
                (SELECT b.building_id FROM plenum_cafm.buildings b WHERE b.building_code = v.building_code
-                 AND b.organization_id = v.organization_id LIMIT 1) AS building_id
+                 AND b.organization_id = v.organization_id LIMIT 1) AS building_id,
+               (vd.id IS NOT NULL AND NOT ({live_vendor_sql('vd')})) AS vendor_retired
           FROM plenum_cafm.ppm_visits v
+          LEFT JOIN plenum_cafm.vendors vd ON vd.id::text = v.vendor_id::text
          WHERE v.organization_id = :o
            AND (lower(coalesce(v.status, '')) = 'missed'
                 OR (lower(coalesce(v.status, '')) = 'deferred' AND coalesce(v.deferred_to, v.scheduled_date) < :today))
@@ -261,22 +304,28 @@ async def ppm_missed(session: AsyncSession, *, organization_id: UUID, building_i
                    AND lower(coalesce(n.status, '')) IN ('completed', 'complete', 'scheduled', 'booked'))
            {pred}
          ORDER BY v.scheduled_date"""), {"o": organization_id, "today": today, **params})).mappings().all()
+    def vendor_of(r) -> str | None:
+        # A retired vendor's visit names no vendor: the PM rebooks it with another.
+        return None if r.get("vendor_retired") else r["vendor_name"]
+
     findings = [{
         "key": f"ppm_missed:{r['id']}", "entity_type": "ppm_visit", "entity_id": r["id"],
         "building_id": str(r["building_id"]) if r["building_id"] else None,
         "severity": "high" if (today - (r["scheduled_date"] or today)).days > 30 else "medium",
         "summary": f"Rebook {r['status'].lower()} PPM — {r['task'][:80]} ({r['asset_code'] or 'no asset'}), "
-                   f"was due {_when(r['scheduled_date'])}{' · ' + r['vendor_name'] if r['vendor_name'] else ''}",
+                   f"was due {_when(r['scheduled_date'])}{' · ' + vendor_of(r) if vendor_of(r) else ''}",
         "payload": {"ppm_ref": r["ppm_ref"], "asset_code": r["asset_code"], "status": r["status"],
                     "scheduled_date": r["scheduled_date"].isoformat() if r["scheduled_date"] else None,
                     "deferred_to": r["deferred_to"].isoformat() if r["deferred_to"] else None,
-                    "deferral_reason": r["deferral_reason"], "vendor": r["vendor_name"],
+                    "deferral_reason": r["deferral_reason"], "vendor": vendor_of(r),
                     "building_code": r["building_code"],
-                    "action": "Rebook the visit with the vendor; approve once it has a date."},
+                    **({"vendor_deleted": True, "action": REBOOK_ELSEWHERE} if r.get("vendor_retired") else
+                       {"action": "Rebook the visit with the vendor; approve once it has a date."})},
     } for r in rows]
     by_vendor: dict[str, int] = {}
     for r in rows:
-        by_vendor[r["vendor_name"] or "no vendor"] = by_vendor.get(r["vendor_name"] or "no vendor", 0) + 1
+        who = "deleted vendor" if r.get("vendor_retired") else (r["vendor_name"] or "no vendor")
+        by_vendor[who] = by_vendor.get(who, 0) + 1
     out: dict[str, Any] = {"ok": True, "visits_to_rebook": len(rows),
                            "missed": sum(1 for r in rows if str(r["status"]).lower() == "missed"),
                            "deferred_past_date": sum(1 for r in rows if str(r["status"]).lower() == "deferred"),
@@ -353,6 +402,7 @@ async def monthly_summary(session: AsyncSession, *, organization_id: UUID, build
     vpred, vparams = _scope_sql(building_ids, asset_col="v.asset_id", code_col="v.building_code")
     wo = (await session.execute(text(f"""
         SELECT coalesce(w.vendor_name, w.vendor, 'no vendor') AS vendor, coalesce(w.building_code, '—') AS building,
+               {_retired_vendor_sql('w', 'coalesce(w.vendor_name, w.vendor)')} AS vendor_retired,
                count(*) FILTER (WHERE coalesce(w.raised_at, w.reported_at, w.created_at) >= CAST(:a AS date)
                                   AND coalesce(w.raised_at, w.reported_at, w.created_at) < CAST(:b AS date)) AS raised,
                count(*) FILTER (WHERE coalesce(w.closed_at, w.completed_at) >= CAST(:a AS date)
@@ -363,16 +413,17 @@ async def monthly_summary(session: AsyncSession, *, organization_id: UUID, build
                                   AND coalesce(w.closed_at, w.completed_at) < CAST(:b AS date) AND w.sla_due_at IS NOT NULL
                                   AND coalesce(w.closed_at, w.completed_at) <= w.sla_due_at) AS in_sla
           FROM plenum_cafm.work_orders w WHERE w.organization_id = :o{wpred}
-         GROUP BY 1, 2"""), {"o": organization_id, "a": m0, "b": m1, **wparams})).mappings().all()
+         GROUP BY 1, 2, 3"""), {"o": organization_id, "a": m0, "b": m1, **wparams})).mappings().all()
     ppm = (await session.execute(text(f"""
         SELECT coalesce(v.vendor_name, 'no vendor') AS vendor, coalesce(v.building_code, '—') AS building,
+               {_retired_vendor_sql('v', 'v.vendor_name')} AS vendor_retired,
                count(*) AS scheduled,
                count(*) FILTER (WHERE lower(coalesce(v.status, '')) IN ('completed', 'complete')) AS completed,
                count(*) FILTER (WHERE lower(coalesce(v.status, '')) = 'missed') AS missed,
                count(*) FILTER (WHERE v.within_tolerance IS TRUE) AS on_time
           FROM plenum_cafm.ppm_visits v
          WHERE v.organization_id = :o AND v.scheduled_date >= :a AND v.scheduled_date < :b{vpred}
-         GROUP BY 1, 2"""), {"o": organization_id, "a": m0, "b": m1, **vparams})).mappings().all()
+         GROUP BY 1, 2, 3"""), {"o": organization_id, "a": m0, "b": m1, **vparams})).mappings().all()
 
     def roll(rows, key, fields):
         acc: dict[str, dict[str, int]] = {}
@@ -385,7 +436,10 @@ async def monthly_summary(session: AsyncSession, *, organization_id: UUID, build
     WF, PF = ("raised", "closed", "with_sla", "in_sla"), ("scheduled", "completed", "missed", "on_time")
     w_tot = {f: sum(int(r[f] or 0) for r in wo) for f in WF}
     p_tot = {f: sum(int(r[f] or 0) for r in ppm) for f in PF}
-    w_vendor, p_vendor = roll(wo, "vendor", WF), roll(ppm, "vendor", PF)
+    # A retired vendor's month still counts in the company's and the building's figures — the
+    # work happened — but it is not reviewed with a vendor that is gone, nor listed by vendor.
+    w_vendor = roll([r for r in wo if not r.get("vendor_retired")], "vendor", WF)
+    p_vendor = roll([r for r in ppm if not r.get("vendor_retired")], "vendor", PF)
     w_bld, p_bld = roll(wo, "building", WF), roll(ppm, "building", PF)
 
     findings = []

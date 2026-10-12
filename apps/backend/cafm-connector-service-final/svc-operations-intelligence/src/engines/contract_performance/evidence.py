@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models.contract_performance import ContractSlaParameters, VendorWoScore
+from ...shared.approvals import not_retired_vendor
 from .scoring import (
     _iso,
     _parse_dt,
@@ -225,6 +226,9 @@ async def list_wo_evidence(
     let a busy vendor's history crowd out another vendor's current month."""
     q = (
         select(VendorWoScore)
+        # A deleted vendor's scored work stays as history and leaves the tab, with its cards
+        # (Hussain, 12 Oct 2026).
+        .where(not_retired_vendor(VendorWoScore.vendor_id))
         .order_by(VendorWoScore.score_month.desc(), VendorWoScore.wo_code)
         .limit(max(1, min(int(limit or 200), 1000)))
     )

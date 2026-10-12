@@ -40,7 +40,7 @@ from .meter_link import (
     is_sub_meter_for, meter_hint, pick_section,
     meter_type_for, section_hint, supply_numbers,
 )
-from .reference_link import REFERENCES, ReferenceResolver, hint_for
+from .reference_link import LIVE_ROW, REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 from ...engine.selection import uses_go
@@ -1618,6 +1618,36 @@ def _natural_keys_for(table: str, row: dict, db_cols: set) -> list[tuple[tuple[s
     return out
 
 
+def _natural_key_sql(schema: str, table: str, cols: tuple, vals: list, has_org: bool,
+                     org_id: object, scales: dict[str, int]) -> tuple[str, dict]:
+    """The question _already_written asks of one key: is a row with it already on file?
+
+    An empty optional column matches only an empty one. A numeric(p,s) column holds the value
+    rounded to s places, so the value is rounded the same way before it is compared —
+    7.700000000000001 is on file as 7.7000.
+
+    A retired vendor is not "already written" (Hussain, 12 Oct 2026). Its row stays for its
+    history, so matched as before a supplier taken on again was skipped as a twin of the vendor
+    that was deleted, and the upload said nothing. See reference_link.LIVE_ROW.
+    """
+    conds = []
+    for i, (c, v) in enumerate(zip(cols, vals)):
+        if v is None:
+            conds.append(f"{c} IS NULL")
+        elif c in scales:
+            conds.append(f"{c} = round(CAST(:v{i} AS numeric), {scales[c]})")
+        else:
+            conds.append(f"{c} = :v{i}")
+    where = " AND ".join(conds)
+    params = {f"v{i}": v for i, v in enumerate(vals) if v is not None}
+    if has_org:
+        where += " AND organization_id::text = :org"
+        params["org"] = org_id
+    if table in LIVE_ROW:
+        where += f" AND {LIVE_ROW[table]}"
+    return f"SELECT 1 FROM {schema}.{table} t WHERE {where} LIMIT 1", params
+
+
 def _system_default_for_db_type(col: str, db_type: str, org_id: str | None) -> object:
     """A value for a NOT NULL column the source cannot possibly supply.
 
@@ -1957,25 +1987,9 @@ async def _apply_records_with_schema_alignment(
                                        _scales: dict[str, int]) -> bool:
                 _ck = (_table, _cols, tuple(str(v) for v in _vals))
                 if _ck not in _nk_seen:
-                    # An empty optional column matches only an empty one. A numeric(p,s) column
-                    # holds the value rounded to s places, so the value is rounded the same way
-                    # before it is compared — 7.700000000000001 is on file as 7.7000.
-                    _conds = []
-                    for i, (c, v) in enumerate(zip(_cols, _vals)):
-                        if v is None:
-                            _conds.append(f"{c} IS NULL")
-                        elif c in _scales:
-                            _conds.append(f"{c} = round(CAST(:v{i} AS numeric), {_scales[c]})")
-                        else:
-                            _conds.append(f"{c} = :v{i}")
-                    _where = " AND ".join(_conds)
-                    _prm = {f"v{i}": v for i, v in enumerate(_vals) if v is not None}
-                    if _has_org:
-                        _where += " AND organization_id::text = :org"
-                        _prm["org"] = effective_org_id
-                    _hit = await _fetch(
-                        f"SELECT 1 FROM {schema_name}.{_table} WHERE {_where} LIMIT 1", _prm
-                    )
+                    _hit = await _fetch(*_natural_key_sql(
+                        schema_name, _table, _cols, _vals, _has_org, effective_org_id, _scales,
+                    ))
                     _nk_seen[_ck] = bool(_hit)
                 return _nk_seen[_ck]
 
@@ -2271,6 +2285,11 @@ async def _apply_records_with_schema_alignment(
                         if _ref_col not in db_cols:
                             continue
                         if looks_like_uuid(safe_row.get(_ref_col)):
+                            # An id the file carries is written as it stands — unless it names
+                            # a retired vendor, which keeps its id after a delete. Dropped and
+                            # reported, exactly as a name that matched nothing.
+                            if not await _refs.linkable(_ref_col, safe_row.get(_ref_col)):
+                                safe_row.pop(_ref_col, None)
                             continue
                         _rh = hint_for(_ref_col, row)
                         _rid = await _refs.resolve(_ref_col, _rh) if _rh else None

@@ -22,6 +22,11 @@ log = structlog.get_logger(__name__)
 
 _SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 _MAX_ROWS = 100
+# Same predicate as ops-intelligence's shared.vendor_identity.live_vendor_sql (the source of
+# truth), on the table's own name: query_table reads `FROM plenum_cafm.vendors` unaliased.
+_LIVE_VENDORS = "COALESCE(lower(to_jsonb(vendors)->>'status'), 'active') <> 'deleted'"
+#: A vendors read filtered on one of these is an exact lookup, so it keeps retired rows.
+_VENDOR_KEY_COLUMNS = frozenset({"id", "vendor_code"})
 
 # Schema cache: avoid re-querying information_schema on every session.
 # Refreshes every 5 minutes so DDL changes are picked up without a restart.
@@ -190,6 +195,11 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
     Always call get_schema() first so you use the correct table_name and
     column names — never guess them.
 
+    On `vendors`, deleted vendors (status 'deleted') are left out of lists. A lookup by
+    id or vendor_code still finds one (its name ends " (deleted)"), so the vendor a past
+    work order names always resolves. To list them — only when the user asks about
+    deleted vendors or history — filter on status.
+
     Args:
         table_name: Exact table name in plenum_cafm as returned by get_schema().
         filters: Optional dict of {column_name: value} equality filters.
@@ -213,6 +223,14 @@ async def query_table(table_name: str, filters: dict[str, Any] | None = None) ->
             params[param_key] = val
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
+
+    # A deleted vendor keeps its row for its history (Hussain, 12 Oct 2026), so a plain read
+    # of vendors would list, count and offer it. Left out unless the caller asks by status, or
+    # looks one vendor up by id or code: that is resolving the vendor a closed work order or
+    # invoice names, a history read, and the model cannot know beforehand it was deleted.
+    keys = {str(c).lower() for c in (filters or {})}
+    if table_name == "vendors" and "status" not in keys and not (keys & _VENDOR_KEY_COLUMNS):
+        where_clause = (where_clause + " AND " if where_clause else "WHERE ") + _LIVE_VENDORS
 
     async with database.AsyncSessionLocal() as session:
         try:

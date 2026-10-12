@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from uuid import UUID
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.engines.energy import asset_vendor as av
+from src.shared.vendor_identity import live_vendor_sql
 
 ORG = "11111111-1111-1111-1111-111111111111"
 OTHER = "99999999-9999-9999-9999-999999999999"
@@ -345,3 +347,104 @@ class TestTheReviewOf29Sep:
         assert "lower(COALESCE(to_jsonb(c)->>'cert_scope', '')) <> 'building'" in sql
         for flag in ("superseded_duplicate", "archived", "a1_test_fixture"):
             assert f"to_jsonb(c)->'raw_metadata'->>'{flag}'" in sql, flag
+
+
+# ── A deleted vendor (Hussain, 12 Oct 2026: delete a vendor — gone from every picker; the assets
+# it held are unassigned and say so) ──────────────────────────────────────────────────────
+
+UNASSIGNED_AT = datetime(2026, 10, 12, 10, 15)
+UNASSIGN_ROW = {"action": "asset.vendor_unassigned", "created_at": UNASSIGNED_AT,
+                "email": "hussain@plenum-tech.com",
+                "metadata": json.dumps({"asset": {"id": ASSET, "name": "Boiler 1", "code": "B-301-BOILER-01"},
+                                        "from": {"id": APEX, "name": "Apex Mechanical"}, "to": None,
+                                        "note": "Vendor deleted", "cause": "vendor_deleted",
+                                        "by_role": "admin"})}
+
+
+class LiveFakeDB(FakeDB):
+    """FakeDB whose reads honour what the SQL asks: the company's vendor list drops retired
+    vendors when it carries the live-vendor predicate, and the change history returns only the
+    actions it binds — as the WHERE clauses would."""
+
+    def __init__(self, *a, history=(), **kw):
+        super().__init__(*a, **kw)
+        self.history = list(history)
+
+    async def execute(self, clause, params=None):
+        sql = str(clause.compile(dialect=postgresql.dialect()))
+        p = params or {}
+        if "FROM plenum_cafm.audit_logs" in sql and not sql.lstrip().startswith("INSERT"):
+            self.sql.append(sql)
+            self.params.append(p)
+            wanted = p.get("actions") or [p.get("action")]
+            return _Result([r for r in self.history if r["action"] in wanted])
+        res = await super().execute(clause, params)
+        if ("FROM plenum_cafm.vendors v" in sql and "LIMIT 500" in sql
+                and live_vendor_sql("v") in sql):
+            res._rows = [v for v in res._rows if str(v.get("status") or "").lower() != "deleted"]
+        return res
+
+
+def retired(vid, name, **kw):
+    return vendor(vid, name + " (deleted)", status="deleted", **kw)
+
+
+class TestADeletedVendor:
+    async def test_an_asset_unassigned_by_a_vendor_delete_shows_that_as_its_last_change(self):
+        db = LiveFakeDB(asset_vendor=None, history=[UNASSIGN_ROW])
+        out = await av.vendor_view(db, asset_id=ASSET, organization_id=ORG)
+        assert out["last_change"] == {"at": "2026-10-12T10:15:00+00:00", "by": "hussain@plenum-tech.com",
+                                      "from": "Apex Mechanical", "to": None, "note": "Vendor deleted"}
+
+    async def test_a_deleted_vendor_is_not_offered_at_all(self):
+        # Before, a retired vendor was listed greyed out as "not active (deleted)"; a deleted
+        # vendor is gone from every picker.
+        db = LiveFakeDB(vendors=[vendor(APEX, "Apex Mechanical"), vendor(MITIE, "Mitie"),
+                                 retired("bbbbbbbb-0000-0000-0000-000000000003", "Coolair")])
+        out = await av.vendor_view(db, asset_id=ASSET, organization_id=ORG)
+        assert [c["name"] for c in out["choices"]] == ["Apex Mechanical", "Mitie"]
+
+    async def test_an_asset_still_on_a_deleted_vendor_shows_it_as_stored_but_does_not_offer_it(self):
+        # A delete and a drawer read can cross: the asset may still point at the retired row
+        # for a moment. The drawer names it as stored, and never offers it as a choice.
+        db = LiveFakeDB(vendors=[retired(APEX, "Apex Mechanical"), vendor(MITIE, "Mitie")])
+        out = await av.vendor_view(db, asset_id=ASSET, organization_id=ORG)
+        assert out["vendor"]["name"] == "Apex Mechanical (deleted)" and out["vendor"]["status"] == "deleted"
+        assert [c["name"] for c in out["choices"]] == ["Mitie"]
+
+    @pytest.mark.parametrize("block", ["Clear", "Blocked"])
+    async def test_a_deleted_vendor_is_refused_as_deleted(self, block):
+        # Checked before blocked and inactive: "not active (deleted)" told the admin nothing.
+        db = FakeDB(vendors=[vendor(APEX, "Apex Mechanical"),
+                             retired(MITIE, "Mitie", block=block, reason="insurance lapsed")])
+        out = await av.change_vendor(db, asset_id=ASSET, vendor_id=MITIE, user_id=USER, role="admin",
+                                     organization_id=ORG)
+        assert out == {"ok": False, "reason": "deleted",
+                       "error": "Mitie was deleted. A deleted vendor cannot be assigned."}
+        assert not db.writes and db.commits == 0
+
+    async def test_choosing_the_deleted_vendor_an_asset_still_points_at_is_refused_not_a_no_op(self):
+        db = FakeDB(vendors=[retired(APEX, "Apex Mechanical"), vendor(MITIE, "Mitie")])
+        out = await av.change_vendor(db, asset_id=ASSET, vendor_id=APEX, user_id=USER, role="admin",
+                                     organization_id=ORG)
+        assert out["ok"] is False and out["reason"] == "deleted" and not db.writes
+
+    async def test_another_companys_deleted_vendor_is_not_found_like_any_other(self):
+        db = FakeDB(vendors=[vendor(APEX, "Apex Mechanical"), retired(MITIE, "Mitie", org=OTHER)])
+        out = await av.change_vendor(db, asset_id=ASSET, vendor_id=MITIE, user_id=USER, role="admin",
+                                     organization_id=ORG)
+        assert out["reason"] == "vendor_not_found" and "deleted" not in out["error"]
+
+    async def test_the_chosen_vendor_is_read_under_a_share_lock_before_the_write(self):
+        # A delete takes the vendor row FOR UPDATE. Reading the chosen vendor FOR SHARE makes the
+        # two wait for each other: either the delete waits and the assignment lands first (and
+        # the delete then unassigns it), or the assignment waits, reads the vendor as deleted,
+        # and refuses. Without it, an asset could be assigned to a vendor deleted a moment before.
+        db = FakeDB()
+        await av.change_vendor(db, asset_id=ASSET, vendor_id=MITIE, user_id=USER, role="admin",
+                               organization_id=ORG)
+        reads = [i for i, (q, p) in enumerate(zip(db.sql, db.params))
+                 if "FROM plenum_cafm.vendors v WHERE" in q and p.get("vid") == MITIE]
+        update = next(i for i, q in enumerate(db.sql) if q.lstrip().startswith("UPDATE plenum_cafm.assets"))
+        assert reads and all(db.sql[i].rstrip().endswith("FOR SHARE") for i in reads)
+        assert max(reads) < update

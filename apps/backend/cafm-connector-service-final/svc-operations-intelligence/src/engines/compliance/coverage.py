@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import live_vendor_sql
 from . import certificates as cert_svc
 from .country_pack import list_pack_types
 from .verification_sources import normalize_country
@@ -159,8 +160,11 @@ async def _vendor_rows(session: AsyncSession, organization_id: UUID | None) -> l
     Selecting on the condition itself is both correct and cheaper: the set that qualifies
     is small, and the limit now bounds a list that is already the right one rather than
     truncating the register alphabetically.
+
+    A retired vendor is never one of them (Hussain, 12 Oct 2026), blocked or not: it keeps its
+    certificates as history, and coverage is about vendors who can still be engaged.
     """
-    sql = """
+    sql = f"""
         SELECT v.id::text AS id, v.vendor_name, v.vendor_code,
                coalesce(v.block_state, 'Clear') AS block_state,
                v.blocked_accreditation_type, v.block_reason
@@ -174,6 +178,7 @@ async def _vendor_rows(session: AsyncSession, organization_id: UUID | None) -> l
             )
             OR lower(coalesce(v.block_state, '')) = 'blocked'
         )
+          AND {live_vendor_sql('v')}
     """
     params: dict[str, Any] = {}
     if organization_id:

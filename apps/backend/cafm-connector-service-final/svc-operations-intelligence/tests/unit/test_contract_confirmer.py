@@ -19,6 +19,8 @@ from src.engines.contract_performance import parameters as params_mod
 
 ORG = UUID("00000000-0000-0000-0000-000000000001")
 USER = UUID("00000000-0000-0000-0001-000000000017")
+#: The list's vendor-name lookup statement, as the fakes below recognise it.
+_VENDOR_NAMES = "SELECT id::text AS id, vendor_name FROM plenum_cafm.vendors"
 
 
 class _Row:
@@ -106,7 +108,8 @@ async def test_the_list_resolves_the_confirmer_to_a_name_in_one_query():
             seen.append((sql, params or {}))
             if "FROM plenum_cafm.users" in sql:
                 return _Res([_U(str(USER), "Aasim Shaik", "aasim.shaik@plenum-tech.com")])
-            if "FROM plenum_cafm.vendors" in sql or "FROM plenum_cafm.ingestion_documents" in sql:
+            # The vendor-name lookup, not the list (whose retired-vendor filter reads vendors too).
+            if sql.startswith(_VENDOR_NAMES) or "FROM plenum_cafm.ingestion_documents" in sql:
                 return _Res([])
             return _Res([row])
 
@@ -128,7 +131,8 @@ async def test_a_confirmer_who_cannot_be_resolved_leaves_the_name_empty_not_the_
             sql = " ".join(str(stmt).split())
             if "FROM plenum_cafm.users" in sql:
                 raise RuntimeError("users table unavailable")
-            if "FROM plenum_cafm.vendors" in sql or "FROM plenum_cafm.ingestion_documents" in sql:
+            # The vendor-name lookup, not the list (whose retired-vendor filter reads vendors too).
+            if sql.startswith(_VENDOR_NAMES) or "FROM plenum_cafm.ingestion_documents" in sql:
                 return _Res([])
             return _Res([row])
 
@@ -146,7 +150,8 @@ async def test_no_user_lookup_runs_when_nothing_is_confirmed():
         async def execute(self, stmt, params=None):
             sql = " ".join(str(stmt).split())
             seen.append(sql)
-            if "FROM plenum_cafm.vendors" in sql or "FROM plenum_cafm.ingestion_documents" in sql:
+            # The vendor-name lookup, not the list (whose retired-vendor filter reads vendors too).
+            if sql.startswith(_VENDOR_NAMES) or "FROM plenum_cafm.ingestion_documents" in sql:
                 return _Res([])
             return _Res([row])
 

@@ -478,6 +478,10 @@ class VendorResponse(_Base):
     vendor_name: str
     address: str | None
     created_at: datetime
+    # 'deleted' on a retired vendor (Hussain, 12 Oct 2026). The live list leaves those out; a
+    # lookup by id still answers, for history, and this says which it is. Optional and last, so
+    # every existing reader of the response is unaffected.
+    status: str | None = None
 
 
 # ══════════════════════════════════════════════════════════════════════

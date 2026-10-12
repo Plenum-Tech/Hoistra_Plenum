@@ -155,7 +155,15 @@ func (w *writer) resolveRows(ctx context.Context, p *tablePlan) []*rules.Row {
 		}
 		for _, ref := range spec.References {
 			col := ref.Column
-			if !p.resolveCols[col] || rules.LooksLikeUUID(safe.Get(col)) {
+			if !p.resolveCols[col] {
+				continue
+			}
+			if rules.LooksLikeUUID(safe.Get(col)) {
+				// An id the row carries is written as it stands — unless it names a retired vendor,
+				// which keeps its id after a delete. Dropped and reported, as write_node does.
+				if !w.res.Linkable(ctx, col, safe.Get(col).PyStr()) {
+					safe.Pop(col)
+				}
 				continue
 			}
 			rid := ""

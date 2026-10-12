@@ -1951,7 +1951,8 @@ class AssetVendorChange(BaseModel):
 
 #: What each refusal of a vendor change answers as.
 _VENDOR_CHANGE_STATUS = {"not_admin": 403, "not_found": 404, "vendor_not_found": 404,
-                         "blocked": 409, "inactive": 409, "different_trade": 409, "legacy_id": 422,
+                         "blocked": 409, "inactive": 409, "different_trade": 409, "deleted": 409,
+                         "legacy_id": 422,
                          "unchecked": 503,
                          "not_recorded": 503, "not_changed": 503}
 
@@ -1987,7 +1988,7 @@ async def asset_vendor_change(
     """Assign the asset to another of its company's vendors.
 
     Admins only (403 otherwise). The asset must be in your buildings (404) and the vendor in the
-    asset's company (404, the same answer as a vendor that does not exist). A blocked or
+    asset's company (404, the same answer as a vendor that does not exist). A blocked, deleted or
     inactive vendor is refused with its reason (409); a legacy vendor id that the asset's column
     cannot hold is refused (422). The change and its audit_logs entry are written in one
     transaction — if the entry cannot be written, nothing changes (503). Choosing the vendor

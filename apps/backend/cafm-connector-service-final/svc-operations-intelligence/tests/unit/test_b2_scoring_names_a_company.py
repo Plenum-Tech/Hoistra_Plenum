@@ -34,6 +34,16 @@ from src.engines.contract_performance import scoring as sc
 from src.engines.contract_performance.scoring import weights_to_dict
 from src.models.contract_performance import VendorMonthlyScorecard
 
+
+@pytest.fixture(autouse=True)
+def _vendor_status_reads_live(monkeypatch):
+    """These fakes answer no vendor-status read. Since 12 Oct 2026 scoring refuses when that
+    status cannot be read (pinned in test_vendor_deleted_scoring), so here it reads as live."""
+    async def _live(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(sc, "retired_vendor_refusal", _live)
+
 ORG = UUID("11111111-1111-5111-8111-111111111111")
 OTHER = UUID("22222222-2222-5222-8222-222222222222")
 VENDOR = UUID("33333333-3333-5333-8333-333333333333")
@@ -334,3 +344,13 @@ async def test_the_month_end_job_cuts_each_card_for_the_company_whose_scores_the
 async def test_the_month_end_job_still_cuts_a_single_company_deployments_cards(monkeypatch):
     _, calls, _ = await _month_end(monkeypatch, [(VENDOR, None)])
     assert calls == [(VENDOR, None)]
+
+
+async def test_the_month_end_job_never_picks_a_deleted_vendor(monkeypatch):
+    # A retired vendor's card would be refused anyway; picking it only filled the log with
+    # refusals every month (12 Oct 2026). The pick leaves it out in SQL.
+    from src.shared.vendor_identity import deleted_vendor_ids_sql
+
+    session, _, _ = await _month_end(monkeypatch, [])
+    assert deleted_vendor_ids_sql() in session.sql[0]
+    assert "vendor_id::text NOT IN" in " ".join(session.sql[0].split())

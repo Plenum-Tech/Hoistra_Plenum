@@ -13,6 +13,7 @@ import (
 	"hoistra/engine/internal/cell"
 	"hoistra/engine/internal/coerce"
 	"hoistra/engine/internal/pgschema"
+	"hoistra/engine/internal/resolve"
 	"hoistra/engine/internal/rules"
 )
 
@@ -485,7 +486,12 @@ func (w *writer) keyLookup(ctx context.Context, tx pgx.Tx, p *tablePlan, km rule
 		args = append(args, w.org)
 		conds = append(conds, fmt.Sprintf("organization_id::text = $%d", len(args)))
 	}
-	rows, err := w.fetch(ctx, tx, fmt.Sprintf("SELECT 1 FROM %s.%s WHERE %s LIMIT 1", w.job.Schema, p.dest,
+	// A retired vendor is not "already written" (write_node._natural_key_sql): a supplier taken
+	// on again would otherwise be skipped as a twin of the vendor that was deleted.
+	if live := resolve.LiveRow(p.dest); live != "" {
+		conds = append(conds, live)
+	}
+	rows, err := w.fetch(ctx, tx, fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE %s LIMIT 1", w.job.Schema, p.dest,
 		strings.Join(conds, " AND ")), args...)
 	if err != nil {
 		return false, err
@@ -575,6 +581,9 @@ func (w *writer) prefetchKeys(ctx context.Context, tx pgx.Tx, p *tablePlan, item
 		if p.cols["organization_id"] {
 			conds = append(conds, fmt.Sprintf("t.organization_id::text = $%d", len(g)+1))
 			args = append(args, w.org)
+		}
+		if live := resolve.LiveRow(p.dest); live != "" {
+			conds = append(conds, live) // as keyLookup: a retired vendor is not already written
 		}
 		sql := fmt.Sprintf("SELECT k.i FROM unnest(%s) WITH ORDINALITY AS k(%s, i) WHERE EXISTS (SELECT 1 FROM %s.%s t "+
 			"WHERE %s)", strings.Join(unn, ", "), strings.Join(names, ", "), w.job.Schema, p.dest, strings.Join(conds, " AND "))

@@ -27,8 +27,56 @@ from ..models import (
 from ..models.base import SCHEMA
 from .email_graph import send_via_microsoft_graph
 from .email_transport import email_transport
+from .vendor_identity import deleted_vendor_ids_sql, is_deleted_vendor, live_vendor_sql
 
 log = get_logger(__name__)
+
+
+# ── a deleted vendor ─────────────────────────────────────────────────────────
+#
+# A vendor deleted with history is RETIRED (Hussain, 12 Oct 2026): its row stays, status
+# 'deleted', so the invoices and closed work it appears on still resolve. It is never scored,
+# rated against, linked to new data, offered or emailed again. The two guards below are what
+# the engines on this side share; the status itself is read by vendor_identity, the one
+# definition of "deleted".
+
+VENDOR_DELETED = "vendor_deleted"
+VENDOR_UNREADABLE = "vendor_unreadable"
+
+
+async def retired_vendor_refusal(
+    session: AsyncSession, vendor_id: Any, *, what: str
+) -> dict[str, Any] | None:
+    """None when new data may be linked to this vendor (or no vendor is named); otherwise the
+    refusal, saying what did not happen (``what``: "no contract was recorded").
+
+    For WRITES that attach something new to a vendor. A status that cannot be read refuses
+    too, with its own reason: the vendor may be the one an admin has just deleted, and a
+    contract or invoice filed against it would put it back on the Vendors page."""
+    if not str(vendor_id or "").strip():
+        return None
+    # FOR SHARE: a write racing the delete waits for it and then reads 'deleted', rather than
+    # reading 'active' and landing on a vendor retired a moment later (review, 12 Oct 2026).
+    if not await is_deleted_vendor(session, vendor_id, unreadable_is_deleted=True, for_share=True):
+        return None
+    # Asked again the read's way, which answers False when the status could not be read —
+    # the only way to tell a retired vendor from an unreadable one.
+    if await is_deleted_vendor(session, vendor_id, for_share=True):
+        return {"ok": False, "reason": VENDOR_DELETED,
+                "error": f"This vendor has been deleted, so {what}."}
+    log.warning("approvals.vendor_status_unreadable", vendor_id=str(vendor_id)[:100])
+    return {"ok": False, "reason": VENDOR_UNREADABLE,
+            "error": f"This vendor's record could not be checked just now, so {what}. "
+                     "Try again in a moment."}
+
+
+def not_retired_vendor(vendor_column: Any) -> Any:
+    """Rows whose vendor is not retired — for the lists, cards and scores a deleted vendor must
+    leave. A row naming no vendor is kept: it was never anybody's to remove. Both sides as
+    text, because vendors.id is varchar on production (legacy ids like 'V-01') and the columns
+    that point at it are uuid."""
+    retired = text(deleted_vendor_ids_sql()).columns(column("id", String))
+    return or_(vendor_column.is_(None), cast(vendor_column, String).not_in(retired))
 
 
 async def apply_pm_action_track(
@@ -232,13 +280,18 @@ def _subject_on_record() -> Any:
     "7 Pending", all Compliance, over a register holding no certificates. Applied in SQL, so
     the LIMIT counts only items a person can act on and orphans cannot crowd live ones out.
     A site, a document or no subject at all cannot be proved gone, so those stay listed.
+
+    A retired vendor is not on record either (Hussain, 12 Oct 2026): its row stays for history,
+    but nothing about it is to be acted on. That covers the items naming it only in their
+    payload — invoice flags, staleness flags, a legacy-id passport share — as well as by subject.
     """
     q, c = ApprovalsQueueItem, ComplianceCertificate
     hidden = or_(*[
         func.coalesce(c.raw_metadata[flag].astext, "").notin_(["", "false", "0"])
         for flag in _HIDDEN_CERTIFICATE_FLAGS
     ])
-    return or_(
+    payload_vendor = q.payload["vendor_id"].astext
+    subject_there = or_(
         q.status != "pending",
         q.related_entity_id.is_(None),
         q.related_entity_type.is_(None),
@@ -246,14 +299,22 @@ def _subject_on_record() -> Any:
         and_(q.related_entity_type == "compliance_certificate",
              exists().where(c.id == q.related_entity_id, ~hidden)),
         # Both sides as text: vendors.id is varchar on production and uuid on hoistra_test,
-        # and casting only the item's side raised "uuid = character varying" there.
+        # and casting only the item's side raised "uuid = character varying" there. The
+        # vendors row is read unaliased, so the live test names it by its table name.
         and_(q.related_entity_type == "vendor",
-             exists().where(cast(_VENDORS.c.id, String) == cast(q.related_entity_id, String))),
+             exists().where(cast(_VENDORS.c.id, String) == cast(q.related_entity_id, String),
+                            text(live_vendor_sql("vendors")))),
         and_(q.related_entity_type == "energy_anomaly",
              exists().where(EnergyAnomaly.id == q.related_entity_id)),
         and_(q.related_entity_type == "contract_sla_parameters",
              exists().where(ContractSlaParameters.id == q.related_entity_id)),
     )
+    payload_vendor_live = or_(
+        q.status != "pending",
+        payload_vendor.is_(None),
+        payload_vendor.not_in(text(deleted_vendor_ids_sql()).columns(column("id", String))),
+    )
+    return and_(subject_there, payload_vendor_live)
 
 
 async def list_queue(
@@ -340,6 +401,66 @@ async def _restrict_queue_by_building(
     return out
 
 
+def _vendors_named_by(item: Any) -> list[tuple[str, str]]:
+    """The vendors an item is about or would write to, each with how the refusal names it.
+
+    By subject, and by payload, where a legacy id ("V-01") rides because related_entity_id is a
+    uuid. A booking request's recommended contractors are not here: see _booking_all_retired."""
+    payload = getattr(item, "payload", None) or {}
+    named: list[tuple[str, str]] = []
+    subject = getattr(item, "related_entity_id", None)
+    if getattr(item, "related_entity_type", None) == "vendor" and subject:
+        named.append((str(subject), "This vendor"))
+    if payload.get("vendor_id"):
+        named.append((str(payload["vendor_id"]), "This vendor"))
+    out: list[tuple[str, str]] = []
+    for vendor_id, who in named:
+        if vendor_id.strip() and vendor_id not in {v for v, _ in out}:
+            out.append((vendor_id, who))
+    return out
+
+
+async def _booking_all_retired(session: AsyncSession, item: Any) -> bool:
+    """Whether a booking request has recommended contractors and every one has been deleted.
+
+    The same rule booking.fulfill_booking_on_approve books by: a retired recommendation is
+    passed over for the next live one. Refusing when only the TOP one was retired stopped the
+    approve before that could happen (review, 12 Oct 2026). An entry naming no vendor id
+    counts as live, as it does there."""
+    if getattr(item, "item_type", None) != "booking_request":
+        return False
+    recommended = (getattr(item, "payload", None) or {}).get("recommended_vendors") or []
+    if not isinstance(recommended, list) or not recommended:
+        return False
+    for rec in recommended:
+        if not (isinstance(rec, dict) and await is_deleted_vendor(session, rec.get("vendor_id"))):
+            return False
+    return True
+
+
+async def _retired_vendor_named_by(
+    session: AsyncSession, item: Any, *, what: str
+) -> dict[str, Any] | None:
+    """The refusal for an item whose vendor has been deleted, before anything is sent for it.
+
+    Pending is not enforced on these calls — a send or a decision reaches an item by id whatever
+    its status, and deleting a vendor closes its items rather than removing them — so the
+    vendor's own status is what stops mail to a deleted vendor. Read the way a read is: a status
+    that cannot be read does not hold up a send to a vendor nobody has deleted."""
+    for vendor_id, who in _vendors_named_by(item):
+        if await is_deleted_vendor(session, vendor_id):
+            log.info("approvals.refused_deleted_vendor", queue_item_id=str(getattr(item, "id", "")),
+                     vendor_id=vendor_id[:100])
+            return {"ok": False, "reason": VENDOR_DELETED,
+                    "error": f"{who} has been deleted, so {what}."}
+    if await _booking_all_retired(session, item):
+        log.info("approvals.refused_deleted_vendor", queue_item_id=str(getattr(item, "id", "")),
+                 vendor_id="recommended_vendors")
+        return {"ok": False, "reason": VENDOR_DELETED,
+                "error": f"The contractor this booking would go to has been deleted, so {what}."}
+    return None
+
+
 async def decide_queue_item(
     session: AsyncSession,
     item_id: UUID,
@@ -357,6 +478,14 @@ async def decide_queue_item(
     decision_l = decision.lower()
     if decision_l not in {"approve", "edit", "dismiss"}:
         return {"ok": False, "error": "decision must be approve | edit | dismiss"}
+
+    # Approving is what sends — the email handoff, the booking to the contractor. An item about
+    # a deleted vendor can still be dismissed, which is how it leaves the queue.
+    if decision_l == "approve":
+        refused = await _retired_vendor_named_by(
+            session, item, what="this can no longer be approved. Dismiss it instead")
+        if refused:
+            return refused
 
     # Edit = save PM corrections and KEEP pending (do not vanish from Approvals rail).
     if decision_l == "edit":
@@ -685,9 +814,11 @@ async def sent_email_history(
     return out
 
 
+#: A retired vendor has no address to send to: it answers like one that does not exist.
 _VENDOR_ROW = (
     "SELECT v.id::text AS id, v.vendor_name, to_jsonb(v)->>'organization_id' AS organization_id"
-    " FROM plenum_cafm.vendors v WHERE v.id::text = :vid{scope} LIMIT 1"
+    " FROM plenum_cafm.vendors v WHERE v.id::text = :vid AND " + live_vendor_sql("v")
+    + "{scope} LIMIT 1"
 )
 
 
@@ -957,6 +1088,12 @@ async def send_approval_email_draft(
         if (item is not None and org_id is not None
                 and str(item.organization_id or "") != str(org_id)):
             return {"ok": False, "error": "That queue item is not in your company."}
+        # Before the recipient is written onto the item: a draft about a deleted vendor is not
+        # sent, handed off or recorded (Hussain, 12 Oct 2026).
+        if item is not None:
+            refused = await _retired_vendor_named_by(session, item, what="nothing was sent")
+            if refused:
+                return refused
         if item:
             org_id = org_id or item.organization_id
             # Persist chosen recipient on the draft for audit

@@ -20,6 +20,16 @@ from src.engines.contract_performance.scoring import weights_to_dict
 from src.models.contract_performance import VendorWoScore
 
 
+@pytest.fixture(autouse=True)
+def _vendor_status_reads_live(monkeypatch):
+    """These fakes answer no vendor-status read. Since 12 Oct 2026 scoring refuses when that
+    status cannot be read (pinned in test_vendor_deleted_scoring), so here it reads as live."""
+    async def _live(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(sc, "retired_vendor_refusal", _live)
+
+
 class _FakeResult:
     def __init__(self, rows):
         self._rows = rows

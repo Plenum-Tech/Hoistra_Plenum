@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...models.contract_performance import InvoiceLine, InvoiceVerification
 from ...shared.approvals import enqueue_approval, write_audit
+from ...shared.vendor_identity import vendor_link_refusal
 from .parameters import contracted_hourly_rate
 from ...swarm.adversary import validate_invoice_flag_delta
 from .scoring import get_or_create_weights
@@ -362,6 +363,16 @@ async def verify_invoice(
     """
     B3 — parse/match invoice lines; flags > £500 through Adversary before PM queue.
     """
+    # A verification, its lines and its flags are new data on a vendor. A deleted vendor's past
+    # invoices stay; no new one is filed against it, and none is filed while its status cannot
+    # be read (Hussain, 12 Oct 2026) — nor against an id with no vendor on record in the
+    # company (review, 12 Oct 2026).
+    refused = await vendor_link_refusal(
+        session, vendor_id, organization_id, what="the invoice was not verified against it")
+    if refused:
+        log.warning("invoice.verify_refused_vendor", invoice_ref=invoice_ref,
+                    vendor_id=str(vendor_id)[:100], reason=refused["reason"])
+        return refused
     weights = await get_or_create_weights(session, organization_id)
     adversary_threshold = float(weights["invoice_flag_adversary_gbp"])
 

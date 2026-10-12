@@ -55,6 +55,7 @@ type Set struct {
 	floorCache    map[sectionKey]*string
 	meterCache    map[string]*string
 	refCache      map[[2]string]string
+	linkCache     map[[2]string]bool
 	assetIDs      map[string]string
 	assetBldg     map[string]string
 
@@ -77,6 +78,7 @@ func New(tx Tx, spec *rules.Spec, org, schema string, siteNames map[string]strin
 		buildingCache: map[string]*string{}, sectionCache: map[sectionKey]string{},
 		floorCache: map[sectionKey]*string{}, meterCache: map[string]*string{},
 		refCache: map[[2]string]string{}, assetIDs: map[string]string{}, assetBldg: map[string]string{},
+		linkCache:     map[[2]string]bool{},
 		RefUnresolved: map[string]map[string]bool{},
 	}
 }
@@ -486,8 +488,12 @@ func (s *Set) Reference(ctx context.Context, column, hint string) (string, bool)
 		parts = append(parts, fmt.Sprintf("lower(coalesce(%s::text, '')) = $2", c))
 	}
 	parts = append(parts, "id::text = $2")
-	sql := fmt.Sprintf("\nSELECT id::text FROM %s.%s\n WHERE organization_id::text = $1\n   AND (%s)\n LIMIT 2\n",
-		s.schema, ref.Table, strings.Join(parts, " OR "))
+	live := ""
+	if lr := LiveRow(ref.Table); lr != "" {
+		live = "\n   AND " + lr
+	}
+	sql := fmt.Sprintf("\nSELECT id::text FROM %s.%s t\n WHERE organization_id::text = $1\n   AND (%s)%s\n LIMIT 2\n",
+		s.schema, ref.Table, strings.Join(parts, " OR "), live)
 	s.RefReads++
 	ids := sortedSet(s.fetch(ctx, sql, s.org, ck[1]), 0)
 	if len(ids) == 1 {
@@ -504,6 +510,57 @@ func (s *Set) Reference(ctx context.Context, column, hint string) (string, bool)
 		s.RefUnresolved[column][hint] = true
 	}
 	return "", false
+}
+
+// ── retired rows ─────────────────────────────────────────────────────────────────────────
+
+// liveVendor is reference_link.LIVE_ROW["vendors"]. Deleting a vendor that has history RETIRES it
+// (Hussain, 12 Oct 2026): the row keeps its id, its status becomes 'deleted' and its name gains
+// " (deleted)". Nothing a migration writes may link to it, or count it as already written.
+// Source of truth: ops-intelligence src/shared/vendor_identity.py live_vendor_sql.
+const liveVendor = "COALESCE(lower(to_jsonb(t)->>'status'), 'active') <> 'deleted'"
+
+// LiveRow is the predicate (on alias t) a row of the table must pass to be linked to or matched
+// on, or "" for a table with no retired state.
+func LiveRow(table string) string {
+	if table == "vendors" {
+		return liveVendor
+	}
+	return ""
+}
+
+// retiredSQL is reference_link.RETIRED_SQL: a count, so the answer is always one row and an empty
+// answer can only mean the read itself failed.
+const retiredSQL = "\nSELECT count(*) FROM %s.%s t\n WHERE lower(t.id::text) = $1\n   AND NOT (%s)\n"
+
+// Linkable is ReferenceResolver.linkable: an id the row already carries is written as it stands
+// unless it names a retired row — which keeps its id, so a workbook exported before the delete
+// still carries it. Such an id is refused and reported with the references that could not be
+// placed. A check that could not be read refuses too; only a definite answer is remembered.
+func (s *Set) Linkable(ctx context.Context, column, carried string) bool {
+	ref, ok := s.spec.Reference(column)
+	v := pystr.Strip(carried)
+	if !ok || v == "" || LiveRow(ref.Table) == "" {
+		return true
+	}
+	ck := [2]string{column, pystr.Lower(v)}
+	linkable, known := s.linkCache[ck]
+	if !known {
+		s.RefReads++
+		rows := s.fetch(ctx, fmt.Sprintf(retiredSQL, s.schema, ref.Table, LiveRow(ref.Table)), ck[1])
+		if len(rows) > 0 && len(rows[0]) > 0 {
+			n, isCount := rows[0][0].(int64)
+			linkable = isCount && n == 0
+			s.linkCache[ck] = linkable
+		}
+	}
+	if !linkable {
+		if s.RefUnresolved[column] == nil {
+			s.RefUnresolved[column] = map[string]bool{}
+		}
+		s.RefUnresolved[column][v] = true
+	}
+	return linkable
 }
 
 // ReferenceReport is ReferenceResolver.report().

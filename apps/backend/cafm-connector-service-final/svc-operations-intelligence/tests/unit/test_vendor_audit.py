@@ -211,7 +211,8 @@ def test_a_block_and_a_clear_say_what_did_it_and_why():
 def test_a_record_that_cannot_be_read_is_named_and_the_other_still_shows():
     out, _ = _trail(fail_on="FROM plenum_cafm.ops_audit_log")
     assert out["ok"] is True
-    assert out["unreadable"] == ["blocks and clears"]
+    # The same read carries deletes (12 Oct 2026), so the name says they are missing too.
+    assert out["unreadable"] == ["blocks, clears, deletions and building assignments"]
     assert [e["kind"] for e in out["events"]] == ["reassigned"]
 
 
@@ -318,3 +319,181 @@ def test_the_vendor_cert_worker_reads_states_around_the_run_and_records_the_diff
     asyncio.run(scan._process_vendor_certs(db, [Cert(V1), Cert(V1)], organization_id=UUID(ORG)))
     assert calls == [False, False], "the per-certificate calls record nothing themselves"
     assert [r.action_type for r in _audits(db)] == [va.BLOCKED]
+
+
+# ── deletes (Hussain, 12 Oct 2026: delete a vendor, recorded in the Vendor audit trail) ──
+#
+# A delete is one ops_audit_log entry, action vendor.deleted, written by the admin's delete
+# (admin/vendor_delete.py) with a snapshot of who did it, or one per run by a data reset.
+
+ADMIN = "cccccccc-0000-0000-0000-000000000001"
+AT_4 = datetime(2026, 10, 12, 10, 15, tzinfo=timezone.utc)
+EFFECTS = {"removed": {"vendor_contacts": 1}, "unassigned": {"assets.vendor_id": 1, "work_orders.vendor_id": 1},
+           "closed": {"approvals_queue_items": 1}, "revoked": {}, "ended": {}, "archived": {},
+           "kept": {"invoice_verifications": 4}}
+DELETE = {"id": "o3", "created_at": AT_4, "action_type": "vendor.deleted", "actor": ADMIN,
+          "actor_user_id": ADMIN, "actor_name": "H. Kalabhai (renamed since)", "actor_email": "old@plenum-tech.com",
+          "actor_role": "superadmin",
+          "detail": json.dumps({
+              "vendor": {"id": V1, "name": "Coolair", "code": "COOL", "trade": "HVAC", "block_state": "Clear"},
+              "mode": "retire", "reason": "Contract ended",
+              "by": {"id": ADMIN, "name": "Hussain Kalabhai", "email": "hussain@plenum-tech.com", "role": "admin"},
+              "effects": EFFECTS,
+              "assets": [{"id": "a1", "name": "Boiler 1", "code": "B-301-BOILER-01"}],
+              "work_orders": [{"id": "w1", "code": "WO-1001", "title": "Boiler service"}],
+              "approvals": ["q1"], "source": "person"})}
+RESET = {"id": "o4", "created_at": AT_4, "action_type": "vendor.deleted", "actor": ADMIN,
+         "actor_name": None, "actor_email": None, "actor_role": None,
+         "detail": {"mode": "reset", "count": 2, "source": "data_reset",
+                    "vendors": [{"id": V1, "name": "Coolair", "code": "COOL"},
+                                {"id": "V-01", "name": "Legacy Ltd", "code": None}],
+                    "by": {"id": ADMIN, "name": "Hussain Kalabhai", "email": "hussain@plenum-tech.com",
+                           "role": "admin"}}}
+
+
+class _ActionFilteringDB(FakeDB):
+    """Answers each read with only the rows its bound action(s) select, as the WHERE would — so
+    an action the read does not ask for never reaches the trail."""
+
+    async def execute(self, stmt, params=None):
+        res = await super().execute(stmt, params)
+        p = dict(params or {})
+        if "actions" in p:
+            res._rows = [r for r in res._rows if r.get("action_type") in p["actions"]]
+        elif "action" in p:
+            res._rows = [r for r in res._rows if r.get("action") == p["action"]]
+        return res
+
+
+def _filtered_trail(ops_rows, log_rows=()):
+    db = _ActionFilteringDB({"FROM plenum_cafm.audit_logs": list(log_rows),
+                             "FROM plenum_cafm.ops_audit_log": list(ops_rows)})
+    return asyncio.run(va.list_events(db, organization_id=UUID(ORG))), db
+
+
+def test_the_trail_reads_deletes_beside_blocks_and_clears():
+    # Before 12 Oct 2026 the read asked for blocks and clears only, so a delete never showed.
+    out, _ = _filtered_trail([BLOCK, CLEAR, DELETE])
+    assert [e["kind"] for e in out["events"]] == ["deleted", "cleared", "blocked"]
+
+
+def test_a_delete_says_who_deleted_which_vendor_how_and_what_it_changed():
+    out, _ = _filtered_trail([DELETE])
+    [e] = out["events"]
+    assert e == {
+        "id": "o:o3", "kind": "deleted", "at": "2026-10-12T10:15:00+00:00",
+        # 12 Oct 2026 (review R2): the users row the actor names wins over the entry's own
+        # snapshot - ops_audit_log takes inserts from generic writers, and a snapshot is free
+        # JSON. The role at the time is the snapshot's, being the same person's.
+        "actor": {"id": ADMIN, "name": "H. Kalabhai (renamed since)", "email": "old@plenum-tech.com",
+                  "role": "admin"},
+        "source": "person",
+        "vendor": {"id": V1, "name": "Coolair", "code": "COOL"},
+        "mode": "retire", "reason": "Contract ended", "effects": EFFECTS,
+        "assets": [{"id": "a1", "name": "Boiler 1", "code": "B-301-BOILER-01"}],
+        "work_orders": [{"id": "w1", "code": "WO-1001", "title": "Boiler service"}],
+        "vendors": None, "count": None, "unavailable": [],
+        "from_vendor": None, "to_vendor": None, "asset": None, "building": None, "note": None,
+        "accreditation": None, "certificate_id": None,
+    }
+
+
+def test_a_delete_with_no_snapshot_names_its_admin_from_the_users_record():
+    d = json.loads(DELETE["detail"])
+    d.pop("by")
+    d.pop("source")
+    out, _ = _filtered_trail([dict(DELETE, detail=d)])
+    [e] = out["events"]
+    assert e["actor"] == {"id": ADMIN, "name": "H. Kalabhai (renamed since)", "email": "old@plenum-tech.com",
+                          "role": "superadmin"}
+    assert e["source"] == "person", "a delete with no source recorded is a person's"
+
+
+def test_a_delete_by_a_user_no_longer_on_record_still_says_a_person_did_it():
+    # No snapshot and no users row: the id the entry carries is all there is, and the page
+    # says "A user no longer on record" rather than "Unknown person".
+    d = {k: v for k, v in json.loads(DELETE["detail"]).items() if k != "by"}
+    row = dict(DELETE, detail=d, actor_user_id=None, actor_name=None, actor_email=None,
+               actor_role=None)
+    [e] = _filtered_trail([row])[0]["events"]
+    assert e["actor"] == {"id": ADMIN, "name": None, "email": None, "role": None}
+
+
+def test_a_delete_with_no_one_on_record_has_no_actor():
+    d = {k: v for k, v in json.loads(DELETE["detail"]).items() if k != "by"}
+    row = dict(DELETE, actor="hoistra-ui", detail=d, actor_user_id=None, actor_name=None,
+               actor_email=None, actor_role=None)
+    [e] = _filtered_trail([row])[0]["events"]
+    assert e["actor"] is None and e["source"] == "person"
+
+
+JANE = "dddddddd-0000-0000-0000-000000000009"
+
+
+def test_a_snapshot_naming_someone_else_cannot_put_their_name_on_a_delete():
+    # 12 Oct 2026 (review R2): a row inserted through a generic writer could carry
+    # by: {name: 'Jane Finance'} and the trail showed Jane deleting the vendor.
+    d = dict(json.loads(DELETE["detail"]),
+             by={"id": JANE, "name": "Jane Finance", "email": "jane@ex.com", "role": "admin"})
+    [e] = _filtered_trail([dict(DELETE, detail=d)])[0]["events"]
+    assert e["actor"] == {"id": ADMIN, "name": "H. Kalabhai (renamed since)",
+                          "email": "old@plenum-tech.com", "role": "superadmin"}
+
+
+def test_a_snapshot_is_used_only_for_the_actor_it_names_when_no_users_row_matches():
+    forged = dict(DELETE, actor="x", actor_user_id=None, actor_name=None, actor_email=None,
+                  actor_role=None)
+    [e] = _filtered_trail([forged])[0]["events"]
+    assert e["actor"] is None, "a snapshot for an id the entry does not carry names no one"
+    gone = dict(DELETE, actor_user_id=None, actor_name=None, actor_email=None, actor_role=None)
+    [e] = _filtered_trail([gone])[0]["events"]
+    assert e["actor"] == {"id": ADMIN, "name": "Hussain Kalabhai",
+                          "email": "hussain@plenum-tech.com", "role": "admin"}
+
+
+def test_the_delete_read_says_whether_a_users_row_matched():
+    assert "u.id::text AS actor_user_id" in " ".join(va._BLOCKS.split())
+
+
+def test_a_data_reset_lists_the_vendors_it_deleted():
+    [e] = _filtered_trail([RESET])[0]["events"]
+    assert e["kind"] == "deleted" and e["source"] == "data_reset" and e["mode"] == "reset"
+    assert e["vendor"] is None
+    assert e["vendors"] == [{"id": V1, "name": "Coolair", "code": "COOL"},
+                            {"id": "V-01", "name": "Legacy Ltd", "code": None}]
+    assert e["count"] == 2
+    assert e["actor"] == {"id": ADMIN, "name": "Hussain Kalabhai", "email": "hussain@plenum-tech.com",
+                          "role": "admin"}
+    assert (e["effects"], e["assets"], e["work_orders"]) == ({}, [], [])
+
+
+def test_a_delete_entry_of_an_unexpected_shape_still_shows():
+    d = {"vendor": {"id": V1, "name": "Coolair"}, "mode": "remove",
+         "effects": ["not", "a", "dict"], "assets": "a1", "work_orders": [{"id": "w1"}, "junk"],
+         "vendors": "Coolair", "count": True}
+    [e] = _filtered_trail([dict(DELETE, detail=d)])[0]["events"]
+    assert e["kind"] == "deleted" and e["vendor"] == {"id": V1, "name": "Coolair"}
+    assert e["effects"] == {} and e["assets"] == [] and e["work_orders"] == [{"id": "w1"}]
+    assert e["vendors"] is None and e["count"] is None
+
+
+def test_an_action_the_trail_does_not_know_is_not_shown_as_a_lifted_block():
+    # The mapper labelled every entry that was not a block "cleared": a new action added to the
+    # read without its own mapping would have shown as "Block lifted — automatic".
+    unknown = dict(CLEAR, id="o9", action_type="vendor.renamed")
+    out, _ = _trail({"FROM plenum_cafm.audit_logs": [], "FROM plenum_cafm.ops_audit_log": [BLOCK, unknown]})
+    assert [(e["id"], e["kind"]) for e in out["events"]] == [("o:o1", "blocked")]
+
+
+def test_the_assets_a_delete_unassigned_are_not_listed_again_as_reassignments():
+    # Each unassigned asset gets its own audit_logs row (its own history says so); the trail
+    # shows the one delete event that lists them, not one row per asset beside it.
+    unassigned = dict(REASSIGN, id="r2", action=va.UNASSIGNED)
+    out, _ = _filtered_trail([DELETE], log_rows=[dict(REASSIGN, action=va.REASSIGNED), unassigned])
+    assert [e["id"] for e in out["events"]] == ["o:o3", "r:r1"]
+
+
+def test_the_delete_actor_is_joined_on_the_users_key_the_entry_carries():
+    # ops_audit_log.actor is free text: str(user_id) for a person, "system:<source>" for a scan.
+    sql = " ".join(va._BLOCKS.split())
+    assert "LEFT JOIN plenum_cafm.users u ON u.id::text = o.actor" in sql

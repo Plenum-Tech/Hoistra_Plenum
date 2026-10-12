@@ -30,8 +30,13 @@ from .auth import scope
 router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(scope)])
 
 
+#: A refusal that is about the record's state, not the request's shape: a deleted vendor takes no
+#: new link (409), and one whose record could not be read just now may on a retry (503).
+_STATUS = {"not_found": 404, "vendor_deleted": 409, "vendor_unreadable": 503}
+
+
 def _bad(exc: reg.RegisterError) -> HTTPException:
-    code = 404 if exc.reason == "not_found" else 422
+    code = _STATUS.get(exc.reason, 422)
     return HTTPException(status_code=code, detail={"ok": False, "error": str(exc), "reason": exc.reason})
 
 

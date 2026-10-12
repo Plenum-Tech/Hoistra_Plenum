@@ -613,7 +613,7 @@ async def _workbook_extras(migration_id: str) -> dict[str, Any] | None:
         resp = await _svc_request(
             "POST", settings.operations_intelligence_base_url,
             f"/api/contract-performance/migration/{migration_id}/workbook-extras?trigger=chat",
-            service="operations-intelligence", timeout=180.0, max_attempts=1)
+            service="operations_intelligence", timeout=180.0, max_attempts=1)
         return resp.json()
     except Exception as exc:  # noqa: BLE001 - the tables are written; this is the follow-up
         log.warning("single_door.workbook_extras_failed", migration_id=migration_id, error=str(exc)[:200])
@@ -1284,7 +1284,7 @@ async def _reconcile_feature_b_migration(file_paths: list[str]) -> dict[str, Any
         from ..http_client import request as _svc_request
         resp = await _svc_request(
             "POST", base, "/api/contract-performance/migration/reconcile",
-            service="operations-intelligence", timeout=90.0, max_attempts=1,
+            service="operations_intelligence", timeout=90.0, max_attempts=1,
             json={"vendor_links": links})
         out = resp.json()
         log.info("single_door.feature_b_reconciled", tables=out.get("tables"))

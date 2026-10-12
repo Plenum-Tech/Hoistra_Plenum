@@ -96,8 +96,8 @@ call. Every filtered result carries `<field>_match`:
 `required_contractor_accreditation`. UK pack: 55 types, 27 Building across 11 trades, 28 Vendor
 across 10 trades.
 Also: `resource_skills` (an operative's personal ticket), `approvals_queue_items` (the PM's queue),
-`compliance_risk_snapshots` (risk over time), `vendors` (`block_state`, `block_reason`,
-`blocked_accreditation_type`).
+`compliance_risk_snapshots` (risk over time), and the vendor itself:
+`vendors` (`block_state`, `block_reason`, `blocked_accreditation_type`, `status` — `'deleted'` = a deleted vendor, name ends "(deleted)": leave it out of blocked-vendor lists and counts unless asked about history).
 
 **Building key.** A building row identifies its building by `site_id`, else `site_ref`, else
 `building_name`; only when all three are empty is it "portfolio / unlinked". A certificate that

@@ -11,6 +11,10 @@ Two databases disagree on vendors.id: one carries 1,025 legacy text ids (V-01, V
 beside uuids, and every column that points at a vendor is uuid. A legacy vendor therefore cannot
 be attached to an asset whose vendor_id is uuid; the drawer lists it as not assignable and says
 why, rather than failing on the write.
+
+A deleted vendor (Hussain, 12 Oct 2026) is gone from the list entirely and refused by name on the
+write. An asset its delete unassigned shows that as its last change. An asset read while a delete
+is still finishing may point at the retired row for a moment, so the drawer names it as stored.
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared.vendor_identity import DELETED_STATUS, live_vendor_sql, unmarked_name
+from ..auth.vendor_audit import UNASSIGNED
 from . import asset_intelligence as ai
 
 log = get_logger(__name__)
@@ -44,12 +50,20 @@ _VENDOR = """
            to_jsonb(v)->>'status' AS status, to_jsonb(v)->>'organization_id' AS organization_id
       FROM plenum_cafm.vendors v WHERE v.id::text = :vid LIMIT 1"""
 
-_CHOICES = """
+#: The vendor being assigned, read FOR SHARE. A delete takes the row FOR UPDATE, so the two wait
+#: for each other: the assignment lands first and the delete then unassigns it, or the
+#: assignment waits, reads the vendor as deleted, and refuses. Unlocked, an asset could be
+#: assigned to a vendor deleted a moment before.
+_TARGET = _VENDOR + " FOR SHARE"
+
+#: A deleted vendor is not listed at all — not even greyed out (Hussain, 12 Oct 2026).
+_CHOICES = f"""
     SELECT v.id::text AS id, v.vendor_name, to_jsonb(v)->>'trade' AS trade,
            to_jsonb(v)->>'block_state' AS block_state, to_jsonb(v)->>'block_reason' AS block_reason,
            to_jsonb(v)->>'status' AS status
       FROM plenum_cafm.vendors v
      WHERE to_jsonb(v)->>'organization_id' = :org
+       AND {live_vendor_sql("v")}
      ORDER BY v.vendor_name
      LIMIT 500"""
 
@@ -82,11 +96,13 @@ _SCORE = """
      ORDER BY to_jsonb(c)->>'score_month' DESC
      LIMIT 1"""
 
+#: A reassignment, or the unassignment a vendor delete wrote for this asset ("to" null, note
+#: "Vendor deleted") — either is the asset's last change.
 _LAST_CHANGE = """
     SELECT l.created_at, l.metadata, u.email
       FROM plenum_cafm.audit_logs l
       LEFT JOIN plenum_cafm.users u ON u.id::text = l.user_id::text
-     WHERE l.entity_type = 'asset' AND l.entity_id::text = :aid AND l.action = :action
+     WHERE l.entity_type = 'asset' AND l.entity_id::text = :aid AND l.action = ANY(:actions)
      ORDER BY l.created_at DESC
      LIMIT 1"""
 
@@ -230,7 +246,8 @@ async def vendor_view(session: AsyncSession, *, asset_id: str, organization_id: 
             score = {"score": _num(srows[0]["score"]), "month": str(srows[0].get("month") or "")[:10]}
 
     last = None
-    lrows = await _rows(session, _LAST_CHANGE, {"aid": a["id"], "action": ACTION}, "audit")
+    lrows = await _rows(session, _LAST_CHANGE, {"aid": a["id"], "actions": [ACTION, UNASSIGNED]},
+                        "audit")
     if lrows is None:
         unreadable.append("the change history")
     elif lrows:
@@ -295,11 +312,17 @@ async def change_vendor(session: AsyncSession, *, asset_id: str, vendor_id: str,
     org = a.get("organization_id")
     if _other_company(org, organization_id):
         return {"ok": False, "reason": "not_found", "error": "No such asset in your buildings."}
-    vrows = await _rows(session, _VENDOR, {"vid": str(vendor_id)}, "vendor")
+    vrows = await _rows(session, _TARGET, {"vid": str(vendor_id)}, "vendor")
     v = vrows[0] if vrows else None
     # Another company's vendor is answered exactly like one that does not exist.
     if not v or not org or v.get("organization_id") != org:
         return {"ok": False, "reason": "vendor_not_found", "error": "No such vendor in this company."}
+    # Before anything else is said about it, "already assigned" included: a deleted vendor is
+    # never answered with ok, and "is not active (deleted)" told the admin nothing.
+    if str(v.get("status") or "").strip().lower() == DELETED_STATUS:
+        name = unmarked_name(v.get("vendor_name")) or "This vendor"
+        return {"ok": False, "reason": "deleted",
+                "error": f"{name} was deleted. A deleted vendor cannot be assigned."}
     if a.get("vendor_id") == v["id"]:
         return {"ok": True, "changed": False, "vendor": {"id": v["id"], "name": v["vendor_name"]}}
     prow = None

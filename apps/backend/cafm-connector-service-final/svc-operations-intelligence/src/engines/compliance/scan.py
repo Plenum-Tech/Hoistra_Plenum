@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import settings
@@ -14,6 +14,7 @@ from ...core.logging import get_logger
 from ...db import AsyncSessionLocal
 from ...models import ApprovalsQueueItem, ComplianceCertificate, ComplianceScanRun
 from ...shared.approvals import apply_pm_action_track, enqueue_approval, send_platform_email, write_audit
+from ...shared.vendor_identity import deleted_vendor_ids_sql, is_deleted_vendor, live_vendor_sql
 from ...swarm.adversary import (
     validate_block_state_change,
     validate_lapsed_flag,
@@ -194,13 +195,16 @@ async def _fetch_vendor_contact(
     ``plenum_cafm.vendors.id`` is varchar (Fiix codes) while ``vendor_contacts.vendor_id``
     is uuid, so every join is cast to ::text. SAVEPOINT so a residual type error can't
     abort the whole vendor-worker transaction.
+
+    A retired vendor has no contact here (Hussain, 12 Oct 2026): nothing is sent to a vendor
+    that has been deleted, and the ladder stops before it asks.
     """
     try:
         async with session.begin_nested():
             row = (
                 await session.execute(
                     text(
-                        """
+                        f"""
                         SELECT v.vendor_name,
                                COALESCE(
                                  (SELECT vc.email FROM plenum_cafm.vendor_contacts vc
@@ -210,6 +214,7 @@ async def _fetch_vendor_contact(
                                ) AS email
                         FROM plenum_cafm.vendors v
                         WHERE v.id::text = :vid
+                          AND {live_vendor_sql('v')}
                         """
                     ),
                     {"vid": str(vendor_id)},
@@ -234,29 +239,39 @@ async def _set_vendor_block(
 ) -> bool:
     """Block the vendor. A vendor that was not blocked before gets one vendor-audit entry
     (auth/vendor_audit.py); every scan re-blocks a lapsed vendor, and that is not a change.
-    ``record=False``: the caller (the scan's vendor worker) records the run's net change."""
+    ``record=False``: the caller (the scan's vendor worker) records the run's net change.
+
+    Only a live vendor (Hussain, 12 Oct 2026). A retired vendor's block state stays as the
+    delete left it — flipping it would read as a vendor blocked today and write a trail entry
+    for a vendor nobody works with — and a vendor that is not on the register at all is not
+    "blocked" either: both answer False, so the caller raises no block acknowledgement."""
     try:
         async with session.begin_nested():
             prior = (await session.execute(
                 text(
-                    """
+                    f"""
                     SELECT COALESCE(block_state, 'Clear') AS block_state, vendor_name,
                            organization_id::text AS organization_id
-                      FROM plenum_cafm.vendors
+                      FROM plenum_cafm.vendors v
                      WHERE id::text = :vid
+                       AND {live_vendor_sql('v')}
                     """
                 ),
                 {"vid": str(vendor_id)},
             )).mappings().first()
+            if not prior:
+                log.info("scan.block_skipped_vendor_not_live", vendor_id=str(vendor_id))
+                return False
             await session.execute(
                 text(
-                    """
-                    UPDATE plenum_cafm.vendors
+                    f"""
+                    UPDATE plenum_cafm.vendors v
                     SET block_state = 'Blocked',
                         block_reason = :reason,
                         block_date = now(),
                         blocked_accreditation_type = :acct
                     WHERE id::text = :vid
+                      AND {live_vendor_sql('v')}
                     """
                 ),
                 {"vid": str(vendor_id), "reason": reason, "acct": accreditation_type},
@@ -289,18 +304,22 @@ async def _clear_vendor_block(
     record: bool = True,
 ) -> bool:
     """Clear Blocked state. Returns True if a row was updated (block lifted), and records the
-    lift in the vendor audit trail (auth/vendor_audit.py)."""
+    lift in the vendor audit trail (auth/vendor_audit.py).
+
+    Never a retired vendor (Hussain, 12 Oct 2026): a renewal uploaded after the delete must
+    not lift the old block, record a clear, or tell the PM the vendor may work again."""
     from ...shared.approvals import enqueue_approval
 
     result = await session.execute(
         text(
-            """
-            UPDATE plenum_cafm.vendors
+            f"""
+            UPDATE plenum_cafm.vendors v
             SET block_state = 'Clear',
                 block_reason = NULL,
                 block_date = NULL,
                 blocked_accreditation_type = NULL
             WHERE id::text = :vid AND COALESCE(block_state, 'Clear') = 'Blocked'
+              AND {live_vendor_sql('v')}
             RETURNING vendor_name, organization_id::text AS organization_id
             """
         ),
@@ -704,6 +723,10 @@ async def apply_vendor_cert_ladder(
     vendor_id = cert.vendor_id
     if not vendor_id:
         return result
+    # A retired vendor is not chased, blocked or cleared (Hussain, 12 Oct 2026) — whether the
+    # nightly scan or a late upload of one of its certificates brought it here.
+    if await is_deleted_vendor(session, vendor_id):
+        return result
 
     vendor_name, vendor_email = await _fetch_vendor_contact(session, vendor_id)
 
@@ -862,6 +885,28 @@ async def apply_vendor_cert_ladder(
     return result
 
 
+async def _retired_vendor_ids(session: AsyncSession, vendor_ids: list[str]) -> set[str]:
+    """Which of these vendors have been deleted, in one read. Unreadable answers none: the
+    block writes below carry the live-vendor filter themselves, and the ladder checks again."""
+    if not vendor_ids:
+        return set()
+    try:
+        async with session.begin_nested():
+            rows = (
+                await session.execute(
+                    text(
+                        f"SELECT r.id FROM ({deleted_vendor_ids_sql()}) AS r(id) "
+                        "WHERE r.id IN :ids"
+                    ).bindparams(bindparam("ids", expanding=True)),
+                    {"ids": list(vendor_ids)},
+                )
+            ).mappings().all()
+        return {str(r["id"]) for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("scan.retired_vendors_unreadable", error=str(exc)[:200])
+        return set()
+
+
 async def _process_vendor_certs(
     session: AsyncSession,
     certs: list[ComplianceCertificate],
@@ -874,9 +919,24 @@ async def _process_vendor_certs(
     from ..auth import vendor_audit
 
     vendor_ids = list(dict.fromkeys(str(c.vendor_id) for c in certs if c.vendor_id))
+    retired = await _retired_vendor_ids(session, vendor_ids)
     before = await vendor_audit.read_vendor_states(session, vendor_ids)
     for cert in certs:
         wr.scanned += 1
+        # The same certificates the building stream sets aside, which this stream used to
+        # ladder anyway: an archived accreditation (the vendor delete archives them), one a
+        # renewal superseded — whose lapse re-blocked the vendor every night after the
+        # renewal had lifted it, though _supersede_prior_vendor_certs says the scan skips
+        # superseded rows — and a seeded fixture. And any certificate of a retired vendor
+        # (Hussain, 12 Oct 2026).
+        meta0 = getattr(cert, "raw_metadata", None) or {}
+        if (
+            meta0.get("a1_test_fixture")
+            or meta0.get("superseded_duplicate")
+            or meta0.get("archived")
+            or str(cert.vendor_id or "") in retired
+        ):
+            continue
         country = cert.country_code or settings.default_country_code
         pack = await get_pack_type(
             session,

@@ -21,6 +21,7 @@ ORG = UUID("11111111-1111-5111-8111-111111111111")
 HARBOUR = "c343c566-0000-4000-8000-000000000001"
 STRANGER = str(uuid4())
 COMPANY = "Northbridge Estates Ltd"
+ADMIN = UUID("aaaaaaaa-0000-4000-8000-0000000000a1")
 
 
 class _Session:
@@ -48,7 +49,7 @@ def calls(monkeypatch):
 
     async def _principal():
         return Principal(
-            user_id=uuid4(), email="admin@example.com", organization_id=ORG, session_id=None,
+            user_id=ADMIN, email="admin@example.com", organization_id=ORG, session_id=None,
             issued_at=datetime.now(timezone.utc), password_changed_at=0, role="admin",
             can_ingest=False, building_ids=None)
 
@@ -58,8 +59,9 @@ def calls(monkeypatch):
     async def _buildings(session, org):
         return {HARBOUR: {"id": HARBOUR, "name": "Harbour Point", "building_code": "B-101"}}
 
-    async def _run(session, org, *, areas, apply, building_id=None):
+    async def _run(session, org, *, areas, apply, building_id=None, **kw):
         seen["runs"].append({"areas": areas, "apply": apply, "building_id": building_id})
+        seen.setdefault("actors", []).append(kw.get("actor"))
         return {"organization_id": org, "applied": apply, "areas": [], "row_total": 7,
                 "building_id": building_id, "buildings": 1, "links_cleared": [], "blocked": [],
                 "skipped": {}, "kept": [], "company_wide": [], "available_areas": {}}
@@ -142,9 +144,19 @@ def test_a_building_with_no_name_is_confirmed_by_its_code(calls, monkeypatch):
 
 
 def test_the_engines_refusal_of_a_building_is_a_404(calls, monkeypatch):
-    async def _refuse(session, org, *, areas, apply, building_id=None):
+    async def _refuse(session, org, *, areas, apply, building_id=None, actor=None):
         raise admin_routes.org_data_reset.ResetForeignBuilding("not this company's")
 
     monkeypatch.setattr(admin_routes.org_data_reset, "run_reset", _refuse)
     r = TestClient(app).get(f"/api/admin/data-reset?areas=assets&building_id={HARBOUR}")
     assert r.status_code == 404 and r.json()["detail"]["reason"] == "building_not_found"
+
+
+def test_the_reset_names_the_admin_who_ran_it_so_its_vendor_deletions_are_theirs(calls):
+    # The reset writes a vendor-trail entry for the vendors it deletes (12 Oct 2026); without the
+    # admin it reads as the system's doing.
+    c = TestClient(app)
+    c.get("/api/admin/data-reset?areas=contracts")
+    r = c.post("/api/admin/data-reset", json={"areas": ["contracts"], "confirm": COMPANY})
+    assert r.status_code == 200, r.text
+    assert calls["actors"] == [None, str(ADMIN)]

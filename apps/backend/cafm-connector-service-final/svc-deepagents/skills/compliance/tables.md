@@ -16,7 +16,7 @@ description: ALWAYS loaded. Column names, the building key, and what coverage me
 | `approvals_queue_items` | the PM's queue | `source_feature`, `item_type`, `severity`, `status`, `summary`, `payload`, `email_draft` |
 | `compliance_scan_runs` | one nightly-equivalent scan | `scope`, `building_scanned`, `vendor_scanned`, `alerts_created`, `blocks_set` |
 | `compliance_risk_snapshots` | risk over time | `snapshot_date`, `vendors_blocked`, `high_risk_lt_30`, `medium_risk_lt_90` |
-| `vendors` (core) | the vendor itself | `id`, `vendor_name`, `block_state`, `block_reason`, `blocked_accreditation_type` |
+| `vendors` (core) | the vendor itself | `id`, `vendor_name`, `block_state`, `block_reason`, `blocked_accreditation_type`, `status` (`'deleted'` = a deleted vendor, name ends "(deleted)": leave it out of blocked-vendor lists and counts unless asked about history) |
 
 ---
 

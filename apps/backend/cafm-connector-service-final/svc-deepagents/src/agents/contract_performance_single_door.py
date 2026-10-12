@@ -245,6 +245,10 @@ def vendor_note_for(vendor: dict | None) -> str:
         return f" Vendor '{name}' was new and is now registered."
     if status == "matched":
         return f" Linked to existing vendor '{name}'."
+    if status == "vendor_deleted":
+        # Checked before the nameless case: the backend may send the vendor back without its
+        # name, and "no service provider named" would tell the reader the document was blank.
+        return " The vendor on this contract was deleted, so the contract was not linked to it."
     if status == "not_named_in_contract" or not name:
         return " No service provider named in the document — contract is unlinked."
     if status == "legacy_id_unlinkable":
