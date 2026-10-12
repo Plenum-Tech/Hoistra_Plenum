@@ -57,7 +57,7 @@ export const SUPPORT_TOPICS = [
     blurb: 'Who did what and when, and reading the vendor history.',
     prompts: [
       'Where do I see who changed what?',
-      'How do I see when a vendor was blocked or reassigned?',
+      'How do I see when a vendor was blocked, reassigned or deleted?',
       'Can I export the audit trail?'
     ]
   },
@@ -107,14 +107,18 @@ const GUIDE = {
     'Adding a building is called hoisting it: Hoist a building on the Buildings page, or say "hoist a building" to the orchestrator. Only administrators can. The form asks for the building name, country, region or state, primary use, floors, floor area in square metres, use mix, metering, a building code and, optionally, a site; Write the record saves it, and then documents can be ingested straight away or later.',
     'People are managed in Users & access (administrators, in Admin view). Invite user asks for the full name, work email, the buildings they can see (Allocate to buildings) and whether they can ingest data, then Send invitation. The invitee finishes with Activate account from the email.',
     'On each person in Users & access an administrator can change their buildings, switch Can ingest data on or off, see their usage, and suspend or reactivate them. Removing someone suspends them; nothing is deleted.',
+    'An administrator can delete a vendor: in User view, open the vendor on the Vendors page and press Delete vendor. Hoistra first shows what it would change. A vendor with no history is removed completely; a vendor with history is retired — hidden everywhere, its past records kept and marked (deleted). Assets and open work orders assigned to it are unassigned and its pending decisions are closed; closed work keeps its history. It applies across every building and cannot be undone, so the vendor\'s name must be typed to confirm. Every deletion is recorded in the Vendor audit trail.',
     'Roles are user and admin. The invitation has no role choice and there is no control in the app to change a role — the user should email Plenum for that.',
-    'Administrators switch between Admin view and User view in the account menu (the initial in the top right). Admin view holds Integrations, Users & access, Hoist Crons, Chat memory, Hoist Traces, Skill lab and Audit trail; User view holds Buildings, Compliance, Vendors, Energy, Assets and Maintenance.',
+    'Administrators switch between Admin view and User view in the account menu (the initial in the top right). Admin view holds Integrations, Users & access, Hoist Crons, Chat memory, Hoist Traces, Skill lab and Audit trail; User view holds the reports of the chosen instance — on the Full platform: Buildings, Compliance, Vendors, Energy, Assets and Maintenance.',
+    'After signing in, an administrator or user chooses an instance: Ops Brain (Buildings, Maintenance, Vendors), Compliance Engine (Buildings, Compliance Graph, Compliance, Vendors), Assets Operating System (Buildings, Energy, Assets, Maintenance, Vendors) or Full platform (everything). The instance decides which reports User view lists and the cards on Home; the data is the same company data in every instance. The instance button in the top bar goes back to the choice, in User view and Admin view. A super admin goes straight to the platform console.',
+    'Compliance Graph is a report in the Compliance Engine instance, in User view and Admin view. It lists each building\'s regulated areas (fire, gas, electrical, water and so on — the areas of its country\'s compliance pack), how many certificates each area has on record against how many it needs, and, for the building picked, every obligation with the certificate that discharges it and the vendor who issued it. Update the graph opens the document upload; certificates name a building, not a floor or a room.',
+    'Hoist vendors is on the Vendors page in User view, for administrators only. It lists vendors named on certificates that are not yet in the vendor list. Hoist vendor adds one, asking for its details one question at a time and saving it to the vendor list with its certificates linked; Not a vendor hides a name (kept in that browser); Hoist a new vendor adds a vendor that has no certificate yet. Each hoist is recorded in the Vendor audit trail.',
     'An account with more than one building has a building picker in the top bar to narrow everything to one building.'
   ],
   audit: [
     'Audit trail is in Admin view. It has two tabs: Ingestion audit trail and Vendor audit trail.',
     'Ingestion audit trail lists every document decision. It can be searched by person, document or building, narrowed by building or person, by Today, 7 days, 14 days or All, and by outcome: Accepted, Reassigned, Overridden or Rejected.',
-    'Vendor audit trail lists each time a vendor was reassigned, blocked or cleared, searchable and narrowed by the same date ranges. It records from late September 2026, so earlier blocks are not in it.',
+    'Vendor audit trail lists each time a vendor was reassigned, blocked, cleared or deleted, searchable, narrowed by the same date ranges and by kind (Reassigned, Blocked, Cleared, Deleted, Hoisting). It records from late September 2026, so earlier blocks are not in it; deletions are recorded from 12 October 2026. A deletion names the admin who made it, how the vendor went, what was unassigned, and the reason given.',
     'Neither tab has an export. For an audit extract the user should email Plenum.'
   ],
   billing: [

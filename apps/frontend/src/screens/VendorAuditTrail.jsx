@@ -18,7 +18,7 @@ export default function VendorAuditTrail({ vals }) {
             <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", letterSpacing: "0.09em", textTransform: "uppercase", padding: "3px 8px", borderRadius: "5px", background: "var(--color-accent)", color: "var(--accent-ink)" }}>{"Admin only"}</span>
           </div>
           <p style={{ fontSize: "13px", color: "var(--color-neutral-400)", margin: "8px 0 0", maxWidth: "88ch", lineHeight: "1.55" }}>
-            {"Every time an asset moved to another vendor, and every time compliance blocked or cleared a vendor — who or what made the change, when, and why."}
+            {"Every time an asset moved to another vendor, compliance blocked or cleared a vendor, or an admin hoisted or deleted one — who or what made the change, when, and why."}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
@@ -66,6 +66,14 @@ export default function VendorAuditTrail({ vals }) {
         <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>{vals.vaShownLine}</span>
       </div>
 
+      {/* Hoisting entries (logic/vendorHoist.js) are this browser's own record of each hoist;
+          the vendor itself is saved, but the trail entry is kept only in this browser. */}
+      {vals.vaLocalNote ? (
+        <div style={{ marginTop: "12px", display: "flex", alignItems: "flex-start", gap: "7px", fontSize: "11.5px", lineHeight: "1.5", color: "var(--color-neutral-500)" }}>
+          <i className="ph ph-info" aria-hidden="true" style={{ fontSize: "13px", color: "var(--st-warn)", marginTop: "1px", flexShrink: "0" }}></i>
+          <span>{vals.vaLocalNote}</span>
+        </div>
+      ) : null}
       {vals.vaUnreadableNote ? (
         <div style={{ marginTop: "12px", fontSize: "11.5px", color: "var(--st-warn)" }}>{vals.vaUnreadableNote}</div>
       ) : null}
@@ -86,7 +94,9 @@ export default function VendorAuditTrail({ vals }) {
             <span style={{ fontSize: "12.5px" }}>{g.label}</span>
             <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>{g.count}</span>
           </div>
-          <div style={{ borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
+          {/* The rows are a fixed grid wider than a phone: the card scrolls sideways rather than
+              cutting an expanded row's details off at 390px (12 Oct 2026). */}
+          <div style={{ borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflowX: "auto", overflowY: "hidden" }}>
             {(g.rows || []).map((r) => (
               <div key={r.id} style={{ borderBottom: "1px solid var(--color-divider)" }}>
                 <div className="hv2" role="button" aria-expanded={r.open} onClick={r.toggle} style={{ display: "grid", gridTemplateColumns: ROW_GRID, gap: "12px", alignItems: "center", padding: "11px 16px", cursor: "pointer" }}>

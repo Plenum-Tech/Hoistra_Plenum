@@ -411,6 +411,7 @@ export function evidenceForMonth(R, vendorId, ev, cache) {
 //   coverage      { [cc]: vendors[] }  from GET /api/compliance/coverage/vendors
 //   packs         { [cc]: types[] }    from GET /api/compliance/country-pack
 //   woScores      GET /api/contract-performance/wo-scores            (Evidence rows, L1/L2/L3 split)
+//   gone          vendor ids deleted from this tab (logic/vendorDelete.js)
 export function shapeLiveVendors(input, now) {
   const raw = input || {};
   const at = now || new Date();
@@ -428,6 +429,15 @@ export function shapeLiveVendors(input, now) {
   const woTruncated = !!(raw.woScores && raw.woScores.truncated);
   const woByVendor = {};
   (woScores || []).forEach((w) => { const k = String(w.vendor_id || ""); if (k) (woByVendor[k] = woByVendor[k] || []).push(w); });
+  // Deleted vendors (Hussain, 12 Oct 2026). A retired vendor's scorecards, contract terms and
+  // certificates stay as its history and still carry its id, and every list below is a union of
+  // them — so the vendor is dropped from each source here, not at the end, where its name would
+  // still have hidden a live vendor of the same name. Gone: deleted from this tab, named so on
+  // its certificates, or marked so in the vendor list.
+  const gone = {};
+  (Array.isArray(raw.gone) ? raw.gone : []).forEach((id) => { gone[String(id)] = true; });
+  (Array.isArray(raw.certificates) ? raw.certificates : []).forEach((r) => { if (r && r.vendor_deleted === true && r.vendor_id) gone[String(r.vendor_id)] = true; });
+  (Array.isArray(raw.master) ? raw.master : []).forEach((x) => { if (x && x.id && lower(x.status) === "deleted") gone[String(x.id)] = true; });
 
   const live = !!(cards || params || weights || approvals || certificates);
   const empty = {
@@ -458,6 +468,7 @@ export function shapeLiveVendors(input, now) {
   const covCcs = Object.keys(coverage);
   covCcs.forEach((cc) => {
     (coverage[cc] || []).forEach((v) => {
+      if (v.vendor_id && gone[String(v.vendor_id)]) return;
       if (v.vendor_id) (covById[String(v.vendor_id)] = covById[String(v.vendor_id)] || {})[cc] = v;
       if (v.vendor_name) (covByName[lower(v.vendor_name)] = covByName[lower(v.vendor_name)] || {})[cc] = v;
     });
@@ -474,6 +485,7 @@ export function shapeLiveVendors(input, now) {
   // Certificates by vendor id / name.
   const certsById = {}, certsByName = {};
   (certificates || []).forEach((r) => {
+    if (r.vendor_id && gone[String(r.vendor_id)]) return;
     if (r.vendor_id) (certsById[String(r.vendor_id)] = certsById[String(r.vendor_id)] || []).push(r);
     else if (r.vendor_name) (certsByName[lower(r.vendor_name)] = certsByName[lower(r.vendor_name)] || []).push(r);
   });
@@ -485,7 +497,7 @@ export function shapeLiveVendors(input, now) {
   const cardMonths = {};
   (cards || []).forEach((c) => {
     const id = String(c.vendor_id || "");
-    if (!id) return;
+    if (!id || gone[id]) return;
     if (c.vendor_name && !nameById[id]) nameById[id] = c.vendor_name;
     if (!latest[id] || String(c.score_month) > String(latest[id].score_month)) latest[id] = c;
     const iso = String(c.score_month || "").slice(0, 10);
@@ -496,7 +508,7 @@ export function shapeLiveVendors(input, now) {
   (params || []).forEach((p) => {
     if (p.id) paramsById[String(p.id)] = p;
     const id = String(p.vendor_id || "");
-    if (!id) return;
+    if (!id || gone[id]) return;
     if (p.vendor_name && !nameById[id]) nameById[id] = p.vendor_name;
     if (!paramsByVendor[id]) paramsByVendor[id] = p;
   });
@@ -507,6 +519,35 @@ export function shapeLiveVendors(input, now) {
   // And every vendor that holds an accreditation: with Compliance's own vendor view gone, a
   // vendor with no scorecard and no contract terms had nowhere to be seen (8 Oct 2026 review).
   Object.keys(certsById).forEach((id) => { if (ids.indexOf(id) < 0) ids.push(id); });
+  // And every vendor on record that serves a building through its building certificates
+  // (`serving`, from the compliance register — vpModel). A vendor hoisted from a certificate
+  // has no scorecard, contract or accreditation yet and was nowhere here (12 Oct 2026). One
+  // already listed under another id is not listed twice: matched on its name.
+  const known = {};
+  Object.keys(nameById).forEach((id) => { known[lower(nameById[id])] = true; });
+  Object.keys(covByName).forEach((k) => { known[k] = true; });
+  (certificates || []).forEach((r) => { if (r.vendor_name && !(r.vendor_id && gone[String(r.vendor_id)])) known[lower(r.vendor_name)] = true; });
+  const servingById = {};
+  (Array.isArray(raw.serving) ? raw.serving : []).forEach((x) => {
+    const id = String((x && x.vendor_id) || "");
+    if (!id || gone[id]) return;
+    const e = servingById[id] || (servingById[id] = { name: x.vendor_name || null, buildings: [] });
+    if (x.building && e.buildings.indexOf(x.building) < 0) e.buildings.push(x.building);
+  });
+  Object.keys(servingById).forEach((id) => {
+    const nm = servingById[id].name;
+    if (ids.indexOf(id) < 0 && !(nm && known[lower(nm)])) { ids.push(id); if (nm) known[lower(nm)] = true; }
+  });
+  // And every vendor in the vendor list itself (`master`, logic/vendorMaster.js): one hoisted
+  // with no certificate, contract or card is still the company's vendor (12 Oct 2026).
+  const masterById = {};
+  (Array.isArray(raw.master) ? raw.master : []).forEach((x) => {
+    const id = String((x && x.id) || "");
+    if (!id || gone[id] || !x.name || ids.indexOf(id) > -1 || known[lower(x.name)]) return;
+    masterById[id] = x.name;
+    known[lower(x.name)] = true;
+    ids.push(id);
+  });
 
   const newestMonth = Object.keys(latest).reduce((m, id) => (String(latest[id].score_month) > m ? String(latest[id].score_month) : m), "");
   const month = newestMonth ? monthLabel(newestMonth) : null;
@@ -547,7 +588,8 @@ export function shapeLiveVendors(input, now) {
     const p = paramsByVendor[id] || (bd.contract_parameters_id && paramsById[String(bd.contract_parameters_id)]) || null;
     const anyCov = covById[id] ? covById[id][Object.keys(covById[id])[0]] : null;
     const certName = (certsById[id] || []).map((c) => c.vendor_name).find(Boolean);
-    const name = nameById[id] || (anyCov && anyCov.vendor_name) || (p && p.vendor_name) || certName || "Vendor " + id.slice(-4);
+    const name = nameById[id] || (anyCov && anyCov.vendor_name) || (p && p.vendor_name) || certName
+      || (servingById[id] && servingById[id].name) || masterById[id] || "Vendor " + id.slice(-4);
     const certs = (certsById[id] || []).concat(certsByName[lower(name)] || []);
     const cov2 = covFor(covById[id], certs) || covFor(covByName[lower(name)], certs) || null;
 
@@ -829,11 +871,20 @@ export function shapeLiveVendors(input, now) {
 export const vendorsLiveMethods = {
   // Shaped once per load — renderVals runs on every keystroke.
   vpModel() {
-    const raw = this.state.vpRaw;
+    const raw = this.state.vpRaw, reg = this.state.ccLive, list = this.state.vmRows, gone = this.state.vdlGone;
     const m = this._vpMemo;
-    if (m && m.raw === raw) return m.model;
-    const model = shapeLiveVendors(raw);
-    this._vpMemo = { raw: raw, model: model };
+    if (m && m.raw === raw && m.reg === reg && m.list === list && m.gone === gone) return m.model;
+    // The vendors on record that the compliance register says serve a building, so the
+    // directory lists one with nothing else on file yet (a vendor just hoisted). A retired
+    // vendor's building certificates still name it; they are history, not service.
+    const serving = reg ? (reg.certs || [])
+      .filter((c) => c.kind === "building" && c.vendorOnRecord && !c.vendorDeleted && c.vendorId && c.vendor)
+      .map((c) => ({ vendor_id: c.vendorId, vendor_name: c.vendor, building: c.building })) : [];
+    // Gone: deleted from this tab (logic/vendorDelete.js) — whatever a read that left before the
+    // delete still carries — or named deleted on any certificate in the register.
+    const retired = (gone || []).concat(reg ? (reg.certs || []).filter((c) => c.vendorDeleted && c.vendorId).map((c) => String(c.vendorId)) : []);
+    const model = shapeLiveVendors(raw ? Object.assign({}, raw, { serving: serving, master: list || [], gone: retired }) : raw);
+    this._vpMemo = { raw: raw, reg: reg, list: list, gone: gone, model: model };
     return model;
   },
   vpIsLive() { return !!this.state.vpRaw; },

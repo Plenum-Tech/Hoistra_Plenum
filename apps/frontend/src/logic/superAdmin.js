@@ -191,6 +191,8 @@ export const superAdminMethods = {
     clearInterval(this._orchTick);
     this.setState({
       viewOrgId: orgId, viewOrgName: name || null,
+      // No instance yet for this company: its User view asks which one (logic/instances.js).
+      instance: null,
       saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null,
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
       // The building a staged attachment was to be filed against belongs to the company it
@@ -245,6 +247,9 @@ export const superAdminMethods = {
     clearInterval(this._orchTick);
     this.setState({
       viewOrgId: null, viewOrgName: null,
+      // The instance belonged to the company just left; the superadmin's own User view is
+      // the full platform.
+      instance: null,
       role: restoreRole, view: "home", navOpen: true, acctOpen: false, detail: null,
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
       // Same as on the way in: a filing choice made under the company just left is dropped.

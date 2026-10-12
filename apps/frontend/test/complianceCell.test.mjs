@@ -63,7 +63,7 @@ const titles = (choices) => choices.map((c) => c.title);
 test('the register keeps each matrix column\'s code, and each type\'s trade and required accreditation', () => {
   assert.ok(col('ASBESTOS_SURVEY') > -1);
   assert.equal(REG.mxTypes[col('ASBESTOS_SURVEY')], 'Asbestos Survey');
-  assert.deepEqual(REG.packTypes.ASBESTOS_SURVEY, { name: 'Asbestos Survey', scope: 'building', trade: 'Asbestos', requires: 'UKAS' });
+  assert.deepEqual(REG.packTypes.ASBESTOS_SURVEY, { name: 'Asbestos Survey', scope: 'building', trade: 'Asbestos', requires: 'UKAS', reg: null, issuer: null });
 });
 
 test('a "Not required" cell is not a question', () => {

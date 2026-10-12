@@ -5,6 +5,7 @@ import AnswerCards from './AnswerCards.jsx';
 import ChoiceCards from './ChoiceCards.jsx';
 import ComplianceAnswer from './ComplianceAnswer.jsx';
 import HoistBuildingCard from './HoistBuildingCard.jsx';
+import VendorHoistChat from './VendorHoistChat.jsx';
 import { useFollowBottom } from './useFollowBottom.js';
 
 export default function OrchestratorDock({ vals }) {
@@ -70,6 +71,8 @@ export default function OrchestratorDock({ vals }) {
         </div>
         {/* Hoist / edit a building — the real form, as a dock flow (HoistBuildingCard.jsx). */}
         {vals.bcOpen ? <HoistBuildingCard vals={vals} /> : null}
+        {/* Hoist a vendor — one question at a time (VendorHoistChat.jsx, logic/vendorHoist.js). */}
+        {vals.fVhoist ? <VendorHoistChat vals={vals} /> : null}
         {vals.fUpdate ? (
           <>
             <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>

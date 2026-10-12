@@ -36,6 +36,17 @@ export default function TopBar({ vals }) {
             {vals.tenant}
           </span>
         </div>
+        {/* The instance picked at sign-in (logic/instances.js). Pressing it goes back to the
+            picker. Shown in the user view and the admin view alike. */}
+        {vals.instShow ? (
+          <div className="hv4" role="button" tabIndex={0} onClick={vals.instSwitch} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vals.instSwitch(); } }} title="Switch instance"
+            style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap", flexShrink: "1", minWidth: "0", maxWidth: "200px", overflow: "hidden", fontSize: "11px", padding: "4px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-300)", cursor: "pointer" }}>
+            <i className="ph ph-squares-four" style={{ fontSize: "12px", flexShrink: "0" }}></i>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+              {vals.instName}
+            </span>
+          </div>
+        ) : null}
         {/* Export everything this company holds. Admin and superadmin only, and only while
             the account is in Admin view — so it is not carried around by a superadmin
             reading the product as a user. Opens a preview rather than downloading on
@@ -116,6 +127,11 @@ export default function TopBar({ vals }) {
                   <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
                     {vals.acctRole}{vals.acctOrgName ? " · " + vals.acctOrgName : ""}
                   </div>
+                  {vals.instShow ? (
+                    <div style={{ fontSize: "10.5px", color: "var(--color-accent)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {vals.instLine}
+                    </div>
+                  ) : null}
                 </div>
                 {(vals.acctItems || []).map((a, $index) => (
                   <React.Fragment key={$index}>

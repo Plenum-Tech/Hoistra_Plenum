@@ -59,7 +59,11 @@ export default function Navigator({ vals }) {
                 <span className="hv6" onClick={vals.openReportsGrid} title="All report cards" style={{ fontSize: "10.5px", letterSpacing: "0.11em", textTransform: "uppercase", color: "var(--color-neutral-500)", cursor: "pointer" }}>
                   {"Reports"}
                 </span>
-                <i className="ph ph-plus hv6" onClick={vals.toggleReportMenu} title="New report" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                {/* A custom report shows only in the full platform (logic/instances.js), so an
+                    instance does not offer to make one it would not list. */}
+                {vals.navReportAdd ? (
+                  <i className="ph ph-plus hv6" onClick={vals.toggleReportMenu} title="New report" style={{ fontSize: "12px", color: "var(--color-neutral-500)", cursor: "pointer" }}></i>
+                ) : null}
               </div>
               {/* New report opens as a panel on the right (ReportBuilder.jsx, mounted in App.jsx) —
                   every session, searchable, with room to read which is which. */}

@@ -115,7 +115,9 @@ function certDraft(c, sender, woLine) {
       sentLabel: "Renewal request"
     };
   }
-  const contractor = named(c.vendor);
+  // A retired contractor (12 Oct 2026) is no contractor: the draft is addressed to nobody, and
+  // the Worker line says why.
+  const contractor = c.vendorDeleted ? null : named(c.vendor);
   return {
     emKind: "renewal",
     emKicker: "Inspection booking · draft",
@@ -125,7 +127,7 @@ function certDraft(c, sender, woLine) {
       certFields(c),
       "Please propose an inspection date within the next 10 working days, and send the certificate once it is issued."
     ], sender),
-    vendor: contractor, vendorId: str(c.vendorId) || null,
+    vendor: contractor, vendorId: contractor ? str(c.vendorId) || null : null, vendorDeleted: !!c.vendorDeleted,
     sentLabel: "Booking request"
   };
 }
@@ -228,7 +230,8 @@ const VENDOR_RENEWAL = { vendor_email: true, block_ack: true, vendor_risk: true 
 const CERT_BOOKING = { alert: true, booking_request: true };
 
 function remedialDraft(cert, p, sender) {
-  const to = cert.kind === "vendor" ? cert.holder : named(cert.vendor);
+  const gone = cert.kind !== "vendor" && !!cert.vendorDeleted;
+  const to = cert.kind === "vendor" ? cert.holder : gone ? null : named(cert.vendor);
   const defects = str(p.defects_found), actions = str(p.remedial_actions);
   return {
     emKind: "renewal", emKicker: "Remedial works · draft",
@@ -239,7 +242,7 @@ function remedialDraft(cert, p, sender) {
       certFields(cert),
       "Please quote for the remedial works with your earliest date, and send the completion evidence once they are done."
     ], sender),
-    vendor: to, vendorId: str(cert.vendorId) || null, sentLabel: "Remedial request"
+    vendor: to, vendorId: gone ? null : str(cert.vendorId) || null, vendorDeleted: gone, sentLabel: "Remedial request"
   };
 }
 
@@ -255,7 +258,8 @@ function compliancePlan(it, c) {
     planner: "Drafted from the compliance register: " + cert.nm + " — " + cert.holder + ", " + expiryPhrase(cert) + ".",
     draft: draftFields(d),
     lookup: d.vendorId ? { vendorId: d.vendorId, vendor: d.vendor } : null,
-    noAddress: d.vendor ? null : "No contractor on the certificate — add the recipient below."
+    noAddress: d.vendor ? null : d.vendorDeleted ? "The contractor on this certificate has been deleted — add the recipient below."
+      : "No contractor on the certificate — add the recipient below."
   }));
   if (VENDOR_RENEWAL[type]) {
     const found = engineEmail(c.approvals, { item: it, certId: cid, vendorId: cid ? "" : vid });

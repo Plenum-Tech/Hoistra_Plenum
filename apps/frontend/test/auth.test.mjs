@@ -110,7 +110,7 @@ afterEach(async () => { await settle(); cleanup(); });
 
 // ── sign in ──────────────────────────────────────────────────────────────────
 
-test('login 200: account, both tokens, signed in on home; only the refresh token is stored', async () => {
+test('login 200: account, both tokens, signed in on the instance picker; only the refresh token is stored', async () => {
   handlers['POST ' + A + '/login'] = session(USER, 1);
   c.setState({ email: ' sam@example.com ', password: 'correct-horse-battery-staple' });
   await c.authSignIn();
@@ -118,7 +118,8 @@ test('login 200: account, both tokens, signed in on home; only the refresh token
   assert.deepEqual(r.body, { email: 'sam@example.com', password: 'correct-horse-battery-staple' });
   assert.equal(r.headers.Authorization, undefined, 'login never carries a bearer');
   assert.equal(c.state.signedIn, true);
-  assert.equal(c.state.view, 'home');
+  // A user picks an instance before anything else (logic/instances.js, 11 Oct 2026).
+  assert.equal(c.state.view, 'instances');
   assert.equal(c.state.navOpen, true);
   assert.equal(c.state.account.email, 'sam@example.com');
   assert.equal(c.state.accessToken, 'acc-1');
@@ -691,7 +692,9 @@ test('a restored role:admin on a user account is clamped in the constructor', ()
 test('a reload restores the page you were on instead of always landing on Home', () => {
   cleanup();
   for (const view of ['users', 'audit', 'insp']) {
-    mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: ADMIN, role: 'admin', view });
+    // A session from this build carries the instance it picked (logic/instances.js); one that
+    // never picked is shown the picker instead, which test/instances.test.mjs covers.
+    mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-1', account: ADMIN, role: 'admin', view, instance: 'full' });
     const inst = new HoistraLogic();
     assert.equal(inst.state.view, view);
   }
@@ -899,7 +902,8 @@ test('reset: a dead code is cleared; resend in reset mode asks /password/forgot'
 
 // ── reload, refresh, and other tabs ──────────────────────────────────────────
 
-const seedSession = (user, n) => { mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-' + n, account: user, view: 'buildings', role: 'user', navOpen: true }); };
+// `instance`: a session from this build carries the one it picked (logic/instances.js).
+const seedSession = (user, n) => { mem[SESSION_KEY] = JSON.stringify({ signedIn: true, refreshToken: 'ref-' + n, account: user, view: 'buildings', role: 'user', navOpen: true, instance: 'full' }); };
 
 test('reload: the shell renders on the stored identity, one refresh rotates both tokens and keeps the page', async () => {
   cleanup();
@@ -1063,7 +1067,7 @@ test('a reload never lands on a different account\'s session — the exact bug: 
   // loadSession() prefers sessionStorage, so seed tabMem with Plenum and mem with
   // TechCorp — the shape another, already-open TechCorp tab would have left behind.
   globalThis.window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-    signedIn: true, refreshToken: 'ref-plenum', account: PLENUM, view: 'buildings', role: 'admin'
+    signedIn: true, refreshToken: 'ref-plenum', account: PLENUM, view: 'buildings', role: 'admin', instance: 'full'
   }));
   globalThis.window.localStorage.setItem(SESSION_KEY, JSON.stringify({
     signedIn: true, refreshToken: 'ref-techcorp', account: TECHCORP, view: 'home', role: 'admin'

@@ -87,7 +87,27 @@ export const adminApi = {
   // 409 reset_blocked carries detail.blocked when kept rows depend on the ones going; nothing
   // is changed then.
   dataReset: (areas, confirm, buildingId) =>
-    apiFetch(B, '/api/admin/data-reset', { method: 'POST', query: orgQuery(), body: Object.assign({ areas: areas, confirm: confirm }, buildingId ? { building_id: buildingId } : {}), timeoutMs: 600000 })
+    apiFetch(B, '/api/admin/data-reset', { method: 'POST', query: orgQuery(), body: Object.assign({ areas: areas, confirm: confirm }, buildingId ? { building_id: buildingId } : {}), timeoutMs: 600000 }),
+
+  // What deleting this vendor would change, counted in a transaction the service rolls back
+  // (Hussain, 12 Oct 2026). → {vendor{id,name,code,trade,block_state}, mode: remove (no
+  // history: the row goes) | retire (history: hidden everywhere, past records kept and marked
+  // "(deleted)"), confirm_with, groups{removed, unassigned, closed, revoked, ended, archived,
+  // kept, other: [{key, label, rows, items?}]}, unavailable[]}. The id is encoded: half of
+  // production's vendor ids are legacy text ('V-01'), not uuids.
+  vendorDeletePlan: (id) =>
+    apiFetch(B, '/api/admin/vendors/' + encodeURIComponent(id) + '/delete', { query: orgQuery(), timeoutMs: 60000 }),
+
+  // IRREVERSIBLE. `confirm` must be the plan's confirm_with (the vendor's name) and `expect` the
+  // mode the admin was shown — a plan that moved since is 409 plan_changed carrying the new one,
+  // and nothing is changed. 404 vendor_not_found (also another company's vendor), 409
+  // vendor_busy, 409 delete_refused, 503 not_recorded (the trail could not be written, so
+  // nothing was deleted); {already: true} when it was deleted before.
+  deleteVendor: (id, body) =>
+    apiFetch(B, '/api/admin/vendors/' + encodeURIComponent(id) + '/delete', {
+      method: 'POST', query: orgQuery(), timeoutMs: 120000,
+      body: { confirm: body.confirm, expect: body.expect, reason: body.reason === undefined ? null : body.reason }
+    })
 };
 
 // The export itself. It cannot go through apiFetch: that parses every response as JSON and

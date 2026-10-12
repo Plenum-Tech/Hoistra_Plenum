@@ -7,6 +7,7 @@
 import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
 import { ApiError, configureAuth, setActingOrg } from '../api/client.js';
+import { usesInstances } from './instances.js';
 import { forgetIssuedToken, forgetSharedSession, isSupersededToken, issuedTokenKey, latestIssuedRecord, loadSharedSession, recordIssuedToken, SESSION_KEY } from './session.js';
 
 // Resolves on the next storage event for this account's session slot or token record, or
@@ -359,6 +360,9 @@ export const authMethods = {
     recordIssuedToken(resp.user && resp.user.id, resp.tokens && resp.tokens.refresh_token, issuedAt, o.replaced);
     const admin = canAdmin(resp.user);
     const isSuperadmin = resp.user.role === 'superadmin';
+    // An admin or a user picks an instance first (logic/instances.js); a superadmin goes
+    // to the console as before and never sees the picker.
+    const picks = usesInstances(resp.user);
     // Where each role lands, on a FRESH sign-in only (keepView is the reload refresh,
     // which must not move the page — a refresh keeps whatever view/mode was already
     // open). A user is always 'user'; an admin always opens in admin view rather than
@@ -396,7 +400,8 @@ export const authMethods = {
       signedIn: true,
       role: o.keepView ? p.role : (admin ? 'admin' : 'user'),
       saOn: o.keepView ? p.saOn : isSuperadmin,
-      view: o.keepView ? p.view : 'home', navOpen: o.keepView ? p.navOpen : true,
+      view: o.keepView ? p.view : (picks ? 'instances' : 'home'), navOpen: o.keepView ? p.navOpen : true,
+      instance: o.keepView ? p.instance : null,
       viewOrgId: o.keepView ? p.viewOrgId : null, viewOrgName: o.keepView ? p.viewOrgName : null,
       sessionId: o.keepView ? p.sessionId : null,
       ccChat: o.keepView ? p.ccChat : [],
@@ -533,6 +538,8 @@ export const authMethods = {
   // Local sign-out. `notice` is what the gate shows — the server's own line when it ended
   // the session, nothing when the person chose to leave.
   authSignedOut(notice) {
+    // A hoist saving when the session ends uploads nothing afterwards (vendorHoist.js).
+    this._vhEpoch = (this._vhEpoch || 0) + 1; this._vhFiles = [];
     // The account's own token record goes with the session, so no refresh token outlives it
     // in storage — unless another tab of the account has since signed into a session of its
     // own, whose token this tab never held.
@@ -549,6 +556,8 @@ export const authMethods = {
     // the one write below: a write of its own here, still signed in, would store this tab's
     // session over a shared slot that another account now holds.
     const drPatch = typeof this.drResetPatch === 'function' ? this.drResetPatch() : {};
+    // The Delete vendor dialog and this tab's deleted-vendor ids, in the same one write.
+    const vdlPatch = typeof this.vdlResetPatch === 'function' ? this.vdlResetPatch() : {};
     // A viewAsCompany() override belongs to the session that chose it — never left
     // armed for whoever signs into this tab next.
     setActingOrg(null);
@@ -561,8 +570,9 @@ export const authMethods = {
     this._qSeen = null;
     this.setState({
       ...drPatch,
+      ...vdlPatch,
       account: null, accessToken: null, refreshToken: null, refreshTokenAt: null, signedIn: false, role: 'user',
-      view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false,
+      view: 'home', navOpen: false, queueOpen: false, detail: null, acctOpen: false, instance: null,
       // The vendor drawer is a fixed overlay too; left open it showed a company's vendor,
       // contacts and change controls over the sign-in gate.
       vdOpen: false, vd: null, vdConfirm: false, vdSaving: false,
@@ -584,6 +594,8 @@ export const authMethods = {
       // the way out, so the cards never outlive the session that read them.
       reports: [], reportsOwner: null, reportsLoading: false, reportsError: '', reportsLoadedAt: null,
       reportKey: null, reportRunIdx: 0, reportSelected: [], rpArmed: null,
+      // One person's search, graph pick and half-done hoist are not the next person's.
+      vpDirQ: '', vpDirFilter: 'All', hgBuilding: null, hgArea: null, vhFlow: null, vhSaving: false, vhSavingKey: null,
       pwOpen: false, pwCurrent: '', pwNext: '', pwBusy: false, pwError: '',
       authMode: 'signin', authBusy: false, authError: '', authReason: '', authAttemptsLeft: null,
       authNotice: notice || '', password: '', code: '', newPassword: ''
@@ -1003,13 +1015,21 @@ export const authMethods = {
             this.setState({ saOn: true, acctOpen: false }, () => { if (typeof this.saLiveLoad === 'function') this.saLiveLoad(); });
           }
         } : null,
+        // Back to the instance picker, from User view. (The admin view switches with the chip
+        // in the top bar — instances.js instShow.)
+        usesInstances(a, s.viewOrgId) && s.role !== 'admin' ? {
+          label: 'Switch instance', icon: 'ph-squares-four', tick: false,
+          click: () => this.instSwitch()
+        } : null,
         admin ? {
           label: s.role === 'admin' ? 'User view' : 'Admin view',
           icon: s.role === 'admin' ? 'ph-user-focus' : 'ph-shield-star', tick: false,
+          // Into User view lands in the instance picked at sign-in; an admin who has not
+          // picked one yet — or a superadmin viewing as a company — is asked which first.
           click: () => this.setState((p) => ({
             role: p.role === 'admin' ? 'user' : 'admin',
             acctOpen: false,
-            view: p.role === 'admin' ? 'home' : 'buildings',
+            view: p.role === 'admin' ? (usesInstances(p.account, p.viewOrgId) && !p.instance ? 'instances' : 'home') : 'buildings',
             navOpen: true, detail: null
           }))
         } : null,

@@ -55,6 +55,8 @@ const ALLOWED = [
   ['src/cafm/features/ai/doc-rag-api.ts', 'PLENUM_CMMS_SCHEMA="plenum_cafm"'],
   ['src/logic/buildingsCrud.js', 'FROM plenum_cafm.sites'],
   ['src/logic/energyLive.js', 'FROM plenum_cafm.equipment'],
+  // The vendor list's SELECT-only fallback for an admin (logic/vendorMaster.js).
+  ['src/logic/vendorMaster.js', 'FROM plenum_cafm.vendors v'],
   // The engine a trace names, matched to give the answer its domain label.
   ['src/logic/chat.js', 'engine.includes("doc_rag")']
 ];

@@ -22,6 +22,11 @@ import { extractComplianceAnswer } from './complianceLive.js';
 import { readSupport, supportRef, supportStatus, SUPPORT_SPACE_KEY } from './support.js';
 
 export const SESSIONS_KEY = 'hoistra.sessions.v1';
+// Sessions deleted in this browser, by id, with when. Every tab shares the session store and
+// merges into it on save (saveSessions), so a deletion has to be remembered there too, or the
+// next save from a tab still holding the session writes it straight back (12 Oct 2026).
+export const SESSIONS_GONE_KEY = 'hoistra.sessions.deleted.v1';
+const GONE_MAX = 2000;
 // Every session is kept (up to MAX_SESSIONS); only the newest FULL_SESSIONS keep their
 // transcript in this browser. Older conversations are a title and a time, and their turns come
 // back from the server when opened (sessionHydrate) — the list used to stop at 60, and every
@@ -321,10 +326,60 @@ const shrink = (list, stage, keepId) => {
   return list.slice(0, 300).map(shedOthers);
 };
 
+// The ids deleted in this browser (see SESSIONS_GONE_KEY).
+function readGone(st) {
+  try {
+    const d = JSON.parse(st.getItem(SESSIONS_GONE_KEY) || '{}');
+    return d && typeof d === 'object' && !Array.isArray(d) ? d : {};
+  } catch (e) { return {}; }
+}
+function writeGone(st, gone) {
+  const keep = Object.keys(gone).sort((a, b) => gone[b] - gone[a]).slice(0, GONE_MAX);
+  const out = {};
+  keep.forEach((k) => { out[k] = gone[k]; });
+  try { st.setItem(SESSIONS_GONE_KEY, JSON.stringify(out)); } catch (e) { /* storage refused: this tab still drops them */ }
+}
+export function forgottenSessionIds(storage) {
+  const st = storage || store();
+  return new Set(st ? Object.keys(readGone(st)) : []);
+}
+export function forgetSessionIds(ids, storage) {
+  const st = storage || store();
+  if (!st) return;
+  const gone = readGone(st);
+  (ids || []).filter(Boolean).forEach((id) => { gone[String(id)] = Date.now(); });
+  writeGone(st, gone);
+}
+export function unforgetSessionIds(ids, storage) {
+  const st = storage || store();
+  if (!st) return;
+  const gone = readGone(st);
+  (ids || []).forEach((id) => { delete gone[String(id)]; });
+  writeGone(st, gone);
+}
+
+// Every tab of this browser shares the one store, so a save merges with what is there rather
+// than writing its own list over it. The list this tab holds is missing whatever another tab
+// made since it last read the store — a task such as a vendor hoist vanished the moment a
+// second open tab saved (12 Oct 2026). A session in both keeps the newer copy (its `at` moves
+// with activity), this tab's on a tie; a session deleted in this browser stays deleted.
+function mergeStored(list, st) {
+  const gone = readGone(st);
+  const stored = loadSessions(st);
+  const byId = {};
+  (list || []).filter(Boolean).forEach((r) => { if (!gone[r.id]) byId[r.id] = r; });
+  stored.forEach((r) => {
+    if (gone[r.id]) return;
+    const mine = byId[r.id];
+    if (!mine || (r.at || 0) > (mine.at || 0)) byId[r.id] = r;
+  });
+  return Object.keys(byId).map((k) => byId[k]);
+}
+
 export function saveSessions(list, storage, keepId) {
   const st = storage || store();
   if (!st) return false;
-  let l = trimSessions(list);
+  let l = trimSessions(mergeStored(list, st));
   for (let stage = 0; stage <= 4; stage++) {
     try {
       st.setItem(SESSIONS_KEY, JSON.stringify(l));
@@ -393,7 +448,7 @@ export function shapeSessionList(sessions, opts) {
 
 // ── controller ───────────────────────────────────────────────────────────────
 // The page a task was raised on (its `page` label, from ctxLabel()) → the view to show it beside.
-const TASK_PAGE_VIEW = { Home: 'home', Compliance: 'cc', Vendors: 'vp', Buildings: 'buildings' };
+const TASK_PAGE_VIEW = { Home: 'home', Compliance: 'cc', Vendors: 'vp', Buildings: 'buildings', 'Compliance Graph': 'hg', 'Hoist vendors': 'vh' };
 
 export const sessionsMethods = {
   // The first question of a conversation makes the record; follow-ups find it by the
@@ -490,7 +545,9 @@ export const sessionsMethods = {
     }
     this.setState({ sessionsServerCount: threads.length, sessionsServerComplete: complete });
     // The account or scope may have changed while the read was out: stamp with what was asked for.
-    this.setState((p) => ({ sessions: mergeServerThreads(p.sessions || [], threads, { owner: owner, viewOrgId: scope, skip: this._sessDeleted || null }) }));
+    // Deleted here, or in another tab of this browser, while the read was out.
+    const skip = new Set(Array.from(this._sessDeleted || []).concat(Array.from(forgottenSessionIds())));
+    this.setState((p) => ({ sessions: mergeServerThreads(p.sessions || [], threads, { owner: owner, viewOrgId: scope, skip: skip }) }));
   },
 
   // A thread this browser never saw (or whose transcript was shed to make room): its turns
@@ -585,6 +642,8 @@ export const sessionsMethods = {
     const onServer = s.signedIn ? (s.sessions || []).filter((x) => x && want.has(String(x.id)) && x.kind !== 'task') : [];
     const gone = this._sessDeleted || (this._sessDeleted = new Set());
     want.forEach((id) => gone.add(id));
+    // And in the browser store, which every tab merges into on save (saveSessions).
+    forgetSessionIds(Array.from(want));
     this.setState((p) => Object.assign(
       { sessions: (p.sessions || []).filter((x) => !want.has(String(x.id))) },
       active ? { sessionId: null, ccChat: [], ccBusy: false, ccStream: null } : {}
@@ -605,6 +664,7 @@ export const sessionsMethods = {
           failed.push(r);
           // Still on the server, so the next read lists it again - and says why it is back.
           if (this._sessDeleted) this._sessDeleted.delete(String(r.id));
+          unforgetSessionIds([r.id]);
         }
       }
     };

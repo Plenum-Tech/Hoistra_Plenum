@@ -64,6 +64,8 @@ export function vendorStatus(v) {
   if (v.block === "Blocked") return { label: "Blocked", tone: "risk", title: "Blocked — cannot be allocated regulated work here" };
   if (v.worst === "Lapsed") return { label: "At risk", tone: "warn", title: "An accreditation has lapsed — the vendor is blocked once that is enforced" };
   if (v.worst === "<30d") return { label: "At risk", tone: "warn", title: "Clear today — an accreditation expires within 30 days, and the vendor is blocked if it lapses" };
+  // "Clear" says every accreditation held is current, which is no claim at all when none is held.
+  if (v.noAccreditations) return { label: "No accreditations", tone: "warn", title: "No accreditation on file — this vendor cannot be shown eligible for regulated work here until its evidence arrives" };
   return { label: "Clear", tone: "none", title: "Clear — every accreditation held is current beyond 30 days" };
 }
 
@@ -362,7 +364,9 @@ export const complianceMethods = {
       const id = c.nm + "|" + c.holder;
       const open = s.ccQueueOpenId === id;
       const subject = c.nm + " — " + c.holder;
-      const vendorName = c.kind === "vendor" ? c.holder : (CC.vendors.find((v) => v.serves.indexOf(c.holder) > -1) || {}).name || "the responsible vendor";
+      // The contractor the certificate names, before any vendor that merely serves the building
+      // (an assignment must not re-address another vendor's certificate — second review).
+      const vendorName = c.kind === "vendor" ? c.holder : c.vendor || (CC.vendors.find((v) => v.serves.indexOf(c.holder) > -1) || {}).name || "the responsible vendor";
       return {
         nm: c.nm, holder: c.holder,
         kind: c.kind === "vendor" ? "vendor accreditation" : "building certificate",
@@ -435,8 +439,13 @@ export const complianceMethods = {
       certRows: certRows.map((c) => this.ccCertRowVals(c, CC)),
       vendorRows: vendorRows.map((v) => ({
         name: v.name, worst: v.worst, bg: TAG[v.sev].bg, fg: TAG[v.sev].fg,
-        serves: v.serves.join(", "), cov: v.cov + "%", frac: v.on + "/" + v.req, covColor: covColor(v.cov),
-        gaps: v.gaps.length ? v.gaps.join(" · ") : "—",
+        // A vendor with nothing on file has no coverage to state — a dash, not a 0% that reads
+        // like a score against requirements nobody looked up.
+        serves: v.serves.join(", "),
+        cov: v.noAccreditations ? "—" : v.cov + "%", frac: v.noAccreditations ? "" : v.on + "/" + v.req,
+        bar: v.noAccreditations ? "0%" : v.cov + "%",
+        covColor: v.noAccreditations ? "var(--color-neutral-500)" : covColor(v.cov),
+        gaps: v.noAccreditations ? "No accreditations on file" : v.gaps.length ? v.gaps.join(" · ") : "—",
         block: vendorStatus(v).label, blockTitle: vendorStatus(v).title,
         blockBg: TAG[vendorStatus(v).tone].bg, blockFg: TAG[vendorStatus(v).tone].fg,
         // The whole row opens the vendor on the Vendors page, on its accreditations.
@@ -454,7 +463,7 @@ export const complianceMethods = {
     const s = this.state;
     const acts = this.ccCertActions(c);
     const subject = c.nm + " — " + c.holder;
-    const ven = c.kind === "vendor" ? c.holder : (CC.vendors.find((v) => v.serves.indexOf(c.holder) > -1) || {}).name || "the responsible vendor";
+    const ven = c.kind === "vendor" ? c.holder : c.vendor || (CC.vendors.find((v) => v.serves.indexOf(c.holder) > -1) || {}).name || "the responsible vendor";
     const urgent = c.days <= 30 || /suspect/.test(c.auth);
     // Once an evidence request has been approved for this certificate the action
     // reports that instead of offering the same request again — the row is the only

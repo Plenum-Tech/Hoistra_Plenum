@@ -32,13 +32,19 @@ import VendorDrawer from './components/shell/VendorDrawer.jsx';
 import CommandPalette from './components/shell/CommandPalette.jsx';
 import Toast from './components/shell/Toast.jsx';
 import ReportBuilder from './components/shell/ReportBuilder.jsx';
+import InstancePicker from './screens/InstancePicker.jsx';
+import HoistVendors from './screens/HoistVendors.jsx';
+import HoistGraph from './screens/HoistGraph.jsx';
 
 export default function App() {
   const vals = useHoistra();
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad }}>
       {vals.gated ? <Gate vals={vals} /> : null}
-      {vals.signedIn ? (
+      {/* The instance picker after sign-in (logic/instances.js) stands alone: no navigator,
+          top bar or dock behind it, since none of them knows the instance yet. */}
+      {vals.isPicker ? <InstancePicker vals={vals} /> : null}
+      {vals.signedIn && !vals.isPicker ? (
         <>
           {vals.acctOpen ? (
             <>
@@ -60,6 +66,8 @@ export default function App() {
       {vals.isAnswer ? <Answer vals={vals} /> : null}
       {vals.isChat ? <Chat vals={vals} /> : null}
       {vals.isVP ? <Vendors vals={vals} /> : null}
+      {vals.isVH ? <HoistVendors vals={vals} /> : null}
+      {vals.isHG ? <HoistGraph vals={vals} /> : null}
       {vals.isModule ? <Module vals={vals} /> : null}
       {vals.isCC ? <Compliance vals={vals} /> : null}
       {vals.isReport ? <CustomReport vals={vals} /> : null}

@@ -71,10 +71,14 @@ export function vendorDrawerModel(s, handlers) {
         : "No address on the vendor record",
     phone: (v && v.phone) || "",
     scoreLine: !v ? "" : view.score ? view.score.score + "/100 · " + monthText(view.score.month) : "Not scored yet",
-    lastChange: last
-      ? "Changed from " + (last.from || "no vendor") + " to " + (last.to || "—") + (last.by ? " by " + last.by : "")
-        + (dateText(last.at) ? " on " + dateText(last.at) : "") + (last.note ? " — " + last.note : "")
-      : "No change recorded",
+    // A vendor delete unassigns its assets (12 Oct 2026); that reads as what happened, not "changed to —".
+    lastChange: last && !last.to && last.note === "Vendor deleted"
+      ? "Unassigned when " + (last.from || "its vendor") + " was deleted" + (last.by ? ", by " + last.by : "")
+        + (dateText(last.at) ? " on " + dateText(last.at) : "")
+      : last
+        ? "Changed from " + (last.from || "no vendor") + " to " + (last.to || "—") + (last.by ? " by " + last.by : "")
+          + (dateText(last.at) ? " on " + dateText(last.at) : "") + (last.note ? " — " + last.note : "")
+        : "No change recorded",
     openWorkOrders: typeof asset.openWorkOrders === "number" ? String(asset.openWorkOrders) : "—",
     unreadableNote: view && (view.unreadable || []).length ? "Could not be read just now: " + view.unreadable.join(", ") + "." : "",
     canChange: canChange,

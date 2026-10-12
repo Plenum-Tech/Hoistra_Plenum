@@ -252,7 +252,8 @@ export const renderValsMethods = {
 
     // Dock width. orchBaseW is the designed width for the current flow and acts as the
     // floor; ORCH_MAX_W is the hard ceiling so a drag cannot swallow the page beside it.
-    const orchBaseW = s.flow === "investigate" ? 420 : 280;
+    // Hoisting a vendor (vendorHoist.js) asks for typed fields and shows the record back.
+    const orchBaseW = s.flow === "investigate" ? 420 : s.flow === "vhoist" ? 380 : 280;
     const ORCH_MAX_W = 720;
     const orchW = Math.max(orchBaseW, Math.min(ORCH_MAX_W, s.orchW || orchBaseW));
 
@@ -1115,7 +1116,11 @@ export const renderValsMethods = {
           }
         ];
       })(),
-      vpList: VD.vendors.map((v) => {
+      // The directory, searched and filtered rather than scrolled (12 Oct 2026). Every row is
+      // shaped once with what the filters test, then narrowed; each filter's count is the search
+      // narrowed by that filter alone, so pressing one never changes its own number.
+      ...(() => {
+      const dirRows = VD.vendors.map((v) => {
         const R = VD.V[v.id];
         // The compliance engine's coverage figure when it has one for this vendor, otherwise
         // counted from the accreditations on the record. Coverage is a fraction of what the
@@ -1146,9 +1151,37 @@ export const renderValsMethods = {
           termsShow: draft ? "inline-flex" : "none",
           termsNote: draft ? (R.contract.readNothing ? "No terms read — review before confirming" : "Terms not confirmed") : "",
           termsTitle: draft ? "Scoring is blocked until this vendor's contract terms are confirmed. Opens the terms so you can review and confirm them." : "",
-          goConfirm: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.vpGoConfirm(v.id); }
+          goConfirm: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.vpGoConfirm(v.id); },
+          active: !!active,
+          // What the filters read. "Needs action" is the directory's own red/amber: blocked or
+          // capped, scored below 80, or terms waiting to be confirmed before it can be scored.
+          _needs: capped || !!v.blocked || (n !== null && n < 80) || draft,
+          _unscored: n === null,
+          _blocked: capped || !!v.blocked,
+          _words: (v.name + " " + (v.meta || "")).toLowerCase()
         };
-      }),
+      });
+      const q = String(s.vpDirQ || "").trim().toLowerCase();
+      const searched = dirRows.filter((r) => !q || r._words.indexOf(q) > -1);
+      const FILTERS = [["All", () => true], ["Needs action", (r) => r._needs], ["Not scored", (r) => r._unscored], ["Blocked", (r) => r._blocked]];
+      const on = FILTERS.find((f) => f[0] === s.vpDirFilter) || FILTERS[0];
+      const shown = searched.filter(on[1]);
+      const plural = (k) => k + (k === 1 ? " vendor" : " vendors");
+      return {
+        vpList: shown,
+        vpDirCount: shown.length === dirRows.length ? plural(dirRows.length) : shown.length + " of " + plural(dirRows.length),
+        vpDirQ: s.vpDirQ || "",
+        vpDirSetQ: (e) => this.setState({ vpDirQ: String((e && e.target ? e.target.value : e) || "").slice(0, 80) }),
+        vpDirChips: FILTERS.map(([label, test]) => ({
+          label: label, count: searched.filter(test).length, on: on[0] === label,
+          pick: () => this.setState({ vpDirFilter: label })
+        })),
+        vpDirEmpty: shown.length ? "" : dirRows.length
+          ? "No vendor matches" + (q ? " “" + (s.vpDirQ || "").trim() + "”" : "") + (on[0] !== "All" ? " in " + on[0] : "") + "."
+          : "",
+        vpDirClear: () => this.setState({ vpDirQ: "", vpDirFilter: "All" })
+      };
+      })(),
       // The count on each tab is the number of rows behind it. An empty tab counts 0 — it
       // never borrows the five components a scorecard would have had.
       //
@@ -1172,7 +1205,25 @@ export const renderValsMethods = {
       vpServedRows: (vpCC.rec ? vpCC.rec.serves : []).map((name) => {
         const b = vpCC.CC.buildings.find((x) => x.name === name) || null;
         const tone = !b ? "none" : b.blocked || b.high ? "risk" : b.med ? "warn" : "ok";
+        // Assigned by an admin (vendorBuildings.js), named on its certificates, or both.
+        const rec = vpCC.rec;
+        const isAssigned = (rec.assigned || []).indexOf(name) > -1;
+        const onCerts = (vpCC.CC.certs || []).some((c) => c.kind === "building" && c.holder === name
+          && ((rec.id && c.vendorId && String(c.vendorId) === String(rec.id)) || c.vendor === rec.name));
+        // The id the assignment was stored with, never a name lookup (second review).
+        const bid = (rec.assignedIds || {})[name] || this.iBuildingIdFor(name);
+        const key = rec.id + "|" + bid;
         return {
+          tag: isAssigned ? (onCerts ? "Assigned · on certificates" : "Assigned") : "On certificates",
+          assigned: isAssigned,
+          unassignBusy: s.vbBusyKey === key,
+          unassign: isAssigned && this.vhCan(s) && rec.id && bid ? async () => {
+            if (this.state.vbBusyKey) return;
+            this.setState({ vbBusyKey: key });
+            const r = await this.vbUnassign(rec.id, bid);
+            this.setState({ vbBusyKey: null });
+            this.flash(r.ok ? rec.name + " is no longer assigned to " + name + "." : "Not unassigned — " + r.error + ".");
+          } : null,
           name: name, state: b ? (b.state || "—") : "—",
           cov: b ? b.cov + "%" : "—", frac: b ? b.on + "/" + b.req : "—",
           covFg: !b ? "var(--color-neutral-500)" : b.cov >= 60 ? "var(--st-ok)" : b.cov >= 30 ? "var(--st-warn)" : "var(--st-risk)",
@@ -1180,9 +1231,40 @@ export const renderValsMethods = {
           status: !b ? "Not in scope" : b.blocked ? b.blocked + " blocked" : b.high ? b.high + " high risk" : b.med ? b.med + " medium risk" : "Clear",
           statusBg: tone === "none" ? "var(--color-neutral-900)" : "var(--st-" + tone + "-bg)",
           statusFg: tone === "none" ? "var(--color-neutral-400)" : "var(--st-" + tone + ")",
-          open: () => { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); this.setState({ view: "cc", ccPivot: "buildings", ccFocus: { kind: "building", name: name }, ccTab: 0, ccQueue: null, ccQueueOpenId: null }); }
+          // A building Compliance does not list yet (assigned, nothing on file) has no record to
+          // open there; opening it fell back to the first building (second review).
+          open: b ? () => { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); this.setState({ view: "cc", ccPivot: "buildings", ccFocus: { kind: "building", name: name }, ccTab: 0, ccQueue: null, ccQueueOpenId: null }); } : null
         };
       }),
+      // Assign the vendor to a building from its Buildings served tab: an admin in User view, a
+      // vendor with a record, a building it is not on yet. Hidden where the database is not set
+      // up for assignments (vendorBuildings.js).
+      vpAssign: (() => {
+        const rec = vpCC.rec;
+        // A vendor with nothing on file has no register record: the live directory's own id
+        // (never a sample vendor's) is the vendor to assign (second review).
+        const vid = (rec && rec.id) || (this.vpIsLive() && vpV && vpV.id ? vpV.id : null);
+        const vname = (rec && rec.name) || (vpV && vpV.name) || "The vendor";
+        if (!vid || !this.vhCan(s) || s.vbAvailable === false) return null;
+        const on = (rec && rec.serves) || [];
+        const rows = this.iBuildingRows().filter((b) => b.id);
+        const opts = rows.map((b) => b.name).filter((nm) => on.indexOf(nm) < 0).sort((x, y) => x.localeCompare(y));
+        const value = opts.indexOf(s.vpAssignName) > -1 ? s.vpAssignName : "";
+        return {
+          opts: opts, value: value, busy: !!s.vpAssignBusy,
+          empty: rows.length ? "On every building already" : "The buildings list has not loaded",
+          pick: (e) => this.setState({ vpAssignName: e && e.target ? e.target.value : e }),
+          run: async () => {
+            const nm = this.state.vpAssignName;
+            const bid = nm ? this.iBuildingIdFor(nm) : null;
+            if (!bid || this.state.vpAssignBusy) return;
+            this.setState({ vpAssignBusy: true });
+            const r = await this.vbAssign(vid, [bid], "manual");
+            this.setState({ vpAssignBusy: false, vpAssignName: r.ok ? "" : nm });
+            this.flash(r.ok ? vname + " is assigned to " + nm + "." : "Not assigned — " + r.error + ".");
+          }
+        };
+      })(),
       vp: (() => {
         const v = vpV, R = vpR;
         if (!v || !R) return {};
@@ -1402,9 +1484,15 @@ export const renderValsMethods = {
             ? "£" + invTotal.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—",
           invActionsShow: R.invoices.length ? "flex" : "none",
           challenge: () => this.runAction("Raise credit note", v.name),
-          approveInv: () => this.runAction("Approve as charged", v.name)
+          approveInv: () => this.runAction("Approve as charged", v.name),
+          // Delete vendor (logic/vendorDelete.js): offered to an admin in User view, closing over
+          // this vendor's id — the panel's vals carry its name only. The control that opened it
+          // is where focus returns.
+          canDelete: this.vdlCanFor(s, v.id),
+          deleteVendor: (e) => this.vdlOpen(v.id, v.name, e && e.currentTarget)
         };
       })(),
+      ...this.vdlVals(s),
 
       ...this.intVals(s),
       ...this.enVals(s),
@@ -2535,8 +2623,13 @@ export const renderValsMethods = {
           // A handoff keeps the draft too: a mailto is a URL, mail clients cut long ones
           // short, and nothing has been confirmed sent until the reader presses send there.
           const keepDraft = !!problem || unconfirmed || handoff;
-          const outcome = problem
-            ? "Not sent — " + problem + ". The draft is unchanged; correct it or retry."
+          // A draft whose queue item names a deleted vendor is refused whatever address is typed
+          // (12 Oct 2026): retrying cannot work, so it says to dismiss the item.
+          const vendorGone = (err && err.reason === "vendor_deleted") || (failed && res && res.reason === "vendor_deleted");
+          const outcome = vendorGone
+            ? "Not sent. This vendor was deleted — dismiss the item instead."
+            : problem
+            ? "Not sent — " + String(problem).replace(/\.\s*$/, "") + ". The draft is unchanged; correct it or retry."
             : unconfirmed
               ? "Not confirmed — the mail service reported \"" + (status || "no status")
                 + "\" rather than delivery. The draft is unchanged; retry, or check the email log."
@@ -2676,19 +2769,19 @@ export const renderValsMethods = {
          (spacesLive.js). Sessions: every conversation and task, newest first, with a real
          elapsed time (sessions.js). Both open where they came from. */
       navSpaces: spm.builtin.map((b) => ({
-        name: b.name, n: b.badge, icon: b.icon, tone: toneColor(b.tone), title: b.live ? b.kpis.map((k) => k.label + " " + k.value).join(" · ") : "Waiting for the engine to answer",
+        key: b.key, name: b.name, n: b.badge, icon: b.icon, tone: toneColor(b.tone), title: b.live ? b.kpis.map((k) => k.label + " " + k.value).join(" · ") : "Waiting for the engine to answer",
         active: s.view === "space" && s.spaceKey === b.key,
         click: () => this.openSpace(b.key),
         drop: (ids) => fileMany(ids, b.key)
       })).concat([{
         // Support: the requests themselves, not a place to file other sessions in.
-        name: spm.support.name, n: spm.support.open ? spm.support.open + " open" : "", icon: spm.support.icon,
+        key: SUPPORT_SPACE_KEY, name: spm.support.name, n: spm.support.open ? spm.support.open + " open" : "", icon: spm.support.icon,
         tone: spm.support.open ? "var(--color-accent)" : "var(--color-neutral-500)",
         title: spm.support.total ? spm.support.open + " open · " + spm.support.resolved + " resolved" : "Your support requests — none yet",
         active: (s.view === "space" && s.spaceKey === SUPPORT_SPACE_KEY) || (s.view === "chat" && this.supIsOn()),
         click: () => this.openSpace(SUPPORT_SPACE_KEY)
       }]).concat(spm.custom.map((c) => ({
-        name: c.name, n: c.sessions ? String(c.sessions) : "", icon: "ph-folder-simple", tone: "var(--color-neutral-500)", title: "Saved space" + (c.sessions ? " · " + c.sessions + (c.sessions === 1 ? " session" : " sessions") : ""),
+        key: c.id, name: c.name, n: c.sessions ? String(c.sessions) : "", icon: "ph-folder-simple", tone: "var(--color-neutral-500)", title: "Saved space" + (c.sessions ? " · " + c.sessions + (c.sessions === 1 ? " session" : " sessions") : ""),
         active: s.view === "space" && s.spaceKey === c.id,
         click: () => this.openSpace(c.id),
         drop: (ids) => fileMany(ids, c.id)
@@ -2737,9 +2830,9 @@ export const renderValsMethods = {
         const active = (s.view === "module" && s.module === n.key)
           || (s.view === "buildings" && n.key === "buildings_user")
           || (s.view === "cc" && n.key === "compliance")
-          || (s.view === "vp" && n.key === "vendors");
+          || ((s.view === "vp" || s.view === "vh") && n.key === "vendors");
         return {
-          label: n.label, icon: n.icon, count: n.count || "", show: n.count ? "flex" : "none",
+          key: n.key, label: n.label, icon: n.icon, count: n.count || "", show: n.count ? "flex" : "none",
           color: active ? "var(--color-accent)" : "var(--color-neutral-300)",
           chip: active ? "var(--color-accent-900)" : "transparent",
           click: () => {
@@ -3443,6 +3536,15 @@ export const renderValsMethods = {
         export: () => this.orch(mod.exportLabel, mod.name)
       };
     }
+    // Hoist vendors (logic/vendorHoist.js): its page, the Vendors page's way in, and the
+    // conversation in the dock. Before the instance layer, which narrows the ask bars.
+    Object.assign(vals, this.vhVals(s));
+    // The Compliance Graph report (logic/hoistGraph.js); its navigator entry is placed by the
+    // Compliance Engine below.
+    Object.assign(vals, this.hgVals(s));
+    // The instance picker and the instance's user view (logic/instances.js) — last, so the
+    // reports, spaces, home cards and ask bars it narrows are the finished ones.
+    Object.assign(vals, this.instVals(s, vals));
     return this.cvt(vals);
   }
 };

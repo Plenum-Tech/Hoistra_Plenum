@@ -7,6 +7,7 @@
 // nothing is asserted without disclosure.
 //
 // Methods are mixed into HoistraLogic.prototype; `this` is the controller.
+import { withAssignments } from './vendorBuildings.js';
 import { isScheduleRequest } from './crons.js';
 import { investigationContext } from './assetsActions.js';
 import { MODULES, INGEST_ASK } from './constants.js';
@@ -181,7 +182,11 @@ function packTypesOf(packs) {
       name: t.certificate_type_name || code,
       scope: String(t.certificate_scope || "").toLowerCase() === "vendor" ? "vendor" : "building",
       trade: t.trade_category || null,
-      requires: t.required_contractor_accreditation || null
+      requires: t.required_contractor_accreditation || null,
+      // The regulation that attaches the obligation and who issues it — the Building & Hoist
+      // Graph names both beside each obligation (hoistGraph.js).
+      reg: t.regulation_reference || null,
+      issuer: t.issuing_body || null
     };
   }));
   return out;
@@ -191,6 +196,8 @@ function packTypesOf(packs) {
 //   certificates: rows from GET /api/compliance/certificates
 //   coverage:     { [cc]: { buildings: [...], vendors: [...] } }  (GET /coverage/*)
 //   packs:        { [cc]: types[] }                              (GET /country-pack)
+//   gone:         vendor ids deleted from this tab (logic/vendorDelete.js) — a read that left
+//                 before the delete still lists them
 export function shapeLiveCompliance(input) {
   const certificates = (input && input.certificates) || [];
   const coverage = (input && input.coverage) || {};
@@ -233,6 +240,15 @@ export function shapeLiveCompliance(input) {
       nm: r.certificate_type_name || nameOf(r.certificate_type_code),
       holder: holder, kind: kind, cc: cc, state: r.state || r.region || null,
       building: building, vendor: vendor, vendorId: r.vendor_id || null,
+      // Whether the vendor named here is in the vendor master. The API says so outright
+      // (vendor_on_record — false when the id points at a vendor no longer there, with the name
+      // read back from the certificate; a RETIRED vendor stays on record with vendor_deleted
+      // set); an older build without it is read off the id.
+      // Hoist vendors (vendorHoist.js) lists the names that are not.
+      vendorOnRecord: typeof r.vendor_on_record === "boolean" ? r.vendor_on_record : !!r.vendor_id,
+      // The vendor named here was deleted with its history kept — retired (Hussain, 12 Oct 2026).
+      // The certificate is that history and stays; the vendor is in no list (below).
+      vendorDeleted: r.vendor_deleted === true,
       exp: fmtDate(r.expiry_date), days: days, risk: rk.risk, sev: rk.sev,
       auth: a.auth, authSev: a.authSev, ver: verOf(r), pos: runwayPos(d0),
       status: r.status || null, trade: r.trade_category || null,
@@ -316,7 +332,13 @@ export function shapeLiveCompliance(input) {
     delete x._n; delete x._codes;
   });
 
-  // Vendors: coverage rows plus every vendor holding an accreditation certificate.
+  // Vendors: coverage rows plus every vendor holding an accreditation certificate — never a
+  // retired one. Its certificates still name it (they are its history), so each source below
+  // skips a vendor whose certificates say it was deleted, or one deleted from this tab.
+  const retired = {};
+  ((input && input.gone) || []).forEach((id) => { retired[String(id)] = true; });
+  rows.forEach((c) => { if (c.vendorDeleted && c.vendorId) retired[String(c.vendorId)] = true; });
+  const live = (c) => !c.vendorDeleted && !(c.vendorId && retired[String(c.vendorId)]);
   const vMap = {};
   const ensureV = (name, cc) => {
     if (!vMap[name]) vMap[name] = { name: name, cc: cc, id: null, cov: 0, on: 0, req: 0, block: "Clear", worst: "OK", sev: "ok", serves: [], gaps: [], certs: 0, noDoc: 0, spec: "—", _n: 0, _worst: Infinity };
@@ -324,6 +346,7 @@ export function shapeLiveCompliance(input) {
   };
   Object.keys(coverage).forEach((cc) => {
     ((coverage[cc] && coverage[cc].vendors) || []).forEach((v) => {
+      if (v.vendor_id && retired[String(v.vendor_id)]) return;
       const x = ensureV(v.vendor_name || v.vendor_id, normCountry(v.country_code || cc));
       x.id = v.vendor_id || null; x.cov = Math.round(Number(v.coverage_pct || 0)); x.on = v.on_record || 0; x.req = v.required || 0;
       x.certs = v.certificates_total || 0; x.gaps = (v.gaps || []).map(nameOf);
@@ -331,7 +354,7 @@ export function shapeLiveCompliance(input) {
       if (v.blocked_accreditation_type) x.blockedType = nameOf(v.blocked_accreditation_type);
     });
   });
-  rows.filter((c) => c.kind === "vendor").forEach((c) => {
+  rows.filter((c) => c.kind === "vendor" && live(c)).forEach((c) => {
     const x = ensureV(c.holder, c.cc);
     // Same fix as buildings: vendor coverage is fetched once per country and a vendor with
     // no country recorded comes back under several, so the first response used to decide
@@ -345,14 +368,25 @@ export function shapeLiveCompliance(input) {
     x._worst = Math.min(x._worst, c.days);
     if (c.risk === "Blocked") x.block = "Blocked";
   });
+  // A vendor ON RECORD named on a building certificate serves that building even when it holds
+  // no vendor accreditation. Coverage only lists vendors that hold one (or are blocked), so a
+  // vendor hoisted from a certificate — linked to it, nothing else on file yet — was in no
+  // list at all (12 Oct 2026). A name that is not on record stays out: it is not a vendor in
+  // the master, and the building's "Not on record" view is where it belongs.
+  rows.filter((c) => c.kind === "building" && c.vendor && c.vendorOnRecord && live(c)).forEach((c) => {
+    const x = ensureV(c.vendor, c.cc);
+    if (!x.id && c.vendorId) x.id = c.vendorId;
+  });
   // A vendor "serves" the buildings whose building certificates name it.
-  rows.filter((c) => c.kind === "building" && c.vendor).forEach((c) => {
+  rows.filter((c) => c.kind === "building" && c.vendor && live(c)).forEach((c) => {
     const x = vMap[c.vendor];
     if (x && x.serves.indexOf(c.holder) < 0) x.serves.push(c.holder);
   });
   Object.keys(vMap).forEach((name) => {
     const x = vMap[name];
     if (!x.certs) x.certs = x._n;
+    // Nothing held at all — not a vendor whose accreditations are all current.
+    x.noAccreditations = !x.certs;
     const w = x._worst;
     x.worst = x.block === "Blocked" ? "Blocked" : !isFinite(w) ? (x.certs ? "OK" : "None on file") : w < 0 ? "Lapsed" : w <= 30 ? "<30d" : w <= 90 ? "<90d" : "OK";
     x.sev = x.block === "Blocked" || x.worst === "Lapsed" ? "risk" : /</.test(x.worst) ? "warn" : x.certs ? "ok" : "none";
@@ -450,6 +484,9 @@ export function shapeLiveCompliance(input) {
     // Every pack type's trade and the contractor accreditation it requires, first country wins:
     // how a building type is matched to the vendors who do its work (complianceCell.js).
     packTypes: packTypesOf(packs),
+    // Each country's building obligations, in pack order: what a building in that country
+    // must hold (the Building & Hoist Graph's rows, hoistGraph.js).
+    packBuilding: Object.keys(packByCc).reduce((o, cc) => { o[cc] = packByCc[cc].building.slice(); return o; }, {}),
     mxShort: mxCodes.map((code) => String(code).replace(/_/g, " ").slice(0, 8)),
     mx: mx,
     mxLabel: HOISTRA_CC.mxLabel,
@@ -624,7 +661,8 @@ export function overdueBars(certificates, register) {
 // the compliance console. The chat page is reached from a space's ask bar and by reopening
 // a conversation from the sessions list.
 // "insp" is the inspection-reports page (Maintenance → Open all reports).
-export const DOCK_VIEWS = ["cc", "vp", "buildings", "insp"];
+// "vh" (Hoist vendors): a hoist's attached certificates are uploaded in its own panel.
+export const DOCK_VIEWS = ["cc", "vp", "buildings", "insp", "hg", "vh"];
 //: The modules whose page answers beside itself instead of handing the screen over to the
 //: conversation. They share one view name ("module"), so they cannot live in DOCK_VIEWS.
 //: These are MODULES keys, not page titles: Maintenance is keyed "ops". Naming it by its
@@ -640,7 +678,22 @@ const RETRY_MAX = 6;
 
 export const complianceLiveMethods = {
   // What ccModel() reads: the live register when loaded, the seed otherwise.
-  ccData() { return this.state.ccLive || HOISTRA_CC; },
+  // The live register with each vendor's building assignments merged in (vendorBuildings.js), so
+  // every screen that reads it sees them; memoized on the two reads.
+  ccData() {
+    const live = this.state.ccLive;
+    if (!live) return HOISTRA_CC;
+    const vb = this.state.vbRows, gone = this.state.vdlGone;
+    if (!vb || !vb.length) return live;
+    const m = this._ccVbMemo;
+    if (m && m.live === live && m.vb === vb && m.gone === gone) return m.out;
+    // A vendor deleted from this tab keeps its rows until the next read; it is not merged back.
+    const no = (gone || []).map((x) => String(x).toLowerCase());
+    const rows = no.length ? vb.filter((r) => no.indexOf(String(r.vendor_id || '').toLowerCase()) < 0) : vb;
+    const out = withAssignments(live, rows);
+    this._ccVbMemo = { live: live, vb: vb, gone: gone, out: out };
+    return out;
+  },
   ccIsLive() { return !!this.state.ccLive; },
 
   async ccLoad(opts) {
@@ -666,7 +719,9 @@ export const complianceLiveMethods = {
         };
         packs[cc] = p.status === "fulfilled" ? (p.value.types || []) : [];
       }));
-      const shaped = shapeLiveCompliance({ certificates: certificates, coverage: coverage, packs: packs });
+      // Read from state when the answer lands, not when the read left: a vendor deleted while it
+      // was on the wire is in the answer and must not come back with it.
+      const shaped = shapeLiveCompliance({ certificates: certificates, coverage: coverage, packs: packs, gone: this.state.vdlGone });
       this._ccAttempts = 0;
       this.setState((s) => {
         // Prune scope selections that do not exist in the live register.
@@ -843,6 +898,16 @@ export const complianceLiveMethods = {
     }
     if (s.view === "insp") {
       return "The user is on the Hoistra inspection-reports page (Maintenance → inspection reports). " + this.mxInspContext();
+    }
+    // The Compliance Graph report (hoistGraph.js): the figures on screen, from the live register.
+    // Nothing is said about a register that has not answered.
+    if (s.view === "hg") {
+      const m = this.hgModel();
+      return "The user is on the Hoistra Compliance Graph report: each building's regulated areas (the compliance pack's trades — fire, gas, electrical, water…), the obligations the pack attaches to each, the certificate that discharges each one, the vendor who issued it and that vendor's accreditations." +
+        (m.answered
+          ? " It is showing the live compliance register: " + m.stats.map((x) => x.v + " " + x.l.toLowerCase()).join(", ") + "." +
+            (m.buildings.length ? " Buildings: " + m.buildings.slice(0, 40).map((b) => b.name + " (" + (b.areas.filter((a) => a.state === "risk").map((a) => a.name).join(", ") || "no area") + " out of compliance)").join("; ") + "." : "")
+          : " The compliance register has not answered yet, so it shows no figures.");
     }
     if (s.view === "cc") {
       const d = this.ccData();

@@ -38,7 +38,14 @@ const KEY = SESSION_KEY;
 // failed this allow-list and fell back to view: 'home' below, same as landing on an
 // unrecognised value would. They take no companion id (same as 'home'/'cc'/'vp'), so
 // nothing else needs restoring alongside them.
-const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'crons', 'memories', 'skilllab', 'traces', 'audit', 'insp'];
+//
+// 'instances' is the instance picker that follows sign-in (logic/instances.js): a reload on
+// it stays on it, and the instance picked there is restored with the session. 'vh' is Hoist
+// vendors (logic/vendorHoist.js); an account that may not use it lands on Vendors instead.
+const VIEWS = ['home', 'answer', 'module', 'cc', 'vp', 'buildings', 'integ', 'report', 'chat', 'sessions', 'space', 'users', 'crons', 'memories', 'skilllab', 'traces', 'audit', 'insp', 'instances', 'vh', 'hg'];
+// The instance keys (logic/instances.js INSTANCES). Kept here rather than imported so this
+// store stays free of the view modules; HoistraLogic's constructor checks it again.
+const INSTANCE_KEYS = ['ops', 'comp', 'assets', 'full'];
 
 const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isStr = (v) => typeof v === 'string';
@@ -153,6 +160,8 @@ function readSlice(storage) {
       }
     }
   }
+
+  if (isStr(d.instance) && INSTANCE_KEYS.indexOf(d.instance) > -1) out.instance = d.instance;
 
   // The conversation in progress: its transcript is restored from the sessions store
   // (logic/sessions.js) and the next question continues the same orchestrator thread.
@@ -315,6 +324,7 @@ function buildSlice(state) {
     viewOrgId: state.viewOrgId || null,
     viewOrgName: state.viewOrgName || null,
     view: state.view || 'home',
+    instance: state.instance || null,
     module: state.module || null,
     spaceKey: state.spaceKey || null,
     reportKey: state.reportKey || null,

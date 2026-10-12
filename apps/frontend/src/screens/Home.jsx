@@ -7,6 +7,31 @@ export default function Home({ vals }) {
   return (
       <div style={{ flex: "1", display: "flex", flexDirection: "column", alignItems: "center", padding: "0 32px 80px" }}>
         <div style={{ width: "100%", maxWidth: "1080px", display: "flex", flexDirection: "column" }}>
+          {/* An instance home (logic/instances.js): its own four cards in place of the full
+              platform's Hoist Score / P&L / Crons / Platform value row. Each card opens the
+              report its figure comes from. */}
+          {vals.isInstHome ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "0", padding: "8px 0 0", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", marginTop: "8px" }}>
+            {(vals.instHomeCards || []).map((c, $index) => (
+              <div key={$index} className="hv19" role="button" tabIndex={0} onClick={c.click}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } }}
+                style={{ padding: "14px 20px 15px", display: "flex", flexDirection: "column", minWidth: "0", cursor: "pointer", borderLeft: $index ? "1px solid var(--color-divider)" : "none" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                  <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
+                    {c.l}
+                  </span>
+                  <i className="ph ph-arrow-up-right" style={{ fontSize: "11px", color: "var(--color-accent)" }}></i>
+                </div>
+                <span style={{ fontSize: "22px", lineHeight: "1", marginTop: "9px", fontVariantNumeric: "tabular-nums", color: c.color }}>
+                  {c.v}
+                </span>
+                <span title={c.s} style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", marginTop: "7px", lineHeight: "1.45" }}>
+                  {c.s}
+                </span>
+              </div>
+            ))}
+          </div>
+          ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "0", padding: "22px 0 0", borderTop: "1px solid var(--color-divider)", borderBottom: "1px solid var(--color-divider)", marginTop: "8px" }}>
             <div style={{ padding: "14px 22px 15px 0", display: "flex", flexDirection: "column", minWidth: "0" }}>
               <span style={{ fontSize: "9.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
@@ -182,11 +207,24 @@ export default function Home({ vals }) {
               </div>
             </div>
           </div>
+          )}
           <div style={{ padding: "64px 0 0", display: "flex", flexDirection: "column", gap: "9px", alignItems: "center", textAlign: "center" }}>
+            {vals.isInstHome ? (
+              <div style={{ fontSize: "10.5px", letterSpacing: "0.13em", textTransform: "uppercase", color: "var(--color-accent-300)" }}>
+                {vals.instKicker}
+              </div>
+            ) : null}
             <h1 style={{ fontSize: "37px", margin: "0", lineHeight: "1.1" }}>
               {"Ask. Run. Anything."}
             </h1>
-            <div title={vals.heroLive ? "From the live register" : "Seed portfolio — the live register has not answered yet"} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 10px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
+            {vals.isInstHome ? (
+              <div title={vals.heroLive ? "From the live register" : "The live register has not answered yet"} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 14px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
+                {(vals.instTitleLine || []).map((l, $index) => (
+                  <span key={$index}>{l}</span>
+                ))}
+              </div>
+            ) : null}
+            <div title={vals.heroLive ? "From the live register" : "Seed portfolio — the live register has not answered yet"} style={{ display: vals.isInstHome ? "none" : "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: "6px 10px", fontSize: "15px", letterSpacing: "0.02em", color: "var(--color-neutral-400)", marginTop: "4px" }}>
               {(vals.heroStats || []).map((h, $index) => (
                 <React.Fragment key={$index}>
                   {$index > 0 ? (
@@ -204,7 +242,7 @@ export default function Home({ vals }) {
           <div style={{ marginTop: "26px", position: "relative", width: "100%", maxWidth: "760px", alignSelf: "center" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "15px 18px", borderRadius: "12px", background: "var(--color-surface)", boxShadow: "var(--shadow-md)", borderBottom: "2px solid var(--color-accent)" }}>
               <i className="ph ph-sparkle" style={{ fontSize: "17px", color: "var(--color-accent)" }}></i>
-              <input className="input" value={vals.query} onChange={vals.setQuery} onKeyDown={vals.onKey} placeholder="Which buildings put me at risk this month?" style={{ flex: "1", background: "transparent", border: "none", fontSize: "16px", color: "var(--color-text)", padding: "0", outline: "none", fontFamily: "var(--font-body)" }} />
+              <input className="input" value={vals.query} onChange={vals.setQuery} onKeyDown={vals.onKey} placeholder={vals.homePh} style={{ flex: "1", background: "transparent", border: "none", fontSize: "16px", color: "var(--color-text)", padding: "0", outline: "none", fontFamily: "var(--font-body)" }} />
               {/* Hidden outright for an account whose "Can ingest" is off — asking a
                   question is not ingesting, so only this control goes. */}
               {vals.canIngest ? (

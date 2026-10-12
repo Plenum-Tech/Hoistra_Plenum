@@ -79,6 +79,36 @@ export const complianceApi = {
 
   savedSpaceSummary: () => apiFetch(B, '/api/compliance/saved-space/summary', { query: withOrg() }),
 
+  // ── Hoist vendors (logic/vendorHoist.js) ────────────────────────────────
+  // Creates the vendor named on this certificate in the vendor master — or matches one of the
+  // same name in the certificate's company — and links the certificate to it. A refusal comes
+  // back as 200 {ok:false, error}. Only vendor_name is sent: the route writes any other
+  // profile field it is given straight into vendors columns that not every database has.
+  createVendorForCertificate: (certificateId, body) =>
+    apiFetch(B, '/api/compliance/certificates/' + enc(certificateId) + '/create-vendor', {
+      method: 'POST', body: body, timeoutMs: T_WORK
+    }),
+  // Links a certificate (and its document) to a vendor already in the master.
+  linkCertificate: (certificateId, body) =>
+    apiFetch(B, '/api/compliance/certificates/' + enc(certificateId) + '/link', {
+      method: 'POST', body: body, timeoutMs: T_WORK
+    }),
+
+  // ── vendor ↔ building assignments (engines/compliance/vendor_buildings.py) ──
+  // The company's assignments ({available: false} where the table is not set up yet); an admin
+  // assigns a vendor to buildings (source 'hoist' from Hoist vendors, 'manual' from the page)
+  // and ends one. Refusals come back as HTTP errors with {reason, error}.
+  vendorBuildings: (vendorId) =>
+    apiFetch(B, '/api/compliance/vendor-buildings', { query: withOrg(vendorId ? { vendor_id: vendorId } : {}) }),
+  assignVendorBuildings: (vendorId, buildingIds, source) =>
+    apiFetch(B, '/api/compliance/vendors/' + enc(vendorId) + '/buildings', {
+      method: 'POST', query: withOrg(), body: { building_ids: buildingIds, source: source || 'manual' }, timeoutMs: T_WORK
+    }),
+  unassignVendorBuilding: (vendorId, buildingId) =>
+    apiFetch(B, '/api/compliance/vendors/' + enc(vendorId) + '/buildings/' + enc(buildingId), {
+      method: 'DELETE', query: withOrg(), timeoutMs: T_WORK
+    }),
+
   // ── A1 scan ─────────────────────────────────────────────────────────────
   // Building (A2) + Vendor (A3) workers, alert ladder, adversary check.
   runScan: (body) =>

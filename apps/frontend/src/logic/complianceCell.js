@@ -90,13 +90,15 @@ export function cellSubject(CC, building, i) {
     : [];
   const trades = tradesFor(pt.trade);
   const tradeOf = (c) => low(c.trade || (packTypes[c.code] || {}).trade);
-  const vcerts = trades.length ? all.filter((c) => c.kind === "vendor" && c.holder !== "Unlinked vendor" && trades.indexOf(tradeOf(c)) > -1) : [];
+  // A retired vendor's certificates stay on the register as history (vendorDeleted, 12 Oct
+  // 2026): it is never offered as the one to ask, by its building certificate or its own.
+  const vcerts = trades.length ? all.filter((c) => c.kind === "vendor" && !c.vendorDeleted && c.holder !== "Unlinked vendor" && trades.indexOf(tradeOf(c)) > -1) : [];
   const required = requiredType(pt.requires, packTypes);
   const recOf = (name) => (CC.vendors || []).find((v) => v.name === name) || null;
   const holdsTrade = (name) => vcerts.some((c) => c.holder === name);
 
   const named = {};
-  certs.forEach((c) => { if (c.vendor) named[c.vendor] = named[c.vendor] || c.vendorId || null; });
+  certs.forEach((c) => { if (c.vendor && !c.vendorDeleted) named[c.vendor] = named[c.vendor] || c.vendorId || null; });
   let names = Object.keys(named);
   (CC.vendors || []).forEach((v) => {
     if (names.indexOf(v.name) < 0 && (v.serves || []).indexOf(building) > -1 && holdsTrade(v.name)) names.push(v.name);

@@ -42,6 +42,7 @@ import { buildingsCrudMethods } from './buildingsCrud.js';
 import { DC_DEFAULTS, documentsCrudMethods } from './documentsCrud.js';
 import { OX_DEFAULTS, orgExportMethods } from './orgExport.js';
 import { DR_DEFAULTS, dataResetMethods } from './dataReset.js';
+import { VDL_DEFAULTS, vendorDeleteMethods } from './vendorDelete.js';
 import { buildingsGraphMethods } from './buildingsGraph.js';
 import { AUTH_DEFAULTS, authMethods, canAdmin } from './auth.js';
 import { usersMethods } from './users.js';
@@ -56,6 +57,11 @@ import { superAdminLiveMethods } from './superAdminLive.js';
 import { platformCostMethods } from './platformCost.js';
 import { choiceMethods } from './choiceCards.js';
 import { supportMethods, SUPPORT_TOPICS } from './support.js';
+import { instancesMethods, INSTANCE_KEYS, usesInstances } from './instances.js';
+import { vendorHoistMethods } from './vendorHoist.js';
+import { vendorMasterMethods } from './vendorMaster.js';
+import { hoistGraphMethods } from './hoistGraph.js';
+import { vendorBuildingsMethods } from './vendorBuildings.js';
 
 export class HoistraLogic extends Controller {
   state = {
@@ -63,7 +69,25 @@ export class HoistraLogic extends Controller {
     ...DC_DEFAULTS,
     ...OX_DEFAULTS,
     ...DR_DEFAULTS,
+    // Delete vendor (logic/vendorDelete.js): the open dialog, and the vendors deleted from this tab.
+    ...VDL_DEFAULTS,
     view: "home", module: null, answerKey: null, askedQuery: "",
+    // Which instance the user view is set up for (logic/instances.js): null until one is
+    // picked on the instance picker (view "instances") that follows sign-in.
+    instance: null,
+    // Hoist vendors (logic/vendorHoist.js): the conversation in the dock, the buildings
+    // question's search, the per-browser record of hidden and prepared vendors (read on first
+    // use), and the page's two disclosure toggles.
+    vhFlow: null, vhAreaQ: "", vhLocal: null, vhShowHidden: false, vhAll: false,
+    // A save in flight: from the dock's Hoist vendor, or from a row's Save (by its key).
+    vhSaving: false, vhSavingKey: null,
+    // The company's vendor list itself (logic/vendorMaster.js): null until read.
+    vmRows: null, vmSource: null, vmError: "", vmLoading: false,
+    // Vendor ↔ building assignments (logic/vendorBuildings.js) and the Buildings served tab's picker.
+    vbRows: null, vbAvailable: null, vbError: "", vpAssignName: "", vpAssignBusy: false, vbBusyKey: null,
+    // The Compliance Graph report (logic/hoistGraph.js): the building open under the overview,
+    // and the area picked from its cell.
+    hgBuilding: null, hgArea: null,
     query: "", queueOpen: false, paletteOpen: false, detail: null,
     chainOpen: true, toast: "", filter: "All", navOpen: false,
     // Custom reports (logic/reports.js): server-owned now (svc-operations-intelligence's
@@ -150,6 +174,8 @@ export class HoistraLogic extends Controller {
     docQuery: "", docPage: 0,
     ugText: "", ugParsed: false,
     vpVendor: "v1", vpTab: 0,
+    // The Vendors directory's search and filter (renderVals vpList).
+    vpDirQ: "", vpDirFilter: "All",
     // Contract terms panel, write side (logic/vendorsWrite.js). `vpConfirmArmed` is the
     // confirmation step in front of Confirm — it exists so the count of platform defaults
     // is read before those defaults become agreed values, not after. `vpEditField` is the
@@ -302,6 +328,18 @@ export class HoistraLogic extends Controller {
     if (this.state.viewOrgId && !(this.state.account && this.state.account.role === "superadmin")) {
       this.state.viewOrgId = null; this.state.viewOrgName = null;
     }
+    // An instance is only an admin's or a user's to have (or a superadmin's while viewing as
+    // a company — instances.js usesInstances). An account that has not picked one yet — a
+    // session from before instances, or a picker left open — is shown the picker on load,
+    // keeping its role, so an admin still goes on to the admin view. Once one is picked, a
+    // reload never moves the page.
+    const picks = usesInstances(this.state.account, this.state.viewOrgId);
+    if (!picks || INSTANCE_KEYS.indexOf(this.state.instance) < 0) this.state.instance = null;
+    // A superadmin viewing a company is asked only on the way into User view (auth.js), so a
+    // reload in the admin view leaves them where they were - the picker would hide the bar that
+    // holds "Exit" (review, 12 Oct 2026).
+    const viewingAsAdmin = this.state.account && this.state.account.role === "superadmin" && this.state.role === "admin";
+    if (this.state.signedIn && picks && !this.state.instance && !viewingAsAdmin) this.state.view = "instances";
     // getActingOrg() (api/client.js) is a plain in-memory variable, not itself persisted —
     // every API call reads it directly, so a restored viewOrgId must be primed back into
     // it here, or every report keeps reading the account's own company regardless of what
@@ -342,4 +380,4 @@ export class HoistraLogic extends Controller {
   }
 }
 
-Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsQueueMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, supportMethods, migrationMethods, emailHistoryMethods, renderValsMethods);
+Object.assign(HoistraLogic.prototype, coreMethods, complianceMethods, vendorsMethods, energyMethods, assetsConditionMethods, maintenanceMethods, integrationsMethods, complianceLiveMethods, homeLiveMethods, queueLiveMethods, cronMethods, cronsPageMethods, memoriesPageMethods, skillLabMethods, tracesPageMethods, correctionMethods, documentsRegisterMethods, vendorsLiveMethods, vendorsQueueMethods, vendorsWriteMethods, chatBuildingMethods, chatCaseMethods, buildingsLiveMethods, energyLiveMethods, assetsLiveMethods, assetsVendorMethods, vendorAuditMethods, maintenanceLiveMethods, buildingsCrudMethods, documentsCrudMethods, orgExportMethods, dataResetMethods, buildingsGraphMethods, graphLiveMethods, chatMethods, sessionsMethods, spacesMethods, reportsMethods, authMethods, usersMethods, usersLiveMethods, auditMethods, auditLiveMethods, ingestionMethods, ingestionLiveMethods, superAdminMethods, superAdminLiveMethods, platformCostMethods, choiceMethods, supportMethods, instancesMethods, vendorHoistMethods, vendorMasterMethods, vendorDeleteMethods, hoistGraphMethods, vendorBuildingsMethods, migrationMethods, emailHistoryMethods, renderValsMethods);

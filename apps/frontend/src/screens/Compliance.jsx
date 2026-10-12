@@ -631,7 +631,7 @@ export default function Compliance({ vals }) {
                                         </span>
                                       </span>
                                       <div style={{ height: "4px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
-                                        <div style={{ height: "100%", borderRadius: "2px", width: v.cov, background: v.covColor }}></div>
+                                        <div style={{ height: "100%", borderRadius: "2px", width: v.bar || v.cov, background: v.covColor }}></div>
                                       </div>
                                     </div>
                                     <div style={{ fontSize: "10.5px", color: "var(--color-neutral-400)", lineHeight: "1.5", minWidth: "0" }}>

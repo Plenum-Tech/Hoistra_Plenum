@@ -255,3 +255,14 @@ test('a vendor change reaches an investigation open on the same asset', async ()
   assert.equal(c.state.inv.vendorEmail, null, 'the old contact is not reused');
   assert.deepEqual(c.state.inv.vendorEmailCandidates, []);
 });
+
+test('an asset that lost its vendor because the vendor was deleted says so, not "changed to —"', async () => {
+  energyApi.assetVendor = async () => Object.assign({}, VIEW, {
+    vendor: null, contacts: { email: null, candidates: [] }, score: null,
+    last_change: { at: '2026-10-12T09:30:00', by: 'ada@test.local', from: 'Acme Lifts Ltd', to: null, note: 'Vendor deleted' }
+  });
+  await row(c).vendorOpen(E);
+  const d = c.renderVals().vd;
+  assert.equal(d.vendorName, 'No vendor on the asset record');
+  assert.equal(d.lastChange, 'Unassigned when Acme Lifts Ltd was deleted, by ada@test.local on 12 Oct 2026');
+});

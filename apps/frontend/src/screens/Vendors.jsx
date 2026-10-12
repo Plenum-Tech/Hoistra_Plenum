@@ -2,6 +2,7 @@
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React from 'react';
 import CertificateList from '../components/shell/CertificateList.jsx';
+import VendorDeleteDialog from '../components/shell/VendorDeleteDialog.jsx';
 
 export default function Vendors({ vals }) {
   return (
@@ -55,6 +56,20 @@ export default function Vendors({ vals }) {
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              {/* Hoist vendors (logic/vendorHoist.js): an admin's, in User view only. The count is
+                  the vendors named on certificates that the vendor master does not hold. */}
+              {vals.vhShow ? (
+                <button type="button" className="hv14" onClick={vals.vhOpen} title="Vendors named on your certificates that are not in the vendor master"
+                  style={{ display: "inline-flex", alignItems: "center", gap: "7px", fontFamily: "inherit", fontSize: "12px", padding: "7px 12px", borderRadius: "8px", border: "1px solid var(--color-accent)", background: "transparent", color: "var(--color-accent)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <i className="ph ph-plus-circle" aria-hidden="true" style={{ fontSize: "13px" }}></i>
+                  <span>{"Hoist vendors"}</span>
+                  {vals.vhDetN ? (
+                    <span aria-label={vals.vhDetN + " detected"} style={{ fontSize: "10.5px", minWidth: "18px", padding: "1px 6px", borderRadius: "9px", background: "var(--color-accent)", color: "var(--accent-ink)", fontVariantNumeric: "tabular-nums", textAlign: "center", boxSizing: "border-box" }}>
+                      {vals.vhDetN}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
               <div title={vals.vpSourceDetail} style={{ display: "inline-flex", alignItems: "center", gap: "7px", padding: "6px 11px", borderRadius: "20px", border: "1px solid var(--color-divider)", fontSize: "11px", color: "var(--color-neutral-400)", whiteSpace: "nowrap" }}>
                 <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: vals.vpSourceDot, flexShrink: "0" }}></span>
                 <span>{vals.vpSourceLabel}</span>
@@ -275,67 +290,35 @@ export default function Vendors({ vals }) {
           </div>
             </>
           ) : null}
-          <div style={{ display: vals.vpQueueShow ? "none" : vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start" }}>
-            <div style={{ minWidth: "0", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "11px 15px", borderBottom: "1px solid var(--color-divider)" }}>
-                <span style={{ fontSize: "12.5px", flex: "1" }}>
-                  {"Vendor directory"}
-                </span>
-                <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>
-                  {"score · coverage"}
-                </span>
+          <div style={{ display: vals.vpQueueShow ? "none" : vals.vpBodyShow, gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: "14px", marginTop: "16px", alignItems: "start", containerType: "inline-size", containerName: "vpbody" }}>
+            {/* The directory: searched and filtered, its own scroll, pinned beside the vendor it
+                opens — so reading a vendor never means scrolling past every other one. */}
+            <div className="vp-dir" style={{ minWidth: "0", borderRadius: "11px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+              <div style={{ padding: "11px 14px 10px", borderBottom: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", gap: "9px", flexShrink: "0" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+                  <span style={{ fontSize: "12.5px" }}>{"Vendor directory"}</span>
+                  <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums", flex: "1" }}>{vals.vpDirCount}</span>
+                  <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)" }}>{"score · coverage"}</span>
+                </div>
+                <div style={{ position: "relative" }}>
+                  <i className="ph ph-magnifying-glass" aria-hidden="true" style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", fontSize: "13px", color: "var(--color-neutral-500)" }}></i>
+                  <input className="input" value={vals.vpDirQ} onChange={vals.vpDirSetQ} onKeyDown={(e) => { if (e.key === "Escape") vals.vpDirClear(); }}
+                    placeholder="Search vendors, contracts, accreditation" aria-label="Search the vendor directory"
+                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "var(--font-body)", fontSize: "12px", padding: "7px 10px 7px 30px", borderRadius: "8px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", outline: "none" }} />
+                </div>
+                <div role="group" aria-label="Filter the vendor directory" style={{ display: "flex", gap: "5px", flexWrap: "wrap" }}>
+                  {(vals.vpDirChips || []).map((f) => (
+                    <button key={f.label} type="button" aria-pressed={f.on} onClick={f.pick} className={f.on ? "" : "hv4"}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontFamily: "inherit", fontSize: "11px", padding: "3px 10px", borderRadius: "14px", cursor: "pointer", border: "1px solid " + (f.on ? "var(--color-accent)" : "var(--color-divider)"), background: f.on ? "var(--color-accent)" : "transparent", color: f.on ? "var(--accent-ink)" : "var(--color-neutral-400)" }}>
+                      <span>{f.label}</span>
+                      <span style={{ fontVariantNumeric: "tabular-nums", opacity: "0.75" }}>{f.count}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              {(vals.vpList || []).map((v, $index) => (
-                <React.Fragment key={$index}>
-                  <div className="hv2" onClick={v.pick} style={{ position: "relative", display: "grid", gridTemplateColumns: "minmax(0,1fr) 52px 68px", gap: "12px", alignItems: "center", padding: "11px 15px 11px 18px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer", background: v.bg }}>
-                    <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "3px", background: v.edge }}></div>
-                    <div style={{ minWidth: "0" }}>
-                      <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {v.name}
-                      </div>
-                      <div style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {v.meta}
-                      </div>
-                      <div style={{ fontSize: "10px", color: v.capFg, marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: v.capShow }}>
-                        {v.cap}
-                      </div>
-                      <button type="button" className="hv3" onClick={v.goConfirm} title={v.termsTitle}
-                        style={{ display: v.termsShow, alignItems: "center", gap: "5px", maxWidth: "100%", marginTop: "5px", padding: "2px 9px 2px 6px", borderRadius: "20px", border: "1px solid var(--st-warn)", background: "var(--st-warn-bg)", color: "var(--st-warn)", fontFamily: "var(--font-body)", fontSize: "10px", lineHeight: "1.5", cursor: "pointer" }}>
-                        <i className="ph ph-warning-circle" style={{ fontSize: "11px", flex: "none" }}></i>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {v.termsNote}
-                        </span>
-                        <span style={{ flex: "none", whiteSpace: "nowrap", fontWeight: "600" }}>
-                          {"· Confirm ›"}
-                        </span>
-                      </button>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "16px", lineHeight: "1", color: v.scoreFg }}>
-                        {v.score}
-                      </div>
-                      <div style={{ fontSize: "9.5px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
-                        {v.trend}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "5px" }}>
-                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10.5px", color: v.covFg }}>
-                          {v.cov}
-                        </span>
-                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)" }}>
-                          {v.covFrac}
-                        </span>
-                      </div>
-                      <div style={{ height: "4px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
-                        <div style={{ height: "100%", borderRadius: "2px", width: v.covBar, background: v.covFg }}></div>
-                      </div>
-                    </div>
-                  </div>
-                </React.Fragment>
-              ))}
-              <div style={{ padding: "12px 15px", fontSize: "10.5px", color: "var(--color-neutral-500)", lineHeight: "1.5" }}>
-                {"Coverage is the accreditation types this vendor holds on file against those its work requires. A mandatory lapse caps the score at 60 whatever the delivery numbers say."}
+              <DirectoryList rows={vals.vpList || []} empty={vals.vpDirEmpty} clear={vals.vpDirClear} />
+              <div style={{ padding: "9px 14px", fontSize: "10px", color: "var(--color-neutral-500)", lineHeight: "1.5", borderTop: "1px solid var(--color-divider)", flexShrink: "0" }}>
+                {"Coverage is the accreditation types a vendor holds against those its work requires. A mandatory lapse caps the score at 60."}
               </div>
             </div>
             <div style={{ minWidth: "0", display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -357,6 +340,15 @@ export default function Vendors({ vals }) {
                       <div style={{ fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "2px" }}>
                         {"of 100 · "}{vals.vp.trend}
                       </div>
+                      {/* Delete vendor (logic/vendorDelete.js): an admin's, in User view. It opens a
+                          dialog that reads what would change before anything can be deleted. */}
+                      {vals.vp.canDelete ? (
+                        <button type="button" className="hv27" onClick={vals.vp.deleteVendor} aria-haspopup="dialog"
+                          style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginTop: "9px", fontFamily: "inherit", fontSize: "11.5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--st-risk)", background: "transparent", color: "var(--st-risk)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                          <i className="ph ph-trash" aria-hidden="true" style={{ fontSize: "13px" }}></i>
+                          <span>{"Delete vendor"}</span>
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                   <div style={{ alignItems: "center", gap: "9px", marginTop: "11px", padding: "9px 11px", borderRadius: "8px", background: vals.vp.capBg, display: vals.vp.capShow }}>
@@ -856,14 +848,30 @@ export default function Vendors({ vals }) {
                 {vals.vpPaneServed ? (
                   <>
                     <div style={{ padding: "11px 16px", fontSize: "11.5px", color: "var(--color-neutral-500)", lineHeight: "1.5", borderBottom: "1px solid var(--color-divider)" }}>
-                      {"The buildings whose certificates name this vendor. Open one to see its own record in Compliance."}
+                      {"The buildings this vendor is assigned to, and those whose certificates name it. Open one to see its own record in Compliance."}
                     </div>
+                    {vals.vpAssign ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--color-divider)" }}>
+                        <span style={{ fontSize: "11.5px", color: "var(--color-neutral-400)" }}>{"Assign to a building"}</span>
+                        <select value={vals.vpAssign.value} onChange={vals.vpAssign.pick} aria-label="Building to assign this vendor to" disabled={!vals.vpAssign.opts.length}
+                          style={{ fontFamily: "var(--font-body)", fontSize: "12px", padding: "5px 8px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", minWidth: "180px", maxWidth: "100%" }}>
+                          <option value="">{vals.vpAssign.opts.length ? "Choose a building…" : vals.vpAssign.empty}</option>
+                          {vals.vpAssign.opts.map((nm) => <option key={nm} value={nm}>{nm}</option>)}
+                        </select>
+                        <button type="button" className="btn btn-primary" onClick={vals.vpAssign.run} disabled={!vals.vpAssign.value || vals.vpAssign.busy}
+                          style={{ fontFamily: "inherit", fontSize: "11.5px", padding: "5px 12px", cursor: vals.vpAssign.value && !vals.vpAssign.busy ? "pointer" : "default", opacity: vals.vpAssign.value && !vals.vpAssign.busy ? "1" : "0.55" }}>
+                          {vals.vpAssign.busy ? "Assigning…" : "Assign"}
+                        </button>
+                      </div>
+                    ) : null}
                     {(vals.vpServedRows || []).map((b, $index) => (
-                      <button key={$index} type="button" className="hv2" onClick={b.open} title={"Open " + b.name + " in Compliance"}
-                        style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 0.9fr 0.7fr auto 14px", gap: "12px", alignItems: "center", width: "100%", padding: "11px 16px", border: "none", borderBottom: "1px solid var(--color-divider)", background: "transparent", fontFamily: "inherit", textAlign: "left", color: "inherit", cursor: "pointer" }}>
+                      <div key={$index} style={{ display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--color-divider)" }}>
+                      <button type="button" className={b.open ? "hv2" : ""} onClick={b.open || undefined} disabled={!b.open}
+                        title={b.open ? "Open " + b.name + " in Compliance" : b.name + " has nothing on file in Compliance yet"}
+                        style={{ flex: "1", minWidth: "0", display: "grid", gridTemplateColumns: "minmax(0,1.6fr) 0.9fr 0.7fr auto 14px", gap: "12px", alignItems: "center", padding: "11px 16px", border: "none", background: "transparent", fontFamily: "inherit", textAlign: "left", color: "inherit", cursor: b.open ? "pointer" : "default" }}>
                         <span style={{ minWidth: "0" }}>
                           <span style={{ display: "block", fontSize: "12.5px", fontWeight: 500, color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.name}</span>
-                          <span style={{ display: "block", fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.state}</span>
+                          <span style={{ display: "block", fontSize: "11px", color: "var(--color-neutral-500)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.state + " · " + b.tag}</span>
                         </span>
                         <span style={{ fontSize: "11px", color: "var(--color-neutral-500)", fontVariantNumeric: "tabular-nums" }}>
                           <span style={{ fontFamily: "ui-monospace,monospace", color: b.covFg }}>{b.cov}</span>{" coverage · " + b.frac}
@@ -872,10 +880,17 @@ export default function Vendors({ vals }) {
                         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", borderRadius: "5px", padding: "2px 7px", background: b.statusBg, color: b.statusFg, whiteSpace: "nowrap" }}>{b.status}</span>
                         <i className="ph ph-caret-right" aria-hidden="true" style={{ fontSize: "12px", color: "var(--color-neutral-500)" }}></i>
                       </button>
+                      {b.unassign ? (
+                        <button type="button" className="hv11" onClick={b.unassign} disabled={b.unassignBusy} aria-label={"Unassign from " + b.name} title={"Take this vendor off " + b.name}
+                          style={{ flex: "none", fontFamily: "inherit", fontSize: "11px", padding: "0 14px", border: "none", borderLeft: "1px solid var(--color-divider)", background: "transparent", color: "var(--color-neutral-500)", cursor: "pointer" }}>
+                          {"Unassign"}
+                        </button>
+                      ) : null}
+                      </div>
                     ))}
                     {(vals.vpServedRows || []).length ? null : (
                       <div style={{ padding: "14px 16px", fontSize: "11.5px", color: "var(--color-neutral-500)" }}>
-                        {vals.vpCCPending ? "The compliance register has not loaded yet — the buildings show here once it has." : "No building on record names this vendor yet."}
+                        {vals.vpCCPending ? "The compliance register has not loaded yet — the buildings show here once it has." : "This vendor is not assigned to any building, and no building certificate names it yet."}
                       </div>
                     )}
                   </>
@@ -938,6 +953,73 @@ export default function Vendors({ vals }) {
             </div>
           </div>
         </div>
+        {/* Outside the fadeUp wrapper, and portalled to <body> besides: a fixed overlay inside an
+            animated "both"-fill parent is pinned to that parent. */}
+        <VendorDeleteDialog vals={vals} />
       </div>
+  );
+}
+
+// The directory's rows, in their own scroll. Compact: name, then one line with the contract,
+// accreditation and anything waiting — the cap or unconfirmed terms — beside it. The selected
+// vendor is kept in view when it changes, never yanked back while someone scrolls.
+function DirectoryList({ rows, empty, clear }) {
+  const box = React.useRef(null);
+  const activeKey = (rows.find((r) => r.active) || {}).name || "";
+  // Scrolls the list's own box only: scrollIntoView moved the window too, so opening the page
+  // jumped down to the first row (review, 12 Oct 2026).
+  React.useEffect(() => {
+    const b = box.current;
+    const el = b && b.querySelector('[data-active="true"]');
+    if (!el) return;
+    const top = el.offsetTop, bottom = top + el.offsetHeight;  // the box is the offset parent
+    if (top < b.scrollTop) b.scrollTop = top;
+    else if (bottom > b.scrollTop + b.clientHeight) b.scrollTop = bottom - b.clientHeight;
+  }, [activeKey]);
+  return (
+    <div ref={box} style={{ position: "relative", overflowY: "auto", flex: "1 1 auto", minHeight: "0" }}>
+      {rows.map((v, i) => (
+        <div key={v.name + i} data-active={v.active ? "true" : "false"} className="hv2 vp-dir-row" role="button" tabIndex={0} aria-current={v.active ? "true" : undefined} onClick={v.pick}
+          onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); v.pick(); } }}
+          style={{ position: "relative", display: "grid", gridTemplateColumns: "minmax(0,1fr) 44px 64px", gap: "10px", alignItems: "center", padding: "7px 14px 7px 17px", borderBottom: "1px solid var(--color-divider)", cursor: "pointer", background: v.bg }}>
+          <div style={{ position: "absolute", left: "0", top: "0", bottom: "0", width: "3px", background: v.edge }}></div>
+          <div style={{ minWidth: "0" }}>
+            <div style={{ fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px", minWidth: "0" }}>
+              <span style={{ fontSize: "10.5px", color: "var(--color-neutral-500)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0", flex: "0 1 auto" }}>{v.meta}</span>
+              {v.capShow !== "none" ? (
+                <span style={{ flex: "none", fontSize: "9.5px", color: v.capFg, whiteSpace: "nowrap" }}>{"· ceiling 60"}</span>
+              ) : null}
+              {v.termsShow !== "none" ? (
+                <button type="button" className="hv3" onClick={v.goConfirm} title={v.termsTitle}
+                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: "4px", padding: "1px 7px 1px 5px", borderRadius: "20px", border: "1px solid var(--st-warn)", background: "var(--st-warn-bg)", color: "var(--st-warn)", fontFamily: "var(--font-body)", fontSize: "9.5px", lineHeight: "1.5", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <i className="ph ph-warning-circle" aria-hidden="true" style={{ fontSize: "10px" }}></i>
+                  {v.termsNote}{" · Confirm ›"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontFamily: "ui-monospace,monospace", fontSize: "14px", lineHeight: "1", color: v.scoreFg }}>{v.score}</div>
+            <div style={{ fontSize: "9px", color: "var(--color-neutral-500)", marginTop: "2px", whiteSpace: "nowrap" }}>{v.trend}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "4px" }}>
+              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "10px", color: v.covFg }}>{v.cov}</span>
+              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9px", color: "var(--color-neutral-500)" }}>{v.covFrac}</span>
+            </div>
+            <div style={{ height: "3px", borderRadius: "2px", background: "var(--color-neutral-900)", overflow: "hidden" }}>
+              <div style={{ height: "100%", borderRadius: "2px", width: v.covBar, background: v.covFg }}></div>
+            </div>
+          </div>
+        </div>
+      ))}
+      {empty ? (
+        <div style={{ padding: "18px 14px", fontSize: "11.5px", color: "var(--color-neutral-500)", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <span>{empty}</span>
+          <button type="button" className="hv4" onClick={clear} style={{ fontFamily: "inherit", fontSize: "11px", padding: "3px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "transparent", color: "var(--color-neutral-400)", cursor: "pointer" }}>{"Show all vendors"}</button>
+        </div>
+      ) : null}
+    </div>
   );
 }

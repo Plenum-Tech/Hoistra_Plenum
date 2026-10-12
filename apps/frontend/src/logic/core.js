@@ -13,7 +13,7 @@ import { planQueueAction } from './queueDraft.js';
 const IN_FLIGHT_GUARDS = [
   '_ccLoading', '_homeLoading', '_vpLoading', '_bldLoading', '_shapeLoading',
   '_enLoading', '_enPosLoading', '_asLiveLoading', '_asCondLoading', '_asCondSeeded', '_mxLiveLoading', '_spLoading',
-  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading', '_cronLoading'
+  '_glTablesLoading', '_usLiveLoading', '_rpLoading', '_mgListLoading', '_cronLoading', '_vmLoading', '_vbLoading'
 ];
 
 export const coreMethods = {
@@ -98,6 +98,10 @@ export const coreMethods = {
     // This month's credits, for the Platform notice in the Decision queue (admins only).
     this.usageLoad();
     this.vpLoad();
+    // The vendor list itself, so a vendor with nothing else on file is still listed (vendorMaster.js).
+    if (typeof this.vmLoad === 'function') this.vmLoad();
+    // Which buildings each vendor is assigned to (logic/vendorBuildings.js).
+    if (typeof this.vbLoad === 'function') this.vbLoad();
     // What the server still holds. A document held in another browser — or before the chat
     // could answer one at all — is otherwise invisible: five were open on 21 Sep with
     // nothing in the UI pointing at any of them. Silent if it fails.
@@ -142,6 +146,9 @@ export const coreMethods = {
     IN_FLIGHT_GUARDS.forEach((k) => { this[k] = false; });
     // Reset page data: a building chosen for one company must not sit, armed, under the next.
     if (typeof this.drReset === 'function') this.drReset();
+    // Delete vendor: an open dialog names one company's vendor, and the vendors deleted from this
+    // tab are that company's ids — none of it may sit under the next (logic/vendorDelete.js).
+    if (typeof this.vdlReset === 'function') this.vdlReset();
     clearTimeout(this._mgTimer);
     clearTimeout(this._ccRetry); clearTimeout(this._homeRetry); clearTimeout(this._homeRefresh);
     clearTimeout(this._vpRetry); clearTimeout(this._vpRefresh); clearTimeout(this._bldRetry);
@@ -165,7 +172,11 @@ export const coreMethods = {
     this._vdToken = (this._vdToken || 0) + 1;
     this._vaToken = (this._vaToken || 0) + 1;
     this._asInvRow = null;
-    if (this.state.flow === 'investigate') this.setState({ flow: null });
+    // A hoist in the dock names one company's certificates: finished after a switch it would
+    // create the vendor in the first company and record it in the second (review, 12 Oct 2026).
+    if (this.state.flow === 'investigate' || this.state.flow === 'vhoist') this.setState({ flow: null });
+    this._vhFiles = [];
+    this._vhEpoch = (this._vhEpoch || 0) + 1;
     this._ccAttempts = 0; this._homeAttempts = 0; this._vpAttempts = 0; this._bldAttempts = 0;
     this._enAttempts = 0; this._enPosAttempts = {}; this._asLiveAttempts = 0;
     this._mxLiveAttempts = 0; this._spAttempts = 0;
@@ -173,6 +184,12 @@ export const coreMethods = {
       ccLive: null, ccLoading: false, ccError: "", ccLoadedAt: null, ccLastScan: null,
       homeRaw: null, homeLoading: false, homeError: "", homeLoadedAt: null,
       vpRaw: null, vpLoading: false, vpError: "", vpLoadedAt: null, vpEv: null, vpEvMonths: {},
+      vmRows: null, vmSource: null, vmError: "", vmLoading: false,
+      vbRows: null, vbAvailable: null, vbError: "", vpAssignName: "", vpAssignBusy: false,
+      // Hoist vendors' conversation, the directory's search and the Compliance Graph's pick are
+      // one company's; none of them is carried into the next.
+      vhFlow: null, vhSaving: false, vhSavingKey: null, vhAreaQ: "",
+      vpDirQ: "", vpDirFilter: "All", hgBuilding: null, hgArea: null,
       bldLive: null, bldLoading: false, bldError: "", bldLoadedAt: null, bldMeta: null,
       enAnomLive: null, enMetersLive: null, enFloorsLive: null, enEquip: null, enLoading: false, enError: "", enLoadedAt: null, enPosByCc: {},
       asLive: null, asLiveWos: null, asLiveLoading: false, asLiveError: "", asLiveLoadedAt: null,
@@ -343,6 +360,8 @@ export const coreMethods = {
     if (s.view === "module" && MODULES[s.module]) return MODULES[s.module].name;
     if (s.view === "report") { const c = flattenCards(s.reports).find((x) => x.id === s.reportKey); return c ? c.name : "Reports"; }
     if (s.view === "buildings") return "Buildings";
+    if (s.view === "hg") return "Compliance Graph";
+    if (s.view === "vh") return "Hoist vendors";
     if (s.view === "insp") return "Inspection reports";
     if (s.view === "answer") return "Query";
     if (s.view === "chat") return "Orchestrator";
