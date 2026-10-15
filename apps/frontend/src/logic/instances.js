@@ -282,6 +282,13 @@ export const instancesMethods = {
       isPicker: !!s.signedIn && s.view === 'instances',
       pickerSignedIn: 'Signed in' + (vals.tenant ? ' · ' + vals.tenant : ''),
       pickerSignOut: () => this.authSignOut(),
+      // A superadmin viewing as a company reaches the picker straight from the console
+      // (superAdmin.js viewAsCompany). The picker hides the top bar that holds "Exit", so it
+      // carries its own way back - the same as the account menu's "Super Admin console".
+      pickerExit: a && a.role === 'superadmin' && s.viewOrgId ? () => {
+        this.exitViewAsCompany();
+        this.setState({ saOn: true }, () => { if (typeof this.saLiveLoad === 'function') this.saLiveLoad(); });
+      } : null,
       // Opened from the chip with an instance already picked: a way back without picking again.
       pickerBack: on && chosen ? () => this.setState({ view: 'home' }) : null,
       instCards: INSTANCES.map((x) => ({

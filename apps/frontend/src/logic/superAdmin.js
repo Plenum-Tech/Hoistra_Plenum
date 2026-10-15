@@ -140,8 +140,8 @@ export const superAdminMethods = {
 
   // Switches every reader that honours currentOrgId()/getActingOrg() (Buildings,
   // Compliance, Vendors, Home, Users & access, Audit trail, company usage) onto this
-  // company's data, and drops out of the console into that company's Admin view — same
-  // landing a fresh admin sign-in gets. Assets and Maintenance do not switch (see the
+  // company's data, and drops out of the console onto that company's instance picker, then
+  // its User view. Assets and Maintenance do not switch (see the
   // file header) and keep reading this deployment's own data regardless.
   viewAsCompany(orgId, name) {
     if (!orgId) return;
@@ -161,7 +161,7 @@ export const superAdminMethods = {
     // to, or the superadmin's own selection is lost for good rather than restored on the
     // eventual exitViewAsCompany().
     // Same capture-once-on-first-entry rule as the building selection above, and for the
-    // same reason: role flips to "admin" for the duration of the view (below), and without
+    // same reason: role is set for the duration of the view (below), and without
     // remembering what it was before, exitViewAsCompany() had nothing to give back but a
     // hardcoded "admin" — stranding a superadmin who was in User view on their own account
     // in Admin view permanently after they left, with no way back except toggling it by
@@ -191,9 +191,11 @@ export const superAdminMethods = {
     clearInterval(this._orchTick);
     this.setState({
       viewOrgId: orgId, viewOrgName: name || null,
-      // No instance yet for this company: its User view asks which one (logic/instances.js).
+      // No instance yet for this company: the picker asks which one, and the pick lands in
+      // its User view (Hussain, 15 Oct 2026 — logic/instances.js). "Admin view" in the account
+      // menu still reaches the company's admin view.
       instance: null,
-      saOn: false, role: "admin", view: "home", navOpen: true, acctOpen: false, detail: null,
+      saOn: false, role: "user", view: "instances", navOpen: true, acctOpen: false, detail: null,
       sessionId: null, ccChat: [], ccBusy: false, ccStream: null, orchOpen: false, orchTask: null,
       // The building a staged attachment was to be filed against belongs to the company it
       // was chosen under — the same reset newQuery() makes when a conversation ends, made

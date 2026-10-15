@@ -214,16 +214,16 @@ test("the admin view's top bar switches instance, and the admin stays in admin v
 });
 
 // ── a superadmin viewing as a company ─────────────────────────────────────────
-// Viewing as a company, a superadmin is that company's admin for the duration: picking
-// "User view" asks which instance, exactly as it does an admin.
+// "View as this company" opens the instance picker and the pick lands in that company's
+// User view (Hussain, 15 Oct 2026). The account menu's "Admin view" still reaches the
+// company's unchanged admin view.
 const viewAs = (x, id, name) => { x.viewAsCompany(id, name); return x; };
 const toUserView = (x) => x.renderVals().acctItems.find((a) => a.label === 'User view').click();
+const toAdminView = (x) => x.renderVals().acctItems.find((a) => a.label === 'Admin view').click();
 
-test('a superadmin viewing as a company is asked for an instance on the way into User view', () => {
+test('"View as this company" opens the instance picker, and the pick lands in User view', () => {
   signIn(c, SUPER);
   viewAs(c, 'org-9', 'TechCorp');
-  assert.equal(c.state.role, 'admin');
-  toUserView(c);
   assert.equal(c.state.role, 'user');
   assert.equal(c.state.view, 'instances');
   assert.equal(c.renderVals().isPicker, true);
@@ -231,6 +231,8 @@ test('a superadmin viewing as a company is asked for an instance on the way into
   pick(c, 'comp');
   const v = c.renderVals();
   assert.equal(c.state.role, 'user');
+  assert.equal(c.state.view, 'home');
+  assert.equal(v.isPicker, false);
   assert.equal(v.isInstHome, true);
   assert.equal(v.instShow, true);
   assert.equal(v.instName, 'Compliance Engine');
@@ -240,13 +242,36 @@ test('a superadmin viewing as a company is asked for an instance on the way into
   assert.equal(c.state.view, 'instances');
 });
 
-test('a superadmin viewing as a company keeps the admin view unchanged', () => {
+test('the picker opened by "View as" has a way back to the Super Admin console', () => {
   signIn(c, SUPER);
   viewAs(c, 'org-9', 'TechCorp');
   const v = c.renderVals();
-  assert.equal(v.instShow, false);
-  assert.ok(labels(v.acctItems).indexOf('Switch instance') < 0);
+  assert.equal(typeof v.pickerExit, 'function', 'the picker hides the top bar, so it carries its own exit');
+  v.pickerExit();
+  assert.equal(c.state.viewOrgId, null);
+  assert.equal(c.state.instance, null);
+  assert.equal(c.state.saOn, true, 'back in the console the view was opened from');
+});
+
+test('an admin or a user on their own account has no console exit on the picker', () => {
+  signIn(c, ADMIN);
+  assert.equal(c.renderVals().isPicker, true);
+  assert.equal(c.renderVals().pickerExit, null);
+});
+
+test('a superadmin viewing as a company can still reach the unchanged admin view', () => {
+  signIn(c, SUPER);
+  viewAs(c, 'org-9', 'TechCorp');
+  pick(c, 'ops');
+  toAdminView(c);
+  assert.equal(c.state.role, 'admin');
+  assert.equal(c.state.viewOrgId, 'org-9');
+  const v = c.renderVals();
   assert.equal(v.isInstHome, false);
+  assert.ok(labels(v.acctItems).indexOf('Switch instance') < 0);
+  toUserView(c);
+  assert.equal(c.state.role, 'user');
+  assert.equal(c.state.view, 'home', 'the instance already picked is kept');
 });
 
 test('a superadmin on their own account is not offered instances in User view', () => {
@@ -264,11 +289,9 @@ test('a superadmin on their own account is not offered instances in User view', 
 test('each company viewed is asked afresh, and leaving the view drops the instance', () => {
   signIn(c, SUPER);
   viewAs(c, 'org-9', 'TechCorp');
-  toUserView(c);
   pick(c, 'ops');
   viewAs(c, 'org-7', 'Plenum Tech');
   assert.equal(c.state.instance, null, 'another company starts with no instance');
-  toUserView(c);
   assert.equal(c.state.view, 'instances');
   pick(c, 'assets');
   c.exitViewAsCompany();
@@ -279,13 +302,21 @@ test('each company viewed is asked afresh, and leaving the view drops the instan
 test('a reload while viewing as a company keeps the instance', () => {
   signIn(c, SUPER);
   viewAs(c, 'org-9', 'TechCorp');
-  toUserView(c);
   pick(c, 'ops');
   const again = fresh();
   assert.equal(again.state.viewOrgId, 'org-9');
   assert.equal(again.state.instance, 'ops');
   assert.equal(again.state.view, 'home');
   assert.equal(again.renderVals().instName, 'Ops Brain');
+});
+
+test('a reload on the picker opened by "View as" stays on the picker', () => {
+  signIn(c, SUPER);
+  viewAs(c, 'org-9', 'TechCorp');
+  const again = fresh();
+  assert.equal(again.state.viewOrgId, 'org-9');
+  assert.equal(again.state.view, 'instances');
+  assert.equal(again.renderVals().isPicker, true);
 });
 
 // ── switching ─────────────────────────────────────────────────────────────────
@@ -570,7 +601,7 @@ test("the Compliance Engine's Lapsed and Failed checks cards open their lists", 
 test('a superadmin viewing as a company stays in the admin view across a reload', () => {
   signIn(c, SUPER);
   viewAs(c, 'org-9', 'TechCorp');
-  c.setState({ view: 'users' });
+  c.setState({ role: 'admin', view: 'users' }); // switched to Admin view before any pick
   const again = fresh();
   // The constructor reads the stored session: the same superadmin, viewing TechCorp, admin view.
   assert.equal(again.state.account.role, 'superadmin');

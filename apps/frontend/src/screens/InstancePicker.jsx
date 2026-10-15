@@ -22,6 +22,11 @@ export default function InstancePicker({ vals }) {
                   <i className="ph ph-arrow-left" style={{ fontSize: "12px" }}></i>{"Back to " + vals.instName}
                 </button>
               ) : null}
+              {vals.pickerExit ? (
+                <button type="button" className="hv16" onClick={vals.pickerExit} style={{ font: "inherit", background: "none", border: "none", padding: "0", cursor: "pointer", color: "var(--color-neutral-500)", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                  <i className="ph ph-lock-key" style={{ fontSize: "12px" }}></i>{"Back to Super Admin"}
+                </button>
+              ) : null}
               <button type="button" className="hv16" onClick={vals.pickerSignOut} style={{ font: "inherit", background: "none", border: "none", padding: "0", cursor: "pointer", color: "var(--color-neutral-500)", display: "inline-flex", alignItems: "center", gap: "5px" }}>
                 <i className="ph ph-sign-out" style={{ fontSize: "12px" }}></i>{"Sign out"}
               </button>

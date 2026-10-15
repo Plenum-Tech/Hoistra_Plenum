@@ -383,7 +383,7 @@ test("saVals' saCo only offers View as on a live row, and marks the one currentl
   assert.equal(v.saCo.viewAsCurrent, true, 'the row being acted as is marked, once it is');
 });
 
-test('viewAsCompany switches the override, re-fetches every reader that honours it, and lands in Admin view', async () => {
+test('viewAsCompany switches the override, re-fetches every reader that honours it, and lands on the instance picker in User view', async () => {
   fresh(Object.assign(
     { ['GET ' + B + '/companies']: COMPANIES, ['GET ' + B + '/credits']: CREDITS, ['GET ' + B + '/companies/' + ORG1]: CARD1 },
     liveRoutes()
@@ -399,8 +399,8 @@ test('viewAsCompany switches the override, re-fetches every reader that honours 
   assert.equal(c.state.viewOrgId, ORG1);
   assert.equal(c.state.viewOrgName, 'Plenum Group');
   assert.equal(c.state.saOn, false, 'drops out of the console');
-  assert.equal(c.state.role, 'admin');
-  assert.equal(c.state.view, 'home');
+  assert.equal(c.state.role, 'user', 'into the company\'s User view (Hussain, 15 Oct 2026)');
+  assert.equal(c.state.view, 'instances', 'asked which instance first');
   assert.match(c.state.toast, /Viewing as Plenum Group/);
 
   const users = calls.find((x) => x.key === 'GET ' + ADM + '/users');
