@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db import get_session
-from ...services.database_service import DatabaseService
+from ...services.database_service import DatabaseService, WriteRefused
+from ...services.principal import Principal, _detail, require_admin
 from ...core.exceptions import (
     TableNotFoundError,
     ColumnNotFoundError,
@@ -31,11 +32,25 @@ router = APIRouter()
 log = get_logger(__name__)
 
 
-def _svc(session: AsyncSession = Depends(get_session)) -> DatabaseService:
-    return DatabaseService(session)
+def _svc(
+    session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(require_admin),
+) -> DatabaseService:
+    """The engine, bound to whoever is asking.
+
+    The router already depends on require_admin, so this does not add a gate — it makes the
+    caller available to the query builder. Without it every route here ran unfiltered: the role
+    decided whether you got in, and nothing decided which rows you got."""
+    return DatabaseService(session, principal)
 
 
 def _http_error(exc: Exception) -> HTTPException:
+    # A vendor delete, status change or edit of a retired vendor, refused by the service —
+    # its own status and reason, so a caller can tell "go to the Vendors page" from a bad query.
+    # The audit trail's refusal (12 Oct 2026) travels the same way.
+    if isinstance(exc, WriteRefused):
+        log.warning("route.vendor_write_refused", reason=exc.reason)
+        return HTTPException(exc.status_code, detail=_detail(str(exc), exc.reason))
     if isinstance(exc, (UnsafeIdentifierError, UnsafeQueryError)):
         log.warning(
             "route.security_rejection",

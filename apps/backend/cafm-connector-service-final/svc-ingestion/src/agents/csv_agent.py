@@ -58,6 +58,7 @@ from shared.intermediate_schema import (
     VendorEntity,
     WorkOrderEntity,
 )
+from shared import building_link
 from shared.schema_mapper import SchemaMapping, map_headers
 
 logger = get_logger(__name__)
@@ -417,6 +418,9 @@ _FIELD_TO_COLUMN: dict[str, dict[str, str]] = {
 
 # Tables where asyncpg COPY is used directly (all required non-null columns satisfiable)
 _DIRECT_COPY_TABLES: frozenset[str] = frozenset({"assets", "spare_parts", "work_orders"})
+#: Tables whose rows hang off a building in the graph, so their ingest resolves one.
+#: spare_parts are stock, held in a store rather than fixed to a property.
+_BUILDING_LINKED_TABLES: frozenset[str] = frozenset({"assets", "work_orders"})
 
 # Required columns per table (non-null, no server default) that we must always supply
 _REQUIRED_COLUMNS: dict[str, dict[str, Any]] = {
@@ -520,6 +524,25 @@ def _coerce_str(val: Any) -> str | None:
     return s if s else None
 
 
+def _coerce_uuid(val: Any) -> UUID | None:
+    """The value as a UUID, or None when it is not UUID-shaped."""
+    if isinstance(val, UUID):
+        return val
+    s = _coerce_str(val)
+    if not s:
+        return None
+    try:
+        return UUID(s)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+#: Where the resolved ids are parked on a row between resolution and record build.
+#: Double-underscored so they can never collide with a real source column.
+_RESOLVED_BUILDING_KEY = "__resolved_building_id__"
+_RESOLVED_ASSET_KEY = "__resolved_asset_id__"
+
+
 def _build_asset_record(
     row: dict[str, Any],
     org_id: UUID,
@@ -542,6 +565,12 @@ def _build_asset_record(
         "serial_number": _coerce_str(row.get("serial")),
         "manufacturer": _coerce_str(row.get("make")),
         "model_number": _coerce_str(row.get("model")),
+        # A building_id the source already carries is better evidence than anything we
+        # infer from a name, so it wins over the resolved one and is never overwritten.
+        # assets.building_id is a uuid column and COPY encodes by type, so a string here
+        # would fail the whole batch — a malformed value drops the link, not the row.
+        "building_id": _coerce_uuid(row.get("building_id"))
+        or _coerce_uuid(row.get(_RESOLVED_BUILDING_KEY)),
     }
     record.update({k: v for k, v in optional.items() if v is not None})
     columns = list(record.keys())
@@ -593,6 +622,17 @@ def _build_work_order_record(
     desc = _coerce_str(row.get("wo_type")) or _coerce_str(row.get("maintenance_type"))
     if desc:
         record["description"] = desc
+    # A work order is against a piece of plant, and that plant is already placed. Whatever
+    # the source carries wins over anything inferred, same rule as assets.
+    bid = _coerce_uuid(row.get("building_id")) or _coerce_uuid(row.get(_RESOLVED_BUILDING_KEY))
+    if bid is not None:
+        record["building_id"] = bid
+    # Recorded even when the building could not be. Which asset the work was done on is
+    # what makes an asset's history readable at all, and it is also how the building is
+    # filled in later once the asset itself is placed.
+    aid = _coerce_uuid(row.get("asset_id")) or _coerce_uuid(row.get(_RESOLVED_ASSET_KEY))
+    if aid is not None:
+        record["asset_id"] = aid
     columns = list(record.keys())
     return tuple(record.values()), columns
 
@@ -648,9 +688,16 @@ def _row_to_asset_entity(row: dict[str, Any]) -> AssetEntity | None:
         category=_coerce_str(row.get("category")),
         manufacturer=_coerce_str(row.get("make")),
         model_number=_coerce_str(row.get("model")),
-        extra={k: v for k, v in row.items()
-               if k not in {"asset_code", "asset_name", "serial", "category", "make", "model"}
+        # The resolved link is surfaced as a plain building_id rather than the internal
+        # parking key, so the preview shows what the row was actually filed against.
+        extra={
+            **{k: v for k, v in row.items()
+               if k not in {"asset_code", "asset_name", "serial", "category", "make",
+                            "model", _RESOLVED_BUILDING_KEY}
                and v is not None},
+            **({"building_id": row[_RESOLVED_BUILDING_KEY]}
+               if row.get(_RESOLVED_BUILDING_KEY) and not row.get("building_id") else {}),
+        },
     )
 
 
@@ -979,6 +1026,55 @@ async def extract_csv(
 
             rows_as_dicts = df.to_dict(orient="records")
 
+            # ── 6a. Link rows to the building graph ───────────────────────
+            # One call for the whole file, hints deduped. Enrichment only: a row that
+            # cannot be placed still ingests with building_id NULL and its reason logged,
+            # because a row with no building is recoverable and a lost row is not.
+            #
+            # Work orders resolve through the asset they are against, which the resolver
+            # treats as a link rather than a match — so a work order lands in the same
+            # building as its plant by construction. Ingest assets before work orders and
+            # the whole file places itself; the other way round and every row reports
+            # asset_not_placed.
+            if entity_type in _BUILDING_LINKED_TABLES and rows_as_dicts:
+                link = await building_link.resolve_buildings(
+                    rows_as_dicts, use_asset=(entity_type == "work_orders")
+                )
+                for _i, _bid in enumerate(link["by_row"]):
+                    if _bid:
+                        rows_as_dicts[_i][_RESOLVED_BUILDING_KEY] = _bid
+                for _i, _aid in enumerate(link.get("asset_by_row") or []):
+                    if _aid:
+                        rows_as_dicts[_i][_RESOLVED_ASSET_KEY] = _aid
+                if _meta_out is not None:
+                    _meta_out["building_link"] = link
+                span.set_attribute("cafm.building_link.linked", link["linked"])
+                span.set_attribute("cafm.building_link.unique_hints", link["unique_hints"])
+                span.set_attribute("cafm.building_link.gaps", len(link["gaps"]))
+                logger.info(
+                    "csv_agent.building_link",
+                    ingestion_id=str(ingestion_id),
+                    rows=link["rows"],
+                    unique_hints=link["unique_hints"],
+                    linked=link["linked"],
+                    unlinked=link["unlinked"],
+                    by_reason=link["by_reason"],
+                )
+                # Each gap logged on its own line with what would close it — an agent
+                # reading these can act, where a count of NULLs only says something is
+                # wrong without saying what.
+                for gap in link["gaps"]:
+                    logger.warning(
+                        "csv_agent.building_link_gap",
+                        ingestion_id=str(ingestion_id),
+                        field=gap["field"],
+                        reason=gap["reason"],
+                        rows_affected=gap["rows_affected"],
+                        row_says=gap["row_says"],
+                        sample_assets=gap["sample_assets"],
+                        remedy=gap["remedy"],
+                    )
+
             # Debug: log first row structure for non-direct-copy tables
             if not use_direct_copy and total_rows > 0 and rows_as_dicts:
                 first_row = rows_as_dicts[0]
@@ -992,8 +1088,7 @@ async def extract_csv(
 
             for batch_start in range(0, total_rows, _BATCH_SIZE):
                 batch = rows_as_dicts[batch_start: batch_start + _BATCH_SIZE]
-                batch_records: list[tuple[Any, ...]] = []
-                batch_columns: list[str] | None = None
+                batch_groups: dict[tuple[str, ...], list[tuple[Any, ...]]] = {}
 
                 for row_idx, row in enumerate(batch):
                     # Convert NaN floats to None
@@ -1069,12 +1164,12 @@ async def extract_csv(
                     if use_direct_copy and builder is not None:
                         try:
                             record, cols = builder(clean_row, resolved_org_id, mapping)
-                            if batch_columns is None:
-                                batch_columns = cols
-                            if list(record.__class__.__mro__) or True:  # always true
-                                # Ensure all records in batch have same columns
-                                if len(record) == len(batch_columns):
-                                    batch_records.append(record)
+                            # Grouped by the exact column tuple, not its length. Optional
+                            # columns vary row to row — one row carrying asset_code where
+                            # the next carries serial_number is the same count and a
+                            # different meaning, and COPY positions by order alone, so
+                            # matching on length would write values into the wrong column.
+                            batch_groups.setdefault(tuple(cols), []).append(record)
                         except Exception as row_exc:
                             rows_failed += 1
                             logger.debug(
@@ -1084,29 +1179,32 @@ async def extract_csv(
                             )
 
                 # Write batch via asyncpg COPY (skipped in dry_run mode)
-                if use_direct_copy and batch_records and batch_columns and not dry_run:
-                    try:
-                        await _copy_batch_to_table(
-                            engine, entity_type, batch_records, batch_columns
-                        )
-                        rows_written += len(batch_records)
-                        batches_written += 1
-                        logger.debug(
-                            "csv_agent.batch_written",
-                            ingestion_id=str(ingestion_id),
-                            batch_num=batches_written,
-                            rows=len(batch_records),
-                            table=entity_type,
-                        )
-                    except Exception as copy_exc:
-                        rows_failed += len(batch_records)
-                        logger.error(
-                            "csv_agent.copy_failed",
-                            ingestion_id=str(ingestion_id),
-                            batch_num=batches_written + 1,
-                            table=entity_type,
-                            error=str(copy_exc),
-                        )
+                if use_direct_copy and batch_groups and not dry_run:
+                    for group_cols, group_records in batch_groups.items():
+                        try:
+                            await _copy_batch_to_table(
+                                engine, entity_type, group_records, list(group_cols)
+                            )
+                            rows_written += len(group_records)
+                            batches_written += 1
+                            logger.debug(
+                                "csv_agent.batch_written",
+                                ingestion_id=str(ingestion_id),
+                                batch_num=batches_written,
+                                rows=len(group_records),
+                                columns=list(group_cols),
+                                table=entity_type,
+                            )
+                        except Exception as copy_exc:
+                            rows_failed += len(group_records)
+                            logger.error(
+                                "csv_agent.copy_failed",
+                                ingestion_id=str(ingestion_id),
+                                batch_num=batches_written + 1,
+                                table=entity_type,
+                                columns=list(group_cols),
+                                error=str(copy_exc),
+                            )
 
             processing_ms = round((time.monotonic() - t0) * 1000)
             total_entities = (

@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from .config import settings
+from .catalog_ddl import catalog_ddl as _catalog_ddl
 
 _engine = None
 _session_factory = None
@@ -111,5 +112,5 @@ async def ensure_udr_tables() -> None:
     """Create the UDR support tables if they do not exist (idempotent)."""
     engine = _get_engine()
     async with engine.begin() as conn:
-        for stmt in _udr_ddl():
+        for stmt in [*_udr_ddl(), *_catalog_ddl(settings.db_schema)]:
             await conn.execute(text(stmt))

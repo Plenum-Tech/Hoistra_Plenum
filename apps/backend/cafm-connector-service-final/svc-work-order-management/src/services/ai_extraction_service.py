@@ -11,6 +11,7 @@ from openai import OpenAI
 from typing import Dict, Any
 
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -168,7 +169,7 @@ class AIExtractionService:
         response = self.client.chat.completions.create(
             model=self.model,
             response_format={"type": "json_object"},
-            max_tokens=2048,
+            **completion_kwargs(self.model, 2048),
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user",   "content": user_msg},

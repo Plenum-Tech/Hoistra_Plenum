@@ -1,0 +1,3 @@
+# The schema-mapper image (svc-ai-schema-mapper/Dockerfile) builds hoist-engine itself; the
+# binaries engine/scripts/dev.sh build-linux leaves in engine/bin are never copied.
+svc-ai-schema-mapper/engine/bin/

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
 import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -10,15 +11,72 @@ from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import String, and_, cast, column, exists, func, or_, select, table, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..core.logging import get_logger
-from ..models import ApprovalsQueueItem, OpsAuditLog, OpsEmailLog
-from .email_graph import graph_configured, send_via_microsoft_graph
+from ..models import (
+    ApprovalsQueueItem,
+    ComplianceCertificate,
+    ContractSlaParameters,
+    EnergyAnomaly,
+    OpsAuditLog,
+    OpsEmailLog,
+)
+from ..models.base import SCHEMA
+from .email_graph import send_via_microsoft_graph
+from .email_transport import email_transport
+from .vendor_identity import deleted_vendor_ids_sql, is_deleted_vendor, live_vendor_sql
 
 log = get_logger(__name__)
+
+
+# ── a deleted vendor ─────────────────────────────────────────────────────────
+#
+# A vendor deleted with history is RETIRED (Hussain, 12 Oct 2026): its row stays, status
+# 'deleted', so the invoices and closed work it appears on still resolve. It is never scored,
+# rated against, linked to new data, offered or emailed again. The two guards below are what
+# the engines on this side share; the status itself is read by vendor_identity, the one
+# definition of "deleted".
+
+VENDOR_DELETED = "vendor_deleted"
+VENDOR_UNREADABLE = "vendor_unreadable"
+
+
+async def retired_vendor_refusal(
+    session: AsyncSession, vendor_id: Any, *, what: str
+) -> dict[str, Any] | None:
+    """None when new data may be linked to this vendor (or no vendor is named); otherwise the
+    refusal, saying what did not happen (``what``: "no contract was recorded").
+
+    For WRITES that attach something new to a vendor. A status that cannot be read refuses
+    too, with its own reason: the vendor may be the one an admin has just deleted, and a
+    contract or invoice filed against it would put it back on the Vendors page."""
+    if not str(vendor_id or "").strip():
+        return None
+    # FOR SHARE: a write racing the delete waits for it and then reads 'deleted', rather than
+    # reading 'active' and landing on a vendor retired a moment later (review, 12 Oct 2026).
+    if not await is_deleted_vendor(session, vendor_id, unreadable_is_deleted=True, for_share=True):
+        return None
+    # Asked again the read's way, which answers False when the status could not be read —
+    # the only way to tell a retired vendor from an unreadable one.
+    if await is_deleted_vendor(session, vendor_id, for_share=True):
+        return {"ok": False, "reason": VENDOR_DELETED,
+                "error": f"This vendor has been deleted, so {what}."}
+    log.warning("approvals.vendor_status_unreadable", vendor_id=str(vendor_id)[:100])
+    return {"ok": False, "reason": VENDOR_UNREADABLE,
+            "error": f"This vendor's record could not be checked just now, so {what}. "
+                     "Try again in a moment."}
+
+
+def not_retired_vendor(vendor_column: Any) -> Any:
+    """Rows whose vendor is not retired — for the lists, cards and scores a deleted vendor must
+    leave. A row naming no vendor is kept: it was never anybody's to remove. Both sides as
+    text, because vendors.id is varchar on production (legacy ids like 'V-01') and the columns
+    that point at it are uuid."""
+    retired = text(deleted_vendor_ids_sql()).columns(column("id", String))
+    return or_(vendor_column.is_(None), cast(vendor_column, String).not_in(retired))
 
 
 async def apply_pm_action_track(
@@ -130,6 +188,12 @@ def _hash_payload(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+#: ops_audit_log.source_feature is CHAR(1): A/B/C are the three product features. Platform
+#: administration (companies, invitations, allocation) is none of them, so it gets its own
+#: letter. Anything longer than one character is rejected by the database, not stored.
+PLATFORM_FEATURE = "P"
+
+
 async def write_audit(
     session: AsyncSession,
     *,
@@ -196,6 +260,63 @@ async def enqueue_approval(
     return item
 
 
+#: The subjects a queue item can name that this service can look up. vendors has no model
+#: here, and its id is varchar (about half are legacy non-uuid ids), so the uuid is cast.
+_VENDORS = table("vendors", column("id", String), schema=SCHEMA)
+_CHECKED_SUBJECTS = ("compliance_certificate", "vendor", "energy_anomaly", "contract_sla_parameters")
+#: The flags list_certificates() hides a certificate for: an item about a certificate the
+#: register does not show is not one anybody can open.
+_HIDDEN_CERTIFICATE_FLAGS = ("archived", "superseded_duplicate", "a1_test_fixture")
+
+
+def _subject_on_record() -> Any:
+    """The item is decided history, names nothing this can check, or its subject is still
+    there to act on.
+
+    related_entity_id is a loose uuid, not a foreign key, and nothing that removes a subject
+    closes the items about it: deleting a document takes its certificates, a data reset
+    empties a company's Compliance and Contracts tables, archiving hides a certificate. Each
+    left its lapse alert or vendor block pending — on 28 Sep 2026 the top bar read
+    "7 Pending", all Compliance, over a register holding no certificates. Applied in SQL, so
+    the LIMIT counts only items a person can act on and orphans cannot crowd live ones out.
+    A site, a document or no subject at all cannot be proved gone, so those stay listed.
+
+    A retired vendor is not on record either (Hussain, 12 Oct 2026): its row stays for history,
+    but nothing about it is to be acted on. That covers the items naming it only in their
+    payload — invoice flags, staleness flags, a legacy-id passport share — as well as by subject.
+    """
+    q, c = ApprovalsQueueItem, ComplianceCertificate
+    hidden = or_(*[
+        func.coalesce(c.raw_metadata[flag].astext, "").notin_(["", "false", "0"])
+        for flag in _HIDDEN_CERTIFICATE_FLAGS
+    ])
+    payload_vendor = q.payload["vendor_id"].astext
+    subject_there = or_(
+        q.status != "pending",
+        q.related_entity_id.is_(None),
+        q.related_entity_type.is_(None),
+        q.related_entity_type.notin_(_CHECKED_SUBJECTS),
+        and_(q.related_entity_type == "compliance_certificate",
+             exists().where(c.id == q.related_entity_id, ~hidden)),
+        # Both sides as text: vendors.id is varchar on production and uuid on hoistra_test,
+        # and casting only the item's side raised "uuid = character varying" there. The
+        # vendors row is read unaliased, so the live test names it by its table name.
+        and_(q.related_entity_type == "vendor",
+             exists().where(cast(_VENDORS.c.id, String) == cast(q.related_entity_id, String),
+                            text(live_vendor_sql("vendors")))),
+        and_(q.related_entity_type == "energy_anomaly",
+             exists().where(EnergyAnomaly.id == q.related_entity_id)),
+        and_(q.related_entity_type == "contract_sla_parameters",
+             exists().where(ContractSlaParameters.id == q.related_entity_id)),
+    )
+    payload_vendor_live = or_(
+        q.status != "pending",
+        payload_vendor.is_(None),
+        payload_vendor.not_in(text(deleted_vendor_ids_sql()).columns(column("id", String))),
+    )
+    return and_(subject_there, payload_vendor_live)
+
+
 async def list_queue(
     session: AsyncSession,
     *,
@@ -203,15 +324,141 @@ async def list_queue(
     status: str | None = "pending",
     source_feature: str | None = None,
     limit: int = 100,
+    scope: Any | None = None,
 ) -> list[ApprovalsQueueItem]:
-    q = select(ApprovalsQueueItem).order_by(ApprovalsQueueItem.created_at.desc()).limit(limit)
+    q = (select(ApprovalsQueueItem).where(_subject_on_record())
+         .order_by(ApprovalsQueueItem.created_at.desc()).limit(limit))
     if organization_id:
         q = q.where(ApprovalsQueueItem.organization_id == organization_id)
     if status:
         q = q.where(ApprovalsQueueItem.status == status)
     if source_feature:
         q = q.where(ApprovalsQueueItem.source_feature == source_feature)
-    return list((await session.execute(q)).scalars().all())
+    items = list((await session.execute(q)).scalars().all())
+    if scope is not None and getattr(scope, "restricted", False):
+        items = await _restrict_queue_by_building(session, items, scope)
+    return items
+
+
+async def _restrict_queue_by_building(
+    session: AsyncSession, items: list[ApprovalsQueueItem], scope: Any
+) -> list[ApprovalsQueueItem]:
+    """Narrows the unified queue to a building-restricted caller's allocation.
+
+    ``related_entity_type`` names what a queue item is about, and only two of the values
+    it takes are ever building- or site-specific: ``compliance_certificate`` (resolved via
+    the certificate's own building_id, same rule list_certificates() applies) and
+    ``energy_anomaly`` (which names its building directly — the column was called site_id
+    until Sep 2026 and never held a site id, and reading it as one dropped every energy
+    anomaly from a restricted queue). Every other type this queue carries today —
+    vendor, contract_sla_parameters, asset_criticality, invoice, document, site,
+    meter_reading_gap, energy_recommendation — is not building-scoped data in this schema
+    (the same reason vendor accreditation coverage is not narrowed either), so those items
+    are left as they are rather than hidden on a guess.
+    """
+    from ..models import ComplianceCertificate, EnergyAnomaly
+
+    cert_ids = [i.related_entity_id for i in items if i.related_entity_type == "compliance_certificate" and i.related_entity_id]
+    anomaly_ids = [i.related_entity_id for i in items if i.related_entity_type == "energy_anomaly" and i.related_entity_id]
+
+    cert_building: dict[str, str | None] = {}
+    if cert_ids:
+        rows = (
+            await session.execute(
+                select(ComplianceCertificate.id, ComplianceCertificate.building_id).where(
+                    ComplianceCertificate.id.in_(cert_ids)
+                )
+            )
+        ).all()
+        cert_building = {str(cid): (str(bid) if bid else None) for cid, bid in rows}
+
+    # An energy anomaly names its building directly. The column was called site_id until
+    # Sep 2026 and never held a site id, and this code took the name at its word: it looked
+    # the value up in a site-to-buildings map, matched nothing, and so dropped every energy
+    # anomaly from a restricted caller's queue. The building is the answer already.
+    anomaly_building: dict[str, str | None] = {}
+    if anomaly_ids:
+        rows = (
+            await session.execute(
+                select(EnergyAnomaly.id, EnergyAnomaly.building_id).where(EnergyAnomaly.id.in_(anomaly_ids))
+            )
+        ).all()
+        anomaly_building = {str(aid): (str(bid) if bid else None) for aid, bid in rows}
+
+    out: list[ApprovalsQueueItem] = []
+    for item in items:
+        if item.related_entity_type == "compliance_certificate":
+            bid = cert_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        if item.related_entity_type == "energy_anomaly":
+            bid = anomaly_building.get(str(item.related_entity_id))
+            if bid and scope.allows_building(bid):
+                out.append(item)
+            continue
+        out.append(item)
+    return out
+
+
+def _vendors_named_by(item: Any) -> list[tuple[str, str]]:
+    """The vendors an item is about or would write to, each with how the refusal names it.
+
+    By subject, and by payload, where a legacy id ("V-01") rides because related_entity_id is a
+    uuid. A booking request's recommended contractors are not here: see _booking_all_retired."""
+    payload = getattr(item, "payload", None) or {}
+    named: list[tuple[str, str]] = []
+    subject = getattr(item, "related_entity_id", None)
+    if getattr(item, "related_entity_type", None) == "vendor" and subject:
+        named.append((str(subject), "This vendor"))
+    if payload.get("vendor_id"):
+        named.append((str(payload["vendor_id"]), "This vendor"))
+    out: list[tuple[str, str]] = []
+    for vendor_id, who in named:
+        if vendor_id.strip() and vendor_id not in {v for v, _ in out}:
+            out.append((vendor_id, who))
+    return out
+
+
+async def _booking_all_retired(session: AsyncSession, item: Any) -> bool:
+    """Whether a booking request has recommended contractors and every one has been deleted.
+
+    The same rule booking.fulfill_booking_on_approve books by: a retired recommendation is
+    passed over for the next live one. Refusing when only the TOP one was retired stopped the
+    approve before that could happen (review, 12 Oct 2026). An entry naming no vendor id
+    counts as live, as it does there."""
+    if getattr(item, "item_type", None) != "booking_request":
+        return False
+    recommended = (getattr(item, "payload", None) or {}).get("recommended_vendors") or []
+    if not isinstance(recommended, list) or not recommended:
+        return False
+    for rec in recommended:
+        if not (isinstance(rec, dict) and await is_deleted_vendor(session, rec.get("vendor_id"))):
+            return False
+    return True
+
+
+async def _retired_vendor_named_by(
+    session: AsyncSession, item: Any, *, what: str
+) -> dict[str, Any] | None:
+    """The refusal for an item whose vendor has been deleted, before anything is sent for it.
+
+    Pending is not enforced on these calls — a send or a decision reaches an item by id whatever
+    its status, and deleting a vendor closes its items rather than removing them — so the
+    vendor's own status is what stops mail to a deleted vendor. Read the way a read is: a status
+    that cannot be read does not hold up a send to a vendor nobody has deleted."""
+    for vendor_id, who in _vendors_named_by(item):
+        if await is_deleted_vendor(session, vendor_id):
+            log.info("approvals.refused_deleted_vendor", queue_item_id=str(getattr(item, "id", "")),
+                     vendor_id=vendor_id[:100])
+            return {"ok": False, "reason": VENDOR_DELETED,
+                    "error": f"{who} has been deleted, so {what}."}
+    if await _booking_all_retired(session, item):
+        log.info("approvals.refused_deleted_vendor", queue_item_id=str(getattr(item, "id", "")),
+                 vendor_id="recommended_vendors")
+        return {"ok": False, "reason": VENDOR_DELETED,
+                "error": f"The contractor this booking would go to has been deleted, so {what}."}
+    return None
 
 
 async def decide_queue_item(
@@ -231,6 +478,14 @@ async def decide_queue_item(
     decision_l = decision.lower()
     if decision_l not in {"approve", "edit", "dismiss"}:
         return {"ok": False, "error": "decision must be approve | edit | dismiss"}
+
+    # Approving is what sends — the email handoff, the booking to the contractor. An item about
+    # a deleted vendor can still be dismissed, which is how it leaves the queue.
+    if decision_l == "approve":
+        refused = await _retired_vendor_named_by(
+            session, item, what="this can no longer be approved. Dismiss it instead")
+        if refused:
+            return refused
 
     # Edit = save PM corrections and KEEP pending (do not vanish from Approvals rail).
     if decision_l == "edit":
@@ -517,6 +772,103 @@ async def decide_queue_item(
     }
 
 
+REMINDER_PREFIX = "Reminder: "
+
+
+def base_subject(subject: str) -> str:
+    """The request a subject is about, without any number of "Reminder: " in front."""
+    s = (subject or "").strip()
+    while s.lower().startswith(REMINDER_PREFIX.lower()):
+        s = s[len(REMINDER_PREFIX):].strip()
+    return s
+
+
+async def sent_email_history(
+    session: AsyncSession, *, subject: str, organization_id: UUID | None, limit: int = 10,
+) -> dict[str, Any]:
+    """The emails this company actually sent for one request - the original and its reminders,
+    newest first. Only status "sent": a dry run or a handoff did not reach anyone, so it is not
+    something to remind about. No company, no history (a platform-wide answer would name
+    another company's recipients)."""
+    base = base_subject(subject)
+    out: dict[str, Any] = {"ok": True, "subject": base, "count": 0, "items": []}
+    if not organization_id or not base:
+        return out
+    rows = (await session.execute(
+        select(OpsEmailLog.to_address, OpsEmailLog.subject, OpsEmailLog.sent_at)
+        .where(OpsEmailLog.organization_id == organization_id,
+               OpsEmailLog.status == "sent",
+               func.lower(OpsEmailLog.subject).in_([base.lower(), (REMINDER_PREFIX + base).lower()]))
+        .order_by(OpsEmailLog.sent_at.desc().nullslast())
+        .limit(limit))).all()
+    items = [{"to": r[0], "subject": r[1], "sent_at": r[2].isoformat() if r[2] else None,
+              "reminder": base_subject(r[1]) != (r[1] or "").strip()} for r in rows]
+    originals = [i for i in items if not i["reminder"]]
+    out.update({
+        "count": len(items), "items": items,
+        "reminders": sum(1 for i in items if i["reminder"]),
+        "first_sent_at": (originals[-1] if originals else items[-1])["sent_at"] if items else None,
+        "last_sent_at": items[0]["sent_at"] if items else None,
+        "last_to": items[0]["to"] if items else None,
+    })
+    return out
+
+
+#: A retired vendor has no address to send to: it answers like one that does not exist.
+_VENDOR_ROW = (
+    "SELECT v.id::text AS id, v.vendor_name, to_jsonb(v)->>'organization_id' AS organization_id"
+    " FROM plenum_cafm.vendors v WHERE v.id::text = :vid AND " + live_vendor_sql("v")
+    + "{scope} LIMIT 1"
+)
+
+
+async def vendor_contact(
+    session: AsyncSession,
+    *,
+    vendor_id: str | None,
+    organization_id: UUID | None,
+    building_ids: tuple[UUID, ...] | None,
+    is_superadmin: bool = False,
+) -> dict[str, Any]:
+    """Where a draft to this vendor may be sent — the Decision queue's drafts fill their To line
+    from it, and they are sent for real.
+
+    The address is the one ``vendor_contacts`` gives the Assets drafts: the primary contact, or
+    the only one; several and none marked primary is no address and the candidates, for the
+    reader to choose from. Reads only. A vendor in another company — or one whose row names no
+    company, which cannot be shown to be the caller's — answers exactly like a vendor that does
+    not exist, and so does one with no footprint on the buildings a restricted user may see.
+    """
+    from ..engines.auth import access
+    from ..engines.energy import asset_intelligence as ai  # local: avoids an import cycle
+
+    vid = str(vendor_id or "").strip()
+    # No company in scope is not "every company": only a superadmin reads across companies.
+    if not vid or (organization_id is None and not is_superadmin):
+        return {"ok": False, "reason": "not_found"}
+    scope_sql, params = access.vendor_predicate(building_ids, "v.id", prefix="vc")
+    try:
+        async with session.begin_nested():
+            row = (await session.execute(
+                text(_VENDOR_ROW.format(scope=scope_sql)), {"vid": vid, **params},
+            )).mappings().first()
+    except Exception as exc:  # noqa: BLE001 — a read that failed is not a vendor that is missing
+        log.warning("approvals.vendor_contact_unreadable", error=str(exc)[:200])
+        return {"ok": False, "reason": "unreadable"}
+    if not row:
+        return {"ok": False, "reason": "not_found"}
+    if organization_id is not None and str(row.get("organization_id") or "") != str(organization_id):
+        return {"ok": False, "reason": "not_found"}
+    found = await ai.vendor_contacts(session, row["id"])
+    return {
+        "ok": True,
+        "vendor": {"id": row["id"], "name": row.get("vendor_name")},
+        "email": found["email"],
+        "candidates": found["candidates"],
+        "written": False,
+    }
+
+
 async def send_platform_email(
     session: AsyncSession,
     *,
@@ -528,22 +880,39 @@ async def send_platform_email(
     cc_address: str | None = None,
     attachments: list[dict[str, str]] | None = None,
     commit: bool = True,
+    log_body: str | None = None,
+    html_body: str | None = None,
 ) -> dict[str, Any]:
-    """Platform sends email — Microsoft Graph (preferred) or SMTP."""
+    """Platform sends email — Microsoft Graph (preferred) or SMTP.
+
+    ``log_body`` is what gets written to ops_email_log in place of the message itself.
+    Every email is recorded here, which is right for an audit trail and wrong for a
+    message whose entire content is a live credential: a one-time code stored in a table
+    anyone with read access can query is not one-time in any useful sense, and it outlives
+    the ten minutes it was supposed to exist for. Callers sending a secret pass a redacted
+    stand-in, so the record still proves an email went out and no longer contains the
+    thing it was carrying.
+
+    ``html_body`` is optional: when given, ``body`` is still sent as the plain-text
+    alternative (SMTP's multipart/alternative, and what ``log_body`` redacts) and
+    ``html_body`` is what a client capable of rendering it shows instead. Every account
+    email that used to be a bare block of plain text with a raw link — the exact shape a
+    spam filter is tuned to flag — now has a real, branded HTML part.
+    """
     row = OpsEmailLog(
         id=uuid4(),
         organization_id=organization_id,
         queue_item_id=queue_item_id,
         to_address=to_address,
         subject=subject,
-        body=body,
+        body=log_body if log_body is not None else body,
         status="queued",
     )
     session.add(row)
     await session.flush()
 
-    use_graph = graph_configured()
-    use_smtp = bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+    transport = email_transport()
+    use_graph, use_smtp = transport == "graph", transport == "smtp"
 
     async def _persist() -> None:
         if commit:
@@ -561,8 +930,8 @@ async def send_platform_email(
             cc=cc_address,
             subject=subject,
             email_id=str(row.id),
-            graph_configured=use_graph,
-            smtp_configured=use_smtp,
+            transport=transport,
+            email_provider=settings.email_provider,
             attachments=len(attachments or []),
         )
         return {
@@ -583,9 +952,10 @@ async def send_platform_email(
             result = await send_via_microsoft_graph(
                 to_address=to_address,
                 subject=subject,
-                body=body,
+                body=html_body if html_body else body,
                 cc_address=cc_address,
                 attachments=attachments,
+                html=bool(html_body),
             )
             from_addr = str(result.get("from") or settings.outlook_user_mail)
         else:
@@ -603,6 +973,8 @@ async def send_platform_email(
                 msg["Cc"] = cc_address
             msg["Subject"] = subject
             msg.set_content(body)
+            if html_body:
+                msg.add_alternative(html_body, subtype="html")
             for att in attachments or []:
                 raw = att.get("content_base64") or ""
                 if not raw:
@@ -622,22 +994,28 @@ async def send_platform_email(
                     [p.strip() for p in cc_address.split(",") if p.strip()]
                 )
             use_ssl = bool(settings.smtp_use_ssl) or int(settings.smtp_port) == 465
-            if use_ssl:
-                with smtplib.SMTP_SSL(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
-            else:
-                with smtplib.SMTP(
-                    settings.smtp_host, settings.smtp_port, timeout=30
-                ) as smtp:
-                    if settings.smtp_use_tls:
-                        smtp.ehlo()
-                        smtp.starttls()
-                        smtp.ehlo()
-                    smtp.login(user, password)
-                    smtp.send_message(msg, to_addrs=recipients)
+
+            # smtplib is blocking: run inline it would hold the event loop — and every
+            # other request on this worker — for the whole exchange, up to the 30s timeout.
+            def _smtp_send() -> None:
+                if use_ssl:
+                    with smtplib.SMTP_SSL(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+                else:
+                    with smtplib.SMTP(
+                        settings.smtp_host, settings.smtp_port, timeout=30
+                    ) as smtp:
+                        if settings.smtp_use_tls:
+                            smtp.ehlo()
+                            smtp.starttls()
+                            smtp.ehlo()
+                        smtp.login(user, password)
+                        smtp.send_message(msg, to_addrs=recipients)
+
+            await asyncio.to_thread(_smtp_send)
             result = {"ok": True, "provider": "smtp", "from": from_addr}
 
         row.status = "sent"
@@ -702,6 +1080,20 @@ async def send_approval_email_draft(
     item = None
     if queue_item_id:
         item = await session.get(ApprovalsQueueItem, queue_item_id)
+        # The item is looked up by id alone, and what follows writes the recipient and the
+        # "sent" marks onto it and its siblings — so an id from another company is refused
+        # here, before anything is written or sent, rather than recorded against that company.
+        # An item naming no company is refused to a company too: its queue lists only items
+        # carrying its id, so such an item was never on its screen.
+        if (item is not None and org_id is not None
+                and str(item.organization_id or "") != str(org_id)):
+            return {"ok": False, "error": "That queue item is not in your company."}
+        # Before the recipient is written onto the item: a draft about a deleted vendor is not
+        # sent, handed off or recorded (Hussain, 12 Oct 2026).
+        if item is not None:
+            refused = await _retired_vendor_named_by(session, item, what="nothing was sent")
+            if refused:
+                return refused
         if item:
             org_id = org_id or item.organization_id
             # Persist chosen recipient on the draft for audit
@@ -709,9 +1101,70 @@ async def send_approval_email_draft(
             draft["to"] = to_addr
             if cc_address:
                 draft["cc_senior"] = cc_address
-            draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
             item.email_draft = draft
             item.updated_at = datetime.now(timezone.utc)
+
+    mode = (settings.email_delivery_mode or "handoff").lower()
+    if mode != "platform_send":
+        # PRD Q1: the platform drafts, the PM sends from their own client. decide_queue_item()
+        # has honoured that since Phase 2; this path — what the dock's "Approve & send" posts
+        # to — went straight to the platform sender whatever the mode said, so a deployment
+        # that had chosen handoff still sent vendor mail from the shared mailbox the moment
+        # someone pressed the button. The handoff is on the record exactly as a send would
+        # be: one ops_email_log row, one audit row, then the mailto for the reader's client.
+        handoff = build_email_handoff({
+            "to": to_addr,
+            "subject": subject.strip(),
+            "body": body,
+            "cc": (cc_address or "").strip() or None,
+        })
+        if item is not None:
+            # Not last_sent_at: queue_item_to_dict() reads that as email_sent_at, and the
+            # Approvals rail would show a sent timestamp for mail that never left here.
+            draft = dict(item.email_draft or {})
+            draft["last_handoff_at"] = datetime.now(timezone.utc).isoformat()
+            item.email_draft = draft
+        session.add(
+            OpsEmailLog(
+                id=uuid4(),
+                organization_id=org_id,
+                queue_item_id=queue_item_id,
+                to_address=to_addr,
+                subject=subject.strip(),
+                body=body,
+                status="handoff",
+                sent_at=datetime.now(timezone.utc),
+            )
+        )
+        await write_audit(
+            session,
+            actor="user:pm",
+            action_type="approvals_queue.email_handoff",
+            source_feature=item.source_feature if item else "A",
+            organization_id=org_id,
+            output_payload={
+                "queue_item_id": str(queue_item_id) if queue_item_id else None,
+                "to": to_addr,
+                "cc": cc_address,
+                "status": "handoff",
+            },
+            detail={"subject": subject[:200]},
+        )
+        await session.commit()
+        return {
+            "ok": True,
+            "status": "handoff",
+            "handoff": handoff,
+            "pm_action_status": None,
+            "email_sent_to": None,
+        }
+
+    if item is not None:
+        # Stamped on the road that sends, and only there: this is what the Approvals rail
+        # shows as the sent time.
+        draft = dict(item.email_draft or {})
+        draft["last_sent_at"] = datetime.now(timezone.utc).isoformat()
+        item.email_draft = draft
 
     result = await send_platform_email(
         session,
@@ -765,12 +1218,15 @@ async def send_approval_email_draft(
         )
         # Sync siblings (confirm + ladder) for same certificate so Bell Review state matches
         if item.related_entity_id is not None:
+            # Inside the item's own company: a vendor row is not always one company's, and
+            # this marks every sibling it finds as sent to this company's recipient.
             siblings = (
                 await session.execute(
                     select(ApprovalsQueueItem).where(
                         ApprovalsQueueItem.status == "pending",
                         ApprovalsQueueItem.related_entity_type == item.related_entity_type,
                         ApprovalsQueueItem.related_entity_id == item.related_entity_id,
+                        ApprovalsQueueItem.organization_id == item.organization_id,
                         ApprovalsQueueItem.id != item.id,
                     )
                 )

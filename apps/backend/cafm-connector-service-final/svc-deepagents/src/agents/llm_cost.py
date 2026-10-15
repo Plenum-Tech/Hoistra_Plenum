@@ -153,6 +153,8 @@ class Ledger:
         }
         self.entries.append(entry)
         log.info("llm.call", session_id=self.session_id, **{k: v for k, v in entry.items() if k != "tools" or v})
+        from . import trace as _trace
+        _trace.on_llm_cost(entry)
         return entry
 
     def last(self, role: str) -> dict[str, Any] | None:

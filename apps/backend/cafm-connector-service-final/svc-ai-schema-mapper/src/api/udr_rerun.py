@@ -204,20 +204,19 @@ async def _enqueue_resume(
         redis_settings = RedisSettings.from_dsn(settings.redis_url)
         pool = await create_pool(redis_settings)
         try:
-            await pool.enqueue_job(
-                "resume_migration",
-                migration_id=migration_id,
-                gate_type=gate_type,
-                decisions=decisions,
+            from ..migration_runs import enqueue_resume
+
+            queued = await enqueue_resume(
+                pool, migration_id=migration_id, gate_type=gate_type, decisions=decisions,
             )
         finally:
             await pool.aclose()
         logger.info(
-            "udr_rerun_enqueued",
+            "udr_rerun_enqueued" if queued in ("queued", "duplicate") else "udr_rerun_not_queued_resume_running",
             migration_id=migration_id,
             gate_type=gate_type,
         )
-        return True
+        return queued in ("queued", "duplicate")
     except Exception as exc:  # pragma: no cover — best effort, logs and falls through
         logger.warning(
             "udr_rerun_enqueue_failed",
@@ -348,7 +347,7 @@ async def rerun_phase(
         detail=(
             "Rerun queued — worker will replay the pipeline from the requested phase."
             if queued
-            else "Rerun intent persisted. Worker not reachable — call /status once the worker is online to advance."
+            else "Rerun intent persisted but not queued — a previous step is still being applied, or the worker is not reachable. Ask again in a moment."
         ),
     )
 
@@ -387,6 +386,6 @@ async def reset_to_phase(
         detail=(
             "Reset queued — worker will rewind state to the requested phase."
             if queued
-            else "Reset intent persisted. Worker not reachable — call /status once the worker is online to advance."
+            else "Reset intent persisted but not queued — a previous step is still being applied, or the worker is not reachable. Ask again in a moment."
         ),
     )

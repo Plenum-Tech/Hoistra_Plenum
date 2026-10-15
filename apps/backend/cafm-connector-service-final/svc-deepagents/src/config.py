@@ -17,6 +17,25 @@ def _find_env_file() -> str | None:
 _ENV_FILE = _find_env_file()
 
 
+#: The model the compliance portfolio summary runs on when the environment does not name one.
+#:
+#: Written here once and imported by every caller. It used to be the string "claude-opus-5"
+#: repeated at seven call sites as `settings.compliance_summary_model or "claude-opus-5"`, which
+#: is how it came to disagree with reality: both the Container App and the local .env set
+#: COMPLIANCE_SUMMARY_MODEL=claude-sonnet-5, so the fallback had not been reached in either
+#: environment and nobody had cause to notice it named a different, dearer model. A default that
+#: is never exercised still decides what happens the day the variable is unset.
+DEFAULT_COMPLIANCE_SUMMARY_MODEL = "claude-sonnet-5"
+
+#: The model the vendor/contract analyst writes its answer zones with when the environment
+#: does not name one. Kept separate from the compliance default above because the two are
+#: different decisions: this one runs on every vendor question a property manager asks, so
+#: pointing it at the dearer model buys compliance-grade answers at compliance-grade prices.
+#: Declared here rather than inline for the reason the note above gives — a fallback nobody
+#: exercises still decides what happens the day the variable is unset.
+DEFAULT_CONTRACT_ANALYST_MODEL = "claude-sonnet-5"
+
+
 class Settings(BaseSettings):
     # Database
     db_url: str = Field(..., validation_alias=AliasChoices("DB_URL", "DATABASE_URL", "db_url"))
@@ -89,7 +108,7 @@ class Settings(BaseSettings):
     # ("forged AND still compliant") over the whole table, which the cheap routing model gets
     # wrong, so it runs on Claude independently of OPENAI_MODEL.
     compliance_summary_model: str = Field(
-        "claude-opus-5",
+        DEFAULT_COMPLIANCE_SUMMARY_MODEL,
         validation_alias=AliasChoices(
             "COMPLIANCE_SUMMARY_MODEL", "compliance_summary_model"
         ),
@@ -114,6 +133,16 @@ class Settings(BaseSettings):
             "COMPLIANCE_DEBUG_PAYLOADS", "compliance_debug_payloads"
         ),
     )
+    # Activity log: every input/output message of the orchestrator and the compliance
+    # stages, appended to plenum_cafm.agent_activity_log for troubleshooting. Payloads are
+    # bounded (ACTIVITY_LOG_PAYLOAD_CHARS). See agents/activity_log.py.
+    activity_log_enabled: bool = Field(
+        True, validation_alias=AliasChoices("ACTIVITY_LOG_ENABLED", "activity_log_enabled")
+    )
+    activity_log_payload_chars: int = Field(
+        64000,
+        validation_alias=AliasChoices("ACTIVITY_LOG_PAYLOAD_CHARS", "activity_log_payload_chars"),
+    )
     # Downstream service URLs
     # NOTE: UDR (user/data lookup) uses direct DB access — no HTTP svc-udr needed
     wo_engine_base_url: str = "http://localhost:8001"       # svc-ingestion (legacy alias kept)
@@ -131,9 +160,15 @@ class Settings(BaseSettings):
     deep_agents_upload_dir: str = "/tmp/deepagents_uploads"
     # Cumulative cap for a with-files migration upload, enforced (streamed) in the
     # run-stateful-with-files endpoint. Default aligns with the nginx gateway's client_max_body_size
-    # (200m) so the front door, the gateway, and the client agree on one ceiling. Override via env.
+    # (1g) so the front door, the gateway, and the client agree on one ceiling. Override via env.
+    #
+    # The upload is streamed a megabyte at a time, so accepting a gigabyte costs a gigabyte of
+    # disk under deep_agents_upload_dir and one chunk of memory. What follows is the expensive
+    # part: a workbook is parsed in full, and openpyxl holds far more than the file's own size
+    # while it does. A gigabyte of spreadsheet is a memory problem for the parser long before it
+    # is a transfer problem here.
     deep_agents_max_upload_mb: int = Field(
-        200,
+        1024,
         validation_alias=AliasChoices("DEEP_AGENTS_MAX_UPLOAD_MB"),
     )
     ingest_batch_inline_threshold: int = Field(
@@ -163,6 +198,25 @@ class Settings(BaseSettings):
     orchestrator_history_max_tokens: int = Field(
         48000,
         validation_alias=AliasChoices("ORCHESTRATOR_HISTORY_MAX_TOKENS"),
+    )
+    # Self-managed context (agents/context_budget.py): the working part of a turn - every message
+    # after the system prompt - is held under this budget by the model compacting its own older
+    # tool results into notes. Measured 5 Oct 2026: the orchestrator loop and the compliance
+    # agent grew ~21-24k tokens inside one question, up to 75k.
+    context_budget_tokens: int = Field(
+        24000,
+        validation_alias=AliasChoices("CONTEXT_BUDGET_TOKENS"),
+    )
+    # The compliance analyst reads the register as a digest (agents/register_digest.py): rows
+    # needing attention in full, every other certificate one line. Off sends every row in full.
+    compliance_register_digest: bool = Field(
+        True,
+        validation_alias=AliasChoices("COMPLIANCE_REGISTER_DIGEST"),
+    )
+    # Off restores the old behaviour exactly: oldest messages trimmed, nothing compacted.
+    context_self_manage: bool = Field(
+        True,
+        validation_alias=AliasChoices("CONTEXT_SELF_MANAGE"),
     )
     # Phase 6 — optional object-storage connectors (stubs until drivers wired)
     azure_storage_connection_string: str = Field(

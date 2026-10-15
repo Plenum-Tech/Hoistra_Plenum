@@ -8,6 +8,7 @@ from openai import OpenAI
 from typing import Dict, Any, List
 
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -110,7 +111,7 @@ class EmailParser:
         response = self.client.chat.completions.create(
             model=self.model,
             response_format={"type": "json_object"},
-            max_tokens=64,
+            **completion_kwargs(self.model, 64),
             messages=[
                 {"role": "system", "content": _CLASSIFY_SYSTEM},
                 {"role": "user",   "content": _CLASSIFY_TEMPLATE.format(
@@ -155,7 +156,7 @@ class EmailParser:
         response = self.client.chat.completions.create(
             model=self.model,
             response_format={"type": "json_object"},
-            max_tokens=1024,
+            **completion_kwargs(self.model, 1024),
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user",   "content": user_msg},

@@ -27,6 +27,7 @@ from ..models.work_order import WorkOrder
 from ..models.journey_log import JourneyLog
 from ..config import settings
 from ..core.logging import get_logger
+from ..llm_params import completion_kwargs
 
 log = get_logger(__name__)
 
@@ -125,8 +126,7 @@ Respond in JSON only, no extra text:
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=120,
+            **completion_kwargs(model, 120, temperature=0),
         )
         return resp.choices[0].message.content.strip()
 

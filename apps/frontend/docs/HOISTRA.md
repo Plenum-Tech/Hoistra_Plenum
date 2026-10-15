@@ -62,22 +62,21 @@ Logo → home · reporting currency (GBP · USD · AED · SGD) · **Pending** pi
 Collapsed rail (icons) or open panel (248px). Open panel shows: **New query** · **Reports** group · **Spaces** · **Sessions**.
 
 Reports group is scoped by mode:
-- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then saved custom reports (e.g. Risky Buildings · 30 min).
+- **User view:** Buildings (User), Compliance, Vendors, Energy, Assets, Work orders, then the saved custom reports with their cadence badge.
 - **Admin view:** Buildings (Admin), Integrations (Admin) · 15 min — only these.
 
 Active state follows the actual page and role. Order: Vendors sits above Energy.
 
-**Spaces:** Compliance (3 lapsed), Energy (6 anomalies), Vendor performance (3 below 80), Vendor operations (14 to approve) — each opens its module.
-**Sessions:** every query and every orchestrator task, newest first; a task reopens the orchestrator, a query re-runs, "What needs my approval today?" opens the decision queue.
+**Spaces:** the four built-in spaces — Compliance, Energy, Vendor performance, Vendor operations — carry live badges (lapsed certificates, open anomalies, vendors below 80, approvals pending; `—` until the engine answers) and open a space page: figures, the sessions filed there, an ask bar. **+** adds a saved space (svc-udr `saved_spaces`); saved spaces can be renamed and deleted from their page.
+**Sessions:** every conversation with the orchestrator and every orchestrator task, newest first with a real elapsed time; a chat session reopens the conversation page on its transcript and continues the same thread, a task reopens the dock on its chain. **All sessions** opens the Sessions page (search, by day, delete, file in a space).
 
-**+ New report:** build a saved report from a session — source query, refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name.
+**+ New report:** build a saved report from a session — source (a recent session's question), refresh cadence (30 min · 1 hr · 6 hr · 12 hr · 24 hr · daily 02:00 · chosen days with a 7-day picker and time), name. The first refresh runs on creation; the badge is the cadence, or Pending / Running / Failed.
 
 ### 4.4 Ask bar (query first)
 Sits directly under the breadcrumb on every non-admin report: Compliance, Vendors, Energy / Assets / Work orders modules, custom reports, Buildings (user view). Sparkle icon, page-scoped placeholder, **Ask** button, three suggested questions for that page. Enter or Ask runs through the query interface and lands on the answer view. Admin pages (Buildings admin, Integrations) do not carry it.
 
 ### 4.5 Orchestrator dock
 Fixed left panel (280px; 420px during an investigation) opened by any action that makes the platform *do* something. Shows the task as intent, the **Orchestrator → Planner → Worker → Quality** chain playing in, then an armed flow:
-- **declare** — hoist a building (3 steps: record → schema → documents)
 - **booking**, **pick** (contractor swap), **new** (new vendor), **email** (draft with To / Subject / Body, Approve & send)
 - **investigate** — the conversational investigation (see §9.6)
 
@@ -112,7 +111,8 @@ Two entries, one page, driven by `role`.
 
 ### 6.1 Buildings (Admin)
 - **Hoist Graph** — organic cluster: five building hubs, shared nodes for vendors and regulation packs, direct vs indirect relationships by line style, marker-yellow badge where unstructured files are bound to a table by similarity. Click to expand a node; per-building hierarchy tree beneath (building → floors → assets → documents, with vectorised files shown as marker chips).
-- **Hoist a building** — orchestrator declare flow.
+- **Hoist a building** / **Edit** — one modal, open to either role (`logic/buildingsCrud.js`): create sends the whole form as `POST /api/energy/buildings`; opening Edit on a row prefills every field (the primary-use enum verbatim, not the resolved TM46 category) and the submit sends only what changed as `PATCH /api/energy/buildings/{id}`, with `expected_updated_at` so a stale edit 409s instead of overwriting. **Remove** — `DELETE` without `confirm` reports what the building holds (detached, never deleted) before the dialog lets you confirm.
+- **What it is costing** — the per-row graph drawer also reads `GET /api/energy/buildings/{id}/cost-drivers` (`logic/buildingsGraph.js`), ranked on the gap over contract; spend no work order names an asset for is shown separately, outside the ranking.
 - **Update the graph** — NLP instruction to re-bind or correct.
 - **Documents** — structured (tables and rows) and unstructured (vectorised and bound), per building, with reconciled counts.
 - **Export canonical table** — with snapshot history. Columns: Building ID · Name · Country · State · Use / floor-area split · Floors · Floor area · EUI · Benchmark · EUI vs benchmark · Benchmark standard · Hoist Score.
@@ -206,7 +206,7 @@ Side title, footnote and the "Ask about this module" chips follow the selected m
 ---
 
 ## 10. Assets and Work orders
-Present as modules with the generic layout (metric cards, filterable table, side bars, asks). Assets currently routes to the Risky Buildings report. Full build-out is open.
+Present as modules with the generic layout (metric cards, filterable table, side bars, asks). Assets currently opens the Buildings page, where the asset registers hang off each site. Full build-out is open.
 
 ---
 
@@ -243,7 +243,7 @@ One table per node, keyed on a natural key, joined by foreign keys. Core tables:
 
 ## 14. Roles
 
-`role` is session state: `"user"` (default) or `"admin"`. Toggled from the account menu; Buildings (Admin) and Integrations set admin on open. Admin gates: Hoist a building, Update the graph, Integrations page, admin navigator. Everything else is user. Built once, driven by state, so the two views cannot drift.
+`role` is session state: `"user"` (default) or `"admin"`. Toggled from the account menu; Buildings (Admin) and Integrations set admin on open. Admin gates: Update the graph, Integrations page, admin navigator (hoisting, editing and removing a building are open to either role). Everything else is user. Built once, driven by state, so the two views cannot drift.
 
 ---
 

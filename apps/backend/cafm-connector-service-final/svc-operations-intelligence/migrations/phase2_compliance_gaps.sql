@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.building_country_packs (
     UNIQUE (site_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_bcp_org ON plenum_cafm.building_country_packs (organization_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_bcp_org ON plenum_cafm.building_country_packs (organization_id);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.resource_skills (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.resource_skills (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_rs_vendor ON plenum_cafm.resource_skills (vendor_id);
-CREATE INDEX IF NOT EXISTS ix_rs_status ON plenum_cafm.resource_skills (status);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_rs_vendor ON plenum_cafm.resource_skills (vendor_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_rs_status ON plenum_cafm.resource_skills (status);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.approval_action_tokens (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS plenum_cafm.approval_action_tokens (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_aat_token ON plenum_cafm.approval_action_tokens (token);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_aat_token ON plenum_cafm.approval_action_tokens (token);
 
 CREATE TABLE IF NOT EXISTS plenum_cafm.compliance_risk_snapshots (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),

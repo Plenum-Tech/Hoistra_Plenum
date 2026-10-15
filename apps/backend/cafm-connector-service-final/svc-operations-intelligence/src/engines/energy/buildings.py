@@ -19,6 +19,7 @@ how the meter reading arrives, and whether attribution is measured or inferred.
 from __future__ import annotations
 
 import json
+import re
 from statistics import median
 from typing import Any
 from uuid import UUID
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.logging import get_logger
 from ...models.energy import BuildingEnergyProfile, EnergyMeter, EuiSnapshot
 from ..compliance.site_links import as_uuid, sites_shape
+from . import building_rollup
 from .eui import load_tm46, tm46_benchmark
 
 log = get_logger(__name__)
@@ -96,14 +98,38 @@ _FALLBACK_PACK = {
 }
 _ROLLING_MIN_COMPARABLES = 2
 
+#: Names that resolve to a country code. Codes and country names, then sub-national names
+#: — a region, emirate or home nation — because the columns this reads are filled by hand
+#: and by import, and a person writing "Dubai" under country means the UAE.
+#:
+#: One rule for adding to the second group: the name must be able to mean exactly ONE
+#: country. That is why the seven emirates are here and "Central Region" is not — Singapore
+#: has one, and so do Ghana, Uganda and Malawi. The bare compass regions are absent for the
+#: same reason: "South West" names a part of a dozen countries, and the two UK sites holding
+#: it are not evidence about the phrase. Unmapped names return None, which is the truth.
 _COUNTRY_ALIASES = {
-    "UK": "UK", "GB": "UK", "GBR": "UK", "UNITED KINGDOM": "UK", "ENGLAND": "UK",
-    "SCOTLAND": "UK", "WALES": "UK", "NORTHERN IRELAND": "UK", "GREAT BRITAIN": "UK",
+    # United Kingdom
+    "UK": "UK", "GB": "UK", "GBR": "UK", "UNITED KINGDOM": "UK", "GREAT BRITAIN": "UK",
+    "ENGLAND": "UK", "SCOTLAND": "UK", "WALES": "UK", "CYMRU": "UK",
+    "NORTHERN IRELAND": "UK", "NORTHERN IRL.": "UK", "NORTHERN IRL": "UK", "NI": "UK",
+    "GREATER LONDON": "UK", "LONDON": "UK", "GREATER MANCHESTER": "UK",
+    "WEST MIDLANDS": "UK", "YORKSHIRE": "UK", "MERSEYSIDE": "UK",
+    "WEST YORKSHIRE": "UK", "SOUTH YORKSHIRE": "UK", "TYNE AND WEAR": "UK",
+    # United States
     "US": "US", "USA": "US", "UNITED STATES": "US", "UNITED STATES OF AMERICA": "US",
-    "AE": "AE", "UAE": "AE", "ARE": "AE", "UNITED ARAB EMIRATES": "AE", "DUBAI": "AE",
-    "ABU DHABI": "AE",
+    "NEW YORK": "US",
+    # United Arab Emirates — all seven emirates, each unambiguous.
+    "AE": "AE", "UAE": "AE", "ARE": "AE", "UNITED ARAB EMIRATES": "AE",
+    "ABU DHABI": "AE", "AJMAN": "AE", "DUBAI": "AE", "FUJAIRAH": "AE",
+    "RAS AL KHAIMAH": "AE", "RAS AL-KHAIMAH": "AE", "SHARJAH": "AE",
+    "UMM AL QUWAIN": "AE", "UMM AL-QUWAIN": "AE",
+    # Singapore
     "SG": "SG", "SGP": "SG", "SINGAPORE": "SG",
 }
+
+#: A bare ISO-style code, which is accepted as itself so a country this table has never
+#: heard of still works when it arrives already coded.
+_ISO_LIKE = re.compile(r"^[A-Z]{2,3}$")
 
 # Fields that make a building row usable on the dashboard. Completeness is the share of
 # these present — a data-quality figure, not a compliance or performance score.
@@ -121,10 +147,23 @@ COMPLETENESS_FIELDS = (
 
 
 def country_code_for(raw: Any) -> str | None:
+    """The country code a name resolves to, or None when it resolves to nothing.
+
+    None is a real answer and the important one. The previous version ended `or s`, which
+    made the `else None` branch unreachable and handed back whatever it was given — so any
+    place name became a country code simply by being passed in, and no caller could tell a
+    resolved code from an unmapped string. `region` now carries Sharjah on 96 production
+    sites; deriving country from it would have written SHARJAH as the code.
+    """
     s = str(raw or "").strip().upper()
     if not s:
         return None
-    return _COUNTRY_ALIASES.get(s, s if len(s) <= 3 else None) or s
+    code = _COUNTRY_ALIASES.get(s)
+    if code:
+        return code
+    # Already a code: accepted as itself, so a country not in the table still works.
+    # Anything else is a name nobody has mapped, and saying so is the whole point.
+    return s if _ISO_LIKE.match(s) else None
 
 
 def tm46_type_for(site_type: Any) -> str | None:
@@ -284,14 +323,23 @@ def shape_building_row(
         bench = _num(site.get("benchmark_kwh_per_m2"))
         bench_source = "sites_recorded"
     if bench is None and tm46_market and building_type:
-        bench = tm46_benchmark(building_type, "electricity")
-        bench_source = "tm46_by_site_type" if bench is not None else None
+        # Compare like with like. A snapshot states the fuel it measured, so its benchmark is
+        # that fuel's. A whole-building EUI recorded on the row names no fuel and covers all
+        # of them, so it reads against the combined benchmark — scoring a 214 kWh/m²
+        # whole-building figure against TM46's 95 electricity-only would report a building
+        # sitting AT its benchmark as 125% over it.
+        fuel = str((snapshot or {}).get("meter_type") or "").strip().lower() or "combined"
+        if fuel not in {"electricity", "gas", "combined"}:
+            fuel = "combined"
+        bench = tm46_benchmark(building_type, fuel)
+        bench_source = f"tm46_{fuel}_by_use" if bench is not None else None
 
     # EUI: computed from meter readings when there is a snapshot, else the recorded value.
     eui_source = "eui_snapshot" if eui is not None else None
     if eui is None and _num(site.get("eui_kwh_per_m2")) is not None:
         eui = _num(site.get("eui_kwh_per_m2"))
-        eui_source = "sites_recorded"
+        # buildings.eui_kwh_m2 in the canonical model; sites.eui_kwh_per_m2 in the older one.
+        eui_source = "buildings_recorded" if site.get("building_id") or site.get("primary_use") else "sites_recorded"
     if deviation is None and eui is not None and bench:
         deviation = round(100.0 * (eui - bench) / bench, 2)
 
@@ -309,7 +357,7 @@ def shape_building_row(
         }
     else:
         met["metering_source"] = "energy_meters" if meters else None
-    hoist_score = _int(site.get("hoist_score"))
+    stored_hoist_score = _int(site.get("hoist_score"))
 
     present = {
         "name": bool(site.get("building_name") or site.get("name")),
@@ -326,6 +374,9 @@ def shape_building_row(
     completeness = round(100.0 * (len(COMPLETENESS_FIELDS) - len(missing)) / len(COMPLETENESS_FIELDS))
 
     row = {
+        # The row's identity. When the graph is the root this IS the building_id ("B-001");
+        # on the sites fallback both name the same key, so a caller can read either.
+        "building_id": key or None,
         "site_id": key or None,
         "site_key": key or (str(site_uuid) if site_uuid else None),
         "site_uuid": str(site_uuid) if site_uuid else None,
@@ -353,6 +404,10 @@ def shape_building_row(
         "eui_period_start": (snapshot or {}).get("period_start"),
         "eui_period_end": (snapshot or {}).get("period_end"),
         "eui_meter_type": (snapshot or {}).get("meter_type"),
+        # What the building is contracted at, as the benchmark pass priced it. A page that
+        # prices the gap itself must use this and not a market constant, or the same kWh
+        # carries two costs depending on which surface you read.
+        "tariff_gbp_per_kwh": (snapshot or {}).get("tariff_used"),
         "benchmark_standard": pack["standard"],
         "benchmark_standing": pack["standing"],
         "benchmark_standing_note": pack["standing_note"],
@@ -360,9 +415,26 @@ def shape_building_row(
         "benchmark_source": bench_source,
         "benchmark_comparables": None,
         "deviation_pct": round(deviation, 1) if deviation is not None else None,
-        "hoist_score": hoist_score,
+        # The Hoist Score is how completely a building is held in the graph - coverage
+        # first. That is exactly what `completeness` above measures, from the rows that
+        # exist rather than from anything typed in. So a building with nothing stored is
+        # scored on what the graph actually holds, and a stored figure still wins: it is
+        # someone's judgement, and a judgement outranks a derivation.
+        #
+        # It used to be neither. create_building wrote a hard 0 that nothing ever updated,
+        # so every hoisted building reported a Hoist Score of zero - read as "scored, and
+        # scored nothing" rather than "not scored", which is the one thing it did not mean.
+        # 0 until the graph holds something about this building. apply_graph_rollup()
+        # raises it as each domain arrives; record completeness is a different question and
+        # keeps its own field below.
+        "hoist_score": stored_hoist_score if stored_hoist_score is not None else 0,
+        "hoist_score_source": "recorded" if stored_hoist_score is not None else "graph_coverage",
         "record_completeness_pct": completeness,
         "completeness_missing": missing,
+        # What a client quotes back as expected_updated_at so a patch cannot silently
+        # overwrite an edit made between the read and the write.
+        "updated_at": site.get("updated_at"),
+        "created_at": site.get("created_at"),
     }
     row.update(met)
     return row
@@ -399,6 +471,238 @@ def apply_rolling_benchmarks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if r.get("eui_kwh_per_m2") is not None and bench:
             r["deviation_pct"] = round(100.0 * (r["eui_kwh_per_m2"] - bench) / bench, 1)
     return rows
+
+
+def sqft_to_sqm(value: Any) -> float | None:
+    """Square feet to square metres. The canonical schema records gross_area_sqft; every
+    benchmark on the platform is kWh/m², so the two must never be compared unconverted."""
+    v = _num(value)
+    return round(v / building_rollup.SQFT_PER_SQM, 2) if v is not None else None
+
+
+def building_to_row_input(b: dict[str, Any]) -> dict[str, Any]:
+    """A plenum_cafm.buildings row in the shape shape_building_row() reads.
+
+    The two tables carry the same facts under different names — a building has `name` where
+    a site has `site_name`, and its recorded fallbacks are suffixed `_recorded` so they can
+    never be mistaken for a counted figure.
+    """
+    # Country, region and the benchmark standard come from the building's LOCATION and the
+    # regulation pack that location points at. The per-building columns are only read where a
+    # deployment has not migrated to locations yet, so nothing regresses mid-migration.
+    return {
+        "key": b.get("building_id"),
+        "building_id": b.get("building_id"),
+        "primary_use": b.get("primary_use"),
+        "alt_id": b.get("site_id"),
+        "name": b.get("name") or b.get("building_name") or b.get("site_name"),
+        "building_name": b.get("name") or b.get("building_name"),
+        "building_code": b.get("building_code"),
+        "code": b.get("building_code"),
+        "updated_at": b.get("updated_at"),
+        "created_at": b.get("created_at"),
+        "country": b.get("country"),
+        "country_code": b.get("loc_country_code") or b.get("country_code")
+                        or b.get("site_country_code"),
+        "city": b.get("city"),
+        "region": b.get("loc_region") or b.get("state") or b.get("city")
+                  or b.get("site_region") or b.get("site_city"),
+        "postcode": b.get("postcode"),
+        "status": b.get("status"),
+        # The survey — what the structure is, how big it is, how it scores — with the site
+        # as the last fallback, the same shape as country/region/metering above. A site may
+        # hold several buildings, and where it does this is the estate's figure standing in
+        # for the building's: shape_building_row labels the source so a reader can see that,
+        # and anything counted from the graph overrides it in apply_graph_rollup.
+        "site_type": b.get("primary_use") or b.get("use_type") or b.get("site_site_type"),
+        "use_type": b.get("primary_use") or b.get("use_type") or b.get("site_use_type"),
+        "use_mix": b.get("site_use_mix"),
+        "floors": (b.get("floors") if b.get("floors") is not None
+                   else b.get("floors_recorded") or b.get("site_floors")),
+        # The canonical area is square feet; the row model works in m². The site already
+        # records m², so it is taken as it stands rather than converted twice.
+        "gfa_sqm": (sqft_to_sqm(b.get("gross_area_sqft")) or b.get("gfa_sqm_recorded")
+                    or b.get("site_gfa_sqm")),
+        # How the reading arrives. Recorded on the site, not the building — the same
+        # fallback shape as country/region above.
+        "metering_route": b.get("metering_route") or b.get("site_metering_route"),
+        "metering_granularity": (b.get("metering_granularity")
+                                 or b.get("site_metering_granularity")),
+        # The standard still comes from the location's regulation pack first — a pack
+        # inferred from an estate's address is a guess with a legal claim attached. The site
+        # column is not that inference: it is a standard somebody recorded against the site,
+        # and it is read only when neither the pack nor the building states one.
+        "benchmark_standard": (b.get("pack_standard") or b.get("benchmark_standard")
+                               or b.get("site_benchmark_standard")),
+        "benchmark_standing": (b.get("pack_standing") or b.get("benchmark_standing")
+                               or b.get("site_benchmark_standing")),
+        "benchmark_standing_note": (b.get("pack_standing_note")
+                                    or b.get("benchmark_standing_note")
+                                    or b.get("site_benchmark_standing_note")),
+        "benchmark_source_label": b.get("pack_benchmark_source"),
+        "eui_kwh_per_m2": (b.get("eui_kwh_m2") or b.get("eui_kwh_per_m2")
+                           or b.get("site_eui_kwh_per_m2")),
+        "benchmark_kwh_per_m2": (b.get("benchmark_kwh_per_m2")
+                                 or b.get("site_benchmark_kwh_per_m2")),
+        "hoist_score": b.get("hoist_score") or b.get("site_hoist_score"),
+    }
+
+
+#: What a building is scored on: the operational record, not its own description. Filling
+#: in a form is not coverage — a building with a name, a floor count and an area is a
+#: building nobody has ingested anything about yet, and it scores nothing.
+#:
+#: Each domain is one equal share of the score, and each is present or absent: a building
+#: is not covered because one branch is full. The share rises as each kind of record
+#: arrives, which is the whole point — the score tracks ingestion, not data entry.
+HOIST_SCORE_DOMAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("assets", ("assets",)),
+    ("compliance", ("certificates",)),
+    # The graph's own contracts relation, or — where the contracts view is missing — the
+    # ingested parameters reached through their document. Two names, counted apart in
+    # building_rollup.child_counts() so the Buildings card still prints exactly what its
+    # drawer opens; the domain is met by either.
+    ("contracts", ("contracts", "contract_parameters")),
+    # A meter is how energy arrives, by either table: the graph's meters, or energy_meters
+    # from a readings upload. Readings and an EUI follow from it, and are counted by the
+    # caller when it has them, so the domain is met by any of the three.
+    ("energy", ("meters", "energy_meters")),
+    ("maintenance", ("work_orders",)),
+)
+
+
+def hoist_score_for(
+    counts: dict[str, Any] | None, *, has_eui: bool = False
+) -> dict[str, Any]:
+    """How completely this building is held in the graph, from what the graph counted.
+
+    Returns the score out of 100, the domains that are covered, and the ones still missing,
+    so a reader is told what would raise it rather than being handed a number to guess at.
+    """
+    c = counts or {}
+    covered: list[str] = []
+    missing: list[str] = []
+    for domain, relations in HOIST_SCORE_DOMAINS:
+        hit = any(int(c.get(r) or 0) > 0 for r in relations)
+        if domain == "energy" and has_eui:
+            hit = True
+        (covered if hit else missing).append(domain)
+    share = 100.0 / len(HOIST_SCORE_DOMAINS)
+    return {
+        "score": int(round(len(covered) * share)),
+        "covered": covered,
+        "missing": missing,
+        "of": [d for d, _ in HOIST_SCORE_DOMAINS],
+    }
+
+
+def apply_graph_rollup(row: dict[str, Any], roll: dict[str, Any] | None) -> dict[str, Any]:
+    """Overlay what the graph counted onto a shaped row, and say where each figure came from.
+
+    A counted figure beats a recorded one — the floors on record ARE the floors — but only
+    when the count is complete, and a partial count is the normal state of a graph being
+    filled in. Three spaces recorded on a 24-storey building sum to a fraction of its area,
+    and letting that replace the surveyed figure understated one building here by twelve
+    times while looking like an ordinary number.
+
+    So a counted figure replaces a recorded one only when it is not SMALLER than it. When
+    it is smaller the survey stands, and the count travels beside it as
+    ``gfa_counted_sqm`` / ``floors_counted`` with the shortfall named in ``partial_counts``
+    — visibly incomplete rather than quietly wrong. A building with no rows at all keeps
+    its surveyed numbers. Each field carries its own source so the two are never conflated.
+    """
+    row["floors_source"] = "buildings_recorded" if row.get("floors") is not None else None
+    row["gfa_source"] = row.get("gfa_source") or ("buildings_recorded" if row.get("gfa_sqm") is not None else None)
+    row["use_mix_source"] = "buildings_recorded" if row.get("use_mix") else None
+    row["graph_counts"] = {}
+    if not roll:
+        return row
+
+    partial: list[str] = []
+
+    floors = roll.get("floors")
+    if floors:
+        recorded = row.get("floors")
+        row["floors_counted"] = int(floors)
+        if recorded is None or int(floors) >= int(recorded):
+            row["floors"] = int(floors)
+            row["floors_source"] = "floors_table"
+        else:
+            # Fewer floor rows than the survey says the building has: the graph is being
+            # filled in, not correcting the survey.
+            partial.append(f"floors: {int(floors)} of {int(recorded)} on record")
+
+    gfa = roll.get("gfa_sqm")
+    if gfa:
+        recorded_gfa = row.get("gfa_sqm")
+        row["gfa_counted_sqm"] = round(float(gfa), 2)
+        if recorded_gfa is None or float(gfa) >= float(recorded_gfa):
+            row["gfa_sqm"] = float(gfa)
+            row["gfa_source"] = "spaces_sum"
+        else:
+            partial.append(
+                f"area: {round(float(gfa)):,} m² counted of {round(float(recorded_gfa)):,} m² recorded"
+            )
+    mix = roll.get("use_mix") or []
+    if mix:
+        row["use_mix"] = mix
+        row["use_mix_source"] = "spaces_by_type"
+        if roll.get("dominant_use"):
+            row["use_type"] = roll["dominant_use"]
+            if not row.get("building_type"):
+                row["building_type"] = tm46_type_for(roll["dominant_use"])
+    row["spaces"] = roll.get("spaces")
+    row["graph_counts"] = roll.get("counts") or {}
+    # The Hoist Score, from what was counted rather than from what was typed. A recorded
+    # figure still wins — a judgement outranks a derivation — and the row says which it is.
+    if row.get("hoist_score_source") != "recorded":
+        hs = hoist_score_for(row["graph_counts"], has_eui=row.get("eui_kwh_per_m2") is not None)
+        row["hoist_score"] = hs["score"]
+        row["hoist_score_source"] = "graph_coverage"
+        row["hoist_score_covered"] = hs["covered"]
+        row["hoist_score_missing"] = hs["missing"]
+        row["hoist_score_domains"] = hs["of"]
+    # Named rather than merely implied by two fields disagreeing, so a UI can show "the
+    # graph knows part of this building" without the reader having to spot it.
+    row["partial_counts"] = partial
+    return row
+
+
+def attribute_energy(
+    building_id: str,
+    site_id: str,
+    buildings_on_site: int,
+    profiles: dict[str, Any],
+    snapshots: dict[str, Any],
+    meters: dict[str, Any],
+) -> tuple[Any, Any, list[Any], str]:
+    """Which energy records belong to this building, and on what basis.
+
+    Energy is recorded against a site. A building's own records always apply. A site's
+    records apply only when the building IS the site — one building on it. Where a site
+    holds several, its site-level reading is left off every one of them: dividing one
+    meter between two buildings would state a split the data does not contain, and showing
+    the whole reading against each would count the same kilowatt-hours twice.
+
+    Returns (profile, snapshot, meters, attribution) where attribution is one of
+    building | site_sole_building | unattributed_site_shared | none.
+    """
+    b_prof, b_snap = profiles.get(building_id), snapshots.get(building_id)
+    b_mtrs = meters.get(building_id) or []
+    if b_prof or b_snap or b_mtrs:
+        return b_prof, b_snap, b_mtrs, "building"
+
+    sole = bool(site_id) and buildings_on_site == 1
+    if sole:
+        s_prof, s_snap = profiles.get(site_id), snapshots.get(site_id)
+        s_mtrs = meters.get(site_id) or []
+        if s_prof or s_snap or s_mtrs:
+            return s_prof, s_snap, s_mtrs, "site_sole_building"
+        return None, None, [], "none"
+
+    if site_id and (profiles.get(site_id) or snapshots.get(site_id) or meters.get(site_id)):
+        return None, None, [], "unattributed_site_shared"
+    return None, None, [], "none"
 
 
 def _pick(cols: dict[str, str], *names: str) -> str | None:
@@ -458,82 +762,254 @@ async def _load_site_rows(session: AsyncSession, *, limit: int) -> list[dict[str
     return out
 
 
+async def get_building(
+    session: AsyncSession,
+    site_id: str,
+    *,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """One building by ``sites.site_id`` (VARCHAR(50)); also matches site_uuid or building_code.
+
+    Built from the same rows as the table so the two never disagree; the rolling benchmark
+    needs the other buildings, which is why this is not a single-row query.
+    """
+    table = await list_buildings(session, organization_id=organization_id, limit=5000)
+    needle = str(site_id or "").strip()
+    for row in table["buildings"]:
+        if needle and needle in {row.get("site_id"), row.get("site_uuid"), row.get("code")}:
+            return {"ok": True, "building": row, "benchmark_unit": table["benchmark_unit"],
+                    "completeness_fields": table["completeness_fields"]}
+    return {"ok": False, "error": "building_not_found", "site_id": needle}
+
+
+async def resolve_building_id(
+    session: AsyncSession,
+    identifier: Any,
+    *,
+    organization_id: UUID | None = None,
+) -> UUID | None:
+    """The building's own id, given either that id or the code a person reads off the page.
+
+    A building has two names in this system: the uuid the rows key on, and the short code
+    (``B-001``) that every screen and every document shows. Routes that accept only the uuid
+    refuse the one people actually have, and the refusal reads as "that is not a uuid" -
+    which describes the string rather than the problem. Resolving first means the caller may
+    hand over whichever one it holds, and a building that is genuinely gone is reported as
+    missing rather than as malformed.
+
+    Returns None when nothing matches, and also when the code matches more than one building
+    - two buildings sharing a code is a data fault, and picking one would hide it.
+    """
+    ident = str(identifier or "").strip()
+    if not ident:
+        return None
+    shape = (await building_rollup.graph_shape(session))["buildings"]
+    if not shape["exists"]:
+        return None
+    key, cols = shape["key"], shape["columns"]
+
+    try:
+        ident_uuid: UUID | None = UUID(ident)
+    except (ValueError, TypeError):
+        ident_uuid = None
+
+    org_sql, params = "", {"ident": ident}
+    if organization_id is not None and "organization_id" in cols:
+        org_sql = " AND organization_id::text = :org"
+        params["org"] = str(organization_id)
+
+    # The uuid is checked for existence rather than trusted: a deleted building must answer
+    # "no such building", not an empty graph that reads as a building with nothing in it.
+    if ident_uuid is not None:
+        sql = f"SELECT {key}::text FROM plenum_cafm.buildings WHERE {key}::text = :ident{org_sql}"
+    elif "building_code" in cols:
+        sql = (f"SELECT {key}::text FROM plenum_cafm.buildings "
+               f"WHERE upper(building_code) = upper(:ident){org_sql} LIMIT 2")
+    else:
+        return None
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text(sql), params)).all()
+    except Exception as exc:  # noqa: BLE001 - a lookup must never raise at a caller
+        log.warning("buildings.resolve_failed", error=str(exc)[:200], identifier=ident[:60])
+        return None
+    if len(rows) != 1:
+        return None
+    try:
+        return UUID(str(rows[0][0]))
+    except (ValueError, TypeError):
+        return None
+
+
+async def site_to_buildings(session: AsyncSession) -> dict[str, list[str]]:
+    """The energy tables' ``site_id`` -> the ``buildings.building_id``(s) on that site.
+
+    Meters, anomalies and the rest of Feature C's readings key on a site, not a building —
+    a site can hold more than one building, which is exactly why _list_from_graph() above
+    refuses to attribute a shared site's energy to either one rather than guess. Any caller
+    narrowing a site-keyed row to a single building should apply the same rule: zero or more
+    than one entry for a site means "cannot attribute", not "pick one."
+    """
+    rows = await building_rollup.load_buildings(session, limit=5000)
+    out: dict[str, list[str]] = {}
+    for b in rows:
+        sid = str(b.get("site_id") or "").strip()
+        bid = str(b.get("building_id") or "").strip()
+        if sid and bid:
+            out.setdefault(sid, []).append(bid)
+    return out
+
+
+async def restrict_by_site(
+    session: AsyncSession, rows: list[dict[str, Any]], scope: Any, *, site_key: str = "site_id"
+) -> list[dict[str, Any]]:
+    """Narrows site-keyed rows (meters, anomalies, …) to a building-restricted caller's
+    allocated buildings. A no-op for an unrestricted caller or an empty scope.
+
+    The key is not always a site. The energy tables carried a column called ``site_id``
+    holding a BUILDING id until Sep 2026, when it was renamed to ``building_id`` to say so.
+    Mapping such an id through site_to_buildings() looks a building up in a site-keyed map,
+    misses every time, and drops every row: a building-allocated person saw an empty meter
+    and anomaly list instead of their own. So the id is tried as a building first, which is
+    now also the common case rather than the exception.
+
+    The site reading is kept as the fallback for a genuinely site-keyed caller, and there it
+    still refuses to guess: a site holding zero or more than one building cannot be
+    attributed, and an unattributable row is dropped rather than shown.
+    """
+    if not rows or scope is None or not getattr(scope, "restricted", False):
+        return rows
+    site_map: dict[str, list[str]] | None = None
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sid = str(r.get(site_key) or "").strip()
+        if not sid:
+            continue
+        if scope.allows_building(sid):
+            out.append(r)
+            continue
+        if site_map is None:
+            site_map = await site_to_buildings(session)
+        bids = site_map.get(sid) or []
+        if len(bids) == 1 and scope.allows_building(bids[0]):
+            out.append(r)
+    return out
+
+
+
+async def _list_from_graph(
+    session: AsyncSession,
+    buildings: list[dict[str, Any]],
+    roll: dict[str, Any],
+    *,
+    organization_id: UUID | None = None,
+) -> dict[str, Any]:
+    """The table rooted on plenum_cafm.buildings, with every figure the graph can count.
+
+    A site may hold several buildings. Energy records key on the site, so site-level figures
+    are attributed to a building ONLY when that building is the whole site — splitting one
+    site's meter across two buildings would invent a division the data does not contain.
+    Where a site has more than one building, its site-level energy is left off both and the
+    row says the reading is unattributed rather than showing half of it twice.
+    """
+    profiles, snapshots, meters = await _energy_by_site(session, organization_id)
+    sim = await simulated_coverage(session)
+    per_site: dict[str, int] = {}
+    for b in buildings:
+        sid = str(b.get("site_id") or "").strip()
+        if sid:
+            per_site[sid] = per_site.get(sid, 0) + 1
+
+    rows: list[dict[str, Any]] = []
+    for b in buildings:
+        src = building_to_row_input(b)
+        bid = str(b.get("building_id") or "")
+        sid = str(b.get("site_id") or "").strip()
+        prof, snap, mtrs, attribution = attribute_energy(
+            bid, sid, per_site.get(sid, 1) if sid else 1, profiles, snapshots, meters
+        )
+        row = shape_building_row(src, profile=prof, snapshot=snap, meters=mtrs)
+        row["site_id"] = sid or None
+        row["buildings_on_site"] = per_site.get(sid, 1) if sid else 1
+        row["energy_attribution"] = attribution
+        row["simulated"] = sim.get(bid) or {"any": False}
+        rows.append(apply_graph_rollup(row, roll.get(bid)))
+    apply_rolling_benchmarks(rows)
+    tm46 = load_tm46()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "root": "buildings",
+        "graph_shape": roll.get("_shape", {}),
+        "benchmark_packs": BENCHMARK_PACKS,
+        "tm46_pack": tm46.get("pack"),
+        "benchmark_unit": tm46.get("unit") or "kWh/m²/yr",
+        "completeness_fields": list(COMPLETENESS_FIELDS),
+        "buildings": rows,
+    }
+
+
+async def _org_building_ids(
+    session: AsyncSession, organization_id: UUID | None
+) -> set[str] | None:
+    """Building ids plenum_cafm.buildings itself says belong to this company, or ``None``
+    when there is no company to narrow to (an internal/unscoped caller) — the caller then
+    leaves its rows untouched, the same "no filter" default every org-scoped query here
+    already falls back to. Guarded with as_uuid() for the same reason _energy_by_site is:
+    a legacy integer organizations.id cannot equal this table's uuid column, and comparing
+    them raises rather than matching nothing.
+    """
+    org_uuid = as_uuid(organization_id)
+    if org_uuid is None:
+        return None
+    try:
+        async with session.begin_nested():
+            rows = (
+                await session.execute(
+                    text("SELECT building_id::text AS id FROM plenum_cafm.buildings WHERE organization_id = :o"),
+                    {"o": str(org_uuid)},
+                )
+            ).scalars().all()
+    except Exception as exc:  # noqa: BLE001 — a failed lookup must never leak every company's buildings
+        log.warning("energy.buildings.org_ids_failed", error=str(exc)[:200])
+        return set()
+    return {str(r) for r in rows}
+
+
 async def list_buildings(
     session: AsyncSession,
     *,
     organization_id: UUID | None = None,
     limit: int = 500,
 ) -> dict[str, Any]:
+    # The building graph is the root when it has rows: a site can hold several buildings, and
+    # floors / area / use split are counted from it rather than typed onto a row. A deployment
+    # that has not populated plenum_cafm.buildings yet still reads from sites, one per building.
+    graph_buildings = await building_rollup.load_buildings(session, limit=limit)
+    roll = await building_rollup.rollups(session, limit=limit) if graph_buildings else {}
+    if graph_buildings:
+        # The branch decision above is a deployment-wide fact (does plenum_cafm.buildings
+        # have rows at all); which of those rows this caller may see is a company-scoped
+        # one, applied after — load_buildings() itself carries no organization_id, so this
+        # was returning every company's buildings to whoever asked, admin and superadmin
+        # alike, with nothing else in this path narrowing it back down.
+        org_ids = await _org_building_ids(session, organization_id)
+        if org_ids is not None:
+            graph_buildings = [
+                b for b in graph_buildings if str(b.get("building_id") or "") in org_ids
+            ]
+        return await _list_from_graph(
+            session, graph_buildings, roll, organization_id=organization_id
+        )
     sites = await _load_site_rows(session, limit=limit)
 
-    pq = select(BuildingEnergyProfile)
-    if organization_id:
-        pq = pq.where(BuildingEnergyProfile.organization_id == organization_id)
-    profiles: dict[str, dict[str, Any]] = {}
-    try:
-        async with session.begin_nested():
-            for p in (await session.execute(pq)).scalars().all():
-                profiles[str(p.site_id)] = {
-                    "building_type": p.building_type,
-                    "gia_m2": float(p.gia_m2) if p.gia_m2 is not None else None,
-                    "tm46_electricity_benchmark": (
-                        float(p.tm46_electricity_benchmark)
-                        if p.tm46_electricity_benchmark is not None
-                        else None
-                    ),
-                }
-    except Exception as exc:  # noqa: BLE001
-        log.warning("energy.buildings.profiles_read_failed", error=str(exc)[:200])
-
-    # Latest snapshot per site: ordered newest first, first hit per site wins.
-    sq = select(EuiSnapshot).order_by(
-        EuiSnapshot.site_id, EuiSnapshot.period_end.desc(), EuiSnapshot.created_at.desc()
-    )
-    if organization_id:
-        sq = sq.where(EuiSnapshot.organization_id == organization_id)
-    snapshots: dict[str, dict[str, Any]] = {}
-    try:
-        async with session.begin_nested():
-            for s in (await session.execute(sq)).scalars().all():
-                sid = str(s.site_id)
-                if sid in snapshots:
-                    continue
-                snapshots[sid] = {
-                    "eui_kwh_per_m2": float(s.eui_kwh_per_m2),
-                    "benchmark_kwh_per_m2": (
-                        float(s.benchmark_kwh_per_m2) if s.benchmark_kwh_per_m2 is not None else None
-                    ),
-                    "deviation_pct": float(s.deviation_pct) if s.deviation_pct is not None else None,
-                    "period_start": s.period_start.isoformat() if s.period_start else None,
-                    "period_end": s.period_end.isoformat() if s.period_end else None,
-                    "meter_type": s.meter_type,
-                }
-    except Exception as exc:  # noqa: BLE001
-        log.warning("energy.buildings.snapshots_read_failed", error=str(exc)[:200])
-
-    meters: dict[str, list[dict[str, Any]]] = {}
-    try:
-        async with session.begin_nested():
-            mq = select(EnergyMeter).where(EnergyMeter.active.is_(True), EnergyMeter.site_id.is_not(None))
-            for m in (await session.execute(mq)).scalars().all():
-                meters.setdefault(str(m.site_id), []).append(
-                    {
-                        "meter_type": m.meter_type,
-                        "mpan": m.mpan,
-                        "mprn": m.mprn,
-                        "dcc_device_id": m.dcc_device_id,
-                        "is_sub_meter": bool(m.is_sub_meter),
-                        "raw_metadata": m.raw_metadata or {},
-                    }
-                )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("energy.buildings.meters_read_failed", error=str(exc)[:200])
+    profiles, snapshots, meters = await _energy_by_site(session, organization_id)
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     def _lookup(table: dict[str, Any], site: dict[str, Any]) -> Any:
-        # Energy tables key on a UUID site_id; sites here keys on site_id VARCHAR(50) and may
+        # Energy tables key on a UUID building_id; sites here keys on site_id VARCHAR(50) and may
         # carry the UUID in `id`. Match on the text of either, so both shapes join.
         for cand in (site.get("key"), site.get("alt_id")):
             c = str(cand or "").strip()
@@ -570,12 +1046,16 @@ async def list_buildings(
             )
         )
 
+    sim = await simulated_coverage(session)
+    for r in rows:
+        r["simulated"] = sim.get(str(r.get("building_id") or r.get("site_key") or "")) or {"any": False}
     apply_rolling_benchmarks(rows)
 
     tm46 = load_tm46()
     return {
         "ok": True,
         "count": len(rows),
+        "root": "sites",
         "sites_table_rows": len(sites),
         "benchmark_packs": BENCHMARK_PACKS,
         "tm46_pack": tm46.get("pack"),
@@ -583,3 +1063,133 @@ async def list_buildings(
         "completeness_fields": list(COMPLETENESS_FIELDS),
         "buildings": rows,
     }
+
+
+async def simulated_coverage(session: AsyncSession) -> dict[str, dict[str, Any]]:
+    """Per building: how much of its meter history is a simulated feed, and over what dates.
+
+    ``meters_simulated`` already says a building HAS a simulated feed, and that is not the
+    question a reader has. Harbour View's meters carry real half-hourly reads to 31 August
+    and a simulated feed from 1 September: told only "simulated", a person discounts the
+    real five months; told nothing, they act on invented ones. The dates are the answer, so
+    the row carries them.
+
+    Counted from the readings themselves rather than from the meter's flag — the flag says
+    what the feed is doing now, the rows say what the history actually contains.
+    """
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(text("""
+                SELECT m.building_id::text AS building_id,
+                       count(*) AS readings,
+                       count(*) FILTER (WHERE r.source = 'simulator') AS simulated,
+                       min(r.reading_at) FILTER (WHERE r.source = 'simulator') AS sim_from,
+                       max(r.reading_at) FILTER (WHERE r.source = 'simulator') AS sim_to,
+                       max(r.reading_at) FILTER (WHERE r.source <> 'simulator') AS real_to
+                  FROM plenum_cafm.energy_meters m
+                  JOIN plenum_cafm.meter_readings r ON r.meter_id = m.id
+                 WHERE m.building_id IS NOT NULL
+                 GROUP BY 1
+            """))).mappings().all()
+    except Exception as exc:  # noqa: BLE001 — a marker must never take the page down
+        log.warning("energy.buildings.simulated_coverage_failed", error=str(exc)[:200])
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not r["simulated"]:
+            out[r["building_id"]] = {"any": False}
+            continue
+        out[r["building_id"]] = {
+            "any": True,
+            "readings": int(r["simulated"]),
+            "readings_total": int(r["readings"]),
+            "from": r["sim_from"].isoformat() if r["sim_from"] else None,
+            "to": r["sim_to"].isoformat() if r["sim_to"] else None,
+            "real_to": r["real_to"].isoformat() if r["real_to"] else None,
+            # Said in words as well as dates, because this is what a banner prints.
+            "note": (f"{r['sim_from'].day} {r['sim_from']:%b} to "
+                     f"{r['sim_to'].day} {r['sim_to']:%b} is a simulated feed"
+                     if r["sim_from"] and r["sim_to"] else "part of this feed is simulated"),
+        }
+    return out
+
+
+async def _energy_by_site(
+    session: AsyncSession, organization_id: UUID | None
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """Energy profile, latest EUI snapshot and active meters, keyed by site/building id text."""
+    # organization_id arrives as access.Scope's raw value — on this production database
+    # that is the legacy integer organizations.id, not the uuid these two tables' own
+    # organization_id columns hold. Comparing an int against a uuid column raises
+    # UndefinedFunctionError ("operator does not exist: uuid = integer"); that used to be
+    # swallowed by the try/except below and silently dropped every profile and EUI snapshot
+    # on this database. as_uuid() folds the mismatch to None — no filter — before it can
+    # reach either query.
+    organization_id = as_uuid(organization_id)
+    pq = select(BuildingEnergyProfile)
+    if organization_id:
+        pq = pq.where(BuildingEnergyProfile.organization_id == organization_id)
+    profiles: dict[str, dict[str, Any]] = {}
+    try:
+        async with session.begin_nested():
+            for p in (await session.execute(pq)).scalars().all():
+                profiles[str(p.building_id)] = {
+                    "building_type": p.building_type,
+                    "gia_m2": float(p.gia_m2) if p.gia_m2 is not None else None,
+                    "tm46_electricity_benchmark": (
+                        float(p.tm46_electricity_benchmark)
+                        if p.tm46_electricity_benchmark is not None
+                        else None
+                    ),
+                }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("energy.buildings.profiles_read_failed", error=str(exc)[:200])
+
+    # Latest snapshot per site: ordered newest first, first hit per site wins.
+    sq = select(EuiSnapshot).order_by(
+        EuiSnapshot.building_id, EuiSnapshot.period_end.desc(), EuiSnapshot.created_at.desc()
+    )
+    if organization_id:
+        sq = sq.where(EuiSnapshot.organization_id == organization_id)
+    snapshots: dict[str, dict[str, Any]] = {}
+    try:
+        async with session.begin_nested():
+            for s in (await session.execute(sq)).scalars().all():
+                sid = str(s.building_id)
+                if sid in snapshots:
+                    continue
+                snapshots[sid] = {
+                    "eui_kwh_per_m2": float(s.eui_kwh_per_m2),
+                    "benchmark_kwh_per_m2": (
+                        float(s.benchmark_kwh_per_m2) if s.benchmark_kwh_per_m2 is not None else None
+                    ),
+                    "deviation_pct": float(s.deviation_pct) if s.deviation_pct is not None else None,
+                    "period_start": s.period_start.isoformat() if s.period_start else None,
+                    "period_end": s.period_end.isoformat() if s.period_end else None,
+                    "meter_type": s.meter_type,
+                    # The rate this gap was priced at, carried through so the page costs it
+                    # the same way the snapshot did rather than at a constant of its own.
+                    "tariff_used": float(s.tariff_used) if s.tariff_used is not None else None,
+                }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("energy.buildings.snapshots_read_failed", error=str(exc)[:200])
+
+    meters: dict[str, list[dict[str, Any]]] = {}
+    try:
+        async with session.begin_nested():
+            mq = select(EnergyMeter).where(EnergyMeter.active.is_(True), EnergyMeter.building_id.is_not(None))
+            for m in (await session.execute(mq)).scalars().all():
+                meters.setdefault(str(m.building_id), []).append(
+                    {
+                        "meter_type": m.meter_type,
+                        "mpan": m.mpan,
+                        "mprn": m.mprn,
+                        "dcc_device_id": m.dcc_device_id,
+                        "is_sub_meter": bool(m.is_sub_meter),
+                        "raw_metadata": m.raw_metadata or {},
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("energy.buildings.meters_read_failed", error=str(exc)[:200])
+
+    return profiles, snapshots, meters

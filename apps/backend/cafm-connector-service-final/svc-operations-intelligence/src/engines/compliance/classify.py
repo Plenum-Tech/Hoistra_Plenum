@@ -22,6 +22,12 @@ from .verification_sources import canonicalize_type_code
 
 log = get_logger(__name__)
 
+#: Passes over the same document, and how many must agree. The architecture asks for three
+#: on compliance certificates; two of three is the majority that makes an answer usable
+#: while still refusing a three-way split.
+_CLASSIFY_PASSES = 3
+_CLASSIFY_QUORUM = 2
+
 # Brand / regulation keywords that rarely appear in the pack type NAME but strongly
 # imply a type. Maps a lowercase keyword → the canonical CCC code (matched against the
 # pack via canonicalize on both sides, so pack-code or CCC-code seeding both resolve).
@@ -330,6 +336,52 @@ async def _claude_classify(
     file_name: str | None,
     pdf_base64: str | None,
 ) -> str | None:
+    """Three passes over the document; the answer at least two of them agree on.
+
+    Temperature is zero, so the passes should agree trivially — and where they do not, the
+    document is genuinely ambiguous to the model and a single sample was never a safe way to
+    resolve it. Returning None then is the useful answer: the keyword heuristic downstream is
+    deterministic, and on a document it recognises it is right by construction.
+    """
+    import asyncio
+
+    votes = await asyncio.gather(
+        *(
+            _claude_classify_once(
+                packs=packs, source_text=source_text, file_name=file_name,
+                pdf_base64=pdf_base64,
+            )
+            for _ in range(_CLASSIFY_PASSES)
+        ),
+        return_exceptions=True,
+    )
+    cast = [v for v in votes if isinstance(v, str) and v]
+    if not cast:
+        return None
+
+    tally: dict[str, int] = {}
+    for v in cast:
+        tally[v] = tally.get(v, 0) + 1
+    winner, count = max(tally.items(), key=lambda kv: (kv[1], kv[0]))
+
+    if count < _CLASSIFY_QUORUM:
+        # A split decision on the field that selects the regulation pack. Say so and stand
+        # aside rather than passing off one of three guesses as the answer.
+        log.warning("classify.claude_no_majority", votes=tally, file_name=file_name)
+        return None
+    if len(tally) > 1:
+        log.info("classify.claude_split_vote", votes=tally, chose=winner,
+                 file_name=file_name)
+    return winner
+
+
+async def _claude_classify_once(
+    *,
+    packs: list[Any],
+    source_text: str,
+    file_name: str | None,
+    pdf_base64: str | None,
+) -> str | None:
     try:
         import anthropic
 
@@ -340,13 +392,27 @@ async def _claude_classify(
             for p in packs
         )
         prompt = (
-            "You are classifying a UK facilities-management compliance document.\n"
-            "Pick the single best matching certificate_type_code from this catalogue "
-            "(building = property/PM; vendor = contractor accreditation):\n"
+            "You are classifying a UK facilities-management compliance document.\n\n"
+            "Read the scheme name and its reference first. These documents print what they "
+            "are in large type near the top or in the title — a scheme name and number such "
+            "as BAFE SP101, BAFE SP203-1, CP12, EICR, ISO 9001, NICEIC — and that is the "
+            "single most reliable signal. Match it against the catalogue before considering "
+            "anything else. Do not settle for a code from the same subject area: BAFE SP101 "
+            "(servicing fire extinguishers) and a fire alarm service certificate are both "
+            "about fire and are different documents.\n\n"
+            "Then decide who the certificate is about, which decides its scope:\n"
+            "  vendor   — it certifies a COMPANY: 'this is to certify that <company> has "
+            "complied with', a registration or competency scheme, a contractor "
+            "accreditation. It names no property.\n"
+            "  building — it certifies a PROPERTY or the work done at one: an address, a "
+            "site, an installation, an inspection of premises.\n\n"
+            "Catalogue (code | name | scope):\n"
             f"{catalogue}\n\n"
             'Return ONLY JSON: {"certificate_type_code": "<code>", '
-            '"confidence": "high|medium|low"}. Use a code exactly as listed, or '
-            '"UNKNOWN" if none fit.'
+            '"scope": "building|vendor", "confidence": "high|medium|low"}. '
+            'Use a code exactly as listed, or "UNKNOWN" if none fit — a wrong code is worse '
+            "than none, because it files the certificate under a regulation it is not "
+            "subject to."
         )
         if file_name:
             prompt += f"\n\nFile name: {file_name}"
@@ -373,6 +439,10 @@ async def _claude_classify(
         resp = await client.messages.create(
             model=model,
             max_tokens=200,
+            # Zero, not the SDK's default of 1.0. This picks one entry from a supplied
+            # catalogue; there is no part of that task that sampling improves, and at 1.0
+            # the same certificate came back as three different types on three uploads.
+            temperature=0,
             messages=[{"role": "user", "content": content}],
         )
         raw = resp.content[0].text if resp.content else "{}"
@@ -381,6 +451,20 @@ async def _claude_classify(
         code = str(data.get("certificate_type_code") or "").strip()
         if not code or code.upper() == "UNKNOWN":
             return None
+        said_scope = str(data.get("scope") or "").strip().lower()
+        if said_scope:
+            implied = next(
+                (str(p.certificate_scope).strip().lower()
+                 for p in packs if str(p.certificate_type_code) == code),
+                "",
+            )
+            if implied and said_scope != implied:
+                # It read the document as one kind and chose a code that is the other. On
+                # the certificate that prompted this work it read "vendor accreditation"
+                # correctly and still picked a Building-scope code.
+                log.warning("classify.scope_disagrees_with_code", code=code,
+                            model_scope=said_scope, code_scope=implied,
+                            file_name=file_name)
         return code
     except Exception as exc:  # noqa: BLE001 — classification is best-effort
         log.warning("classify.claude_failed", error=str(exc)[:200])

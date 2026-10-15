@@ -1,6 +1,10 @@
 """Unit tests — Feature B2 vendor scoring."""
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
+from src.engines.contract_performance import scoring as sc
+
 from src.engines.contract_performance.parameters import merge_extraction_with_defaults
 from src.engines.contract_performance.scoring import (
     DEFAULT_WEIGHTS,
@@ -10,6 +14,16 @@ from src.engines.contract_performance.scoring import (
     detect_recall,
     score_work_order_pure,
 )
+
+
+@pytest.fixture(autouse=True)
+def _vendor_status_reads_live(monkeypatch):
+    """These fakes answer no vendor-status read. Since 12 Oct 2026 scoring refuses when that
+    status cannot be read (pinned in test_vendor_deleted_scoring), so here it reads as live."""
+    async def _live(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(sc, "retired_vendor_refusal", _live)
 
 
 class TestB2Components:

@@ -166,6 +166,18 @@
     "ISO_9001",
     "ISO_14001"
    ]
+  },
+  {
+   "register": "GOV.UK Find an energy certificate",
+   "trade": "Energy",
+   "prefills_number": true,
+   "verification_url": "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-reference-number",
+   "aliases": [
+    "EPC",
+    "DEC",
+    "TM44",
+    "Find an energy certificate"
+   ]
   }
  ],
  "certificate_types": [
@@ -908,7 +920,7 @@
    "frequency_months": 120,
    "issuing_body": "Accredited Energy Assessor registered on CIBSE or Elmhurst scheme",
    "required_contractor_accreditation": null,
-   "verification_url": null,
+   "verification_url": "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-reference-number",
    "key_fields_schema": {
     "required": [
      "certificate_number",
@@ -951,7 +963,7 @@
    "frequency_months": 60,
    "issuing_body": "CIBSE-registered Energy Assessor (Level 3 or 4 Non-Domestic)",
    "required_contractor_accreditation": null,
-   "verification_url": null,
+   "verification_url": "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-reference-number",
    "key_fields_schema": {
     "required": [
      "certificate_number",
@@ -991,7 +1003,7 @@
    "frequency_months": 12,
    "issuing_body": "Accredited Energy Assessor",
    "required_contractor_accreditation": null,
-   "verification_url": null,
+   "verification_url": "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-reference-number",
    "key_fields_schema": {
     "required": [
      "certificate_number",

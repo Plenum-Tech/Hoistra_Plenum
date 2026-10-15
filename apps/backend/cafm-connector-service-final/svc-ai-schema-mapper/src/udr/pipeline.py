@@ -29,6 +29,7 @@ from .primitives import build_table_metadata, classify_columns, detect_primary_k
 from .reference_tables import promote_shared_attribute
 from .unique_tables import apply_consolidation, identify_unique_tables
 from .validation import run_coverage_check, run_test1_chunk_pk, run_test2_column_fk
+from .memo import memo_scoped
 
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,11 @@ def _decisions_from_columns(graph_columns: list[dict]) -> list[dict]:
     ]
 
 
+#: The UDR pass's stages, in the order it runs them.
+UDR_STAGES = ("preprocessing", "unique_tables", "prefix_columns", "vector_chunking", "test1", "test2", "hierarchy")
+
+
+@memo_scoped
 def run_udr_pipeline(
     tables_in: dict[str, list[dict]],
     *,
@@ -145,6 +151,7 @@ def run_udr_pipeline(
     alias_resolver=None,
     field_resolver=None,
     clock=None,
+    on_stage=None,
 ) -> UdrRunResult:
     """Run the value-centric UDR pipeline over one batch of tables.
 
@@ -164,12 +171,18 @@ def run_udr_pipeline(
 
     def _stamp(stage: str) -> None:
         """Record stage wall-clock time + its elapsed ms since the previous stamp,
-        and emit a per-stage processing log line (DEBUG)."""
+        and emit a per-stage processing log line (DEBUG). ``on_stage(stage, n, 7)`` hears of it
+        (the run card's live stage on a Go run); a listener that fails is ignored."""
         t = time.perf_counter()
         stage_durations[stage] = round((t - _perf[0]) * 1000, 2)
         _perf[0] = t
         stage_times[stage] = now().isoformat()
         logger.debug("[UDR] stage '%s' done (%sms)", stage, stage_durations[stage])
+        if on_stage is not None:
+            try:
+                on_stage(stage, UDR_STAGES.index(stage) + 1, len(UDR_STAGES))
+            except Exception:  # noqa: BLE001
+                pass
 
     logger.debug(
         "[UDR] IN run_id=%s tables=%d names=%s docs=%d",

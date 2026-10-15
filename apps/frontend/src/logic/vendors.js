@@ -19,7 +19,7 @@ export const vendorsMethods = {
         { l: "Contract review date", v: "October 2026", editable: true }
       ],
       chain: [
-        { a: "Orchestrator", t: "Intent: contract-performance-engine. Period resolved to August 2026." },
+        { a: "Orchestrator", t: "Routed to Vendor performance. Period resolved to August 2026." },
         { a: "Planner", t: "Fetch completed WOs for vendor → score against extracted SLA baseline → weight by asset criticality → aggregate" },
         { a: "Worker", t: "Work orders scored. L1 asset failures weighted 3×. Cost variance run against pre-job estimates." },
         { a: "Quality", t: v.tone === "risk" ? "Fired — score movement above 15 points checked for data anomaly before presenting. Confirmed genuine." : "Not fired — read-only scorecard output." }

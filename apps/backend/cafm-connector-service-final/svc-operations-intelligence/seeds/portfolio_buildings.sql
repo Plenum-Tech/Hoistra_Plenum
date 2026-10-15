@@ -1,10 +1,21 @@
 -- Portfolio seed — the nine demo buildings, keyed on site_id VARCHAR(50). Applied at startup only
--- when AUTO_SEED_PORTFOLIO_BUILDINGS=true (see config.py), and only where the site_id is not
--- already present, so operator edits are never overwritten. Not a migration: the table works
--- with none of these rows. Floor areas
--- are the design figures converted to m² (412,000 ft² = 38,276 m²).
+-- when AUTO_SEED_PORTFOLIO_BUILDINGS=true (see config.py). Not a migration: the table works
+-- with none of these rows. Floor areas are the design figures converted to m²
+-- (412,000 ft² = 38,276 m²).
+--
+-- Two guards, not one.
+--
+-- ON CONFLICT (site_id) keeps operator edits to a seeded row. That alone was not enough:
+-- three of these buildings are also on record under a real customer's own site key, with
+-- that customer's certificates filed against them, and the seed row was the duplicate. The
+-- duplicate was merged into the owned row and deleted — and this seed put it straight back
+-- on the next startup, because a different site_id is not a conflict.
+--
+-- So a row is also skipped when a site owned by an organisation already carries its name.
+-- A demo portfolio is for a deployment that has no portfolio; once a real one names the
+-- building, the demo copy is a second row for one structure and must not return.
 INSERT INTO plenum_cafm.sites (site_id, site_name, building_name, building_code, site_code, country, country_code, state, city, site_type, use_type, use_mix, floors, gfa_sqm, metering_route, metering_granularity, benchmark_standard, benchmark_standing, benchmark_standing_note, eui_kwh_per_m2, benchmark_kwh_per_m2, hoist_score, status)
-VALUES
+SELECT v.* FROM (VALUES
  ('B-001', 'Bishopsgate Tower', 'Bishopsgate Tower', 'B-001', 'B-001', 'United Kingdom', 'UK', 'Greater London', 'London', 'Commercial', 'Commercial', '[{"use":"Commercial","pct":92},{"use":"Retail","pct":8}]'::jsonb, '34', '38276', 'HH data collector · LoA', 'sub-metered', 'CIBSE TM46', 'guidance', 'guidance · EPC E law, EPC B proposed 2031', 214, 215, 88, 'active'),
  ('B-002', 'Kingsway House', 'Kingsway House', 'B-002', 'B-002', 'United Kingdom', 'UK', 'Greater London', 'London', 'Mixed', 'Mixed', '[{"use":"Residential","pct":46},{"use":"Commercial","pct":34},{"use":"Retail","pct":20}]'::jsonb, '11', '13750', 'HH data collector · LoA', 'sub-metered', 'CIBSE TM46', 'guidance', 'guidance · EPC E law, EPC B proposed 2031', 198, 172, 71, 'active'),
  ('B-003', 'Town Hall', 'Town Hall', 'B-003', 'B-003', 'United Kingdom', 'UK', 'Greater Manchester', 'Manchester', 'Commercial', 'Commercial', '[{"use":"Commercial","pct":100}]'::jsonb, '6', '8919', 'HH data collector · LoA', 'building-level', 'CIBSE TM46', 'guidance', 'guidance · EPC E law, EPC B proposed 2031', 231, 215, 62, 'active'),
@@ -14,4 +25,10 @@ VALUES
  ('B-007', 'Marina Heights', 'Marina Heights', 'B-007', 'B-007', 'UAE', 'AE', 'Dubai', 'Dubai', 'Hospital', 'Hospital', '[{"use":"Hospital","pct":79},{"use":"Commercial","pct":14},{"use":"Retail","pct":7}]'::jsonb, '8', '18952', 'Own sub-meters + BMS', 'sub-metered', 'Rolling portfolio benchmark', 'none', 'no operational standard · portfolio benchmark', 246, 228, 58, 'active'),
  ('B-008', 'Northgate Mall', 'Northgate Mall', 'B-008', 'B-008', 'United States', 'US', 'New York', 'New York', 'Mixed', 'Mixed', '[{"use":"Mall","pct":62},{"use":"Retail","pct":26},{"use":"Commercial","pct":12}]'::jsonb, '3', '29543', 'Green Button CMD · aggregator', 'sub-metered', 'Energy Star · ASHRAE 100', 'enacted', 'enacted, city-scoped · NYC LL97', 188, 205, 74, 'active'),
  ('B-009', 'Raffles Link', 'Raffles Link', 'B-009', 'B-009', 'Singapore', 'SG', 'Central Region', 'Singapore', 'Commercial', 'Commercial', '[{"use":"Commercial","pct":100}]'::jsonb, '19', '24898', 'Retailer feed · contracted', 'sub-metered', 'BCA Benchmarking Report', 'mandatory_submission', 'submission mandatory · rating voluntary', 176, 192, 92, 'active')
+) AS v (site_id, site_name, building_name, building_code, site_code, country, country_code, state, city, site_type, use_type, use_mix, floors, gfa_sqm, metering_route, metering_granularity, benchmark_standard, benchmark_standing, benchmark_standing_note, eui_kwh_per_m2, benchmark_kwh_per_m2, hoist_score, status)
+ WHERE NOT EXISTS (
+   SELECT 1 FROM plenum_cafm.sites owned
+    WHERE owned.organization_id IS NOT NULL
+      AND lower(trim(owned.site_name)) = lower(trim(v.site_name))
+ )
 ON CONFLICT (site_id) DO NOTHING;

@@ -19,32 +19,55 @@ from .compliance_offers import offers_for_row, row_from_ingest
 from .contract_performance_single_door import extract_text_from_upload
 from .document_forensics import analyze_certificate_document, forensics_summary_line
 from .pdf_vision_extract import extract_document_text
+from . import activity_log
 
 log = structlog.get_logger(__name__)
 
 
 # CCC §1 canonical aliases for Type code: lines and residual legacy tokens
+# Spellings that are NOT codes in the UK CountryPack, mapped to the code that IS.
+#
+# This map used to run the other way: it took a valid pack code (NAPIT, BPCA, REFCOM,
+# GAS_SAFE …) and rewrote it to a variant (NAPIT_REG, BPCA_MEMBER, REFCOM_COMPANY,
+# GASSAFE_COMPANY …) that appears nowhere in uk_compliance_pack_v1_1.json — the file that
+# seeds plenum_cafm.country_certificate_pack. Every UK certificate ingested through the
+# single door therefore carried a type code that could not join its pack row, so coverage
+# counted the certificate as missing, and the type name, trade category, issuing body,
+# verification URL and alert thresholds all fell back to defaults.
+#
+# The pack is the authority: scripts/rebuild_uk_pack_from_docx.py derives it from the
+# customer's UK_Compliance_Certification_Pack_v1.1.docx and emits these codes. Anything
+# else is a spelling. The old variants are kept as SOURCES here so a document that states
+# "Type code: NAPIT_REG", or a row already stored with one, still resolves to the pack code.
 _CODE_ALIASES_INLINE = {
-    "FIRE_ALARM_SERVICE": "FIRE_ALARM_SVC",
-    "SPRINKLER": "SPRINKLER_TEST",
-    "GAS_SAFE": "GAS_CP17",
-    "L8_RISK": "LEGIONELLA_RA",
-    "BPCA": "BPCA_MEMBER",
-    "NICEIC": "NICEIC_CONTRACTOR",
-    "NAPIT": "NAPIT_REG",
-    "ACS_CARD": "ACS_GAS_CARD",
-    "SIA_INDIVIDUAL": "SIA_LICENCE",
-    "NSI_GOLD_SECURITY": "NSI_GOLD_SEC",
-    "BAFE_SP203_1": "BAFE_SP203",
-    "HSE_ASBESTOS_LICENCE": "ASBESTOS_LICENCE",
-    "LCA": "LCA_REG",
-    "REFCOM": "REFCOM_COMPANY",
-    "LEIA": "LEIA_MEMBER",
-    "CONTRACTOR_PL_INSURANCE": "CONTRACTOR_PL",
-    "CONTRACTOR_EL_INSURANCE": "CONTRACTOR_EL",
-    "PA1_PA2_PA6": "PESTICIDE_PAx",
-    "ASBESTOS_P402_P403_P404": "BOHS_P40x",
-    "BTEC_LEGIONELLA": "LEGIONELLA_COMP",
+    # gas — one legacy token meant two different things; the pack separates them
+    "GAS_CP17": "CP17",                       # building: commercial gas safety record
+    "GASSAFE_COMPANY": "GAS_SAFE",            # vendor: Gas Safe company registration
+    "ACS_GAS_CARD": "ACS_CARD",
+    # fire / security
+    "BAFE_SP203": "BAFE_SP203_1",
+    "FIRE_ALARM_SVC": "FIRE_ALARM_SERVICE",
+    "SPRINKLER_TEST": "SPRINKLER",
+    "NSI_GOLD_SEC": "NSI_GOLD_SECURITY",
+    "SIA_LICENCE": "SIA_INDIVIDUAL",
+    # electrical / mechanical
+    "NICEIC_CONTRACTOR": "NICEIC",
+    "NAPIT_REG": "NAPIT",
+    "REFCOM_COMPANY": "REFCOM",
+    "LEIA_MEMBER": "LEIA",
+    # water hygiene
+    "LEGIONELLA_RA": "L8_RISK",
+    "LEGIONELLA_COMP": "BTEC_LEGIONELLA",
+    "LEGIONELLA_LOG": "LEGIONELLA_MONITORING",
+    "LCA_REG": "LCA",
+    # asbestos
+    "ASBESTOS_LICENCE": "HSE_ASBESTOS_LICENCE",
+    "BOHS_P40x": "ASBESTOS_P402_P403_P404",
+    # insurance / pest
+    "CONTRACTOR_EL": "CONTRACTOR_EL_INSURANCE",
+    "CONTRACTOR_PL": "CONTRACTOR_PL_INSURANCE",
+    "BPCA_MEMBER": "BPCA",
+    "PESTICIDE_PAx": "PA1_PA2_PA6",
 }
 
 # Filename / message / body hints → (certificate_type_code, cert_scope)
@@ -450,6 +473,8 @@ async def classify_compliance_certificate_llm(
         f"User message: {msg or '(none)'}\n"
         f"Document text (may be partial/OCR):\n{body or '(no text layer extracted)'}"
     )
+    _model = "claude-haiku-4-5-20251001"
+    _t0 = __import__("time").perf_counter()
     try:
         import json as _json
 
@@ -457,13 +482,21 @@ async def classify_compliance_certificate_llm(
 
         client = anthropic.AsyncAnthropic(api_key=key)
         resp = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=_model,
             max_tokens=350,
             messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         raw = resp.content[0].text if resp.content else "{}"
         raw = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.I | re.M)
         data = _json.loads(raw)
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg, "text_chars": len(body)},
+            output=data, model=_model, usage=resp.usage,
+            latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+            summary_out=f"compliance={data.get('compliance')} candidates={[c.get('certificate_type_code') for c in (data.get('candidates') or [])]}",
+        )
         if not data.get("compliance"):
             return []
         out: list[dict[str, Any]] = []
@@ -487,6 +520,12 @@ async def classify_compliance_certificate_llm(
         return out
     except Exception as exc:  # noqa: BLE001 — classification is best-effort
         log.warning("single_door.compliance.llm_classify_failed", error=str(exc)[:200])
+        activity_log.fire_exchange(
+            agent="compliance_intake", stage="classify_document", system=None,
+            user={"prompt": prompt, "file": name, "user_query": msg}, error=str(exc),
+            model=_model, latency_ms=(__import__("time").perf_counter() - _t0) * 1000,
+            summary_in=f"classify {name}",
+        )
         return []
 
 
@@ -636,6 +675,116 @@ async def classify_compliance_certificate_hybrid(
             keyword=(keyword_hint or {}).get("certificate_type_code"),
         )
     return result
+
+
+def _extract_building_fields(
+    extracted: dict[str, Any], text: str
+) -> tuple[str | None, str | None]:
+    """The building this certificate is about: its name, and the reference the portfolio
+    knows it by.
+
+    ops-intelligence already knows what to do with these two — `_pick_field` finds them,
+    `resolve_site_link` links the site FK and `attach_to_graph` places the certificate on the
+    building (engines/compliance/certificates.py). It simply never received them: this door
+    posted certificate_number, the dates, the inspector and the result, and nothing else off
+    the page. So every INGESTED building certificate landed under "No building on
+    certificate", while one added by hand through the same API could carry its building.
+
+    The UK pack's key_fields_schema names no building field for CP17 or EICR, so `extracted`
+    often holds none — hence the text fallback, which reads the same labelled rows a person
+    reading the certificate would. The reference pattern deliberately requires the word
+    "building" so a certificate number can never be mistaken for one.
+    """
+    name: str | None = None
+    ref: str | None = None
+    for key in ("Building name", "building_name", "Premises name", "Property name", "Site name"):
+        val = extracted.get(key)
+        if val and str(val).strip():
+            name = str(val).strip()
+            break
+    for key in ("Building reference", "building_reference", "Building ref", "Site reference"):
+        val = extracted.get(key)
+        if val and str(val).strip():
+            ref = str(val).strip()
+            break
+    if not name:
+        m = re.search(r"building\s*name\s*[:|]?\s*([A-Z][^\n|]{1,80})", text or "", re.I)
+        if m:
+            name = m.group(1).strip()
+    if not ref:
+        m = re.search(
+            r"building\s*(?:reference|ref)\s*(?:no\.?|number)?\s*[:|]?\s*([A-Za-z0-9][^\n|]{0,40})",
+            text or "",
+            re.I,
+        )
+        if m:
+            ref = m.group(1).strip()
+    return (name[:255] if name else None, ref[:120] if ref else None)
+
+
+_BAND_KEYS = (
+    "energy_rating", "epc_rating", "epc_band", "asset_rating", "current_energy_rating",
+    "Asset rating (A-G) and score", "Asset rating", "Energy rating",
+)
+_SCORE_KEYS = ("energy_score", "epc_score", "asset_rating_score")
+# "C (74)", "C 74", "Band C", "c". The band is one letter A-G standing alone, so "Band" is
+# not read as a B; the score, when it follows, is one to three digits.
+_BAND_VALUE_RE = re.compile(r"(?:band\s*)?\b([A-Ga-g])\b(?!\w)\s*[:|(\-–]?\s*(\d{1,3})?")
+_BAND_TEXT_RE = re.compile(
+    r"(?:asset|energy|epc)\s+rating(?:\s*\(a[-–]g\)(?:\s*and\s+score)?)?\s*[:|\-–]?\s*"
+    r"(?:band\s*)?\b([A-G])\b(?!\w)\s*[:|(\-–]?\s*(\d{1,3})?",
+    re.I,
+)
+
+
+def _extract_energy_rating(
+    extracted: dict[str, Any], text: str
+) -> tuple[str | None, int | None]:
+    """The EPC asset rating this certificate states: its band A-G and the score behind it.
+
+    ops-intelligence stores both (energy_rating, energy_score) and the MEES tiles are computed
+    from the band alone: below E now, below B by 2030. Its extractor already read them from
+    the page — /api/compliance/extract returned energy_rating "C" and energy_score 74 for the
+    Harbour Point EPC — and this door then posted certificate_number, the dates, the inspector
+    and the result, exactly as it once did with the building name. Both EPC rows for Harbour
+    Point landed with energy_rating NULL, and "MEES — proposed 2030" read 0 over a certificate
+    that said C.
+
+    The extracted keys are read first, under the snake_case names and the labels the pack
+    schema uses; the document text is the fallback, for a scanned copy whose extraction
+    captured the number and dates but not the rating row.
+    """
+    band: str | None = None
+    score: int | None = None
+    for key in _BAND_KEYS:
+        val = extracted.get(key)
+        if val is None or not str(val).strip():
+            continue
+        m = _BAND_VALUE_RE.search(str(val))
+        if m:
+            band = m.group(1).upper()
+            if m.group(2):
+                score = int(m.group(2))
+            break
+    for key in _SCORE_KEYS:
+        val = extracted.get(key)
+        if score is None and val not in (None, ""):
+            try:
+                score = int(str(val).strip().rstrip("+"))
+            except ValueError:
+                pass
+    if band is None:
+        # Every rating row, not the first: "Energy rating  Band C" carries no score, and the
+        # score sits on the "Asset rating (A-G) and score  C (74)" row below it.
+        for m in _BAND_TEXT_RE.finditer(text or ""):
+            b = m.group(1).upper()
+            if band is None:
+                band = b
+            if score is None and m.group(2) and b == band:
+                score = int(m.group(2))
+            if score is not None:
+                break
+    return band, score
 
 
 def _extract_company_name(extracted: dict[str, Any], text: str, filename: str) -> str | None:
@@ -995,6 +1144,23 @@ async def route_compliance_certificate_upload(
             }
             if company:
                 upsert_payload["vendor_name"] = company
+            # A building certificate has to arrive naming its building. ops-intelligence
+            # resolves the site FK and the graph edge from these two columns; without them
+            # the certificate is stored but belongs to nothing, and the console groups it
+            # under "No building on certificate".
+            if scope != "Vendor":
+                _b_name, _b_ref = _extract_building_fields(extracted, text or "")
+                if _b_name:
+                    upsert_payload["building_name"] = _b_name
+                if _b_ref:
+                    upsert_payload["building_reference"] = _b_ref
+                # An EPC's asset rating is the fact MEES is judged on. Sent for every
+                # building certificate: ops-intelligence keeps it only on EPC-type rows.
+                _band, _score = _extract_energy_rating(extracted, text or "")
+                if _band:
+                    upsert_payload["energy_rating"] = _band
+                if _score is not None:
+                    upsert_payload["energy_score"] = _score
             try:
                 up = await _request(
                     "POST",

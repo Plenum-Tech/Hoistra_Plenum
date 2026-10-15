@@ -263,12 +263,6 @@ async def append_migration_node_log(
     Activity-Log dimensions (trigger / one-line outcome / status / actor) — F4-2.
     """
     try:
-        result = await session.execute(
-            select(MigrationJob.node_logs).where(MigrationJob.id == migration_id)
-        )
-        row = result.one_or_none()
-        existing: list = (row[0] or []) if row else []
-
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
         entry = {
             "node_id": node_id,
@@ -281,13 +275,34 @@ async def append_migration_node_log(
             "logs": logs,
         }
         enrich_node_entry(entry, node_name=node_name, trigger=trigger, outcome=outcome, actor=actor)
-        existing.append(entry)
 
-        await session.execute(
-            update(MigrationJob)
-            .where(MigrationJob.id == migration_id)
-            .values(node_logs=existing)
-        )
+        if session.get_bind().dialect.name == "postgresql":
+            # The entry alone, appended where the list lies: reading the whole list and writing it
+            # back sent every earlier node's logs up again (~5.7 s a node on a slow uplink by the
+            # end of a run, 2 Oct 2026), and two nodes finishing at once lost one entry.
+            from sqlalchemy import bindparam, case, cast, func, literal
+            from sqlalchemy.dialects.postgresql import JSONB as _JSONB
+
+            # A list that is not a list yet (NULL, or JSON null) starts as [], as `row[0] or []` did.
+            current = case((func.jsonb_typeof(MigrationJob.node_logs) == "array", MigrationJob.node_logs),
+                           else_=cast(literal("[]"), _JSONB))
+            await session.execute(
+                update(MigrationJob)
+                .where(MigrationJob.id == migration_id)
+                .values(node_logs=current.op("||")(bindparam("node_log_entry", [entry], type_=_JSONB)))
+            )
+        else:
+            result = await session.execute(
+                select(MigrationJob.node_logs).where(MigrationJob.id == migration_id)
+            )
+            row = result.one_or_none()
+            existing: list = (row[0] or []) if row else []
+            existing.append(entry)
+            await session.execute(
+                update(MigrationJob)
+                .where(MigrationJob.id == migration_id)
+                .values(node_logs=existing)
+            )
         await session.commit()
         logger.debug(f"[append_migration_node_log] node={node_id} migration={migration_id}")
     except Exception as e:

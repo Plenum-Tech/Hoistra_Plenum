@@ -55,7 +55,7 @@ def test_uk_row_reads_against_tm46_by_site_type():
     assert row["benchmark_standard"] == "CIBSE TM46"
     assert row["benchmark_standing"] == "guidance"
     assert row["building_type"] == "office"
-    assert row["benchmark_source"] == "tm46_by_site_type"
+    assert row["benchmark_source"] == "tm46_combined_by_use"
     assert row["benchmark_kwh_per_m2"] and row["benchmark_kwh_per_m2"] > 0
     assert row["floors"] == 34 and row["gfa_sqm"] == 38276.5
     assert row["eui_kwh_per_m2"] is None
@@ -153,3 +153,22 @@ def test_parse_use_mix_shapes():
     assert parse_use_mix("not json") == []
     assert parse_use_mix([["Retail", 100]]) == [{"use": "Retail", "pct": 100.0}]
     assert parse_use_mix({"Office": 60, "Retail": 40}) == [{"use": "Office", "pct": 60.0}, {"use": "Retail", "pct": 40.0}]
+
+
+def test_a_whole_building_eui_reads_against_the_combined_benchmark():
+    """A recorded EUI names no fuel and covers all of them. Scoring it against TM46's
+    electricity-only figure reported a building sitting AT its benchmark as 125% over it."""
+    site = _site(eui_kwh_per_m2="214", building_id="u-1", primary_use="Commercial")
+    row = shape_building_row(site, profile=None, snapshot=None, meters=[])
+    assert row["benchmark_source"] == "tm46_combined_by_use"
+    assert row["benchmark_kwh_per_m2"] == 212.0
+    assert row["eui_source"] == "buildings_recorded"
+    assert abs(row["deviation_pct"]) < 2
+
+
+def test_a_snapshot_reads_against_the_fuel_it_measured():
+    snap = {"eui_kwh_per_m2": 95.0, "benchmark_kwh_per_m2": None, "deviation_pct": None,
+            "meter_type": "electricity"}
+    row = shape_building_row(_site(), profile=None, snapshot=snap, meters=[])
+    assert row["benchmark_source"] == "tm46_electricity_by_use"
+    assert row["benchmark_kwh_per_m2"] == 95.0

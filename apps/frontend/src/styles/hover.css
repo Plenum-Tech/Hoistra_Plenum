@@ -24,3 +24,25 @@
 .hv23:hover { background:var(--color-accent) !important; color:var(--accent-ink) !important; border-color:var(--color-accent) !important; }
 .hv24:hover { opacity:0.8 !important; }
 .hv25:hover { background:var(--color-accent-900) !important; }
+.hv26:hover { background:var(--marker-tint) !important; color:var(--color-text) !important; }
+/* The instance picker's cards (screens/InstancePicker.jsx): the whole card is the control. */
+.inst-card:hover { border-color:var(--color-accent) !important; box-shadow:var(--shadow-md) !important; }
+.inst-card:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+/* The Vendors directory (screens/Vendors.jsx) scrolls inside its own panel. It is pinned beside the
+   vendor detail only while the two sit side by side (the body grid wide enough for two 340px
+   columns); stacked, a pinned panel would sit over the detail it opens. */
+.vp-dir { max-height:calc(100vh - 150px); }
+@container vpbody (min-width: 694px) { .vp-dir { position:sticky; top:76px; max-height:calc(100vh - 92px); } }
+.vp-dir-row:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; }
+/* The Compliance Graph (screens/HoistGraph.jsx): its five figures in two columns on a phone. */
+@media (max-width: 640px) { .hg-stats { grid-template-columns:repeat(2,minmax(0,1fr)) !important; } }
+/* Delete vendor (screens/Vendors.jsx, components/shell/VendorDeleteDialog.jsx): the risk-toned
+   outline controls fill with the risk tint on hover. */
+.hv27:hover { background:var(--st-risk-bg) !important; }
+/* The dialog's fields: 16px on a phone, so focusing one does not zoom the page (iOS zooms any
+   input under 16px). */
+.vdl-field { font-size:13px; }
+@media (max-width: 640px) { .vdl-field { font-size:16px; } .vdl-btn { min-height:44px; } }
+/* The dialog's box: the visible screen less a margin. 100dvh where it is understood; on iOS 100vh
+   is the screen without its toolbars, and a long plan's top would sit out of reach (12 Oct 2026). */
+.vdl-box { max-height:calc(100vh - 32px); max-height:calc(100dvh - 32px); }

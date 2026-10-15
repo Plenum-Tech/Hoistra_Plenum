@@ -48,6 +48,8 @@ dependencies = [
     # File processing
     "pandas>=2.2.0",
     "chardet>=5.0.0",
+    # The engine bridge (src/engine/store.py): the Arrow files hoist-engine reads and writes.
+    "pyarrow>=17.0",
     # python-calamine: fast Rust-based Excel READER (pandas engine="calamine"). openpyxl is kept for
     # WRITING .xlsx (output.xlsx / combined workbook) only — see src/excel_parser.py.
     "python-calamine>=0.2.0",

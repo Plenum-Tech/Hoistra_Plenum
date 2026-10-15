@@ -14,9 +14,43 @@ import structlog
 from langchain_core.tools import tool
 
 from ..config import settings
-from ..http_client import request as _request
+from ..http_client import request as _http_request
 
 log = structlog.get_logger(__name__)
+
+#: An nginx location, not a path doc-rag serves. `/backend/doc-rag/` exists so a browser can
+#: reach the service through the one ingress, and nginx strips it before proxying to
+#: 127.0.0.1:8004 — so a service calling that port directly must not send it. Every path in
+#: this module carried it, which 404s everything except the two calls that happened to have
+#: been given a fallback, and the agent reported that to the user as "the document retrieval
+#: service returned an error".
+_NGINX_PREFIX = "/doc-rag"
+
+
+async def _request(method: str, base: str, path: str, **kwargs):
+    """doc-rag's own path first, the nginx-prefixed one second.
+
+    Both are tried because doc_rag_base_url is a setting: it points at port 8004 here and
+    could point at the front door elsewhere, and one wrong guess costs a whole capability
+    silently. Trying both makes this module right either way, and answers the prefix
+    question once rather than at each of a dozen call sites.
+
+    Only a 404 falls through — that is the shape of a wrong path. A 500, a timeout or a
+    refused connection is the service's answer to the right path and is raised as it was,
+    so a real fault is never retried into a confusing second error.
+    """
+    unprefixed = path[len(_NGINX_PREFIX):] if path.startswith(_NGINX_PREFIX + "/") else path
+    candidates = [unprefixed] if unprefixed == path else [unprefixed, path]
+    last: Exception | None = None
+    for candidate in candidates:
+        try:
+            return await _http_request(method, base, candidate, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404 or candidate is candidates[-1]:
+                raise
+            log.info("doc_rag.path_not_found_trying_prefixed", tried=candidate)
+            last = exc
+    raise last  # unreachable: the loop either returns or raises
 
 _TIMEOUT = 60.0
 _INDEX_TIMEOUT = 180.0
@@ -226,50 +260,6 @@ async def index_documents_batch(file_paths: list[str], wait: bool = True) -> dic
     return out
 
 
-@tool
-async def query_docs(query: str, top_k: int = 5) -> dict:
-    """Ask a natural language question and get an answer grounded in indexed documents.
-
-    The RAG service retrieves the most relevant document chunks and synthesises
-    a grounded answer. Always returns source citations.
-
-    Args:
-        query: Plain English question about documents (e.g. 'What does the AHU manual say about belt tension?').
-        top_k: Number of document chunks to retrieve (default/capped at 3 to fit context).
-    """
-    payload = {"query": query, "top_k": min(top_k, _VECTOR_TOP_K)}
-
-    def _shrink(body):
-        # synthesised answer is small; trim the (potentially huge) raw source chunks.
-        if isinstance(body, dict) and isinstance(body.get("sources"), list):
-            body["sources"] = _trim_sources(body["sources"])
-        return body
-
-    try:
-        resp = await _request(
-            "POST",
-            settings.doc_rag_base_url,
-            "/doc-rag/rag/query",
-            service=_SERVICE,
-            timeout=_TIMEOUT,
-            json=payload,
-        )
-        return _shrink(resp.json())
-    except Exception as exc:
-        try:
-            resp = await _request(
-                "POST",
-                settings.doc_rag_base_url,
-                "/api/query",
-                service=_SERVICE,
-                timeout=_TIMEOUT,
-                json=payload,
-            )
-            return _shrink(resp.json())
-        except Exception:
-            return _err(exc, "query")
-
-
 # Keep vector results small so they never blow the LLM context window: top-3 chunks,
 # each text field truncated. (A single un-trimmed page chunk can be thousands of tokens.)
 _VECTOR_TOP_K = 3
@@ -290,47 +280,85 @@ def _trim_sources(sources, k: int = _VECTOR_TOP_K, max_chars: int = _CHUNK_MAX_C
     return out
 
 
+# ── Searching: through the company-scoped register search, never doc-rag directly ─────────────
+#
+# These two searched doc-rag's /rag/query, which has no login and no company filter: in the chat,
+# any company's question could be answered from another company's contracts (found 2 Oct 2026).
+# Both now go to svc-operations-intelligence GET /api/documents/search with the caller's own
+# token (http_client forwards it). That search starts from the document register, narrowed to the
+# caller's company and buildings; naming nothing searches every INDEXED document the company owns.
+# Personal documents stay admin-only and logged there. Indexing (index_document and the batch)
+# still talks to doc-rag inside the container - that is writing, not reading across companies.
+
+_OPS_SERVICE = "operations_intelligence"
+
+
+async def _scoped_search(query: str) -> dict:
+    resp = await _http_request("GET", settings.operations_intelligence_base_url.rstrip("/"), "/api/documents/search",
+                               service=_OPS_SERVICE, timeout=_TIMEOUT, params={"q": (query or "")[:500]})
+    return resp.json()
+
+
+def _as_sources(body: dict, k: int) -> list[dict]:
+    """The scoped passages in the shape the chat's citation reader expects (document_id, file_name)."""
+    return _trim_sources([{"document_id": x.get("document_id"), "file_name": x.get("file"),
+                           "document": x.get("document"), "page": x.get("page"), "heading": x.get("heading"),
+                           "text": x.get("text"), "score": x.get("score")}
+                          for x in (body.get("passages") or []) if isinstance(x, dict)], k=k)
+
+
+@tool
+async def query_docs(query: str, top_k: int = 5) -> dict:
+    """Find the passages in YOUR COMPANY'S indexed documents that answer a question.
+
+    Searches only documents the signed-in user's company and buildings own (the document register);
+    returns `sources` (document, file, page, text) to quote and cite, and a `note` when nothing
+    matched or nothing is indexed. There is no synthesised answer: read the passages and answer
+    from them. When the question is about a specific vendor, contract, asset or building, prefer
+    search_documents, which narrows to the documents linked to it.
+
+    Args:
+        query: Plain English question about documents (e.g. 'What does the AHU manual say about belt tension?').
+        top_k: Number of passages to return (capped at 3 to fit context).
+    """
+    if len((query or "").strip()) < 2:
+        return {"error": "Ask a question to search the documents.", "sources": []}
+    try:
+        body = await _scoped_search(query)
+    except Exception as exc:  # noqa: BLE001 - a tool answers, it does not raise into the agent loop
+        return _err(exc, "query")
+    if not isinstance(body, dict):
+        return {"error": "The document search returned nothing readable.", "sources": []}
+    if body.get("ok") is False:
+        return {"error": body.get("error") or "The document search failed.", "sources": []}
+    out = {"sources": _as_sources(body, min(top_k, _VECTOR_TOP_K)), "scope": "your company's documents",
+           "documents_searched": len(body.get("searched") or [])}
+    if body.get("note"):
+        out["note"] = body["note"]
+    return out
+
+
 @tool
 async def semantic_search(query: str, filter_type: str | None = None) -> list[dict]:
-    """Search indexed documents by semantic similarity and return the TOP 3 matching chunks.
+    """Search YOUR COMPANY'S indexed documents and return the top 3 matching passages.
 
-    Returns raw chunks (truncated) without answer synthesis — useful for relevant passages.
+    Scoped to the signed-in user's company and buildings, like query_docs; returns the raw
+    passages (document, file, page, text) with no answer synthesis.
 
     Args:
         query: Search query string.
-        filter_type: Optional document type to restrict search ('pdf', 'docx', 'txt').
+        filter_type: Ignored (kept for older plans); every indexed document type is searched.
     """
-    payload: dict = {"query": query}
-    if filter_type:
-        payload["filter_type"] = filter_type
-
+    _ = filter_type
+    if len((query or "").strip()) < 2:
+        return []
     try:
-        # New API doesn't expose /api/search; use rag/query and return sources/chunks.
-        resp = await _request(
-            "POST",
-            settings.doc_rag_base_url,
-            "/doc-rag/rag/query",
-            service=_SERVICE,
-            timeout=_TIMEOUT,
-            json={"query": query, "top_k": _VECTOR_TOP_K},
-        )
-        body = resp.json()
-        if isinstance(body, dict) and "sources" in body and isinstance(body["sources"], list):
-            return _trim_sources(body["sources"])
-        return _trim_sources([body] if isinstance(body, dict) else body)
-    except Exception as exc:
-        try:
-            resp = await _request(
-                "POST",
-                settings.doc_rag_base_url,
-                "/api/search",
-                service=_SERVICE,
-                timeout=_TIMEOUT,
-                json=payload,
-            )
-            return _trim_sources(resp.json())
-        except Exception:
-            return [_err(exc, "search")]
+        body = await _scoped_search(query)
+    except Exception as exc:  # noqa: BLE001
+        return [_err(exc, "search")]
+    if not isinstance(body, dict) or body.get("ok") is False:
+        return [{"error": (body or {}).get("error") if isinstance(body, dict) else "The document search failed."}]
+    return _as_sources(body, _VECTOR_TOP_K)
 
 
 @tool

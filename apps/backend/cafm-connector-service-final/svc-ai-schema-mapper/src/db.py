@@ -5,6 +5,7 @@ Sync connection string getter for PostgresSaver checkpointer (requires psycopg2,
 """
 
 import asyncio
+import os
 import logging
 import re
 import ssl
@@ -93,8 +94,10 @@ def _build_async_engine() -> AsyncEngine:
         "command_timeout": 45,
     }
 
-    # NullPool doesn't support pool_size/max_overflow parameters
-    if settings.environment == "development":
+    # NullPool doesn't support pool_size/max_overflow parameters. HOIST_DB_POOL=1 gives a development
+    # process the pooled engine below: with NullPool every session opened a new TLS connection to
+    # Azure, ~0.25 s each, dozens of times a gate on the migration worker (2 Oct 2026).
+    if settings.environment == "development" and os.environ.get("HOIST_DB_POOL") != "1":
         engine = create_async_engine(
             db_url,
             echo=False,

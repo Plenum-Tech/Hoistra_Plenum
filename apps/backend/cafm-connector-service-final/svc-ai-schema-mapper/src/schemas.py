@@ -97,6 +97,12 @@ class MigrationStatusResponse(BaseModel):
     # Error information
     error_message: Optional[str] = None
 
+    # hoist-engine: "go" for a run the engine does the row-heavy steps of (None for a Python
+    # run), and while one of its steps is running, where it is: {"engine", "step", "stage",
+    # "table", "done", "total", "rate_per_s", "at"} (engine/progress.py).
+    engine: Optional[str] = None
+    engine_progress: Optional[Dict[str, Any]] = None
+
     # Per-node log array — always 9 entries (node_id 1–9).
     # Each entry: {node_id, node_name, status, started_at, completed_at, duration_ms, output, logs}
     # status values: "complete" | "running" | "pending"

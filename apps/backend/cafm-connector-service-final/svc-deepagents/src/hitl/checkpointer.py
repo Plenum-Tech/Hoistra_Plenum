@@ -43,6 +43,20 @@ async def create_checkpointer(db_url: str) -> tuple[AsyncPostgresSaver, AsyncCon
         conninfo=conn_string,
         max_size=4,
         kwargs={"autocommit": True, "prepare_threshold": 0},
+        # A pooled connection is handed back out without being tested unless we ask for it,
+        # and this pool talks to a managed Postgres over SSL that closes idle sessions on
+        # its own schedule. Unchecked, the socket is already dead when langgraph loads its
+        # checkpoint, and the turn dies on
+        #     consuming input failed: SSL error: unexpected eof while reading
+        # inside aget_tuple — before a single tool runs. The work of the turn had already
+        # been done by then, so the user saw "could not answer" over a successful ingest.
+        # Observed twice on 22 Sep 2026: 46 minutes after one boot, 33 after the next.
+        #
+        # src/database.py has carried pool_pre_ping + pool_recycle for the app's own engine
+        # all along; this pool is the one that never got them.
+        check=AsyncConnectionPool.check_connection,  # test on getconn, replace if dead
+        max_idle=300.0,     # retire before the server's idle timeout reaches it
+        max_lifetime=1800.0,  # recycle on a clock, as pool_recycle=1800 does next door
         open=False,
     )
     await pool.open()

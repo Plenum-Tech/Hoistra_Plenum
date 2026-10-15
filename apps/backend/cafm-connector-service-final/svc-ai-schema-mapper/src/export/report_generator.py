@@ -18,6 +18,17 @@ from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _pct(value: Any) -> str:
+    """A rate as a percentage, or "n/a" when the pipeline did not record one.
+
+    A customer-confirmed hierarchy carries no data_match_rate and the overall confidence can be
+    unset; formatting either with `:.1%` raised and lost the whole report (run ee83c4b4, 30 Sep 2026).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{value:.1%}"
+
+
 def generate_pdf_report(
     migration_id: str,
     cmms_name: str,
@@ -82,7 +93,7 @@ def generate_pdf_report(
         f"  - Human-approved:\t{tier2_human_count} fields",
         f"  - Unmappable:\t\t{len(tier2_unmappable)} fields",
         "",
-        f"Overall Confidence: {overall_confidence:.1%}",
+        f"Overall Confidence: {_pct(overall_confidence)}",
         "",
     ]
 
@@ -129,7 +140,7 @@ def generate_pdf_report(
             report_lines.append(
                 f"  • {h.get('source_table')}.{h.get('source_column')} "
                 f"→ {h.get('target_table')}.{h.get('target_column')} "
-                f"({h.get('relationship_type')}) [{h.get('data_match_rate'):.1%}]"
+                f"({h.get('relationship_type')}) [{_pct(h.get('data_match_rate'))}]"
             )
         if len(confirmed_hierarchies) > 10:
             report_lines.append(f"  ... and {len(confirmed_hierarchies) - 10} more")

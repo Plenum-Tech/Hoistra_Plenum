@@ -70,6 +70,34 @@ class IntermediateSchema:
         }
 
 
+# Fallback name-pattern map (same as Node 2 _TABLE_NAME_PATTERNS)
+_FALLBACK_PATTERNS = [
+    ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
+    ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
+    ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
+    ("part", "spare_parts"), ("inventory", "spare_parts"),
+    ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
+    ("inspection", "findings"), ("finding", "findings"),
+    ("site", "locations"), ("location", "locations"),
+]
+
+
+def entity_type_for(table_name: str, table_routing: Optional[Dict[str, str]] = None) -> str:
+    """The entity a source table's records belong to.
+
+    1. table_routing (built by Node 2, updated by Node 4 for new tables); 2. the name-pattern
+    fallback Node 2 uses; 3. unknown — its own lowercase name (new/custom tables pass through).
+    """
+    if table_routing and table_name in table_routing:
+        return table_routing[table_name]
+    table_lower = table_name.lower()
+    for pattern, etype in _FALLBACK_PATTERNS:
+        if pattern in table_lower:
+            return etype
+    logger.info(f"[Schema Builder] Unknown table '{table_name}' → passthrough as entity '{table_lower}'")
+    return table_lower
+
+
 def build_intermediate_schema(
     migration_id: str,
     cmms_name: str,
@@ -119,38 +147,11 @@ def build_intermediate_schema(
     #   3. Unknown → use source table name as entity type (new/custom tables pass through)
     entities: Dict[str, List[Dict]] = {}
 
-    # Fallback name-pattern map (same as Node 2 _TABLE_NAME_PATTERNS)
-    _FALLBACK_PATTERNS = [
-        ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
-        ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
-        ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
-        ("part", "spare_parts"), ("inventory", "spare_parts"),
-        ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
-        ("inspection", "findings"), ("finding", "findings"),
-        ("site", "locations"), ("location", "locations"),
-    ]
-
     for table_name, records in cleaned_tables.items():
         if not records:
             continue
 
-        # 1. Use table_routing if available
-        if table_routing and table_name in table_routing:
-            entity_type = table_routing[table_name]
-        else:
-            # 2. Name-pattern fallback
-            table_lower = table_name.lower()
-            entity_type = None
-            for pattern, etype in _FALLBACK_PATTERNS:
-                if pattern in table_lower:
-                    entity_type = etype
-                    break
-            # 3. Unknown — include as its own entity type (new/custom table)
-            if not entity_type:
-                entity_type = table_lower
-                logger.info(
-                    f"[Schema Builder] Unknown table '{table_name}' → passthrough as entity '{entity_type}'"
-                )
+        entity_type = entity_type_for(table_name, table_routing)
 
         if entity_type not in entities:
             entities[entity_type] = []

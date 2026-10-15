@@ -19,7 +19,7 @@ class EnergyMeter(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     meter_type: Mapped[str] = mapped_column(String(20), nullable=False)
     mpan: Mapped[str | None] = mapped_column(String(40))
@@ -77,7 +77,7 @@ class BuildingEnergyProfile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     building_type: Mapped[str] = mapped_column(String(80), nullable=False, default="office")
     gia_m2: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     tm46_electricity_benchmark: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
@@ -92,7 +92,7 @@ class EuiSnapshot(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     meter_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -131,7 +131,7 @@ class EnergyRecommendation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     recommendation_type: Mapped[str] = mapped_column(String(40), nullable=False)
     condition_score: Mapped[int | None] = mapped_column(Integer)
     consumption_vs_benchmark_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
@@ -151,7 +151,7 @@ class EnergyAnomaly(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     meter_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     anomaly_type: Mapped[str] = mapped_column(String(60), nullable=False)
@@ -161,7 +161,11 @@ class EnergyAnomaly(Base):
     metric_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     excess_kwh: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
     annualised_excess_kwh: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    #: The amount, in `currency`. The column name is historical — it has always held the
+    #: site's own tariff, which is sterling only for the UK buildings. NULL means the rule
+    #: could not price this firing; 0 means it priced it at nothing.
     financial_gbp: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
     tariff_used: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
     detail_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="open")
@@ -179,7 +183,7 @@ class EnergyMonthlyReport(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     report_month: Mapped[date] = mapped_column(Date, nullable=False)
     eui_trend_json: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     anomalies_ranked_json: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
@@ -198,9 +202,114 @@ class SiteOccupancyLog(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    site_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     occupancy_state: Mapped[str] = mapped_column(String(40), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(40), nullable=False, default="manual")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EnergyRating(Base):
+    """A dated snapshot of a consumption-derived rating: an Energy Star score estimate, an
+    LL97 emissions position, EUI against the BCA reference. Kept as rows rather than
+    recomputed on every page load so a tile can say how many months stand behind it."""
+
+    __tablename__ = "energy_ratings"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    scheme: Mapped[str] = mapped_column(String(40), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    months_of_data: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(16, 6))
+    unit: Mapped[str | None] = mapped_column(String(40))
+    limit_value: Mapped[Decimal | None] = mapped_column(Numeric(16, 6))
+    status: Mapped[str | None] = mapped_column(String(40))
+    basis: Mapped[str] = mapped_column(String(20), nullable=False, default="consumption")
+    detail_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChillerDesignSpec(Base):
+    """What the chiller was sold as: kW/RT at a design ambient, and its capacity. The figure
+    every kW/RT reading is judged against."""
+
+    __tablename__ = "chiller_design_specs"
+    __table_args__ = {"schema": SCHEMA}
+
+    asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    design_kw_per_rt: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    design_capacity_rt: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    design_ambient_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    design_chw_supply_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    source: Mapped[str | None] = mapped_column(String(80))
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChillerPerformanceReading(Base):
+    """One BMS or sub-meter sample of a chiller: electrical kW in, cooling out (RT, or thermal
+    kW which the engine converts), and the ambient it was working against."""
+
+    __tablename__ = "chiller_performance_readings"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    building_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reading_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    kw_input: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    cooling_load_rt: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    cooling_load_kw: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    ambient_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    chw_supply_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    chw_return_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="bms")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WeatherDegreeDays(Base):
+    """Monthly heating and cooling degree days for a building's location - the regressor
+    the weather-normalised rule needs. One row per building and month."""
+
+    __tablename__ = "weather_degree_days"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    month: Mapped[date] = mapped_column(Date, nullable=False)
+    hdd: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
+    cdd: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
+    base_temp_c: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("15.5"))
+    station: Mapped[str | None] = mapped_column(String(120))
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="manual")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BmsTrend(Base):
+    """A BMS zone sample: heating and cooling demand side by side, which is what the
+    simultaneous-heating-and-cooling rule reads."""
+
+    __tablename__ = "bms_trends"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    building_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    zone: Mapped[str] = mapped_column(String(120), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heating_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    cooling_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    zone_temp_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    setpoint_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="bms")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

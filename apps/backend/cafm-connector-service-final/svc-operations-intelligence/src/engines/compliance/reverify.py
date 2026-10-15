@@ -5,11 +5,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
+from ...shared.vendor_identity import deleted_vendor_ids_sql
 from . import ccc_verify as ccc_verify_svc
 
 log = get_logger(__name__)
@@ -40,7 +41,24 @@ def _checked_at(meta: dict[str, Any] | None) -> datetime | None:
         return None
 
 
+# A retired vendor's accreditations are not re-verified (Hussain, 12 Oct 2026): checking a
+# register for a vendor nobody works with costs a lookup and can raise a human-verification
+# approval about it. A BUILDING certificate it issued is still the building's certificate,
+# so only vendor-scope rows are left out.
+_NOT_A_RETIRED_VENDORS = text(
+    "(plenum_cafm.compliance_certificates.vendor_id IS NULL"
+    " OR lower(coalesce(plenum_cafm.compliance_certificates.cert_scope, '')) = 'building'"
+    " OR plenum_cafm.compliance_certificates.vendor_id::text NOT IN ("
+    + deleted_vendor_ids_sql()
+    + "))"
+)
+
+
 def _is_active(cert: ComplianceCertificate) -> bool:
+    # Archived certificates are set aside everywhere else — lists, KPIs, both scan streams.
+    meta = cert.raw_metadata if isinstance(cert.raw_metadata, dict) else {}
+    if meta.get("archived"):
+        return False
     st = (cert.status or "").strip()
     if not st:
         # No status yet — include if expiry is in the future or missing
@@ -63,8 +81,11 @@ async def reverify_due_certificates(
     cutoff = datetime.now(timezone.utc) - timedelta(days=REVERIFY_DAYS)
     # Fetch a wider window then filter — status values vary by casing
     fetch_n = max(1, min(limit * 4, 500))
-    q = select(ComplianceCertificate).order_by(ComplianceCertificate.updated_at.asc()).limit(
-        fetch_n
+    q = (
+        select(ComplianceCertificate)
+        .where(_NOT_A_RETIRED_VENDORS)
+        .order_by(ComplianceCertificate.updated_at.asc())
+        .limit(fetch_n)
     )
     if organization_id:
         q = q.where(
@@ -133,6 +154,7 @@ async def auto_verify_listed_certificates(
     fetch_n = max(1, min(int(limit) * 2, 500))
     q = (
         select(ComplianceCertificate)
+        .where(_NOT_A_RETIRED_VENDORS)
         .order_by(ComplianceCertificate.updated_at.desc())
         .limit(fetch_n)
     )
