@@ -5,6 +5,7 @@
 // scale), then the companies behind it. A company opens in PlatformCostPanel.
 import React from 'react';
 import PlatformCostPanel, { ToneIcon } from './PlatformCostPanel.jsx';
+import EvalSpendLine from '../../tracelab/EvalSpendLine.jsx';
 
 // One tooltip for the page. Marks spread bindTip(value, label) onto themselves; the tooltip
 // sits above the mark, values first. It enhances only: every value is also on the page.
@@ -273,6 +274,7 @@ export default function PlatformCostPage({ vals }) {
         </div>
       ) : null}
 
+      <EvalSpendLine monthLabel={st.showing || month.label} />
       {vals.pcPanel ? <PlatformCostPanel panel={vals.pcPanel} bindTip={bindTip} /> : null}
       {tipNode}
     </div>

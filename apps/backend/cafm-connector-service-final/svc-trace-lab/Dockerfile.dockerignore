@@ -1,0 +1,12 @@
+# Used by BuildKit for svc-trace-lab/Dockerfile only (it replaces the context's .dockerignore
+# for this build, so the context's one entry is repeated here). Never send caches, virtualenvs
+# or .env files into the build.
+svc-ai-schema-mapper/engine/bin/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+**/.env
+**/.env.*

@@ -1,0 +1,5725 @@
+{
+ "columns": {
+  "annotation_events": {
+   "action": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "actor_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "actor_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "annotation_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "at": {
+    "default": "clock_timestamp()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "conversation_key": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "detail": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "seq": {
+    "default": null,
+    "identity": "a",
+    "notnull": true,
+    "type": "bigint"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   }
+  },
+  "annotations": {
+   "blind": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "boolean"
+   },
+   "conversation_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "field": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "quote": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "quote_occurrence": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "quote_start": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "reviewer_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "span_agent": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "span_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "span_kind": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "span_name": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "superseded_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "superseded_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "supersedes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "tombstone": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "verdict": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "eval_case_runs": {
+   "computed_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decision": {
+    "default": "'incomplete'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "degraded": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "eval_case_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "golden_run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "graders": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "k": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "n": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "pass_at_1": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "pass_at_3": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "pass_at_5": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "pass_hat_k": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "passes": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "pending": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "purpose": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "reason": {
+    "default": "'running'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "reps": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "summary": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   }
+  },
+  "eval_cases": {
+   "baseline_pass_rate": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(3,2)"
+   },
+   "baseline_run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "case_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "expected": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "golden_case_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "initial_state": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "input": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "kind": {
+    "default": "'unclassified'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "retired_reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "rev": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "source_batch_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "source_golden_case_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "source_turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "source_type": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "supersedes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "version": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "evidence_spans": {
+   "seq": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "span": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "span_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "evidence_turns": {
+   "captured_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "turn": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "golden_cases": {
+   "ask_as": {
+    "default": "'company'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "case_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "case_version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "evaluation": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "expected_answer": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "expected_values": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "flags": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "followups": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "idx": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "key_source": {
+    "default": "'id_column'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "notes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "page_context": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "requirement_ids": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "row_no": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "set_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "stale": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "verified_on": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "date"
+   }
+  },
+  "golden_results": {
+   "answer": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "case_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "case_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "case_version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "grade": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "graded_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "ms": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "msg_idx": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "outcome": {
+    "default": "'pending'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "refused": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "rep": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "session_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "usd": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   }
+  },
+  "golden_reveals": {
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "revealed_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "reviewer_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "golden_runs": {
+   "estimate_usd": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   },
+   "finished_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "job_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "k": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "label": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "params": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "purpose": {
+    "default": "'adhoc'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "set_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "started_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "started_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "started_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "status": {
+    "default": "'queued'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "summary": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "usd_cap": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   },
+   "usd_spent": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   }
+  },
+  "golden_sets": {
+   "case_count": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "diff": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "header_row": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": "'scenario'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "name": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "retired_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "set_hash": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "sheet_name": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "source_filename": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "source_kind": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "source_sha256": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "status": {
+    "default": "'active'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "warnings": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   }
+  },
+  "jobs": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "done": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "finished_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "heartbeat_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "params": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "progress": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "scope_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "started_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "status": {
+    "default": "'queued'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "stop_requested": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "total": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "usd_cap": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   },
+   "usd_estimate": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   },
+   "usd_reserved": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   },
+   "usd_spent": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   },
+   "worker": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   }
+  },
+  "judge_predictions": {
+   "attempts": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "critique": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "evidence_chars": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "evidence_truncated": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "failure_present": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "smallint"
+   },
+   "input_sha": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "judge_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "model": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "prompt_hash": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "usd": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,6)"
+   }
+  },
+  "judge_runs": {
+   "agreement": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "disagreements": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "finished_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "fn": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "fp": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "items": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "job_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "judge_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "label_flips": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "n": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "n_error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "n_truncated": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "n_undecidable": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "results": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "rev": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "split": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "started_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "started_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "started_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "tn": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "tnr": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "tnr_high": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "tnr_low": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "tp": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "tpr": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "tpr_high": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "tpr_low": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(6,4)"
+   },
+   "usd": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   },
+   "usd_cap": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,4)"
+   }
+  },
+  "judge_split_members": {
+   "conversation_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "evidence_snapshot": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "label_present": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "label_source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "split": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "split_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "judge_splits": {
+   "counts": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "excluded": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "fractions": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(4,3)[]"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "labels_sha": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "min_labels": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "min_per_class": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "override": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "retired_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "seed": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "status": {
+    "default": "'active'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "judges": {
+   "change_note": {
+    "default": "''::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "check_key": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "check_version": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "decision": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "decision_note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "frozen_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "frozen_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "frozen_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "history": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "judge_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "min_labels_override": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "model": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "monitor_threshold": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(5,4)"
+   },
+   "prompt_hash": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "prompt_parts": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "prompt_text": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "rev": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "split_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "status": {
+    "default": "'draft'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "stop_reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "lab_expected_answers": {
+   "author_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "evidence": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "expected": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "expected_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "question_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "lab_failure_modes": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "definition": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "name": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "tombstone": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   }
+  },
+  "lab_label_cells": {
+   "author_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "author_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "author_role": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "mode_lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "question_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "source": {
+    "default": "'manual'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "value": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   }
+  },
+  "lab_members": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decided_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "decided_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "lab_role": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "superseded_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "superseded_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "supersedes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "user_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   }
+  },
+  "lab_platform_members": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decided_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "decided_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "lab_role": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "user_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   }
+  },
+  "lab_question_traces": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "question_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "lab_questions": {
+   "asked_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "followups": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "intent": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "role": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "scenario_ref": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "seq_no": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "lab_runs": {
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "owner_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "owner_user_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "run_day": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "date"
+   },
+   "run_no": {
+    "default": null,
+    "identity": "d",
+    "notnull": true,
+    "type": "integer"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "title": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "labels": {
+   "annotation_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "approval": {
+    "default": "'single'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "basis": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decided_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "decided_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "present": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "boolean"
+   },
+   "proposal_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "quote": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "session_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "source": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "span_agent": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "span_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "span_kind": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "span_name": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "superseded_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "supersedes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "tombstone": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "mode_events": {
+   "action": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "actor_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "actor_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "detail": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "seq": {
+    "default": null,
+    "identity": "a",
+    "notnull": true,
+    "type": "bigint"
+   }
+  },
+  "modes": {
+   "absorbed_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "agent": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "boundary": {
+    "default": "''::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "close_negative_turn_ids": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "close_negatives_waiver": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "confirmed_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "created_from": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid[]"
+   },
+   "decided_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "decided_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "decided_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "definition": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "evaluator_type": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "frozen_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "level": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "merged_into": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "name": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "nearest_mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "positive_turn_ids": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "proposer_organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "rejected_reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "requirement_ids": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "rescoped_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "retired_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "split_from": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "status": {
+    "default": "'candidate'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "version": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "monitor_batches": {
+   "channel": {
+    "default": "'chat'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "checks": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "error": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "finished_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "job_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "judges": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "period_label": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "plan": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "results": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "risk_groups": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "sample_rate": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(5,4)"
+   },
+   "seed": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "started_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "started_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "started_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "usd": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(12,6)"
+   },
+   "usd_cap": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(12,4)"
+   },
+   "window_end": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "window_start": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   }
+  },
+  "monitor_verdicts": {
+   "attempts": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "detail": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "evaluator_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "failure_present": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "smallint"
+   },
+   "first_batch_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "judge_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_started_at": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "updated_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   }
+  },
+  "proposal_runs": {
+   "canary_agree": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "canary_total": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "estimate_usd": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(10,4)"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "items_planned": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "job_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "model": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "params": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "prompt_hash": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "prompt_version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "worst_usd": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "numeric(10,4)"
+   }
+  },
+  "proposals": {
+   "annotation_ids": {
+    "default": "'{}'::uuid[]",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid[]"
+   },
+   "basis": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "cache_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "canary_label_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "closed_reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "decided_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "decided_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "decided_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "draft": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "evidence": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "field": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "flags": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "is_canary": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "label_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "mode_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "quote": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "run_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "span_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "status": {
+    "default": "'pending'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "suggestion": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "usd": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "numeric(10,6)"
+   }
+  },
+  "requirements": {
+   "area": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "code": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "implementations": {
+    "default": "'[]'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "level": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "motivating_turn_ids": {
+    "default": "'{}'::text[]",
+    "identity": "",
+    "notnull": true,
+    "type": "text[]"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "origin": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "revision": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "revision_of": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "statement": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "status": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "sample_batches": {
+   "channel": {
+    "default": "'chat'::text",
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "counts_for_prevalence": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "created_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "created_by_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "excluded_sampled": {
+    "default": "0",
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "feature_version": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "params": {
+    "default": "'{}'::jsonb",
+    "identity": "",
+    "notnull": true,
+    "type": "jsonb"
+   },
+   "plan_step": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "pool_size": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "requested": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "reviews_required": {
+    "default": "1",
+    "identity": "",
+    "notnull": true,
+    "type": "smallint"
+   },
+   "seed": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "bigint"
+   },
+   "selected": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "strategy": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "window_since": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "window_until": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "withdrawn_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "withdrawn_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "withdrawn_reason": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   }
+  },
+  "sample_items": {
+   "batch_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "cluster": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "integer"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "dimension_value": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "features": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "jsonb"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "position": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   },
+   "reason": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "score": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "double precision"
+   },
+   "session_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  },
+  "schema_migrations": {
+   "applied_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "applied_by": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "checksum": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "version": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "integer"
+   }
+  },
+  "step_labels": {
+   "conversation_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "created_at": {
+    "default": "now()",
+    "identity": "",
+    "notnull": true,
+    "type": "timestamp with time zone"
+   },
+   "expected": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "group_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "id": {
+    "default": "gen_random_uuid()",
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "label": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "lineage_id": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "note": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "only_if": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "organization_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "question": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "quote": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_email": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "reviewer_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "uuid"
+   },
+   "reviewer_role": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "step_key": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "step_kind": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   },
+   "step_title": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "text"
+   },
+   "superseded_at": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "timestamp with time zone"
+   },
+   "superseded_by": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "supersedes": {
+    "default": null,
+    "identity": "",
+    "notnull": false,
+    "type": "uuid"
+   },
+   "tombstone": {
+    "default": "false",
+    "identity": "",
+    "notnull": true,
+    "type": "boolean"
+   },
+   "turn_id": {
+    "default": null,
+    "identity": "",
+    "notnull": true,
+    "type": "text"
+   }
+  }
+ },
+ "constraints": {
+  "annotation_events.annotation_events_action_check": {
+   "def": "CHECK ((action = ANY (ARRAY['create'::text, 'edit'::text, 'delete'::text, 'reveal'::text, 'dispose'::text, 'undispose'::text])))",
+   "type": "c"
+  },
+  "annotation_events.annotation_events_detail_check": {
+   "def": "CHECK ((jsonb_typeof(detail) = 'object'::text))",
+   "type": "c"
+  },
+  "annotation_events.annotation_events_pkey": {
+   "def": "PRIMARY KEY (seq)",
+   "type": "p"
+  },
+  "annotation_events.annotation_events_turn_id_check": {
+   "def": "CHECK (((turn_id IS NULL) OR ((length(turn_id) >= 1) AND (length(turn_id) <= 200))))",
+   "type": "c"
+  },
+  "annotations.annotations_field_check": {
+   "def": "CHECK ((field = ANY (ARRAY['question'::text, 'answer'::text, 'input'::text, 'output'::text])))",
+   "type": "c"
+  },
+  "annotations.annotations_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['verdict'::text, 'comment'::text])))",
+   "type": "c"
+  },
+  "annotations.annotations_note_check": {
+   "def": "CHECK ((char_length(note) <= 2000))",
+   "type": "c"
+  },
+  "annotations.annotations_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "annotations.annotations_quote_check": {
+   "def": "CHECK ((char_length(quote) <= 2000))",
+   "type": "c"
+  },
+  "annotations.annotations_quote_occurrence_check": {
+   "def": "CHECK ((quote_occurrence >= 1))",
+   "type": "c"
+  },
+  "annotations.annotations_quote_start_check": {
+   "def": "CHECK ((quote_start >= 0))",
+   "type": "c"
+  },
+  "annotations.annotations_supersedes_fkey": {
+   "def": "FOREIGN KEY (supersedes) REFERENCES tracelab.annotations(id)",
+   "type": "f"
+  },
+  "annotations.annotations_turn_id_check": {
+   "def": "CHECK (((turn_id IS NULL) OR ((length(turn_id) >= 1) AND (length(turn_id) <= 200))))",
+   "type": "c"
+  },
+  "annotations.annotations_verdict_check": {
+   "def": "CHECK ((verdict = ANY (ARRAY['right'::text, 'wrong'::text])))",
+   "type": "c"
+  },
+  "annotations.annotations_version_check": {
+   "def": "CHECK ((version >= 1))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_comment": {
+   "def": "CHECK (((kind <> 'comment'::text) OR (verdict IS NULL)))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_comment_note": {
+   "def": "CHECK ((tombstone OR (kind <> 'comment'::text) OR (btrim(COALESCE(note, ''::text)) <> ''::text)))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_live_verdict": {
+   "def": "CHECK ((tombstone OR (kind <> 'verdict'::text) OR (verdict IS NOT NULL)))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_right": {
+   "def": "CHECK (((verdict IS DISTINCT FROM 'right'::text) OR ((quote IS NULL) AND (span_id IS NULL) AND (field IS NULL))))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_span_field": {
+   "def": "CHECK (((span_id IS NULL) OR (field = ANY (ARRAY['input'::text, 'output'::text]))))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_turn_field": {
+   "def": "CHECK (((span_id IS NOT NULL) OR (field IS NULL) OR (field = ANY (ARRAY['question'::text, 'answer'::text]))))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_verdict_turn": {
+   "def": "CHECK (((kind <> 'verdict'::text) OR (turn_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "annotations.ck_tl_ann_wrong": {
+   "def": "CHECK ((tombstone OR (verdict IS DISTINCT FROM 'wrong'::text) OR ((btrim(COALESCE(note, ''::text)) <> ''::text) AND (quote IS NOT NULL) AND (field IS NOT NULL) AND (quote_occurrence IS NOT NULL))))",
+   "type": "c"
+  },
+  "annotations.ux_tl_ann_supersedes": {
+   "def": "UNIQUE (supersedes)",
+   "type": "u"
+  },
+  "eval_case_runs.ck_eval_case_runs_counts": {
+   "def": "CHECK ((passes <= n))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_decision_check": {
+   "def": "CHECK ((decision = ANY (ARRAY['pass'::text, 'block'::text, 'incomplete'::text])))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_degraded_check": {
+   "def": "CHECK ((degraded >= 0))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_eval_case_id_fkey": {
+   "def": "FOREIGN KEY (eval_case_id) REFERENCES tracelab.eval_cases(id)",
+   "type": "f"
+  },
+  "eval_case_runs.eval_case_runs_golden_run_id_fkey": {
+   "def": "FOREIGN KEY (golden_run_id) REFERENCES tracelab.golden_runs(id)",
+   "type": "f"
+  },
+  "eval_case_runs.eval_case_runs_k_check": {
+   "def": "CHECK (((k >= 1) AND (k <= 20)))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_n_check": {
+   "def": "CHECK ((n >= 0))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_passes_check": {
+   "def": "CHECK ((passes >= 0))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_pending_check": {
+   "def": "CHECK ((pending >= 0))",
+   "type": "c"
+  },
+  "eval_case_runs.eval_case_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "eval_case_runs.eval_case_runs_purpose_check": {
+   "def": "CHECK ((purpose = ANY (ARRAY['baseline'::text, 'release_check'::text, 'repeat'::text])))",
+   "type": "c"
+  },
+  "eval_case_runs.ux_eval_case_runs_case_run": {
+   "def": "UNIQUE (eval_case_id, golden_run_id)",
+   "type": "u"
+  },
+  "eval_cases.ck_eval_cases_active_classified": {
+   "def": "CHECK (((status <> 'active'::text) OR (kind <> 'unclassified'::text)))",
+   "type": "c"
+  },
+  "eval_cases.ck_eval_cases_capability_rate": {
+   "def": "CHECK (((kind = 'capability'::text) = (baseline_pass_rate IS NOT NULL)))",
+   "type": "c"
+  },
+  "eval_cases.ck_eval_cases_golden_source": {
+   "def": "CHECK (((source_type = 'golden_case'::text) = (source_golden_case_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "eval_cases.ck_eval_cases_monitor_source": {
+   "def": "CHECK (((source_type <> 'monitor'::text) OR (source_batch_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "eval_cases.ck_eval_cases_turn_source": {
+   "def": "CHECK (((source_type = 'golden_case'::text) OR (source_turn_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "eval_cases.ck_eval_cases_twin": {
+   "def": "CHECK (((golden_case_id IS NOT NULL) OR (status = ANY (ARRAY['proposed'::text, 'retired'::text]))))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_baseline_pass_rate_check": {
+   "def": "CHECK ((baseline_pass_rate = ANY (ARRAY[0.00, 0.20, 0.40, 0.60, 0.80])))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_baseline_run_id_fkey": {
+   "def": "FOREIGN KEY (baseline_run_id) REFERENCES tracelab.golden_runs(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_case_key_check": {
+   "def": "CHECK ((case_key ~ '^e-[0-9a-f]{8}$'::text))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_golden_case_id_fkey": {
+   "def": "FOREIGN KEY (golden_case_id) REFERENCES tracelab.golden_cases(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['unclassified'::text, 'regression'::text, 'capability'::text])))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "eval_cases.eval_cases_retired_reason_check": {
+   "def": "CHECK (((retired_reason IS NULL) OR (length(retired_reason) <= 500)))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_rev_check": {
+   "def": "CHECK ((rev >= 1))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_source_batch_id_fkey": {
+   "def": "FOREIGN KEY (source_batch_id) REFERENCES tracelab.monitor_batches(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_source_golden_case_id_fkey": {
+   "def": "FOREIGN KEY (source_golden_case_id) REFERENCES tracelab.golden_cases(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_source_turn_id_check": {
+   "def": "CHECK (((source_turn_id IS NULL) OR ((length(source_turn_id) >= 1) AND (length(source_turn_id) <= 200))))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_source_type_check": {
+   "def": "CHECK ((source_type = ANY (ARRAY['live_turn'::text, 'monitor'::text, 'golden_case'::text])))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['proposed'::text, 'draft'::text, 'baselining'::text, 'active'::text, 'retired'::text, 'superseded'::text])))",
+   "type": "c"
+  },
+  "eval_cases.eval_cases_supersedes_fkey": {
+   "def": "FOREIGN KEY (supersedes) REFERENCES tracelab.eval_cases(id)",
+   "type": "f"
+  },
+  "eval_cases.eval_cases_version_check": {
+   "def": "CHECK ((version >= 1))",
+   "type": "c"
+  },
+  "eval_cases.ux_eval_cases_key_version": {
+   "def": "UNIQUE (organization_id, case_key, version)",
+   "type": "u"
+  },
+  "evidence_spans.evidence_spans_pkey": {
+   "def": "PRIMARY KEY (turn_id, span_id)",
+   "type": "p"
+  },
+  "evidence_spans.evidence_spans_seq_check": {
+   "def": "CHECK ((seq >= 0))",
+   "type": "c"
+  },
+  "evidence_spans.evidence_spans_span_check": {
+   "def": "CHECK ((jsonb_typeof(span) = 'object'::text))",
+   "type": "c"
+  },
+  "evidence_spans.evidence_spans_span_id_check": {
+   "def": "CHECK (((length(span_id) >= 1) AND (length(span_id) <= 200)))",
+   "type": "c"
+  },
+  "evidence_spans.evidence_spans_turn_id_fkey": {
+   "def": "FOREIGN KEY (turn_id) REFERENCES tracelab.evidence_turns(turn_id)",
+   "type": "f"
+  },
+  "evidence_turns.evidence_turns_pkey": {
+   "def": "PRIMARY KEY (turn_id)",
+   "type": "p"
+  },
+  "evidence_turns.evidence_turns_reason_check": {
+   "def": "CHECK (((reason IS NULL) OR ((length(reason) >= 1) AND (length(reason) <= 40))))",
+   "type": "c"
+  },
+  "evidence_turns.evidence_turns_turn_check": {
+   "def": "CHECK ((jsonb_typeof(turn) = 'object'::text))",
+   "type": "c"
+  },
+  "evidence_turns.evidence_turns_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_ask_as_check": {
+   "def": "CHECK ((ask_as = 'company'::text))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_case_key_check": {
+   "def": "CHECK ((case_key ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'::text))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_case_version_check": {
+   "def": "CHECK ((case_version ~ '^[0-9a-f]{12}$'::text))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_evaluation_check": {
+   "def": "CHECK ((evaluation = ANY (ARRAY['objective'::text, 'judgment'::text])))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_expected_answer_check": {
+   "def": "CHECK (((length(expected_answer) >= 1) AND (length(expected_answer) <= 6000)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_expected_values_check": {
+   "def": "CHECK ((jsonb_typeof(expected_values) = 'array'::text))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_followups_check": {
+   "def": "CHECK ( CASE WHEN (jsonb_typeof(followups) = 'array'::text) THEN (jsonb_array_length(followups) <= 5) ELSE false END)",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_idx_check": {
+   "def": "CHECK ((idx >= 0))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_key_source_check": {
+   "def": "CHECK ((key_source = ANY (ARRAY['id_column'::text, 'hash'::text])))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_notes_check": {
+   "def": "CHECK (((notes IS NULL) OR (length(notes) <= 2000)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_page_context_check": {
+   "def": "CHECK (((page_context IS NULL) OR (length(page_context) <= 4000)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "golden_cases.golden_cases_question_check": {
+   "def": "CHECK (((length(question) >= 1) AND (length(question) <= 2000)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_requirement_ids_check": {
+   "def": "CHECK ((cardinality(requirement_ids) <= 20))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_row_no_check": {
+   "def": "CHECK (((row_no IS NULL) OR (row_no >= 1)))",
+   "type": "c"
+  },
+  "golden_cases.golden_cases_set_id_case_key_key": {
+   "def": "UNIQUE (set_id, case_key)",
+   "type": "u"
+  },
+  "golden_cases.golden_cases_set_id_fkey": {
+   "def": "FOREIGN KEY (set_id) REFERENCES tracelab.golden_sets(id)",
+   "type": "f"
+  },
+  "golden_cases.golden_cases_set_id_idx_key": {
+   "def": "UNIQUE (set_id, idx)",
+   "type": "u"
+  },
+  "golden_cases.golden_cases_source_check": {
+   "def": "CHECK (((source IS NULL) OR (length(source) <= 500)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_case_id_fkey": {
+   "def": "FOREIGN KEY (case_id) REFERENCES tracelab.golden_cases(id)",
+   "type": "f"
+  },
+  "golden_results.golden_results_error_check": {
+   "def": "CHECK (((error IS NULL) OR (length(error) <= 2000)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_grade_check": {
+   "def": "CHECK (((grade IS NULL) OR (jsonb_typeof(grade) = 'object'::text)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_ms_check": {
+   "def": "CHECK (((ms IS NULL) OR (ms >= 0)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_msg_idx_check": {
+   "def": "CHECK (((msg_idx >= 0) AND (msg_idx <= 5)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_outcome_check": {
+   "def": "CHECK ((outcome = ANY (ARRAY['pending'::text, 'pass'::text, 'fail'::text, 'unsure'::text, 'degraded'::text, 'stale_reference'::text, 'error'::text])))",
+   "type": "c"
+  },
+  "golden_results.golden_results_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "golden_results.golden_results_refused_check": {
+   "def": "CHECK ((jsonb_typeof(refused) = 'array'::text))",
+   "type": "c"
+  },
+  "golden_results.golden_results_rep_check": {
+   "def": "CHECK (((rep >= 1) AND (rep <= 20)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_run_id_case_key_rep_msg_idx_key": {
+   "def": "UNIQUE (run_id, case_key, rep, msg_idx)",
+   "type": "u"
+  },
+  "golden_results.golden_results_run_id_fkey": {
+   "def": "FOREIGN KEY (run_id) REFERENCES tracelab.golden_runs(id)",
+   "type": "f"
+  },
+  "golden_results.golden_results_session_id_check": {
+   "def": "CHECK (((length(session_id) >= 1) AND (length(session_id) <= 200)))",
+   "type": "c"
+  },
+  "golden_results.golden_results_turn_id_check": {
+   "def": "CHECK (((turn_id IS NULL) OR ((length(turn_id) >= 1) AND (length(turn_id) <= 200))))",
+   "type": "c"
+  },
+  "golden_results.golden_results_usd_check": {
+   "def": "CHECK (((usd IS NULL) OR (usd >= (0)::numeric)))",
+   "type": "c"
+  },
+  "golden_reveals.golden_reveals_pkey": {
+   "def": "PRIMARY KEY (turn_id, reviewer_id)",
+   "type": "p"
+  },
+  "golden_reveals.golden_reveals_reviewer_id_check": {
+   "def": "CHECK (((length(reviewer_id) >= 1) AND (length(reviewer_id) <= 200)))",
+   "type": "c"
+  },
+  "golden_reveals.golden_reveals_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_estimate_usd_check": {
+   "def": "CHECK (((estimate_usd IS NULL) OR (estimate_usd >= (0)::numeric)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_job_id_fkey": {
+   "def": "FOREIGN KEY (job_id) REFERENCES tracelab.jobs(id)",
+   "type": "f"
+  },
+  "golden_runs.golden_runs_k_check": {
+   "def": "CHECK (((k >= 1) AND (k <= 20)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_label_check": {
+   "def": "CHECK (((length(label) >= 1) AND (length(label) <= 120)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_label_key": {
+   "def": "UNIQUE (label)",
+   "type": "u"
+  },
+  "golden_runs.golden_runs_params_no_secrets": {
+   "def": "CHECK ((NOT (params ?| ARRAY['authorization'::text, 'bearer'::text, 'token'::text, 'access_token'::text, 'refresh_token'::text, 'api_key'::text, 'password'::text])))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_params_object": {
+   "def": "CHECK ((jsonb_typeof(params) = 'object'::text))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "golden_runs.golden_runs_purpose_check": {
+   "def": "CHECK ((purpose = ANY (ARRAY['adhoc'::text, 'baseline'::text, 'release_check'::text, 'repeat'::text])))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_set_id_fkey": {
+   "def": "FOREIGN KEY (set_id) REFERENCES tracelab.golden_sets(id)",
+   "type": "f"
+  },
+  "golden_runs.golden_runs_started_by_check": {
+   "def": "CHECK (((length(started_by) >= 1) AND (length(started_by) <= 200)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'paused'::text, 'done'::text, 'failed'::text, 'capped'::text, 'interrupted'::text, 'cancelled'::text])))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_summary_check": {
+   "def": "CHECK ((jsonb_typeof(summary) = 'object'::text))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_usd_cap_check": {
+   "def": "CHECK (((usd_cap IS NULL) OR (usd_cap >= (0)::numeric)))",
+   "type": "c"
+  },
+  "golden_runs.golden_runs_usd_spent_check": {
+   "def": "CHECK ((usd_spent >= (0)::numeric))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_case_count_check": {
+   "def": "CHECK (((case_count >= 0) AND (case_count <= 2000)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_created_by_check": {
+   "def": "CHECK (((length(created_by) >= 1) AND (length(created_by) <= 200)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_diff_check": {
+   "def": "CHECK ((jsonb_typeof(diff) = 'object'::text))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_header_row_check": {
+   "def": "CHECK ((header_row >= 0))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['scenario'::text, 'regression'::text])))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_kind_shape": {
+   "def": "CHECK ((((kind = 'regression'::text) = (version = 0)) AND ((kind = 'regression'::text) OR ((source_filename IS NOT NULL) AND (source_sha256 IS NOT NULL) AND (case_count >= 1)))))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_name_check": {
+   "def": "CHECK (((length(name) >= 1) AND (length(name) <= 200)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_note_check": {
+   "def": "CHECK (((note IS NULL) OR (length(note) <= 500)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_organization_id_kind_version_key": {
+   "def": "UNIQUE (organization_id, kind, version)",
+   "type": "u"
+  },
+  "golden_sets.golden_sets_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "golden_sets.golden_sets_set_hash_check": {
+   "def": "CHECK ((set_hash ~ '^[0-9a-f]{12}$'::text))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_sheet_name_check": {
+   "def": "CHECK (((sheet_name IS NULL) OR (length(sheet_name) <= 200)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_source_filename_check": {
+   "def": "CHECK (((source_filename IS NULL) OR ((length(source_filename) >= 1) AND (length(source_filename) <= 255))))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_source_kind_check": {
+   "def": "CHECK (((source_kind IS NULL) OR (source_kind = ANY (ARRAY['xlsx'::text, 'csv'::text]))))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_source_sha256_check": {
+   "def": "CHECK (((source_sha256 IS NULL) OR (source_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['active'::text, 'retired'::text])))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_version_check": {
+   "def": "CHECK ((version >= 0))",
+   "type": "c"
+  },
+  "golden_sets.golden_sets_warnings_check": {
+   "def": "CHECK ((jsonb_typeof(warnings) = 'array'::text))",
+   "type": "c"
+  },
+  "jobs.jobs_done_check": {
+   "def": "CHECK ((done >= 0))",
+   "type": "c"
+  },
+  "jobs.jobs_error_check": {
+   "def": "CHECK (((error IS NULL) OR (length(error) <= 2000)))",
+   "type": "c"
+  },
+  "jobs.jobs_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['golden_run'::text, 'golden_grade'::text, 'judge_run'::text, 'proposal_grouping'::text, 'proposal_depth_scan'::text, 'proposal_cells'::text, 'monitor_batch'::text, 'company_delete'::text])))",
+   "type": "c"
+  },
+  "jobs.jobs_model_spend_capped": {
+   "def": "CHECK (((kind = 'company_delete'::text) OR (usd_cap IS NOT NULL)))",
+   "type": "c"
+  },
+  "jobs.jobs_params_no_secrets": {
+   "def": "CHECK ((NOT (params ?| ARRAY['authorization'::text, 'bearer'::text, 'token'::text, 'access_token'::text, 'refresh_token'::text, 'api_key'::text, 'password'::text])))",
+   "type": "c"
+  },
+  "jobs.jobs_params_object": {
+   "def": "CHECK ((jsonb_typeof(params) = 'object'::text))",
+   "type": "c"
+  },
+  "jobs.jobs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "jobs.jobs_scope_key_check": {
+   "def": "CHECK (((length(scope_key) >= 3) AND (length(scope_key) <= 200)))",
+   "type": "c"
+  },
+  "jobs.jobs_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'paused'::text, 'done'::text, 'failed'::text, 'capped'::text, 'interrupted'::text, 'cancelled'::text])))",
+   "type": "c"
+  },
+  "jobs.jobs_total_check": {
+   "def": "CHECK (((total IS NULL) OR (total >= 0)))",
+   "type": "c"
+  },
+  "jobs.jobs_usd_cap_check": {
+   "def": "CHECK (((usd_cap IS NULL) OR (usd_cap >= (0)::numeric)))",
+   "type": "c"
+  },
+  "jobs.jobs_usd_estimate_check": {
+   "def": "CHECK (((usd_estimate IS NULL) OR (usd_estimate >= (0)::numeric)))",
+   "type": "c"
+  },
+  "jobs.jobs_usd_reserved_check": {
+   "def": "CHECK ((usd_reserved >= (0)::numeric))",
+   "type": "c"
+  },
+  "jobs.jobs_usd_spent_check": {
+   "def": "CHECK ((usd_spent >= (0)::numeric))",
+   "type": "c"
+  },
+  "judge_predictions.judge_predictions_check": {
+   "def": "CHECK (((status = 'decided'::text) = (failure_present IS NOT NULL)))",
+   "type": "c"
+  },
+  "judge_predictions.judge_predictions_failure_present_check": {
+   "def": "CHECK ((failure_present = ANY (ARRAY[0, 1])))",
+   "type": "c"
+  },
+  "judge_predictions.judge_predictions_judge_id_fkey": {
+   "def": "FOREIGN KEY (judge_id) REFERENCES tracelab.judges(id)",
+   "type": "f"
+  },
+  "judge_predictions.judge_predictions_pkey": {
+   "def": "PRIMARY KEY (prompt_hash, turn_id)",
+   "type": "p"
+  },
+  "judge_predictions.judge_predictions_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['decided'::text, 'error'::text, 'undecidable'::text])))",
+   "type": "c"
+  },
+  "judge_predictions.judge_predictions_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "judge_runs.judge_runs_job_id_fkey": {
+   "def": "FOREIGN KEY (job_id) REFERENCES tracelab.jobs(id)",
+   "type": "f"
+  },
+  "judge_runs.judge_runs_judge_id_fkey": {
+   "def": "FOREIGN KEY (judge_id) REFERENCES tracelab.judges(id)",
+   "type": "f"
+  },
+  "judge_runs.judge_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "judge_runs.judge_runs_split_check": {
+   "def": "CHECK ((split = ANY (ARRAY['dev'::text, 'test'::text])))",
+   "type": "c"
+  },
+  "judge_runs.judge_runs_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'done'::text, 'incomplete'::text, 'capped'::text, 'failed'::text, 'interrupted'::text])))",
+   "type": "c"
+  },
+  "judge_split_members.judge_split_members_conversation_key_check": {
+   "def": "CHECK (((length(conversation_key) >= 3) AND (length(conversation_key) <= 300)))",
+   "type": "c"
+  },
+  "judge_split_members.judge_split_members_label_source_check": {
+   "def": "CHECK ((label_source = ANY (ARRAY['human_structured_label'::text, 'human_open_code'::text, 'accepted_suggestion'::text, 'rejected_suggestion'::text, 'accepted_label_proposal'::text])))",
+   "type": "c"
+  },
+  "judge_split_members.judge_split_members_pkey": {
+   "def": "PRIMARY KEY (split_id, turn_id)",
+   "type": "p"
+  },
+  "judge_split_members.judge_split_members_split_check": {
+   "def": "CHECK ((split = ANY (ARRAY['train'::text, 'dev'::text, 'test'::text])))",
+   "type": "c"
+  },
+  "judge_split_members.judge_split_members_split_id_fkey": {
+   "def": "FOREIGN KEY (split_id) REFERENCES tracelab.judge_splits(id)",
+   "type": "f"
+  },
+  "judge_split_members.judge_split_members_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_fractions_check": {
+   "def": "CHECK ((cardinality(fractions) = 3))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_labels_sha_check": {
+   "def": "CHECK ((labels_sha ~ '^[0-9a-f]{64}$'::text))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_min_labels_check": {
+   "def": "CHECK ((min_labels >= 1))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_min_per_class_check": {
+   "def": "CHECK ((min_per_class >= 1))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "judge_splits.judge_splits_mode_id_version_key": {
+   "def": "UNIQUE (mode_id, version)",
+   "type": "u"
+  },
+  "judge_splits.judge_splits_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "judge_splits.judge_splits_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['active'::text, 'retired'::text])))",
+   "type": "c"
+  },
+  "judge_splits.judge_splits_version_check": {
+   "def": "CHECK ((version >= 1))",
+   "type": "c"
+  },
+  "judges.judges_check": {
+   "def": "CHECK ((((kind = 'llm'::text) AND (model IS NOT NULL) AND (prompt_text IS NOT NULL) AND (check_key IS NULL)) OR ((kind = 'code'::text) AND (check_key IS NOT NULL) AND (check_version IS NOT NULL) AND (prompt_text IS NULL))))",
+   "type": "c"
+  },
+  "judges.judges_check1": {
+   "def": "CHECK (((status = 'draft'::text) OR ((frozen_at IS NOT NULL) AND (stop_reason IS NOT NULL))))",
+   "type": "c"
+  },
+  "judges.judges_decision_check": {
+   "def": "CHECK ((decision = ANY (ARRAY['use'::text, 'do_not_use'::text])))",
+   "type": "c"
+  },
+  "judges.judges_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['llm'::text, 'code'::text])))",
+   "type": "c"
+  },
+  "judges.judges_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "judges.judges_mode_id_version_key": {
+   "def": "UNIQUE (mode_id, version)",
+   "type": "u"
+  },
+  "judges.judges_monitor_threshold_check": {
+   "def": "CHECK (((monitor_threshold > (0)::numeric) AND (monitor_threshold < (1)::numeric)))",
+   "type": "c"
+  },
+  "judges.judges_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "judges.judges_split_id_fkey": {
+   "def": "FOREIGN KEY (split_id) REFERENCES tracelab.judge_splits(id)",
+   "type": "f"
+  },
+  "judges.judges_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'frozen'::text])))",
+   "type": "c"
+  },
+  "judges.judges_version_check": {
+   "def": "CHECK ((version >= 0))",
+   "type": "c"
+  },
+  "lab_expected_answers.lab_expected_answers_author_email_check": {
+   "def": "CHECK (((author_email IS NULL) OR (char_length(author_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_expected_answers.lab_expected_answers_expected_check": {
+   "def": "CHECK (((char_length(expected) >= 1) AND (char_length(expected) <= 8000)))",
+   "type": "c"
+  },
+  "lab_expected_answers.lab_expected_answers_expected_id_check": {
+   "def": "CHECK (((expected_id IS NULL) OR ((char_length(expected_id) >= 1) AND (char_length(expected_id) <= 200))))",
+   "type": "c"
+  },
+  "lab_expected_answers.lab_expected_answers_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_expected_answers.lab_expected_answers_question_id_fkey": {
+   "def": "FOREIGN KEY (question_id) REFERENCES tracelab.lab_questions(id)",
+   "type": "f"
+  },
+  "lab_expected_answers.lab_expected_answers_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['coding_agent'::text, 'excel'::text, 'manual'::text])))",
+   "type": "c"
+  },
+  "lab_failure_modes.ck_tl_lab_failure_modes_live": {
+   "def": "CHECK ((tombstone OR (name IS NOT NULL)))",
+   "type": "c"
+  },
+  "lab_failure_modes.lab_failure_modes_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_failure_modes.lab_failure_modes_definition_check": {
+   "def": "CHECK (((definition IS NULL) OR (char_length(definition) <= 4000)))",
+   "type": "c"
+  },
+  "lab_failure_modes.lab_failure_modes_name_check": {
+   "def": "CHECK (((name IS NULL) OR ((char_length(name) >= 1) AND (char_length(name) <= 120))))",
+   "type": "c"
+  },
+  "lab_failure_modes.lab_failure_modes_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_label_cells.ck_tl_lab_label_cells_author": {
+   "def": "CHECK (((author_id IS NOT NULL) OR (author_email IS NOT NULL)))",
+   "type": "c"
+  },
+  "lab_label_cells.lab_label_cells_author_email_check": {
+   "def": "CHECK (((author_email IS NULL) OR (char_length(author_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_label_cells.lab_label_cells_author_role_check": {
+   "def": "CHECK (((author_role IS NULL) OR (char_length(author_role) <= 40)))",
+   "type": "c"
+  },
+  "lab_label_cells.lab_label_cells_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_label_cells.lab_label_cells_question_id_fkey": {
+   "def": "FOREIGN KEY (question_id) REFERENCES tracelab.lab_questions(id)",
+   "type": "f"
+  },
+  "lab_label_cells.lab_label_cells_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['manual'::text, 'coding_agent'::text])))",
+   "type": "c"
+  },
+  "lab_label_cells.lab_label_cells_value_check": {
+   "def": "CHECK ((value = ANY (ARRAY['positive'::text, 'negative'::text])))",
+   "type": "c"
+  },
+  "lab_members.lab_members_email_check": {
+   "def": "CHECK (((email IS NULL) OR (char_length(email) <= 320)))",
+   "type": "c"
+  },
+  "lab_members.lab_members_lab_role_check": {
+   "def": "CHECK ((lab_role = ANY (ARRAY['domain_expert'::text, 'tester'::text, 'admin'::text, 'user'::text])))",
+   "type": "c"
+  },
+  "lab_members.lab_members_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_members.lab_members_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'removed'::text])))",
+   "type": "c"
+  },
+  "lab_members.lab_members_supersedes_fkey": {
+   "def": "FOREIGN KEY (supersedes) REFERENCES tracelab.lab_members(id)",
+   "type": "f"
+  },
+  "lab_members.ux_tl_members_supersedes": {
+   "def": "UNIQUE (supersedes)",
+   "type": "u"
+  },
+  "lab_platform_members.lab_platform_members_decided_by_email_check": {
+   "def": "CHECK (((decided_by_email IS NULL) OR (char_length(decided_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_platform_members.lab_platform_members_email_check": {
+   "def": "CHECK (((email IS NULL) OR (char_length(email) <= 320)))",
+   "type": "c"
+  },
+  "lab_platform_members.lab_platform_members_lab_role_check": {
+   "def": "CHECK ((lab_role = 'consultant'::text))",
+   "type": "c"
+  },
+  "lab_platform_members.lab_platform_members_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_platform_members.lab_platform_members_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['active'::text, 'removed'::text])))",
+   "type": "c"
+  },
+  "lab_question_traces.lab_question_traces_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_question_traces.lab_question_traces_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_question_traces.lab_question_traces_question_id_fkey": {
+   "def": "FOREIGN KEY (question_id) REFERENCES tracelab.lab_questions(id)",
+   "type": "f"
+  },
+  "lab_question_traces.lab_question_traces_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'manual'::text])))",
+   "type": "c"
+  },
+  "lab_question_traces.lab_question_traces_turn_id_check": {
+   "def": "CHECK (((char_length(turn_id) >= 1) AND (char_length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "lab_question_traces.ux_tl_lab_question_traces": {
+   "def": "UNIQUE (question_id, turn_id)",
+   "type": "u"
+  },
+  "lab_questions.lab_questions_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_followups_check": {
+   "def": "CHECK (((followups IS NULL) OR (jsonb_typeof(followups) = 'array'::text)))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_intent_check": {
+   "def": "CHECK (((intent IS NULL) OR ((char_length(intent) >= 1) AND (char_length(intent) <= 500))))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_questions.lab_questions_question_check": {
+   "def": "CHECK (((char_length(question) >= 1) AND (char_length(question) <= 4000)))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_role_check": {
+   "def": "CHECK (((role IS NULL) OR ((char_length(role) >= 1) AND (char_length(role) <= 200))))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_run_id_fkey": {
+   "def": "FOREIGN KEY (run_id) REFERENCES tracelab.lab_runs(id)",
+   "type": "f"
+  },
+  "lab_questions.lab_questions_scenario_ref_check": {
+   "def": "CHECK (((scenario_ref IS NULL) OR ((char_length(scenario_ref) >= 1) AND (char_length(scenario_ref) <= 200))))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_seq_no_check": {
+   "def": "CHECK ((seq_no >= 1))",
+   "type": "c"
+  },
+  "lab_questions.lab_questions_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text])))",
+   "type": "c"
+  },
+  "lab_questions.ux_tl_lab_questions_seq": {
+   "def": "UNIQUE (run_id, seq_no)",
+   "type": "u"
+  },
+  "lab_runs.ck_tl_lab_runs_production": {
+   "def": "CHECK (((kind <> 'production'::text) OR ((owner_user_id IS NOT NULL) AND (run_day IS NOT NULL))))",
+   "type": "c"
+  },
+  "lab_runs.lab_runs_created_by_email_check": {
+   "def": "CHECK (((created_by_email IS NULL) OR (char_length(created_by_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_runs.lab_runs_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['synthetic'::text, 'production'::text])))",
+   "type": "c"
+  },
+  "lab_runs.lab_runs_owner_email_check": {
+   "def": "CHECK (((owner_email IS NULL) OR (char_length(owner_email) <= 320)))",
+   "type": "c"
+  },
+  "lab_runs.lab_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "lab_runs.lab_runs_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['sync'::text, 'coding_agent'::text, 'excel'::text, 'manual'::text])))",
+   "type": "c"
+  },
+  "lab_runs.lab_runs_title_check": {
+   "def": "CHECK (((char_length(title) >= 1) AND (char_length(title) <= 200)))",
+   "type": "c"
+  },
+  "lab_runs.ux_tl_lab_runs_no": {
+   "def": "UNIQUE (run_no)",
+   "type": "u"
+  },
+  "labels.ck_tl_labels_accepted": {
+   "def": "CHECK (((source <> 'accepted_suggestion'::text) OR present))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_bulk": {
+   "def": "CHECK (((approval = 'single'::text) OR (source = ANY (ARRAY['accepted_suggestion'::text, 'rejected_suggestion'::text, 'accepted_label_proposal'::text]))))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_from_proposal": {
+   "def": "CHECK (((source <> ALL (ARRAY['accepted_suggestion'::text, 'rejected_suggestion'::text, 'accepted_label_proposal'::text])) OR (proposal_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_open_code": {
+   "def": "CHECK (((source <> 'human_open_code'::text) OR ((annotation_id IS NOT NULL) AND present)))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_rejected": {
+   "def": "CHECK (((source <> 'rejected_suggestion'::text) OR (NOT present)))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_tombstone": {
+   "def": "CHECK (((NOT tombstone) OR ((present IS NULL) AND (source = 'human_structured_label'::text))))",
+   "type": "c"
+  },
+  "labels.ck_tl_labels_value": {
+   "def": "CHECK ((tombstone OR (present IS NOT NULL)))",
+   "type": "c"
+  },
+  "labels.labels_annotation_id_fkey": {
+   "def": "FOREIGN KEY (annotation_id) REFERENCES tracelab.annotations(id)",
+   "type": "f"
+  },
+  "labels.labels_approval_check": {
+   "def": "CHECK ((approval = ANY (ARRAY['single'::text, 'bulk'::text])))",
+   "type": "c"
+  },
+  "labels.labels_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "labels.labels_note_check": {
+   "def": "CHECK ((char_length(note) <= 2000))",
+   "type": "c"
+  },
+  "labels.labels_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "labels.labels_proposal_id_fkey": {
+   "def": "FOREIGN KEY (proposal_id) REFERENCES tracelab.proposals(id)",
+   "type": "f"
+  },
+  "labels.labels_quote_check": {
+   "def": "CHECK ((char_length(quote) <= 2000))",
+   "type": "c"
+  },
+  "labels.labels_source_check": {
+   "def": "CHECK ((source = ANY (ARRAY['human_structured_label'::text, 'accepted_suggestion'::text, 'rejected_suggestion'::text, 'accepted_label_proposal'::text, 'human_open_code'::text])))",
+   "type": "c"
+  },
+  "labels.labels_supersedes_fkey": {
+   "def": "FOREIGN KEY (supersedes) REFERENCES tracelab.labels(id)",
+   "type": "f"
+  },
+  "labels.ux_tl_labels_supersedes": {
+   "def": "UNIQUE (supersedes)",
+   "type": "u"
+  },
+  "mode_events.mode_events_action_check": {
+   "def": "CHECK ((action = ANY (ARRAY['create'::text, 'edit'::text, 'rename'::text, 'merge'::text, 'split'::text, 'retire'::text, 'restore'::text, 'propose'::text, 'accept'::text, 'reject'::text])))",
+   "type": "c"
+  },
+  "mode_events.mode_events_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "mode_events.mode_events_pkey": {
+   "def": "PRIMARY KEY (seq)",
+   "type": "p"
+  },
+  "modes.ck_tl_modes_merged_retired": {
+   "def": "CHECK (((merged_into IS NULL) OR (status = 'retired'::text)))",
+   "type": "c"
+  },
+  "modes.ck_tl_modes_not_self": {
+   "def": "CHECK (((merged_into IS DISTINCT FROM id) AND (split_from IS DISTINCT FROM id)))",
+   "type": "c"
+  },
+  "modes.ck_tl_modes_proposer": {
+   "def": "CHECK (((status <> 'proposed'::text) OR (proposer_organization_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "modes.ck_tl_modes_rejected": {
+   "def": "CHECK (((status = 'rejected'::text) = (rejected_reason IS NOT NULL)))",
+   "type": "c"
+  },
+  "modes.modes_agent_check": {
+   "def": "CHECK ((agent = ANY (ARRAY['orchestrator'::text, 'wo_engine'::text, 'compliance'::text, 'contract_performance'::text, 'energy_intelligence'::text, 'udr'::text, 'doc_rag'::text, 'migration'::text])))",
+   "type": "c"
+  },
+  "modes.modes_boundary_check": {
+   "def": "CHECK ((char_length(boundary) <= 1000))",
+   "type": "c"
+  },
+  "modes.modes_close_negatives_waiver_check": {
+   "def": "CHECK ((char_length(close_negatives_waiver) <= 500))",
+   "type": "c"
+  },
+  "modes.modes_created_from_check": {
+   "def": "CHECK ((cardinality(created_from) >= 1))",
+   "type": "c"
+  },
+  "modes.modes_definition_check": {
+   "def": "CHECK (((char_length(definition) >= 10) AND (char_length(definition) <= 1000)))",
+   "type": "c"
+  },
+  "modes.modes_evaluator_type_check": {
+   "def": "CHECK ((evaluator_type = ANY (ARRAY['code'::text, 'judge'::text])))",
+   "type": "c"
+  },
+  "modes.modes_level_check": {
+   "def": "CHECK ((level = ANY (ARRAY['technical'::text, 'experience'::text, 'domain'::text, 'data'::text])))",
+   "type": "c"
+  },
+  "modes.modes_merged_into_fkey": {
+   "def": "FOREIGN KEY (merged_into) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "modes.modes_name_check": {
+   "def": "CHECK ((name ~ '^[a-z][a-z0-9_]{2,63}$'::text))",
+   "type": "c"
+  },
+  "modes.modes_nearest_mode_id_fkey": {
+   "def": "FOREIGN KEY (nearest_mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "modes.modes_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "modes.modes_rejected_reason_check": {
+   "def": "CHECK (((char_length(rejected_reason) >= 1) AND (char_length(rejected_reason) <= 500)))",
+   "type": "c"
+  },
+  "modes.modes_split_from_fkey": {
+   "def": "FOREIGN KEY (split_from) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "modes.modes_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['proposed'::text, 'candidate'::text, 'confirmed'::text, 'frozen'::text, 'retired'::text, 'rejected'::text])))",
+   "type": "c"
+  },
+  "monitor_batches.ck_monitor_batches_window": {
+   "def": "CHECK ((window_end > window_start))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_channel_check": {
+   "def": "CHECK ((channel = 'chat'::text))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_error_check": {
+   "def": "CHECK (((error IS NULL) OR (length(error) <= 2000)))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_job_id_fkey": {
+   "def": "FOREIGN KEY (job_id) REFERENCES tracelab.jobs(id)",
+   "type": "f"
+  },
+  "monitor_batches.monitor_batches_period_label_check": {
+   "def": "CHECK (((length(period_label) >= 3) AND (length(period_label) <= 40)))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "monitor_batches.monitor_batches_sample_rate_check": {
+   "def": "CHECK (((sample_rate > (0)::numeric) AND (sample_rate <= (1)::numeric)))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'done'::text, 'capped'::text, 'failed'::text, 'interrupted'::text])))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_usd_cap_check": {
+   "def": "CHECK (((usd_cap IS NULL) OR (usd_cap >= (0)::numeric)))",
+   "type": "c"
+  },
+  "monitor_batches.monitor_batches_usd_check": {
+   "def": "CHECK ((usd >= (0)::numeric))",
+   "type": "c"
+  },
+  "monitor_verdicts.ck_monitor_verdicts_decided": {
+   "def": "CHECK (((status = 'decided'::text) = (failure_present IS NOT NULL)))",
+   "type": "c"
+  },
+  "monitor_verdicts.ck_monitor_verdicts_judge": {
+   "def": "CHECK (((evaluator_key ~~ 'judge:%'::text) = (judge_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "monitor_verdicts.monitor_verdicts_attempts_check": {
+   "def": "CHECK ((attempts >= 1))",
+   "type": "c"
+  },
+  "monitor_verdicts.monitor_verdicts_evaluator_key_check": {
+   "def": "CHECK ((evaluator_key ~ '^(judge:[0-9a-f-]{36}|code:[a-z][a-z0-9_]*@v[0-9]+)$'::text))",
+   "type": "c"
+  },
+  "monitor_verdicts.monitor_verdicts_failure_present_check": {
+   "def": "CHECK ((failure_present = ANY (ARRAY[0, 1])))",
+   "type": "c"
+  },
+  "monitor_verdicts.monitor_verdicts_first_batch_id_fkey": {
+   "def": "FOREIGN KEY (first_batch_id) REFERENCES tracelab.monitor_batches(id)",
+   "type": "f"
+  },
+  "monitor_verdicts.monitor_verdicts_judge_id_fkey": {
+   "def": "FOREIGN KEY (judge_id) REFERENCES tracelab.judges(id)",
+   "type": "f"
+  },
+  "monitor_verdicts.monitor_verdicts_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "monitor_verdicts.monitor_verdicts_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "monitor_verdicts.monitor_verdicts_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['decided'::text, 'error'::text, 'undecidable'::text, 'not_applicable'::text])))",
+   "type": "c"
+  },
+  "monitor_verdicts.monitor_verdicts_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "monitor_verdicts.ux_monitor_verdicts_evaluator_turn": {
+   "def": "UNIQUE (evaluator_key, turn_id)",
+   "type": "u"
+  },
+  "proposal_runs.ck_tl_runs_depth_mode": {
+   "def": "CHECK (((kind <> 'depth_scan'::text) OR (mode_id IS NOT NULL)))",
+   "type": "c"
+  },
+  "proposal_runs.proposal_runs_job_id_fkey": {
+   "def": "FOREIGN KEY (job_id) REFERENCES tracelab.jobs(id)",
+   "type": "f"
+  },
+  "proposal_runs.proposal_runs_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['grouping'::text, 'depth_scan'::text, 'cells'::text])))",
+   "type": "c"
+  },
+  "proposal_runs.proposal_runs_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "proposal_runs.proposal_runs_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "proposals.ck_tl_prop_cell_target": {
+   "def": "CHECK (((kind = 'group'::text) OR ((turn_id IS NOT NULL) AND (organization_id IS NOT NULL) AND (mode_id IS NOT NULL))))",
+   "type": "c"
+  },
+  "proposals.ck_tl_prop_closed_reason": {
+   "def": "CHECK (((status = 'closed'::text) = (closed_reason IS NOT NULL)))",
+   "type": "c"
+  },
+  "proposals.ck_tl_prop_group_notes": {
+   "def": "CHECK (((kind <> 'group'::text) OR (cardinality(annotation_ids) >= 1)))",
+   "type": "c"
+  },
+  "proposals.ck_tl_prop_org_turn": {
+   "def": "CHECK (((organization_id IS NULL) = (turn_id IS NULL)))",
+   "type": "c"
+  },
+  "proposals.proposals_closed_reason_check": {
+   "def": "CHECK ((closed_reason = ANY (ARRAY['human_decision_exists'::text, 'mode_changed'::text, 'superseded'::text, 'unsure'::text, 'quote_not_verbatim'::text, 'canary'::text, 'turn_unavailable'::text])))",
+   "type": "c"
+  },
+  "proposals.proposals_evidence_check": {
+   "def": "CHECK ((char_length(evidence) <= 600))",
+   "type": "c"
+  },
+  "proposals.proposals_field_check": {
+   "def": "CHECK ((field = ANY (ARRAY['question'::text, 'answer'::text, 'input'::text, 'output'::text])))",
+   "type": "c"
+  },
+  "proposals.proposals_kind_check": {
+   "def": "CHECK ((kind = ANY (ARRAY['group'::text, 'depth_scan'::text, 'cell'::text])))",
+   "type": "c"
+  },
+  "proposals.proposals_mode_id_fkey": {
+   "def": "FOREIGN KEY (mode_id) REFERENCES tracelab.modes(id)",
+   "type": "f"
+  },
+  "proposals.proposals_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "proposals.proposals_quote_check": {
+   "def": "CHECK ((char_length(quote) <= 2000))",
+   "type": "c"
+  },
+  "proposals.proposals_run_id_fkey": {
+   "def": "FOREIGN KEY (run_id) REFERENCES tracelab.proposal_runs(id)",
+   "type": "f"
+  },
+  "proposals.proposals_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'dismissed'::text, 'closed'::text])))",
+   "type": "c"
+  },
+  "proposals.proposals_suggestion_check": {
+   "def": "CHECK ((suggestion = ANY (ARRAY['present'::text, 'absent'::text, 'unsure'::text, 'file_under'::text, 'new_mode'::text, 'no_mode_fits'::text])))",
+   "type": "c"
+  },
+  "proposals.ux_tl_prop_run_key": {
+   "def": "UNIQUE (run_id, cache_key)",
+   "type": "u"
+  },
+  "requirements.ck_tl_req_area": {
+   "def": "CHECK ((split_part(code, '-'::text, 1) = area))",
+   "type": "c"
+  },
+  "requirements.requirements_area_check": {
+   "def": "CHECK ((area = ANY (ARRAY['GEN'::text, 'COMP'::text, 'VEN'::text, 'UDR'::text, 'EN'::text, 'WO'::text, 'DOC'::text])))",
+   "type": "c"
+  },
+  "requirements.requirements_code_check": {
+   "def": "CHECK ((code ~ '^(GEN|COMP|VEN|UDR|EN|WO|DOC)-[0-9]{1,3}$'::text))",
+   "type": "c"
+  },
+  "requirements.requirements_level_check": {
+   "def": "CHECK ((level = ANY (ARRAY['technical'::text, 'experience'::text, 'domain'::text, 'data'::text])))",
+   "type": "c"
+  },
+  "requirements.requirements_note_check": {
+   "def": "CHECK ((char_length(note) <= 1000))",
+   "type": "c"
+  },
+  "requirements.requirements_origin_check": {
+   "def": "CHECK ((origin = ANY (ARRAY['seed'::text, 'ui'::text])))",
+   "type": "c"
+  },
+  "requirements.requirements_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "requirements.requirements_revision_check": {
+   "def": "CHECK ((revision >= 1))",
+   "type": "c"
+  },
+  "requirements.requirements_revision_of_fkey": {
+   "def": "FOREIGN KEY (revision_of) REFERENCES tracelab.requirements(id)",
+   "type": "f"
+  },
+  "requirements.requirements_statement_check": {
+   "def": "CHECK (((char_length(statement) >= 10) AND (char_length(statement) <= 600)))",
+   "type": "c"
+  },
+  "requirements.requirements_status_check": {
+   "def": "CHECK ((status = ANY (ARRAY['draft'::text, 'active'::text, 'superseded'::text, 'withdrawn'::text])))",
+   "type": "c"
+  },
+  "requirements.ux_tl_req_code_revision": {
+   "def": "UNIQUE (code, revision)",
+   "type": "u"
+  },
+  "sample_batches.ck_tl_batches_prevalence": {
+   "def": "CHECK ((counts_for_prevalence = (strategy = 'uniform'::text)))",
+   "type": "c"
+  },
+  "sample_batches.ck_tl_batches_window": {
+   "def": "CHECK ((window_until > window_since))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_excluded_sampled_check": {
+   "def": "CHECK ((excluded_sampled >= 0))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_params_check": {
+   "def": "CHECK ((jsonb_typeof(params) = 'object'::text))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "sample_batches.sample_batches_plan_step_check": {
+   "def": "CHECK ((plan_step = ANY (ARRAY['initial_uniform'::text, 'cluster_representatives'::text, 'dimension'::text, 'depth_search'::text, 'final_uniform'::text, 'extra'::text])))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_pool_size_check": {
+   "def": "CHECK ((pool_size >= 0))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_requested_check": {
+   "def": "CHECK (((requested >= 1) AND (requested <= 200)))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_reviews_required_check": {
+   "def": "CHECK (((reviews_required >= 1) AND (reviews_required <= 3)))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_selected_check": {
+   "def": "CHECK ((selected >= 0))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_strategy_check": {
+   "def": "CHECK ((strategy = ANY (ARRAY['uniform'::text, 'diversity'::text, 'dimension'::text, 'outlier'::text, 'enrich'::text, 'monitor_flagged'::text])))",
+   "type": "c"
+  },
+  "sample_batches.sample_batches_withdrawn_reason_check": {
+   "def": "CHECK (((withdrawn_reason IS NULL) OR (char_length(withdrawn_reason) <= 500)))",
+   "type": "c"
+  },
+  "sample_items.sample_items_batch_id_fkey": {
+   "def": "FOREIGN KEY (batch_id) REFERENCES tracelab.sample_batches(id)",
+   "type": "f"
+  },
+  "sample_items.sample_items_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "sample_items.sample_items_position_check": {
+   "def": "CHECK ((\"position\" >= 1))",
+   "type": "c"
+  },
+  "sample_items.sample_items_reason_check": {
+   "def": "CHECK ((char_length(reason) <= 300))",
+   "type": "c"
+  },
+  "sample_items.sample_items_turn_id_check": {
+   "def": "CHECK (((length(turn_id) >= 1) AND (length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "sample_items.ux_tl_items_position": {
+   "def": "UNIQUE (batch_id, \"position\")",
+   "type": "u"
+  },
+  "sample_items.ux_tl_items_turn": {
+   "def": "UNIQUE (organization_id, turn_id)",
+   "type": "u"
+  },
+  "schema_migrations.schema_migrations_applied_by_check": {
+   "def": "CHECK (((length(applied_by) >= 1) AND (length(applied_by) <= 200)))",
+   "type": "c"
+  },
+  "schema_migrations.schema_migrations_checksum_check": {
+   "def": "CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))",
+   "type": "c"
+  },
+  "schema_migrations.schema_migrations_pkey": {
+   "def": "PRIMARY KEY (version)",
+   "type": "p"
+  },
+  "schema_migrations.schema_migrations_version_check": {
+   "def": "CHECK ((version > 0))",
+   "type": "c"
+  },
+  "step_labels.ck_tl_step_labels_live": {
+   "def": "CHECK ((tombstone OR (label IS NOT NULL) OR (note IS NOT NULL)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_conversation_key_check": {
+   "def": "CHECK (((char_length(conversation_key) >= 1) AND (char_length(conversation_key) <= 400)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_expected_check": {
+   "def": "CHECK (((expected IS NULL) OR ((char_length(expected) >= 1) AND (char_length(expected) <= 2000))))",
+   "type": "c"
+  },
+  "step_labels.step_labels_label_check": {
+   "def": "CHECK ((label = ANY (ARRAY['right'::text, 'wrong'::text, 'unsure'::text])))",
+   "type": "c"
+  },
+  "step_labels.step_labels_note_check": {
+   "def": "CHECK (((note IS NULL) OR (char_length(note) <= 2000)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_only_if_check": {
+   "def": "CHECK (((only_if IS NULL) OR ((char_length(only_if) >= 1) AND (char_length(only_if) <= 2000))))",
+   "type": "c"
+  },
+  "step_labels.step_labels_pkey": {
+   "def": "PRIMARY KEY (id)",
+   "type": "p"
+  },
+  "step_labels.step_labels_question_check": {
+   "def": "CHECK (((question IS NULL) OR (char_length(question) <= 2000)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_quote_check": {
+   "def": "CHECK (((quote IS NULL) OR ((char_length(quote) >= 1) AND (char_length(quote) <= 2000))))",
+   "type": "c"
+  },
+  "step_labels.step_labels_reviewer_role_check": {
+   "def": "CHECK ((reviewer_role = ANY (ARRAY['domain_expert'::text, 'tester'::text, 'admin'::text, 'user'::text, 'platform'::text, 'consultant'::text])))",
+   "type": "c"
+  },
+  "step_labels.step_labels_step_key_check": {
+   "def": "CHECK (((char_length(step_key) >= 1) AND (char_length(step_key) <= 300)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_step_kind_check": {
+   "def": "CHECK (((char_length(step_kind) >= 1) AND (char_length(step_kind) <= 40)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_step_title_check": {
+   "def": "CHECK (((step_title IS NULL) OR (char_length(step_title) <= 300)))",
+   "type": "c"
+  },
+  "step_labels.step_labels_supersedes_fkey": {
+   "def": "FOREIGN KEY (supersedes) REFERENCES tracelab.step_labels(id)",
+   "type": "f"
+  },
+  "step_labels.step_labels_turn_id_check": {
+   "def": "CHECK (((char_length(turn_id) >= 1) AND (char_length(turn_id) <= 200)))",
+   "type": "c"
+  },
+  "step_labels.ux_tl_step_labels_supersedes": {
+   "def": "UNIQUE (supersedes)",
+   "type": "u"
+  }
+ },
+ "functions": {
+  "judge_predictions_guard()": "b7a5153eaee8d58ff5715ad6ed9627e0",
+  "judge_runs_guard()": "07791708c22f2f1367889933ecdb6558",
+  "judge_splits_guard()": "f63aa34ddf00adc24bad673f89e06e69",
+  "judges_examples_from_train()": "7b99aab12cf7317df699f609584cca05",
+  "judges_guard()": "a40c6daf3d8d63805da92c3d5f3e2ae6",
+  "monitor_verdicts_guard()": "54aec03d2c533803dcaf60de2ef61d8e",
+  "question_id(code text)": "cf65eaa0fec95d0f903f4f8d703d36db",
+  "refuse_change()": "f8f9ee411ca80ddd768a8b1cb813a033",
+  "supersede_only()": "66d9a3289d27f82b732fae2218b323f0"
+ },
+ "indexes": {
+  "annotation_events_pkey": {
+   "def": "CREATE UNIQUE INDEX annotation_events_pkey ON tracelab.annotation_events USING btree (seq)",
+   "table": "annotation_events"
+  },
+  "annotations_pkey": {
+   "def": "CREATE UNIQUE INDEX annotations_pkey ON tracelab.annotations USING btree (id)",
+   "table": "annotations"
+  },
+  "eval_case_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX eval_case_runs_pkey ON tracelab.eval_case_runs USING btree (id)",
+   "table": "eval_case_runs"
+  },
+  "eval_cases_pkey": {
+   "def": "CREATE UNIQUE INDEX eval_cases_pkey ON tracelab.eval_cases USING btree (id)",
+   "table": "eval_cases"
+  },
+  "evidence_spans_pkey": {
+   "def": "CREATE UNIQUE INDEX evidence_spans_pkey ON tracelab.evidence_spans USING btree (turn_id, span_id)",
+   "table": "evidence_spans"
+  },
+  "evidence_turns_pkey": {
+   "def": "CREATE UNIQUE INDEX evidence_turns_pkey ON tracelab.evidence_turns USING btree (turn_id)",
+   "table": "evidence_turns"
+  },
+  "golden_cases_pkey": {
+   "def": "CREATE UNIQUE INDEX golden_cases_pkey ON tracelab.golden_cases USING btree (id)",
+   "table": "golden_cases"
+  },
+  "golden_cases_set_id_case_key_key": {
+   "def": "CREATE UNIQUE INDEX golden_cases_set_id_case_key_key ON tracelab.golden_cases USING btree (set_id, case_key)",
+   "table": "golden_cases"
+  },
+  "golden_cases_set_id_idx_key": {
+   "def": "CREATE UNIQUE INDEX golden_cases_set_id_idx_key ON tracelab.golden_cases USING btree (set_id, idx)",
+   "table": "golden_cases"
+  },
+  "golden_results_pkey": {
+   "def": "CREATE UNIQUE INDEX golden_results_pkey ON tracelab.golden_results USING btree (id)",
+   "table": "golden_results"
+  },
+  "golden_results_run_id_case_key_rep_msg_idx_key": {
+   "def": "CREATE UNIQUE INDEX golden_results_run_id_case_key_rep_msg_idx_key ON tracelab.golden_results USING btree (run_id, case_key, rep, msg_idx)",
+   "table": "golden_results"
+  },
+  "golden_reveals_pkey": {
+   "def": "CREATE UNIQUE INDEX golden_reveals_pkey ON tracelab.golden_reveals USING btree (turn_id, reviewer_id)",
+   "table": "golden_reveals"
+  },
+  "golden_runs_label_key": {
+   "def": "CREATE UNIQUE INDEX golden_runs_label_key ON tracelab.golden_runs USING btree (label)",
+   "table": "golden_runs"
+  },
+  "golden_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX golden_runs_pkey ON tracelab.golden_runs USING btree (id)",
+   "table": "golden_runs"
+  },
+  "golden_sets_organization_id_kind_version_key": {
+   "def": "CREATE UNIQUE INDEX golden_sets_organization_id_kind_version_key ON tracelab.golden_sets USING btree (organization_id, kind, version)",
+   "table": "golden_sets"
+  },
+  "golden_sets_pkey": {
+   "def": "CREATE UNIQUE INDEX golden_sets_pkey ON tracelab.golden_sets USING btree (id)",
+   "table": "golden_sets"
+  },
+  "ix_eval_case_runs_run": {
+   "def": "CREATE INDEX ix_eval_case_runs_run ON tracelab.eval_case_runs USING btree (golden_run_id)",
+   "table": "eval_case_runs"
+  },
+  "ix_eval_cases_org": {
+   "def": "CREATE INDEX ix_eval_cases_org ON tracelab.eval_cases USING btree (organization_id, status, kind)",
+   "table": "eval_cases"
+  },
+  "ix_eval_cases_source_turn": {
+   "def": "CREATE INDEX ix_eval_cases_source_turn ON tracelab.eval_cases USING btree (source_turn_id)",
+   "table": "eval_cases"
+  },
+  "ix_evidence_spans_turn_seq": {
+   "def": "CREATE INDEX ix_evidence_spans_turn_seq ON tracelab.evidence_spans USING btree (turn_id, seq)",
+   "table": "evidence_spans"
+  },
+  "ix_evidence_turns_org_captured": {
+   "def": "CREATE INDEX ix_evidence_turns_org_captured ON tracelab.evidence_turns USING btree (organization_id, captured_at DESC)",
+   "table": "evidence_turns"
+  },
+  "ix_golden_cases_org_key": {
+   "def": "CREATE INDEX ix_golden_cases_org_key ON tracelab.golden_cases USING btree (organization_id, case_key)",
+   "table": "golden_cases"
+  },
+  "ix_golden_results_graded": {
+   "def": "CREATE INDEX ix_golden_results_graded ON tracelab.golden_results USING btree (graded_at) WHERE (graded_at IS NOT NULL)",
+   "table": "golden_results"
+  },
+  "ix_golden_results_org_created": {
+   "def": "CREATE INDEX ix_golden_results_org_created ON tracelab.golden_results USING btree (organization_id, created_at)",
+   "table": "golden_results"
+  },
+  "ix_golden_results_turn": {
+   "def": "CREATE INDEX ix_golden_results_turn ON tracelab.golden_results USING btree (turn_id)",
+   "table": "golden_results"
+  },
+  "ix_golden_reveals_org": {
+   "def": "CREATE INDEX ix_golden_reveals_org ON tracelab.golden_reveals USING btree (organization_id, revealed_at DESC)",
+   "table": "golden_reveals"
+  },
+  "ix_golden_runs_org_started": {
+   "def": "CREATE INDEX ix_golden_runs_org_started ON tracelab.golden_runs USING btree (organization_id, started_at DESC)",
+   "table": "golden_runs"
+  },
+  "ix_jobs_org_kind_created": {
+   "def": "CREATE INDEX ix_jobs_org_kind_created ON tracelab.jobs USING btree (organization_id, kind, created_at DESC)",
+   "table": "jobs"
+  },
+  "ix_jobs_running_heartbeat": {
+   "def": "CREATE INDEX ix_jobs_running_heartbeat ON tracelab.jobs USING btree (heartbeat_at) WHERE (status = 'running'::text)",
+   "table": "jobs"
+  },
+  "ix_judge_predictions_turn": {
+   "def": "CREATE INDEX ix_judge_predictions_turn ON tracelab.judge_predictions USING btree (turn_id)",
+   "table": "judge_predictions"
+  },
+  "ix_judge_runs_judge": {
+   "def": "CREATE INDEX ix_judge_runs_judge ON tracelab.judge_runs USING btree (judge_id, started_at DESC)",
+   "table": "judge_runs"
+  },
+  "ix_judge_split_members_turn": {
+   "def": "CREATE INDEX ix_judge_split_members_turn ON tracelab.judge_split_members USING btree (turn_id)",
+   "table": "judge_split_members"
+  },
+  "ix_monitor_batches_period": {
+   "def": "CREATE INDEX ix_monitor_batches_period ON tracelab.monitor_batches USING btree (organization_id, period_label, started_at DESC)",
+   "table": "monitor_batches"
+  },
+  "ix_monitor_batches_started": {
+   "def": "CREATE INDEX ix_monitor_batches_started ON tracelab.monitor_batches USING btree (started_at DESC)",
+   "table": "monitor_batches"
+  },
+  "ix_monitor_verdicts_org_time": {
+   "def": "CREATE INDEX ix_monitor_verdicts_org_time ON tracelab.monitor_verdicts USING btree (organization_id, updated_at)",
+   "table": "monitor_verdicts"
+  },
+  "ix_monitor_verdicts_turn": {
+   "def": "CREATE INDEX ix_monitor_verdicts_turn ON tracelab.monitor_verdicts USING btree (turn_id)",
+   "table": "monitor_verdicts"
+  },
+  "ix_monitor_verdicts_week": {
+   "def": "CREATE INDEX ix_monitor_verdicts_week ON tracelab.monitor_verdicts USING btree (evaluator_key, turn_started_at)",
+   "table": "monitor_verdicts"
+  },
+  "ix_tl_ann_conv_head": {
+   "def": "CREATE INDEX ix_tl_ann_conv_head ON tracelab.annotations USING btree (organization_id, conversation_key) WHERE (superseded_by IS NULL)",
+   "table": "annotations"
+  },
+  "ix_tl_ann_events_lineage": {
+   "def": "CREATE INDEX ix_tl_ann_events_lineage ON tracelab.annotation_events USING btree (lineage_id, at)",
+   "table": "annotation_events"
+  },
+  "ix_tl_ann_events_turn": {
+   "def": "CREATE INDEX ix_tl_ann_events_turn ON tracelab.annotation_events USING btree (turn_id, at)",
+   "table": "annotation_events"
+  },
+  "ix_tl_ann_org_time": {
+   "def": "CREATE INDEX ix_tl_ann_org_time ON tracelab.annotations USING btree (organization_id, created_at)",
+   "table": "annotations"
+  },
+  "ix_tl_ann_turn": {
+   "def": "CREATE INDEX ix_tl_ann_turn ON tracelab.annotations USING btree (turn_id)",
+   "table": "annotations"
+  },
+  "ix_tl_batches_org_time": {
+   "def": "CREATE INDEX ix_tl_batches_org_time ON tracelab.sample_batches USING btree (organization_id, created_at DESC)",
+   "table": "sample_batches"
+  },
+  "ix_tl_items_turn_only": {
+   "def": "CREATE INDEX ix_tl_items_turn_only ON tracelab.sample_items USING btree (turn_id)",
+   "table": "sample_items"
+  },
+  "ix_tl_lab_expected_question": {
+   "def": "CREATE INDEX ix_tl_lab_expected_question ON tracelab.lab_expected_answers USING btree (question_id, created_at DESC)",
+   "table": "lab_expected_answers"
+  },
+  "ix_tl_lab_failure_modes_lineage": {
+   "def": "CREATE INDEX ix_tl_lab_failure_modes_lineage ON tracelab.lab_failure_modes USING btree (COALESCE(lineage_id, id), created_at DESC)",
+   "table": "lab_failure_modes"
+  },
+  "ix_tl_lab_label_cells_cell": {
+   "def": "CREATE INDEX ix_tl_lab_label_cells_cell ON tracelab.lab_label_cells USING btree (question_id, mode_lineage_id, created_at DESC)",
+   "table": "lab_label_cells"
+  },
+  "ix_tl_lab_question_traces_turn": {
+   "def": "CREATE INDEX ix_tl_lab_question_traces_turn ON tracelab.lab_question_traces USING btree (turn_id)",
+   "table": "lab_question_traces"
+  },
+  "ix_tl_lab_runs_org": {
+   "def": "CREATE INDEX ix_tl_lab_runs_org ON tracelab.lab_runs USING btree (organization_id, run_no DESC)",
+   "table": "lab_runs"
+  },
+  "ix_tl_labels_annotation": {
+   "def": "CREATE INDEX ix_tl_labels_annotation ON tracelab.labels USING btree (annotation_id) WHERE (annotation_id IS NOT NULL)",
+   "table": "labels"
+  },
+  "ix_tl_labels_mode_head": {
+   "def": "CREATE INDEX ix_tl_labels_mode_head ON tracelab.labels USING btree (mode_id) WHERE (superseded_by IS NULL)",
+   "table": "labels"
+  },
+  "ix_tl_labels_org_mode_head": {
+   "def": "CREATE INDEX ix_tl_labels_org_mode_head ON tracelab.labels USING btree (organization_id, mode_id) WHERE (superseded_by IS NULL)",
+   "table": "labels"
+  },
+  "ix_tl_labels_turn": {
+   "def": "CREATE INDEX ix_tl_labels_turn ON tracelab.labels USING btree (turn_id)",
+   "table": "labels"
+  },
+  "ix_tl_members_org": {
+   "def": "CREATE INDEX ix_tl_members_org ON tracelab.lab_members USING btree (organization_id, created_at)",
+   "table": "lab_members"
+  },
+  "ix_tl_mode_events_mode": {
+   "def": "CREATE INDEX ix_tl_mode_events_mode ON tracelab.mode_events USING btree (mode_id, at)",
+   "table": "mode_events"
+  },
+  "ix_tl_modes_merged_into": {
+   "def": "CREATE INDEX ix_tl_modes_merged_into ON tracelab.modes USING btree (merged_into) WHERE (merged_into IS NOT NULL)",
+   "table": "modes"
+  },
+  "ix_tl_modes_proposals": {
+   "def": "CREATE INDEX ix_tl_modes_proposals ON tracelab.modes USING btree (proposer_organization_id, created_at) WHERE (status = 'proposed'::text)",
+   "table": "modes"
+  },
+  "ix_tl_modes_split_from": {
+   "def": "CREATE INDEX ix_tl_modes_split_from ON tracelab.modes USING btree (split_from) WHERE (split_from IS NOT NULL)",
+   "table": "modes"
+  },
+  "ix_tl_platform_members_user": {
+   "def": "CREATE INDEX ix_tl_platform_members_user ON tracelab.lab_platform_members USING btree (user_id, created_at DESC)",
+   "table": "lab_platform_members"
+  },
+  "ix_tl_prop_cache": {
+   "def": "CREATE INDEX ix_tl_prop_cache ON tracelab.proposals USING btree (cache_key)",
+   "table": "proposals"
+  },
+  "ix_tl_prop_org_queue": {
+   "def": "CREATE INDEX ix_tl_prop_org_queue ON tracelab.proposals USING btree (organization_id, kind, status, created_at)",
+   "table": "proposals"
+  },
+  "ix_tl_prop_queue": {
+   "def": "CREATE INDEX ix_tl_prop_queue ON tracelab.proposals USING btree (kind, status, mode_id, created_at)",
+   "table": "proposals"
+  },
+  "ix_tl_prop_run": {
+   "def": "CREATE INDEX ix_tl_prop_run ON tracelab.proposals USING btree (run_id, status)",
+   "table": "proposals"
+  },
+  "ix_tl_prop_turn": {
+   "def": "CREATE INDEX ix_tl_prop_turn ON tracelab.proposals USING btree (turn_id) WHERE (turn_id IS NOT NULL)",
+   "table": "proposals"
+  },
+  "ix_tl_runs_job": {
+   "def": "CREATE INDEX ix_tl_runs_job ON tracelab.proposal_runs USING btree (job_id)",
+   "table": "proposal_runs"
+  },
+  "ix_tl_step_labels_group": {
+   "def": "CREATE INDEX ix_tl_step_labels_group ON tracelab.step_labels USING btree (organization_id, group_id) WHERE ((group_id IS NOT NULL) AND (superseded_by IS NULL))",
+   "table": "step_labels"
+  },
+  "ix_tl_step_labels_org_time": {
+   "def": "CREATE INDEX ix_tl_step_labels_org_time ON tracelab.step_labels USING btree (organization_id, created_at DESC)",
+   "table": "step_labels"
+  },
+  "ix_tl_step_labels_turn": {
+   "def": "CREATE INDEX ix_tl_step_labels_turn ON tracelab.step_labels USING btree (organization_id, turn_id) WHERE (superseded_by IS NULL)",
+   "table": "step_labels"
+  },
+  "jobs_pkey": {
+   "def": "CREATE UNIQUE INDEX jobs_pkey ON tracelab.jobs USING btree (id)",
+   "table": "jobs"
+  },
+  "judge_predictions_pkey": {
+   "def": "CREATE UNIQUE INDEX judge_predictions_pkey ON tracelab.judge_predictions USING btree (prompt_hash, turn_id)",
+   "table": "judge_predictions"
+  },
+  "judge_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX judge_runs_pkey ON tracelab.judge_runs USING btree (id)",
+   "table": "judge_runs"
+  },
+  "judge_split_members_pkey": {
+   "def": "CREATE UNIQUE INDEX judge_split_members_pkey ON tracelab.judge_split_members USING btree (split_id, turn_id)",
+   "table": "judge_split_members"
+  },
+  "judge_splits_mode_id_version_key": {
+   "def": "CREATE UNIQUE INDEX judge_splits_mode_id_version_key ON tracelab.judge_splits USING btree (mode_id, version)",
+   "table": "judge_splits"
+  },
+  "judge_splits_pkey": {
+   "def": "CREATE UNIQUE INDEX judge_splits_pkey ON tracelab.judge_splits USING btree (id)",
+   "table": "judge_splits"
+  },
+  "judges_mode_id_version_key": {
+   "def": "CREATE UNIQUE INDEX judges_mode_id_version_key ON tracelab.judges USING btree (mode_id, version)",
+   "table": "judges"
+  },
+  "judges_pkey": {
+   "def": "CREATE UNIQUE INDEX judges_pkey ON tracelab.judges USING btree (id)",
+   "table": "judges"
+  },
+  "lab_expected_answers_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_expected_answers_pkey ON tracelab.lab_expected_answers USING btree (id)",
+   "table": "lab_expected_answers"
+  },
+  "lab_failure_modes_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_failure_modes_pkey ON tracelab.lab_failure_modes USING btree (id)",
+   "table": "lab_failure_modes"
+  },
+  "lab_label_cells_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_label_cells_pkey ON tracelab.lab_label_cells USING btree (id)",
+   "table": "lab_label_cells"
+  },
+  "lab_members_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_members_pkey ON tracelab.lab_members USING btree (id)",
+   "table": "lab_members"
+  },
+  "lab_platform_members_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_platform_members_pkey ON tracelab.lab_platform_members USING btree (id)",
+   "table": "lab_platform_members"
+  },
+  "lab_question_traces_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_question_traces_pkey ON tracelab.lab_question_traces USING btree (id)",
+   "table": "lab_question_traces"
+  },
+  "lab_questions_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_questions_pkey ON tracelab.lab_questions USING btree (id)",
+   "table": "lab_questions"
+  },
+  "lab_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX lab_runs_pkey ON tracelab.lab_runs USING btree (id)",
+   "table": "lab_runs"
+  },
+  "labels_pkey": {
+   "def": "CREATE UNIQUE INDEX labels_pkey ON tracelab.labels USING btree (id)",
+   "table": "labels"
+  },
+  "mode_events_pkey": {
+   "def": "CREATE UNIQUE INDEX mode_events_pkey ON tracelab.mode_events USING btree (seq)",
+   "table": "mode_events"
+  },
+  "modes_pkey": {
+   "def": "CREATE UNIQUE INDEX modes_pkey ON tracelab.modes USING btree (id)",
+   "table": "modes"
+  },
+  "monitor_batches_pkey": {
+   "def": "CREATE UNIQUE INDEX monitor_batches_pkey ON tracelab.monitor_batches USING btree (id)",
+   "table": "monitor_batches"
+  },
+  "monitor_verdicts_pkey": {
+   "def": "CREATE UNIQUE INDEX monitor_verdicts_pkey ON tracelab.monitor_verdicts USING btree (id)",
+   "table": "monitor_verdicts"
+  },
+  "proposal_runs_pkey": {
+   "def": "CREATE UNIQUE INDEX proposal_runs_pkey ON tracelab.proposal_runs USING btree (id)",
+   "table": "proposal_runs"
+  },
+  "proposals_pkey": {
+   "def": "CREATE UNIQUE INDEX proposals_pkey ON tracelab.proposals USING btree (id)",
+   "table": "proposals"
+  },
+  "requirements_pkey": {
+   "def": "CREATE UNIQUE INDEX requirements_pkey ON tracelab.requirements USING btree (id)",
+   "table": "requirements"
+  },
+  "sample_batches_pkey": {
+   "def": "CREATE UNIQUE INDEX sample_batches_pkey ON tracelab.sample_batches USING btree (id)",
+   "table": "sample_batches"
+  },
+  "sample_items_pkey": {
+   "def": "CREATE UNIQUE INDEX sample_items_pkey ON tracelab.sample_items USING btree (id)",
+   "table": "sample_items"
+  },
+  "schema_migrations_pkey": {
+   "def": "CREATE UNIQUE INDEX schema_migrations_pkey ON tracelab.schema_migrations USING btree (version)",
+   "table": "schema_migrations"
+  },
+  "step_labels_pkey": {
+   "def": "CREATE UNIQUE INDEX step_labels_pkey ON tracelab.step_labels USING btree (id)",
+   "table": "step_labels"
+  },
+  "ux_eval_case_runs_case_run": {
+   "def": "CREATE UNIQUE INDEX ux_eval_case_runs_case_run ON tracelab.eval_case_runs USING btree (eval_case_id, golden_run_id)",
+   "table": "eval_case_runs"
+  },
+  "ux_eval_cases_current": {
+   "def": "CREATE UNIQUE INDEX ux_eval_cases_current ON tracelab.eval_cases USING btree (organization_id, case_key) WHERE (status <> 'superseded'::text)",
+   "table": "eval_cases"
+  },
+  "ux_eval_cases_key_version": {
+   "def": "CREATE UNIQUE INDEX ux_eval_cases_key_version ON tracelab.eval_cases USING btree (organization_id, case_key, version)",
+   "table": "eval_cases"
+  },
+  "ux_golden_sets_one_active_scenario": {
+   "def": "CREATE UNIQUE INDEX ux_golden_sets_one_active_scenario ON tracelab.golden_sets USING btree (organization_id) WHERE ((kind = 'scenario'::text) AND (status = 'active'::text))",
+   "table": "golden_sets"
+  },
+  "ux_golden_sets_one_regression": {
+   "def": "CREATE UNIQUE INDEX ux_golden_sets_one_regression ON tracelab.golden_sets USING btree (organization_id) WHERE (kind = 'regression'::text)",
+   "table": "golden_sets"
+  },
+  "ux_jobs_one_open_per_scope": {
+   "def": "CREATE UNIQUE INDEX ux_jobs_one_open_per_scope ON tracelab.jobs USING btree (scope_key) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text, 'paused'::text, 'interrupted'::text]))",
+   "table": "jobs"
+  },
+  "ux_judge_runs_one_test": {
+   "def": "CREATE UNIQUE INDEX ux_judge_runs_one_test ON tracelab.judge_runs USING btree (judge_id) WHERE (split = 'test'::text)",
+   "table": "judge_runs"
+  },
+  "ux_judge_splits_active": {
+   "def": "CREATE UNIQUE INDEX ux_judge_splits_active ON tracelab.judge_splits USING btree (mode_id) WHERE (status = 'active'::text)",
+   "table": "judge_splits"
+  },
+  "ux_monitor_batches_active": {
+   "def": "CREATE UNIQUE INDEX ux_monitor_batches_active ON tracelab.monitor_batches USING btree (COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE (status = ANY (ARRAY['queued'::text, 'running'::text]))",
+   "table": "monitor_batches"
+  },
+  "ux_monitor_verdicts_evaluator_turn": {
+   "def": "CREATE UNIQUE INDEX ux_monitor_verdicts_evaluator_turn ON tracelab.monitor_verdicts USING btree (evaluator_key, turn_id)",
+   "table": "monitor_verdicts"
+  },
+  "ux_tl_ann_lineage_head": {
+   "def": "CREATE UNIQUE INDEX ux_tl_ann_lineage_head ON tracelab.annotations USING btree (lineage_id) WHERE (superseded_by IS NULL)",
+   "table": "annotations"
+  },
+  "ux_tl_ann_supersedes": {
+   "def": "CREATE UNIQUE INDEX ux_tl_ann_supersedes ON tracelab.annotations USING btree (supersedes)",
+   "table": "annotations"
+  },
+  "ux_tl_ann_verdict_head": {
+   "def": "CREATE UNIQUE INDEX ux_tl_ann_verdict_head ON tracelab.annotations USING btree (turn_id, reviewer_id) WHERE ((kind = 'verdict'::text) AND (superseded_by IS NULL))",
+   "table": "annotations"
+  },
+  "ux_tl_items_position": {
+   "def": "CREATE UNIQUE INDEX ux_tl_items_position ON tracelab.sample_items USING btree (batch_id, \"position\")",
+   "table": "sample_items"
+  },
+  "ux_tl_items_turn": {
+   "def": "CREATE UNIQUE INDEX ux_tl_items_turn ON tracelab.sample_items USING btree (organization_id, turn_id)",
+   "table": "sample_items"
+  },
+  "ux_tl_lab_question_traces": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_question_traces ON tracelab.lab_question_traces USING btree (question_id, turn_id)",
+   "table": "lab_question_traces"
+  },
+  "ux_tl_lab_question_traces_synced": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_question_traces_synced ON tracelab.lab_question_traces USING btree (turn_id) WHERE (source = 'sync'::text)",
+   "table": "lab_question_traces"
+  },
+  "ux_tl_lab_questions_seq": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_questions_seq ON tracelab.lab_questions USING btree (run_id, seq_no)",
+   "table": "lab_questions"
+  },
+  "ux_tl_lab_runs_no": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_runs_no ON tracelab.lab_runs USING btree (run_no)",
+   "table": "lab_runs"
+  },
+  "ux_tl_lab_runs_user_day": {
+   "def": "CREATE UNIQUE INDEX ux_tl_lab_runs_user_day ON tracelab.lab_runs USING btree (owner_user_id, COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid), run_day) WHERE (kind = 'production'::text)",
+   "table": "lab_runs"
+  },
+  "ux_tl_labels_head": {
+   "def": "CREATE UNIQUE INDEX ux_tl_labels_head ON tracelab.labels USING btree (turn_id, mode_id) WHERE (superseded_by IS NULL)",
+   "table": "labels"
+  },
+  "ux_tl_labels_supersedes": {
+   "def": "CREATE UNIQUE INDEX ux_tl_labels_supersedes ON tracelab.labels USING btree (supersedes)",
+   "table": "labels"
+  },
+  "ux_tl_members_head": {
+   "def": "CREATE UNIQUE INDEX ux_tl_members_head ON tracelab.lab_members USING btree (organization_id, user_id) WHERE (superseded_by IS NULL)",
+   "table": "lab_members"
+  },
+  "ux_tl_members_supersedes": {
+   "def": "CREATE UNIQUE INDEX ux_tl_members_supersedes ON tracelab.lab_members USING btree (supersedes)",
+   "table": "lab_members"
+  },
+  "ux_tl_modes_live_name": {
+   "def": "CREATE UNIQUE INDEX ux_tl_modes_live_name ON tracelab.modes USING btree (name) WHERE (status <> ALL (ARRAY['retired'::text, 'rejected'::text]))",
+   "table": "modes"
+  },
+  "ux_tl_prop_pending_cell": {
+   "def": "CREATE UNIQUE INDEX ux_tl_prop_pending_cell ON tracelab.proposals USING btree (kind, turn_id, mode_id) WHERE ((status = 'pending'::text) AND (kind = ANY (ARRAY['depth_scan'::text, 'cell'::text])))",
+   "table": "proposals"
+  },
+  "ux_tl_prop_run_key": {
+   "def": "CREATE UNIQUE INDEX ux_tl_prop_run_key ON tracelab.proposals USING btree (run_id, cache_key)",
+   "table": "proposals"
+  },
+  "ux_tl_req_active": {
+   "def": "CREATE UNIQUE INDEX ux_tl_req_active ON tracelab.requirements USING btree (code) WHERE (status = 'active'::text)",
+   "table": "requirements"
+  },
+  "ux_tl_req_code_revision": {
+   "def": "CREATE UNIQUE INDEX ux_tl_req_code_revision ON tracelab.requirements USING btree (code, revision)",
+   "table": "requirements"
+  },
+  "ux_tl_step_labels_lineage_head": {
+   "def": "CREATE UNIQUE INDEX ux_tl_step_labels_lineage_head ON tracelab.step_labels USING btree (COALESCE(lineage_id, id)) WHERE (superseded_by IS NULL)",
+   "table": "step_labels"
+  },
+  "ux_tl_step_labels_supersedes": {
+   "def": "CREATE UNIQUE INDEX ux_tl_step_labels_supersedes ON tracelab.step_labels USING btree (supersedes)",
+   "table": "step_labels"
+  }
+ },
+ "server_version_num": 160015,
+ "tables": [
+  "annotation_events",
+  "annotations",
+  "eval_case_runs",
+  "eval_cases",
+  "evidence_spans",
+  "evidence_turns",
+  "golden_cases",
+  "golden_results",
+  "golden_reveals",
+  "golden_runs",
+  "golden_sets",
+  "jobs",
+  "judge_predictions",
+  "judge_runs",
+  "judge_split_members",
+  "judge_splits",
+  "judges",
+  "lab_expected_answers",
+  "lab_failure_modes",
+  "lab_label_cells",
+  "lab_members",
+  "lab_platform_members",
+  "lab_question_traces",
+  "lab_questions",
+  "lab_runs",
+  "labels",
+  "mode_events",
+  "modes",
+  "monitor_batches",
+  "monitor_verdicts",
+  "proposal_runs",
+  "proposals",
+  "requirements",
+  "sample_batches",
+  "sample_items",
+  "schema_migrations",
+  "step_labels"
+ ],
+ "triggers": {
+  "annotation_events.annotation_events_append_only": "CREATE TRIGGER annotation_events_append_only BEFORE DELETE OR UPDATE ON tracelab.annotation_events FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "annotation_events.annotation_events_no_truncate": "CREATE TRIGGER annotation_events_no_truncate BEFORE TRUNCATE ON tracelab.annotation_events FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "annotations.annotations_no_truncate": "CREATE TRIGGER annotations_no_truncate BEFORE TRUNCATE ON tracelab.annotations FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
+  "annotations.annotations_supersede_only": "CREATE TRIGGER annotations_supersede_only BEFORE DELETE OR UPDATE ON tracelab.annotations FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()",
+  "evidence_spans.evidence_spans_rows": "CREATE TRIGGER evidence_spans_rows BEFORE DELETE OR UPDATE ON tracelab.evidence_spans FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "evidence_spans.evidence_spans_truncate": "CREATE TRIGGER evidence_spans_truncate BEFORE TRUNCATE ON tracelab.evidence_spans FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "evidence_turns.evidence_turns_rows": "CREATE TRIGGER evidence_turns_rows BEFORE DELETE OR UPDATE ON tracelab.evidence_turns FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "evidence_turns.evidence_turns_truncate": "CREATE TRIGGER evidence_turns_truncate BEFORE TRUNCATE ON tracelab.evidence_turns FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "golden_cases.golden_cases_rows": "CREATE TRIGGER golden_cases_rows BEFORE DELETE OR UPDATE ON tracelab.golden_cases FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "golden_cases.golden_cases_truncate": "CREATE TRIGGER golden_cases_truncate BEFORE TRUNCATE ON tracelab.golden_cases FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "golden_reveals.golden_reveals_rows": "CREATE TRIGGER golden_reveals_rows BEFORE DELETE OR UPDATE ON tracelab.golden_reveals FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "golden_reveals.golden_reveals_truncate": "CREATE TRIGGER golden_reveals_truncate BEFORE TRUNCATE ON tracelab.golden_reveals FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "judge_predictions.judge_predictions_guard": "CREATE TRIGGER judge_predictions_guard BEFORE DELETE OR UPDATE ON tracelab.judge_predictions FOR EACH ROW EXECUTE FUNCTION tracelab.judge_predictions_guard()",
+  "judge_predictions.judge_predictions_no_truncate": "CREATE TRIGGER judge_predictions_no_truncate BEFORE TRUNCATE ON tracelab.judge_predictions FOR EACH STATEMENT EXECUTE FUNCTION tracelab.judge_predictions_guard()",
+  "judge_runs.judge_runs_guard": "CREATE TRIGGER judge_runs_guard BEFORE INSERT OR DELETE OR UPDATE ON tracelab.judge_runs FOR EACH ROW EXECUTE FUNCTION tracelab.judge_runs_guard()",
+  "judge_runs.judge_runs_no_truncate": "CREATE TRIGGER judge_runs_no_truncate BEFORE TRUNCATE ON tracelab.judge_runs FOR EACH STATEMENT EXECUTE FUNCTION tracelab.judge_runs_guard()",
+  "judge_split_members.judge_split_members_append_only": "CREATE TRIGGER judge_split_members_append_only BEFORE DELETE OR UPDATE ON tracelab.judge_split_members FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "judge_split_members.judge_split_members_no_truncate": "CREATE TRIGGER judge_split_members_no_truncate BEFORE TRUNCATE ON tracelab.judge_split_members FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "judge_splits.judge_splits_guard": "CREATE TRIGGER judge_splits_guard BEFORE DELETE OR UPDATE ON tracelab.judge_splits FOR EACH ROW EXECUTE FUNCTION tracelab.judge_splits_guard()",
+  "judge_splits.judge_splits_no_truncate": "CREATE TRIGGER judge_splits_no_truncate BEFORE TRUNCATE ON tracelab.judge_splits FOR EACH STATEMENT EXECUTE FUNCTION tracelab.judge_splits_guard()",
+  "judges.judges_examples_from_train": "CREATE TRIGGER judges_examples_from_train BEFORE INSERT ON tracelab.judges FOR EACH ROW EXECUTE FUNCTION tracelab.judges_examples_from_train()",
+  "judges.judges_guard": "CREATE TRIGGER judges_guard BEFORE DELETE OR UPDATE ON tracelab.judges FOR EACH ROW EXECUTE FUNCTION tracelab.judges_guard()",
+  "judges.judges_no_truncate": "CREATE TRIGGER judges_no_truncate BEFORE TRUNCATE ON tracelab.judges FOR EACH STATEMENT EXECUTE FUNCTION tracelab.judges_guard()",
+  "lab_expected_answers.lab_expected_answers_append_only": "CREATE TRIGGER lab_expected_answers_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_expected_answers FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_expected_answers.lab_expected_answers_no_truncate": "CREATE TRIGGER lab_expected_answers_no_truncate BEFORE TRUNCATE ON tracelab.lab_expected_answers FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_failure_modes.lab_failure_modes_append_only": "CREATE TRIGGER lab_failure_modes_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_failure_modes FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_failure_modes.lab_failure_modes_no_truncate": "CREATE TRIGGER lab_failure_modes_no_truncate BEFORE TRUNCATE ON tracelab.lab_failure_modes FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_label_cells.lab_label_cells_append_only": "CREATE TRIGGER lab_label_cells_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_label_cells FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_label_cells.lab_label_cells_no_truncate": "CREATE TRIGGER lab_label_cells_no_truncate BEFORE TRUNCATE ON tracelab.lab_label_cells FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_members.lab_members_no_truncate": "CREATE TRIGGER lab_members_no_truncate BEFORE TRUNCATE ON tracelab.lab_members FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
+  "lab_members.lab_members_supersede_only": "CREATE TRIGGER lab_members_supersede_only BEFORE DELETE OR UPDATE ON tracelab.lab_members FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()",
+  "lab_platform_members.lab_platform_members_append_only": "CREATE TRIGGER lab_platform_members_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_platform_members FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_platform_members.lab_platform_members_no_truncate": "CREATE TRIGGER lab_platform_members_no_truncate BEFORE TRUNCATE ON tracelab.lab_platform_members FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_question_traces.lab_question_traces_append_only": "CREATE TRIGGER lab_question_traces_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_question_traces FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_question_traces.lab_question_traces_no_truncate": "CREATE TRIGGER lab_question_traces_no_truncate BEFORE TRUNCATE ON tracelab.lab_question_traces FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_questions.lab_questions_append_only": "CREATE TRIGGER lab_questions_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_questions FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_questions.lab_questions_no_truncate": "CREATE TRIGGER lab_questions_no_truncate BEFORE TRUNCATE ON tracelab.lab_questions FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_runs.lab_runs_append_only": "CREATE TRIGGER lab_runs_append_only BEFORE DELETE OR UPDATE ON tracelab.lab_runs FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "lab_runs.lab_runs_no_truncate": "CREATE TRIGGER lab_runs_no_truncate BEFORE TRUNCATE ON tracelab.lab_runs FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "labels.labels_no_truncate": "CREATE TRIGGER labels_no_truncate BEFORE TRUNCATE ON tracelab.labels FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
+  "labels.labels_supersede_only": "CREATE TRIGGER labels_supersede_only BEFORE DELETE OR UPDATE ON tracelab.labels FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()",
+  "mode_events.mode_events_append_only": "CREATE TRIGGER mode_events_append_only BEFORE DELETE OR UPDATE ON tracelab.mode_events FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "mode_events.mode_events_no_truncate": "CREATE TRIGGER mode_events_no_truncate BEFORE TRUNCATE ON tracelab.mode_events FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "monitor_verdicts.monitor_verdicts_guard": "CREATE TRIGGER monitor_verdicts_guard BEFORE DELETE OR UPDATE ON tracelab.monitor_verdicts FOR EACH ROW EXECUTE FUNCTION tracelab.monitor_verdicts_guard()",
+  "monitor_verdicts.monitor_verdicts_no_truncate": "CREATE TRIGGER monitor_verdicts_no_truncate BEFORE TRUNCATE ON tracelab.monitor_verdicts FOR EACH STATEMENT EXECUTE FUNCTION tracelab.monitor_verdicts_guard()",
+  "sample_items.sample_items_append_only": "CREATE TRIGGER sample_items_append_only BEFORE DELETE OR UPDATE ON tracelab.sample_items FOR EACH ROW EXECUTE FUNCTION tracelab.refuse_change()",
+  "sample_items.sample_items_no_truncate": "CREATE TRIGGER sample_items_no_truncate BEFORE TRUNCATE ON tracelab.sample_items FOR EACH STATEMENT EXECUTE FUNCTION tracelab.refuse_change()",
+  "step_labels.step_labels_no_truncate": "CREATE TRIGGER step_labels_no_truncate BEFORE TRUNCATE ON tracelab.step_labels FOR EACH STATEMENT EXECUTE FUNCTION tracelab.supersede_only()",
+  "step_labels.step_labels_supersede_only": "CREATE TRIGGER step_labels_supersede_only BEFORE DELETE OR UPDATE ON tracelab.step_labels FOR EACH ROW EXECUTE FUNCTION tracelab.supersede_only()"
+ },
+ "version": 11
+}

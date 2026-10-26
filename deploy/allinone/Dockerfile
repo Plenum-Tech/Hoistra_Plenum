@@ -44,6 +44,8 @@ ENV VITE_OPS_INTELLIGENCE_BASE_URL=$VITE_OPS_INTELLIGENCE_BASE_URL \
     VITE_SCHEMA_MAPPER_BASE_URL=$VITE_SCHEMA_MAPPER_BASE_URL \
     VITE_DEEP_AGENTS_BASE_URL=$VITE_DEEP_AGENTS_BASE_URL \
     VITE_ORGANIZATION_ID=$VITE_ORGANIZATION_ID
+ARG VITE_TRACE_LAB=0
+ENV VITE_TRACE_LAB=$VITE_TRACE_LAB
 RUN npm run build
 
 # ── hoist-engine: the Go engine a migration's row-heavy steps run on ──────────────────────
@@ -116,6 +118,7 @@ RUN python -m venv /opt/docrag && /opt/docrag/bin/pip install --no-cache-dir --u
 COPY ${BE}/doc-rag-main/requirements.txt doc-rag/
 RUN /opt/docrag/bin/pip install --no-cache-dir -r doc-rag/requirements.txt
 COPY ${BE}/doc-rag-main/ doc-rag/
+COPY ${BE}/svc-trace-lab/ svc-trace-lab/
 
 COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY deploy/allinone/nginx.conf       /etc/nginx/conf.d/hoistra.conf

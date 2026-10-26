@@ -1,5 +1,6 @@
 // Users — Users & access (admin). `vals` is the view model from useHoistra().
 import React from 'react';
+import TraceLabAccess from '../lab/TraceLabAccess.jsx';
 
 export default function Users({ vals }) {
   return (
@@ -137,6 +138,7 @@ export default function Users({ vals }) {
                       </React.Fragment>
                     ))}
                   </div>
+                  {u.labUser && u.panelShow !== "none" ? <TraceLabAccess user={u.labUser} /> : null}
                 </div>
               </div>
             </React.Fragment>

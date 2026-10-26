@@ -111,6 +111,7 @@ export const usersMethods = {
         const suspArmed = s.usArmed === suspKey, delArmed = s.usArmed === delKey;
         return {
           name: u.name, email: u.email, title: u.title, isMe,
+          labUser: u.live && !isMe ? { id: u.id, email: u.email, role: u.role } : null,
           // An admin row (live) carries buildings [] BY DESIGN — all_buildings rides along
           // so it does not render as "0 buildings" against the person who administers them.
           nB: u.allB ? "All buildings" : u.buildings.length + (u.buildings.length === 1 ? " building" : " buildings"),

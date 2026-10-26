@@ -49,6 +49,8 @@ export default defineConfig(({ mode }) => {
   },
   build: {
     outDir: 'dist',
+    // Two pages: Hoistra (index.html) and Trace Lab (lab/index.html), served at /lab/ by the same static servers.
+    rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), lab: fileURLToPath(new URL('./lab/index.html', import.meta.url)) } },
     sourcemap: mode !== 'production',
     chunkSizeWarningLimit: 900
   }
