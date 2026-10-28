@@ -247,10 +247,12 @@ export const coreMethods = {
     return walk(x);
   },
 
+  // The toast sits above every overlay (Toast.jsx z-index), so a full-screen console still shows it. A long message,
+  // such as an activation link to copy, stays long enough to read.
   flash(msg) {
     this.setState({ toast: msg });
     clearTimeout(this._tt);
-    this._tt = setTimeout(() => this.setState({ toast: "" }), 2600);
+    this._tt = setTimeout(() => this.setState({ toast: "" }), String(msg || "").length > 120 ? 9000 : 2600);
   },
 
 
