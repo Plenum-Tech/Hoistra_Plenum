@@ -567,13 +567,22 @@ async def unarchive_certificates(
 async def draft_renewal_email(
     body: RenewalEmailRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Draft a renewal email for one selected certificate (by id or number) and queue it."""
-    return await cert_svc.draft_renewal_email(
+    # 28 Oct 2026: bounded to the caller's register. Another company's certificate, or one on
+    # a building the caller is not allocated, is 404 exactly like an unknown id (a 403 would
+    # confirm it exists), and nothing is queued or audited.
+    out = await cert_svc.draft_renewal_email(
         session,
         certificate_id=body.certificate_id,
         certificate_number=body.certificate_number,
+        organization_id=s.organization_id,
+        building_ids=s.building_ids,
     )
+    if out.get("reason") == "not_found":
+        raise HTTPException(status_code=404, detail=out)
+    return out
 
 
 @router.post("/building-change")

@@ -3378,11 +3378,46 @@ async def unarchive_certificates(
     }
 
 
+def _renewal_cert_in_scope(
+    cert: Any,
+    organization_id: UUID | None,
+    building_ids: tuple[UUID, ...] | None,
+) -> bool:
+    """Whether the caller's register shows this certificate — the rule list_certificates uses.
+
+    (28 Oct 2026: the renewal-email route loaded a certificate by id or number with no company
+    check, so a signed-in user of one company could queue a renewal email in another company's
+    approvals queue, addressed to that company's vendor.) The company is the certificate's own
+    organization_id or org_id; NULL never means shared. A caller restricted to buildings sees
+    certificates on those buildings, plus vendor accreditations that name no building.
+    """
+    if organization_id is not None:
+        if organization_id not in (getattr(cert, "organization_id", None), getattr(cert, "org_id", None)):
+            return False
+    if building_ids is not None:
+        building = getattr(cert, "building_id", None)
+        if building is None:
+            return str(getattr(cert, "cert_scope", "") or "").lower() == "vendor"
+        return building in building_ids
+    return True
+
+
+#: The answer for a certificate the caller cannot see. The same words for an unknown id and for
+#: another company's certificate, so the reply says nothing about another company's data.
+_RENEWAL_NOT_FOUND = {
+    "ok": False,
+    "reason": "not_found",
+    "error": "certificate not found (pass certificate_id or certificate_number)",
+}
+
+
 async def draft_renewal_email(
     session: AsyncSession,
     *,
     certificate_id: UUID | None = None,
     certificate_number: str | None = None,
+    organization_id: UUID | None = None,
+    building_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """
     Draft a renewal email for ONE selected certificate and queue it for PM approval.
@@ -3390,8 +3425,15 @@ async def draft_renewal_email(
     Building scope → a booking-request draft to the PM; Vendor scope → a renewal draft to the
     vendor contact. Returns `email_drafts` so the center chat renders it as a sendable card.
     Nothing is emailed until the PM sends it from the Approvals card (no WO created).
+
+    ``organization_id`` / ``building_ids`` are the caller's scope (the route passes them):
+    a certificate outside it answers exactly as an unknown one and nothing is written.
+    A renewal draft already pending for the same certificate is returned (``reused``)
+    instead of queuing a second one, and ``to_is_fallback`` says when no vendor contact was
+    found and the draft goes to the default PM address.
     """
     from ...config import settings
+    from ...models import ApprovalsQueueItem
     from .contractors import resolve_site_display
     from .notify_drafts import _mailto
 
@@ -3399,15 +3441,24 @@ async def draft_renewal_email(
     if certificate_id:
         cert = await session.get(ComplianceCertificate, certificate_id)
     if cert is None and certificate_number:
-        cert = (
-            await session.execute(
-                select(ComplianceCertificate)
-                .where(ComplianceCertificate.certificate_number == certificate_number)
-                .limit(1)
+        q = select(ComplianceCertificate).where(
+            ComplianceCertificate.certificate_number == certificate_number
+        )
+        # A certificate number is not unique across companies: look only in the caller's
+        # register, or the first match could be another company's (28 Oct 2026).
+        if organization_id is not None:
+            q = q.where(
+                (ComplianceCertificate.organization_id == organization_id)
+                | (ComplianceCertificate.org_id == organization_id)
             )
-        ).scalar_one_or_none()
-    if cert is None:
-        return {"ok": False, "error": "certificate not found (pass certificate_id or certificate_number)"}
+        if building_ids is not None:
+            vendor_only = ComplianceCertificate.building_id.is_(None) & (
+                func.lower(ComplianceCertificate.cert_scope) == "vendor"
+            )
+            q = q.where(ComplianceCertificate.building_id.in_(list(building_ids)) | vendor_only)
+        cert = (await session.execute(q.limit(1))).scalar_one_or_none()
+    if cert is None or not _renewal_cert_in_scope(cert, organization_id, building_ids):
+        return dict(_RENEWAL_NOT_FOUND)
 
     country = cert.country_code or "UK"
     pack = await get_pack_type(session, cert.certificate_type_code or cert.cert_type or "", country_code=country)
@@ -3432,6 +3483,8 @@ async def draft_renewal_email(
         if refused:
             return refused
 
+    # Only a vendor renewal has a contact to miss; a building booking goes to the PM by design.
+    to_is_fallback = False
     if cert.cert_scope == "Vendor":
         vendor_name, vendor_email = "Vendor", None
         if cert.vendor_id:
@@ -3453,6 +3506,7 @@ async def draft_renewal_email(
                 pass
         renewal_url = pack.verification_url if pack else None
         to = vendor_email or settings.default_pm_email
+        to_is_fallback = not vendor_email
         # Follow the lifecycle ladder: the "must not be assigned regulated work" block line is
         # only true once the accreditation has actually lapsed (past expiry). For a Current cert
         # this is an ADVANCE reminder — the vendor is not barred from work — and for an at-risk
@@ -3538,6 +3592,66 @@ async def draft_renewal_email(
         "mailto_uri": _mailto(to or settings.default_pm_email, subject, body),
     }
     approval_summary = f"Renewal email — {type_name} ({cert.certificate_number or '—'})"
+
+    # One pending renewal draft per certificate (28 Oct 2026: every click queued another item,
+    # so the Decision queue filled with copies and the same email could be sent twice). The
+    # transaction lock makes a double click wait for the first insert, then find it. It is
+    # released when this transaction commits or the session closes.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+        {"k": f"renewal-email:{cert.id}:{item_type}"},
+    )
+    existing = (
+        await session.execute(
+            select(ApprovalsQueueItem)
+            .where(
+                ApprovalsQueueItem.status == "pending",
+                ApprovalsQueueItem.item_type == item_type,
+                ApprovalsQueueItem.related_entity_type == "compliance_certificate",
+                ApprovalsQueueItem.related_entity_id == cert.id,
+                # Only an item this route queued: the nightly scan queues booking_request
+                # items for the same certificate too, and those are not renewal drafts.
+                ApprovalsQueueItem.payload["renewal"].astext == "true",
+                # A sent draft stays pending on the queue with email_sent set; handing it back
+                # would reopen old wording for a certificate whose state has moved on (28 Oct 2026).
+                func.coalesce(ApprovalsQueueItem.payload["email_sent"].astext, "false") != "true",
+            )
+            .order_by(ApprovalsQueueItem.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        # Nothing is written: no second item, no second audit row. The draft is the one
+        # queued, because that is what Approve & send on the queue item would send.
+        queued = dict(existing.email_draft or {}) or draft
+        payload = existing.payload or {}
+        if "to_is_fallback" in payload:
+            reused_fallback = bool(payload["to_is_fallback"])
+        else:  # queued before the flag was recorded
+            reused_fallback = (
+                cert.cert_scope == "Vendor" and queued.get("to") == settings.default_pm_email
+            )
+        summary = existing.summary or approval_summary
+        return {
+            "ok": True,
+            "certificate_id": str(cert.id),
+            "queue_item_id": str(existing.id),
+            "email_draft": queued,
+            "email_drafts": [{
+                **queued,
+                "queue_item_id": str(existing.id),
+                "certificate_id": str(cert.id),
+                "summary": summary,
+                "escalation": critical,
+            }],
+            "message": (
+                "Renewal email already drafted and queued — review and Send from the "
+                "Approvals card."
+            ),
+            "reused": True,
+            "to_is_fallback": reused_fallback,
+        }
+
     item = await enqueue_approval(
         session,
         source_feature="A",
@@ -3548,7 +3662,8 @@ async def draft_renewal_email(
         related_entity_type="compliance_certificate",
         related_entity_id=cert.id,
         email_draft=draft,
-        payload={"certificate_id": str(cert.id), "renewal": True, "no_work_order": True},
+        payload={"certificate_id": str(cert.id), "renewal": True, "no_work_order": True,
+                 "to_is_fallback": to_is_fallback},
     )
     await session.commit()
     chat_draft = {
@@ -3565,6 +3680,8 @@ async def draft_renewal_email(
         "email_draft": draft,
         "email_drafts": [chat_draft],
         "message": "Renewal email drafted and queued — review and Send from the Approvals card.",
+        "reused": False,
+        "to_is_fallback": to_is_fallback,
     }
 
 
