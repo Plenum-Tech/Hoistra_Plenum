@@ -57,10 +57,12 @@ export const complianceApi = {
       method: 'POST', body: body || {}, timeoutMs: T_WORK
     }),
 
-  // Drafts the renewal email and queues it on the approvals card (nothing is sent here).
+  // Drafts the renewal email and queues it on the approvals card (nothing is sent here). The
+  // viewed company goes with it (28 Oct 2026): the route now keeps to the caller's company, and a
+  // super admin viewing another company is that company only when the query says so.
   draftRenewalEmail: (certificateId) =>
     apiFetch(B, '/api/compliance/certificates/renewal-email', {
-      method: 'POST', body: { certificate_id: certificateId }, timeoutMs: T_DRAFT
+      method: 'POST', query: withOrg(), body: { certificate_id: certificateId }, timeoutMs: T_DRAFT
     }),
 
   // ── Coverage and the regulation pack ────────────────────────────────────

@@ -359,9 +359,14 @@ export const supportMethods = {
     this.supAskFromIndex(text);
   },
 
+  // At once, and again on the next frame for a composer the render is still mounting: an 80 ms
+  // wait lost whatever the reader typed first (27 Oct 2026, as ccOpenChat).
   supFocus() {
     if (typeof document === 'undefined') return;
-    setTimeout(() => { const el = document.getElementById('chat-composer'); if (el) el.focus(); }, 80);
+    const focus = () => { if (typeof document === 'undefined') return; const el = document.getElementById('chat-composer'); if (el && document.activeElement !== el) el.focus(); };
+    focus();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focus);
+    else setTimeout(focus, 0);
   },
 
   // Before a message is asked (ccAsk): the cases support answers itself. Returns true when the

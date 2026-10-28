@@ -211,6 +211,58 @@ async def record_answer(session_id: str, answer: str, *, tools: list | None = No
     chat_memories.learn_soon(session_id, question, answer)
 
 
+async def record_view(session_id: str, view: dict | None, cost: dict | None = None, *,
+                      answer: str | None = None) -> None:
+    """Adds the answer's OpenUI view (agents/answer_presenter.py) to the turn that `answer` answers,
+    so a reopened chat draws the answer as it was drawn live, and brings that turn's stored pipeline
+    cost up to date with the layout's model call (`cost`, sent or not).
+
+    The layout is made after the answer is final, so it arrives after record_answer, and the reader
+    may have asked again by then. The turn is the newest one holding this answer, not just the newest
+    one (28 Oct 2026: a follow-up answered during the layout took the earlier answer's view and cost).
+    Without `answer` it is the newest answered turn. Only a turn without a view of its own takes it,
+    and only within the view's byte budget."""
+    from ..agents.replay_guard import is_replay
+    if is_replay():
+        return
+    if not _ready or not session_id:
+        return
+    if not isinstance(view, dict) or len(json.dumps(view, default=str)) > OPENUI_MAX_BYTES:
+        view = None
+    if view is None and not isinstance(cost, dict):
+        return
+    if answer is None:
+        newest = f"""id = (SELECT id FROM {TURNS} WHERE thread_id = :tid ORDER BY turn_no DESC LIMIT 1)
+                   AND answer IS NOT NULL"""
+    else:
+        newest = f"""id = (SELECT id FROM {TURNS} WHERE thread_id = :tid AND answer = :answer
+                             ORDER BY turn_no DESC LIMIT 1)"""
+    pin = {} if answer is None else {"answer": answer}
+    try:
+        from ..database import _get_engine
+
+        async with _get_engine().begin() as conn:
+            if isinstance(cost, dict):
+                await conn.execute(text(f"""
+                    UPDATE {TURNS} SET tools = (
+                        SELECT jsonb_agg(CASE WHEN e->>'tool' = :panel
+                                               AND jsonb_typeof(e->'output'->'cost') = 'object'
+                                              THEN jsonb_set(e, '{{output,cost}}', CAST(:cost AS jsonb))
+                                              ELSE e END ORDER BY i)
+                          FROM jsonb_array_elements(tools) WITH ORDINALITY AS x(e, i))
+                     WHERE {newest} AND jsonb_typeof(tools) = 'array' AND tools <> '[]'::jsonb"""),
+                    {"panel": CARD_TOOLS[0], "cost": json.dumps(cost, default=str), "tid": session_id, **pin})
+            if view is not None:
+                await conn.execute(text(f"""
+                    UPDATE {TURNS} SET tools = COALESCE(tools, '[]'::jsonb) || CAST(:entry AS jsonb)
+                     WHERE {newest}
+                       AND NOT COALESCE(tools, '[]'::jsonb) @> CAST(:has AS jsonb)"""),
+                    {"entry": json.dumps([{"tool": OPENUI_TOOL, "output": view}], default=str),
+                     "has": json.dumps([{"tool": OPENUI_TOOL}]), "tid": session_id, **pin})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("chat_threads.record_view_failed", session_id=session_id, error=str(exc)[:300])
+
+
 async def working_set(session_id: str) -> dict | None:
     """The thread's working set, or None when there is none or the store is unavailable."""
     if not _ready or not session_id:
@@ -242,18 +294,29 @@ def record_answer_soon(session_id: str, answer: str, *, tools: list | None = Non
 # output is still dropped. Names stay strings, so a reader that wants names is unchanged.
 CARD_TOOLS = ("compliance_pipeline", "compliance_response")
 CARD_MAX_BYTES = 256_000
+OPENUI_TOOL = "openui_view"
+OPENUI_MAX_BYTES = 64_000
 
 
 def _card_payloads(tools: list | None) -> list[dict]:
     # The FIRST of each: the chat draws the first compliance_response / compliance_pipeline it
     # finds (complianceLive.extractComplianceAnswer), so the reopened chat shows the same one.
     first: dict[str, dict] = {}
+    view: dict | None = None
     for t in tools or []:
-        if isinstance(t, dict) and t.get("tool") in CARD_TOOLS and isinstance(t.get("output"), dict):
+        if not isinstance(t, dict) or not isinstance(t.get("output"), dict):
+            continue
+        if t.get("tool") in CARD_TOOLS:
             first.setdefault(t["tool"], t["output"])
+        elif t.get("tool") == OPENUI_TOOL and view is None:
+            view = t["output"]
     out = [{"tool": name, "output": first[name]} for name in CARD_TOOLS if name in first]
     if not out or len(json.dumps(out, default=str)) > CARD_MAX_BYTES:
-        return []
+        out = []
+    # The answer's OpenUI view (agents/openui_view.py) is kept on a budget of its own: a large
+    # view never pushes the cards out, and cards too big to keep never take the view with them.
+    if view is not None and len(json.dumps(view, default=str)) <= OPENUI_MAX_BYTES:
+        out.append({"tool": OPENUI_TOOL, "output": view})
     return out
 
 

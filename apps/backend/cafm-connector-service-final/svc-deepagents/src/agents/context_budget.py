@@ -282,7 +282,24 @@ def make_hook(*, agent: str, trim_max_tokens: int | None, budget: int | None = N
             out["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES), *new]
         return out
 
-    return hook
+    if agent != "orchestrator":
+        return hook
+
+    def hook_with_answer_format(state: dict[str, Any]) -> dict[str, Any]:
+        """The orchestrator's stored system prompt is the one its thread started with. A thread
+        begun before the OpenUI answer format (or after it was switched off) is given the current
+        rule in what is sent to the model; the stored history is left as it was."""
+        from .openui_view import with_answer_format
+        out = hook(state)
+        sent = out.get("llm_input_messages") or state.get("messages") or []
+        if not sent or not isinstance(sent[0], SystemMessage) or not isinstance(sent[0].content, str):
+            return out
+        content = with_answer_format(sent[0].content)
+        if content == sent[0].content:
+            return out
+        return {**out, "llm_input_messages": [SystemMessage(content=content), *sent[1:]]}
+
+    return hook_with_answer_format
 
 
 def _account(agent: str, events: list, shrunk: int, noticed: bool, working: int) -> None:

@@ -26,6 +26,8 @@
 FROM node:20-alpine AS frontend
 WORKDIR /app
 COPY apps/frontend/package.json apps/frontend/package-lock.json* ./
+# @openuidev/lang-core's postinstall reports each install to its vendor; off for every build.
+ENV OPENUI_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY apps/frontend/ ./
 # Relative paths, deliberately. The frontend and the API share an origin here, so

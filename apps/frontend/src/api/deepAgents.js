@@ -81,9 +81,11 @@ export const deepAgentsApi = {
   traceFeedback: (id, rating, comment) => apiFetch(B, '/api/traces/turns/' + encodeURIComponent(id) + '/feedback',
     { method: 'POST', body: { rating: rating || null, comment: comment || null }, query: orgOverride(), timeoutMs: 8000 }),
   // Replay a recorded turn with corrections applied at the steps they were raised on: a new,
-  // traced turn in the same thread. Slow by nature (engines run again), so a long wait.
+  // traced turn in the same thread. Slow by nature (engines run again), so a long wait: since
+  // 28 Oct 2026 the corrected answer is also laid out before it returns (up to 40 s more), and
+  // the gateway ends a response that has been silent for 300 s, so just under that.
   traceRerun: (turnId, body) => apiFetch(B, '/api/traces/turns/' + encodeURIComponent(turnId) + '/rerun',
-    { method: 'POST', body: body, query: orgOverride(), timeoutMs: 240000 }),
+    { method: 'POST', body: body, query: orgOverride(), timeoutMs: 290000 }),
   // A teaching from the chat's correction drawer: remembered as a company correction.
   addMemory: (body) => apiFetch(B, '/api/memories', { method: 'POST', body: body, query: orgOverride(), timeoutMs: 12000 }),
   // Skill lab (agents/skill_lab.py): instructions measured on replayed questions. Admin only.
@@ -250,11 +252,18 @@ export const deepAgentsApi = {
   //   agent_switch       { from_domain, to_domain }
   //   gate_interrupt     { payload, session_id }
   //   workflow_completed { answer, session_id, … }
+  //   answer_view        { session_id, view, cost }       the answer's layout, AFTER completion
   //   error              { error, session_id }
   //
   // This is the same orchestrator path as run-stateful — stream() calls the compliance
   // preflight too — so the structured answer arrives here as well, painted zone by zone
   // instead of all at the end. Returns a handle with close().
+  //
+  // 27 Oct 2026: the turn settles at workflow_completed (onDone), but the server may go on
+  // using the socket: a `reasoning` {label: 'Layout'} and one `answer_view` follow when it lays
+  // the answer out, and only then does it close. Events after onDone still reach onEvent, and
+  // onEnd reports the socket's close whenever it comes — onClose cannot, because it only ever
+  // means "closed before the turn settled".
   stream(sessionId, message, context, on) {
     const h = on || {};
     const base = new URL(B + '/api/workflow/ws/' + encodeURIComponent(sessionId), window.location.origin);
@@ -311,7 +320,10 @@ export const deepAgentsApi = {
     // A socket that never opens is the normal case when the service is down; the caller
     // falls back to the non-streaming POST rather than showing an error.
     ws.onerror = () => finish(new Error('stream unavailable'));
-    ws.onclose = () => finish(null);
+    ws.onclose = () => {
+      finish(null);
+      if (h.onEnd) h.onEnd();
+    };
 
     return {
       close: () => {

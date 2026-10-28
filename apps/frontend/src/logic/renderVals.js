@@ -142,6 +142,45 @@ export function buildingIdByName(rows, name) {
   return (hit && (hit.buildingId || hit.building_id)) || null;
 }
 
+// Whether a keydown is Enter meant as "send". The Enter that confirms an IME candidate (Japanese,
+// Chinese, Korean input) is not: React's onChange has already put the uncommitted pre-edit text in
+// the box, and sending on it asked the orchestrator a half-typed word and cleared the rest of the
+// sentence (27 Oct 2026). Chrome marks that keydown isComposing; Safari fires it after
+// compositionend with isComposing false, but keyCode 229 on both.
+export function isSendEnter(e) {
+  if (!e || e.key !== "Enter") return false;
+  if (e.isComposing || (e.nativeEvent && e.nativeEvent.isComposing)) return false;
+  return e.keyCode !== 229;
+}
+
+// Where the open email draft is drawn on the Hoistra chat page (28 Oct 2026). The dock draws the
+// one open draft at its top; the chat page had no email card at all, so a draft opened there from
+// an answer's button ("Draft renewal email") was made, queued on the Approvals card, and never
+// shown. ccRunOffer records which answer asked (`emAt`: its index in the transcript, with the kind
+// and certificate of the draft it opened), and the page draws the draft under that answer while
+// the open draft is still that one. A draft no answer opened, on the chat page with the dock
+// closed, goes at the end of the transcript rather than nowhere. The support email has its own
+// card (supportVals), and a draft the dock opened over the page stays the dock's.
+//   returns the transcript index to draw it under, -1 for the end, or null: not on the page.
+export function emChatPlace(s) {
+  if (!s || s.view !== "chat" || s.flow !== "email" || s.emKind === "support") return null;
+  const a = s.emAt;
+  const mine = !!a && a.kind === s.emKind && (a.cert || "") === (s.emCertId || "");
+  if (!mine && s.orchOpen) return null;
+  const n = (s.ccChat || []).length;
+  return mine && a.i >= 0 && a.i < n ? a.i : -1;
+}
+
+// The tone of a send's outcome line (em.send's flowDone): refused or unconfirmed is a risk, a dry
+// run or a handoff to the mail client went only part of the way, anything else went. It used to
+// be drawn with the green tick of a delivered email whatever it said (28 Oct 2026).
+export function emDoneTone(text) {
+  const t = String(text || "");
+  if (/^Not (sent|confirmed)/.test(t)) return "risk";
+  if (/NOT delivered|handoff mode/.test(t)) return "warn";
+  return "ok";
+}
+
 export const renderValsMethods = {
   // Live rows only. The seed list has names with no id behind them, and resolving one to a
   // fabricated key would file a document against a building that does not exist.
@@ -421,7 +460,7 @@ export const renderValsMethods = {
       // open the chat and leave the document sitting there unexplained, which reads as the
       // control having done nothing.
       onKey: (e) => {
-        if (e.key !== "Enter") return;
+        if (!isSendEnter(e)) return;
         const q = (s.query || "").trim() || ((s.ccFiles || []).length ? INGEST_ASK : "");
         if (!q) return;
         this.setState({ query: "" });
@@ -1511,7 +1550,7 @@ export const renderValsMethods = {
       pq: s.pq || "",
       pqSet: (e) => this.setState({ pq: e.target.value }),
       pqKey: (e) => {
-        if (e.key !== "Enter") return;
+        if (!isSendEnter(e)) return;
         const q = (s.pq || "").trim();
         if (!q) return;
         this.setState({ pq: "" });
@@ -2079,7 +2118,7 @@ export const renderValsMethods = {
       setOrchQuery: (e) => this.setState({ orchQuery: e.target.value }),
       // On the compliance console a follow-up is a real question to the orchestrator, so
       // the dock is a conversation. Elsewhere it stays the scripted task replay.
-      orchKey: (e) => { if (e.key === "Enter") this.orchSubmitNow(); },
+      orchKey: (e) => { if (isSendEnter(e)) this.orchSubmitNow(); },
       orchSubmit: () => this.orchSubmitNow(),
       orchPlaceholder: !chatView ? "" : supV.supOn ? supV.supPlaceholder : ((s.ccChat || []).length ? "Ask a follow-up…"
         : s.view === "cc" ? "Ask anything about compliance…"
@@ -2096,12 +2135,24 @@ export const renderValsMethods = {
         isYou: m.role === "you",
         isBot: m.role !== "you",
         text: m.text,
+        // The answer as the orchestrator drew it (OpenUI), and a note a later check added under it.
+        view: m.view && m.view.lang ? m.view.lang : null,
+        viewTail: m.view && m.view.tail ? m.view.tail : "",
+        // An answer watched as it was written replaces its draft in place; others enter.
+        enter: m.live ? "none" : "fadeUp 0.25s ease both",
         // A re-run keeps its original question; the correction it was re-run with sits beneath.
         // A reopened thread stores no correction text, only that it was a re-run.
         correction: m.role !== "you" || !m.correction ? ""
           : m.correction === "Re-run with your correction" ? m.correction : "Re-run with your correction: " + m.correction,
-        // Which engine answered, read off the tools behind the reply.
-        domain: m.error ? "Orchestrator" : (m.rich ? "Compliance" : domainOf(m.calls)),
+        // Which engine answered, read off the tools behind the reply. Cards are not the
+        // compliance engine's alone: every routed engine attaches the pipeline panel
+        // (compliance_pipeline), so a vendor SLA answer with cards read "Compliance" above a
+        // trace saying contract_performance (27 Oct 2026). Only a card payload with no tool
+        // names at all — a stream cut short, an old stored turn — is taken as Compliance.
+        domain: m.error ? "Orchestrator" : ((m.rich && !(m.calls || []).length) ? "Compliance" : domainOf(m.calls)),
+        // The answer is finished and the server is laying it out (ccStreamTurn): a quiet cue
+        // beside it until the layout lands, the socket closes, or the wait runs out.
+        layingOut: !!(m.mid && (s.ccLayout || {})[m.mid]),
         // Tool names behind a reply, de-duplicated, so the route is visible per message.
         tools: (m.calls || []).filter((t, j, a) => a.indexOf(t) === j).join(" · "),
         toolsShow: (m.calls || []).length ? "block" : "none",
@@ -2115,15 +2166,51 @@ export const renderValsMethods = {
           // Bars are derived here because the live register (days-to-expiry per
           // certificate) lives on the controller, not in the answer payload.
           overdue: overdueBars(m.rich.certificates, this.ccData()),
-          // Each offer becomes a real button. `kind` decides what it runs.
-          offers: (m.rich.offers || []).map((o) => {
-            const busy = !!(s.ccOfferBusy || {})[o.cert_id + ":" + o.kind];
-            return Object.assign({}, o, {
-              busy: busy,
-              label: busy ? "Working…" : o.label,
-              run: busy ? () => {} : () => this.ccRunOffer(o)
+          // Each offer becomes a real button (ComplianceAnswer's OfferButton). `kind` decides what
+          // it runs; the answer's index goes with it, so a draft it opens on the chat page is drawn
+          // under this answer (emChatPlace). 28 Oct 2026: four "Draft renewal email" buttons read
+          // the same, so each also says which certificate it is for — the register's name, then
+          // its holder where two in this answer share a name, then its number or expiry where
+          // they still do. Its label is its own throughout ("Working…" is the busy state now).
+          // "Log as outstanding" has no route to run, so it is not offered as a dead button.
+          offers: (() => {
+            const certs = ((this.ccData() || {}).certs) || [];
+            const list = (m.rich.offers || []).filter((o) => o && o.kind !== "log_outstanding");
+            const facts = list.map((o) => {
+              const c = o.cert_id ? certs.find((x) => x.id === o.cert_id) : null;
+              return { name: (c && c.nm) || o.cert_name || o.certificate_type_code || "", holder: (c && c.holder) || o.owner || "", extra: (c && (c.number || c.exp)) || "" };
             });
-          })
+            const clash = (j, key) => facts.some((g, k) => k !== j && list[k].label === list[j].label && key(g) === key(facts[j]));
+            return list.map((o, j) => {
+              const f = facts[j];
+              let forName = f.name;
+              if (forName && f.holder && clash(j, (g) => g.name)) forName += " · " + f.holder;
+              if (forName && f.extra && clash(j, (g) => g.name + "|" + g.holder)) forName += " · " + f.extra;
+              const key = o.cert_id + ":" + o.kind;
+              const busy = !!(s.ccOfferBusy || {})[key];
+              const open = o.kind === "renewal_email" && s.flow === "email" && s.emKind === "renewal" && !!o.cert_id && s.emCertId === o.cert_id;
+              const done = !!(s.ccOfferDrafts || {})[key] || !!(s.ccOfferDone || {})[key];
+              const failed = !!(s.ccOfferFailed || {})[key];
+              const state = busy ? "busy" : open ? "open" : failed ? "error" : done ? "done" : "";
+              const who = [f.name, f.holder].filter(Boolean).join(", ");
+              // Where its open draft is: under the answer on the chat page, at the top of the dock.
+              const where = s.view === "chat" && emChatPlace(s) !== null ? "below" : "above";
+              // A few words beside the label while it runs, while its draft is open, and after a
+              // failure (28 Oct 2026: "more clickable, interactive"). The label itself never changes.
+              const status = state === "busy" ? (o.kind === "renewal_email" ? "Drafting…" : o.kind === "verify_now" ? "Checking…" : o.kind === "confirm_draft" ? "Confirming…" : "Working…")
+                : state === "open" ? "Open " + where
+                : state === "error" ? "Failed — press to retry" : "";
+              return Object.assign({}, o, {
+                busy: busy, state: state, forName: forName, status: status,
+                aria: o.label + (who ? " — " + who : "") + (open ? " (draft open " + where + ")"
+                  : state === "busy" ? " (" + status.toLowerCase() + ")"
+                  : state === "error" ? " (failed — press to retry)"
+                  : state === "done" ? (o.kind === "renewal_email" ? " (drafted — opens it again)" : o.kind === "confirm_draft" ? " (confirmed)" : " (checked)") : ""),
+                // A confirmed draft is off the draft list; confirming it again has nothing to do.
+                run: busy || (done && o.kind === "confirm_draft") ? undefined : () => this.ccRunOffer(o, { at: i })
+              });
+            });
+          })()
         }) : null,
         ms: m.ms,
         // Expanded by default — the route is the point of showing it. Collapses per
@@ -2137,7 +2224,13 @@ export const renderValsMethods = {
         bubbleShow: s.ccEditIdx === i ? "none" : "block",
         fileNames: (m.files || []).join(" · "),
         filesShow: (m.files || []).length ? "block" : "none",
-        stoppedShow: m.stopped ? "block" : "none",
+        // A turn cut short says so under what it shows. Stopped with nothing written is the old
+        // "Stopped."; stopped or dropped mid-answer keeps the words that had arrived, and says
+        // they are not the whole answer (27 Oct 2026).
+        stoppedShow: m.stopped || m.incomplete ? "block" : "none",
+        stopNote: m.stopped
+          ? (m.incomplete ? "Stopped before the answer was finished — the text above is what had arrived." : "Stopped.")
+          : m.incomplete ? "The connection closed before the answer was finished — the text above is what had arrived." : "",
         // A reply whose attachment started a migration reopens that run in the card below.
         // The newest opened on arrival; this is how an EARLIER turn's run is picked back up.
         migIds: (m.migrations || []).map((id) => ({ id: id, short: String(id).slice(0, 8), open: () => this.mgOpen(id) })),
@@ -2175,7 +2268,7 @@ export const renderValsMethods = {
         whyShow: s.crWhy && s.crWhy.turnId === m.turnId ? "flex" : "none",
         whyText: s.crWhy && s.crWhy.turnId === m.turnId ? s.crWhy.text : "",
         whySet: (e) => this.crWhySet(e.target.value),
-        whyKey: (e) => { if (e.key === "Enter") { e.preventDefault(); this.crWhySend(); } if (e.key === "Escape") this.crWhySkip(); },
+        whyKey: (e) => { if (isSendEnter(e)) { e.preventDefault(); this.crWhySend(); } if (e.key === "Escape") this.crWhySkip(); },
         whySend: () => this.crWhySend(),
         whySkip: () => this.crWhySkip(),
         suggest: () => { this.setState({ ccTraceIdx: i }); this.crLoadRun(m.turnId); this.crOpen(m.turnId, null, "suggestion"); }
@@ -2183,13 +2276,18 @@ export const renderValsMethods = {
       ccEditText: s.ccEditText,
       ccEditSet: (e) => this.ccEditSet(e.target.value),
       ccEditKey: (e) => {
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.ccEditRun(); }
+        if (isSendEnter(e) && !e.shiftKey) { e.preventDefault(); this.ccEditRun(); }
         if (e.key === "Escape") this.ccEditCancel();
       },
       ccEditCancel: () => this.ccEditCancel(),
       ccEditRun: () => this.ccEditRun(),
 
       orchBusy: !!s.ccBusy,
+      // What an OpenUI answer's buttons do here (openui/host.js). One object for the life of the
+      // controller, so the answers below it never re-render because of it.
+      // email(draft) opens a model-written email in the email card to edit and Approve & send
+      // (emailHistory.js emOpenDraft, 28 Oct 2026); the card is drawn by the dock or the chat page.
+      openuiHost: this._openuiHost || (this._openuiHost = { ask: (q) => this.askScoped(q), open: (t) => this.openuiOpen(t), email: (d) => this.emOpenDraft(d) }),
       orchChatHasAny: (s.ccChat || []).length > 0,
       orchChatReset: () => this.ccChatReset(),
 
@@ -2471,7 +2569,17 @@ export const renderValsMethods = {
       },
 
       fBooking: s.flow === "booking", fPick: s.flow === "pick", fNew: s.flow === "new",
-      fEmail: s.flow === "email", fDone: !!s.flowDone, fDoneText: s.flowDone,
+      // The dock's email card, unless the chat page draws this draft under its answer (it is the
+      // same draft; one card for it is enough when the dock is open over the page).
+      fEmail: s.flow === "email" && !(s.view === "chat" && emChatPlace(s) !== null), fDone: !!s.flowDone, fDoneText: s.flowDone,
+      fDoneTone: emDoneTone(s.flowDone),
+      // The chat page's email card (screens/Chat.jsx): the transcript index it goes under, -1 for
+      // the end, null for none. Then, once it has closed, what its send did, in the same place —
+      // only while that outcome is still the last thing a flow reported.
+      emChatAt: emChatPlace(s),
+      emChatReceipt: s.view === "chat" && !s.flow && s.emReceipt && s.flowDone && s.flowDone === s.emReceipt.text
+        ? { at: s.emReceipt.at >= 0 && s.emReceipt.at < (s.ccChat || []).length ? s.emReceipt.at : -1, text: s.flowDone, tone: emDoneTone(s.flowDone) }
+        : null,
       // Cancel on a draft opened from an investigation goes back to that investigation; anywhere
       // else it closes the card. Either way nothing stays armed for the next email.
       // A draft that is sending is not cancelled from under itself — the send decides where the
@@ -2481,7 +2589,7 @@ export const renderValsMethods = {
         : Object.assign(p.emFromInv && p.inv && p.flow === "email"
           ? { flow: "investigate", flowDone: "", emFromInv: false }
           : { flow: null, flowDone: "", emFromInv: false },
-          { emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false }))),
+          { emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false, emAt: null, emReceipt: null }))),
       fNewVendor: () => this.setState({ flow: "new" }),
 
       bk: {
@@ -2542,6 +2650,16 @@ export const renderValsMethods = {
 
       em: {
         kicker: s.emKicker, to: s.emTo, subject: s.emSubject, body: s.emBody,
+        // Sent against an Approvals card item (a queued renewal, a Decision-queue card): the card
+        // says so, as the send records itself on that item.
+        queued: !!s.emQueueItemId,
+        // A renewal the service addressed to the default PM address because it found no vendor
+        // contact (to_is_fallback, 28 Oct 2026): the card says so above the To line. Only for the
+        // certificate whose draft came back that way, so it never carries onto another email.
+        toFallback: s.flow === "email" && s.emKind === "renewal" && !!s.emToFallback && s.emToFallback === s.emCertId,
+        // A Cc line, for a model-written draft only: emCc is never carried onto a vendor email.
+        canCc: s.emKind === "draft", cc: s.emCc || "",
+        setCc: (e) => this.setState({ emCc: e.target.value }),
         // Already sent: the note, and the switch between the reminder and a fresh request.
         prevShow: s.flow === "email" && s.emPrev && s.emPrev.count ? "block" : "none",
         prevNote: historyNote(s.emPrev),
@@ -2599,7 +2717,8 @@ export const renderValsMethods = {
               queueItemId ? { queue_item_id: queueItemId } : {},
               // A support email copies the asker, so Plenum's reply reaches them. Only a support
               // draft: emCc is never carried onto a vendor or contractor email.
-              kind === "support" && s.emCc ? { cc: s.emCc } : {}));
+              // A model-written draft (emOpenDraft) carries the Cc its answer showed, editable in the card.
+              (kind === "support" || kind === "draft") && s.emCc ? { cc: s.emCc } : {}));
           } catch (e) {
             err = e;
           }
@@ -2676,8 +2795,24 @@ export const renderValsMethods = {
           // as it was before the send: a dock closed while the mail was going stays closed.
           this.setState((prev) => {
             const backToInv = !keepDraft && !!prev.inv && !!prev.orchOpen && (kind === "investigate" || !!prev.emFromInv);
+            // A draft drawn on the chat page leaves what its send did where it was (emChatReceipt),
+            // as the card closes (28 Oct 2026).
+            const pagePlace = keepDraft || backToInv ? null : emChatPlace(prev);
+            const doneText = backToInv ? "" : (outcome || requestSent || (
+              spec0 && spec0.done && spec0.k === kind ? spec0.done(s.fiVals, s.fLabel, s.fSubject)
+              : kind === "renewal" ? "Renewal email sent to " + to + "."
+              : kind === "quote" ? "Quote request sent to " + to + ". The reply is watched and a scorecard opens on award."
+              : kind === "booking" ? "Booking instruction sent to " + to + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
+              : "Extension request sent to " + to + ". The obligation is marked as contested pending their reply."));
+            // A sent renewal is no longer a draft to reopen (28 Oct 2026): the next press of its
+            // offer asks the service again instead of the remembered draft and its old queue item.
+            const sentKey = !keepDraft && kind === "renewal" && prev.emCertId ? prev.emCertId + ":renewal_email" : "";
             return {
             emSending: false,
+            ccOfferDrafts: sentKey && (prev.ccOfferDrafts || {})[sentKey]
+              ? Object.fromEntries(Object.entries(prev.ccOfferDrafts).filter(([k]) => k !== sentKey))
+              : prev.ccOfferDrafts,
+            emReceipt: pagePlace === null ? (keepDraft ? prev.emReceipt : null) : { at: pagePlace, text: doneText },
             emFromInv: keepDraft ? prev.emFromInv : false,
             // A draft still on screen keeps its item, so its retry is recorded against it too.
             emQueueItemId: keepDraft ? prev.emQueueItemId : null,
@@ -2704,12 +2839,7 @@ export const renderValsMethods = {
                   }])
                 })
               : prev.inv,
-            flowDone: backToInv ? "" : (outcome || requestSent || (
-              spec0 && spec0.done && spec0.k === kind ? spec0.done(s.fiVals, s.fLabel, s.fSubject)
-              : kind === "renewal" ? "Renewal email sent to " + to + "."
-              : kind === "quote" ? "Quote request sent to " + to + ". The reply is watched and a scorecard opens on award."
-              : kind === "booking" ? "Booking instruction sent to " + to + ". Work order raised for " + s.bkDate + " and the certificate is expected on completion."
-              : "Extension request sent to " + to + ". The obligation is marked as contested pending their reply."))
+            flowDone: doneText
             };
           });
         }
@@ -2930,7 +3060,7 @@ export const renderValsMethods = {
             })),
             ask: s.spaceAsk || "",
             setAsk: (ev) => this.setState({ spaceAsk: ev.target.value }),
-            askKey: (ev) => { if (ev.key === "Enter") this.spaceAskRun(); },
+            askKey: (ev) => { if (isSendEnter(ev)) this.spaceAskRun(); },
             askRun: () => this.spaceAskRun(),
             askPh: "Describe what you need help with — it opens a new support request",
             groups: dayGroups(sg),
@@ -2971,7 +3101,7 @@ export const renderValsMethods = {
           busy: !!s.spBusy,
           ask: s.spaceAsk || "",
           setAsk: (ev) => this.setState({ spaceAsk: ev.target.value }),
-          askKey: (ev) => { if (ev.key === "Enter") this.spaceAskRun(); },
+          askKey: (ev) => { if (isSendEnter(ev)) this.spaceAskRun(); },
           askRun: () => this.spaceAskRun(),
           askPh: e.custom ? "Ask something to file in " + e.name + "…" : "Ask about " + e.name.toLowerCase() + " — the answer is filed here",
           groups: dayGroups(groups),

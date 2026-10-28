@@ -704,8 +704,12 @@ def _money(v: Any) -> str:
 
 
 def _lead(answer: str) -> str:
-    """The answer's first paragraph as plain text, for the Overall card."""
+    """The answer's first paragraph of prose as plain text, for the Overall card. A table or a
+    heading is not prose: read as one, a table's cells ran together as the card's narrative
+    (27 Oct 2026)."""
     for para in re.split(r"\n\s*\n", answer or ""):
+        if re.match(r"\s*(\||#)", para):
+            continue
         t = re.sub(r"[*_`#>|]", "", para).strip()
         if t and not t.startswith("-") and len(t) > 20:
             return t[:600]
@@ -921,7 +925,8 @@ def _cards_condition(o: dict[str, Any], qid: str, kpis: list, groups: list, acti
     kpis.append(_kpi(sm.get("threat", 0), "Threat", "over reference and a persistent anomaly", "critical" if sm.get("threat") else "ok", unit="assets"))
     kpis.append(_kpi(sm.get("watch", 0), "Watch", f"{sm.get('watch_shares_section', 0)} shared section · {sm.get('watch_persistent_anomaly', 0)} persistent anomaly",
                      "warning" if sm.get("watch") else "ok", unit="assets"))
-    kpis.append(_kpi(sm.get("in_control", 0), "In control", f"{sm.get('in_control_anomaly_under_threshold', 0)} with an anomaly under threshold", "ok", unit="assets"))
+    kpis.append(_kpi(sm.get("in_control", 0), "In control", f"{sm.get('in_control_anomaly_under_threshold', 0)} with an anomaly under threshold",
+                     "ok" if sm.get("in_control") else "info", unit="assets"))
     kpis.append(_kpi(sm.get("assets", 0), "Assets banded", f"{sm.get('section_not_measured', 0)} on one signal (no sub-meter)" if sm.get("section_not_measured") else "every section measured", "info", unit="assets"))
     over = [x for x in (o.get("sections") or []) if isinstance(x, dict) and x.get("over_reference")]
     if over:

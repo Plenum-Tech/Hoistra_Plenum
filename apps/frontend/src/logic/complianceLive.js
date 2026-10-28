@@ -19,7 +19,11 @@ import { deepAgentsApi, newTurn } from '../api/deepAgents.js';
 import { errorFromAnswer } from './chat.js';
 import { isStaleScope } from '../api/client.js';
 import { scrubInternal } from './publicText.js';
+import { splitProgram, plainTextOf } from '../openui/detect.js';
 import { withoutCellDuplicates } from './complianceCell.js';
+import { createFramePainter } from './framePainter.js';
+import { callNames, extractOpenUIView, viewFromEvent } from './openuiView.js';
+import { preloadOpenUI } from '../openui/host.js';
 
 // The backend spells the Emirates "UAE"; the shell spells it "AE" (PACKS, CC_OF).
 const COUNTRY = {
@@ -632,7 +636,17 @@ export function stepCostLabel(step) {
 // Days-overdue bars for the answer panel, split by scope. The analysis names its
 // certificates by id, and the live register already knows each one's days-to-expiry, so
 // the two are joined on id rather than re-deriving dates. `reason` carries "… , N days"
-// as a fallback for a certificate the register does not hold.
+// as a fallback for a certificate the register does not hold, and only for one whose status
+// says it is past its date: "1 day left" on an expiring certificate is not a day overdue
+// (27 Oct 2026, a certificate expiring tomorrow was drawn as "1 day" overdue).
+//
+// One bar is one certificate, so its label says which: owner and certificate. Labelled by owner
+// alone, a building's FRA and EICR were two identical "Building — Bishopsgate Tower" bars that
+// read as a duplicate (27 Oct 2026); the scope prefix went with it, since the chart's title
+// already says buildings or vendors. Only the eight longest overdue per scope are drawn, and
+// `more` says how many were left out, so a cut is never silent.
+const PAST_DUE = /lapsed|expired|overdue/i;
+const BAR_ROWS = 8;
 export function overdueBars(certificates, register) {
   const byId = {};
   ((register && register.certs) || []).forEach((c) => { if (c.id) byId[c.id] = c; });
@@ -643,17 +657,51 @@ export function overdueBars(certificates, register) {
   const rows = { building: [], vendor: [] };
   (certificates || []).forEach((c) => {
     const live = byId[c.id];
-    const days = live && isFinite(live.days) ? Math.max(0, -live.days) : parse(c.reason);
+    const days = live && isFinite(live.days) ? Math.max(0, -live.days)
+      : PAST_DUE.test(String(c.status || "")) ? parse(c.reason) : null;
     if (!days) return;
     const scope = String(c.scope || "").toLowerCase() === "vendor" ? "vendor" : "building";
-    rows[scope].push({ label: (scope === "vendor" ? "Vendor — " : "Building — ") + (c.company || c.name), days: days, severity: c.severity });
+    const label = [c.company, c.name].map((v) => String(v || "").trim()).filter(Boolean).join(" · ");
+    rows[scope].push({ label: label, days: days, severity: c.severity });
   });
-  const top = (list) => list.sort((a, b) => b.days - a.days).slice(0, 8);
+  const top = (list) => list.sort((a, b) => b.days - a.days).slice(0, BAR_ROWS);
   const scale = (list) => {
     const max = list.reduce((m, r) => Math.max(m, r.days), 0) || 1;
     return list.map((r) => Object.assign({}, r, { pct: Math.max(1, Math.round((r.days / max) * 100)) + "%" }));
   };
-  return { buildings: scale(top(rows.building)), vendors: scale(top(rows.vendor)) };
+  return {
+    buildings: scale(top(rows.building)),
+    vendors: scale(top(rows.vendor)),
+    more: { buildings: Math.max(0, rows.building.length - BAR_ROWS), vendors: Math.max(0, rows.vendor.length - BAR_ROWS) }
+  };
+}
+
+// How long a finished answer waits on its socket for the server's layout (ccStreamTurn). The
+// server's own layout call gives up at 40 s (answer_presenter.TIMEOUT_S); past this the socket is
+// let go and the answer stays as it is drawn.
+export const LAYOUT_WAIT_MS = 60000;
+
+// An id for one chat message, stable for its life and kept on the session record with it.
+export function newMessageId() {
+  const c = typeof globalThis !== "undefined" ? globalThis.crypto : null;
+  if (c && typeof c.randomUUID === "function") return "m-" + c.randomUUID();
+  return "m-" + Date.now().toString(36) + "-" + Math.random().toString(16).slice(2, 10);
+}
+
+// One answer with its layout applied: the view the server drew it with ({ lang, tail }, the shape
+// extractOpenUIView gives), and the turn's cost brought up to date on its pipeline panel — the
+// cost card (costSummary(rich.cost)) then counts the layout's own model call. The words are never
+// touched, and a view the answer already carried (a general-loop answer that wrote its own) is
+// the author's and is kept. Returns the message itself when there is nothing to change.
+export function withAnswerView(m, view, cost) {
+  if (!m) return m;
+  const addView = !!view && !m.view;
+  const addCost = !!cost && !!m.rich;
+  if (!addView && !addCost) return m;
+  const out = Object.assign({}, m);
+  if (addView) out.view = view;
+  if (addCost) out.rich = Object.assign({}, m.rich, { cost: cost });
+  return out;
 }
 
 // Pages that answer in the side dock rather than on the chat page. Home is one of them: the
@@ -1269,6 +1317,9 @@ export const complianceLiveMethods = {
     // request for a person opens the email to Plenum, and a message after a request was
     // resolved starts a new request. Before the context is read — it may be a support one now.
     if (typeof this.supIntercept === "function" && this.supIntercept(q)) return;
+    // The answer may come back as OpenUI: fetch its renderer now, while the question is
+    // answered, so nothing waits on it when the first words stream in.
+    preloadOpenUI().catch(() => {});
     const context = this.chatContext();
 
     if (this.dockAnswers()) {
@@ -1448,7 +1499,11 @@ export const complianceLiveMethods = {
 
       // Structured payload when the compliance preflight answered; null otherwise,
       // in which case the reply falls back to rendering the markdown answer.
-      const rich = extractComplianceAnswer(calls) || (r && r._partial ? {
+      // A turn cut short (_partial) has cards only when its zones or steps had streamed: an
+      // engine's draft alone is Markdown, and an empty card panel built round it was badged
+      // Compliance and hid the draft behind "returned an empty answer" (27 Oct 2026).
+      const partialCards = !!(r && r._partial && (Object.keys(r._partial.zones || {}).length || (r._partial.steps || []).length));
+      const rich = extractComplianceAnswer(calls) || (partialCards ? {
         narrative: r._partial.zones.narrative || "",
         sections: r._partial.zones.sections || [], groups: r._partial.zones.groups || [],
         kpis: r._partial.zones.kpis || [], actions: r._partial.zones.actions || [],
@@ -1460,14 +1515,31 @@ export const complianceLiveMethods = {
         ccBusy: false,
         ccChat: (p.ccChat || []).concat([{
           role: "bot",
-          text: answer || "The orchestrator returned an empty answer.",
+          // This message's own id, for as long as it exists: the answer's layout arrives after
+          // it (ccStreamTurn) and is applied by this id, in whichever session it sits by then.
+          mid: (r && r._mid) || newMessageId(),
+          // No words but cards: the cards are the answer, and a placeholder sentence would be
+          // drawn above them as if it were one. A socket that closed before anything arrived
+          // says so; "returned an empty answer" is only for an answer that really was empty.
+          text: answer || (richHasCards(rich) ? ""
+            : r && r._partial ? "The connection closed before the orchestrator answered."
+            : "The orchestrator returned an empty answer."),
+          // Cut short before the completion (ccStreamTurn): Stop, or a dropped socket, after the
+          // answer had started to arrive. What arrived is the answer, said to be unfinished.
+          ...(r && r.stopped ? { stopped: true } : {}),
+          ...(r && r.incomplete ? { incomplete: true } : {}),
           // Runs this turn's attachments started. The bubble still names them — an older
           // turn's run is reopened from it — and the newest opens in the card below.
           migrations: startedRuns,
           // Option cards the reply offers ("I want to migrate my data" -> three ways in).
           choices: (r && Array.isArray(r.choices)) ? r.choices : [],
           // Named tools behind this reply, so the route is visible per message.
-          calls: calls.map((t) => t.tool).filter(Boolean),
+          calls: callNames(calls),
+          // The answer as the orchestrator drew it (OpenUI), beside its Markdown `text`.
+          view: extractOpenUIView(calls),
+          // Watched as it was written: the finished answer takes the draft's place without
+          // entering again.
+          live: !!(r && r._streamed),
           interrupted: !!(r && r.interrupted),
           // A cell's own next steps replace the reply's buttons for the same certificate.
           rich: next ? withoutCellDuplicates(rich, next.choices, next.code) : rich,
@@ -1542,11 +1614,34 @@ export const complianceLiveMethods = {
   // caller does not care which transport was used. Partial state is written into the
   // live placeholder message as events arrive; if the socket cannot open at all, this
   // falls back to the plain POST so a failed upgrade never costs the answer.
+  //
+  // AFTER THE ANSWER, ITS LAYOUT (27 Oct 2026). The turn resolves at workflow_completed, as it
+  // always did: the answer shows and the composer unlocks. The socket is no longer closed there.
+  // When the server lays the answer out (agents/answer_presenter.py) it sends a `reasoning`
+  // {label: 'Layout'} and then one `answer_view` {view, cost} on the same socket, and closes it.
+  // The answer used to wait up to 40 s for that layout, and a Stop in the wait threw the finished
+  // answer away. Now the wait is after it: a quiet "Laying out…" cue on the finished message
+  // (state.ccLayout, by the message's id — never stored on the record, so a reload never shows a
+  // cue nothing will clear), and the view and cost are applied to THAT message by its id
+  // (ccApplyAnswerView), wherever the reader has gone since. The cue goes on answer_view, on the
+  // socket's close, on an error, on a Stop, or after LAYOUT_WAIT_MS.
+  //
+  // CUT SHORT BEFORE THE ANSWER. A Stop, or a socket that closes, after the answer had begun to
+  // stream keeps what arrived as the answer, marked stopped/incomplete, with the tools seen so far
+  // (they name the engine). It used to read "Stopped before the orchestrator answered." or "The
+  // orchestrator returned an empty answer." under a draft the reader had just watched being
+  // written. With nothing written yet, a Stop is still "Stopped before the orchestrator answered."
   ccStreamTurn(q, context, ctrl) {
     return new Promise((resolve, reject) => {
       const sid = this.state.sessionId;
+      // The finished message's id, chosen now so the layout that follows the completion can find
+      // the message it belongs to (ccAsk stamps it as `mid`).
+      const mid = newMessageId();
       let opened = false;
       let done = false;
+      // After the completion: true while the socket is kept for the layout, false once it is let go.
+      let layoutOpen = false;
+      let layoutTimer = null;
       // `answer` is the draft: the engine's words as it writes them (answer_delta events),
       // shown where the narrative goes until a zone or the completion replaces it. Compliance
       // never sends deltas — its analyst's zones stream instead — so for it this stays empty.
@@ -1558,6 +1653,51 @@ export const complianceLiveMethods = {
       // tool_completed / agent_switch were dropped, which left nothing to render but the
       // latest line. Each entry keeps its own clock so a slow stage is visible as a slow one.
       const push = (e) => { partial.trace.push(Object.assign({ at: Date.now() - t0 }, e)); };
+      // The tools a turn cut short had run, as the completion would have listed them: the label
+      // and the space are read off these (domainOf), so a stopped energy draft is still Energy.
+      // A tool's name does not always say its engine (get_building_cost_drivers is energy's), so
+      // the engine its events named is added the way the completion adds it, as the
+      // phase2_engine wrapper domainOf trusts first.
+      const toolsSeen = () => {
+        const tools = partial.trace.filter((e) => e.kind === "tool" && e.tool);
+        const names = tools.map((e) => e.tool);
+        const engine = tools.map((e) => e.domain).filter((x) => x && x !== "orchestrator" && x !== "meta").pop();
+        if (engine) names.push("phase2_engine:" + engine);
+        return names.filter((t, i, a) => a.indexOf(t) === i).map((t) => ({ tool: t }));
+      };
+      // A turn cut short with words on screen: those words are its answer, said to be unfinished.
+      // A general-loop draft is its OpenUI program: kept as the view it was being drawn as, with
+      // its words (not its code) as the text that is shown without the view and saved (28 Oct 2026:
+      // a Stop mid-program showed and saved "root = Answer([h, k]) …").
+      const keepDraft = (extra) => {
+        const { lead, program } = splitProgram(partial.answer);
+        const drawn = program ? {
+          answer: [lead, plainTextOf(program)].filter(Boolean).join('\n\n'),
+          tool_calls: toolsSeen().concat([{ tool: 'openui_view', input: {}, output: { v: 1, lang: program } }])
+        } : {};
+        resolve(Object.assign({
+          session_id: sid, answer: partial.answer, tool_calls: toolsSeen(), success: true, incomplete: true,
+          _trace: partial.trace.slice(), _streamed: true, _mid: mid
+        }, drawn, extra || {}));
+      };
+
+      // The layout wait is over, however it ended: the cue goes and the socket is let go. Safe to
+      // call more than once, and a no-op unless the completion kept the socket.
+      const endLayout = () => {
+        if (!layoutOpen) return;
+        layoutOpen = false;
+        clearTimeout(layoutTimer);
+        if (this._ccLayouts) this._ccLayouts.delete(mid);
+        this.ccLayoutCue(mid, false);
+        handle.close();
+      };
+      // What arrives after the completion. Only the layout is read: nothing after the answer may
+      // paint a live turn back, or touch the answer's words.
+      const afterDone = (d) => {
+        if (!layoutOpen) return;
+        if (d.type === "reasoning" && d.label === "Layout") { this.ccLayoutCue(mid, true); return; }
+        if (d.type === "answer_view") { this.ccApplyAnswerView(sid, mid, d); endLayout(); }
+      };
 
       // Everything the stream has produced so far, in the shape ComplianceAnswer reads.
       const paint = () => {
@@ -1578,15 +1718,19 @@ export const complianceLiveMethods = {
           }
         });
       };
+      // The answer's words arrive a few characters at a time; they paint once a frame
+      // (logic/framePainter.js), not once a delta. Steps, tools and zones still paint at once.
+      const painter = createFramePainter(paint);
 
       const handle = deepAgentsApi.stream(sid, q, context, {
         onOpen: () => { opened = true; },
         onEvent: (d) => {
+          if (done) { afterDone(d); return; }
           // The answer arriving as it is written — energy, maintenance, vendors and the
           // general loop send these; compliance streams zones instead. Appended, painted,
           // not traced: a trace entry per token would bury the run rail under the prose.
           if (d.type === "answer_delta") {
-            if (typeof d.text === "string" && d.text) { partial.answer += d.text; paint(); }
+            if (typeof d.text === "string" && d.text) { partial.answer += d.text; painter.request(); }
             return;
           }
           if (d.type === "compliance_step" && d.step) {
@@ -1626,15 +1770,30 @@ export const complianceLiveMethods = {
         },
         onDone: (d) => {
           done = true;
-          handle.close();
+          painter.cancel();
           this.setState({ ccStream: null });
+          // The completion keeps the socket: the answer's layout may follow on it (see above).
+          // The server closes it when it has nothing more to send, which ends the wait at once
+          // for an answer it does not lay out. A gate stops the run; nothing follows it.
+          if (d && d.type === "workflow_completed") {
+            layoutOpen = true;
+            (this._ccLayouts || (this._ccLayouts = new Map())).set(mid, endLayout);
+            layoutTimer = setTimeout(endLayout, this._ccLayoutWaitMs || LAYOUT_WAIT_MS);
+          } else {
+            handle.close();
+          }
           // Carry the trace out with the answer so the finished turn keeps its own run
           // record — the rail can then replay any past turn, not just the live one.
-          resolve(Object.assign({}, d, { _trace: partial.trace.slice() }));
+          // _streamed: the reader watched this answer being written, so it replaces the draft
+          // in place rather than entering again.
+          resolve(Object.assign({}, d, { _trace: partial.trace.slice(), _streamed: partial.answer.length > 0, _mid: mid }));
         },
         onError: (e) => {
-          if (done) return;
+          // After the completion an error can only be the layout's: it ends the wait, and the
+          // answer stands.
+          if (done) { endLayout(); return; }
           done = true;
+          painter.cancel();
           this.setState({ ccStream: null });
           // Never opened → the upgrade was refused somewhere in the chain. Take the
           // non-streaming path rather than failing the question.
@@ -1647,23 +1806,36 @@ export const complianceLiveMethods = {
         onClose: () => {
           if (done) return;
           done = true;
+          painter.cancel();
           this.setState({ ccStream: null });
           if (!opened) {
             deepAgentsApi.runStateful(q, sid, context, ctrl && ctrl.signal).then(resolve, reject);
             return;
           }
-          // Closed after opening but before completing — treat what arrived as the answer.
-          resolve({ session_id: sid, answer: "", tool_calls: [], success: true, _partial: partial, _trace: partial.trace.slice() });
-        }
+          // Closed after opening but before completing — treat what arrived as the answer: the
+          // draft the reader watched, or the zones that streamed (ccAsk draws those as cards).
+          // Either way it is marked unfinished; with nothing at all, ccAsk says the connection
+          // closed. Never "returned an empty answer" over words that were on screen.
+          const zones = Object.keys(partial.zones).length > 0;
+          if (partial.answer) { keepDraft({ _partial: partial }); return; }
+          resolve({ session_id: sid, answer: "", tool_calls: toolsSeen(), success: true, incomplete: zones, _partial: partial, _trace: partial.trace.slice(), _mid: mid });
+        },
+        // The socket's close, whenever it comes. Before the completion onClose has dealt with it;
+        // after, it is the end of the layout wait.
+        onEnd: () => { if (done) endLayout(); }
       });
 
       // The stop button closes the socket.
       if (ctrl && ctrl.signal) {
         ctrl.signal.addEventListener("abort", () => {
-          if (done) return;
+          // After the completion a Stop only lets the layout go: the answer is finished and is
+          // never removed or replaced by it.
+          if (done) { endLayout(); return; }
           done = true;
           handle.close();
+          painter.cancel();
           this.setState({ ccStream: null });
+          if (partial.answer) { keepDraft({ stopped: true }); return; }
           const err = new Error("cancelled");
           err.cancelled = true;
           reject(err);
@@ -1682,9 +1854,26 @@ export const complianceLiveMethods = {
   // NOTE: verify_now and confirm_draft WRITE to the register:
   //   POST /certificates/{id}/verify   records a verification verdict
   //   POST /certificates/{id}/confirm  finalises a draft and links its document
-  // renewal_email only drafts — nothing is sent until the email panel is approved.
-  async ccRunOffer(offer) {
-    if (!offer || !offer.cert_id || !offer.kind) return;
+  // renewal_email only drafts — nothing is sent until the email panel is approved. The draft
+  // route does write one row, though: the compliance service queues the draft on the Approvals
+  // card (approvals_queue_items) every time it is called.
+  //
+  // `opts.at` is the transcript index of the answer whose button this is: on the chat page the
+  // draft is drawn under that answer (renderVals emChatPlace). 28 Oct 2026: the chat page drew
+  // no email card, so the draft was made and queued and then never shown; and every further
+  // click queued another Approvals item. A certificate's draft is now made once per session
+  // (ccOfferDrafts): a second click opens the same draft again and asks the service for nothing.
+  async ccRunOffer(offer, opts) {
+    if (!offer || !offer.kind) return;
+    const at = opts && Number.isInteger(opts.at) ? opts.at : null;
+    // A certificate type missing from the register: "Attach certificate" opens the ingest card for
+    // it, filed against the building when the offer names one. It used to do nothing (it carries
+    // no cert_id), silently.
+    if (offer.kind === "attach_certificate") {
+      const type = offer.cert_name || offer.certificate_type_code || "certificate";
+      return this.ccUploadMissing(type, offer.owner_kind === "building" ? (offer.owner || "") : "", { keepChat: true });
+    }
+    if (!offer.cert_id) return;
     const key = offer.cert_id + ":" + offer.kind;
     if ((this.state.ccOfferBusy || {})[key]) return;
 
@@ -1694,15 +1883,58 @@ export const complianceLiveMethods = {
     const holder = (cert && cert.holder) || offer.owner || "";
     const who = holder ? name + " — " + holder : name;
 
+    // ccOfferFailed marks an offer whose last run failed, so its button says so and offers the
+    // retry (28 Oct 2026: a failed draft left the button looking untouched, the reason only in a
+    // note further down). Pressing it again clears the mark.
     const mark = (on) => this.setState((p) => {
       const b = Object.assign({}, p.ccOfferBusy || {});
       if (on) b[key] = true; else delete b[key];
-      return { ccOfferBusy: b };
+      const f = Object.assign({}, p.ccOfferFailed || {});
+      if (on) delete f[key];
+      return { ccOfferBusy: b, ccOfferFailed: f };
     });
     const note = (text, isError) => {
       mark(false);
-      this.setState((p) => ({ ccChat: (p.ccChat || []).concat([{ role: "bot", note: true, error: !!isError, text: text }]) }));
+      this.setState((p) => Object.assign({ ccChat: (p.ccChat || []).concat([{ role: "bot", note: true, error: !!isError, text: text }]) },
+        isError ? { ccOfferFailed: Object.assign({}, p.ccOfferFailed || {}, { [key]: true }) } : {}));
     };
+
+    // Hand a renewal draft to the shell's email card (the dock's, or the chat page's under this
+    // answer) so the address is editable and nothing leaves the platform until it is approved.
+    // This opens a draft without starting a task (see above), so a Decision-queue draft still open
+    // in the dock has its item and wording cleared here. The draft's own Approvals item, when the
+    // service made one, goes with it instead: Approve & send is recorded on that item, so the
+    // Decision queue does not offer the same email again. A stale outcome line from an earlier
+    // send, and an earlier draft's "already sent" note, are cleared; the history check runs again.
+    const openDraft = (d, extra) => {
+      this.setState((p) => {
+        const b = Object.assign({}, p.ccOfferBusy || {});
+        delete b[key];
+        return Object.assign({
+          ccOfferBusy: b,
+          flow: "email", flowDone: "",
+          emKind: "renewal",
+          emCertId: offer.cert_id,
+          emKicker: "Draft renewal email",
+          emTo: d.to || "",
+          emSubject: d.subject || ("Renewal required — " + name),
+          emBody: d.body || "",
+          emQueueItemId: d.queueItemId || null, emSentLabel: "", emSentNote: "", emSample: false,
+          emPrev: null, emOrig: null, emReminder: false, emReceipt: null,
+          // The certificate whose draft is addressed to the default PM address because the service
+          // found no vendor contact (to_is_fallback): the card says so (renderVals em.toFallback).
+          emToFallback: d.toFallback ? offer.cert_id : "",
+          emAt: at !== null ? { i: at, kind: "renewal", cert: offer.cert_id } : null
+        }, extra ? extra(p) : {});
+      }, () => { if (typeof this.emCheckHistory === "function") this.emCheckHistory(); });
+    };
+
+    if (offer.kind === "renewal_email") {
+      // The send in flight closes the card when it lands, which would take this draft with it.
+      if (this.state.emSending) { if (typeof this.flash === "function") this.flash("An email is still sending — draft this one once it has gone."); return; }
+      const made = (this.state.ccOfferDrafts || {})[key];
+      if (made) return openDraft(made);
+    }
 
     mark(true);
     try {
@@ -1710,22 +1942,19 @@ export const complianceLiveMethods = {
         const r = await complianceApi.draftRenewalEmail(offer.cert_id);
         if (r && r.ok === false) throw new Error(r.error || "not drafted");
         const d = (r && r.email_draft) || {};
-        // Hand the real draft to the shell's email panel so the address is editable and
-        // nothing leaves the platform until it is approved.
-        // This opens a draft without starting a task (see above), so a Decision-queue draft
-        // still open in the dock has its item and wording cleared here — this send is not that
-        // queue item's.
-        this.setState({
-          flow: "email",
-          emKind: "renewal",
-          emCertId: offer.cert_id,
-          emKicker: "Draft renewal email",
-          emTo: d.to || "",
-          emSubject: d.subject || ("Renewal required — " + name),
-          emBody: d.body || "",
-          emQueueItemId: null, emSentLabel: "", emSentNote: "", emSample: false
-        });
-        note("Renewal email drafted for " + who + ". It is open above — check the address, then approve to queue it.");
+        // The route (28 Oct 2026) also says whether it handed back an Approvals item that was already
+        // pending for this certificate (`reused`) instead of queueing another, and whether `to` is
+        // the default PM address because no vendor contact was found (`to_is_fallback`).
+        const made = { to: d.to || "", subject: d.subject || "", body: d.body || "", queueItemId: (r && r.queue_item_id) || null,
+          reused: !!(r && r.reused), toFallback: !!(r && r.to_is_fallback) };
+        const onCard = !made.queueItemId ? "" : made.reused ? " — it was already on the Approvals card, so nothing new was added" : " and added to the Approvals card";
+        // One render for the card, the note and the remembered draft, so the chat page brings the
+        // card into view after the note has landed, not before it (screens/Chat.jsx).
+        openDraft(made, (p) => ({
+          ccOfferDrafts: Object.assign({}, p.ccOfferDrafts || {}, { [key]: made }),
+          ccChat: (p.ccChat || []).concat([{ role: "bot", note: true, error: false,
+            text: "Renewal email drafted for " + who + onCard + "." + (made.toFallback ? " No vendor contact was found, so it is addressed to the default PM address." : "") + " Check the address, then press Approve & send." }])
+        }));
         return;
       }
 
@@ -1736,6 +1965,7 @@ export const complianceLiveMethods = {
         const url = r && (r.verify_url || r.verification_url || (r.verification || {}).verify_url);
         note("Verification for " + who + " returned “" + String(st).replace(/_/g, " ") + "”" +
           (ch ? " via " + String(ch).replace(/_/g, " ") : "") + "." + (url ? " Register: " + url : ""));
+        this.setState((p) => ({ ccOfferDone: Object.assign({}, p.ccOfferDone || {}, { [key]: true }) }));
         this.ccLoad();
         return;
       }
@@ -1746,6 +1976,7 @@ export const complianceLiveMethods = {
         const linked = (r && (r.linked || r.link_results)) || null;
         note(who + " is confirmed and off the draft list." +
           (linked ? " Linked: " + (Array.isArray(linked) ? linked.join(", ") : Object.keys(linked).join(", ")) + "." : ""));
+        this.setState((p) => ({ ccOfferDone: Object.assign({}, p.ccOfferDone || {}, { [key]: true }) }));
         this.ccLoad();
         return;
       }
@@ -1782,11 +2013,18 @@ export const complianceLiveMethods = {
     if (this.dockAnswers()) this.setState({ orchOpen: true });
     else this.openChat();
     if (typeof document === "undefined") return;
-    // Focus whichever composer has mounted.
-    setTimeout(() => {
+    // Focus whichever composer has mounted — at once, and again on the next frame for one the
+    // render is still mounting. It used to wait 80 ms, and a reader who clicked Ask and started
+    // typing straight away lost the first letters to the page ("hich vendors…", 27 Oct 2026).
+    // The dock's composer also takes focus itself as it mounts (autoFocus, OrchestratorDock.jsx).
+    const focus = () => {
+      if (typeof document === "undefined") return;
       const el = document.getElementById("chat-composer") || document.getElementById("orch-composer");
-      if (el) el.focus();
-    }, 80);
+      if (el && document.activeElement !== el) el.focus();
+    };
+    focus();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(focus);
+    else setTimeout(focus, 0);
   },
 
   // Composer submit, shared by the send button and the Enter key. While a turn is running
@@ -1810,8 +2048,60 @@ export const complianceLiveMethods = {
 
   // Stop button — abandons the turn in flight. The orchestrator keeps working server
   // side; this only stops the console waiting for it.
+  // With no turn running, a Stop can only mean the layouts still being waited for (27 Oct 2026):
+  // they are let go and every answer stays exactly as it is drawn. A Stop on a follow-up stops
+  // the follow-up alone — an earlier answer's layout is not the reader's to lose by it.
   ccStop() {
     if (this._ccAbort) this._ccAbort.abort();
+    else this.ccLayoutStopAll();
+  },
+
+  // Every answer still waiting for its layout stops waiting (ccStreamTurn's endLayout).
+  ccLayoutStopAll() {
+    const all = this._ccLayouts ? Array.from(this._ccLayouts.values()) : [];
+    all.forEach((end) => end());
+  },
+
+  // The "Laying out…" cue on one finished message, by its id. Kept off the message (state, not the
+  // record): a cue saved into a session would come back after a reload with nothing to clear it.
+  ccLayoutCue(mid, on) {
+    if (!mid) return;
+    this.setState((p) => {
+      const cur = p.ccLayout || {};
+      if (!!cur[mid] === !!on) return {};
+      const next = Object.assign({}, cur);
+      if (on) next[mid] = true; else delete next[mid];
+      return { ccLayout: next };
+    });
+  },
+
+  // An `answer_view` {view, cost} applied to the message it belongs to: `sid` is the session the
+  // question was asked in and `mid` the message's id. On screen when that session still is, so
+  // the view swaps in where the reader is looking (and sessionSync keeps it on the record);
+  // otherwise straight onto the session's record, so reopening it draws the answer laid out. A
+  // record whose transcript was shed has nothing here to change — the server stored the view on
+  // the turn (chat_threads.record_view), and hydrating it brings the view back.
+  ccApplyAnswerView(sid, mid, d) {
+    const view = viewFromEvent(d && d.view);
+    const cost = d && d.cost && typeof d.cost === "object" && !Array.isArray(d.cost) ? d.cost : null;
+    if (!sid || !mid || (!view && !cost)) return;
+    const apply = (list) => {
+      if (!(list || []).some((m) => m && m.mid === mid)) return null;
+      return list.map((m) => (m && m.mid === mid ? withAnswerView(m, view, cost) : m));
+    };
+    this.setState((p) => {
+      if (p.sessionId === sid) {
+        const chat = apply(p.ccChat);
+        if (chat) return { ccChat: chat };
+      }
+      const list = p.sessions || [];
+      const i = list.findIndex((x) => x && x.id === sid);
+      const turns = i < 0 ? null : apply(list[i].turns);
+      if (!turns) return {};
+      const next = list.slice();
+      next[i] = Object.assign({}, list[i], { turns: turns });
+      return { sessions: next };
+    });
   },
 
   // Edit a question already asked: it and everything after it leave the transcript and
@@ -1842,6 +2132,8 @@ export const complianceLiveMethods = {
   // the next question starts a fresh thread rather than inheriting the old one.
   ccChatReset() {
     if (this._ccAbort) this._ccAbort.abort();
-    this.setState({ sessionId: null, ccChat: [], ccBusy: false, ccStream: null, ccTraceIdx: null, ccStepsOpen: {}, flowDone: "" });
+    // A draft drawn under an answer of this transcript, and its receipt, lose their place with it
+    // (a draft still open moves to the end of the page rather than vanishing).
+    this.setState({ sessionId: null, ccChat: [], ccBusy: false, ccStream: null, ccTraceIdx: null, ccStepsOpen: {}, flowDone: "", emAt: null, emReceipt: null });
   }
 };

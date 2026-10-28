@@ -81,6 +81,24 @@ export const emailHistoryMethods = {
     if (!o) return;
     this.setState({ emReminder: false, emKicker: o.kicker, emTo: o.to || this.state.emTo, emSubject: o.subject, emBody: o.body });
   },
+  // A model-written email opened in the email card (28 Oct 2026): an OpenUI EmailDraft hands its
+  // draft to the answer's host (openui/host.js `email`), and it lands in the same card, with the
+  // same send, as every other draft — editable, nothing leaves until Approve & send, and the send
+  // reports what really happened (and is checked against the sent-email log for a repeat). Only
+  // the words and addresses the answer showed come in; the Cc line goes with the send. On the
+  // chat page the card is drawn at the end of the transcript; elsewhere the dock opens with it.
+  emOpenDraft(d) {
+    if (!d) return;
+    if (this.state.ccBusy) return this.flash("Still answering — edit the draft once the answer is finished.");
+    // The send in flight closes the card when it lands, which would take this draft with it.
+    if (this.state.emSending) return this.flash("An email is still sending — open this draft once it has gone.");
+    this.setState({ flow: 'email', flowDone: '', fSpec: null, fSubject: '', emKind: 'draft', emKicker: 'Email draft',
+      emTo: String(d.to || ''), emCc: String(d.cc || ''), emSubject: String(d.subject || ''), emBody: String(d.body || ''),
+      emQueueItemId: null, emSentLabel: 'Email', emSentNote: 'It is recorded in the email log.', emSample: false,
+      emFromInv: false, emCertId: null, emPrev: null, emOrig: null, emReminder: false, emAt: null, emReceipt: null },
+      () => this.emCheckHistory());
+    if (this.state.view !== 'chat' && !this.state.orchOpen) this.setState({ orchOpen: true });
+  },
   emUseReminder() {
     const o = this.state.emOrig, h = this.state.emPrev;
     if (!o || !h) return;

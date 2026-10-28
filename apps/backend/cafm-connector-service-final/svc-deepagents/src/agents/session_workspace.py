@@ -1074,7 +1074,7 @@ def sync_schema_mapping_from_tool_calls(
 
 
 # The chat's presentation calls: appended after the tools that did the work.
-PRESENTATION_TOOLS = frozenset({"compliance_pipeline", "compliance_response", "planner"})
+PRESENTATION_TOOLS = frozenset({"compliance_pipeline", "compliance_response", "planner", "openui_view"})
 
 
 def last_working_tool(tool_calls: list | None) -> str:

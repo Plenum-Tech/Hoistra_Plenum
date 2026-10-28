@@ -1,0 +1,1125 @@
+/* OpenUI answers — the orchestrator's components, in the dashboard's own language
+   (components/shell/cardStyles.js, styles/tokens.css): warm paper and three ink levels; status
+   colours only for status; the accent only for what can be acted on or must be looked at; the
+   marker tint for the figures a headline turns on. Tokens only, so both themes come free.
+
+   Sizes follow the dense chat type (body 12.5px in the dock, 13.5px on the page). Widths come
+   from the answer's own box (container "oui"), so the same answer reads in the page and in the
+   dock.
+
+   28 Oct 2026, "Briefing": the answer reads like an FM brief. Its lead is a quiet summary panel
+   with the figures it bolded marked in highlighter; its numbered sections are chapters with the
+   answer's own numbers in the margin; each bold-lead paragraph is a finding card, and a finding
+   with a tone has a small tick; record codes are drawn as plant tags; charts are plain report
+   figures. Nothing here adds
+   or changes a word: every ornament is a box, a tick or a tint. */
+
+/* ── local tokens ──────────────────────────────────────────────────────── */
+/* From the existing hue families only, each with its dark pair. Small orange text uses the deep
+   ink (5.38:1 on surface); the hi-vis accent is for fills, borders and icons. */
+.oui-host, .oui {
+  --oui-s1: 4px; --oui-s2: 8px; --oui-s3: 12px; --oui-s4: 16px; --oui-s5: 24px; --oui-s6: 32px;
+  --oui-r-tag: 3px; --oui-r-ctl: 6px; --oui-r-card: 8px;
+  --oui-measure: 36rem;                 /* prose column on the page (~68ch at 13.5px) */
+  --oui-ink-risk: #C23A05;              /* 5.38:1 on surface, 4.74:1 on --st-risk-bg */
+  --oui-ink-accent: #C23A05;            /* small accent text: links, secondary buttons, "Figures" */
+  --oui-mark: color-mix(in srgb, var(--marker) 26%, transparent);   /* a key figure's chip; text on it 15.85:1 (14.52:1 on the brief) */
+  --oui-card-bg: var(--color-surface);
+  --oui-card-ring: var(--shadow-sm);
+  --oui-brief-bg: var(--color-neutral-900);
+  --oui-table-bg: var(--color-surface);
+  --oui-bar: var(--color-neutral-500);  /* 5.23:1 on bg (light), 6.42:1 (dark) */
+  --oui-bar-hover: var(--color-text);
+  --oui-baseline: var(--color-neutral-700);
+  --oui-tick: var(--color-neutral-500);
+  --oui-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Dark (28 Oct 2026, checked rendered). The figure chip is a flat tint with nothing under it now,
+   so it can sit lower than the old band and still read; codes have no fill to tune. */
+:root[data-theme="dark"] .oui-host, :root[data-theme="dark"] .oui {
+  --oui-ink-risk: #FFB08A; --oui-ink-accent: #FFB08A;               /* 9.39:1 on dark surface */
+  --oui-mark: color-mix(in srgb, var(--marker) 16%, transparent);   /* text on it 9.87:1 (9.15:1 on the brief) */
+}
+
+.oui {
+  container: oui / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--oui-s3);
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text);
+}
+/* Each block arrives once; later stream updates reuse its DOM, so this runs on arrival only.
+   `backwards`, not `both`: a transform left in effect would trap any fixed overlay inside. */
+.oui > *, .oui-section-body > *, .oui-disclosure-body > *, .oui-brief > * {
+  min-width: 0;
+  animation: ouiIn 0.26s var(--oui-ease) backwards;
+}
+@keyframes ouiIn { from { opacity: 0; transform: translateY(4px); } }
+/* Blocks arrive one by one only while an answer streams. A finished answer (the one that just
+   replaced its draft, or one reopened later) is drawn at once, with nothing fading in again. */
+.oui-host:not(.is-live) .oui > *,
+.oui-host:not(.is-live) .oui-section-body > *,
+.oui-host:not(.is-live) .oui-brief > *,
+.oui-host:not(.is-live) .oui-bar-fill { animation: none; }
+
+/* ── words ─────────────────────────────────────────────────────────────── */
+.oui-headline {
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  text-wrap: pretty;
+}
+.oui-text { font-size: 12.5px; }
+.oui-text li::marker { color: var(--color-neutral-500); }
+.oui ::selection { background: var(--marker-tint); color: inherit; }
+.oui-label {
+  font-size: 9.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+.oui-label i { font-size: 11px; vertical-align: -1px; }
+
+/* ── the brief: the answer's own lead ──────────────────────────────────── */
+/* The first Headline or Text (Layout.jsx Answer). The panel shows only when more follows; a
+   one-block answer stays plain text. No figure is lifted out of the prose: the marker goes on
+   exactly what the answer bolded, and nothing else. */
+.oui-brief {
+  display: flex;
+  flex-direction: column;
+  gap: var(--oui-s2);
+  min-width: 0;
+  font-size: 13px;
+  border-radius: var(--oui-r-card);
+}
+.oui-brief:not(:only-child) { padding: 10px 11px 11px; background: var(--oui-brief-bg); }
+/* While the answer streams, the frame fades in when the second block lands. A finished answer
+   mounts framed, with nothing to transition. Only paint is transitioned: an animated padding
+   re-laid the whole answer out on every frame (28 Oct 2026), so the padding arrives at once. */
+.oui-host.is-live .oui-brief {
+  transition: background-color 0.2s var(--oui-ease), box-shadow 0.2s var(--oui-ease), opacity 0.2s var(--oui-ease);
+}
+.oui-brief .oui-text { font-size: inherit; }
+/* Key figures and stressed words. (28 Oct 2026, Hussain: "the way u highlight stuff … its
+   shabby". Every bold got a yellow band with a darker foot under it, so a long step title read as
+   one smear.) Now two kinds, told apart by what the bold holds (shared.jsx isFigureText):
+   - a key figure ("£84,000", "7 work orders") gets a flat, pale marker chip behind the figure
+     alone, in tabular numerals, the way a figure is marked on a printed brief. A figure is short
+     by definition, so a long band never appears. Each line of a wrapped figure gets its own
+     rounded piece (box-decoration-break);
+   - a stressed phrase gets weight only: no tint, no line, at any length. */
+.oui-fig {
+  color: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums lining-nums;
+  padding: 0 0.2em;
+  margin: 0 0.02em;
+  border-radius: var(--oui-r-tag);
+  background-color: transparent;
+  background-image: linear-gradient(var(--oui-mark), var(--oui-mark));
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+/* A paragraph's bold lead is what the paragraph is about ("**Lift 4 — LOLER past date.**"), a
+   title, not a figure: it keeps its weight and never the chip, whatever digits it holds. */
+.md-p[data-lead] > strong.oui-fig:first-child { background: none; padding: 0; margin: 0; border-radius: 0; animation: none; }
+.oui-key, .oui-brief .oui-text strong:not(.oui-fig), .oui-callout strong:not(.oui-fig) {
+  font-weight: 600;
+  color: var(--color-text);
+  background: none;
+  padding: 0;
+}
+/* The one authored moment: while the brief is being written, each key figure is marked once, the
+   tint drawn left to right. A finished or reopened answer is drawn already marked. */
+.oui-host.is-live .oui-fig {
+  animation: ouiMark 0.52s var(--oui-ease) 0.12s backwards;
+}
+@keyframes ouiMark { from { background-size: 0% 100%; } }
+@container oui (min-width: 560px) {
+  .oui-brief { font-size: 14.5px; }
+  .oui-brief:not(:only-child) {
+    padding: 16px 18px 17px;
+    max-width: var(--oui-measure);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-divider) 70%, transparent);
+  }
+  .oui-brief .oui-headline { font-size: 17px; line-height: 1.4; }
+}
+
+/* ── chapters ──────────────────────────────────────────────────────────── */
+/* A section's own heading reads as a report chapter: a strong rule above it, its title bigger
+   than the body, in the answer's own casing. The number is the answer's ("1. Risk to life"),
+   split off in Layout.jsx so it can hang in the margin; none is ever added. */
+.oui-section { display: flex; flex-direction: column; gap: 10px; }
+.oui > .oui-section {
+  margin-top: calc(var(--oui-s5) - var(--oui-s3));
+  padding-top: var(--oui-s3);
+  border-top: 1px solid var(--color-rule-strong);
+}
+.oui > .oui-section:first-child { margin-top: 0; }
+.oui-section-title {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  color: var(--color-text);
+  text-wrap: balance;
+}
+.oui-chapter-n { font-weight: 500; color: var(--color-neutral-500); font-variant-numeric: tabular-nums; }
+.oui-section-summary {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-neutral-300);
+  margin-top: -4px;
+  max-width: var(--oui-measure);
+}
+.oui-section-body { display: flex; flex-direction: column; gap: var(--oui-s3); }
+@container oui (min-width: 560px) {
+  .oui > .oui-section { margin-top: calc(var(--oui-s6) - var(--oui-s3)); padding-top: 14px; }
+  .oui > .oui-section:first-child { margin-top: 0; }
+  .oui-section-title { font-size: 15.5px; }
+  .oui-section-summary { font-size: 13px; }
+}
+/* Page: the answer's numbers hang in a margin, so titles, findings and prose share one left
+   edge. Without :has() the number stays inline, which reads just as well. */
+@container oui (min-width: 640px) {
+  .oui:has(.oui-chapter-n) > .oui-section { position: relative; padding-left: 34px; }
+  .oui:has(.oui-chapter-n) > .oui-section > .oui-chapter > .oui-chapter-n { position: absolute; left: 0; }
+  /* The brief clears the same margin, so it and the chapters' cards share one right edge
+     (28 Oct 2026: the brief stopped 34px short of the first card under it). */
+  .oui:has(.oui-chapter-n) > .oui-brief:not(:only-child) { max-width: calc(var(--oui-measure) + 34px); }
+}
+
+/* ── findings ──────────────────────────────────────────────────────────── */
+/* Prose keeps a reading measure on the page; tables and charts keep the full width. */
+.oui > .oui-text, .oui-section-body > .oui-text { max-width: var(--oui-measure); }
+/* A bold-lead paragraph is one finding ("**Fire Risk Assessment — Lapsed**, expired…"): a card.
+   The paragraphs carry no severity, so the card has no tick (28 Oct 2026: a grey tick on every
+   card said nothing and read as a stray caret on the card's edge); the words carry the news. The
+   lead stays inline, so the sentence is never split. Only the answer's own Text at the top level
+   or in a chapter: the brief's paragraphs and a Finding's text are not cards. */
+.oui > .oui-text .md-p[data-lead], .oui-section-body > .oui-text .md-p[data-lead] {
+  position: relative;
+  padding: 10px 13px 11px;
+  border-radius: var(--oui-r-card);
+  background: var(--oui-card-bg);
+  box-shadow: var(--oui-card-ring);
+  color: var(--color-neutral-300);
+}
+.oui > .oui-text .md-p[data-lead] strong, .oui-section-body > .oui-text .md-p[data-lead] strong { color: var(--color-text); }
+
+/* The Finding component (Finding.jsx): the same card, its title and the record's code on the
+   first line, the rest of what the answer said under it. Consecutive findings stack as one list.
+   A tick shows only when the finding carries a tone the answer gave (held to its own words,
+   Finding.jsx findingTone); a neutral finding has none. The tick sits inside the card, beside
+   the first line, never on the card's edge: never a stripe, never a red card (28 Oct 2026).
+   Every finding keeps the tick's room, so a list of them shares one left edge. */
+.oui-finding {
+  position: relative;
+  max-width: var(--oui-measure);
+  padding: 10px 13px 11px 19px;
+  border-radius: var(--oui-r-card);
+  background: var(--oui-card-bg);
+  box-shadow: var(--oui-card-ring);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-neutral-300);
+}
+.oui-finding[data-tone="risk"] { --oui-finding-tick: var(--st-risk); }
+.oui-finding[data-tone="warn"] { --oui-finding-tick: var(--st-warn); }
+.oui-finding[data-tone="ok"] { --oui-finding-tick: var(--st-ok); }
+/* The title runs in to the text as one sentence, as the answer wrote it (Finding.jsx draws the
+   text's first paragraph as a direct child so it can sit inline beside the head). */
+.oui-finding-head { display: inline; }
+.oui-finding-title { min-width: 0; font-weight: 600; color: var(--color-text); overflow-wrap: break-word; }
+.oui-finding-head + .oui-finding-text { display: inline; margin: 0; }
+.oui-finding-text > .md-p:first-child { display: inline; }
+.oui-finding-text strong { color: var(--color-text); }
+.oui-finding + .oui-finding { margin-top: calc(var(--oui-s2) - var(--oui-s3)); }
+/* An issue to act on (Finding.jsx, Content.jsx Text, 28 Oct 2026): a click on the card asks what to
+   do about it; its arrow sits in the top corner, and the card keeps the arrow's room on its right.
+   Pointed at, the card lifts one step (the app's own --shadow-md, 28 Oct 2026) and the arrow
+   takes the accent. */
+/* (The paragraph's selector outweighs the card's own padding rule above, or the arrow sat on the
+   text.) */
+.oui-finding:has(> .oui-card-go), .oui .oui-text .md-p[data-lead]:has(> .oui-card-go) { position: relative; padding-right: 40px; }
+.oui-finding > .oui-card-go, .md-p[data-lead] > .oui-card-go { position: absolute; top: 7px; right: 9px; }
+.oui-finding:has(> .oui-card-go:not(:disabled)), .md-p[data-lead]:has(> .oui-card-go:not(:disabled)) { cursor: pointer; }
+/* Only a card has a ring to firm up: the dock's flat rows and a closed section's rows do not. */
+@container oui (min-width: 381px) {
+  .oui > .oui-text .md-p[data-lead]:has(> .oui-card-go:not(:disabled)):hover,
+  .oui-section-body > .oui-text .md-p[data-lead]:has(> .oui-card-go:not(:disabled)):hover,
+  .oui > .oui-finding:has(> .oui-card-go:not(:disabled)):hover,
+  .oui-section-body > .oui-finding:has(> .oui-card-go:not(:disabled)):hover {
+    box-shadow: var(--shadow-md);
+  }
+}
+.oui-finding, .oui > .oui-text .md-p[data-lead], .oui-section-body > .oui-text .md-p[data-lead] {
+  transition: box-shadow 0.16s var(--oui-ease);
+}
+@container oui (min-width: 560px) {
+  .oui-text, .oui-finding { font-size: 13.5px; }
+}
+
+/* The tick: a short bar beside the first line, in the tone's colour. Risk and warn share one
+   orange (tokens.css), so warn is drawn hollow and the two read apart at a glance; ok is solid
+   green. Its height and place follow the card's own type size (em). */
+.oui-finding[data-tone="risk"]::before, .oui-finding[data-tone="warn"]::before, .oui-finding[data-tone="ok"]::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: calc(10px + 0.35em);
+  width: 3px;
+  height: 0.9em;
+  border-radius: 2px;
+  background: var(--oui-finding-tick);
+}
+.oui-finding[data-tone="warn"]::before {
+  margin-left: -0.5px;
+  width: 4px;
+  background: none;
+  box-shadow: inset 0 0 0 1.25px var(--oui-finding-tick);
+}
+
+/* Dock, and inside a closed section's card: flat rows, a hairline between, so no card sits in a
+   card. A finding's tick moves to the row's own edge. */
+.oui-disclosure-body > .oui-text .md-p[data-lead], .oui-disclosure-body > .oui-finding {
+  position: relative;
+  padding: 6px 0 7px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.oui-disclosure-body > .oui-finding { padding-left: 10px; }
+.oui-disclosure-body > .oui-finding:has(> .oui-card-go),
+.oui-disclosure-body > .oui-text .md-p[data-lead]:has(> .oui-card-go) { padding-right: 30px; }
+.oui-disclosure-body > .oui-finding > .oui-card-go,
+.oui-disclosure-body > .oui-text .md-p[data-lead] > .oui-card-go { top: 3px; right: 0; }
+.oui-disclosure-body > .oui-text .md-p[data-lead] + .md-p[data-lead],
+.oui-disclosure-body > .oui-finding + .oui-finding { border-top: 1px solid var(--color-divider); }
+.oui-disclosure-body > .oui-finding[data-tone]::before { left: 0; top: calc(6px + 0.35em); }
+@container oui (max-width: 380px) {
+  .oui > .oui-text .md-p[data-lead], .oui-section-body > .oui-text .md-p[data-lead], .oui-finding {
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 6px 0 7px;
+  }
+  .oui-finding { padding-left: 10px; }
+  .oui-finding:has(> .oui-card-go) { padding-right: 30px; }
+  .oui-finding > .oui-card-go { top: 3px; right: 0; }
+  /* A finding paragraph's arrow follows its last word: every line keeps the dock's full width. */
+  .oui .oui-text .md-p[data-lead]:has(> .oui-card-go) { padding-right: 0; }
+  .oui .md-p[data-lead] > .oui-card-go { position: static; margin: -4px 0 -3px 3px; }
+  .oui-section-body > .oui-text .md-p[data-lead] + .md-p[data-lead],
+  .oui > .oui-text .md-p[data-lead] + .md-p[data-lead],
+  .oui-finding + .oui-finding { border-top: 1px solid var(--color-divider); }
+  .oui-finding[data-tone]::before { left: 0; top: calc(6px + 0.35em); }
+}
+
+/* ── record codes ──────────────────────────────────────────────────────── */
+/* A code in the answer (shared.jsx refs): B-301-LIFT-4471, FRA-B-301-2025, WO-1184. (28 Oct 2026,
+   Hussain: the highlighting was "shabby"; a grey box with a hairline round every code made a
+   paragraph of four codes read as four buttons stuck on the text.) A code is now ink text in the
+   text's own face, a touch smaller, with slashed zeros so 0 and O never read alike; no fill, no
+   ring. The characters are the answer's own and select like any other words. */
+.oui-ref {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: var(--oui-r-tag);
+  background: none;
+  box-shadow: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.94em;
+  font-weight: 500;
+  letter-spacing: 0;
+  /* Proportional figures in a sentence: tabular ones set every hyphen in a figure's width, and a
+     code read "FRA - B - 301" (checked rendered, 28 Oct 2026). A table lines its codes up below. */
+  font-variant-numeric: slashed-zero;
+  font-feature-settings: normal;
+  text-align: inherit;
+  text-transform: none;
+  white-space: nowrap;
+}
+/* A code that asks about its record (ask.jsx CodeTag, 28 Oct 2026): a faint ink underline says it
+   can be pressed, the way a link in a printed brief would. Pointed at, it takes the accent wash the
+   app's other quiet actions take (text on it 4.74:1 light, 9.30:1 dark); pressed, a deeper one.
+   It stays selectable, so a code is copied as text. While its answer is still being written it is
+   disabled and drops the underline: its letters are the answer's words. */
+.oui-code-ask {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  user-select: text;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--color-text) 38%, transparent);
+  padding: 0 0.12em;
+  margin: 0 -0.12em;
+  transition: background-color 0.12s ease, color 0.12s ease, text-decoration-color 0.12s ease;
+}
+.oui-code-ask:hover:not(:disabled) {
+  background: var(--color-accent-900);
+  color: var(--oui-ink-accent);
+  text-decoration-color: var(--color-accent);
+}
+.oui-code-ask:active:not(:disabled) { background: var(--color-accent-800); }
+.oui-code-ask:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.oui-code-ask:disabled { cursor: inherit; text-decoration-color: transparent; }
+/* In a table the codes line up down the column. */
+.oui-table .oui-ref { font-variant-numeric: tabular-nums slashed-zero; }
+/* A bracketed code keeps its brackets on its line: "(" never ends a line with the tag on the
+   next. The brackets sit close against the tag, so "(FRA-B-301-2025)" reads as one unit. */
+.oui-ref-group { white-space: nowrap; }
+.oui-ref-group > .oui-ref { margin: 0; padding: 0; }
+/* A label names an item; its code is part of the name, not a tag beside it. In a bar's label and
+   a table's first column the code is plain text in the label's own type (28 Oct 2026: a tag over
+   a tag made the figure stop reading as a report figure and the dock's rows grow tall). */
+.oui-bar-label .oui-ref, .oui-table td:first-child .oui-ref {
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  font-variant-numeric: slashed-zero;
+}
+/* The bracketed code under an item's name, on a line of its own, in a table's first column and
+   a bar's label ("CHILLER-101" over "(B-301-CHILLER-101)"): a quiet sub-label. */
+.oui-table td:first-child .oui-ref-group, .oui-bar-label .oui-ref-group {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.92em;
+  font-weight: 400;
+  color: var(--color-neutral-500);
+}
+
+/* ── cards ─────────────────────────────────────────────────────────────── */
+.oui-card {
+  border: none;
+  border-radius: var(--oui-r-card);
+  background: var(--oui-card-bg);
+  box-shadow: var(--oui-card-ring);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.oui-card-title { font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.oui-card-sub { font-size: 10.5px; color: var(--color-neutral-500); }
+/* A code cell or field: the tag inside it carries the look. */
+.oui-code { font-size: inherit; color: var(--color-text); }
+
+/* ── tones ─────────────────────────────────────────────────────────────── */
+/* Risk and warn write in the deep ink; their fills, ticks and icons keep the hi-vis tone. */
+.oui-tone-risk { --oui-tone: var(--st-risk); --oui-tone-ink: var(--oui-ink-risk); --oui-tone-bg: var(--st-risk-bg); }
+.oui-tone-warn { --oui-tone: var(--st-warn); --oui-tone-ink: var(--oui-ink-risk); --oui-tone-bg: var(--st-warn-bg); }
+.oui-tone-ok { --oui-tone: var(--st-ok); --oui-tone-ink: var(--st-ok); --oui-tone-bg: var(--st-ok-bg); }
+.oui-tone-info { --oui-tone: var(--color-neutral-500); }
+.oui-tone-neutral { --oui-tone: var(--color-neutral-700); }
+
+/* ── metrics ───────────────────────────────────────────────────────────── */
+.oui-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr)); gap: var(--oui-s2); }
+/* One figure alone keeps a tile's width rather than stretching an empty box across the answer. */
+.oui-metrics:has(> :only-child) { grid-template-columns: minmax(0, 260px); }
+/* Each tile is its own container, so its figure can be sized to the tile's width. Tone shows in
+   the figure's ink and the dot by its label, never in a coloured border. */
+.oui-metric {
+  container-type: inline-size;
+  position: relative;
+  border: none;
+  border-radius: var(--oui-r-card);
+  background: var(--oui-card-bg);
+  box-shadow: var(--oui-card-ring);
+  padding: 12px 13px 11px;
+  min-width: 0;
+}
+/* A figure never breaks mid-number ("£1,234,56" over "7.89", 27 Oct 2026): it shrinks until its
+   longest unbroken run (--oui-run, set by Metric) fits the tile, from 21px down to 12px. Only a
+   figure too long even at 12px wraps, as a last resort. */
+.oui-metric-value {
+  font-size: clamp(12px, calc(100cqi / (var(--oui-run, 1) * 0.64)), 21px);
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: lining-nums proportional-nums;
+  color: var(--oui-tone-ink, var(--color-text));
+  overflow-wrap: anywhere;
+}
+.oui-metric-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  margin-top: 7px;
+  color: var(--color-neutral-300);
+}
+/* Status in the figure's ink, and a dot by its label for a reader who cannot tell the inks apart. */
+.oui-tone-risk .oui-metric-label::before, .oui-tone-warn .oui-metric-label::before, .oui-tone-ok .oui-metric-label::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--oui-tone); transform: translateY(-1px);
+}
+.oui-metric-note { font-size: 10.5px; line-height: 1.35; margin-top: 2px; color: var(--color-neutral-500); }
+/* A tile that asks about its figure (Data.jsx Metric, 28 Oct 2026). Its arrow sits in the top
+   corner, hidden until the tile is pointed at or focused, and always shown on a touch screen. The
+   figure keeps the arrow's room at all times and is sized to the width left (so it never shrinks
+   or jumps when the arrow appears). Pointed at, the tile's edge firms up. */
+.oui-metric:has(> .oui-metric-go) .oui-metric-value {
+  margin-right: 24px;
+  font-size: clamp(12px, calc((100cqi - 24px) / (var(--oui-run, 1) * 0.64)), 21px);
+}
+.oui-metric:has(> .oui-metric-go:not(:disabled)) { cursor: pointer; }
+.oui-metric:has(> .oui-metric-go:not(:disabled)):hover { box-shadow: var(--oui-card-ring), inset 0 0 0 1px var(--color-rule-strong); }
+.oui-metric { transition: box-shadow 0.16s var(--oui-ease); }
+.oui-metric > .oui-metric-go { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 0.14s var(--oui-ease), background-color 0.14s var(--oui-ease), color 0.14s var(--oui-ease); }
+.oui-metric:is(:hover, :focus-within) > .oui-metric-go { opacity: 1; }
+.oui-metric:hover > .oui-metric-go:disabled { opacity: 0.4; }
+@media (hover: none) {
+  .oui-metric > .oui-metric-go { opacity: 1; }
+  .oui-metric > .oui-metric-go:disabled { opacity: 0.4; }
+}
+
+/* ── tables ────────────────────────────────────────────────────────────── */
+.oui-table { border: 1px solid var(--color-divider); border-radius: var(--oui-r-card); background: var(--oui-table-bg); overflow: hidden; }
+/* Columns past the edge of the box are signalled by a shade on that edge, shown only while there
+   is more to scroll to (in the dock a four-column table shows two; overlay scrollbars show nothing
+   until scrolled, 27 Oct 2026). The covers move with the content (local) and hide each shade
+   once its edge is reached; the shades stay with the box (scroll). */
+.oui-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-neutral-700) transparent;
+  background:
+    linear-gradient(to right, var(--oui-table-bg) 40%, transparent) left center / 28px 100% no-repeat local,
+    linear-gradient(to left, var(--oui-table-bg) 40%, transparent) right center / 28px 100% no-repeat local,
+    linear-gradient(to right, color-mix(in oklab, var(--color-text) 16%, transparent), transparent) left center / 14px 100% no-repeat scroll,
+    linear-gradient(to left, color-mix(in oklab, var(--color-text) 16%, transparent), transparent) right center / 14px 100% no-repeat scroll;
+}
+.oui-table table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Headings in the answer's own casing, on a quiet fill over a firm rule. */
+.oui-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--color-neutral-500);
+  padding: 8px 12px;
+  background: var(--color-neutral-900);
+  border-bottom: 1px solid var(--color-rule-strong);
+  white-space: nowrap;
+}
+.oui-table th.oui-num { text-align: right; }
+.oui-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--color-divider);
+  vertical-align: top;
+  line-height: 1.45;
+  color: var(--color-neutral-300);
+}
+/* The item a row is about reads first; its figures in full ink. */
+.oui-table td:first-child { color: var(--color-text); font-weight: 500; }
+.oui-table td.oui-num { font-weight: 600; color: var(--color-text); }
+/* In the narrow dock a text column would be squeezed to a few letters a line; it keeps a
+   readable width and the table scrolls inside its box instead. No effect where there is room. */
+.oui-table td:not(.oui-num):not(.oui-code):not(.oui-go-col) { min-width: 12ch; }
+.oui-row:last-child td { border-bottom: none; }
+.oui-row:hover td { background: var(--color-neutral-900); }
+/* A row about an item asks about it (Data.jsx Table, 28 Oct 2026): the whole row is the target,
+   its arrow in a narrow last column of its own is the keyboard's way in. The row's tint follows
+   the keyboard too. */
+.oui-row:has(.oui-ask:not(:disabled)) { cursor: pointer; }
+.oui-row:focus-within td { background: var(--color-neutral-900); }
+/* Pointed at, the item the row asks about is underlined, as a bar's label is. */
+.oui-row:has(.oui-ask:not(:disabled)):hover td:first-child {
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+/* The arrow's column: wide enough for its 32px target, the arrow centred on the row. It is
+   always the last column, never pinned: a pinned cell would cover the figures in the dock. */
+.oui-table .oui-go-col { width: 36px; min-width: 36px; padding: 0 6px 0 0; vertical-align: middle; text-align: right; }
+.oui-table thead .oui-go-col { background: var(--color-neutral-900); border-bottom: 1px solid var(--color-rule-strong); }
+.oui-table .oui-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.oui-table td.oui-code { white-space: nowrap; }
+.oui-table-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-divider);
+  font-size: 10.5px;
+  color: var(--color-neutral-500);
+}
+.oui-link {
+  font: inherit;
+  font-size: 11px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--oui-ink-accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.oui-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.oui-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+@container oui (min-width: 560px) {
+  .oui-table table { font-size: 12px; }
+  .oui-table th { font-size: 11px; }
+}
+
+/* ── charts: plain report figures ──────────────────────────────────────── */
+/* A chart is a figure on the page, not a box: its title, its marks, its figures. */
+.oui-card.oui-figure { border: none; background: none; box-shadow: none; padding: 0; border-radius: 0; }
+.oui-figure > .oui-card-title { font-size: 12px; font-weight: 600; color: var(--color-text); }
+
+/* ── bar chart ─────────────────────────────────────────────────────────── */
+/* Label, bar, figure: the figures have a column of their own, so every bar starts on the same
+   baseline and a zero line sits at the same place on every row. Bars are thin, square at the
+   baseline and rounded at the figure, in a quiet ink that still reads (5.2:1); never the accent. */
+.oui-bars {
+  display: grid;
+  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) max-content auto;
+  column-gap: 14px;
+  row-gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+/* A long label wraps rather than being cut to the same few words as its neighbour
+   ("Northbridge Business Park – B…" twice, 27 Oct 2026). */
+.oui-bar-label {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--color-text);
+  max-width: 26ch;
+  overflow-wrap: anywhere;
+  grid-column: 1;
+}
+.oui-bar { display: contents; }
+/* One bar's label, bar, figure and arrow (Charts.jsx BarChart): no box of its own, so the grid
+   still lines every bar up; a click anywhere on it asks about the item (28 Oct 2026). Pointed at,
+   its bar darkens to ink, its label is underlined and its arrow takes the accent. */
+.oui-bar-row { display: contents; }
+.oui-bar-row:has(.oui-ask:not(:disabled)) { cursor: pointer; }
+.oui-bar-row:hover .oui-bar-fill { background: var(--oui-bar-hover); }
+.oui-bar-row.is-ask:hover .oui-bar-label {
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+/* The arrow takes no height of its own: the rows stay as close as the bars. It never reaches past
+   the chart's right edge, which would widen the answer. */
+.oui-bar-go { grid-column: 4; margin: -8px 0 -8px -6px; }
+.oui-bar-track {
+  grid-column: 2;
+  position: relative;
+  min-width: 40px;
+  height: 8px;
+  border-radius: 0;
+  background: none;
+  box-shadow: inset 1px 0 0 var(--oui-baseline);
+  overflow: visible;
+}
+/* With a negative figure the zero line is the baseline; the left edge is not zero. */
+.oui-bar-track:has(.oui-bar-zero) { box-shadow: none; }
+/* A bar runs from zero (left, or the zero line when a figure is negative) to its figure. */
+.oui-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 0 3px 3px 0;
+  background: var(--oui-bar);
+  transform-origin: left center;
+  transition: background-color 0.12s ease;
+  animation: ouiGrow 0.5s var(--oui-ease) backwards;
+}
+.oui-bar-fill.is-neg { border-radius: 3px 0 0 3px; transform-origin: right center; }
+.oui-bar:hover .oui-bar-fill { background: var(--oui-bar-hover); }
+.oui-bar-zero { position: absolute; top: -2px; bottom: -2px; width: 1px; margin-left: -0.5px; background: var(--color-neutral-500); z-index: 1; }
+.oui-bar-value {
+  grid-column: 3;
+  min-width: 2ch;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  white-space: nowrap;
+  text-align: right;
+}
+/* Figures that are not one measure are listed beside their labels, with no bar. */
+.oui-bar-value.is-plain { grid-column: 2 / 4; text-align: left; }
+@keyframes ouiGrow { from { transform: scaleX(0); } }
+@container oui (min-width: 560px) {
+  .oui-figure > .oui-card-title { font-size: 13px; }
+  .oui-bar-label, .oui-bar-value { font-size: 12px; }
+}
+@container oui (max-width: 380px) {
+  .oui-bars { grid-template-columns: minmax(0, 1fr) max-content auto; column-gap: 8px; row-gap: 3px; }
+  .oui-bar-label { grid-column: 1 / -1; max-width: none; }
+  .oui-bar-row:not(:first-child) > .oui-bar-label { margin-top: 8px; }
+  .oui-bar-track { grid-column: 1; }
+  .oui-bar-value { grid-column: 2; }
+  .oui-bar-value.is-plain { grid-column: 1 / 3; }
+  .oui-bar-go { grid-column: 3; margin: -8px 0 -8px -2px; }
+}
+
+/* ── line chart ────────────────────────────────────────────────────────── */
+.oui-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 4px; font-size: 11px; color: var(--color-neutral-300); }
+.oui-legend-unit { color: var(--color-neutral-500); }
+.oui-swatch { display: inline-block; width: 16px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 6px; }
+.oui-chart { position: relative; margin-top: 8px; touch-action: pan-y; }
+.oui-chart svg { display: block; overflow: visible; }
+.oui-axis { font-size: 10px; fill: var(--color-neutral-500); font-variant-numeric: tabular-nums; }
+.oui-axis-strong { fill: var(--color-text); font-weight: 600; }
+.oui-tip {
+  position: absolute;
+  top: -6px;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--oui-r-ctl);
+  padding: 6px 9px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+  z-index: 2;
+}
+.oui-tip-label { color: var(--color-neutral-500); margin-bottom: 1px; }
+.oui-tip-row { display: flex; align-items: center; gap: 6px; }
+.oui-tip-row b { font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; padding-left: 8px; }
+/* A line chart's figures, period by period: one click away under a chart too dense to print
+   them (LineChart), or read by a screen reader only (.oui-sr-only) when the chart prints them. */
+.oui-figures { margin-top: 8px; }
+.oui-figures > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--oui-ink-accent);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.oui-figures > summary::-webkit-details-marker { display: none; }
+.oui-figures > summary:hover { text-decoration: underline; text-underline-offset: 2px; }
+.oui-figures > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.oui-figures > summary .oui-chev { color: inherit; }
+.oui-figures[open] .oui-chev { transform: rotate(90deg); }
+.oui-figures > .oui-table { margin-top: 6px; }
+/* Dense, so the dock shows the figures and not just the periods: headings wrap, cells are tight. */
+.oui-figures .oui-table table { font-size: 11px; }
+.oui-figures .oui-table th, .oui-figures .oui-table td { padding: 5px 9px; white-space: normal; }
+.oui-figures .oui-table thead th { text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+.oui-figures .oui-table td.oui-num { white-space: nowrap; }
+.oui-figures .oui-table td:not(.oui-num):not(.oui-code) { min-width: 0; }
+/* A period heads its row; it reads as a cell, not as a column heading. */
+.oui-table th[scope="row"] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: inherit;
+  font-weight: 500;
+  color: var(--color-text);
+  background: none;
+  border-bottom: 1px solid var(--color-divider);
+  white-space: nowrap;
+}
+.oui-row:last-child th[scope="row"] { border-bottom: none; }
+.oui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── callout ───────────────────────────────────────────────────────────── */
+/* A finding set apart: the card and the icon in its tone; risk and warn on a light wash of their
+   tint. Never a toned border round the box. No tick: the icon already marks the tone, and a tick
+   beside it read as a second mark (28 Oct 2026; the edge tick before it read as a stray caret). */
+.oui-callout {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 11px 14px 12px 15px;
+  border: none;
+  border-radius: var(--oui-r-card);
+  background: var(--oui-card-bg);
+  box-shadow: var(--oui-card-ring);
+  max-width: var(--oui-measure);
+}
+.oui-callout.oui-tone-risk, .oui-callout.oui-tone-warn { background: color-mix(in oklab, var(--oui-tone-bg) 55%, var(--oui-card-bg)); }
+.oui-callout > i { font-size: 15px; line-height: 1.35; color: var(--oui-tone); }
+.oui-callout-text { line-height: 1.5; color: var(--color-text); }
+.oui-callout-title { font-size: 12.5px; font-weight: 600; line-height: 1.35; color: var(--color-text); margin-bottom: 2px; }
+@container oui (min-width: 560px) {
+  .oui-callout { font-size: 13.5px; }
+  .oui-callout-title { font-size: 13.5px; }
+}
+@container oui (max-width: 380px) {
+  .oui-callout { box-shadow: none; }
+  .oui-callout:not(.oui-tone-risk):not(.oui-tone-warn) { background: var(--color-neutral-900); }
+}
+
+/* ── one record ────────────────────────────────────────────────────────── */
+.oui-details-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+/* The key column takes at most 40% and wraps a long key, so the value keeps its width (27 Oct
+   2026: a key like "Statutory thorough examination due date (LOLER)" left the value 0px wide in
+   the dock). Narrow, each key sits above its value. */
+.oui-fields {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.oui-field-key { color: var(--color-neutral-500); min-width: min(84px, 100%); overflow-wrap: anywhere; }
+.oui-field-value { min-width: 0; overflow-wrap: anywhere; }
+@container oui (max-width: 380px) {
+  .oui-fields { grid-template-columns: minmax(0, 1fr); row-gap: 1px; }
+  .oui-field-value { margin-bottom: 5px; }
+  .oui-field-value:last-child { margin-bottom: 0; }
+}
+
+/* ── closed sections ───────────────────────────────────────────────────── */
+.oui-disclosure { border: none; border-radius: var(--oui-r-card); background: var(--oui-card-bg); box-shadow: var(--oui-card-ring); }
+.oui-disclosure-head {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--oui-r-card);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.oui-disclosure-head:hover { background: var(--color-neutral-900); }
+.oui-disclosure-head:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.oui-disclosure.is-open .oui-disclosure-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.oui-chev { font-size: 12px; color: var(--color-neutral-500); transition: transform 0.16s var(--oui-ease); }
+.oui-disclosure.is-open .oui-chev { transform: rotate(90deg); }
+.oui-disclosure-text { display: flex; flex-direction: column; min-width: 0; }
+.oui-disclosure-title { font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.oui-disclosure-summary { font-size: 11.5px; color: var(--color-neutral-500); line-height: 1.4; font-variant-numeric: tabular-nums; }
+.oui-disclosure-body { display: flex; flex-direction: column; gap: var(--oui-s3); padding: 2px 12px 12px 34px; }
+/* In the dock the indent under the caret is width the detail needs. */
+@container oui (max-width: 380px) {
+  .oui-disclosure-body { padding-left: 12px; }
+}
+
+/* ── steps ─────────────────────────────────────────────────────────────── */
+/* The number only orders the steps, so its disc is neutral; the buttons are what acts. */
+.oui-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.oui-step {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 6px;
+  align-items: start;
+  padding: 11px 0;
+  border-top: 1px solid var(--color-divider);
+}
+/* "What to do" (28 Oct 2026, Hussain: "i need the what to do arrow … and also make it better").
+   Every step leads somewhere: its arrow is a round accent button on the row's right, the one
+   orange thing on the row, because it is the action. A row whose only control is its arrow is the
+   arrow's: pointed at, the row takes a quiet wash that reaches a little past the text, its title
+   is underlined and its arrow fills solid and nudges forward. The wash sits under the row's
+   content (isolation), never over it. It reaches past the row by two shadows of itself, not by a
+   wider box: a shadow never widens the answer, so the 190px dock never scrolls sideways. */
+.oui-step.is-ask::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: var(--oui-r-card);
+  background: var(--color-neutral-900);
+  box-shadow: -8px 0 0 var(--color-neutral-900), 8px 0 0 var(--color-neutral-900);
+  opacity: 0;
+  transition: opacity 0.14s var(--oui-ease);
+}
+.oui-step.is-ask:first-child::before { top: -6px; }
+.oui-step.is-ask:has(.oui-btn-icon:not(:disabled)) { cursor: pointer; }
+.oui-step.is-ask:has(.oui-btn-icon:not(:disabled)):hover::before,
+.oui-step.is-ask:focus-within::before { opacity: 1; }
+.oui-step.is-ask:has(.oui-btn-icon:not(:disabled)):hover .oui-step-title {
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+/* The arrow: a 28px disc (24px in the dock) whose target is 32px either way (::after). At rest a
+   pale accent disc with the deep accent ink (4.74:1 light, 9.30:1 dark). Pointed at, it fills with
+   the deeper accent, not the hi-vis one: the light ink on accent-600 is 3.75:1 light and 3.39:1
+   dark, where on the hi-vis accent it was under 3:1 (28 Oct 2026). Pressed, the arrow gives a
+   little; from the keyboard it takes the app's focus ring. */
+.oui-step .oui-btn-icon {
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  margin-top: -3px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-accent-900);
+  color: var(--oui-ink-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 22%, transparent);
+  transition: background-color 0.14s var(--oui-ease), color 0.14s var(--oui-ease), box-shadow 0.14s var(--oui-ease), opacity 0.12s ease;
+}
+/* The target's extra width is all on the left: an arrow sits at the answer's right edge, and a
+   target reaching past that edge would make the dock scroll sideways by a few pixels. */
+.oui-step .oui-btn-icon::after { inset: -2px 0 -2px -4px; border-radius: 16px; }
+.oui-step .oui-btn-icon i { font-size: 14px; transition: transform 0.2s var(--oui-ease); }
+.oui-step .oui-btn-icon:hover:not(:disabled),
+.oui-step.is-ask:hover .oui-btn-icon:not(:disabled) {
+  background: var(--color-accent-600);
+  color: var(--accent-ink);
+  box-shadow: 0 1px 3px -1px color-mix(in oklab, var(--color-accent-600) 55%, transparent);
+}
+.oui-step .oui-btn-icon:hover:not(:disabled) .ph-arrow-right,
+.oui-step.is-ask:hover .oui-btn-icon:not(:disabled) .ph-arrow-right { transform: translateX(2px); }
+.oui-step .oui-btn-icon:hover:not(:disabled) .ph-arrow-up-right,
+.oui-step.is-ask:hover .oui-btn-icon:not(:disabled) .ph-arrow-up-right { transform: translate(1.5px, -1.5px); }
+.oui-step .oui-btn-icon:active:not(:disabled) { background: var(--color-accent-600); color: var(--accent-ink); box-shadow: none; transform: none; }
+.oui-step .oui-btn-icon:active:not(:disabled) i { transform: scale(0.92); }
+.oui-step:first-child { border-top: none; padding-top: 2px; }
+.oui-step-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: -1px;
+  border-radius: 50%;
+  background: var(--oui-card-bg);
+  box-shadow: inset 0 0 0 1px var(--color-rule-strong);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.oui-step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.oui-step-title { font-size: 12.5px; line-height: 1.45; font-weight: 500; }
+.oui-step-detail { font-size: 11.5px; line-height: 1.45; color: var(--color-neutral-300); }
+/* What the step stresses reads in full ink and weight, never a tint (28 Oct 2026). */
+.oui-step-detail strong { color: var(--color-text); font-weight: 600; }
+.oui-step-action { align-self: center; }
+@container oui (min-width: 560px) {
+  .oui-step-title { font-size: 13.5px; }
+  .oui-step-detail { font-size: 12.5px; }
+}
+@container oui (max-width: 460px) {
+  /* A labelled button goes under its step; an arrow keeps its place on the row's right. */
+  .oui-step:not(.is-ask) { grid-template-columns: 22px minmax(0, 1fr); }
+  .oui-step:not(.is-ask) .oui-step-action { grid-column: 2; justify-self: start; }
+  .oui-step { column-gap: 10px; }
+  .oui-step .oui-btn-icon { width: 24px; height: 24px; margin-top: -2px; }
+  .oui-step .oui-btn-icon::after { inset: -4px 0 -4px -8px; }
+  .oui-step .oui-btn-icon i { font-size: 13px; }
+  .oui-step.is-ask::before { box-shadow: -6px 0 0 var(--color-neutral-900), 6px 0 0 var(--color-neutral-900); }
+}
+
+/* ── the ask arrow ─────────────────────────────────────────────────────── */
+/* The arrow on a table row, a bar, a finding (ask.jsx AskArrow, 28 Oct 2026): quiet at rest, a
+   tertiary arrow in a round target, so a chart of eight bars does not shout eight times. It takes
+   the accent wash when its row or card is pointed at, a solid fill when pressed, and the app's
+   focus ring from the keyboard. Its name is the question it asks. */
+.oui-ask {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-neutral-500);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: background-color 0.14s var(--oui-ease), color 0.14s var(--oui-ease);
+}
+/* Its target is 32px, though the disc is 24px: the target round it is invisible. Its extra width
+   is on the left only, so an arrow at the answer's right edge (a bar's, a step's) never reaches
+   past it and the dock never scrolls sideways. */
+.oui-ask::after { content: ''; position: absolute; inset: -4px 0 -4px -8px; border-radius: 16px; }
+.oui-ask i { font-size: 13px; transition: transform 0.2s var(--oui-ease); }
+.oui-ask:hover:not(:disabled),
+:is(.oui-row, .oui-bar-row, .oui-finding, .md-p[data-lead], .oui-metric):hover .oui-ask:not(:disabled),
+:is(.oui-row, .oui-finding, .md-p[data-lead], .oui-metric):focus-within .oui-ask:not(:disabled) {
+  background: var(--color-accent-900);
+  color: var(--oui-ink-accent);
+}
+.oui-ask:hover:not(:disabled) i,
+:is(.oui-row, .oui-bar-row, .oui-finding, .md-p[data-lead], .oui-metric):hover .oui-ask:not(:disabled) i { transform: translateX(2px); }
+/* Pressed: the deeper accent, whose light ink reads 3.75:1 (the hi-vis accent was under 3:1). */
+.oui-ask:active:not(:disabled) { background: var(--color-accent-600); color: var(--accent-ink); }
+.oui-ask:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.oui-ask:disabled { opacity: 0.4; cursor: default; }
+
+/* ── buttons and follow-ups ────────────────────────────────────────────── */
+.oui-buttons { display: flex; flex-wrap: wrap; gap: var(--oui-s2); }
+/* A button's box is 30px tall on the page and 28px in the dock; its target reaches 2px past it on
+   every side (::after), 32px or more either way (28 Oct 2026). */
+.oui-btn {
+  position: relative;
+  min-height: 30px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  padding: 6px 12px;
+  border-radius: var(--oui-r-ctl);
+  border: 1px solid var(--color-accent);
+  background: transparent;
+  color: var(--oui-ink-accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* A long label wraps inside its box: the dock gives an answer about 190px. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-align: left;
+  text-decoration: none;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease, transform 0.12s ease;
+}
+.oui-btn::after { content: ''; position: absolute; inset: -2px 0 -2px -2px; border-radius: inherit; }
+.oui-btn i { font-size: 11px; transition: transform 0.2s var(--oui-ease); }
+.oui-btn-icon { padding: 6px 8px; }
+.oui-btn-icon i { font-size: 12px; }
+.oui-btn:focus-visible, .oui-chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+/* A secondary button pointed at takes a neutral wash and a firmer edge: the orange stays on the
+   edge and the words it had at rest, and the one filled orange button is the primary. */
+.oui-btn:not(.is-primary, .oui-btn-icon):hover:not(:disabled) { background: var(--color-neutral-900); border-color: var(--color-rule-strong); }
+.oui-btn:hover:not(:disabled) > .ph-arrow-right:last-child { transform: translateX(2px); }
+.oui-btn:hover:not(:disabled) > .ph-arrow-up-right:last-child { transform: translate(1.5px, -1.5px); }
+.oui-btn:active:not(:disabled) { transform: translateY(0.5px); }
+.oui-btn.is-primary { background: var(--color-accent); color: var(--accent-ink); }
+.oui-btn.is-primary:hover:not(:disabled) { background: var(--color-accent-600); }
+.oui-btn:disabled, .oui-btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.oui-btn[aria-disabled="true"] { pointer-events: none; }
+@container oui (max-width: 460px) {
+  .oui-btn { min-height: 28px; padding-top: 5px; padding-bottom: 5px; }
+}
+.oui-followups { display: flex; flex-wrap: wrap; gap: var(--oui-s2); }
+.oui > .oui-followups { margin-top: var(--oui-s1); }
+/* A question to ask next: quiet until pointed at, and never orange (it is not the answer's call
+   to action). */
+/* (28 Oct 2026) A 32px target, the question in full ink so it reads as something to ask rather
+   than a footnote, wrapping inside its pill in the dock. Pointed at, its arrow takes the accent
+   ink and leans toward the question. */
+.oui-chip {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 6px 12px 6px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transition: border-color 0.12s ease, color 0.12s ease, background-color 0.12s ease, opacity 0.12s ease;
+}
+.oui-chip i { flex: none; font-size: 12px; color: var(--color-neutral-500); transition: color 0.12s ease, transform 0.2s var(--oui-ease); }
+.oui-chip:hover:not(:disabled) { border-color: var(--color-rule-strong); background: var(--color-neutral-900); }
+.oui-chip:hover:not(:disabled) i { color: var(--oui-ink-accent); transform: translateX(1px); }
+.oui-chip:active:not(:disabled) { background: var(--color-neutral-800); }
+.oui-chip:disabled { opacity: 0.5; cursor: default; }
+
+/* ── email draft ───────────────────────────────────────────────────────── */
+.oui-email-subject { font-size: 12.5px; font-weight: 600; line-height: 1.4; margin-top: 7px; }
+.oui-email-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  margin-top: 4px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.oui-email-meta > span:nth-child(odd) { color: var(--color-neutral-500); }
+.oui-email-body {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--oui-r-ctl);
+  background: var(--color-neutral-900);
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 260px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-neutral-700) transparent;
+}
+.oui-email-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+/* ── words the model wrote before its program ──────────────────────────── */
+.oui-lead { font-size: 12.5px; line-height: 1.55; margin-bottom: 12px; }
+
+/* ── a note a later check added under the answer ───────────────────────── */
+/* A note a later check added (the answer check's caveat), or words the chat could not draw: a
+   caution beside the answer, not small print under it. The callout's recipe in the warn tone:
+   the tinted card and the icon, no tick. */
+.oui-tail {
+  position: relative;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  margin-top: 12px;
+  padding: 10px 13px 11px 15px;
+  max-width: var(--oui-measure);
+  border-radius: var(--oui-r-card);
+  border: none;
+  background: color-mix(in oklab, var(--st-warn-bg) 55%, var(--color-surface));
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+.oui-tail > i { font-size: 13px; line-height: 1.45; color: var(--st-warn); }
+
+/* ── the reader asked for less motion ──────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .oui *, .oui > * { animation: none !important; transition: none !important; }
+  /* The arrows still change colour when pointed at; they no longer move. */
+  .oui .oui-btn i, .oui .oui-ask i, .oui .oui-chip i { transform: none !important; }
+}

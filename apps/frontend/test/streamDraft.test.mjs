@@ -31,6 +31,10 @@ const EVENTS = [
 const seenNarratives = [];
 globalThis.__snapshot = () => {};
 
+// The gap between events. 0 delivers them as one burst; a test about what was painted mid-stream
+// spaces them like a real stream, since the draft paints once a frame (logic/framePainter.js).
+globalThis.__gap = 0;
+
 globalThis.WebSocket = class {
   constructor(url, protocols) { this.url = String(url); this.protocols = protocols; setTimeout(() => { if (this.onopen) this.onopen(); }, 0); }
   send() {
@@ -40,7 +44,7 @@ globalThis.WebSocket = class {
       const e = EVENTS[i++];
       if (this.onmessage) this.onmessage({ data: JSON.stringify(e) });
       globalThis.__snapshot();
-      setTimeout(pump, 0);
+      setTimeout(pump, globalThis.__gap);
     };
     setTimeout(pump, 0);
   }
@@ -50,27 +54,52 @@ globalThis.WebSocket = class {
 const { configureAuth } = await import('../src/api/client.js');
 const { HoistraLogic } = await import('../src/logic/HoistraLogic.js');
 
-const settle = () => new Promise((r) => setTimeout(r, 120));
+const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 let c;
+// Every draft the screen was actually given: one entry per paint, read off the controller's own
+// change notifications rather than sampled after each event.
+const painted = [];
 beforeEach(() => {
   configureAuth({ getToken: () => 'tok-abc123' });
   c = new HoistraLogic();
   c.setState({ signedIn: true, view: 'chat', sessionId: SESSION });
+  globalThis.__gap = 0;
   seenNarratives.length = 0;
+  painted.length = 0;
   globalThis.__snapshot = () => {
     const s = c.state.ccStream;
     seenNarratives.push(s && s.rich ? s.rich.narrative : null);
   };
+  c.subscribe(() => {
+    const s = c.state.ccStream;
+    const draft = s && s.rich ? s.rich.narrative : '';
+    if (draft && painted[painted.length - 1] !== draft) painted.push(draft);
+  });
 });
 const cleanup = () => { clearInterval(c._ccTick); clearInterval(c._orchTick); clearTimeout(c._ccRetry); };
 const answerOf = () => (c.state.ccChat || []).filter((m) => m.role === 'bot').pop();
 
 test('the draft grows on screen as answer_delta events arrive', async () => {
+  // Spaced like a real stream: each delta lands in a frame of its own, so each is painted.
+  globalThis.__gap = 60;
+  await c.ccAsk('why is Kingsway House over benchmark?');
+  await settle(600);
+  assert.ok(painted.includes('Kingsway House is '), `first delta never painted: ${JSON.stringify(painted)}`);
+  assert.ok(painted.includes('Kingsway House is 38% over its own pack'), 'second delta was not appended to the first');
+  assert.ok(painted.includes('Kingsway House is 38% over its own pack, driven by'), 'third delta was not appended');
+  // Never reordered or dropped: every painted draft starts with the one before it.
+  for (let i = 1; i < painted.length; i += 1) assert.ok(painted[i].startsWith(painted[i - 1]), JSON.stringify(painted));
+  cleanup();
+});
+
+test('a burst of deltas inside one frame is painted once, not once per delta', async () => {
+  // All three deltas and the completion within a few milliseconds: at most one draft paint,
+  // and the final answer still replaces it.
   await c.ccAsk('why is Kingsway House over benchmark?');
   await settle();
-  assert.ok(seenNarratives.includes('Kingsway House is '), `first delta never painted: ${JSON.stringify(seenNarratives)}`);
-  assert.ok(seenNarratives.includes('Kingsway House is 38% over its own pack'), 'second delta was not appended to the first');
-  assert.ok(seenNarratives.includes('Kingsway House is 38% over its own pack, driven by'), 'third delta was not appended');
+  assert.ok(painted.length <= 1, `painted ${painted.length} drafts for one burst: ${JSON.stringify(painted)}`);
+  assert.equal(answerOf().text, FINAL);
+  assert.equal(c.state.ccStream, null, 'a frame queued before the completion must not paint the draft back');
   cleanup();
 });
 

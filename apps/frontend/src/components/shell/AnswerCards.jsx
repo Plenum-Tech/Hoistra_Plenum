@@ -5,7 +5,7 @@
 // with their fields, priority-action cards, and a card for whatever else the section holds (tables,
 // lists, paragraphs, drawn by the plain Markdown renderer). Same order and look as
 // ComplianceAnswer, and never a card inside a card. An answer with no structure is plain Markdown.
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import Markdown, { MarkdownBlocks } from './Markdown.jsx';
 import { inline } from './markdownInline.jsx';
 import { answerCards, toneOf } from '../../logic/answerCards.js';
@@ -14,10 +14,14 @@ import { sev, LABEL, CARD } from './cardStyles.js';
 const TEXT = { fontSize: '11.5px', lineHeight: '1.55', textWrap: 'pretty' };
 
 // A figure's colour: a count of something bad is red unless it is zero; anything else is plain.
+// A zero count of a bad thing ("Overdue: 0") is good news; a zero of a good thing ("Compliant
+// buildings: 0") is not, and a zero percentage or sum says nothing either way (27 Oct 2026).
 function kpiTone(k) {
-  const zero = /^[£$€]?\s?0(?:[.,]0+)?\s?%?$/.test(k.value);
+  const v = String(k.value == null ? '' : k.value).trim();
   const t = toneOf(k.label);
-  return zero && (t === 'critical' || t === 'warning') ? 'ok' : t;
+  if (/^0$/.test(v) && (t === 'critical' || t === 'warning')) return 'ok';
+  if (/^[£$€]?\s?0(?:[.,]0+)?\s?%?$/.test(v) && t === 'ok') return 'neutral';
+  return t;
 }
 
 function Kpis({ kpis }) {
@@ -134,8 +138,8 @@ function Section({ s, i }) {
   );
 }
 
-export default function AnswerCards({ text }) {
-  const m = answerCards(text);
+function AnswerCards({ text }) {
+  const m = useMemo(() => answerCards(text), [text]);
   if (!m) return <Markdown text={text} />;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '11px', minWidth: '0' }}>
@@ -151,3 +155,7 @@ export default function AnswerCards({ text }) {
     </div>
   );
 }
+
+// The whole app re-renders on every keystroke and every painted frame of a streaming answer
+// (logic/useHoistra.js); an answer whose text has not changed is not laid out again.
+export default memo(AnswerCards, (a, b) => a.text === b.text);

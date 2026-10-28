@@ -160,6 +160,9 @@ from .compliance_router import compliance_skill_path_enabled
 from . import activity_log
 from . import contract_answer
 from . import llm_cost
+from . import openui_view
+from . import answer_presenter
+from . import lenient_json
 from .skills import fm_lens, prompt_doc
 from .context_budget import compact_context, make_hook as make_context_hook
 from . import register_digest
@@ -4851,7 +4854,11 @@ class DeepAgentOrchestrator:
             "",
         )
         try:
-            payload = json.loads(raw)
+            # A model's slip (a trailing comma, a missing value) is read as meant, never guessed
+            # at (agents/lenient_json.py); the payload is validated below as any other.
+            payload, slips = lenient_json.loads(raw)
+            if slips:
+                log.info("compliance.analyst.repaired", slips=sorted(set(slips)))
         except Exception as exc:  # noqa: BLE001
             log.warning("compliance.analyst.unparsable", error=str(exc)[:200])
             activity_log.fire(
@@ -6352,6 +6359,16 @@ class DeepAgentOrchestrator:
         t0 = time.perf_counter()
         try:
             msg = await self._llm.ainvoke([_S(content=system), _H(content=user)])
+        except asyncio.CancelledError:
+            # Abandoned by a timeout (the layout's): the call still ran and was billed, and what
+            # it cost is unknown, so the turn's cost says it is incomplete rather than leaving it out.
+            ms = (time.perf_counter() - t0) * 1000
+            activity_log.fire_exchange(agent="orchestrator", stage=role, system=system, user=user,
+                                       error="cancelled (timed out)", latency_ms=ms)
+            entry = llm_cost.record(role, settings.openai_model, {}, ms, cancelled=True)
+            if entry is not None:
+                entry["usd"] = None
+            raise
         except Exception as exc:
             activity_log.fire_exchange(agent="orchestrator", stage=role, system=system, user=user, error=str(exc)[:300],
                                        latency_ms=(time.perf_counter() - t0) * 1000)
@@ -6491,6 +6508,7 @@ class DeepAgentOrchestrator:
         """Replay a recorded turn with corrections applied (agents/rerun.py): the corrected plan is
         executed step by step, synthesised and verified, and recorded as a new turn in the same
         thread, linked to the original. Returns what the chat shows."""
+        openui_view.CHAT_TURN.set(True)  # the corrected answer goes back to the chat (see stream())
         from . import rerun as _rerun
 
         plan = _rerun.plan_of(turn)
@@ -6619,6 +6637,15 @@ class DeepAgentOrchestrator:
         # or energy step); what the chat is sent must be what the thread records.
         tool_calls = list(result.get("tool_calls") or tool_calls)
         await self._close_streamed_turn(session_id, result, t0)
+        # Laid out as the original was (see stream()), so the corrected answer keeps its charts.
+        # The re-run answers in one response, so the layout is part of it.
+        if answer_presenter.wanted(answer, tool_calls):
+            view = await answer_presenter.present(question, answer, self._planner_llm)
+            tool_calls, cost = self._with_turn_cost(tool_calls)
+            if view is not None:
+                tool_calls.append(openui_view.payload_entry(view))
+            if view is not None or cost is not None:
+                await chat_threads.record_view(session_id, view, cost, answer=answer)
         return {"ok": True, "turn_id": new_turn_id, "rerun_of": turn.get("turn_id"), "question": rq, "answer": answer,
                 "tool_calls": tool_calls, "plan": plan, "applied": notes, "verify": check,
                 "latency_ms": int((time.perf_counter() - t0) * 1000)}
@@ -7402,6 +7429,8 @@ class DeepAgentOrchestrator:
 
         tool_calls = _extract_tool_calls(messages)
         answer = _extract_answer(messages)
+        # An OpenUI answer leaves as its Markdown rendition, the program beside it (see stream()).
+        answer, openui = openui_view.split_answer(answer) if interrupt_payload is None else (answer, None)
         # The general path reaches the vendor tools too — the meta agent hands the question to
         # the contract sub-agent through `task` whenever the keyword table missed. Composing
         # here as well is what stops the same question answering in cards or in prose depending
@@ -7430,6 +7459,7 @@ class DeepAgentOrchestrator:
                 tool_calls = [*tool_calls, panel]
         if interrupt_payload is None:
             tool_calls = [*tool_calls, *self._loop_cards(_latest_user_message(input_), tool_calls, str(answer or ""))]
+            tool_calls = openui_view.attach(openui, str(answer or ""), tool_calls)
         out = {
             "session_id": session_id,
             "answer": answer,
@@ -7899,6 +7929,64 @@ class DeepAgentOrchestrator:
         session_id: str | None = None,
         extra_context: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
+        """The chat's turn (_stream_turn), with its finished answer laid out for the chat.
+
+        Every route ends in one workflow_completed event, sent the moment the turn has recorded its
+        answer. An answer that has no layout of its own (the engines', the planner's, the
+        compliance summary's Markdown) is then laid out by the model as an OpenUI view
+        (agents/answer_presenter.py) and sent after it as one `answer_view` event:
+        {session_id, view: {v, lang, tail?} | None, cost: <the turn's cost> | None}. view is None
+        when the layout was not sent (no model, too slow, not faithful): the chat keeps drawing the
+        answer as it has it. The answer itself is never held back for the layout or changed by it,
+        so a slow layout, a Stop or a dropped socket during it costs only the layout (27 Oct 2026:
+        the answer waited up to 40 s, and a Stop in that wait discarded it). The view is stored on
+        the turn, so a reopened chat draws it the same way. The layout's model call is part of what
+        the turn cost: the pipeline panel's cost, written before it, is brought up to date, live
+        through `cost` and in the stored thread."""
+        pending: dict[str, Any] | None = None
+        turn = self._stream_turn(user_message, session_id, extra_context)
+        try:
+            async for event in turn:
+                if (isinstance(event, dict) and event.get("type") == "workflow_completed"
+                        and answer_presenter.wanted(event.get("answer"), event.get("tool_calls"), choices=event.get("choices"))):
+                    pending = event
+                yield event
+        finally:
+            await turn.aclose()
+        if pending is None:
+            return
+        sid = pending.get("session_id") or session_id
+        yield {"type": "reasoning", "label": "Layout", "domain": "orchestrator",
+               "text": "Laying the answer out for the chat.", "session_id": sid}
+        view = await answer_presenter.present(user_message, str(pending.get("answer") or ""), self._planner_llm)
+        _calls, cost = self._with_turn_cost(list(pending.get("tool_calls") or []))
+        if sid and (view is not None or cost is not None):
+            await chat_threads.record_view(sid, view, cost, answer=str(pending.get("answer") or ""))
+        yield {"type": "answer_view", "session_id": sid, "view": view, "cost": cost}
+
+    @classmethod
+    def _with_turn_cost(cls, tool_calls: list[Any]) -> tuple[list[Any], dict[str, Any] | None]:
+        """The turn's pipeline panels with the cost as it stands now, and that cost (None when the
+        turn keeps no ledger or no panel carries a cost)."""
+        ledger = llm_cost.current()
+        if ledger is None:
+            return tool_calls, None
+        cost: dict[str, Any] | None = None
+        out: list[Any] = []
+        for t in tool_calls:
+            if (isinstance(t, dict) and t.get("tool") == cls.PIPELINE_PANEL_TOOL
+                    and isinstance(t.get("output"), dict) and isinstance(t["output"].get("cost"), dict)):
+                cost = cost or ledger.summary()
+                t = {**t, "output": {**t["output"], "cost": cost}}
+            out.append(t)
+        return out, cost
+
+    async def _stream_turn(
+        self,
+        user_message: str,
+        session_id: str | None = None,
+        extra_context: str | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream workflow events as typed dicts for WebSocket delivery.
 
@@ -7913,6 +8001,9 @@ class DeepAgentOrchestrator:
         Uses session_id as LangGraph thread_id (same as run_stateful) so checkpoint
         history accumulates. Session conversation_turns backstop when HITL is off.
         """
+        # The chat's turn: its answer is written in OpenUI (agents/openui_view.py). REST callers
+        # (report cards, /run, the Skill lab) read `answer` as text and are not taught the format.
+        openui_view.CHAT_TURN.set(True)
         sid = session_id or str(uuid.uuid4())
         thread_id = sid
         config = self._config(thread_id)
@@ -8329,6 +8420,9 @@ class DeepAgentOrchestrator:
             yield {"type": "error", "error": err, "session_id": sid}
             return
 
+        # The loop writes its answer as OpenUI (the chat drew it live from the deltas). From here
+        # on `answer` is its Markdown rendition, and the program rides the tool calls as a card.
+        final_answer, openui = openui_view.split_answer(final_answer)
         if has_udr_tool_calls(streamed_tool_calls):
             final_answer, _ = await evaluate_udr_response(
                 user_message=user_message,
@@ -8348,6 +8442,7 @@ class DeepAgentOrchestrator:
             if panel:
                 streamed_tool_calls = [*streamed_tool_calls, panel]
         streamed_tool_calls = [*streamed_tool_calls, *self._loop_cards(user_message, streamed_tool_calls, final_answer)]
+        streamed_tool_calls = openui_view.attach(openui, final_answer, streamed_tool_calls)
         # Recorded after the panel and the cards, so a chat reopened from the server shows the
         # answer as it rendered here.
         if final_answer.strip():

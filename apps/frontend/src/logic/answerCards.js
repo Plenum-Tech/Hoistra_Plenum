@@ -37,14 +37,23 @@ export function titleOf(item) {
 // "61" · "£230,160.70 (for those with available costs)" · "156.8%" · "16 (8 flagged by energy)"
 // · "500 items in the approvals queue." A date, an id or a code is not a figure.
 const FIGURE = /^((?:[£$€]\s?)?[-+]?\d[\d,]*(?:\.\d+)?(?:\s?%|[kKmM]\b)?)(.*)$/;
+// 27 Oct 2026: a tile shows its figure big and the rest small, so the figure must be the whole
+// reading. A date ("28 Oct 2026", "1st March 2026") is not a count of 28; a change ("2.04 points
+// lower than August") is not the level. Both stay the list text they were written as.
+const DATE_TAIL = /^(?:st|nd|rd|th)?\s*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?:\s+\d{2,4}\b|\s*,|\s*$)/i;
+const CHANGE_TAIL = /^(?:(?:percentage\s+)?(?:points?|pts?|pp|days?|hours?|hrs?)\s+)?(?:lower|higher|more|less|fewer|up|down|increase[ds]?|decrease[ds]?|rise|rose|fall|fell|drop(?:ped)?|better|worse)\b/i;
 export function kpiOf(kv) {
   if (!kv || kv.key.length > 48) return null;
   const v = unbold(kv.value);
   if (/^\d{4}-\d{2}-\d{2}/.test(v)) return null;
   const m = FIGURE.exec(v);
   if (!m) return null;
+  // A unit glued to the number ("4h 30m", "3d", "10am") is not a plain figure: the tile would
+  // read "4" with "h 30m" under it.
+  if (/^[A-Za-z]/.test(m[2])) return null;
   const rest = m[2].trim();
   if (/^[-/.:]\d|^[A-Za-z]{0,3}\d/.test(rest)) return null;          // 9920-1010-…, B-301, 3.4.1
+  if (DATE_TAIL.test(rest) || CHANGE_TAIL.test(rest)) return null;
   // The rest of the line is kept exactly as written: "(8 flagged by energy)", "items in the queue."
   if (rest.length > 80) return null;
   return { value: m[1].trim(), label: kv.key, sub: rest };
@@ -57,10 +66,14 @@ const SUMMARY = /^(summary|conclusion|overall|in summary|bottom line|in short|ke
 const RISK = /risk|lapsed|overdue|blocked|threat|critical|fail|missed|\blate\b|breach|non[- ]?compliant|anomal|behind|poor|expired/i;
 const WARN = /watch|expir|due\b|pending|warning|attention|approval|queue/i;
 const GOOD = /\bcompliant\b|in control|healthy|on track|completed/i;
+// 27 Oct 2026: a good word negated is the bad count ("Buildings not compliant: 3" was green), and
+// "low risk" is not a risk (it was red).
+const NEGATED = /\b(?:not|non|un)[- ]?(?:compliant|in control|completed|on track|healthy)\b/i;
+const LOW_RISK = /\blow[- ]risk\b/gi;
 
 export function toneOf(title) {
-  const t = String(title || '');
-  return RISK.test(t) ? 'critical' : WARN.test(t) ? 'warning' : GOOD.test(t) ? 'ok' : 'neutral';
+  const t = String(title || '').replace(LOW_RISK, ' ');
+  return NEGATED.test(t) || RISK.test(t) ? 'critical' : WARN.test(t) ? 'warning' : GOOD.test(t) ? 'ok' : 'neutral';
 }
 
 // Heading text as written, without the markdown marks and the trailing colon:
@@ -118,17 +131,26 @@ function arrangeList(b, inActions) {
     } else if (last && last.t === 'block') {
       last.block.items.push(it);
       last.block.indents.push((b.indents || [])[j] || 0);
+      last.block.marks.push((b.marks || [])[j]);
     } else {
-      out.push({ t: 'block', block: { t: 'list', ordered: b.ordered, start: (b.start || 1) + j, items: [it], indents: [(b.indents || [])[j] || 0] } });
+      // A run split off the list starts at its own first number, not at its position: a sub-bullet
+      // above it is not one of the numbered items (27 Oct 2026).
+      const mark = (b.marks || [])[j];
+      const start = mark && /^\d/.test(mark) ? parseInt(mark, 10) : (b.start || 1) + j;
+      out.push({ t: 'block', block: { t: 'list', ordered: b.ordered, start: start, items: [it], indents: [(b.indents || [])[j] || 0], marks: [mark] } });
     }
   });
   return out;
 }
 
 // A paragraph that is nothing but a short bold line reads as a heading: "**Contracts Behind Plan:**".
+// A bold sentence ("**Three certificates lapse this month.**") is the answer saying it loudly, not
+// a label: as a heading it shrank to a grey caption and the next sentence took the headline (27
+// Oct 2026). A bold question still heads what answers it.
 function asHeading(b) {
   if (b.t !== 'p' || b.body.indexOf('\n') > -1) return null;
   const t = titleOf(b.body);
+  if (t && /[.!]$/.test(t)) return null;
   return t && t.length <= 90 ? { t: 'h', level: 4, body: t } : null;
 }
 
@@ -182,11 +204,18 @@ export function answerCards(text) {
     const onlyText = s.raw.every((b) => b.t === 'p');
     const kind = inActions ? 'actions' : (SUMMARY.test(s.title) && onlyText) ? 'summary' : 'card';
     const parts = [];
-    for (const b of s.raw) {
+    s.raw.forEach((b, j) => {
+      const last = parts[parts.length - 1];
       if (b.t === 'list') parts.push(...arrangeList(b, inActions));
-      else if (inActions && b.t === 'p') parts.push({ t: 'actions', actions: [{ text: b.body.trim(), subs: [] }] });
+      // An indented paragraph right after an action is that action's detail ("1. **Book it**\n
+      // The certificate expires Friday."), not one more numbered action (27 Oct 2026).
+      else if (inActions && b.t === 'p' && /^[ \t]+\S/.test(b.body) && last && last.t === 'actions' && last.actions.length)
+        last.actions[last.actions.length - 1].subs.push(b.body.split('\n').map((l) => l.trim()).join(' '));
+      // A lead-in ending in ':' right before a list introduces the actions; it is not one.
+      else if (inActions && b.t === 'p' && !(/:\s*$/.test(b.body) && s.raw[j + 1] && s.raw[j + 1].t === 'list'))
+        parts.push({ t: 'actions', actions: [{ text: b.body.trim(), subs: [] }] });
       else parts.push({ t: 'block', block: b });
-    }
+    });
     // adjacent action runs read as one list
     const merged = [];
     for (const p of parts) {

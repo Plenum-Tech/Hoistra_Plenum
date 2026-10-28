@@ -377,6 +377,10 @@ services:
       # `npm run dev`, since this bind-mount limitation is specific to the container.
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "300"
+      # @openuidev/lang-core's postinstall reports each install to its vendor; the install
+      # below runs on every start, so it is switched off here (as in the image builds).
+      OPENUI_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
     command: sh -c "npm install --no-audit --no-fund && npm run dev"
     ports:
       - "5174:5174"

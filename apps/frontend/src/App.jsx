@@ -35,9 +35,19 @@ import ReportBuilder from './components/shell/ReportBuilder.jsx';
 import InstancePicker from './screens/InstancePicker.jsx';
 import HoistVendors from './screens/HoistVendors.jsx';
 import HoistGraph from './screens/HoistGraph.jsx';
+import { preloadOpenUI } from './openui/host.js';
 
 export default function App() {
   const vals = useHoistra();
+  // The renderer for the orchestrator's OpenUI answers is its own chunk (src/openui), fetched once
+  // the shell is idle after sign-in, so the first answer drawn with it never waits on the network.
+  React.useEffect(() => {
+    if (!vals.signedIn) return undefined;
+    const idle = window.requestIdleCallback || ((cb) => window.setTimeout(cb, 1500));
+    const cancel = window.cancelIdleCallback || window.clearTimeout;
+    const id = idle(() => { preloadOpenUI().catch(() => {}); });
+    return () => cancel(id);
+  }, [vals.signedIn]);
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", display: "flex", flexDirection: "column", paddingLeft: vals.shellPad }}>
       {vals.gated ? <Gate vals={vals} /> : null}

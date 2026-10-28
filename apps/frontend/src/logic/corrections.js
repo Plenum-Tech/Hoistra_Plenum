@@ -17,6 +17,7 @@
 // until the reader acts. Pure functions are tested in test/corrections.test.mjs.
 import { deepAgentsApi } from '../api/deepAgents.js';
 import { extractComplianceAnswer } from './complianceLive.js';
+import { callNames, extractOpenUIView } from './openuiView.js';
 
 // Whether a thumbs-down reason is enough to become a teaching - the server's own rule
 // (agents/auto_teach.py: twelve characters or more, not a one-word verdict), so the box can
@@ -116,6 +117,9 @@ export function rowsFromRun(spans, open) {
         key: k.id, icon: KIND_ICON[k.kind] || 'ph-circle', mono: k.kind === 'tool' || k.kind === 'db',
         title: k.name + (k.model ? ' · ' + k.model : ''), detail: detail,
         meta: [fmtMs(k.latency_ms), fmtUsd(k.cost_usd)].filter(Boolean).join(' · '),
+        // (28 Oct 2026) The same facts again, kept apart, so the rail can set the name, its
+        // model and its time each in its own place. title and meta above stay as they were.
+        kind: k.kind, name: k.name, model: k.model || '', dur: fmtMs(k.latency_ms), usd: fmtUsd(k.cost_usd),
         depth: depth, ok: ok, parts: [], issues: [],
         correct: () => open(k.id, KIND_MODE[k.kind] || 'suggestion')
       });
@@ -268,8 +272,9 @@ export const correctionMethods = {
         ccBusy: false, ccStream: null,
         // The same structured outputs a first answer renders as the dashboard (compliance_response
         // / compliance_pipeline); without them a corrected answer fell back to plain markdown.
-        ccChat: (p.ccChat || []).concat([{ role: 'bot', text: out.answer || '', calls: (out.tool_calls || []).map((t) => t.tool).filter(Boolean),
+        ccChat: (p.ccChat || []).concat([{ role: 'bot', text: out.answer || '', calls: callNames(out.tool_calls || []),
           rich: extractComplianceAnswer(out.tool_calls || []),
+          view: extractOpenUIView(out.tool_calls || []),
           trace: [{ at: 0, kind: 'reasoning', label: 'Re-run', text: 'Steps replayed with your correction: ' + (out.applied || []).join('; ') }]
             .concat((out.taught || []).length ? [{ at: 0, kind: 'reasoning', label: 'Taught', text: 'Remembered for similar questions: ' + out.taught.join(' · ') }] : []),
           ms: Date.now() - t0, turnId: out.turn_id || null, rerunOf: out.rerun_of || o.turnId }])

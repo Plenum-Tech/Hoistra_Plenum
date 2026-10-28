@@ -1,12 +1,17 @@
 // OrchestratorDock — the agent dock and its flows
 // Ported from the Hoistra prototype template. `vals` is the view model from useHoistra().
 import React, { useEffect, useRef } from 'react';
-import AnswerCards from './AnswerCards.jsx';
 import ChoiceCards from './ChoiceCards.jsx';
 import ComplianceAnswer from './ComplianceAnswer.jsx';
+import EmailComposer from './EmailComposer.jsx';
 import HoistBuildingCard from './HoistBuildingCard.jsx';
 import VendorHoistChat from './VendorHoistChat.jsx';
 import { useFollowBottom } from './useFollowBottom.js';
+// Answers the orchestrator wrote as OpenUI, drawn with the Hoistra components (src/openui).
+import LazyOpenUIAnswer from '../../openui/LazyOpenUIAnswer.jsx';
+// Every other answer is Markdown, drawn with the same components (openui/fromMarkdown.js).
+import AnyAnswer from '../../openui/AnyAnswer.jsx';
+import { OpenUIHostContext } from '../../openui/host.js';
 
 export default function OrchestratorDock({ vals }) {
   // The dock's transcript region scrolls on its own; follow the answer as it streams in,
@@ -19,10 +24,16 @@ export default function OrchestratorDock({ vals }) {
     const el = scrollRef.current;
     if (!vals.orchFlowKey || !el) return;
     follow.release();
-    if (el.scrollTo) el.scrollTo({ top: 0, behavior: "smooth" }); else el.scrollTop = 0;
+    // At once, not smoothly (28 Oct 2026): a smooth climb from the bottom of a long answer sends
+    // its first scroll events from within the follow's "near the bottom" band, which re-arms the
+    // follow, and it glided the region straight back down past the draft that had just opened.
+    el.scrollTop = 0;
+    // An email draft that opens puts the cursor in its To line, the thing to check first.
+    const to = typeof document !== "undefined" ? document.getElementById("emc-dock-to") : null;
+    if (to && to.focus) to.focus({ preventScroll: true });
   }, [vals.orchFlowKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <>
+    <OpenUIHostContext.Provider value={vals.openuiHost}>
       {/* Drag the right edge to widen the dock. Widen only — it never goes below the
           flow's default width — and it stops at a hard maximum. Double-click to reset. */}
       <div
@@ -410,73 +421,10 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
-        {vals.fEmail ? (
-          <>
-            <div style={{ marginTop: "16px", padding: "12px", borderRadius: "9px", background: "var(--color-bg)", border: "1px solid var(--color-accent)" }}>
-              <div style={{ fontSize: "9.5px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-accent)" }}>
-                {vals.em.kicker}
-              </div>
-              {/* Already sent: what went out and when, and the reminder / new-request switch. */}
-              <div style={{ display: vals.em.prevShow, marginTop: "9px", padding: "8px 10px", borderRadius: "7px", background: "var(--st-warn-bg)", border: "1px solid var(--st-warn)", fontSize: "11px", lineHeight: "1.5" }}>
-                <div style={{ display: "flex", gap: "7px", alignItems: "flex-start" }}>
-                  <i className="ph ph-clock-counter-clockwise" style={{ fontSize: "13px", color: "var(--st-warn)", flexShrink: "0", marginTop: "1px" }}></i>
-                  <span style={{ color: "var(--color-text)" }}>
-                    {vals.em.prevNote}{" "}
-                    <span style={{ color: "var(--color-neutral-500)" }}>
-                      {vals.em.prevIsReminder ? "This draft is a reminder of it." : "This draft is a new request."}
-                    </span>
-                  </span>
-                </div>
-                <span className="hv11" onClick={vals.em.prevSwitch} style={{ display: "inline-block", marginTop: "5px", marginLeft: "20px", color: "var(--color-accent)", cursor: "pointer", fontSize: "10.5px" }}>
-                  {vals.em.prevSwitchLabel}
-                </span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "7px", marginTop: "10px" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                    {"To"}
-                  </span>
-                  <input className="input" value={vals.em.to} onChange={vals.em.setTo} placeholder="name@organisation.com" style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                    {"Subject"}
-                  </span>
-                  <span style={{ fontSize: "11.5px", lineHeight: "1.4" }}>
-                    <input className="input" value={vals.em.subject} onChange={vals.em.setSubject} style={{ width: "100%", boxSizing: "border-box", fontSize: "11.5px", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
-                  </span>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <span style={{ fontSize: "9.5px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-neutral-500)" }}>
-                    {"Draft"}
-                  </span>
-                  <textarea className="input" value={vals.em.body} onChange={vals.em.setBody} rows="7" style={{ width: "100%", boxSizing: "border-box", fontSize: "11px", lineHeight: "1.5", padding: "7px 8px", borderRadius: "6px", border: "1px solid var(--color-divider)", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none", resize: "vertical" }}></textarea>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "6px", marginTop: "11px" }}>
-                <div className="hv13" onClick={vals.em.openPack} title="Open the generated evidence pack" style={{ display: vals.em.packShow, alignItems: "center", gap: "8px", width: "100%", marginBottom: "8px", padding: "7px 9px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", cursor: "pointer", boxSizing: "border-box" }}>
-                  <i className="ph ph-paperclip" style={{ fontSize: "13px", color: "var(--color-accent)", flexShrink: "0" }}></i>
-                  <span style={{ flex: "1", minWidth: "0", fontSize: "11px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {vals.em.packName}
-                  </span>
-                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", flexShrink: "0" }}>
-                    {vals.em.packSize}
-                  </span>
-                </div>
-                {/* The send is a real outbound call now, so the control says it is working
-                    and stops accepting clicks while it does. A second click on a slow send
-                    is a second email to the same vendor. A sample card's draft is never sent,
-                    and the control says so rather than looking pressable. */}
-                <div className="hv7" onClick={vals.em.sendBusy ? undefined : vals.em.send} style={{ flex: "1", textAlign: "center", fontSize: "11.5px", padding: "6px", borderRadius: "7px", background: "var(--color-accent)", color: "var(--accent-ink)", cursor: vals.em.sendBusy || vals.em.sample ? "default" : "pointer", opacity: vals.em.sendBusy || vals.em.sample ? 0.6 : 1 }}>
-                  {vals.em.sendBusy ? "Sending…" : vals.em.sample ? "Sample — not sent" : vals.em.prevIsReminder ? "Approve & send reminder" : "Approve & send"}
-                </div>
-                <div className="hv11" onClick={vals.fCancel} style={{ fontSize: "11.5px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", color: "var(--color-neutral-500)", cursor: "pointer" }}>
-                  {"Cancel"}
-                </div>
-              </div>
-            </div>
-          </>
-        ) : null}
+        {/* The email draft (components/shell/EmailComposer.jsx, 28 Oct 2026): the same card the
+            chat page draws under an answer, now with real buttons and labelled fields. The send
+            and every label are unchanged; the result strip below (fDone) still reports it here. */}
+        {vals.fEmail ? <EmailComposer em={vals.em} onCancel={vals.fCancel} variant="dock" /> : null}
         {vals.fInvestigate ? (
           <>
             <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -718,10 +666,13 @@ export default function OrchestratorDock({ vals }) {
             </div>
           </>
         ) : null}
+        {/* What a flow left behind. A send that did not go ("Not sent", "Not confirmed") or went
+            only part of the way (a dry run, a handoff) is no longer drawn with the green tick of a
+            delivered one: renderVals' fDoneTone picks the colour (28 Oct 2026). */}
         {vals.fDone ? (
           <>
-            <div style={{ marginTop: "16px", padding: "11px 12px", borderRadius: "9px", background: "var(--st-ok-bg)", display: "flex", gap: "9px", alignItems: "flex-start" }}>
-              <i className="ph ph-check-circle" style={{ fontSize: "14px", color: "var(--st-ok)", marginTop: "1px" }}></i>
+            <div role="status" style={{ marginTop: "16px", padding: "11px 12px", borderRadius: "9px", background: vals.fDoneTone === "ok" || !vals.fDoneTone ? "var(--st-ok-bg)" : vals.fDoneTone === "risk" ? "var(--st-risk-bg)" : "var(--st-warn-bg)", display: "flex", gap: "9px", alignItems: "flex-start" }}>
+              <i className={`ph ${vals.fDoneTone === "risk" ? "ph-warning-circle" : vals.fDoneTone === "warn" ? "ph-info" : "ph-check-circle"}`} aria-hidden="true" style={{ fontSize: "14px", color: vals.fDoneTone === "risk" ? "var(--st-risk)" : vals.fDoneTone === "warn" ? "var(--st-warn)" : "var(--st-ok)", marginTop: "1px" }}></i>
               <span style={{ fontSize: "11px", lineHeight: "1.5", color: "var(--color-text)" }}>
                 {vals.fDoneText}
               </span>
@@ -773,9 +724,9 @@ export default function OrchestratorDock({ vals }) {
                       </span>
                     </div>
                   ) : (
-                    <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.5", textWrap: "pretty", animation: "fadeUp 0.25s ease both" }}>
+                    <div style={{ maxWidth: "96%", minWidth: "0", padding: "9px 11px", borderRadius: "10px 10px 10px 3px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "11.5px", lineHeight: "1.5", textWrap: "pretty", animation: m.enter }}>
                       {m.rich
-                        ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} />
+                        ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} view={m.view} viewTail={m.viewTail} />
                         : m.isNote
                           ? <div style={{ display: "grid", gridTemplateColumns: "13px minmax(0,1fr)", gap: "7px", alignItems: "start" }}>
                               <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "12px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "2px" }}></i>
@@ -783,13 +734,22 @@ export default function OrchestratorDock({ vals }) {
                             </div>
                           : (m.choices || []).length
                             ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} compact />
-                            : <AnswerCards text={m.text} />}
+                            : m.view ? <LazyOpenUIAnswer text={m.view} tail={m.viewTail} fallbackText={m.text} /> : <AnyAnswer text={m.text} />}
                       <div style={{ display: m.interruptShow, fontSize: "10px", color: "var(--color-accent)", marginTop: "6px" }}>
                         {"Paused for approval before finishing."}
+                      </div>
+                      {/* A turn stopped, or cut off, after its answer had begun: what arrived is
+                          shown above, and this says it is not the whole answer. */}
+                      <div style={{ display: m.stoppedShow, fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "6px" }}>
+                        {m.stopNote}
                       </div>
                       <div style={{ display: m.toolsShow, fontFamily: "ui-monospace,monospace", fontSize: "9.5px", color: "var(--color-neutral-500)", marginTop: "7px", paddingTop: "6px", borderTop: "1px solid var(--color-divider)" }}>
                         {m.tools}
                       </div>
+                      {/* The finished answer is being laid out (answer_view on its socket): a quiet
+                          last line, under everything, so nothing above it moves when it comes or
+                          goes (styles/answer.css). */}
+                      {m.layingOut ? <div className="ans-laying is-line" role="status">{"Laying out…"}</div> : null}
                     </div>
                   )}
                 </React.Fragment>
@@ -799,7 +759,7 @@ export default function OrchestratorDock({ vals }) {
                   {/* Painted from the stream: the steps and the answer's zones appear as
                       the orchestrator produces them, not all at once at the end. */}
                   <div style={{ display: vals.orchLiveShow }}>
-                    <ComplianceAnswer rich={vals.orchLiveRich} open={true} onToggle={() => {}} />
+                    <ComplianceAnswer rich={vals.orchLiveRich} open={true} onToggle={() => {}} live />
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
                   <i className="ph ph-circle-notch" style={{ fontSize: "12px", color: "var(--color-accent)" }}></i>
@@ -852,7 +812,10 @@ export default function OrchestratorDock({ vals }) {
               <input type="file" multiple accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,image/*" onChange={vals.orchPickFiles} style={{ display: "none" }} />
             </label>
           )}
-          <input id="orch-composer" className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder={vals.orchPlaceholder} style={{ flex: "1", minWidth: "0", fontSize: "12px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
+          {/* autoFocus: the dock mounts only while it is open (App.jsx), so the composer has the
+              caret in the same commit that shows it. Focused 80 ms later, the first letters the
+              reader typed went to the page ("hich vendors…", 27 Oct 2026). */}
+          <input id="orch-composer" className="input" value={vals.orchQuery} onChange={vals.setOrchQuery} onKeyDown={vals.orchKey} placeholder={vals.orchPlaceholder} autoFocus style={{ flex: "1", minWidth: "0", fontSize: "12px", padding: "8px 10px", borderRadius: "7px", border: "1px solid var(--color-divider)", background: "var(--color-bg)", color: "var(--color-text)", fontFamily: "var(--font-body)", outline: "none" }} />
           <div className="hv7" onClick={vals.orchSendClick} title={vals.orchSendTitle} style={{ width: "34px", borderRadius: "7px", background: vals.orchSendBg, color: "var(--accent-ink)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: "0" }}>
             <i className={`ph ${vals.orchSendIcon}`} style={{ fontSize: "13px" }}></i>
           </div>
@@ -861,6 +824,6 @@ export default function OrchestratorDock({ vals }) {
           {"Every instruction is stored as a session, whichever page it was raised from."}
         </div>
       </div>
-    </>
+    </OpenUIHostContext.Provider>
   );
 }

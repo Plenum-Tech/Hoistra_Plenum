@@ -19,6 +19,7 @@ import { domainOf } from './chat.js';
 import { dayLabel } from './homeLive.js';
 import { deepAgentsApi } from '../api/deepAgents.js';
 import { extractComplianceAnswer } from './complianceLive.js';
+import { callNames, extractOpenUIView } from './openuiView.js';
 import { readSupport, supportRef, supportStatus, SUPPORT_SPACE_KEY } from './support.js';
 
 export const SESSIONS_KEY = 'hoistra.sessions.v1';
@@ -108,12 +109,14 @@ export function makeSession(o) {
 
 const uniq = (xs) => xs.filter((x, i, a) => x && a.indexOf(x) === i);
 
-// Which engine a session belongs to: a structured compliance answer is Compliance outright,
-// otherwise the tools the thread used decide (domainOf, the same rule the chat page applies
-// per reply).
+// Which engine a session belongs to: the tools the thread used decide (domainOf, the same rule
+// the chat page applies per reply). A structured answer is Compliance only when no tool names
+// came with it (a stream cut short, a turn stored before names were kept): every routed engine
+// attaches the card panel (compliance_pipeline), so "has cards" filed every vendor, energy and
+// work-order conversation under Compliance with the shield icon (27 Oct 2026).
 export function sessionDomain(rec) {
   if (!rec) return 'Orchestrator';
-  if ((rec.turns || []).some((m) => m && m.role !== 'you' && m.rich)) return 'Compliance';
+  if (!(rec.calls || []).length && (rec.turns || []).some((m) => m && m.role !== 'you' && m.rich)) return 'Compliance';
   return domainOf(rec.calls || []);
 }
 
@@ -230,10 +233,13 @@ export function turnsFromThread(thread) {
   ((thread && thread.turns) || []).forEach((t) => {
     if (!t) return;
     const tools = Array.isArray(t.tools) ? t.tools : [];
-    const calls = tools.filter((x) => typeof x === 'string');
+    const calls = callNames(tools.filter((x) => typeof x === 'string'));
     // The dashboard payloads the server keeps beside the names (services/chat_threads.py
     // _card_payloads): the answer reopens as it rendered live. Older rows have names only.
-    const rich = extractComplianceAnswer(tools.filter((x) => x && typeof x === 'object' && typeof x.tool === 'string'));
+    const payloads = tools.filter((x) => x && typeof x === 'object' && typeof x.tool === 'string');
+    const rich = extractComplianceAnswer(payloads);
+    // The OpenUI view the answer was drawn with, kept beside the cards (logic/openuiView.js).
+    const view = extractOpenUIView(payloads);
     const stored = String(t.question || '');
     if (t.route === 'rerun' && RERUN_LEAD.test(stored)) {
       let qi = -1;
@@ -242,11 +248,11 @@ export function turnsFromThread(thread) {
       const original = rerunOriginal(stored, prev);
       if (qi > -1 && prev === original) out.splice(qi);
       out.push({ role: 'you', text: original, correction: 'Re-run with your correction', rerun: true });
-      if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls, asked: stored, rerunOf: true }, rich ? { rich: rich } : {}));
+      if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls, asked: stored, rerunOf: true }, rich ? { rich: rich } : {}, view ? { view: view } : {}));
       return;
     }
     if (t.question) out.push({ role: 'you', text: stored });
-    if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls }, rich ? { rich: rich } : {}));
+    if (t.answer) out.push(Object.assign({ role: 'bot', text: String(t.answer), calls: calls }, rich ? { rich: rich } : {}, view ? { view: view } : {}));
   });
   return out.slice(-MAX_TURNS);
 }
@@ -300,7 +306,11 @@ export function loadSessions(storage) {
     rec.turns = Array.isArray(r.turns) ? r.turns.filter((m) => m && typeof m === 'object' && typeof m.role === 'string') : [];
     rec.calls = Array.isArray(r.calls) ? r.calls.filter((x) => typeof x === 'string') : [];
     rec.spaceId = typeof r.spaceId === 'string' && r.spaceId ? r.spaceId : null;
-    rec.domain = typeof r.domain === 'string' && r.domain ? r.domain : sessionDomain(rec);
+    // Read again from the record's own tools and turns whenever it has any: a label stored by an
+    // older build (every engine answer with cards was saved as Compliance) is repaired here
+    // rather than trusted. A record with neither keeps the label it was saved with.
+    const stored = typeof r.domain === 'string' && r.domain ? r.domain : '';
+    rec.domain = (rec.turns.length || rec.calls.length || !stored) ? sessionDomain(rec) : stored;
     // A conversation whose transcript is on the server, not here, stays one across a reload —
     // without this it reopened empty and never read its turns back.
     if (r.remote === true) rec.remote = true;

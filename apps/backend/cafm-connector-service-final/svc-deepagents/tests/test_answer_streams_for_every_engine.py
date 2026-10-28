@@ -57,6 +57,6 @@ class TestComplianceKeepsItsOwnStream:
     def test_the_general_loop_streams_only_its_own_model_run(self):
         import inspect
         from src.agents import orchestrator as o
-        src = inspect.getsource(o.DeepAgentOrchestrator.stream)
+        src = inspect.getsource(o.DeepAgentOrchestrator._stream_turn)  # the turn itself; stream() lays its answer out
         assert 'kind == "on_chat_model_stream"' in src
         assert 'parent_ids' in src

@@ -88,6 +88,21 @@ export const chatMethods = {
     }
   },
 
+  // Where an OpenUI answer's "open" buttons go, once openui/actions.js has judged the target
+  // safe: a page of the app opens in the app, where the navigator would take you (compliance
+  // and vendors are the live console pages; openModule for those two is the prototype's seed
+  // table); a web page opens in a new tab, cut off from this one.
+  openuiOpen(target) {
+    const live = { compliance: "cc", vendors: "vp" };
+    if (target && live[target.page]) {
+      if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0);
+      this.setState({ view: live[target.page], navOpen: true, detail: null });
+      return;
+    }
+    if (target && target.page) { this.openModule(target.page); return; }
+    if (target && target.url && typeof window !== "undefined") window.open(target.url, "_blank", "noopener,noreferrer");
+  },
+
   // "Connected · N tools" — one read of the tool catalogue, retried on request.
   async chatConnect(force) {
     if (this._chatConnecting) return;

@@ -1160,5 +1160,8 @@ def build_system_prompt(extra_context: str | None = None) -> str:
     if lens:
         base = base + "\n\n---\n\n" + lens
     if extra_context:
-        return base + "\n\n---\n\n# Runtime Context\n\n" + extra_context.strip()
-    return base
+        base = base + "\n\n---\n\n# Runtime Context\n\n" + extra_context.strip()
+    # The final answer is written as OpenUI (agents/openui_view.py). Last, so the section can be
+    # taken off again whole when OPENUI_ANSWERS switches it off.
+    from .openui_view import with_answer_format
+    return with_answer_format(base)

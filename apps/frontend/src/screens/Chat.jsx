@@ -12,8 +12,7 @@
 //
 // `vals` is the view model from useHoistra(); the transcript keys are the same ones the
 // compliance console's dock reads.
-import React, { useRef } from 'react';
-import AnswerCards from '../components/shell/AnswerCards.jsx';
+import React, { useEffect, useRef } from 'react';
 import ChoiceCards from '../components/shell/ChoiceCards.jsx';
 import ComplianceAnswer from '../components/shell/ComplianceAnswer.jsx';
 import RunTrace from '../components/shell/RunTrace.jsx';
@@ -22,13 +21,23 @@ import CorrectionDrawer from '../components/shell/CorrectionDrawer.jsx';
 import HoistraMigrationWizard from '../cafm/hoistra-migration-wizard.tsx';
 import HoistBuildingCard from '../components/shell/HoistBuildingCard.jsx';
 import CronJobCard from '../components/shell/CronJobCard.jsx';
+import EmailComposer from '../components/shell/EmailComposer.jsx';
 import { useFollowBottom } from '../components/shell/useFollowBottom.js';
 import { useTraceSpy } from '../components/shell/useTraceSpy.js';
+// Answers the orchestrator wrote as OpenUI, drawn with the Hoistra components (src/openui).
+import LazyOpenUIAnswer from '../openui/LazyOpenUIAnswer.jsx';
+// Every other answer is Markdown, drawn with the same components (openui/fromMarkdown.js).
+import AnyAnswer from '../openui/AnyAnswer.jsx';
+import { OpenUIHostContext } from '../openui/host.js';
 
 const KICKER = { fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--color-neutral-500)" };
 // Buttons carry the browser's own font and chrome; these strip it back to the surrounding
 // type without giving up the focus ring, keyboard activation or the accessible role.
 const BARE = { font: "inherit", background: "transparent", border: "none", padding: "0", margin: "0", cursor: "pointer", color: "inherit" };
+// Every answer sits in its own box, set apart from the page (28 Oct 2026: Hussain asked for the
+// box back after the answer was laid straight on the page). A hairline ring plus the soft shadow
+// holds it, so the answer's own cards read as cards on a sheet rather than boxes in boxes.
+const BUBBLE = { marginTop: "6px", padding: "18px 20px", borderRadius: "4px 14px 14px 14px", boxShadow: "0 0 0 1px var(--color-divider), var(--shadow-sm)", fontSize: "13px", lineHeight: "1.55", textWrap: "pretty" };
 
 const DOMAIN_ICON = {
   Compliance: "ph-shield-check", Energy: "ph-lightning", Vendors: "ph-chart-line-up",
@@ -40,12 +49,46 @@ export default function Chat({ vals }) {
   const count = (vals.orchChat || []).length;
   // Follow the answer as it streams in — the page scrolls, the composer does not. Scrolling
   // up to read an earlier turn pauses the following; the next question resumes it.
-  useFollowBottom({ container: null, end: endRef, busy: vals.orchBusy, count: count });
+  const follow = useFollowBottom({ container: null, end: endRef, busy: vals.orchBusy, count: count });
   // Which turn's trace the rail shows follows the reader's scroll position, not just
   // whichever question finished most recently — see useTraceSpy for how.
   useTraceSpy(vals.orchTraceFollow, [count, vals.orchBusy]);
+  // An email draft opened from an answer's button is drawn under that answer (EmailComposer,
+  // 28 Oct 2026); bring it into view and put the cursor in its To line. The dock's pattern
+  // (OrchestratorDock.jsx): declared after the follow, so the note the same click adds to the
+  // end of the transcript does not pull the page back down past the draft.
+  const draftKey = vals.emChatAt === null || vals.emChatAt === undefined ? "" : vals.orchFlowKey + "|" + vals.emChatAt;
+  useEffect(() => {
+    if (!draftKey || typeof document === "undefined") return;
+    const el = document.getElementById("emc-page");
+    if (!el) return;
+    follow.release();
+    // At once: a smooth scroll that starts near the bottom of the page re-arms the follow (its
+    // first scroll events land in the follow's "near the bottom" band), which pulls the page back
+    // down past the card (the dock had the same trap).
+    if (el.scrollIntoView) el.scrollIntoView({ block: "nearest", behavior: "auto" });
+    const to = document.getElementById("emc-page-to");
+    if (to && to.focus) to.focus({ preventScroll: true });
+  }, [draftKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The draft's card, or once it has gone, what its send did — in the answer's column.
+  const draftHere = (
+    <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start" }}>
+      <span aria-hidden="true"></span>
+      <EmailComposer em={vals.em} onCancel={vals.fCancel} variant="page" done={vals.fDoneText} doneTone={vals.fDoneTone} />
+    </div>
+  );
+  const receiptHere = vals.emChatReceipt ? (
+    <div style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start" }}>
+      <span aria-hidden="true"></span>
+      <div className={"emc-receipt is-" + vals.emChatReceipt.tone} role="status">
+        <i className={`ph ${vals.emChatReceipt.tone === "risk" ? "ph-warning-circle" : vals.emChatReceipt.tone === "warn" ? "ph-info" : "ph-paper-plane-tilt"}`} aria-hidden="true"></i>
+        <span>{vals.emChatReceipt.text}</span>
+      </div>
+    </div>
+  ) : null;
 
   return (
+    <OpenUIHostContext.Provider value={vals.openuiHost}>
     <div style={{ flex: "1", display: "flex", justifyContent: "center", padding: "0 32px" }}>
       <div className="chat-grid" style={{ animation: "fadeUp 0.28s ease both" }}>
 
@@ -202,7 +245,7 @@ export default function Chat({ vals }) {
                     </button>
                   </div>
                 ) : (
-                  <div data-trace-turn={m.traceShow === "inline-flex" ? m.key : undefined} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start", animation: "fadeUp 0.25s ease both" }}>
+                  <div data-trace-turn={m.traceShow === "inline-flex" ? m.key : undefined} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "12px", alignItems: "start", animation: m.enter }}>
                     <div style={{ width: "30px", height: "30px", borderRadius: "8px", background: m.isNote && m.error ? "var(--st-risk-bg)" : "var(--color-accent-900)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <i className={`ph ${m.error ? "ph-warning-circle" : (DOMAIN_ICON[m.domain] || "ph-cpu")}`} style={{ fontSize: "15px", color: m.error ? "var(--st-risk)" : "var(--color-accent)" }}></i>
                     </div>
@@ -220,9 +263,9 @@ export default function Chat({ vals }) {
                           {m.traceSelected ? "In the trace" : "Show the run"}
                         </button>
                       </div>
-                      <div style={{ marginTop: "6px", padding: "14px 16px", borderRadius: "4px 12px 12px 12px", background: m.bg, color: m.fg, boxShadow: "var(--shadow-sm)", fontSize: "13px", lineHeight: "1.55", textWrap: "pretty" }}>
+                      <div style={{ ...BUBBLE, background: m.bg, color: m.fg }}>
                         {m.rich
-                          ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} />
+                          ? <ComplianceAnswer rich={m.rich} ms={m.ms} open={m.stepsOpen} onToggle={m.toggleSteps} fallbackText={m.text} view={m.view} viewTail={m.viewTail} />
                           : m.isNote
                             ? <div style={{ display: "grid", gridTemplateColumns: "14px minmax(0,1fr)", gap: "8px", alignItems: "start" }}>
                                 <i className={`ph ${m.error ? "ph-warning-circle" : "ph-check-circle"}`} style={{ fontSize: "13px", color: m.error ? "var(--st-risk)" : "var(--st-ok)", marginTop: "3px" }}></i>
@@ -230,8 +273,8 @@ export default function Chat({ vals }) {
                               </div>
                             : (m.choices || []).length
                               ? <ChoiceCards intro={m.choiceIntro} cards={m.choices} />
-                              : <AnswerCards text={m.text} />}
-                        <div style={{ display: m.interruptShow, fontSize: "10.5px", color: "var(--color-accent)", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
+                              : m.view ? <LazyOpenUIAnswer text={m.view} tail={m.viewTail} fallbackText={m.text} /> : <AnyAnswer text={m.text} />}
+                        <div className="ans-paused" style={{ display: m.interruptShow, fontSize: "10.5px", marginTop: "8px" }}>{"Paused for approval before finishing."}</div>
                         {/* Teach from this answer: was it right, and if not, what should change
                             (logic/corrections.js). Shown once the turn is on record. */}
                         <div style={{ display: m.teachShow, alignItems: "center", gap: "8px", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid var(--color-divider)", flexWrap: "wrap" }}>
@@ -289,14 +332,25 @@ export default function Chat({ vals }) {
                             </div>
                           ))}
                         </div>
-                        <div style={{ display: m.stoppedShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>{"Stopped."}</div>
+                        <div style={{ display: m.stoppedShow, fontSize: "10.5px", color: "var(--color-neutral-500)", marginTop: "6px" }}>{m.stopNote}</div>
                         <div style={{ display: m.toolsShow, fontFamily: "ui-monospace,monospace", fontSize: "10px", color: "var(--color-neutral-500)", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid var(--color-divider)" }}>{m.tools}</div>
+                        {/* The finished answer is being laid out (answer_view on its socket): a quiet
+                            last line, under everything, so nothing above it moves when it comes or
+                            goes (styles/answer.css). */}
+                        {m.layingOut ? <div className="ans-laying is-line" role="status">{"Laying out…"}</div> : null}
                       </div>
                     </div>
                   </div>
                 )}
+                {vals.emChatAt === m.key ? draftHere : null}
+                {vals.emChatReceipt && vals.emChatReceipt.at === m.key ? receiptHere : null}
               </React.Fragment>
             ))}
+
+            {/* A draft (or its receipt) whose answer is no longer in the transcript, or that no
+                answer opened, goes at the end. */}
+            {vals.emChatAt === -1 ? draftHere : null}
+            {vals.emChatReceipt && vals.emChatReceipt.at === -1 ? receiptHere : null}
 
             {/* Support: once an answer is in, the user says whether it sorted it. Yes closes
                 the request; Not yet keeps it open and shows the way to a person. */}
@@ -413,7 +467,8 @@ export default function Chat({ vals }) {
 
             {/* What a finished flow left behind — the hoist's "keyed as B-42, no documents
                 ingested yet" line, and the same for the flows the dock reports this way. */}
-            {vals.fDone ? (
+            {/* Not for an email drawn on this page: its card, or its receipt, says it in place. */}
+            {vals.fDone && vals.emChatAt === null && !vals.emChatReceipt ? (
               <div style={{ marginTop: "18px", padding: "12px 14px", borderRadius: "10px", background: "var(--st-ok-bg)", display: "flex", gap: "10px", alignItems: "flex-start" }}>
                 <i className="ph ph-check-circle" style={{ fontSize: "15px", color: "var(--st-ok)", marginTop: "1px" }}></i>
                 <span style={{ fontSize: "12px", lineHeight: "1.55", color: "var(--color-text)" }}>{vals.fDoneText}</span>
@@ -438,10 +493,17 @@ export default function Chat({ vals }) {
                   {vals.orchLiveShow === "none" ? (
                     <div style={{ marginTop: "6px", fontSize: "12.5px", lineHeight: "1.5", color: "var(--color-neutral-500)" }}>
                       {"Building the answer. The run trace shows where it has got to."}
+                      <div className="ans-skeleton" aria-hidden="true">
+                        <span className="is-head"></span>
+                        <span className="is-head2"></span>
+                        <div className="ans-skeleton-row"><span className="is-tile"></span><span className="is-tile"></span><span className="is-tile"></span></div>
+                        <span className="is-line"></span>
+                      </div>
                     </div>
                   ) : (
-                    <div style={{ marginTop: "6px", padding: "14px 16px", borderRadius: "4px 12px 12px 12px", background: "var(--color-surface)", boxShadow: "var(--shadow-sm)", fontSize: "13px" }}>
-                      <ComplianceAnswer rich={vals.orchLiveRich} open={false} onToggle={() => {}} />
+                    // In the same box as the finished answer, so nothing jumps when it lands.
+                    <div style={{ ...BUBBLE, background: "var(--color-surface)", color: "var(--color-text)" }}>
+                      <ComplianceAnswer rich={vals.orchLiveRich} open={false} onToggle={() => {}} live />
                     </div>
                   )}
                 </div>
@@ -451,7 +513,9 @@ export default function Chat({ vals }) {
           </div>
 
           {/* ── composer ─────────────────────────────────────────────────── */}
-          <div style={{ position: "sticky", bottom: "0", background: "var(--color-bg)", padding: "10px 0 18px", borderTop: "1px solid var(--color-divider)" }}>
+          {/* No rule over it (28 Oct 2026): the page fades into the composer instead, so the last
+              lines of an answer slide under it rather than being cut by a line. */}
+          <div style={{ position: "sticky", bottom: "0", background: "linear-gradient(to bottom, transparent, var(--color-bg) 20px)", padding: "24px 0 18px" }}>
             {vals.supResolved ? (
               <div className="sup-closed" role="status">
                 <i className="ph ph-check-circle" aria-hidden="true"></i>
@@ -578,5 +642,6 @@ export default function Chat({ vals }) {
         <CorrectionDrawer vals={vals} />
       </div>
     </div>
+    </OpenUIHostContext.Provider>
   );
 }

@@ -1,0 +1,1469 @@
+[
+ {
+  "name": "example-dashboard",
+  "program": "root = Answer([head, kpis, certs, trades, overdue, todo, next])\nhead = Headline(\"Three things need you this week: the gas safety certificate at Building A expires on **Friday**, **7 work orders** are overdue and Building A is using **18% more energy** than in early October.\")\nkpis = Metrics([m1, m2, m3, m4])\nm1 = Metric(\"Overdue work orders\", 7, \"+3 on last week\", \"risk\")\nm2 = Metric(\"Certificates due in 30 days\", 4, \"1 this week\", \"warn\")\nm3 = Metric(\"SLA met this month\", \"91%\", \"-2 pt on September\")\nm4 = Metric(\"Building A energy use\", \"241.0 kWh/m²\", \"Building B: 178.4\")\ncerts = Section(\"Certificates to act on\", [f1, f2])\nf1 = Finding(\"Gas safety certificate, Building A\", \"Expires on Friday and the inspection is not booked yet.\", \"warn\", \"GSC-A-2025\")\nf2 = Finding(\"Lift thorough examination, Building B\", \"Expires on 9 Nov; Liftcare has the visit booked for 4 Nov.\", \"warn\")\ntrades = BarChart(\"Overdue work orders by trade\", [\"HVAC\", \"Electrical\", \"Plumbing\", \"Fire safety\"], [3, 2, 1, 1])\noverdue = Section(\"Overdue work orders\", [wo], \"7 past their due date, 3 of them HVAC\")\nwo = Table([\"Work order\", \"Job\", \"Building\", \"Days overdue\", \"Vendor\"], [[\"WO-1184\", \"AHU-2 drive belt replacement\", \"Building A\", 9, \"Acme Mechanical\"], [\"WO-1179\", \"Emergency lighting monthly test\", \"Building B\", 6, \"Brightline Electrical\"], [\"WO-1171\", \"Chiller 1 high-pressure alarm\", \"Building A\", 5, \"Acme Mechanical\"]], \"4 more: 2 plumbing, 1 electrical, 1 fire safety\")\ntodo = Section(\"What to do\", [steps])\nsteps = Steps([s1, s2, s3])\ns1 = Step(\"Book the gas safety inspection at Building A\", \"The certificate expires on Friday.\", b1)\nb1 = Button(\"Draft the booking email\", @ToAssistant(\"Draft an email to book the gas safety inspection at Building A\"), \"primary\")\ns2 = Step(\"Chase Acme Mechanical on the 3 HVAC jobs\", \"Two are past their SLA.\", b2)\nb2 = Button(\"Show the HVAC backlog\", @ToAssistant(\"Show the HVAC backlog at Building A\"))\ns3 = Step(\"Check the AHU-2 schedule at Building A\", \"It has run overnight since 12 Oct.\")\nnext = FollowUps([\"Compare energy use at Building A and Building B\", \"Which vendors are slipping on SLA?\"])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Three things need you this week: the gas safety certificate at Building A expires on **Friday**, **7 work orders** are overdue and Building A is using **18% more energy** than in early October."
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Overdue work orders",
+          "value": 7,
+          "note": "+3 on last week",
+          "tone": "risk"
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Certificates due in 30 days",
+          "value": 4,
+          "note": "1 this week",
+          "tone": "warn"
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "SLA met this month",
+          "value": "91%",
+          "note": "-2 pt on September"
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Building A energy use",
+          "value": "241.0 kWh/m²",
+          "note": "Building B: 178.4"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "title": "Certificates to act on",
+       "children": [
+        {
+         "type": "Finding",
+         "props": {
+          "title": "Gas safety certificate, Building A",
+          "text": "Expires on Friday and the inspection is not booked yet.",
+          "tone": "warn",
+          "code": "GSC-A-2025"
+         }
+        },
+        {
+         "type": "Finding",
+         "props": {
+          "title": "Lift thorough examination, Building B",
+          "text": "Expires on 9 Nov; Liftcare has the visit booked for 4 Nov.",
+          "tone": "warn"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "BarChart",
+      "props": {
+       "title": "Overdue work orders by trade",
+       "labels": [
+        "HVAC",
+        "Electrical",
+        "Plumbing",
+        "Fire safety"
+       ],
+       "values": [
+        3,
+        2,
+        1,
+        1
+       ]
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "title": "Overdue work orders",
+       "children": [
+        {
+         "type": "Table",
+         "props": {
+          "columns": [
+           "Work order",
+           "Job",
+           "Building",
+           "Days overdue",
+           "Vendor"
+          ],
+          "rows": [
+           [
+            "WO-1184",
+            "AHU-2 drive belt replacement",
+            "Building A",
+            9,
+            "Acme Mechanical"
+           ],
+           [
+            "WO-1179",
+            "Emergency lighting monthly test",
+            "Building B",
+            6,
+            "Brightline Electrical"
+           ],
+           [
+            "WO-1171",
+            "Chiller 1 high-pressure alarm",
+            "Building A",
+            5,
+            "Acme Mechanical"
+           ]
+          ],
+          "caption": "4 more: 2 plumbing, 1 electrical, 1 fire safety"
+         }
+        }
+       ],
+       "summary": "7 past their due date, 3 of them HVAC"
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "title": "What to do",
+       "children": [
+        {
+         "type": "Steps",
+         "props": {
+          "items": [
+           {
+            "type": "Step",
+            "props": {
+             "title": "Book the gas safety inspection at Building A",
+             "detail": "The certificate expires on Friday.",
+             "action": {
+              "type": "Button",
+              "props": {
+               "label": "Draft the booking email",
+               "action": {
+                "action": "ToAssistant",
+                "args": [
+                 "Draft an email to book the gas safety inspection at Building A"
+                ]
+               },
+               "variant": "primary"
+              }
+             }
+            }
+           },
+           {
+            "type": "Step",
+            "props": {
+             "title": "Chase Acme Mechanical on the 3 HVAC jobs",
+             "detail": "Two are past their SLA.",
+             "action": {
+              "type": "Button",
+              "props": {
+               "label": "Show the HVAC backlog",
+               "action": {
+                "action": "ToAssistant",
+                "args": [
+                 "Show the HVAC backlog at Building A"
+                ]
+               }
+              }
+             }
+            }
+           },
+           {
+            "type": "Step",
+            "props": {
+             "title": "Check the AHU-2 schedule at Building A",
+             "detail": "It has run overnight since 12 Oct."
+            }
+           }
+          ]
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "FollowUps",
+      "props": {
+       "questions": [
+        "Compare energy use at Building A and Building B",
+        "Which vendors are slipping on SLA?"
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "example-clarifying-question",
+  "program": "root = Answer([ask, choices])\nask = Headline(\"Which building do you mean? **Building A** and **Building B** both have a chiller.\")\nchoices = FollowUps([\"The chiller at Building A\", \"The chiller at Building B\", \"Both chillers\"])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Which building do you mean? **Building A** and **Building B** both have a chiller."
+      }
+     },
+     {
+      "type": "FollowUps",
+      "props": {
+       "questions": [
+        "The chiller at Building A",
+        "The chiller at Building B",
+        "Both chillers"
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "statements-in-reverse-order",
+  "program": "h = Headline(\"Late first\")\nroot = Answer([h, m])\nm = Metrics([a])\na = Metric(\"Open\", 4)",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Late first"
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Open",
+          "value": 4
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "inline-nesting",
+  "program": "root = Answer([Headline(\"Inline\"), Metrics([Metric(\"A\", 1), Metric(\"B\", \"2%\", \"up 1\")])])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Inline"
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "A",
+          "value": 1
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "B",
+          "value": "2%",
+          "note": "up 1"
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "optional-and-trailing-commas",
+  "program": "root = Answer([h m,])\nh = Headline(\"No commas\")\nm = Metrics([Metric(\"A\" 1) Metric(\"B\" 2),])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "No commas"
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "A",
+          "value": 1
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "B",
+          "value": 2
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "comments",
+  "program": "# the answer\nroot = Answer([h]) // root first\nh = Headline(\"Has # and // inside\")  # trailing",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Has # and // inside"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "escapes",
+  "program": "root = Answer([h, t])\nh = Headline(\"Say \\\"yes\\\" \\u00e9 \\\\ done\")\nt = Text(\"Line one\\nLine two\\ttabbed 🙂\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Say \"yes\" é \\ done"
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "markdown": "Line one\nLine two\ttabbed 🙂"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "single-quoted",
+  "program": "root = Answer([h])\nh = Headline('It\\'s single')",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "It's single"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "null-skips-an-optional",
+  "program": "root = Answer([m])\nm = Metrics([a])\na = Metric(\"Overdue\", 7, null, \"risk\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Overdue",
+          "value": 7,
+          "tone": "risk"
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "fenced-with-prose",
+  "program": "Here is the answer:\n```openui\nroot = Answer([h])\nh = Headline(\"Fenced\")\n```\nThanks.",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Fenced"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "unresolved-reference",
+  "program": "root = Answer([h, missing])\nh = Headline(\"Half there\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Half there"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [
+   "missing"
+  ],
+  "orphaned": []
+ },
+ {
+  "name": "orphan-statement",
+  "program": "root = Answer([h])\nh = Headline(\"Kept\")\nlost = Headline(\"Never reached\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Kept"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": [
+   "lost"
+  ]
+ },
+ {
+  "name": "duplicate-name-later-wins",
+  "program": "root = Answer([h])\nh = Headline(\"First\")\nh = Headline(\"Second\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Second"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "type-mismatches",
+  "program": "root = Answer([h, m, c, t, ok])\nh = Headline(42)\nm = Metrics([Metric(\"x\", 7, null, \"weird\")])\nc = BarChart(\"T\", [\"a\", \"b\"], [\"3\", 2])\nt = Table([\"a\", 1, \"b\"], [[\"x\", null, true], \"notarow\", [{k: 1}, 2]])\nok = Text(\"survivor\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "x",
+          "value": 7
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "BarChart",
+      "props": {
+       "title": "T",
+       "labels": [
+        "a",
+        "b"
+       ],
+       "values": [
+        "3",
+        2
+       ]
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "columns": [
+        "a",
+        1,
+        "b"
+       ],
+       "rows": [
+        [
+         "x",
+         null,
+         true
+        ],
+        [
+         {
+          "k": 1
+         },
+         2
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Text",
+      "props": {
+       "markdown": "survivor"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "unknown-component-and-data-in-slot",
+  "program": "root = Answer([bad, 5, \"str\", null, h])\nbad = Nope(1)\nh = Headline(\"Only me\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     null,
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Only me"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "entry-without-root",
+  "program": "page = Answer([h])\nh = Headline(\"Fallback entry\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Fallback entry"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "no-entry-at-all",
+  "program": "h = Headline(\"Lonely\")",
+  "root": null,
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "excess-args",
+  "program": "root = Answer([h])\nh = Headline(\"Kept\", \"dropped\", 3)",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Kept"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "multi-line-array",
+  "program": "root = Answer([\n  h,\n  m\n])\nh = Headline(\"Spread out\")\nm = Metrics([\n  Metric(\"A\", 1),\n  Metric(\"B\", 2)\n])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Spread out"
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "A",
+          "value": 1
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "B",
+          "value": 2
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "raw-newline-in-string",
+  "program": "root = Answer([t])\nt = Text(\"first line\nsecond line\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Text",
+      "props": {
+       "markdown": "first line\nsecond line"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "actions-one-and-many",
+  "program": "root = Answer([b, s])\nb = Buttons([x, y])\nx = Button(\"Go\", Action([@ToAssistant(\"a\"), @OpenUrl(\"/compliance\")]), \"primary\")\ny = Button(\"Open\", @OpenUrl(\"https://example.com/x\"))\ns = Steps([Step(\"Do it\", null, Button(\"Ask\", @ToAssistant(\"q\", {site: \"B-101\"})))])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Buttons",
+      "props": {
+       "items": [
+        {
+         "type": "Button",
+         "props": {
+          "label": "Go",
+          "action": {
+           "action": "Action",
+           "args": [
+            [
+             {
+              "action": "ToAssistant",
+              "args": [
+               "a"
+              ]
+             },
+             {
+              "action": "OpenUrl",
+              "args": [
+               "/compliance"
+              ]
+             }
+            ]
+           ]
+          },
+          "variant": "primary"
+         }
+        },
+        {
+         "type": "Button",
+         "props": {
+          "label": "Open",
+          "action": {
+           "action": "OpenUrl",
+           "args": [
+            "https://example.com/x"
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "Steps",
+      "props": {
+       "items": [
+        {
+         "type": "Step",
+         "props": {
+          "title": "Do it",
+          "action": {
+           "type": "Button",
+           "props": {
+            "label": "Ask",
+            "action": {
+             "action": "ToAssistant",
+             "args": [
+              "q",
+              {
+               "site": "B-101"
+              }
+             ]
+            }
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "numbers",
+  "program": "root = Answer([c])\nc = LineChart(\"Trend\", [\"a\", \"b\", \"c\", \"d\"], [Series(\"S\", [-2, 3.5, 1e3, 0.5])], \"kWh\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "LineChart",
+      "props": {
+       "title": "Trend",
+       "labels": [
+        "a",
+        "b",
+        "c",
+        "d"
+       ],
+       "series": [
+        {
+         "type": "Series",
+         "props": {
+          "name": "S",
+          "values": [
+           -2,
+           3.5,
+           1000,
+           0.5
+          ]
+         }
+        }
+       ],
+       "unit": "kWh"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "numeric-labels-and-columns",
+  "program": "root = Answer([c, t])\nc = BarChart(\"EUI by year\", [\"2023\", 2024, 2025], [241, 230, 225])\nt = Table([\"Year\", 2024, \"Change\"], [[\"EUI\", 230, \"-4%\"]])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "BarChart",
+      "props": {
+       "title": "EUI by year",
+       "labels": [
+        "2023",
+        2024,
+        2025
+       ],
+       "values": [
+        241,
+        230,
+        225
+       ]
+      }
+     },
+     {
+      "type": "Table",
+      "props": {
+       "columns": [
+        "Year",
+        2024,
+        "Change"
+       ],
+       "rows": [
+        [
+         "EUI",
+         230,
+         "-4%"
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "figures-as-text-and-nulls",
+  "program": "root = Answer([c, l])\nc = BarChart(\"Spend\", [\"Acme\", \"Brightline\", \"Coolair\"], [\"£1,200\", 800, null])\nl = LineChart(\"Trend\", [\"Jan\", \"Feb\", \"Mar\"], [Series(\"A\", [4.1, null, 3.9])])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "BarChart",
+      "props": {
+       "title": "Spend",
+       "labels": [
+        "Acme",
+        "Brightline",
+        "Coolair"
+       ],
+       "values": [
+        "£1,200",
+        800,
+        null
+       ]
+      }
+     },
+     {
+      "type": "LineChart",
+      "props": {
+       "title": "Trend",
+       "labels": [
+        "Jan",
+        "Feb",
+        "Mar"
+       ],
+       "series": [
+        {
+         "type": "Series",
+         "props": {
+          "name": "A",
+          "values": [
+           4.1,
+           null,
+           3.9
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "nulls-and-booleans-in-lists",
+  "program": "root = Answer([t, k])\nt = Table([null, \"a\", true], [null, [\"x\", null], \"bad\"])\nk = Metrics([Metric(\"Compliant\", true), null])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Table",
+      "props": {
+       "columns": [
+        null,
+        "a",
+        true
+       ],
+       "rows": [
+        null,
+        [
+         "x",
+         null
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Compliant",
+          "value": true
+         }
+        },
+        null
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "unary-plus-in-a-row",
+  "program": "root = Answer([t])\nt = Table([\"Vendor\", \"Change\", \"Score\"], [[\"Corvane\", +0.45, \"22.45/25\"]])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Table",
+      "props": {
+       "columns": [
+        "Vendor",
+        "Change",
+        "Score"
+       ],
+       "rows": [
+        [
+         "Corvane",
+         null,
+         0.45,
+         "22.45/25"
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "ragged-row",
+  "program": "root = Answer([t])\nt = Table([\"Vendor\", \"Score\"], [[\"Apex\", \"23.44 / 25\", \"Primary slippage\"], [\"Corvane\"]])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Table",
+      "props": {
+       "columns": [
+        "Vendor",
+        "Score"
+       ],
+       "rows": [
+        [
+         "Apex",
+         "23.44 / 25",
+         "Primary slippage"
+        ],
+        [
+         "Corvane"
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "chart-values-past-labels",
+  "program": "root = Answer([c])\nc = BarChart(\"Jobs\", [\"HVAC\", \"Lifts\"], [3, 2, 9])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "BarChart",
+      "props": {
+       "title": "Jobs",
+       "labels": [
+        "HVAC",
+        "Lifts"
+       ],
+       "values": [
+        3,
+        2,
+        9
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "root-written-last",
+  "program": "h = Headline(\"Root comes last\")\nm = Metrics([Metric(\"Open\", 4)])\nroot = Answer([h, m])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Root comes last"
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Open",
+          "value": 4
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "finding-plain",
+  "program": "root = Answer([h, f])\nh = Headline(\"One thing to watch\")\nf = Finding(\"Boiler 2\", \"Pressure dropped twice this week.\\n- 1.1 bar on Monday\\n- 0.9 bar on Thursday\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "One thing to watch"
+      }
+     },
+     {
+      "type": "Finding",
+      "props": {
+       "title": "Boiler 2",
+       "text": "Pressure dropped twice this week.\n- 1.1 bar on Monday\n- 0.9 bar on Thursday"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "finding-with-code-and-tone",
+  "program": "root = Answer([f])\nf = Finding(\"Fire Risk Assessment\", \"Lapsed, expired 2026-06-29 (about 4 months ago). The building has **no current FRA** on record.\", \"risk\", \"FRA-B-301-2025\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Finding",
+      "props": {
+       "title": "Fire Risk Assessment",
+       "text": "Lapsed, expired 2026-06-29 (about 4 months ago). The building has **no current FRA** on record.",
+       "tone": "risk",
+       "code": "FRA-B-301-2025"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "finding-null-tone-with-code",
+  "program": "root = Answer([f])\nf = Finding(\"Lift 4\", \"Examination booked for 4 Nov.\", null, \"LIFT-B-04\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Finding",
+      "props": {
+       "title": "Lift 4",
+       "text": "Examination booked for 4 Nov.",
+       "code": "LIFT-B-04"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "findings-inside-a-section",
+  "program": "root = Answer([h, s])\nh = Headline(\"Two certificates need you.\")\ns = Section(\"Risk to life\", [a, b], \"1 lapsed, 1 due\")\na = Finding(\"Fire Risk Assessment\", \"Lapsed on 29 Jun.\", \"risk\", \"FRA-B-2025\")\nb = Finding(\"Gas safety\", \"Expires on Friday.\", \"warn\")",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "Two certificates need you."
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "title": "Risk to life",
+       "children": [
+        {
+         "type": "Finding",
+         "props": {
+          "title": "Fire Risk Assessment",
+          "text": "Lapsed on 29 Jun.",
+          "tone": "risk",
+          "code": "FRA-B-2025"
+         }
+        },
+        {
+         "type": "Finding",
+         "props": {
+          "title": "Gas safety",
+          "text": "Expires on Friday.",
+          "tone": "warn"
+         }
+        }
+       ],
+       "summary": "1 lapsed, 1 due"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "finding-partial-streaming",
+  "program": "root = Answer([a, b])\na = Finding(\"Gas safety\", \"Expires on Friday.\", \"warn\")\nb = Finding(\"Fire Risk Assessment\", \"Lapsed, exp",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Finding",
+      "props": {
+       "title": "Gas safety",
+       "text": "Expires on Friday.",
+       "tone": "warn"
+      }
+     },
+     {
+      "type": "Finding",
+      "props": {
+       "title": "Fire Risk Assessment",
+       "text": "Lapsed, exp"
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "prose-only",
+  "program": "The backlog is long. Total = 42 overdue jobs.",
+  "root": null,
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "empty",
+  "program": "",
+  "root": null,
+  "unresolved": [],
+  "orphaned": []
+ },
+ {
+  "name": "everything",
+  "program": "root = Answer([head, kpis, warn, sec, rec, chart, steps, mail, more])\nhead = Headline(\"All **12 assets** at Building A are covered.\")\nkpis = Metrics([Metric(\"Assets\", 12, \"all covered\", \"ok\"), Metric(\"Open jobs\", 0, null, \"risk\")])\nwarn = Callout(\"warn\", \"The lift certificate expires in 9 days.\", \"Lift\")\nsec = Section(\"Asset detail\", [tbl], \"12 assets, 3 types\", true)\ntbl = Table([\"Asset\", \"Type\", \"Age\"], [[\"AHU-1\", \"Air handling\", 9], [\"CH-1\", \"Chiller\", 4]], \"2 shown\")\nrec = Details(\"AHU-1\", [Field(\"Location\", \"Roof\"), Field(\"Installed\", 2017)], \"Air handling unit\")\nchart = LineChart(\"Energy\", [\"W1\", \"W2\"], [Series(\"A\", [4.1, 4.3]), Series(\"B\", [3.4, 3.3])], \"kWh/m²\")\nsteps = Steps([Step(\"Book the lift inspection\", \"Expires in 9 days.\", Button(\"Draft email\", @ToAssistant(\"Draft it\"), \"primary\")), Step(\"Nothing else\")])\nmail = EmailDraft(\"Lift inspection\", \"ops@example.com\", \"Hello,\\n\\nPlease book.\", \"pm@example.com\")\nmore = FollowUps([\"What else is due?\", \"Show the lift history\"])",
+  "root": {
+   "type": "Answer",
+   "props": {
+    "children": [
+     {
+      "type": "Headline",
+      "props": {
+       "text": "All **12 assets** at Building A are covered."
+      }
+     },
+     {
+      "type": "Metrics",
+      "props": {
+       "items": [
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Assets",
+          "value": 12,
+          "note": "all covered",
+          "tone": "ok"
+         }
+        },
+        {
+         "type": "Metric",
+         "props": {
+          "label": "Open jobs",
+          "value": 0,
+          "tone": "risk"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "Callout",
+      "props": {
+       "tone": "warn",
+       "text": "The lift certificate expires in 9 days.",
+       "title": "Lift"
+      }
+     },
+     {
+      "type": "Section",
+      "props": {
+       "title": "Asset detail",
+       "children": [
+        {
+         "type": "Table",
+         "props": {
+          "columns": [
+           "Asset",
+           "Type",
+           "Age"
+          ],
+          "rows": [
+           [
+            "AHU-1",
+            "Air handling",
+            9
+           ],
+           [
+            "CH-1",
+            "Chiller",
+            4
+           ]
+          ],
+          "caption": "2 shown"
+         }
+        }
+       ],
+       "summary": "12 assets, 3 types",
+       "collapsed": true
+      }
+     },
+     {
+      "type": "Details",
+      "props": {
+       "title": "AHU-1",
+       "fields": [
+        {
+         "type": "Field",
+         "props": {
+          "label": "Location",
+          "value": "Roof"
+         }
+        },
+        {
+         "type": "Field",
+         "props": {
+          "label": "Installed",
+          "value": 2017
+         }
+        }
+       ],
+       "subtitle": "Air handling unit"
+      }
+     },
+     {
+      "type": "LineChart",
+      "props": {
+       "title": "Energy",
+       "labels": [
+        "W1",
+        "W2"
+       ],
+       "series": [
+        {
+         "type": "Series",
+         "props": {
+          "name": "A",
+          "values": [
+           4.1,
+           4.3
+          ]
+         }
+        },
+        {
+         "type": "Series",
+         "props": {
+          "name": "B",
+          "values": [
+           3.4,
+           3.3
+          ]
+         }
+        }
+       ],
+       "unit": "kWh/m²"
+      }
+     },
+     {
+      "type": "Steps",
+      "props": {
+       "items": [
+        {
+         "type": "Step",
+         "props": {
+          "title": "Book the lift inspection",
+          "detail": "Expires in 9 days.",
+          "action": {
+           "type": "Button",
+           "props": {
+            "label": "Draft email",
+            "action": {
+             "action": "ToAssistant",
+             "args": [
+              "Draft it"
+             ]
+            },
+            "variant": "primary"
+           }
+          }
+         }
+        },
+        {
+         "type": "Step",
+         "props": {
+          "title": "Nothing else"
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "EmailDraft",
+      "props": {
+       "subject": "Lift inspection",
+       "to": "ops@example.com",
+       "body": "Hello,\n\nPlease book.",
+       "cc": "pm@example.com"
+      }
+     },
+     {
+      "type": "FollowUps",
+      "props": {
+       "questions": [
+        "What else is due?",
+        "Show the lift history"
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "unresolved": [],
+  "orphaned": []
+ }
+]

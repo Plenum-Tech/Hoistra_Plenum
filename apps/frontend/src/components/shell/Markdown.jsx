@@ -19,7 +19,15 @@ export default function Markdown({ text }) {
   return <MarkdownBlocks blocks={parseBlocks(text)} />;
 }
 
-export function MarkdownBlocks({ blocks }) {
+// mark: an optional pass over what inline() drew in paragraphs, list items and table cells (the
+// OpenUI answer passes shared.jsx refs(), which draws record codes as tags). Every other caller
+// passes none, and its words are drawn as before. A paragraph is a "md-p"; one that opens on bold
+// (a finding: "**Fire Risk Assessment — Lapsed**, expired…") is marked data-lead, which only the
+// OpenUI stylesheet draws as a card (28 Oct 2026).
+const same = (x) => x;
+const LEAD = /^\s*(\*\*|__)/;
+
+export function MarkdownBlocks({ blocks, mark = same }) {
   const HS = { 1: '15px', 2: '13.5px', 3: '12.5px', 4: '12px', 5: '11.5px', 6: '11.5px' };
 
   return (
@@ -48,10 +56,35 @@ export function MarkdownBlocks({ blocks }) {
           );
         }
         if (b.t === 'list') {
+          // Items indented deeper than the list's own items sit under the item before them, and a
+          // numbered item keeps the number the answer gave it (27 Oct 2026: two sub-bullets under
+          // "2." turned the answer's "3." into 5).
           const Tag = b.ordered ? 'ol' : 'ul';
+          const indents = b.indents || [];
+          const marks = b.marks || [];
+          const top = indents.length ? Math.min(...indents) : 0;
+          const groups = [];
+          b.items.forEach((it, j) => {
+            if ((indents[j] || 0) > top && groups.length) groups[groups.length - 1].subs.push(j);
+            else groups.push({ j: j, subs: [] });
+          });
+          const number = (j) => (/^\d+/.test(marks[j] || '') ? parseInt(marks[j], 10) : undefined);
+          const style = { margin: '0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' };
           return (
-            <Tag key={k} start={b.ordered && b.start > 1 ? b.start : undefined} style={{ margin: '0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              {b.items.map((it, j) => <li key={j} style={{ lineHeight: '1.5' }}>{inline(it, 'l' + k + '-' + j)}</li>)}
+            <Tag key={k} start={b.ordered && b.start > 1 ? b.start : undefined} style={style}>
+              {groups.map((g) => {
+                const SubTag = g.subs.length && number(g.subs[0]) !== undefined ? 'ol' : 'ul';
+                return (
+                  <li key={g.j} value={b.ordered ? number(g.j) : undefined} style={{ lineHeight: '1.5' }}>
+                    {mark(inline(b.items[g.j], 'l' + k + '-' + g.j))}
+                    {g.subs.length ? (
+                      <SubTag style={{ ...style, marginTop: '3px' }}>
+                        {g.subs.map((j) => <li key={j} value={SubTag === 'ol' ? number(j) : undefined} style={{ lineHeight: '1.5' }}>{mark(inline(b.items[j], 'l' + k + '-' + j))}</li>)}
+                      </SubTag>
+                    ) : null}
+                  </li>
+                );
+              })}
             </Tag>
           );
         }
@@ -75,7 +108,7 @@ export function MarkdownBlocks({ blocks }) {
                     <tr key={j}>
                       {r.map((c, m) => (
                         <td key={m} style={{ padding: '6px 9px', borderBottom: j === b.rows.length - 1 ? 'none' : '1px solid var(--color-divider)', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
-                          {inline(c, 'td' + k + '-' + j + '-' + m)}
+                          {mark(inline(c, 'td' + k + '-' + j + '-' + m))}
                         </td>
                       ))}
                     </tr>
@@ -86,8 +119,8 @@ export function MarkdownBlocks({ blocks }) {
           );
         }
         return (
-          <div key={k} style={{ lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
-            {inline(b.body, 'p' + k)}
+          <div key={k} className="md-p" data-lead={LEAD.test(b.body) ? '' : undefined} style={{ lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>
+            {mark(inline(b.body, 'p' + k))}
           </div>
         );
       })}
