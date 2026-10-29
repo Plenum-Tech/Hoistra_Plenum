@@ -284,3 +284,46 @@ def get_sync_db_url() -> str:
         url = f"{url}{'&' if '?' in url else '?'}sslmode=require"
 
     return url
+
+
+async def get_plenum_cafm_views() -> dict[str, list[str]]:
+    """Map each plenum_cafm view → the base tables it reads, lowercased.
+
+    A view is not a table and will not take DDL: ``ALTER TABLE ... ADD COLUMN`` on one fails
+    with ``cannot be performed on relation ... not supported for views``, and because the
+    migration runs its statements in one transaction, that one failure rolls back every
+    statement before it. ``plenum_cafm.contracts`` is the case that bit: it is a view over
+    ``contract_sla_parameters``, so a migration that routed any new column to "contracts"
+    could never finish.
+
+    Base tables come from ``information_schema.view_table_usage``, which lists what the view
+    reads. A view over a join names more than one, which is why the value is a list and the
+    caller decides whether one of them is the right home.
+
+    Best-effort: returns {} on any failure, and a caller that gets {} behaves as before.
+    """
+    out: dict[str, list[str]] = {}
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(
+                text(
+                    "SELECT v.table_name, u.table_name AS base_table "
+                    "  FROM information_schema.views v "
+                    "  LEFT JOIN information_schema.view_table_usage u "
+                    "         ON u.view_schema = v.table_schema AND u.view_name = v.table_name "
+                    "        AND u.table_schema = v.table_schema "
+                    " WHERE v.table_schema = 'plenum_cafm' "
+                    " ORDER BY v.table_name, u.table_name"
+                )
+            )
+            for view, base in res.fetchall():
+                entry = out.setdefault(str(view).lower(), [])
+                if base and str(base).lower() not in entry:
+                    entry.append(str(base).lower())
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_views failed — DDL will not be checked against views",
+            exc_info=True,
+        )
+    return out

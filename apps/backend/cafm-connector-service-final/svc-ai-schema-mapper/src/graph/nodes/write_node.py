@@ -594,6 +594,34 @@ async def write_node(state: MigrationState) -> MigrationState:
         return state
 
 
+def _base_table_for_view(view_name: str, base_tables: list[str]) -> str | None:
+    """The table a column meant for ``view_name`` should actually be added to, or None.
+
+    A view over one table has one answer. A view over a join does not, so the name decides:
+    ``contracts`` is a view over ``contract_sla_parameters`` and ``documents``, and only the
+    first shares a word with it. Singular and plural count as the same word, so "contracts"
+    matches "contract_sla_parameters". With no shared word there is no safe answer and the
+    caller keeps the values another way rather than guessing at a table.
+    """
+    bases = [b for b in (base_tables or []) if b]
+    if len(bases) == 1:
+        return bases[0]
+    if not bases:
+        return None
+
+    def words(name: str) -> set[str]:
+        return {w[:-1] if len(w) > 3 and w.endswith("s") else w
+                for w in re.split(r"[^a-z0-9]+", name.lower()) if w}
+
+    want = words(view_name)
+    scored = [(len(want & words(b)), b) for b in bases]
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    best, runner_up = scored[0], (scored[1] if len(scored) > 1 else (0, ""))
+    if best[0] == 0 or best[0] == runner_up[0]:
+        return None          # nothing shared, or two equally good homes: do not guess
+    return best[1]
+
+
 async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True) -> "tuple[list[dict], list[dict]]":
     """The extra-field DDL the review gates asked for, and the new-column renames behind it.
 
@@ -663,6 +691,42 @@ async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True
                             _row[_canon_safe] = _row.pop(_name)
     except Exception as _safety_exc:  # pragma: no cover — best-effort
         logger.warning(f"[Node 9] new-column collision safety net skipped: {_safety_exc}")
+
+    # ── Safety net: a target that is a view, not a table ───────────────────────────────────
+    # ALTER TABLE ... ADD COLUMN on a view fails ("not supported for views"), and every
+    # statement here runs inside one transaction, so that single failure undoes the whole
+    # migration: a run that routed a new column to plenum_cafm.contracts — a view over
+    # contract_sla_parameters — died at statement 14 of 29 with the first 13 rolled back.
+    # A view has real tables underneath it, so the column goes to the one the field belongs
+    # to. When no base table is clearly its home the field falls back to raw_metadata, which
+    # is where this platform already puts what it cannot place: the values survive, the
+    # migration finishes, and the log says what moved where.
+    try:
+        from ...db import get_plenum_cafm_views
+        _views = await get_plenum_cafm_views()
+        _custom_on_views = [
+            e for e in extra_fields_config
+            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
+            and str(e.get("target_table") or "").strip().lower() in _views
+        ]
+        for _e in _custom_on_views:
+            _tgt = str(_e.get("target_table") or "").strip()
+            _col = str(_e.get("custom_column_name") or "")
+            _home = _base_table_for_view(_tgt, _views.get(_tgt.lower()) or [])
+            if _home:
+                logger.warning(
+                    f"[Node 9] '{_tgt}' is a view, which takes no DDL; adding column '{_col}' "
+                    f"to its base table '{_home}' instead"
+                )
+                _e["target_table"] = _home
+            else:
+                logger.warning(
+                    f"[Node 9] '{_tgt}' is a view over {_views.get(_tgt.lower()) or 'nothing named'} "
+                    f"with no single home for '{_col}'; keeping it in raw_metadata instead of DDL"
+                )
+                _e["storage_strategy"] = "raw_metadata"
+    except Exception as _view_exc:  # pragma: no cover — best-effort
+        logger.warning(f"[Node 9] view-target safety net skipped: {_view_exc}")
 
     ddl_statements = _build_migration_ddl_statements(
         extra_fields_config,
@@ -2048,6 +2112,17 @@ async def _apply_records_with_schema_alignment(
             if beat is not None:  # a ProgressBeat, advanced by every batch _insert_rows sends
                 beat.total = sum(len(r) for _s, r in _ordered_tables if isinstance(r, list))
 
+            # A routed target that turns out to be a view cannot take rows either: the same
+            # plenum_cafm.contracts that refuses ADD COLUMN also refuses INSERT, because it
+            # joins two tables and computes columns, so Postgres cannot update it. Rows go to
+            # the base table the view reads, by the same rule the DDL uses above.
+            try:
+                from ...db import get_plenum_cafm_views
+                _write_views = await get_plenum_cafm_views()
+            except Exception as _wv_exc:  # pragma: no cover — best-effort
+                logger.warning(f"[Node 9] view check for the write skipped: {_wv_exc}")
+                _write_views = {}
+
             for source_table_name, records in _ordered_tables:
                 if not isinstance(records, list) or not records:
                     continue
@@ -2057,6 +2132,19 @@ async def _apply_records_with_schema_alignment(
                 # the existing canonical tables. Falls back to the source name when unrouted; two
                 # sources routed to one target both INSERT into it (work_orders).
                 table_name = (table_routing or {}).get(source_table_name, source_table_name)
+                if str(table_name).lower() in _write_views:
+                    _home = _base_table_for_view(
+                        str(table_name), _write_views.get(str(table_name).lower()) or [])
+                    if _home:
+                        logger.warning(
+                            f"[Node 9] '{table_name}' is a view; writing {source_table_name} "
+                            f"into its base table '{_home}' instead")
+                        table_name = _home
+                    else:
+                        logger.error(
+                            f"[Node 9] '{table_name}' is a view with no single base table; "
+                            f"{len(records)} rows from {source_table_name} were not written")
+                        continue
                 safe_table = _to_safe_identifier(table_name)
                 if not safe_table:
                     logger.warning(
