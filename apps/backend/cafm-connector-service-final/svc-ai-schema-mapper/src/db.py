@@ -158,24 +158,32 @@ async def get_async_session() -> AsyncSession:
         yield session
 
 
+#: The columns of plenum_cafm's base tables — never its views, which no migration can write to.
+_BASE_TABLE_COLUMNS_SQL = (
+    "SELECT c.table_name, {cols} FROM information_schema.columns c "
+    "JOIN information_schema.tables t "
+    "  ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+    "WHERE c.table_schema = 'plenum_cafm' AND t.table_type = 'BASE TABLE' "
+    "ORDER BY c.table_name, c.ordinal_position"
+)
+
+
 async def get_plenum_cafm_columns_by_table() -> dict[str, set[str]]:
     """Map each plenum_cafm base table → its column names (lowercased).
 
     Used to constrain field matching to the routed target table's columns, so a
     source column only maps to a column that actually exists on its target table.
     Best-effort: returns {} on any failure (callers then skip the constraint).
+
+    Views are left out: information_schema.columns lists them too, and plenum_cafm.contracts
+    being taken for a table routed a "Contracts" sheet onto it and failed the write on
+    ALTER TABLE ... ADD COLUMN (tests/test_a_view_is_never_a_destination.py).
     """
     out: dict[str, set[str]] = {}
     try:
         session_factory = get_async_session_factory()
         async with session_factory() as session:
-            res = await session.execute(
-                text(
-                    "SELECT table_name, column_name FROM information_schema.columns "
-                    "WHERE table_schema = 'plenum_cafm' "
-                    "ORDER BY table_name, ordinal_position"
-                )
-            )
+            res = await session.execute(text(_BASE_TABLE_COLUMNS_SQL.format(cols="c.column_name")))
             for tbl, col in res.fetchall():
                 out.setdefault(str(tbl).lower(), set()).add(str(col).lower())
     except Exception:
@@ -184,6 +192,30 @@ async def get_plenum_cafm_columns_by_table() -> dict[str, set[str]]:
             exc_info=True,
         )
     return out
+
+
+async def get_plenum_cafm_view_names() -> set[str]:
+    """The names of plenum_cafm's views and materialized views (lowercased).
+
+    A new table must never take one of these names: CREATE TABLE IF NOT EXISTS sees the view,
+    skips with a NOTICE, and every row then fails on "cannot insert into view".
+    Best-effort: returns an empty set on any failure.
+    """
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(text(
+                "SELECT c.relname FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'plenum_cafm' AND c.relkind IN ('v', 'm')"
+            ))
+            return {str(r[0]).lower() for r in res.fetchall()}
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_view_names failed — new table names not checked against views",
+            exc_info=True,
+        )
+        return set()
 
 
 async def get_plenum_cafm_column_types_by_table() -> dict[str, dict[str, str]]:
@@ -199,11 +231,7 @@ async def get_plenum_cafm_column_types_by_table() -> dict[str, dict[str, str]]:
         session_factory = get_async_session_factory()
         async with session_factory() as session:
             res = await session.execute(
-                text(
-                    "SELECT table_name, column_name, data_type FROM information_schema.columns "
-                    "WHERE table_schema = 'plenum_cafm' "
-                    "ORDER BY table_name, ordinal_position"
-                )
+                text(_BASE_TABLE_COLUMNS_SQL.format(cols="c.column_name, c.data_type"))
             )
             for tbl, col, dtype in res.fetchall():
                 out.setdefault(str(tbl).lower(), {})[str(col).lower()] = str(dtype).lower()

@@ -129,11 +129,18 @@ class ReferenceResolver:
         self._org = str(organization_id or "")
         self._schema = schema
         self._cache: dict[tuple[str, str], str | None] = {}
+        self._misses: set[tuple[str, str]] = set()
+        self._table = ""
         self._linkable: dict[tuple[str, str], bool] = {}
         self.reads = 0
         self.resolved = 0
         self.ambiguous: list[str] = []
         self.unresolved: dict[str, set] = {}
+
+    def begin_table(self, table: str) -> None:
+        """The writer moves on to ``table``: what was missing may have been written since."""
+        self._table = str(table or "")
+        self._misses.clear()
 
     async def resolve(self, column: str, hint: str | None) -> str | None:
         spec = REFERENCES.get(column)
@@ -144,6 +151,8 @@ class ReferenceResolver:
             return None
         if key in self._cache:
             return self._cache[key]
+        if key in self._misses:
+            return None
 
         _names, table, match_cols = spec
         match = " OR ".join(f"lower(coalesce({c}::text, '')) = :k" for c in match_cols)
@@ -171,8 +180,14 @@ class ReferenceResolver:
         # one does — vendors are loaded after work_orders, so caching work_orders' miss left
         # every later table with a null vendor_id. Found 23 Sep 2026: 13 work orders and 64
         # PPM visits all showing "Unassigned" against vendors that were on record.
+        # The writer resolves every row of a table before it inserts any of them, so within that
+        # pass a miss stays a miss: it is kept until the writer moves on (begin_table) — 2,270
+        # work orders whose assets had not landed asked for the same asset on every row (29 Oct
+        # 2026). The engine's tableMemo (write/rows.go) does the same.
         if found is not None:
             self._cache[key] = found
+        elif self._table:
+            self._misses.add(key)
         return found
 
     async def linkable(self, column: str, carried: object) -> bool:

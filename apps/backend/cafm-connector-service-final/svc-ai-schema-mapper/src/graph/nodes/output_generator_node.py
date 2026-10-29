@@ -35,6 +35,7 @@ from ...export import (
 )
 from ..state import MigrationState
 from ...engine.selection import uses_go
+from ...sql_identifiers import repair
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
@@ -376,7 +377,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
     if _col_overrides:
         def _snake(s: str) -> str:
             import re as _re
-            return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+            return repair(_re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_"))
 
         # Flatten to {source_field_lower: target} per table, plus a table-agnostic fallback.
         _by_tbl = {
@@ -450,7 +451,7 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
 
             def _tg_snake(s: str) -> str:
                 import re as _re
-                return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+                return repair(_re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column")
 
             # Targets already claimed per destination table, so a retarget never collides with a
             # column another mapping already lands in (mirrors the preprocess-node guard).

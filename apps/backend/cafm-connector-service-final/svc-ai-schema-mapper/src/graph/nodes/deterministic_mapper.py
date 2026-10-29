@@ -539,6 +539,40 @@ def _match_sheet_to_table(table_name: str, db_tables: list[str]) -> str | None:
     return None
 
 
+#: Sheet-name fragments → destination table, first match wins (Node 2 table routing, step 1).
+_TABLE_NAME_PATTERNS = [
+    ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
+    # Energy. The readings patterns come first because "Meter Readings" contains
+    # "meter", and a reading sheet routed to energy_meters writes eighteen thousand
+    # meters and no consumption at all.
+    ("meter_reading", "meter_readings"), ("meter reading", "meter_readings"),
+    ("half_hour", "meter_readings"), ("half hour", "meter_readings"),
+    ("halfhourly", "meter_readings"), ("half_hourly", "meter_readings"),
+    ("kwh", "meter_readings"),
+    ("consumption", "meter_readings"), ("reading", "meter_readings"),
+    ("energy_meter", "energy_meters"), ("energy meter", "energy_meters"),
+    ("mpan", "energy_meters"), ("mprn", "energy_meters"), ("meter", "energy_meters"),
+    ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
+    ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
+    ("part", "spare_parts"), ("inventory", "spare_parts"),
+    ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
+    ("inspection", "findings"), ("finding", "findings"),
+    ("site", "locations"), ("location", "locations"),
+    # plenum_cafm.contracts is a read-only VIEW, so a "Contracts" sheet no longer finds it by
+    # name; the register belongs where FM_ENTITY_TO_TABLE puts the contract entity.
+    ("contract", "vendor_contracts"),
+]
+
+
+def route_by_sheet_name(sheet_name: str) -> str | None:
+    """The destination table a sheet's name points at, or None."""
+    name = (sheet_name or "").lower()
+    for pattern, entity_type in _TABLE_NAME_PATTERNS:
+        if pattern in name:
+            return entity_type
+    return None
+
+
 @timed_node("deterministic")
 async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
     """
@@ -1239,25 +1273,6 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # Energy lives in energy_meters and meter_readings.
         _DIRECT_NAME_DENY = {"meters", "meter"}
 
-        _TABLE_NAME_PATTERNS = [
-            ("asset", "assets"), ("equipment", "assets"), ("equip", "assets"),
-            # Energy. The readings patterns come first because "Meter Readings" contains
-            # "meter", and a reading sheet routed to energy_meters writes eighteen thousand
-            # meters and no consumption at all.
-            ("meter_reading", "meter_readings"), ("meter reading", "meter_readings"),
-            ("half_hour", "meter_readings"), ("half hour", "meter_readings"),
-            ("halfhourly", "meter_readings"), ("half_hourly", "meter_readings"),
-            ("kwh", "meter_readings"),
-            ("consumption", "meter_readings"), ("reading", "meter_readings"),
-            ("energy_meter", "energy_meters"), ("energy meter", "energy_meters"),
-            ("mpan", "energy_meters"), ("mprn", "energy_meters"), ("meter", "energy_meters"),
-            ("work_order", "work_orders"), ("workorder", "work_orders"), ("wo", "work_orders"),
-            ("scheduled_pm", "maintenance_plans"), ("maintenance", "maintenance_plans"), ("pm", "maintenance_plans"),
-            ("part", "spare_parts"), ("inventory", "spare_parts"),
-            ("user", "technicians"), ("technician", "technicians"), ("personnel", "technicians"),
-            ("inspection", "findings"), ("finding", "findings"),
-            ("site", "locations"), ("location", "locations"),
-        ]
         _ENTITY_FIELD_SIGNALS: dict[str, set[str]] = {
             "assets":            {"asset_code", "asset_name", "category", "make", "model", "serial"},
             "work_orders":       {"wo_code", "wo_priority", "wo_status", "wo_type", "maintenance_type"},
@@ -1315,10 +1330,7 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
 
             # (1) Name-pattern match
             if not matched_entity:
-                for pattern, entity_type in _TABLE_NAME_PATTERNS:
-                    if pattern in table_lower:
-                        matched_entity = entity_type
-                        break
+                matched_entity = route_by_sheet_name(table_lower)
 
             # (2) Field-content inference
             if not matched_entity:

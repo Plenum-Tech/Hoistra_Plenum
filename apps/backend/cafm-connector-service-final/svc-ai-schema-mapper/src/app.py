@@ -94,6 +94,7 @@ from .schemas import (
     WriteOutputResponse,
 )
 from .db import get_async_session_factory
+from .sql_identifiers import safe_identifier
 from .models.migration import MigrationJob, MigrationFieldMapping
 from .graph.migration_graph import get_migration_graph
 from .excel_parser import ExcelWorkbook
@@ -8834,7 +8835,7 @@ def create_app() -> FastAPI:
                     ddl_skip.append(m)
                 elif extra and extra.get("storage_strategy") == "custom":
                     tgt_table  = extra.get("target_table") or _infer_target_table(m["source_table"])
-                    col_name   = extra.get("custom_column_name") or m["source_field"].lower()
+                    col_name   = safe_identifier(extra.get("custom_column_name") or m["source_field"]) or m["source_field"].lower()
                     ddl_type   = extra.get("data_type") or pg_dt
                     is_new     = extra.get("is_new_table", False)
                     if is_new:
@@ -8854,7 +8855,7 @@ def create_app() -> FastAPI:
                 else:
                     # No user decision — infer best-fit table and emit ADD COLUMN
                     tgt_table = _infer_target_table(m["source_table"])
-                    col_name  = m["source_field"].lower()
+                    col_name  = safe_identifier(m["source_field"]) or m["source_field"].lower()
                     ddl_custom.append(
                         f"ALTER TABLE plenum_cafm.{tgt_table}\n"
                         f"    ADD COLUMN IF NOT EXISTS {col_name} {pg_dt};"

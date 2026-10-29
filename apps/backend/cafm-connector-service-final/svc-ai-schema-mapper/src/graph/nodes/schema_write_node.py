@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..schema_state import SchemaMappingState, ExtraFieldConfig
 from ...matchers.registry import registry_append
 from ...db import get_async_session_factory
+from ...sql_identifiers import safe_data_type, safe_identifier
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
@@ -36,53 +37,18 @@ logger = get_logger(__name__)
 # Source schema that gets cloned
 _SOURCE_SCHEMA = "plenum_cafm"
 
-#: A PostgreSQL identifier we are willing to build DDL from. Same shape write_node enforces.
-_SAFE_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-
-#: The column types a migration may ask for, and the only strings allowed into a DDL statement.
-#: A type is not user prose: it is one of these, optionally with a length or precision.
-_ALLOWED_TYPES = frozenset({
-    "text", "varchar", "character varying", "char", "character",
-    "smallint", "integer", "int", "int2", "int4", "int8", "bigint",
-    "numeric", "decimal", "real", "double precision", "float", "float4", "float8",
-    "boolean", "bool",
-    "date", "time", "timetz", "timestamp", "timestamptz",
-    "timestamp with time zone", "timestamp without time zone",
-    "time with time zone", "time without time zone",
-    "uuid", "json", "jsonb", "bytea", "inet", "interval",
-})
-
-#: "varchar(255)", "numeric(12, 2)" — a name from the list above and nothing but digits inside.
-_TYPE_RE = re.compile(r"^([a-z][a-z ]*?)\s*(\(\s*\d+\s*(?:,\s*\d+\s*)?\))?$")
-
-
 def _safe_identifier(raw_name) -> str | None:
-    """A table or column name fit to interpolate, or None.
+    """A table or column name fit to interpolate, or None when nothing usable is left.
 
-    Normalised rather than rejected outright for spaces and hyphens, because a source column
-    called "Asset Ref" is an ordinary thing to want and asset_ref is unambiguously what it means.
-    Everything else is dropped, and if what remains is not a plain identifier the answer is None:
-    a name that has to be repaired beyond recognition is not the name anyone asked for.
+    Normalised rather than rejected for spaces and hyphens, because a source column called
+    "Asset Ref" is an ordinary thing to want and asset_ref is unambiguously what it means. A
+    reserved word, a leading digit or an over-long name is repaired (sql_identifiers, 29 Oct
+    2026): a person should not have to rename "end" for the write to parse.
     """
-    if raw_name is None:
-        return None
-    norm = str(raw_name).strip().lower().replace(" ", "_").replace("-", "_")
-    norm = re.sub(r"[^a-z0-9_]", "", norm)
-    return norm if _SAFE_IDENT.match(norm) else None
+    return safe_identifier(raw_name)
 
 
-def _safe_data_type(raw_type, default: str = "TEXT") -> str | None:
-    """A column type fit to interpolate, or None when it is not a type at all."""
-    if raw_type is None or not str(raw_type).strip():
-        return default
-    m = _TYPE_RE.match(str(raw_type).strip().lower())
-    if not m:
-        return None
-    base, size = m.group(1).strip(), (m.group(2) or "")
-    if base not in _ALLOWED_TYPES:
-        return None
-    # Re-emitted from the parts that were validated, never the caller's original string.
-    return (base + re.sub(r"\s+", "", size)).upper()
+_safe_data_type = safe_data_type
 
 
 def _make_new_schema_name(external_cmms_name: str) -> str:
@@ -252,20 +218,25 @@ def _build_ddl_statements(
         if not fk.get("user_confirmed", False):
             continue
 
-        source_table = fk.get("source_table")
-        source_column = fk.get("source_column")
-        target_table = fk.get("target_table")
-        target_column = fk.get("target_column", "id")
+        source_table = safe_identifier(fk.get("source_table"))
+        source_column = safe_identifier(fk.get("source_column"))
+        target_table = safe_identifier(fk.get("target_table"))
+        target_column = safe_identifier(fk.get("target_column", "id"))
 
-        if not source_table or not source_column or not target_table:
+        if not source_table or not source_column or not target_table or not target_column:
+            logger.error("[DDL] refusing FK with an unusable name: %r", fk)
             continue
 
-        constraint_name = f"fk_{source_table}_{source_column}_{target_table}"
+        constraint_name = safe_identifier(f"fk_{source_table}_{source_column}_{target_table}")
+        # PostgreSQL has no ADD CONSTRAINT IF NOT EXISTS (a syntax error, 29 Oct 2026), and a
+        # re-run must not fail on the constraint the first run added: look it up first.
         sql = (
-            f"ALTER TABLE {target_schema}.{source_table} "
-            f"ADD CONSTRAINT IF NOT EXISTS {constraint_name} "
+            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
+            f"WHERE conname = '{constraint_name}' "
+            f"AND conrelid = '{target_schema}.{source_table}'::regclass) THEN "
+            f"ALTER TABLE {target_schema}.{source_table} ADD CONSTRAINT {constraint_name} "
             f"FOREIGN KEY ({source_column}) "
-            f"REFERENCES {target_schema}.{target_table}({target_column});"
+            f"REFERENCES {target_schema}.{target_table}({target_column}); END IF; END $$;"
         )
         ddl.append({
             "sql": sql,

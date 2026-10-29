@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -75,6 +76,39 @@ func TestBuildingViaTheSitesTable(t *testing.T) {
 		"INSERT INTO rt.buildings VALUES ('"+b301+"', '"+org+"', 'Riverside House', 'RH-1', NULL)",
 		"INSERT INTO rt.sites VALUES ('S-9', '"+org+"', 'Riverside House', 'RIV', NULL, NULL)")
 	s := New(tx, spec, org, "rt", nil, nil)
+	if id, ok := s.Building(ctx, "riv"); !ok || id != b301 {
+		t.Fatalf("got %q %v", id, ok)
+	}
+}
+
+// 29 Oct 2026: 2,270 work orders whose site_id carried a work-order-line id took 25 minutes on
+// Azure — every row's hint was new, so every row asked for a building and then a site.
+func TestAHintNoBuildingOrSiteAnswersToAsksNothing(t *testing.T) {
+	ctx, tx := setup(t, building(b301, "Bishopsgate Tower", "B-301"))
+	s := New(tx, spec, org, "plenum_cafm", nil, nil)
+	s.BeginTable("work_orders")
+	for i := 0; i < 50; i++ {
+		if id, ok := s.Building(ctx, fmt.Sprintf("WOL-%05d", i)); ok {
+			t.Fatalf("resolved %s", id)
+		}
+	}
+	if s.BuildingReads != 2 {
+		t.Fatalf("reads %d, want the two identifier reads only", s.BuildingReads)
+	}
+	if id, ok := s.Building(ctx, "b-301"); !ok || id != b301 {
+		t.Fatalf("a real code still resolves: %q %v", id, ok)
+	}
+}
+
+func TestAHintASiteAnswersToStillGoesThroughTheSite(t *testing.T) {
+	ctx, tx := setup(t,
+		"CREATE SCHEMA rt",
+		"CREATE TABLE rt.buildings (building_id uuid, organization_id uuid, name text, building_code text, site_id text)",
+		"CREATE TABLE rt.sites (site_id text, organization_id uuid, site_name text, site_code text, building_name text, name text)",
+		"INSERT INTO rt.buildings VALUES ('"+b301+"', '"+org+"', 'Riverside House', 'RH-1', NULL)",
+		"INSERT INTO rt.sites VALUES ('S-9', '"+org+"', 'Riverside House', 'RIV', NULL, NULL)")
+	s := New(tx, spec, org, "rt", nil, nil)
+	s.BeginTable("assets")
 	if id, ok := s.Building(ctx, "riv"); !ok || id != b301 {
 		t.Fatalf("got %q %v", id, ok)
 	}

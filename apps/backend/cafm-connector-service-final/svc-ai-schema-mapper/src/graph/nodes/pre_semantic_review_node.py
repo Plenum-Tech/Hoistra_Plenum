@@ -40,6 +40,7 @@ from sqlalchemy import text
 
 from cafm_shared.logging import get_logger
 from ...db import get_async_session_factory
+from ...sql_identifiers import repair, safe_identifier
 from ..state import FieldMapping, MigrationState
 
 logger = get_logger(__name__)
@@ -68,6 +69,27 @@ async def _list_plenum_cafm_tables() -> list[str]:
     except Exception as exc:  # pragma: no cover - dropdown is best-effort
         logger.warning(f"[Pre-Semantic Gate] Could not list plenum_cafm tables: {exc}")
         return []
+
+async def _new_tables_off_views(overrides: dict) -> dict:
+    """Routing overrides with every NEW table's name made safe and moved off a view's name
+    (write_node.new_table_name). Existing-table targets are left exactly as sent."""
+    if not any(isinstance(o, dict) and o.get("is_new_table") for o in overrides.values()):
+        return overrides
+    from ...db import get_plenum_cafm_view_names
+    from .write_node import new_table_name
+
+    views = await get_plenum_cafm_view_names()
+    out: dict = {}
+    for src, ovr in overrides.items():
+        if isinstance(ovr, dict) and ovr.get("is_new_table") and (ovr.get("target_table") or "").strip():
+            name = new_table_name(ovr["target_table"].strip(), views)
+            if name != ovr["target_table"].strip():
+                logger.info(f"[Pre-Semantic Gate] new table '{ovr['target_table']}' for '{src}' "
+                            f"is created as '{name}'")
+            ovr = {**ovr, "target_table": name}
+        out[src] = ovr
+    return out
+
 
 # Tiers that require human sign-off at this gate. EVERY deterministic match — including
 # identity (site_ref→id), alias, and table-alias — is shown with Approve/Semantic so the
@@ -374,7 +396,12 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 # PK detection needs EVERY row (uniqueness); the value/format/similar-column
                 # analyses inside build_column_intelligence only need a representative sample,
                 # so cap the rows handed to the report (large files otherwise stall the gate).
-                _pk = _dpk(_rows, _cols).get("columns", [])
+                # The PK the person approved at the PK gate decides; [] is their "surrogate key"
+                # answer. Re-detecting it here showed the classification gate (PK groups, the
+                # PK an FK or lookup points at) the machine's guess instead of their answer.
+                _confirmed_pk = _pk_confirmed.get(_n)
+                _pk = (list(_confirmed_pk) if isinstance(_confirmed_pk, list)
+                       else _dpk(_rows, _cols).get("columns", []))
                 _ci_rows = _rows if len(_rows) <= _CI_PREVIEW_ROW_CAP else _rows[:_CI_PREVIEW_ROW_CAP]
                 _ci_tables[_n] = {"rows": _ci_rows, "columns": _cols, "pk": _pk}
             # destination column + confidence per (source_table, source_field) from every
@@ -604,6 +631,19 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
         # Capture the routing choice; the intertwined routing+matching processing runs on pass 2.
         _r_overrides = _routing_resume.get("table_overrides") if isinstance(_routing_resume, dict) else None
         _r_overrides = _r_overrides if isinstance(_r_overrides, dict) else {}
+        _r_overrides = await _new_tables_off_views(_r_overrides)
+        # Whether the person MOVED each sheet, judged against the routing Node 2 matched its
+        # columns for — the routing about to be overwritten. Pass 2 re-matches a moved sheet from
+        # scratch and keeps every other sheet's column answers; Node 1's table match is not that
+        # baseline (it is None for a sheet Node 2 routed by name, which then lost its renames).
+        _node2_routing = state.get("table_routing") or {}
+        _r_overrides = {
+            _src: ({**_ovr, "rerouted": (
+                str(_ovr.get("target_table") or "").strip().lower()
+                != str(_node2_routing.get(_src) or "").strip().lower()
+            )} if isinstance(_ovr, dict) else _ovr)
+            for _src, _ovr in _r_overrides.items()
+        }
         state["pending_table_overrides"] = _r_overrides
         # Apply the simple destination update now (source → target) so the pass-2 column-matching
         # gate builds its review items against the CONFIRMED routing. The full reroute-to-unresolved
@@ -690,15 +730,19 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
         table_overrides = {}
         canonical_overrides_in = {}
 
-    # Merge the routing captured at the PASS-1 "Confirm table routing" gate. The column-matching
-    # gate (pass 2) submits only column decisions, so the routing overrides come from pass 1 —
-    # apply them here with the (intertwined) routing + matching processing that follows.
+    # Merge the routing captured at the PASS-1 "Confirm table routing" gate — apply it here with
+    # the (intertwined) routing + matching processing that follows. Pass 1 wins: the column-matching
+    # gate offers no routing controls, yet it is a fresh mount that rebuilds each sheet's target
+    # from the suggestions and sends that back — so a new table renamed at pass 1 (not a real
+    # table yet, so never a suggestion) came back under its default name. A sheet pass 1 did not
+    # cover still takes a pass-2 override.
     _pending_routing = state.get("pending_table_overrides") or {}
     if _pending_routing:
-        _merged_overrides = dict(_pending_routing)
-        if isinstance(table_overrides, dict):
-            _merged_overrides.update(table_overrides)  # a pass-2 override (rare) wins
+        _merged_overrides = dict(table_overrides) if isinstance(table_overrides, dict) else {}
+        _merged_overrides.update(_pending_routing)
         table_overrides = _merged_overrides
+    if isinstance(table_overrides, dict) and table_overrides:
+        table_overrides = await _new_tables_off_views(table_overrides)
 
     # Primary keys were confirmed in the separate pk_review gate (Group A); no PK handling here.
 
@@ -735,7 +779,7 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 if out and out[-1] != "_":
                     out.append("_")
                 prev_lower = False
-        return "".join(out).strip("_") or "column"
+        return repair("".join(out).strip("_") or "column")
 
     # ── Process decisions ──────────────────────────────────────────────
     updated_tier1_by_table: dict[str, list[FieldMapping]] = {}
@@ -782,7 +826,8 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
             decision_map[sf] = "approve" if is_new_source else raw_decision
             tf = (d.get("target_field") or "").strip()
             if tf:
-                rename_map[sf] = tf
+                # A typed name PostgreSQL would refuse is repaired, never sent back (29 Oct 2026).
+                rename_map[sf] = safe_identifier(tf) or tf
             dt = (d.get("data_type") or "").strip()
             if dt:
                 data_type_map[sf] = dt
@@ -815,8 +860,15 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                     }
                 elif source_field in rename_map:
                     # Apply a user column rename (changes the canonical column name that
-                    # write_node will CREATE/ALTER for this field).
+                    # write_node will CREATE/ALTER for this field). The gate sends every
+                    # approved field's target; only one that differs from what it showed is a
+                    # rename, and a rename is the person's latest word on this column: the B14.1
+                    # answer and the type guard leave it alone and the writer may create it.
+                    _renamed = (rename_map[source_field].lower()
+                                != str(m.get("target_field") or "").lower())
                     m = {**m, "target_field": rename_map[source_field]}
+                    if _renamed:
+                        m["user_renamed"] = True
                 approved_mappings.append(m)
                 total_approved += 1
                 _line = (
@@ -964,8 +1016,14 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 # unresolved so the semantic mapper (Node 3) re-matches the WHOLE
                 # table against the NEW target table's columns — otherwise the
                 # column-matching step keeps showing the old target's columns.
-                _prev = (detected_matches.get(source_table) or "").strip().lower()
-                if target_table.strip().lower() != _prev:
+                # Pass 1 recorded whether the person moved the sheet off Node 2's routing; a
+                # legacy single gate has no pass 1 and still compares with Node 1's match.
+                if "rerouted" in override:
+                    _rerouted = bool(override.get("rerouted"))
+                else:
+                    _prev = (detected_matches.get(source_table) or "").strip().lower()
+                    _rerouted = target_table.strip().lower() != _prev
+                if _rerouted:
                     _moved = list(unresolved_by_table.get(source_table) or [])
                     for _m in updated_tier1_by_table.get(source_table) or []:
                         _sf = _m.get("source_field") if isinstance(_m, dict) else None

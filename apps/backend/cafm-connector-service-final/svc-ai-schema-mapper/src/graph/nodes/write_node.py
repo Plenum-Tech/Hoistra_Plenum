@@ -44,6 +44,7 @@ from .reference_link import LIVE_ROW, REFERENCES, ReferenceResolver, hint_for
 from ...models.migration import MigrationJob
 from ...db import get_async_session_factory
 from ...engine.selection import uses_go
+from ...sql_identifiers import RESERVED_WORDS, clean, repair, safe_data_type, safe_identifier
 
 from cafm_shared.logging import get_logger
 logger = get_logger(__name__)
@@ -138,6 +139,16 @@ def _infer_sql_type(sample_values: list) -> str:
     return "TEXT"
 
 
+def _ddl_type(raw_type: object, where: str) -> str:
+    """A column type PostgreSQL will take. One it would refuse ("string", "VARCHAR(255") or one
+    carrying more than a type becomes TEXT — the column and its data are kept, the write goes on."""
+    data_type = safe_data_type(raw_type)
+    if data_type is None:
+        logger.warning("[DDL] %s: %r is not a column type — created as TEXT", where, raw_type)
+        return "TEXT"
+    return data_type
+
+
 def _build_migration_ddl_statements(
     extra_fields_config: list[ExtraFieldConfig],
     all_mappings_by_source_table: Optional[dict[str, list[dict]]] = None,
@@ -176,15 +187,15 @@ def _build_migration_ddl_statements(
             # the CREATE TABLE DDL consistent with the DML sync path (which already
             # normalizes via _to_safe_identifier). Existing tables carry a real
             # canonical name, so they're left exactly as-is.
-            safe_target = _to_safe_identifier(target_table) or target_table
+            safe_target = new_table_name(target_table, set())
             new_tables.setdefault(safe_target, []).append(entry)
         else:
             existing_table_cols.setdefault(target_table, []).append(entry)
 
     # ── 1. CREATE TABLE for brand-new tables ─────────────────────────
     for table_name, columns in new_tables.items():
-        pk_col = columns[0].get("new_table_pk", "id") or "id"
-        pk_lower = pk_col.lower()
+        pk_col = _to_safe_identifier(columns[0].get("new_table_pk", "id")) or "id"
+        pk_lower = pk_col
         source_table = columns[0].get("source_table", "")  # source sheet that maps to this new table
         _source_mappings = (all_mappings_by_source_table or {}).get(source_table, [])
 
@@ -192,11 +203,11 @@ def _build_migration_ddl_statements(
         # IS the business key used for PK/FK relationships: emit it AS the primary key with
         # its real type instead of a synthetic UUID that would clash. Same for a custom PK.
         _pk_mapping = next(
-            (m for m in _source_mappings if (m.get("target_field") or "").lower() == pk_lower),
+            (m for m in _source_mappings if _to_safe_identifier(m.get("target_field")) == pk_lower),
             None,
         )
         _pk_custom = next(
-            (c for c in columns if (c.get("custom_column_name") or "").lower() == pk_lower),
+            (c for c in columns if _to_safe_identifier(c.get("custom_column_name")) == pk_lower),
             None,
         )
         if _pk_mapping is not None:
@@ -204,7 +215,7 @@ def _build_migration_ddl_statements(
                 f"    {pk_col} {_infer_sql_type(_pk_mapping.get('sample_values') or [])} PRIMARY KEY"
             ]
         elif _pk_custom is not None:
-            col_defs = [f"    {pk_col} {_pk_custom.get('data_type', 'TEXT')} PRIMARY KEY"]
+            col_defs = [f"    {pk_col} {_ddl_type(_pk_custom.get('data_type'), f'{table_name}.{pk_col}')} PRIMARY KEY"]
         else:
             col_defs = [f"    {pk_col} UUID PRIMARY KEY DEFAULT gen_random_uuid()"]
         # Every table a migration creates says whose rows they are and where they belong
@@ -223,28 +234,30 @@ def _build_migration_ddl_statements(
         # their target_field values as the column names in the new table.
         if _source_mappings:
             for mapping in _source_mappings:
-                target_field = mapping.get("target_field", "")
-                if not target_field or target_field.lower() in seen_lower:
+                target_field = _to_safe_identifier(mapping.get("target_field"))
+                if not target_field or target_field in seen_lower:
                     continue
                 # Prefer a user-chosen SQL type (new-table data-type dropdown);
                 # otherwise infer it from the sampled values.
-                sql_type = (mapping.get("data_type") or "").strip() or _infer_sql_type(
-                    mapping.get("sample_values") or []
+                sql_type = (
+                    _ddl_type(mapping.get("data_type"), f"{table_name}.{target_field}")
+                    if (mapping.get("data_type") or "").strip()
+                    else _infer_sql_type(mapping.get("sample_values") or [])
                 )
                 col_defs.append(f"    {target_field} {sql_type}")
-                seen_lower.add(target_field.lower())
+                seen_lower.add(target_field)
                 total_data_cols += 1
 
         # Add explicitly-declared custom columns (user-named via DDL intent)
         custom_col_count = 0
         for col in columns:
-            col_name = col.get("custom_column_name")
-            if not col_name or col_name.lower() in seen_lower:
+            col_name = _to_safe_identifier(col.get("custom_column_name"))
+            if not col_name or col_name in seen_lower:
                 continue
-            data_type = col.get("data_type", "TEXT")
+            data_type = _ddl_type(col.get("data_type"), f"{table_name}.{col_name}")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             col_defs.append(f"    {col_name} {data_type}{nullable_clause}")
-            seen_lower.add(col_name.lower())
+            seen_lower.add(col_name)
             custom_col_count += 1
             total_data_cols += 1
 
@@ -268,8 +281,12 @@ def _build_migration_ddl_statements(
     # ── 2. ALTER TABLE ADD COLUMN for existing tables ─────────────────
     for table_name, columns in existing_table_cols.items():
         for col in columns:
-            col_name = col.get("custom_column_name")
-            data_type = col.get("data_type", "TEXT")
+            col_name = _to_safe_identifier(col.get("custom_column_name"))
+            if not col_name:
+                logger.error("[DDL] no usable column name in %r for %s — not created",
+                             col.get("custom_column_name"), table_name)
+                continue
+            data_type = _ddl_type(col.get("data_type"), f"{table_name}.{col_name}")
             nullable_clause = "" if col.get("nullable", True) else " NOT NULL"
             sql = (
                 f"ALTER TABLE {_SCHEMA}.{table_name} "
@@ -625,9 +642,10 @@ def _base_table_for_view(view_name: str, base_tables: list[str]) -> str | None:
 async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True) -> "tuple[list[dict], list[dict]]":
     """The extra-field DDL the review gates asked for, and the new-column renames behind it.
 
-    Returns ``(ddl_statements, column_renames)``; each rename is ``{"table", "from", "to"}`` in the
-    order it was decided. ``rename_rows`` moves the values in ``state["cleaned_tables"]`` as well
-    (the Python writer reads them from there); the engine applies the renames itself.
+    Returns ``(ddl_statements, column_renames)``. ``column_renames`` is always empty now: the
+    collision renames are decided once in preprocess (move_new_columns_off_existing_columns), so
+    the rows already carry the final names; the pair and ``rename_rows`` stay for the engine
+    bridge's job shape.
     """
     extra_fields_config: list[ExtraFieldConfig] = state.get("extra_fields_config", [])
     column_renames: list[dict] = []
@@ -647,50 +665,10 @@ async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True
             [m if isinstance(m, dict) else dict(m) for m in mappings]
         )
 
-    # ── Safety net: a custom new-column name that collides with an existing column ──────────
-    # An unmapped field offered as a "new column" can be submitted with a name that already
-    # exists on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK).
-    # ADD COLUMN IF NOT EXISTS then no-ops and the data is silently dropped. When that happens,
-    # fall back to the field's canonical name (column_intelligence) so the column is actually
-    # created — and move the values in the cleaned records to the canonical key so they land in
-    # it. Best-effort; skipped on any error. Belt-and-suspenders on top of the gate defaulting
-    # the new-column name to the canonical.
-    try:
-        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
-        _custom_existing = [
-            e for e in extra_fields_config
-            if e.get("storage_strategy") == "custom" and not e.get("is_new_table")
-        ]
-        if _col_canon and _custom_existing:
-            from ...db import get_plenum_cafm_columns_by_table
-            _cols_by_tbl = await get_plenum_cafm_columns_by_table()
-            _cleaned = state.get("cleaned_tables")
-            for _e in _custom_existing:
-                _tgt = str(_e.get("target_table") or "").strip()
-                _name = str(_e.get("custom_column_name") or "").strip()
-                if not _tgt or not _name:
-                    continue
-                _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
-                if _name.lower() not in _existing_lower:
-                    continue  # no collision — the ADD COLUMN will create it fine
-                _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
-                _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
-                _canon_safe = _to_safe_identifier(_canon) if _canon else ""
-                if (not _canon_safe or _canon_safe.lower() == _name.lower()
-                        or _canon_safe.lower() in _existing_lower):
-                    continue  # no usable canonical alternative
-                logger.warning(
-                    f"[Node 9] new-column '{_name}' already exists on '{_tgt}'; using canonical "
-                    f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
-                )
-                _e["custom_column_name"] = _canon_safe
-                column_renames.append({"table": str(_src_t), "from": _name, "to": _canon_safe})
-                if rename_rows and isinstance(_cleaned, dict) and isinstance(_cleaned.get(_src_t), list):
-                    for _row in _cleaned[_src_t]:
-                        if isinstance(_row, dict) and _name in _row and _canon_safe not in _row:
-                            _row[_canon_safe] = _row.pop(_name)
-    except Exception as _safety_exc:  # pragma: no cover — best-effort
-        logger.warning(f"[Node 9] new-column collision safety net skipped: {_safety_exc}")
+    # The new-column collision check used to run here. It runs in preprocess now
+    # (move_new_columns_off_existing_columns): this node runs its DDL before the write gate and
+    # again from the top on resume, and on that second pass every column it had just created
+    # looked like a collision, so the data moved to the canonical name (29 Oct 2026).
 
     # ── Safety net: a target that is a view, not a table ───────────────────────────────────
     # ALTER TABLE ... ADD COLUMN on a view fails ("not supported for views"), and every
@@ -734,6 +712,54 @@ async def _ddl_statements_for(state: MigrationState, *, rename_rows: bool = True
     )
     return ddl_statements, column_renames
 
+
+
+async def move_new_columns_off_existing_columns(state: MigrationState) -> "list[dict]":
+    """Move a custom new-column name that collides with a column the destination ALREADY has to
+    the field's canonical name, in ``extra_fields_config``. Returns ``[{"table", "from", "to"}]``.
+
+    An unmapped field offered as a "new column" can be submitted with a name that already exists
+    on the target table (e.g. vendors.id pinned to asset_id but sent as "id", the PK). ADD COLUMN
+    IF NOT EXISTS then no-ops and the data is silently dropped, so the canonical name
+    (column_intelligence) is used instead. Called by preprocess, before the rows are renamed and
+    before any DDL of this run exists — so "already has" means the destination's own columns,
+    never one this run created. Best-effort; skipped on any error.
+    """
+    renames: list[dict] = []
+    try:
+        extra_fields_config = state.get("extra_fields_config") or []
+        _col_canon = ((state.get("column_intelligence") or {}).get("column_canonical")) or {}
+        _custom_existing = [
+            e for e in extra_fields_config
+            if isinstance(e, dict) and e.get("storage_strategy") == "custom" and not e.get("is_new_table")
+        ]
+        if not _col_canon or not _custom_existing:
+            return renames
+        from ...db import get_plenum_cafm_columns_by_table
+        _cols_by_tbl = await get_plenum_cafm_columns_by_table()
+        for _e in _custom_existing:
+            _tgt = str(_e.get("target_table") or "").strip()
+            _name = str(_e.get("custom_column_name") or "").strip()
+            if not _tgt or not _name:
+                continue
+            _existing_lower = {str(c).lower() for c in (_cols_by_tbl.get(_tgt.lower()) or set())}
+            if _name.lower() not in _existing_lower:
+                continue  # no collision — the ADD COLUMN will create it fine
+            _src_t, _src_f = _e.get("source_table"), _e.get("source_field")
+            _canon = str(_col_canon.get(f"{_src_t}.{_src_f}") or "").strip()
+            _canon_safe = _to_safe_identifier(_canon) if _canon else ""
+            if (not _canon_safe or _canon_safe.lower() == _name.lower()
+                    or _canon_safe.lower() in _existing_lower):
+                continue  # no usable canonical alternative
+            logger.warning(
+                f"[Node 5] new-column '{_name}' already exists on '{_tgt}'; using canonical "
+                f"'{_canon_safe}' for {_src_t}.{_src_f} so the column is created (not dropped)"
+            )
+            _e["custom_column_name"] = _canon_safe
+            renames.append({"table": str(_src_t), "from": _name, "to": _canon_safe})
+    except Exception as _safety_exc:  # pragma: no cover — best-effort
+        logger.warning(f"[Node 5] new-column collision check skipped: {_safety_exc}")
+    return renames
 
 
 async def _persist_field_mappings(state: MigrationState) -> None:
@@ -888,6 +914,21 @@ async def _finish_successful_write(state: MigrationState) -> MigrationState:
 
     state["el_m9_passed"] = True
     logger.info("[Node 9] EL-M.9 PASSED: IntermediateSchema sent and acknowledged")
+
+    # The demoted FKs' lookup tables. The SQL-artifact path already ran their B22.1 block.
+    if state.get("handoff_status") == "applied_sql_aligned":
+        try:
+            _lookups = await _write_shared_attribute_lookups(state)
+            if _lookups:
+                logger.info(f"[Node 9] Shared-attribute lookup tables written: {_lookups}")
+                append_event(
+                    state, node_id=9, node_name="write_node", event="lookup_tables_written",
+                    status="completed",
+                    outcome=f"{len(_lookups)} lookup table(s) for demoted foreign keys",
+                    detail=", ".join(f"{x['table']} ({x['values']} values)" for x in _lookups),
+                )
+        except Exception as _lk_exc:  # the rows are written; a lookup must not undo the run
+            logger.warning(f"[Node 9] Shared-attribute lookup tables not written: {_lk_exc}")
 
     # ── Update migration_jobs database record ──────────────────────
     try:
@@ -1216,15 +1257,26 @@ def _infer_sql_type_for_value(value: object) -> str:
 
 def _to_safe_identifier(raw: str) -> str | None:
     """
-    Normalize and validate SQL identifier for dynamic column creation.
+    Normalize SQL identifier for dynamic column creation: a reserved word, a leading digit or an
+    over-long name is repaired (sql_identifiers), None only when no letter or digit is left.
     """
-    if raw is None:
-        return None
-    normalized = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
-    normalized = re.sub(r"[^a-z0-9_]", "", normalized)
-    if not _SAFE_SQL_IDENT.match(normalized):
-        return None
-    return normalized
+    return safe_identifier(raw)
+
+
+def new_table_name(raw: str, view_names: "set[str]") -> str:
+    """The name a NEW destination table is created under: the safe identifier of ``raw``, moved
+    to ``<name>_register`` when a plenum_cafm view already has that name or it is a word
+    PostgreSQL reserves ("Order" → order_register, never a person's job to rename).
+
+    CREATE TABLE IF NOT EXISTS on a view's name skips with a NOTICE and every row then fails on
+    "cannot insert into view" — an "Invoices" sheet against plenum_cafm.invoices (29 Oct 2026).
+    """
+    if clean(raw or "") in RESERVED_WORDS:
+        return repair(clean(raw), reserved_suffix="_register")
+    name = _to_safe_identifier(raw) or str(raw or "").strip()
+    if name.lower() in {str(v).lower() for v in (view_names or ())}:
+        return f"{name}_register"
+    return name
 
 
 #: Consecutive per-row failures of the same kind before a table is abandoned.
@@ -1764,7 +1816,8 @@ def _collect_approved_new_columns(state) -> dict[str, set[str]]:
 
     def _add(tbl: object, col: object) -> None:
         _t = str(tbl or "").strip().lower()
-        _c = str(col or "").strip().lower()
+        # Under the name the writer creates it with, which every row key is also put through.
+        _c = _to_safe_identifier(col) or str(col or "").strip().lower()
         if _t and _c:
             out.setdefault(_t, set()).add(_c)
 
@@ -1785,30 +1838,160 @@ def _collect_approved_new_columns(state) -> dict[str, set[str]]:
         _add(_e.get("target_table") or _dest_for(_e.get("source_table")),
              _e.get("custom_column_name"))
 
+    # A field a later gate named (a custom column, a rename) lands under THAT name, so the B14.1
+    # "New column" name below is never filled for it and must not be created empty.
+    _named_later = {
+        (str(_e.get("source_table") or "").lower(), str(_e.get("source_field") or "").lower())
+        for _e in (state.get("extra_fields_config") or []) if isinstance(_e, dict)
+        and str(_e.get("storage_strategy") or "custom").lower() == "custom"
+        and _e.get("custom_column_name")
+    }
+    _buckets = ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table")
+    for _bucket in _buckets:
+        for _tbl, _maps in (state.get(_bucket) or {}).items():
+            for _m in _maps or []:
+                if isinstance(_m, dict) and _m.get("user_renamed"):
+                    _named_later.add((str(_tbl).lower(), str(_m.get("source_field") or "").lower()))
+
     # 2. B14.1 column-mapping gate — "New column" button.
     for _src, _cols in (state.get("column_dest_overrides") or {}).items():
         if not isinstance(_cols, dict):
             continue
         for _field, _choice in _cols.items():
-            if str(_choice) == "__new__":
+            if str(_choice) == "__new__" and (str(_src).lower(), str(_field).lower()) not in _named_later:
                 _add(_dest_for(_src), _snake_ident(_field))
 
-    # 3. Pre-semantic (Step 2) gate — columns the user assigned / created there.
-    for _bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
+    # 3. Pre-semantic (Step 2) gate — columns the user assigned / created there, and every column
+    #    a person renamed at the column-matching or field-mapping gate (``user_renamed``).
+    for _bucket in _buckets:
         for _tbl, _maps in (state.get(_bucket) or {}).items():
             for _m in _maps or []:
                 if not isinstance(_m, dict):
                     continue
-                if str(_m.get("tier") or "") in {"T1_new_table", "T1_manual"}:
+                if str(_m.get("tier") or "") in {"T1_new_table", "T1_manual"} or _m.get("user_renamed"):
                     _add(_dest_for(_tbl), _m.get("target_field"))
 
     return out
 
 
+async def _write_shared_attribute_lookups(state) -> "list[dict]":
+    """The lookup table of every FK a person demoted to Shared Attribute at the classification
+    gate (B20.1), built from the rows just written. Returns ``[{"table", "values"}]``.
+
+    A Shared Attribute promoted to FK gets the same table: it is what the members reference.
+
+    The gate promises a demoted FK "gets a lookup table instead". That table only ever came from
+    the SQL artifact's B22.1 block, which the schema-aligned write — every run with a building,
+    every engine run — never applies, and the block has no company column. Here each lookup row
+    carries the writing company (``UNIQUE (organization_id, <attribute>)``), its values are read
+    back from that company's rows only, and a name already used by anything that is not such a
+    lookup moves to ``<name>_ref`` (the B22.1 no-clobber rule) or is skipped. Detected shared
+    attributes nobody re-classified are left to the SQL artifact, as before. FK constraints are
+    not added: the B22.1 block names the SOURCE sheets, which are not tables.
+    """
+    org = str(state.get("organization_id") or "").strip()
+    ci = state.get("column_intelligence") or {}
+    entries = {str(t.get("from_group")): t for t in ((ci.get("shared_attribute_tables") or [])
+                                                     if isinstance(ci, dict) else [])
+               if isinstance(t, dict)}
+    # A Shared Attribute promoted to FK keeps a reference table for its members to point at
+    # (apply_classification_decisions), unless a member is some table's PK: then it has no entry.
+    demoted = [r for r in ((ci.get("classification") or []) if isinstance(ci, dict) else [])
+               if isinstance(r, dict) and (r.get("human_override") == "fk_to_shared"
+                                           or (r.get("human_override") == "shared_to_fk"
+                                               and str(r.get("group_id")) in entries))]
+    if not org or not demoted:
+        return []
+    try:
+        _UUID(org)
+    except ValueError:
+        return []
+
+    from .hierarchy_node import _mapped_column_names
+
+    names = _mapped_column_names(state)
+    routing = {str(k).lower(): str(v) for k, v in (state.get("table_routing") or {}).items()}
+    factory = get_async_session_factory()
+    async with factory() as session:
+        cols_by_table: dict[str, set[str]] = {}
+        # Only text columns hold the attribute's values: a member mapped onto a reference column
+        # (Contracts.Vendor -> vendor_contracts.vendor_id) is written as the resolved UUID.
+        text_cols: set[tuple[str, str]] = set()
+        for t, c, dt in (await session.execute(text(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'plenum_cafm'"))).fetchall():
+            cols_by_table.setdefault(str(t).lower(), set()).add(str(c).lower())
+            if str(dt).lower() in ("text", "character varying", "character"):
+                text_cols.add((str(t).lower(), str(c).lower()))
+        relkinds = {str(n).lower(): str(k) for n, k in (await session.execute(text(
+            "SELECT c.relname, c.relkind::text FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'plenum_cafm'"
+        ))).fetchall()}
+
+    written: list[dict] = []
+    for row in demoted:
+        entry = entries.get(str(row.get("group_id"))) or {}
+        pk = _to_safe_identifier(row.get("canonical_name") or entry.get("pk_column") or "")
+        base = _to_safe_identifier(entry.get("table_name") or pk or "")
+        if not pk or not base or pk in {"id", "organization_id", "created_at"}:
+            continue
+        sources: list[tuple[str, str]] = []
+        for m in row.get("members") or []:
+            if "." not in str(m):
+                continue
+            sheet, col = str(m).split(".", 1)
+            dest = _to_safe_identifier(routing.get(sheet.lower()) or sheet)
+            mapped = _to_safe_identifier(names.get(sheet.lower(), {}).get(col.lower()) or col)
+            have = cols_by_table.get(dest or "", set())
+            if (dest and mapped and mapped in have and "organization_id" in have
+                    and (dest, mapped) in text_cols):
+                sources.append((dest, mapped))
+        if not sources:
+            logger.info(f"[Node 9] lookup for {row.get('group_id')} skipped: no written column")
+            continue
+        table = None
+        for cand in (base, f"{base}_ref"):
+            kind = relkinds.get(cand)
+            if kind is None or (kind in ("r", "p")
+                                and {"organization_id", pk} <= cols_by_table.get(cand, set())):
+                table = cand
+                break
+        if table is None:
+            logger.warning(f"[Node 9] lookup '{base}' skipped: the name is taken")
+            continue
+        union = " UNION ".join(
+            f'SELECT btrim(s."{c}"::text) AS v FROM plenum_cafm."{t}" s '
+            f"WHERE s.organization_id::text = :org AND s.\"{c}\" IS NOT NULL"
+            for t, c in sorted(set(sources))
+        )
+        async with factory() as session:
+            await session.execute(text(
+                f'CREATE TABLE IF NOT EXISTS plenum_cafm."{table}" ('
+                f"id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
+                f"organization_id UUID NOT NULL, "
+                f'"{pk}" TEXT NOT NULL, '
+                f"created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+                f'UNIQUE (organization_id, "{pk}"))'
+            ))
+            await session.execute(text(
+                f'INSERT INTO plenum_cafm."{table}" (organization_id, "{pk}") '
+                f"SELECT DISTINCT CAST(:org AS uuid), v FROM ({union}) u WHERE v <> '' "
+                f'ON CONFLICT (organization_id, "{pk}") DO NOTHING'
+            ), {"org": org})
+            n = (await session.execute(text(
+                f'SELECT count(*) FROM plenum_cafm."{table}" WHERE organization_id = CAST(:org AS uuid)'
+            ), {"org": org})).scalar()
+            await session.commit()
+        relkinds[table] = "r"
+        cols_by_table[table] = {"id", "organization_id", pk, "created_at"}
+        written.append({"table": table, "values": int(n or 0)})
+    return written
+
+
 def _snake_ident(s: object) -> str:
     """snake_case a source field the same way output_generator names a '__new__' column."""
     import re as _re
-    return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+    return repair(_re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column")
 
 
 # What the detector cannot be relied on to notice. Hierarchy detection reads the
@@ -2159,6 +2342,7 @@ async def _apply_records_with_schema_alignment(
 
                 _tbl_started_at = datetime.utcnow()
                 logger.info(f"[Node 9] ► Table '{safe_table}': {len(records)} records")
+                _refs.begin_table(safe_table)
                 cols_rs = await session.execute(
                     text(
                         """

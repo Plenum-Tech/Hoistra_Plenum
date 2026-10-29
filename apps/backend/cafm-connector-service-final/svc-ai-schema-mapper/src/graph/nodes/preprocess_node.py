@@ -21,6 +21,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from ..state import MigrationState
+from ...sql_identifiers import repair
 from .ingest_node import _sanitize_records
 
 from cafm_shared.logging import get_logger
@@ -37,7 +38,7 @@ DATE_FORMATS = [
 
 
 def _snake(s: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+    return repair(re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column")
 
 
 def _apply_column_dest_overrides(state: dict) -> dict:
@@ -51,11 +52,22 @@ def _apply_column_dest_overrides(state: dict) -> dict:
     ``column_mapping_override`` so the type guard leaves an explicit choice alone) and is returned
     as a rename for the field, which also covers a field no tier mapping named. "__new__" lands
     under the snake_cased field name, the name _collect_approved_new_columns allows to be created.
-    Matched on (table, field) exactly, then case-insensitively."""
+    Matched on (table, field) exactly, then case-insensitively.
+
+    B14.1 is the EARLIEST column answer: a field the person renamed afterwards — at the column-
+    matching or field-mapping gate (``user_renamed``) — keeps that later name (29 Oct 2026)."""
     overrides = state.get("column_dest_overrides") or {}
     renames: dict[str, dict[str, str]] = {}
     if not isinstance(overrides, dict) or not overrides:
         return renames
+    _buckets = ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table")
+    decided_later = {
+        (str(table).lower(), str(m["source_field"]).lower())
+        for bucket in _buckets
+        for table, maps in (state.get(bucket) or {}).items()
+        for m in maps or []
+        if isinstance(m, dict) and m.get("source_field") and m.get("user_renamed")
+    }
     by_lower = {str(t).lower(): {str(f).lower(): v for f, v in (cols or {}).items()}
                 for t, cols in overrides.items() if isinstance(cols, dict)}
     # The rename map is read back with an exact key (preprocess_tables does
@@ -76,14 +88,14 @@ def _apply_column_dest_overrides(state: dict) -> dict:
             continue
         key = real_by_lower.get(str(table).lower(), str(table))
         for field, choice in cols.items():
-            if not choice:
+            if not choice or (str(table).lower(), str(field).lower()) in decided_later:
                 continue
             target = _snake(field) if str(choice) == "__new__" else str(choice)
             renames.setdefault(key, {})[str(field)] = target
-    for bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
+    for bucket in _buckets:
         for table, maps in (state.get(bucket) or {}).items():
             for m in maps or []:
-                if not isinstance(m, dict) or not m.get("source_field"):
+                if not isinstance(m, dict) or not m.get("source_field") or m.get("user_renamed"):
                     continue
                 sf = str(m["source_field"])
                 target = (renames.get(str(table)) or {}).get(sf)
@@ -166,7 +178,7 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
 
                 def _tg_snake(s: str) -> str:
                     import re as _re
-                    return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column"
+                    return repair(_re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_") or "column")
 
                 # Targets already claimed per DESTINATION table (a dest can receive several source
                 # tables, e.g. work_order + workorders → work_orders), so a retarget never collides
@@ -189,8 +201,8 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
                         for _m in _maps or []:
                             if not isinstance(_m, dict):
                                 continue
-                            if _m.get("column_mapping_override"):
-                                continue  # the person chose this column at the column-mapping gate
+                            if _m.get("column_mapping_override") or _m.get("user_renamed"):
+                                continue  # the person chose this column at a gate
                             _tf, _sf = _m.get("target_field"), _m.get("source_field")
                             if not _tf or not _sf:
                                 continue
@@ -261,6 +273,23 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
             total_skips = sum(len(v) for v in skip_fields_by_table.values())
             logger.info(f"[Node 5] Skip fields: {total_skips} fields across {len(skip_fields_by_table)} tables")
 
+        # The B14.1 answers before the custom names below: those come from the field-mapping and
+        # column-matching gates, which the person answered later.
+        for _st, _cols in _override_renames.items():
+            for _sf, _tgt in _cols.items():
+                mapping_dict_by_table.setdefault(_st, {})[_sf] = _tgt
+        if _override_renames:
+            logger.info(
+                f"[Node 5] Column-mapping gate re-targets applied: "
+                f"{sum(len(c) for c in _override_renames.values())} column(s)"
+            )
+
+        # A new-column name the destination already has moves to the canonical name — decided
+        # here, once, before this run has created any column (write_node runs again on resume).
+        from .write_node import move_new_columns_off_existing_columns
+        await move_new_columns_off_existing_columns(state)
+        extra_fields_config = state.get("extra_fields_config", [])
+
         # Also rename unmapped fields the user turned into NEW COLUMNS to their chosen name
         # (extra_fields_config custom_column_name), e.g. vendors.id → asset_id. These are not in the
         # tier mappings, so without this the new-column field keeps its SOURCE name in the cleaned
@@ -278,15 +307,6 @@ async def preprocess_node(state: MigrationState) -> MigrationState:
                 _custom_renames += 1
         if _custom_renames:
             logger.info(f"[Node 5] New-column custom renames added to rename map: {_custom_renames}")
-
-        for _st, _cols in _override_renames.items():
-            for _sf, _tgt in _cols.items():
-                mapping_dict_by_table.setdefault(_st, {})[_sf] = _tgt
-        if _override_renames:
-            logger.info(
-                f"[Node 5] Column-mapping gate re-targets applied: "
-                f"{sum(len(c) for c in _override_renames.values())} column(s)"
-            )
 
         if on_engine:
             return await _preprocess_on_engine(state, mapping_dict_by_table, skip_fields_by_table, _node_started_at)

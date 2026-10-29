@@ -198,6 +198,7 @@ func (w *writer) apply(ctx context.Context) (*Result, error) {
 	for _, p := range plans {
 		started := time.Now()
 		w.logf("info", fmt.Sprintf("[Node 9] ► Table '%s': %d records", p.dest, len(p.src.rows)))
+		w.res.BeginTable(p.dest)
 		rows := w.resolveRows(ctx, p)
 		o, err := w.insertTable(ctx, tx, p, rows)
 		if err != nil {

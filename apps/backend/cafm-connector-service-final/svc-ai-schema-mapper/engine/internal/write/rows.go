@@ -20,7 +20,8 @@ func truthyStr(v cell.Cell) string {
 
 // tableMemo remembers, for one source table, the lookups that found nothing. write_node resolves
 // every row of a table before it inserts any of them, so within that pass nothing it looks up can
-// appear: a miss stays a miss. Python repeats those queries row by row; the answers are the same.
+// appear: a miss stays a miss. Python's ReferenceResolver keeps reference misses the same way
+// (begin_table, 29 Oct 2026); its section and meter lookups still repeat, with the same answers.
 type tableMemo struct {
 	section map[[2]string]bool
 	meter   map[string]bool
@@ -63,15 +64,14 @@ func (w *writer) meterFind(ctx context.Context, m *tableMemo, hint string) strin
 	return id
 }
 
-// reference is ReferenceResolver.resolve. A remembered miss still counts as a read and records the
-// hint, as the query Python repeats would.
+// reference is ReferenceResolver.resolve. A remembered miss records the hint and, as in Python,
+// costs no read.
 func (w *writer) reference(ctx context.Context, m *tableMemo, column, hint string) string {
 	k := [2]string{column, memoKey(hint)}
 	if k[1] == "" {
 		return ""
 	}
 	if ambiguous, missed := m.ref[k]; missed {
-		w.res.RefReads++
 		if ambiguous {
 			w.res.RefAmbiguous = append(w.res.RefAmbiguous, column+"="+hint)
 		} else {

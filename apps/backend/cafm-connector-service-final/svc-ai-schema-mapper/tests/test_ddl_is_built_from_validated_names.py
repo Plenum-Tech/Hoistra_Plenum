@@ -59,9 +59,16 @@ class TestAnIdentifier:
     def test_is_normalised_the_way_the_writer_normalises_it(self, raw, expect):
         assert _safe_identifier(raw) == expect
 
-    @pytest.mark.parametrize("raw", [None, "", "   ", "1col", "a" * 70, "!!!"])
-    def test_is_refused_when_it_is_not_one(self, raw):
+    @pytest.mark.parametrize("raw", [None, "", "   ", "!!!"])
+    def test_is_refused_when_nothing_usable_is_left(self, raw):
         assert _safe_identifier(raw) is None
+
+    # 29 Oct 2026: a leading digit or an over-long name is repaired, not refused — a person should
+    # not have to rename a column for the write to parse (test_sql_keywords_never_break_a_write).
+    @pytest.mark.parametrize("raw,expect", [("1col", "col_1col"), ("end", "end_value")])
+    def test_is_repaired_when_postgres_would_refuse_it(self, raw, expect):
+        assert _safe_identifier(raw) == expect
+        assert len(_safe_identifier("a" * 70)) == 63
 
     def test_cannot_carry_sql(self):
         out = _safe_identifier('x"; DROP TABLE plenum_cafm.assets; --')
@@ -104,7 +111,10 @@ class TestWhatReachesTheStatement:
         assert "vendor_asset_ref" in _sql([_cfg(custom_column_name="Vendor Asset Ref")])
 
     def test_a_column_with_an_unusable_name_is_dropped_not_emitted(self):
-        assert _build_ddl_statements([_cfg(custom_column_name="1bad")], [], {"assets"}) == []
+        assert _build_ddl_statements([_cfg(custom_column_name="!!!")], [], {"assets"}) == []
+
+    def test_a_column_postgres_would_refuse_is_repaired_and_emitted(self):
+        assert "ADD COLUMN IF NOT EXISTS col_1bad VARCHAR(100)" in _sql([_cfg(custom_column_name="1bad")])
 
     def test_a_column_with_a_bogus_type_is_dropped_not_emitted(self):
         assert _build_ddl_statements(
@@ -125,7 +135,9 @@ class TestWhatReachesTheStatement:
         assert "CREATE TABLE IF NOT EXISTS plenum_cafm.vendor_extras" in good
         assert "ref_code TEXT" in good
         assert _build_ddl_statements(
-            [_cfg(is_new_table=True, target_table="9bad")], [], set()) == []
+            [_cfg(is_new_table=True, target_table="!!!")], [], set()) == []
+        assert "CREATE TABLE IF NOT EXISTS plenum_cafm.col_9bad" in _sql(
+            [_cfg(is_new_table=True, target_table="9bad")])
 
     def test_a_good_column_survives_a_bad_one_beside_it(self):
         sql = _sql([_cfg(custom_column_name="!!!"), _cfg(custom_column_name="keeper")])

@@ -88,7 +88,8 @@ def _cases():
         for col in rl.REFERENCES:
             cases.append({"fn": "reference_hint", "column": col, "row": _wire_row(row)})
             want.append(rl.hint_for(col, row))
-    for raw in KEYS + ["", "  Spaced Name  ", "9lives", "a" * 70, "Ünïcode Ünit", "x-y z", "__", "_ok", "CamelCase"]:
+    for raw in KEYS + ["", "  Spaced Name  ", "9lives", "a" * 70, "Ünïcode Ünit", "x-y z", "__", "_ok", "CamelCase",
+                       "end", "End", "ORDER", "user", "current_date", "2024 Cost", "a" * 69 + "b", "!!!"]:
         cases.append({"fn": "safe_ident", "raw": raw})
         want.append(wn._to_safe_identifier(raw))
     for _ in range(300):

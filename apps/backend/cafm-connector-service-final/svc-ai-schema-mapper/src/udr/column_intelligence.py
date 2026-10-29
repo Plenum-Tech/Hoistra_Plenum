@@ -29,6 +29,10 @@ from collections import Counter
 from itertools import combinations
 from typing import Callable
 
+try:
+    from ..sql_identifiers import quote_ident
+except ImportError:  # udr imported as a top-level package, src/ on sys.path (its own tests)
+    from sql_identifiers import quote_ident
 from .mapping_decision import entity_prefix_conflict, score_column_mapping
 from .memo import memo_scoped
 from .primitives import (
@@ -130,13 +134,9 @@ def _pair_gate_rows(
     return fmt_row, val_row, pair
 
 
-_SAFE_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$", re.IGNORECASE)
-
-
 def _q(name: str) -> str:
-    """Quote a SQL identifier only when it isn't a plain safe identifier (DDL emission, B22.1)."""
-    s = str(name)
-    return s if _SAFE_IDENT_RE.match(s) else '"' + s.replace('"', '""') + '"'
+    """Quote a SQL identifier when it isn't a plain safe identifier or is a keyword (B22.1)."""
+    return quote_ident(name)
 
 
 def _prefixed(table: str, col: str) -> str:
@@ -1720,6 +1720,10 @@ def apply_classification_decisions(
                 rej_keys |= _member_keys(row)
         shared_tables[:] = [
             t for t in shared_tables if str(t.get("from_group")) not in rejected_set
+        ]
+        # Kept aside, not shown: the hierarchy step needs the members to stop enforcing them.
+        ci["classification_rejected_rows"] = [
+            c for c in classification if str(c.get("group_id")) in rejected_set
         ]
         classification[:] = [
             c for c in classification if str(c.get("group_id")) not in rejected_set

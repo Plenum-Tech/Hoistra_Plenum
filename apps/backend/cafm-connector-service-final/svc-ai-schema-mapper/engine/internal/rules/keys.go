@@ -7,19 +7,18 @@ import (
 	"hoistra/engine/internal/cell"
 	"hoistra/engine/internal/coerce"
 	"hoistra/engine/internal/pystr"
+	"hoistra/engine/internal/sqlident"
 )
 
-var (
-	notIdentChar = regexp.MustCompile(`[^a-z0-9_]`)
-	safeIdent    = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-)
+var notIdentChar = regexp.MustCompile(`[^a-z0-9_]`)
 
-// SafeIdent is write_node._to_safe_identifier.
+// SafeIdent is write_node._to_safe_identifier: a reserved word, a leading digit or an over-long
+// name is repaired (sqlident); false only when no letter or digit is left.
 func SafeIdent(raw string) (string, bool) {
 	n := pystr.Lower(pystr.Strip(raw))
 	n = strings.ReplaceAll(strings.ReplaceAll(n, " ", "_"), "-", "_")
-	n = notIdentChar.ReplaceAllString(n, "")
-	if !safeIdent.MatchString(n) {
+	n = sqlident.Repair(notIdentChar.ReplaceAllString(n, ""), "_value")
+	if n == "" {
 		return "", false
 	}
 	return n, true

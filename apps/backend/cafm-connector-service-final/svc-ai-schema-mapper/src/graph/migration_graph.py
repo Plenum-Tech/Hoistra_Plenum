@@ -148,7 +148,10 @@ BULK_IO: "dict[str, tuple[list[str], list[str]]]" = {
     "pk_review_node":            (["full_tables"], []),
     "unique_table_review_node":  (["full_tables"], []),
     "pre_semantic_review_node":  (["full_tables"], []),
-    "preprocess_node":           (["full_tables"], ["full_tables", "cleaned_tables"]),
+    # The classification gate builds a demoted FK's lookup table, and resolves a promoted one's
+    # members, from the rows; without them both answers changed only the label (29 Oct 2026).
+    "grouping_review_node":      (["full_tables"], []),
+    "preprocess_node":          (["full_tables"], ["full_tables", "cleaned_tables"]),
     "hierarchy_node":            (["cleaned_tables"], []),
     "verify_hierarchy_node":     (["cleaned_tables"], []),
     "output_generator_node":     (["full_tables", "cleaned_tables"],

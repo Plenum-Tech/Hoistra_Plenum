@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"hoistra/engine/internal/cell"
+	"hoistra/engine/internal/pystr"
+	"hoistra/engine/internal/sqlident"
 )
 
 // insertionOrder is sql_exporter._determine_insertion_order: parents (FK targets) first. Python
@@ -81,7 +83,11 @@ func quoteIdent(name string) string {
 		}
 	}
 	if ok {
-		return name
+		if !sqlident.Quoted(pystr.Lower(name)) {
+			return name
+		}
+		// A keyword written bare would have folded to lower case; quoted, it must be spelt so.
+		name = pystr.Lower(name)
 	}
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

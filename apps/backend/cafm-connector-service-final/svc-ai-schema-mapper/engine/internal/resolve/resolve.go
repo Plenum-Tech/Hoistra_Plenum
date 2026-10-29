@@ -58,6 +58,11 @@ type Set struct {
 	linkCache     map[[2]string]bool
 	assetIDs      map[string]string
 	assetBldg     map[string]string
+	// idents is every lower-cased identifier a building or site of the company answers to, read
+	// once per table (BeginTable); nil when not read, or when the read failed.
+	idents       map[string]bool
+	identsRead   bool
+	tableStarted bool
 
 	BuildingReads     int
 	BuildingAmbiguous []string
@@ -94,10 +99,24 @@ func key(hint string) string { return pystr.Lower(pystr.Strip(hint)) }
 
 // fetch runs one lookup in a savepoint; a failure is a warning and no rows (write_node._fetch).
 func (s *Set) fetch(ctx context.Context, sql string, args ...any) [][]any {
+	out, err := s.query(ctx, sql, args...)
+	if err != nil {
+		s.warn(fmt.Sprintf("[Node 9] lookup failed (treated as no match): %s", truncate(err.Error(), 200)))
+		return nil
+	}
+	return out
+}
+
+// fetchOK is fetch for a read whose failure only means "not known": no warning, ok false.
+func (s *Set) fetchOK(ctx context.Context, sql string, args ...any) ([][]any, bool) {
+	out, err := s.query(ctx, sql, args...)
+	return out, err == nil
+}
+
+func (s *Set) query(ctx context.Context, sql string, args ...any) ([][]any, error) {
 	sp, err := s.tx.Begin(ctx)
 	if err != nil {
-		s.warn(fmt.Sprintf("[Node 9] lookup failed (treated as no match): %v", err))
-		return nil
+		return nil, err
 	}
 	rows, err := sp.Query(ctx, sql, args...)
 	var out [][]any
@@ -117,14 +136,12 @@ func (s *Set) fetch(ctx context.Context, sql string, args ...any) [][]any {
 	}
 	if err != nil {
 		_ = sp.Rollback(ctx)
-		s.warn(fmt.Sprintf("[Node 9] lookup failed (treated as no match): %s", truncate(err.Error(), 200)))
-		return nil
+		return nil, err
 	}
 	if err := sp.Commit(ctx); err != nil {
-		s.warn(fmt.Sprintf("[Node 9] lookup failed (treated as no match): %v", err))
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 func truncate(s string, n int) string {
@@ -211,6 +228,49 @@ func (s *Set) buildingsMatching(ctx context.Context, names []string) []string {
 	return ids
 }
 
+const buildingIdentsSQL = `SELECT lower(coalesce(name, '')), lower(coalesce(building_code, '')), lower(coalesce(site_id::text, '')) FROM {schema}.buildings WHERE organization_id::text = $1`
+
+const siteIdentsSQL = `SELECT lower(coalesce(site_id::text, '')), lower(coalesce(site_code, '')), lower(coalesce(site_name, '')), lower(coalesce(name, '')) FROM {schema}.sites WHERE organization_id::text = $1`
+
+// BeginTable is called as the writer moves on to a table: the company's building and site
+// identifiers are read again (that table's rows may name one an earlier table wrote).
+func (s *Set) BeginTable(string) {
+	s.idents, s.identsRead, s.tableStarted = nil, false, true
+}
+
+// mayMatch says whether a hint could be answered by a building or site at all. A hint none of
+// them answers to is a miss without asking: 2,270 work orders whose site_id carried a
+// work-order-line id asked for a building and then a site on every row, six round trips each
+// to Azure — 25 minutes (29 Oct 2026). The answer for every other hint is the lookup's own.
+func (s *Set) mayMatch(ctx context.Context, k string) bool {
+	if !s.identsRead {
+		s.identsRead = true
+		ids := map[string]bool{}
+		for _, q := range []string{buildingIdentsSQL, siteIdentsSQL} {
+			s.BuildingReads++
+			rows, ok := s.fetchOK(ctx, s.sql(q), s.org)
+			if !ok {
+				return true
+			}
+			for _, r := range rows {
+				for _, c := range r {
+					if v := str(c); v != "" {
+						ids[v] = true
+					}
+				}
+			}
+		}
+		s.idents = ids
+	}
+	if s.idents == nil {
+		return true
+	}
+	if _, named := s.sites[k]; named {
+		return true
+	}
+	return s.idents[k]
+}
+
 // Building is BuildingResolver.resolve: hits and misses cached by the lower-cased hint.
 func (s *Set) Building(ctx context.Context, hint string) (string, bool) {
 	k := key(hint)
@@ -222,6 +282,10 @@ func (s *Set) Building(ctx context.Context, hint string) (string, bool) {
 			return "", false
 		}
 		return *v, true
+	}
+	if s.tableStarted && !s.mayMatch(ctx, k) {
+		s.buildingCache[k] = nil
+		return "", false
 	}
 	found := s.resolveBuilding(ctx, k)
 	s.buildingCache[k] = found

@@ -26,6 +26,8 @@ func TestQuoteIdentFollowsTheExportersRegex(t *testing.T) {
 		"abc": "abc", "Abc_1": "Abc_1", "_x": "_x", "1abc": `"1abc"`, "a b": `"a b"`, `a"b`: `"a""b"`,
 		"abc\n":  "abc\n", // re.match's $ also matches before a final newline
 		"ſtatus": "ſtatus", "Kelvin_K": "Kelvin_K", "é": `"é"`, "": `""`,
+		// A keyword is quoted, lower-cased as PostgreSQL would have folded it (29 Oct 2026).
+		"end": `"end"`, "End": `"end"`, "time": `"time"`, "name": "name", "end\n": "end\n",
 	}
 	for in, want := range cases {
 		if got := quoteIdent(in); got != want {

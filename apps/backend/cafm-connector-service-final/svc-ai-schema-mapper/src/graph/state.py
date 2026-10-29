@@ -51,6 +51,9 @@ class FieldMapping(TypedDict, total=False):
     reviewer_id: Optional[str]  # user who approved/rejected
     review_timestamp: Optional[datetime]
     langsmith_run_id: Optional[str]  # LangSmith trace ID for this field's mapping (Strategy 4 or Node 3)
+    # A person named this destination column at the column-matching or field-mapping gate: the
+    # earlier B14.1 answer and the type guard leave it alone, and the writer may create it.
+    user_renamed: bool
 
 
 class HierarchyRelationship(TypedDict, total=False):
