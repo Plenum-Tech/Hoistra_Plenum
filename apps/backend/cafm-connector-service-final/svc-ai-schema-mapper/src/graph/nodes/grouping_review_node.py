@@ -58,7 +58,8 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
             "Review the primary keys, foreign-key relationships and shared attributes (B20.1). "
             "For each FK / shared attribute, keep the detected classification, switch it (a FK "
             "demoted to Shared Attribute is not enforced and gets a lookup table instead; a "
-            "Shared Attribute promoted to FK skips its lookup table), or exclude it entirely. "
+            "Shared Attribute promoted to FK is enforced against the table its values live in), "
+            "or exclude it entirely. "
             "The pipeline does not continue until you approve."
         ),
     }

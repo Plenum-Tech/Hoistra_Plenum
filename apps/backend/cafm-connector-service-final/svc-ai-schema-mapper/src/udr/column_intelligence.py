@@ -1554,10 +1554,11 @@ def apply_classification_decisions(
       • FK → Shared Attribute: the FK is NOT enforced; the group instead synthesises its
         B22.1 lookup table + FK-rewrite DDL (needs ``tables`` = ``{name: {"rows", "columns"}}``;
         the verdict change still applies when data is unavailable, just without a lookup).
-      • Shared Attribute → FK: the lookup table is NOT created; the group is recorded as a
-        Foreign Key relationship. Enforcement (fk_candidates) is only added when the group
-        carries a PK member to reference — otherwise the re-classification is display/audit
-        only (there is no PK to enforce against).
+      • Shared Attribute → FK: the group is recorded as a Foreign Key relationship and
+        enforced. Where a member is some table's PK the others reference it and no lookup
+        table is kept. A genuine shared attribute has no such member — a group is called
+        shared precisely because none of its columns is a primary key — so the reference
+        table is what the columns point at, built here if the demotion path has not already.
 
     The row keeps a ``human_override`` marker so every downstream view (Activity-Log Section 2,
     the post-write UDR report) can show the decision was human, not model. Group counts in
@@ -1652,9 +1653,11 @@ def apply_classification_decisions(
         elif target == "fk" and "shared" in verdict:
             row["verdict"] = "Foreign Key relationship"
             row["human_override"] = "shared_to_fk"
-            shared_tables[:] = [t for t in shared_tables if str(t.get("from_group")) != gid]
             pk_key = row.get("has_pk") or row.get("canonical_has_pk")
             if pk_key and "." in str(pk_key):
+                # A member of this group is some table's primary key, so the others point at it
+                # and the lookup table is not needed.
+                shared_tables[:] = [t for t in shared_tables if str(t.get("from_group")) != gid]
                 dt, dc = str(pk_key).split(".", 1)
                 for (st, sc) in _member_pairs(row):
                     if f"{st}.{sc}".lower() == str(pk_key).lower():
@@ -1666,6 +1669,47 @@ def apply_classification_decisions(
                         "reason": "human override at classification gate (B20.1)",
                     })
                     result["fk_candidates_added"] += 1
+            else:
+                # A shared attribute never has one: a group is called shared precisely because no
+                # member is a primary key (see the verdict above — `has_pk` is set only when a PK
+                # member exists). So this branch was unreachable for every row the gate offers the
+                # promotion on, and promoting used to delete the lookup table and add nothing: the
+                # user lost the reference table and its foreign keys, and gained a label.
+                #
+                # The reference table IS the thing to point at. Build it if the demotion path has
+                # not already, then point every member column at its key — which is what asking
+                # for a foreign key means when the column is shared rather than owned.
+                entry = next((t for t in shared_tables if str(t.get("from_group")) == gid), None)
+                if entry is None and tables:
+                    pairs = _member_pairs(row)
+                    canonical = str(row.get("canonical_name") or (pairs[0][1] if pairs else "")).strip()
+                    if pairs and canonical:
+                        entry = synthesize_shared_attribute_table(
+                            tables,
+                            canonical_name=canonical,
+                            group_id=gid,
+                            member_pairs=pairs,
+                            members_display=row.get("members"),
+                        )
+                        if entry:
+                            shared_tables.append(entry)
+                            existing_lookup_groups.add(gid)
+                            result["lookup_tables_added"].append(entry["table_name"])
+                if entry:
+                    dst_t, dst_c = str(entry.get("table_name")), str(entry.get("pk_column"))
+                    known = {f"{f.get('src_table')}.{f.get('src_column')}".lower()
+                             for f in fk_candidates}
+                    for (st, sc) in _member_pairs(row):
+                        if f"{st}.{sc}".lower() in known:
+                            continue
+                        fk_candidates.append({
+                            "src_table": st, "src_column": sc,
+                            "dst_table": dst_t, "dst_column": dst_c,
+                            "ri": row.get("ri"), "confirmed": True,
+                            "reason": "human override at classification gate (B20.1): "
+                                      "shared attribute promoted to a foreign key on its reference table",
+                        })
+                        result["fk_candidates_added"] += 1
             result["overrides_applied"][gid] = "shared_to_fk"
 
     # ── 2. De-selected groups — nothing of theirs is applied ───────────────────
