@@ -607,6 +607,11 @@ export const sessionsMethods = {
         patch.view = TASK_PAGE_VIEW[rec.page] || TASK_PAGE_VIEW[rec.ctx] || 'home';
         if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(0, 0);
       }
+      // Opened from the Sessions list it opens in full, as a conversation does (29 Oct 2026):
+      // the dock fills the content area for this task on this page (renderVals orchFull).
+      patch.orchFull = true;
+      patch.orchFullTask = rec.id;
+      patch.orchFullView = patch.view || this.state.view;
       this.setState(patch);
       return;
     }

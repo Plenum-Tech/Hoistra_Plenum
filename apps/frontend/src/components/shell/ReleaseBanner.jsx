@@ -1,6 +1,6 @@
 // ReleaseBanner — "a newer version is available", with the reload that takes it.
 //
-// Sits above everything (the toast is z-index 500, overlays below that) and stays until the person
+// Sits above every overlay (z-index 900; only the toast, 1000, is higher) and stays until the person
 // acts: a notice that disappears on its own is one a person reading something else never sees. It
 // appears at most once per tab, and only when a reload would lose typed text: otherwise the
 // page reloads itself the moment a response says the server is serving a different build.

@@ -61,9 +61,14 @@ export default function HoistraMigrationWizard(props: Props) {
   const [client] = useState(
     () =>
       new QueryClient({
+        // networkMode "always": React Query's default pauses every read and every gate answer
+        // while the browser reports itself offline, and resumes only on its "online" event. A
+        // network blip on 29 Oct 2026 left a new run on "Loading migration status…" for good:
+        // its status was never requested, while Hoistra's own polls (plain fetch) carried on.
+        // Every call here goes through Hoistra's apiFetch, which reports a failure itself.
         defaultOptions: {
-          queries: { retry: 1, refetchOnWindowFocus: false, refetchOnReconnect: false, refetchOnMount: false, staleTime: 5 * 60 * 1000 },
-          mutations: { retry: 0 },
+          queries: { networkMode: "always", retry: 1, refetchOnWindowFocus: false, refetchOnReconnect: false, refetchOnMount: false, staleTime: 5 * 60 * 1000 },
+          mutations: { networkMode: "always", retry: 0 },
         },
       }),
   );

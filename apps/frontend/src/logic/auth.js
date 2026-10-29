@@ -6,7 +6,7 @@
 // The access token lives in state only; the refresh token is the persisted credential.
 import { authApi } from '../api/auth.js';
 import { adminApi } from '../api/admin.js';
-import { ApiError, configureAuth, setActingOrg } from '../api/client.js';
+import { ApiError, configureAuth, getActingOrg, setActingOrg } from '../api/client.js';
 import { usesInstances } from './instances.js';
 import { forgetIssuedToken, forgetSharedSession, isSupersededToken, issuedTokenKey, latestIssuedRecord, loadSharedSession, recordIssuedToken, SESSION_KEY } from './session.js';
 
@@ -276,7 +276,19 @@ export const authMethods = {
       // Once every open tab runs this build, nothing unstamped is written any more.
       const at = s.refreshTokenAt || issueStamp(mine, this.state);
       if (!s.refreshTokenAt) recordIssuedToken(mine, s.refreshToken, at);
-      this.setState({ refreshToken: s.refreshToken, refreshTokenAt: at, account: s.account || this.state.account });
+      // The other tab's account, but never its building scope: that list belongs to whichever
+      // company THAT tab is on (its own, or the one it views as), and this tab's authLoadScope
+      // keeps its own. Adopted whole, a superadmin viewing a company here had the picker
+      // emptied by a tab on their own company rotating the token (29 Oct 2026).
+      const own = this.state.account;
+      const scope = own ? {
+        buildings: own.buildings, buildingsOrg: own.buildingsOrg || null, building_ids: own.building_ids,
+        all_buildings: own.all_buildings, selected_building_id: own.selected_building_id
+      } : {};
+      this.setState({
+        refreshToken: s.refreshToken, refreshTokenAt: at,
+        account: s.account ? Object.assign({}, s.account, scope) : own
+      });
     }
   },
 
@@ -459,6 +471,9 @@ export const authMethods = {
   // switch, so a transient failure here is invisible rather than a flashed error on top of
   // whatever else just succeeded.
   authLoadScope() {
+    // The company the list is read for, stamped on it as buildingsOrg: the Ingest tray's
+    // picker re-reads a list stamped for another company rather than offer its buildings.
+    const org = getActingOrg() || null;
     return authApi.me().then((r) => {
       if (!r || !r.ok || !r.user) return;
       const u = r.user;
@@ -495,7 +510,8 @@ export const authMethods = {
             building_ids: u.building_ids === undefined ? p.account.building_ids : u.building_ids,
             all_buildings: u.all_buildings === true,
             selected_building_id: u.selected_building_id || null,
-            buildings: list === null ? (Array.isArray(p.account.buildings) ? p.account.buildings : []) : list
+            buildings: list === null ? (Array.isArray(p.account.buildings) ? p.account.buildings : []) : list,
+            buildingsOrg: list === null ? (p.account.buildingsOrg || null) : org
           })
         } : {}));
       });

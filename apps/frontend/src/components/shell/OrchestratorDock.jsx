@@ -42,7 +42,7 @@ export default function OrchestratorDock({ vals }) {
         title={vals.orchAtMax ? "Maximum width — drag left to narrow back toward the default" : "Drag to widen · double-click to reset"}
         style={{ display: vals.orchResizeShow, position: "fixed", top: "0", bottom: "0", left: vals.orchHandleLeft, width: "6px", zIndex: "61", cursor: "col-resize", background: vals.orchHandleTint, opacity: "0.5" }}
       ></div>
-      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: "22px 28px 24px", overflow: "hidden", transition: "left 0.2s ease" }}>
+      <div style={{ position: "fixed", top: "0", bottom: "0", left: vals.orchLeft, width: vals.orchWidth, boxSizing: "border-box", zIndex: "60", background: "var(--color-surface)", borderRight: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", padding: vals.orchPad, overflow: "hidden", transition: "left 0.2s ease" }}>
         {/* Only this region scrolls. The composer below is a footer, so the send / stop
             button stays put however long the answer grows. */}
         <div ref={scrollRef} style={{ flex: "1", minHeight: "0", overflowY: "auto", display: "flex", flexDirection: "column", margin: "0 -28px", padding: "0 28px" }}>

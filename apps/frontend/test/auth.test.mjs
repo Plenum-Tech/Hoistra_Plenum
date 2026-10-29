@@ -1019,6 +1019,27 @@ test('another tab rotating the token is adopted; another tab signing out signs t
   assert.equal(c.state.signedIn, false);
 });
 
+test('another tab rotating the token does not replace this tab\'s building list (29 Oct 2026)', async () => {
+  handlers['POST ' + A + '/login'] = session(USER, 1);
+  c.setState({ email: 'sam@example.com', password: 'x'.repeat(12) });
+  await c.authSignIn();
+  // This tab views a company and its picker holds that company's buildings. Another tab of
+  // the same account — on its own company, which has none — rotates the token and writes its
+  // account, list included, to the shared slot. Adopting that list left "Choose a building"
+  // reading "No building matches that" over a Home that said 9 buildings hoisted.
+  const mine = [{ id: 'b-1', name: 'Vasiliki House', building_code: 'VH-1' }, { id: 'b-2', name: 'Harbour Point', building_code: 'HP-2' }];
+  c.setState((p) => ({ account: Object.assign({}, p.account, { buildings: mine, all_buildings: true, building_ids: null, selected_building_id: 'b-2' }) }));
+  mem[SESSION_KEY] = JSON.stringify(Object.assign(stored(), {
+    refreshToken: 'ref-5', refreshTokenAt: stored().refreshTokenAt + 1,
+    account: Object.assign({}, USER, { full_name: 'Sam Five', buildings: [], all_buildings: true, building_ids: null, selected_building_id: null })
+  }));
+  c.authStorageChanged({ key: SESSION_KEY });
+  assert.equal(c.state.refreshToken, 'ref-5', 'the newer token is still adopted');
+  assert.equal(c.state.account.full_name, 'Sam Five', 'and the account\'s own details');
+  assert.deepEqual(c.state.account.buildings.map((b) => b.id), ['b-1', 'b-2'], 'this tab\'s list stays');
+  assert.equal(c.state.account.selected_building_id, 'b-2');
+});
+
 test('a DIFFERENT account writing the shared slot is not adopted — no live hijack of this tab\'s own session', async () => {
   handlers['POST ' + A + '/login'] = session(USER, 1);
   c.setState({ email: 'sam@example.com', password: 'x'.repeat(12) });
@@ -1293,6 +1314,53 @@ test('viewAsCompany reloads the building scope as that company, so the filing pi
   const v = c.renderVals();
   assert.deepEqual(v.cbMatches.map((b) => b.name), ['Harbour Point', 'Ashgrove Court'], 'the Ingest tray picker offers the company being viewed');
   assert.equal(v.cbEmpty, false, 'never "No building matches that" over an empty search for a company that has buildings');
+});
+
+// 29 Oct 2026: a superadmin viewing a company saw "No building matches that" over a Home that
+// said 9 buildings hoisted; the switch had re-read the list as that company, but in the real
+// browser the re-read never went out. The picker now checks its own list when it opens.
+test('opening the picker with an empty list reads the viewed company\'s buildings there and then', async () => {
+  await signInSuperadmin();
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+  c.setState((p) => ({ account: Object.assign({}, p.account, { buildings: [] }) }));
+  const before = requests(ADM + '/buildings').length;
+
+  const opened = c.cbOpenPicker();
+  assert.equal(c.state.cbLoading, true, 'while it reads, the picker says so');
+  assert.match(c.renderVals().cbEmptyText, /Loading/);
+  await opened;
+  await settle();
+
+  assert.equal(requests(ADM + '/buildings').length - before, 1);
+  // The stub answers NB's rows only for organization_id=NB: these names prove the read was scoped.
+  assert.deepEqual(c.renderVals().cbMatches.map((b) => b.name), ['Harbour Point', 'Ashgrove Court']);
+  assert.equal(c.state.cbLoading, false);
+});
+
+test('opening the picker over another company\'s list replaces it with the viewed company\'s', async () => {
+  await signInSuperadmin();
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+  // The superadmin's own list, left behind by a read that answered for the wrong company.
+  c.setState((p) => ({ account: Object.assign({}, p.account, {
+    buildings: [{ id: OWN_HQ, name: "Sadie's HQ", building_code: 'HQ-1' }], buildingsOrg: null }) }));
+
+  await c.cbOpenPicker();
+  await settle();
+
+  assert.deepEqual(c.renderVals().cbMatches.map((b) => b.name), ['Harbour Point', 'Ashgrove Court']);
+});
+
+test('opening the picker over a list already loaded for this company reads nothing', async () => {
+  await signInSuperadmin();
+  c.viewAsCompany(NB, 'Northbridge Estates Ltd');
+  await settle();
+  const before = requests(ADM + '/buildings').length;
+  await c.cbOpenPicker();
+  await settle();
+  assert.equal(requests(ADM + '/buildings').length, before);
+  assert.equal(c.renderVals().cbEmptyText, 'No building matches that. Check the code, or hoist a new one.');
 });
 
 test('viewAsCompany drops a filing choice made while viewing the previous company — its id names a building the new company does not have', async () => {

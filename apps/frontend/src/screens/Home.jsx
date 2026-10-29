@@ -308,7 +308,7 @@ export default function Home({ vals }) {
                     ))}
                     {vals.cbEmpty ? (
                       <span style={{ padding: "8px", fontSize: "11px", color: "var(--color-neutral-500)" }}>
-                        {"No building matches that. Check the code, or hoist a new one."}
+                        {vals.cbEmptyText || "No building matches that. Check the code, or hoist a new one."}
                       </span>
                     ) : null}
                   </div>

@@ -295,6 +295,12 @@ export const renderValsMethods = {
     const orchBaseW = s.flow === "investigate" ? 420 : s.flow === "vhoist" ? 380 : 280;
     const ORCH_MAX_W = 720;
     const orchW = Math.max(orchBaseW, Math.min(ORCH_MAX_W, s.orchW || orchBaseW));
+    // A task opened from the Sessions list fills the content area (sessions.js openSession) —
+    // only for that task on that page: an action that raises another task, a move to another
+    // page, or closing the dock puts it back beside the page.
+    const orchFull = !!(s.orchOpen && s.orchFull && s.orchTask && s.orchFullTask === s.orchTask.id
+      && s.orchFullView === s.view);
+    const navW = s.navOpen ? 248 : 52;
 
     const detail = s.detail;
     const modKey = s.module;
@@ -2042,10 +2048,14 @@ export const renderValsMethods = {
       // resizing: a width animation re-laid out the page on every frame (8 Oct 2026). Clipped,
       // the hidden part takes no clicks either.
       navClip: s.navOpen ? "inset(0 0 0 0)" : "inset(0 196px 0 0)",
-      orchWidth: orchW + "px",
+      orchWidth: orchFull ? "calc(100vw - " + navW + "px)" : orchW + "px",
+      orchFull,
+      // Full, the dock's content keeps a readable column instead of running the width of the screen.
+      orchPad: orchFull ? "22px max(28px, calc((100vw - " + navW + "px - 880px) / 2)) 24px" : "22px 28px 24px",
       // The navigator behaves the same on every page, Home included: open, it sits beside the
-      // content (never over it), and the dock sits beside the navigator.
-      shellPad: !s.signedIn ? "0px" : ((s.navOpen ? 248 : 52) + (s.orchOpen ? orchW : 0)) + "px",
+      // content (never over it), and the dock sits beside the navigator. A full dock covers the
+      // page, so the page is not pushed aside by it.
+      shellPad: !s.signedIn ? "0px" : ((s.navOpen ? 248 : 52) + (s.orchOpen && !orchFull ? orchW : 0)) + "px",
       // The dock keeps `left` (not a transform): a transform would make it the containing block
       // for the position:fixed click-catchers inside it (8 Oct 2026 review).
       orchLeft: (s.navOpen ? 248 : 52) + "px",
@@ -2053,7 +2063,7 @@ export const renderValsMethods = {
       // Drag the dock's right edge to widen it. Widen only: the floor is the flow's own
       // default (orchBaseW) so a drag can never make the dock narrower than designed, and
       // the ceiling is ORCH_MAX_W so it can never swallow the register beside it.
-      orchResizeShow: s.orchOpen ? "block" : "none",
+      orchResizeShow: s.orchOpen && !orchFull ? "block" : "none",
       orchAtMax: orchW >= ORCH_MAX_W,
       // The handle is fixed, not absolute: the dock scrolls its own content, and an
       // absolute handle would scroll away with it.
@@ -2471,7 +2481,11 @@ export const renderValsMethods = {
         const kind = docFiles.length && sheets.length ? "both" : sheets.length ? "sheets" : "docs";
         const chosenId = this.cbFilingBuildingId();
         const acct = s.account || {};
-        const all = Array.isArray(acct.buildings) ? acct.buildings : [];
+        // A list read for another company is never offered: filing against one of its
+        // buildings would bind this company's upload to someone else's (cbEnsureBuildings
+        // re-reads it when the picker opens).
+        const all = Array.isArray(acct.buildings) && (acct.buildingsOrg || null) === (s.viewOrgId || null)
+          ? acct.buildings : [];
         const chosen = chosenId ? (all.find((b) => b.id === chosenId) || null) : null;
         const q = String(s.cbQuery || "").trim().toLowerCase();
         // Searched on code as well as name: three buildings called "MixedUse 004" is normal
@@ -2504,6 +2518,10 @@ export const renderValsMethods = {
           cbClear: () => this.cbClearBuilding(),
           cbHoist: () => this.cbHoistNew(),
           cbEmpty: matches.length === 0,
+          cbLoading: !!s.cbLoading,
+          cbEmptyText: s.cbLoading
+            ? "Loading this company's buildings…"
+            : "No building matches that. Check the code, or hoist a new one.",
           cbMatches: matches.map((b) => ({
             id: b.id,
             name: b.name || "(unnamed)",

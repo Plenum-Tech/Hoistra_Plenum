@@ -25,16 +25,53 @@
 //   IT DOES NOT DEFAULT TO THE TOP-BAR SCOPE. That picker sets what the reader is LOOKING
 //   AT. Filing a document against it because they happened to be browsing there is exactly
 //   the wrong-building binding the backend's validation gate exists to catch.
+import { adminApi } from "../api/admin.js";
+import { getActingOrg } from "../api/client.js";
+
 const CB_DEFAULTS = {
   // The building chosen for the staged attachments, and its name for the label. Held until
   // the conversation ends rather than per-turn: filing three certificates for one building
   // should not mean choosing it three times.
   cbBuildingId: null, cbBuildingName: "",
-  cbPickerOpen: false, cbQuery: ""
+  cbPickerOpen: false, cbQuery: "", cbLoading: false
 };
 
 export const chatBuildingMethods = {
-  cbOpenPicker() { this.setState({ cbPickerOpen: true, cbQuery: "" }); },
+  cbOpenPicker() {
+    this.setState({ cbPickerOpen: true, cbQuery: "" });
+    return this.cbEnsureBuildings();
+  },
+
+  // The list is account.buildings, which authLoadScope fills at sign-in, on a refresh and on a
+  // company switch. 29 Oct 2026: a superadmin viewing a company opened this picker onto "No
+  // building matches that" over a Home that said 9 buildings hoisted — the switch's re-read
+  // never went out in the real browser. So the picker checks for itself when it opens: an
+  // empty list, or one read for a different company than the one being viewed, is read again
+  // as that company. A list already read for it is used as it is.
+  cbEnsureBuildings() {
+    const a = this.state.account;
+    if (!a) return Promise.resolve();
+    if (this._cbLoading) return this._cbLoading;
+    const org = getActingOrg() || null;
+    const list = Array.isArray(a.buildings) ? a.buildings : [];
+    if (list.length && (a.buildingsOrg || null) === org) return Promise.resolve();
+    // Admin and superadmin read the company list (GET /me names it only for an allocation);
+    // a restricted user's list is their allocation, which /me carries.
+    const unrestricted = a.role === "admin" || a.role === "superadmin";
+    const read = unrestricted || typeof this.authLoadScope !== "function"
+      ? adminApi.listBuildings().then((br) => {
+          const rows = br && Array.isArray(br.buildings) ? br.buildings : [];
+          this.setState((p) => (p.account && p.account.id === a.id && (getActingOrg() || null) === org
+            ? { account: Object.assign({}, p.account, { buildings: rows, buildingsOrg: org }) } : {}));
+        })
+      : this.authLoadScope();
+    this.setState({ cbLoading: true });
+    this._cbLoading = Promise.resolve(read).catch(() => {}).then(() => {
+      this._cbLoading = null;
+      this.setState({ cbLoading: false });
+    });
+    return this._cbLoading;
+  },
   cbClosePicker() { this.setState({ cbPickerOpen: false, cbQuery: "" }); },
   cbSetQueryText(e) { this.setState({ cbQuery: e && e.target ? e.target.value : String(e || "") }); },
 
