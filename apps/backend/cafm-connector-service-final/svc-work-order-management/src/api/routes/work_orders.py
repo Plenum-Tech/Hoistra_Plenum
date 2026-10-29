@@ -36,6 +36,7 @@ from ...services.journey_service import (
     advance_journey_milestone,
 )
 from ...services.approval_workflow import ApprovalWorkflowService
+from ...services import work_order_lookup
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -74,10 +75,34 @@ async def _get_wo_or_404(
                     cast(WorkOrder.wo_code, String) == str(work_order_id))
             )
         )
+        rows = list(result.scalars().all())
+        by_key = [w for w in rows if str(w.work_order_id) == str(work_order_id)]
+        matches = by_key or (rows if len(rows) == 1 else None)
+        if matches is None:
+            # Nothing exact, or several sharing the code (wo_code is not unique). The code as
+            # people type it — "wo-1042", "WO1042" for WO-1042 — is compared case- and
+            # separator-insensitively, and only among the caller's own work orders: a looser
+            # match never reaches past the boundary the exact one is checked against.
+            matches = rows if principal is None else await work_order_lookup.by_code(
+                session, work_order_id,
+                scope=lambda q: scope_select(q, principal, WorkOrder.building_id))
     except SQLAlchemyError as exc:
         raise DatabaseError(str(exc)) from exc
-    wo = result.scalar_one_or_none()
+    if len(matches) > 1:
+        # Several work orders answer to this code. Picking one would act on whichever the
+        # database returned first; the caller is told which there are and asked for the key.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "work_order_ambiguous",
+                    "message": f"'{work_order_id}' matches {len(matches)} work orders: "
+                               f"{work_order_lookup.describe_candidates(matches)}. "
+                               f"Use the work order id."},
+        )
+    wo = matches[0] if matches else None
     if not wo:
+        if rows and principal is not None:
+            # Several exact matches, none on the caller's buildings: refused, as one would be.
+            assert_building(principal, rows[0].building_id)
         raise WorkOrderNotFound(work_order_id)
     if principal is not None:
         # A work order on somebody else's building is refused, not hidden: the caller
@@ -304,7 +329,8 @@ async def get_work_order_history(
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(current_principal),
 ):
-    await _get_wo_or_404(work_order_id, session, principal)   # 404 if not found
+    wo = await _get_wo_or_404(work_order_id, session, principal)   # 404 if not found
+    work_order_id = str(wo.work_order_id)   # history is keyed by id, whatever the caller typed
     try:
         result = await session.execute(
             select(StatusHistory)
@@ -468,7 +494,11 @@ async def get_work_order_status_track(
     """
     from ...services.work_order_status_track import build_work_order_status_track
 
-    track = await build_work_order_status_track(session, work_order_id)
+    # Resolved and checked like every other read of one work order: the key or the code however
+    # it is typed, and 403 for a work order on a building the caller is not allocated to. This
+    # route took the caller and never used it, so any signed-in user could read any track.
+    wo = await _get_wo_or_404(work_order_id, session, principal)
+    track = await build_work_order_status_track(session, str(wo.work_order_id))
     if not track.get("found"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -626,6 +656,7 @@ async def update_status(
     principal: Principal = Depends(current_principal),
 ):
     wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if payload.new_status not in allowed:
         log.warning(
@@ -681,6 +712,7 @@ async def approve_work_order(
 ):
     log.info("work_order.approve.start", work_order_id=work_order_id)
     wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     if wo.status != "pending_approval":
         log.warning(
             "work_order.approve.not_pending",
@@ -718,6 +750,7 @@ async def close_work_order(
 ):
     log.info("work_order.close.start", work_order_id=work_order_id)
     wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     if wo.status == "closed":
         log.warning("work_order.close.already_closed", work_order_id=work_order_id)
         raise WorkOrderAlreadyClosed(work_order_id)
@@ -748,6 +781,7 @@ async def prepare_work_order(
 ):
     log.info("work_order.prepare.start", work_order_id=work_order_id)
     wo = await _get_wo_or_404(work_order_id, session, principal)
+    work_order_id = str(wo.work_order_id)   # history and journey are keyed by id, not the code typed
     allowed = _VALID_TRANSITIONS.get(wo.status, [])
     if "prepared" not in allowed:
         log.warning(

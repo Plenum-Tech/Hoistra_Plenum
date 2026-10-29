@@ -29,6 +29,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import get_logger
+from ..shared import name_lookup, name_match
 from .value_ledger import _grab_rows
 
 log = get_logger(__name__)
@@ -123,12 +124,102 @@ def _scope(organization_id: UUID | None, building_ids: tuple[UUID, ...] | None,
     return sql, p
 
 
+def _word_rx(w: str) -> str:
+    """A word from the start of a word — an underscore or a hyphen counts as a break, so a file
+    named 2026_Acme_Facilities.pdf has the word "acme" — and whole when it is a code or number."""
+    return "(^|[^a-z0-9])" + w + ("([^a-z0-9]|$)" if name_match.exact_token(w) else "")
+
+
+def vendor_name_sql(col: str, vendor: str, p: dict[str, Any], *, every_word: bool = True) -> str:
+    """Whether ``col`` names ``vendor`` (29 Oct 2026): the phrase as typed anywhere (as before),
+    the phrase without its kind word ("Acme contractor" is Acme), the same letters and digits
+    ("RT5 Crossrail" is "RT5, Crossrail"), and every word in any order ("facilities acme",
+    "Gough & Kelly"). A phrase of kind words alone ("the vendor") names none. Parameters are
+    added to ``p`` once and shared by every column this is called for."""
+    kind = name_lookup.VENDOR_KIND_WORDS
+    if not name_lookup.names_something(vendor, kind):
+        return "FALSE"
+    raw = vendor.strip()
+    if "ds_vendor" not in p:
+        p["ds_vendor"] = "%" + raw + "%"
+        _, compacts = name_lookup.exact_forms(raw, kind)
+        p["ds_vendor_compacts"] = compacts
+        core = name_lookup.core_words(raw, kind)
+        if name_lookup.stands_alone(raw, kind):
+            if " ".join(core) != name_match.clean(raw):
+                p["ds_vendor_core"] = "%" + " ".join(core) + "%"
+            if len(core) >= 2:
+                for i, w in enumerate(core[:8]):
+                    p[f"ds_vendor_w{i}"] = _word_rx(w)
+    parts = [f"{col} ILIKE :ds_vendor"]
+    if "ds_vendor_core" in p:
+        parts.append(f"{col} ILIKE :ds_vendor_core")
+    if p["ds_vendor_compacts"]:
+        parts.append(f"regexp_replace(lower({col}::text), '[^a-z0-9]+', '', 'g') = ANY(:ds_vendor_compacts)")
+    words = sorted(k for k in p if k.startswith("ds_vendor_w"))
+    if every_word and words:
+        parts.append("(" + " AND ".join(f"{col} ~* :{k}" for k in words) + ")")
+    return "(" + " OR ".join(parts) + ")"
+
+
+async def _closest_vendor_names(session: AsyncSession, vendor: str, organization_id: UUID | None,
+                                cols: set[tuple[str, str]]) -> list[str]:
+    """The company's own vendor names clearly closest in spelling to ``vendor`` — for a name that
+    found no document at all ("Acme Facilites Ltd"). Never read across companies: a caller with
+    a company and a vendor register without a company column gets none."""
+    kind = name_lookup.VENDOR_KIND_WORDS
+    frags = name_match.fragments(" ".join(name_lookup.core_words(vendor, kind)))
+    if not frags or not name_lookup.stands_alone(vendor, kind):
+        return []
+    p: dict[str, Any] = {"ds_frag": "(" + "|".join(frags) + ")"}
+    org_sql = ""
+    if organization_id is not None:
+        if ("vendors", "organization_id") not in cols:
+            return []
+        org_sql = " AND v.organization_id::text = :ds_org"
+        p["ds_org"] = str(organization_id)
+    rows = await _grab_rows(session, f"""
+        SELECT DISTINCT v.vendor_name AS vendor_name FROM plenum_cafm.vendors v
+         WHERE v.vendor_name ~* :ds_frag{org_sql}
+         LIMIT 500""", p)
+    if isinstance(rows, dict):
+        return []
+    names = [str(r["vendor_name"]) for r in rows if r.get("vendor_name")]
+    top, keys = name_lookup.best(vendor, [(n, n) for n in names], kind)
+    return keys[:3] if top == name_lookup.CLOSE else []
+
+
 async def linked_documents(session: AsyncSession, *, organization_id: UUID | None, building_ids: tuple[UUID, ...] | None,
                            vendor: str | None = None, contract_ref: str | None = None, building_id: UUID | None = None,
                            doc_type: str | None = None, document_ids: list[str] | None = None,
                            asset: str | None = None, include_personal: bool = False,
                            indexed_only: bool = False, limit: int = MAX_DOCUMENTS) -> list[dict[str, Any]] | dict:
-    """The register documents the question is about, newest first."""
+    """The register documents the question is about, newest first.
+
+    A vendor that finds nothing at all is tried once more by its closest spelling among the
+    company's own vendors (29 Oct 2026); each document found that way says ``vendor_read_as``."""
+    docs = await _linked_documents(session, organization_id=organization_id, building_ids=building_ids,
+                                   vendor=vendor, contract_ref=contract_ref, building_id=building_id,
+                                   doc_type=doc_type, document_ids=document_ids, asset=asset,
+                                   include_personal=include_personal, indexed_only=indexed_only, limit=limit)
+    if not vendor or not isinstance(docs, list) or docs:
+        return docs
+    found: dict[str, dict[str, Any]] = {}
+    for name in await _closest_vendor_names(session, vendor, organization_id, await _columns(session)):
+        more = await _linked_documents(session, organization_id=organization_id, building_ids=building_ids,
+                                       vendor=name, contract_ref=contract_ref, building_id=building_id,
+                                       doc_type=doc_type, document_ids=document_ids, asset=asset,
+                                       include_personal=include_personal, indexed_only=indexed_only, limit=limit)
+        for d in more if isinstance(more, list) else []:
+            found.setdefault(str(d.get("document_id")), dict(d, vendor_read_as=name))
+    return list(found.values())[:int(limit)]
+
+
+async def _linked_documents(session: AsyncSession, *, organization_id: UUID | None,
+                            building_ids: tuple[UUID, ...] | None, vendor: str | None, contract_ref: str | None,
+                            building_id: UUID | None, doc_type: str | None, document_ids: list[str] | None,
+                            asset: str | None, include_personal: bool, indexed_only: bool,
+                            limit: int) -> list[dict[str, Any]] | dict:
     from .document_register import DOC_TYPES
 
     cols = await _columns(session)
@@ -143,17 +234,27 @@ async def linked_documents(session: AsyncSession, *, organization_id: UUID | Non
     if asset:
         # An asset's paper: its certificates, warranties, documents, and the maintenance records
         # (work orders, PPM visits, inspections, plans) that cite a report or job sheet.
+        # The code also as letters and digits, the name also without its kind word (29 Oct 2026):
+        # "ACSDL07" is the asset coded "ACS-DL-07".
+        _, asset_compacts = name_lookup.exact_forms(asset, name_lookup.ASSET_KIND_WORDS)
+        asset_core = " ".join(name_lookup.core_words(asset, name_lookup.ASSET_KIND_WORDS))
+        asset_match = ("lower(a.asset_code) = lower(:ds_asset) OR a.asset_name ILIKE :ds_asset_like"
+                       " OR regexp_replace(lower(a.asset_code::text), '[^a-z0-9]+', '', 'g') = ANY(:ds_asset_compacts)"
+                       " OR a.asset_name ILIKE :ds_asset_core_like")
         via = [f"SELECT x.{c}::text FROM plenum_cafm.{t} x WHERE x.asset_id::text IN (SELECT a.id::text FROM "
-               "plenum_cafm.assets a WHERE lower(a.asset_code) = lower(:ds_asset) OR a.asset_name ILIKE :ds_asset_like)"
+               f"plenum_cafm.assets a WHERE {asset_match})"
                f" AND x.{c} IS NOT NULL"
                for t, c in _LINKS if (t, c) in cols and (t, "asset_id") in cols]
         if has_links:
             via.append("SELECT l.document_id::text FROM plenum_cafm.document_links l WHERE l.entity_type = 'asset' "
                        "AND l.removed_at IS NULL AND l.entity_id IN (SELECT a.id::text FROM plenum_cafm.assets a "
-                       "WHERE lower(a.asset_code) = lower(:ds_asset) OR a.asset_name ILIKE :ds_asset_like)")
+                       f"WHERE {asset_match})")
         if via:
             links.append("d.document_id::text IN (" + " UNION ".join(via) + ")")
             p["ds_asset"], p["ds_asset_like"] = asset.strip(), "%" + asset.strip() + "%"
+            p["ds_asset_compacts"] = asset_compacts
+            p["ds_asset_core_like"] = "%" + (asset_core if name_lookup.stands_alone(
+                asset, name_lookup.ASSET_KIND_WORDS) else asset.strip()) + "%"
     if document_ids:
         links.append("d.document_id::text = ANY(:ds_ids)")
         p["ds_ids"] = [str(x) for x in document_ids][:MAX_DOCUMENTS]
@@ -163,18 +264,22 @@ async def linked_documents(session: AsyncSession, *, organization_id: UUID | Non
         p["ds_cref"] = contract_ref.strip()
     if vendor:
         # A vendor's contracts (their SLA parameters name the source document) and its certificates.
-        links.append("""(d.document_id::text IN (SELECT s.document_id::text FROM plenum_cafm.contract_sla_parameters s
+        # The vendor's name however it is written (29 Oct 2026); the documents stay the caller's.
+        vn = vendor_name_sql("v.vendor_name", vendor, p)
+        cn = vendor_name_sql("c.vendor_name", vendor, p)
+        tn = vendor_name_sql("d.title", vendor, p)
+        fn = vendor_name_sql("d.file_name", vendor, p)
+        links.append(f"""(d.document_id::text IN (SELECT s.document_id::text FROM plenum_cafm.contract_sla_parameters s
                           JOIN plenum_cafm.vendors v ON v.id::text = s.vendor_id::text
-                         WHERE v.vendor_name ILIKE :ds_vendor AND s.document_id IS NOT NULL)
+                         WHERE {vn} AND s.document_id IS NOT NULL)
                      OR d.document_id::text IN (SELECT c.document_id::text FROM plenum_cafm.compliance_certificates c
-                         WHERE (c.vendor_name ILIKE :ds_vendor OR c.vendor_id::text IN
-                                (SELECT v.id::text FROM plenum_cafm.vendors v WHERE v.vendor_name ILIKE :ds_vendor))
+                         WHERE ({cn} OR c.vendor_id::text IN
+                                (SELECT v.id::text FROM plenum_cafm.vendors v WHERE {vn}))
                            AND c.document_id IS NOT NULL)
-                     OR d.title ILIKE :ds_vendor OR d.file_name ILIKE :ds_vendor""" + (
+                     OR {tn} OR {fn}""" + (
             " OR d.document_id IN (SELECT l.document_id FROM plenum_cafm.document_links l WHERE l.entity_type = 'vendor'"
             " AND l.removed_at IS NULL AND l.entity_id IN (SELECT v.id::text FROM plenum_cafm.vendors v"
-            " WHERE v.vendor_name ILIKE :ds_vendor))" if has_links else "") + ")")
-        p["ds_vendor"] = "%" + vendor.strip() + "%"
+            f" WHERE {vn}))" if has_links else "") + ")")
     if building_id:
         links.append(_owner_exprs(cols)[1] + " = :ds_bid" + (
             " OR d.document_id IN (SELECT l.document_id FROM plenum_cafm.document_links l WHERE l.entity_type = 'building'"
@@ -229,6 +334,10 @@ async def search(session: AsyncSession, *, question: str, organization_id: UUID 
     if company_wide:
         # Dozens of file names would only crowd the answer; the passages carry their own.
         out["searched"] = out["searched"][:MAX_DOCUMENTS]
+    read_as = sorted({str(d["vendor_read_as"]) for d in docs if d.get("vendor_read_as")})
+    if read_as:
+        # Found by the closest spelling of the vendor asked about (29 Oct 2026): say which was read.
+        out["vendor_read_as"] = read_as
     if not docs and company_wide:
         out["note"] = ("No document your company owns is indexed for search. Say so; do not answer from other sources "
                        "as if from a document.")

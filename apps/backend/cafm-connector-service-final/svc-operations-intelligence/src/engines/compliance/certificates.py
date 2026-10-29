@@ -19,6 +19,7 @@ from ...shared.vendor_identity import (
 )
 from ...core.logging import get_logger
 from ...models import ComplianceCertificate
+from ...shared import name_lookup
 from ...shared.approvals import enqueue_approval, retired_vendor_refusal, write_audit
 from . import epc_rating
 from .country_pack import effective_alert_thresholds, get_pack_type, list_pack_types
@@ -2166,6 +2167,21 @@ async def upsert_certificate(
     return out
 
 
+def rows_naming_vendor(rows: list[dict[str, Any]], name: str | None) -> list[dict[str, Any]]:
+    """The certificate rows whose vendor ``name`` names, by the name ladder (29 Oct 2026).
+
+    A substring test missed "Acme contractor", "facilities acme" and "Gough & Kelly", and counted
+    every "Acme ..." vendor with "Acme" itself. The rows are the caller's already (company and
+    buildings), so the whole ladder applies: the best rung any row reaches, every row at it.
+    """
+    if not str(name or "").strip():
+        return rows
+    pairs = [(i, r.get("vendor_name")) for i, r in enumerate(rows)]
+    _, keys = name_lookup.best(name, pairs, name_lookup.VENDOR_KIND_WORDS)
+    keep = set(keys)
+    return [r for i, r in enumerate(rows) if i in keep]
+
+
 async def list_certificates(
     session: AsyncSession,
     *,
@@ -2254,8 +2270,7 @@ async def list_certificates(
         tc = trade_category.strip().lower()
         out = [r for r in out if tc in (r.get("trade_category") or "").lower()]
     if vendor_name:
-        vn = vendor_name.strip().lower()
-        out = [r for r in out if vn in (r.get("vendor_name") or "").lower()]
+        out = rows_naming_vendor(out, vendor_name)
     if expiring_within_days is not None:
         # Certs expiring within the window (not already lapsed) — "expiring in N days".
         out = [
@@ -2434,9 +2449,11 @@ def _row_matches_count_filters(
         ).lower()
         if issuer_contains.strip().lower() not in issuer:
             return False
-    if vendor_name_contains:
-        vname = (row.get("vendor_name") or "").lower()
-        if vendor_name_contains.strip().lower() not in vname:
+    if vendor_name_contains and vendor_name_contains.strip():
+        # One row alone: every rung but close spelling, which needs the others to know it is
+        # clearly the closest (count_certificates applies the whole ladder, 29 Oct 2026).
+        if not name_lookup.names_match(vendor_name_contains, row.get("vendor_name"),
+                                       name_lookup.VENDOR_KIND_WORDS):
             return False
     if certificate_name_contains:
         blob = (
@@ -2500,10 +2517,13 @@ async def count_certificates(
             insurance_risk_flag=insurance_risk_flag,
             country_code=country_code,
             issuer_contains=issuer_contains,
-            vendor_name_contains=vendor_name_contains,
+            # By the whole ladder below, over every row the other filters keep.
+            vendor_name_contains=None,
             certificate_name_contains=certificate_name_contains,
         )
     ]
+    if vendor_name_contains:
+        matches = rows_naming_vendor(matches, vendor_name_contains)
     # Compact match preview for the agent (enough to cite, not dump full rows).
     preview = [
         {

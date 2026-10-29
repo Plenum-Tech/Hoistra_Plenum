@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
 from ...models.energy import EnergyAnomaly, EnergyMeter, MeterReading
+from ...shared import name_lookup
 from ...shared.approvals import enqueue_approval, write_audit
 from . import detectors as D
 
@@ -1058,14 +1059,16 @@ async def list_anomalies(
     if building_id:
         # Resolved, not trusted. A name here used to match no row and return an empty list,
         # which reads as "this building is clean" — said of a building with nine open findings.
+        # Every record the name names (29 Oct 2026), not the first: the company filter above
+        # decides which of them is the caller's.
         q = q.where(sa_cast(EnergyAnomaly.building_id, SAText)
-                    == await resolve_building(session, building_id))
+                    .in_(await resolve_building_ids(session, building_id)))
     if asset_id:
         q = q.where(sa_cast(EnergyAnomaly.asset_id, SAText)
-                    == await resolve_asset(session, asset_id))
+                    .in_(await resolve_asset_ids(session, asset_id)))
     if meter_id:
         q = q.where(sa_cast(EnergyAnomaly.meter_id, SAText)
-                    == await resolve_meter(session, meter_id))
+                    .in_(await resolve_meter_ids(session, meter_id)))
     if anomaly_type:
         # Matched case-insensitively and on the underscored form, so "Baseline drift" as the
         # UI prints it finds `baseline_drift` as the column holds it.
@@ -1211,6 +1214,59 @@ class UnknownMeter(ValueError):
     """A meter identifier that matched no meter. People say an MPAN, not a uuid."""
 
 
+#: The words that name the kind of record each lookup is for (29 Oct 2026).
+_KIND_WORDS = {"building": name_lookup.BUILDING_KIND_WORDS, "asset": name_lookup.ASSET_KIND_WORDS,
+               "meter": name_lookup.METER_KIND_WORDS}
+
+
+async def _resolve_ids(
+    session: AsyncSession,
+    value: UUID | str | None,
+    *,
+    table: str,
+    id_column: str,
+    name_columns: tuple[str, ...],
+    error: type[ValueError],
+    what: str,
+) -> list[str] | None:
+    """Every id a uuid or a name names — several when records share the name, never one picked.
+
+    The name in its exact forms only (29 Oct 2026): as typed, with the kind word out ("JASMEET
+    BUILDING" is "JASMEET"), as letters and digits ("ACSDL07" is "ACS-DL-07"), the first form
+    that finds a record winning. Not part of a name nor a close spelling: this reads the whole
+    table with no company scope, and a looser match could land on another company's record.
+    """
+    if value in (None, ""):
+        return None
+    raw = str(value).strip()
+    try:
+        return [str(UUID(raw))]
+    except (ValueError, AttributeError, TypeError):
+        pass
+    kind = _KIND_WORDS.get(what, ())
+    texts, compacts = name_lookup.exact_forms(raw, kind)
+    keys: list[str] = []
+    if compacts:
+        where = name_lookup.exact_sql(name_columns, "n_texts", "n_compacts")
+        cols = ", ".join(f"{c}::text AS t{i}" for i, c in enumerate(name_columns))
+        rows = (
+            await session.execute(
+                text(f"SELECT {id_column}::text AS k, {cols} FROM plenum_cafm.{table} "
+                     f"WHERE {where} LIMIT 200"),
+                {"n_texts": texts, "n_compacts": compacts},
+            )
+        ).mappings().all()
+        pairs = [(str(r["k"]), r.get(f"t{i}"))
+                 for r in rows for i in range(len(name_columns)) if r.get("k")]
+        _, keys = name_lookup.best(raw, pairs, kind, max_rung=name_lookup.COMPACT)
+    if keys:
+        return keys
+    raise error(
+        f"No {what} matches {raw!r}. It is neither an id nor a name this caller can see, so "
+        f"no result can be produced for it."
+    )
+
+
 async def _resolve(
     session: AsyncSession,
     value: UUID | str | None,
@@ -1229,46 +1285,56 @@ async def _resolve(
     building, a healthy asset or a silent meter.
 
     A uuid is returned without touching the database — the common path stays one comparison.
+    A name several records share is an error that says so (29 Oct 2026): LIMIT 1 answered with
+    whichever row came first, which may not be the caller's.
     """
-    if value in (None, ""):
+    ids = await _resolve_ids(session, value, table=table, id_column=id_column,
+                             name_columns=name_columns, error=error, what=what)
+    if ids is None:
         return None
-    raw = str(value).strip()
-    try:
-        return str(UUID(raw))
-    except (ValueError, AttributeError, TypeError):
-        pass
-    where = " OR ".join(f"lower(btrim({c}::text)) = lower(btrim(:n))" for c in name_columns)
-    found = (
-        await session.execute(
-            text(f"SELECT {id_column}::text FROM plenum_cafm.{table} WHERE {where} LIMIT 1"),
-            {"n": raw},
+    if len(ids) > 1:
+        raise error(
+            f"{str(value).strip()!r} names more than one {what} on the register, so no one of them "
+            f"is used. Give its id or a more exact name."
         )
-    ).scalar()
-    if found:
-        return str(found)
-    raise error(
-        f"No {what} matches {raw!r}. It is neither an id nor a name this caller can see, so "
-        f"no result can be produced for it."
-    )
+    return ids[0]
+
+
+_BUILDING_LOOKUP = dict(table="buildings", id_column="building_id", name_columns=("name",),
+                        error=UnknownBuilding, what="building")
+_ASSET_LOOKUP = dict(table="assets", id_column="id", name_columns=("asset_code",),
+                     error=UnknownAsset, what="asset")
+_METER_LOOKUP = dict(table="energy_meters", id_column="id",
+                     name_columns=("mpan", "mprn", "dcc_device_id"),
+                     error=UnknownMeter, what="meter")
 
 
 async def resolve_building(session: AsyncSession, value: UUID | str | None) -> str | None:
     """A building id from a uuid or the NAME a person would say ("Building 5")."""
-    return await _resolve(session, value, table="buildings", id_column="building_id",
-                          name_columns=("name",), error=UnknownBuilding, what="building")
+    return await _resolve(session, value, **_BUILDING_LOOKUP)
+
+
+async def resolve_building_ids(session: AsyncSession, value: UUID | str | None) -> list[str] | None:
+    """Every building id a uuid or name names: a filter over all of them, never one picked."""
+    return await _resolve_ids(session, value, **_BUILDING_LOOKUP)
 
 
 async def resolve_asset(session: AsyncSession, value: UUID | str | None) -> str | None:
     """An asset id from a uuid or the CODE a person would say ("ACS-DL-07", "FCU-301")."""
-    return await _resolve(session, value, table="assets", id_column="id",
-                          name_columns=("asset_code",), error=UnknownAsset, what="asset")
+    return await _resolve(session, value, **_ASSET_LOOKUP)
+
+
+async def resolve_asset_ids(session: AsyncSession, value: UUID | str | None) -> list[str] | None:
+    return await _resolve_ids(session, value, **_ASSET_LOOKUP)
 
 
 async def resolve_meter(session: AsyncSession, value: UUID | str | None) -> str | None:
     """A meter id from a uuid, or from the MPAN or MPRN printed on the meter."""
-    return await _resolve(session, value, table="energy_meters", id_column="id",
-                          name_columns=("mpan", "mprn", "dcc_device_id"),
-                          error=UnknownMeter, what="meter")
+    return await _resolve(session, value, **_METER_LOOKUP)
+
+
+async def resolve_meter_ids(session: AsyncSession, value: UUID | str | None) -> list[str] | None:
+    return await _resolve_ids(session, value, **_METER_LOOKUP)
 
 
 SUMMARY_GROUPS: dict[str, str] = {

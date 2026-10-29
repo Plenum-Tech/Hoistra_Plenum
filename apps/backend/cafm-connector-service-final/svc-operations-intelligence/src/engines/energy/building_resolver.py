@@ -26,12 +26,14 @@ Nothing here writes. ``resolve_batch`` reports; linking is a separate, explicit 
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.logging import get_logger
+from ...shared import name_lookup, name_match
 from ..compliance.site_links import normalize_name, normalize_ref
 
 log = get_logger(__name__)
@@ -55,6 +57,8 @@ def building_keys(row: dict[str, Any]) -> dict[str, Any]:
         "name_keys": {normalize_name(n) for n in names if normalize_name(n)},
         "code_keys": {normalize_ref(c) for c in codes if normalize_ref(c)},
         "site_name_key": normalize_name(row.get("site_name")),
+        # As stored, for the name ladder (29 Oct 2026): "RT5, Crossrail", "B-090765".
+        "texts": [str(t).strip() for t in names + codes if str(t or "").strip()],
     }
 
 
@@ -70,15 +74,52 @@ def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def phrase_within(short: str, long: str) -> bool:
+    """``short`` inside ``long`` (both normalised) from the start of a word, and to the end of a
+    word when it ends in a code, a number or a one-/two-letter word (29 Oct 2026). A bare
+    substring test filed a certificate for "Building 7" under "Building 70", and "7 Kingsway
+    Court" under "17 Kingsway Court", whenever the right building was not on the register."""
+    ws = short.split()
+    if not ws:
+        return False
+    end = r"(?![a-z0-9])" if name_match.exact_token(ws[-1]) else ""
+    return re.search(r"(?<![a-z0-9])" + re.escape(short) + end, long) is not None
+
+
 def _contains(n: str, row: dict[str, Any]) -> bool:
     for nk in row.get("name_keys") or set():
         if len(nk) < MIN_CONTAINMENT_LEN:
             continue
         if abs(len(nk) - len(n)) > MAX_CONTAINMENT_DELTA:
             continue
-        if n in nk or nk in n:
+        if phrase_within(n, nk) or phrase_within(nk, n):
             return True
     return False
+
+
+#: The reason each rung of the name ladder resolves with ("name" is the exact name).
+_RUNG_REASON = {
+    name_lookup.EXACT: "name",
+    name_lookup.COMPACT: "name_compact",
+    name_lookup.PHRASE: "name_phrase",
+    name_lookup.WORDS: "name_words",
+    name_lookup.CLOSE: "name_close_spelling",
+}
+
+
+def _row_texts(r: dict[str, Any]) -> list[str]:
+    return (list(r.get("texts") or [])
+            or sorted(r.get("name_keys") or ()) + sorted(r.get("code_keys") or ()))
+
+
+def _ladder(rows: list[dict[str, Any]], name: Any, *, max_rung: int,
+            min_core_len: int = 3) -> tuple[int | None, list[dict[str, Any]]]:
+    """The buildings ``name`` names at the best rung up to ``max_rung`` (several when shared)."""
+    by_id = {r.get("building_id") or "": r for r in rows}
+    pairs = [(r.get("building_id") or "", t) for r in rows for t in _row_texts(r)]
+    top, keys = name_lookup.best(name, pairs, name_lookup.BUILDING_KIND_WORDS,
+                                 max_rung=max_rung, min_core_len=min_core_len)
+    return top, [by_id[k] for k in keys if k in by_id]
 
 
 def choose_building(
@@ -88,12 +129,21 @@ def choose_building(
     code: Any = None,
     site_name: Any = None,
     site_id: Any = None,
+    loose: bool = False,
 ) -> tuple[dict[str, Any] | None, str]:
     """The one building this document belongs to, or why it cannot be chosen.
 
     Returns ``(row, reason)``. ``row`` is None whenever the answer is not unambiguous, and
     the reason is what the report shows so an unlinked document is a stated outcome rather
     than a silence.
+
+    The name is tried as written, then in its other exact forms (29 Oct 2026): with the kind
+    word out ("JASMEET BUILDING" is "JASMEET"), as letters and digits ("B090765" is the code
+    "B-090765"). Those are the only forms a caller that LINKS what it resolves may use
+    (resolve-batch, graph_ingest): the same name, never part of one. ``loose`` is for a read
+    that answers a question (GET /buildings/resolve): it also takes a phrase from the start of a
+    word, every word in any order ("tower hussain") and, after containment, a close spelling
+    ("Jasmet") — each named in the reason, and ambiguous whenever two buildings answer.
     """
     if not rows:
         return None, "no_buildings"
@@ -114,12 +164,41 @@ def choose_building(
         if len(hits) > 1:
             return None, "ambiguous_name"
 
-        if len(n) >= MIN_CONTAINMENT_LEN:
+        # The other exact forms. On a link path the core must be as long as containment asks
+        # (MIN_CONTAINMENT_LEN): such a core is inside the name as written, so it links nothing
+        # the containment tier below would not — it only prefers the exact one of its hits.
+        top, hits = _ladder(rows, name, max_rung=name_lookup.COMPACT,
+                            min_core_len=3 if loose else MIN_CONTAINMENT_LEN)
+        hits = _dedupe(hits)
+        if len(hits) == 1:
+            return hits[0], _RUNG_REASON[top]
+        if len(hits) > 1:
+            return None, "ambiguous_" + _RUNG_REASON[top]
+
+        if loose:
+            top, hits = _ladder(rows, name, max_rung=name_lookup.WORDS)
+            hits = _dedupe(hits)
+            if len(hits) == 1:
+                return hits[0], _RUNG_REASON[top]
+            if len(hits) > 1:
+                return None, "ambiguous_" + _RUNG_REASON[top]
+
+        # The kind of record alone ("the building") names no building, even inside a longer one.
+        if len(n) >= MIN_CONTAINMENT_LEN and name_lookup.names_something(
+                name, name_lookup.BUILDING_KIND_WORDS):
             hits = _dedupe([r for r in rows if _contains(n, r)])
             if len(hits) == 1:
                 return hits[0], "name_contains"
             if len(hits) > 1:
                 return None, "ambiguous_name_contains"
+
+        if loose:
+            top, hits = _ladder(rows, name, max_rung=name_lookup.CLOSE)
+            hits = _dedupe(hits)
+            if len(hits) == 1:
+                return hits[0], _RUNG_REASON[top]
+            if len(hits) > 1:
+                return None, "ambiguous_" + _RUNG_REASON[top]
 
     # The document names a site rather than a building. That resolves only when the site
     # holds exactly one building — on a campus it names the estate, not the structure.
@@ -146,7 +225,32 @@ def choose_building(
 AMBIGUOUS_REASONS = frozenset(
     {"ambiguous_building_code", "ambiguous_name", "ambiguous_name_contains",
      "site_has_several_buildings"}
+    | {"ambiguous_" + r for r in _RUNG_REASON.values()}
 )
+
+
+def name_candidates(rows: list[dict[str, Any]], name: Any, *,
+                    loose: bool = False) -> list[dict[str, Any]]:
+    """The buildings a name could mean, for a person to choose from when it did not resolve:
+    those at the best rung of the ladder, else those it is contained in or contains."""
+    n = normalize_name(name)
+    if not n:
+        return []
+    exact = _dedupe([r for r in rows if n in (r.get("name_keys") or set())])
+    if exact:
+        return exact
+    top, hits = _ladder(rows, name, max_rung=name_lookup.WORDS if loose else name_lookup.COMPACT)
+    if hits and top is not None and top <= name_lookup.COMPACT:
+        return _dedupe(hits)
+    contains = []
+    if len(n) >= MIN_CONTAINMENT_LEN and name_lookup.names_something(
+            name, name_lookup.BUILDING_KIND_WORDS):
+        contains = _dedupe([r for r in rows if _contains(n, r)])
+    if hits or contains:
+        return _dedupe(hits + contains)
+    if loose:
+        return _dedupe(_ladder(rows, name, max_rung=name_lookup.CLOSE)[1])
+    return []
 
 
 def resolution_outcome(reason: str) -> str:
@@ -161,15 +265,33 @@ def resolution_outcome(reason: str) -> str:
 # ── DB ────────────────────────────────────────────────────────────────────────────────
 
 
-async def load_building_index(session: AsyncSession, *, limit: int = 5000) -> list[dict[str, Any]]:
-    """Every building reduced to its matchable forms, with its site's name joined in."""
-    from .building_rollup import graph_shape
+async def load_building_index(session: AsyncSession, *, limit: int = 5000, scope: Any = None) -> list[dict[str, Any]]:
+    """Every building the caller may see, reduced to its matchable forms, with its site's name
+    joined in. ``scope`` (an access.Scope) bounds it to the caller's company and, for a user
+    allocated to buildings, those buildings (29 Oct 2026: it read every company's). None keeps the
+    unbounded read for server-side callers that bring no caller (graph ingest)."""
+    from . import building_rollup
 
-    shape = await graph_shape(session)
+    if scope is not None and not getattr(scope, "is_superadmin", False) and scope.organization_id is None:
+        return []            # no company to act for: nothing, never everyone's
+    shape = await building_rollup.graph_shape(session)
     if not shape["buildings"]["exists"]:
         return []
     key = shape["buildings"]["key"]
     have = shape["buildings"]["columns"]
+    where: list[str] = []
+    params: dict[str, Any] = {}
+    if scope is not None:
+        if scope.organization_id is not None:
+            if "organization_id" in have:
+                where.append("b.organization_id::text = :org")
+                params["org"] = str(scope.organization_id)
+            elif not getattr(scope, "is_superadmin", False):
+                log.warning("building_resolver.no_company_column")
+                return []
+        if scope.building_ids is not None:
+            where.append(f"b.{key}::text = ANY(:bids)")
+            params["bids"] = [str(b) for b in scope.building_ids]
     cols = [f"b.{key}::text AS building_id"]
     for c in ("name", "building_name", "building_code", "site_id"):
         if c in have:
@@ -185,10 +307,11 @@ async def load_building_index(session: AsyncSession, *, limit: int = 5000) -> li
         sname = f"COALESCE({', '.join(name_cols)})" if name_cols else "NULL"
         cols.append(f"{sname}::text AS site_name")
         joins = f" LEFT JOIN plenum_cafm.sites s ON s.{skey}::text = b.site_id::text"
-    sql = f"SELECT {', '.join(cols)} FROM plenum_cafm.buildings b{joins} LIMIT {int(limit)}"
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    sql = f"SELECT {', '.join(cols)} FROM plenum_cafm.buildings b{joins}{where_sql} LIMIT {int(limit)}"
     try:
         async with session.begin_nested():
-            rows = (await session.execute(text(sql))).mappings().all()
+            rows = (await session.execute(text(sql), params)).mappings().all()
     except Exception as exc:  # noqa: BLE001
         log.warning("building_resolver.index_failed", error=str(exc)[:200])
         return []
@@ -281,9 +404,10 @@ async def resolve_one(
     site_name: Any = None,
     site_id: Any = None,
     asset_code: Any = None,
+    scope: Any = None,
 ) -> dict[str, Any]:
-    """Resolve one record's building. Reads only."""
-    index = await load_building_index(session)
+    """Resolve one record's building, among the buildings ``scope`` may see. Reads only."""
+    index = await load_building_index(session, scope=scope)
     asset_map = await load_asset_building_map(session, [asset_code]) if asset_code else {}
     hit = asset_map.get(normalize_ref(asset_code)) or {}
     bid = hit.get("building_id")
@@ -301,8 +425,10 @@ async def resolve_one(
             ),
             "buildings_considered": len(index),
         }
+    # A read that answers a question: the whole name ladder, close spelling included (29 Oct
+    # 2026). resolve_batch, which feeds links, stays on the exact forms.
     row, reason = choose_building(
-        index, name=name, code=code, site_name=site_name, site_id=site_id
+        index, name=name, code=code, site_name=site_name, site_id=site_id, loose=True
     )
     outcome = resolution_outcome(reason)
     out: dict[str, Any] = {
@@ -315,27 +441,31 @@ async def resolve_one(
         "building": row["label"] if row else None,
         "buildings_considered": len(index),
     }
+    if reason == "name_close_spelling" and row:
+        out["note"] = (f"{str(name).strip()!r} is not on the register as written; the closest "
+                       f"name is {row['label']!r}.")
     if outcome != "resolved":
         # What it saw, so a person can decide rather than guess at why it declined.
-        n = normalize_name(name)
+        named = name_candidates(index, name, loose=True)
+        named_ids = {r["building_id"] for r in named}
         out["candidates"] = [
             {"building_id": r["building_id"], "name": r["label"], "site_id": r.get("site_id")}
-            for r in index
-            if (n and (n in (r.get("name_keys") or set()) or _contains(n, r)))
-            or (site_id and r.get("site_id") == str(site_id))
+            for r in named + [r for r in index
+                              if site_id and r.get("site_id") == str(site_id)
+                              and r["building_id"] not in named_ids]
         ][:10]
     return out
 
 
 async def resolve_batch(
-    session: AsyncSession, items: list[dict[str, Any]]
+    session: AsyncSession, items: list[dict[str, Any]], *, scope: Any = None
 ) -> dict[str, Any]:
     """Resolve many at once against a single index read — the shape an ingest run needs.
 
     Two reads for the whole batch: the building index, and the asset map for every asset
     code mentioned. A work order file of 5,000 rows costs the same two queries as one row.
     """
-    index = await load_building_index(session)
+    index = await load_building_index(session, scope=scope)
     labels = {r["building_id"]: r["label"] for r in index}
     asset_map = await load_asset_building_map(
         session, [i.get("asset_code") for i in items]

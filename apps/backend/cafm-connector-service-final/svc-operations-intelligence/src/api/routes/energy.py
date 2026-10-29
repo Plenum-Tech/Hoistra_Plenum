@@ -684,6 +684,7 @@ async def resolve_building(
     site_id: str | None = Query(None),
     asset_code: str | None = Query(None, description="Asset this record is against; its building wins."),
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
     """Which building does this document belong to? Reads only, writes nothing.
 
@@ -693,7 +694,7 @@ async def resolve_building(
     """
     return await bld_resolver.resolve_one(
         session, name=name, code=code, site_name=site_name, site_id=site_id,
-        asset_code=asset_code,
+        asset_code=asset_code, scope=s,
     )
 
 
@@ -701,10 +702,11 @@ async def resolve_building(
 async def resolve_buildings_batch(
     body: ResolveBuildingsRequest,
     session: AsyncSession = Depends(get_session),
+    s: access.Scope = Depends(scope),
 ):
-    """Resolve a whole ingest run against one index read. Reads only."""
+    """Resolve a whole ingest run against one index read, among the caller's buildings. Reads only."""
     return await bld_resolver.resolve_batch(
-        session, [i.model_dump() for i in body.items]
+        session, [i.model_dump() for i in body.items], scope=s
     )
 
 
