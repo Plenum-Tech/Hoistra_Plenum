@@ -2,15 +2,24 @@
 //
 // Sits above everything (the toast is z-index 500, overlays below that) and stays until the person
 // acts: a notice that disappears on its own is one a person reading something else never sees. It
-// appears at most once per tab, because watchForRelease stops after the first difference.
+// appears at most once per tab, and only when a reload would lose typed text: otherwise the
+// page reloads itself the moment a response says the server is serving a different build.
 import React from 'react';
-import { watchForRelease, hardReload } from '../../logic/release.js';
+import { watchForRelease, watchEveryRequest, actOnRelease, hardReload } from '../../logic/release.js';
 
 export default function ReleaseBanner() {
   const [ready, setReady] = React.useState(false);
   const [hidden, setHidden] = React.useState(false);
 
-  React.useEffect(() => watchForRelease(() => setReady(true)), []);
+  // Two ways of noticing, because neither covers the other. The header rides on every request,
+  // so an active page reloads itself within one click of a deploy. The poll catches a tab that
+  // is open and idle, making no requests at all, which is exactly the tab left open overnight.
+  React.useEffect(() => {
+    const show = () => setReady(true);
+    const stopPolling = watchForRelease((served) => actOnRelease(served, show));
+    const stopWatchingRequests = watchEveryRequest(show);
+    return () => { stopPolling(); stopWatchingRequests(); };
+  }, []);
 
   if (!ready || hidden) return null;
 

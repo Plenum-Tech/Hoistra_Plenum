@@ -90,3 +90,80 @@ export async function hardReload() {
 
   window.location.reload();
 }
+
+
+// ── the header check ──────────────────────────────────────────────────────────────────────
+// Every response from this origin carries X-Build-Id (nginx adds it). Comparing it costs
+// nothing and notices a release on the next thing the page does, rather than up to five
+// minutes later. fetch is wrapped once, at boot, because four modules call it directly and
+// anything added later would otherwise have to remember to opt in.
+
+const HEADER = 'X-Build-Id';
+let acted = false;
+
+/** Typed text nobody has submitted yet — reloading would throw it away. */
+function hasUnsavedInput() {
+  try {
+    const fields = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+    for (const el of fields) {
+      if (el.type === 'password' || el.type === 'hidden' || el.disabled || el.readOnly) continue;
+      const text = el.isContentEditable ? (el.textContent || '') : (el.value || '');
+      if (String(text).trim()) return true;
+    }
+  } catch { /* nothing readable: treat as safe */ }
+  return false;
+}
+
+/**
+ * Compare one response's build id with this bundle's, and act once when they differ.
+ *
+ * Both paths end here, so a release found by the poll and one found on a response behave alike:
+ * reload on the spot when nothing would be lost, and otherwise raise the banner and let the person
+ * pick the moment. An automatic reload that eats a half-written work order, or one that repeats
+ * itself, is a worse bug than the stale page it was fixing.
+ */
+const TRIED_KEY = 'hoistra.reloadedForBuild';
+
+function alreadyReloadedFor(served) {
+  try { return window.sessionStorage.getItem(TRIED_KEY) === served; } catch { return false; }
+}
+
+function rememberReloadFor(served) {
+  try { window.sessionStorage.setItem(TRIED_KEY, served); } catch { /* storage blocked */ }
+}
+
+export function actOnRelease(served, onNeedsAttention) {
+  if (acted) return;
+  acted = true;
+  // One automatic reload per served build, and never while something is half-typed. Without the
+  // first rule a page whose bundle does not change on reload — a proxy holding index.html, a
+  // header that is simply wrong — reloads, boots, calls the API, sees the same difference and
+  // reloads again, for ever. That is a far worse failure than the stale page this fixes, and it
+  // is the one a test caught: the loop ran at roughly one navigation every seventy milliseconds.
+  if (!served || alreadyReloadedFor(served) || hasUnsavedInput()) {
+    onNeedsAttention?.(served);
+    return;
+  }
+  rememberReloadFor(served);
+  hardReload();
+}
+
+export function noticeBuildHeader(res, onNeedsAttention) {
+  if (acted || !BUILD_ID || !res?.headers) return;
+  let served = '';
+  try { served = String(res.headers.get(HEADER) || '').trim(); } catch { return; }
+  if (!served || served === BUILD_ID) return;
+  actOnRelease(served, onNeedsAttention);
+}
+
+/** Wrap window.fetch so every call to this origin is checked. Returns an undo. */
+export function watchEveryRequest(onNeedsAttention) {
+  if (!BUILD_ID || typeof window.fetch !== 'function') return () => {};
+  const original = window.fetch;
+  window.fetch = async function patched(...args) {
+    const res = await original.apply(this, args);
+    try { noticeBuildHeader(res, onNeedsAttention); } catch { /* never break a request */ }
+    return res;
+  };
+  return () => { window.fetch = original; };
+}

@@ -55,8 +55,7 @@ ENV VITE_TRACE_LAB=$VITE_TRACE_LAB
 ARG VITE_BUILD_ID=dev
 ENV VITE_BUILD_ID=$VITE_BUILD_ID
 RUN npm run build \
- && printf '{"build":"%s"}\n' "$VITE_BUILD_ID" > dist/version.json \
- && printf '{"build":"%s"}\n' "$VITE_BUILD_ID" > dist/lab/version.json
+ && printf '{"build":"%s"}\n' "$VITE_BUILD_ID" > dist/version.json
 
 # ── hoist-engine: the Go engine a migration's row-heavy steps run on ──────────────────────
 # Its unit tests run here; the ones that need Postgres skip (svc-ai-schema-mapper/Dockerfile says
@@ -132,6 +131,10 @@ COPY ${BE}/svc-trace-lab/ svc-trace-lab/
 
 COPY --from=frontend /app/dist /usr/share/nginx/html
 COPY deploy/allinone/nginx.conf       /etc/nginx/conf.d/hoistra.conf
+# The same id the bundle was compiled with, stamped into the config so every response carries
+# it. Declared again here because a build argument does not cross stage boundaries.
+ARG VITE_BUILD_ID=dev
+RUN sed -i "s/__BUILD_ID__/${VITE_BUILD_ID}/g" /etc/nginx/conf.d/hoistra.conf  && ! grep -q __BUILD_ID__ /etc/nginx/conf.d/hoistra.conf
 COPY deploy/allinone/supervisord.conf /etc/supervisor/conf.d/hoistra.conf
 
 # ── the deployment's own .env, carried into the image ────────────────────────────────
