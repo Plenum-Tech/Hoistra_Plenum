@@ -316,3 +316,40 @@ class MigrationState(TypedDict, total=False):
     engine_reports: dict[str, Any]
     #: The write the engine planned before the write gate (EL-4.0 + what is already on file).
     write_plan: Optional[dict[str, Any]]
+
+    # ── Keys that were written and then dropped (29 Oct 2026) ────────────────
+    #: The graph is compiled with interrupt_after on every step node, so a checkpoint is
+    #: written after EVERY step and LangGraph keeps only the keys declared here. These
+    #: eighteen were written by a node and read back by a later one, which meant the value
+    #: never survived the boundary between them: step 7 built the hierarchy and step 8 read
+    #: nothing, step 9 wrote the artefact URLs and step 10 stored None. The same fault was
+    #: found once before, in the column-mapping answers (preprocess_node, 1 Oct). Anything
+    #: a node writes for a later node to read belongs in this file, always.
+
+    # Hierarchy detection (step 7, hierarchy_node) — read by the confirmation gate after it
+    containment_hierarchy: list[dict[str, Any]]
+    hierarchy_levels: dict[str, Any]
+    hierarchy_duplicate_groups: list[dict[str, Any]]
+    single_table_hierarchy_mode: bool
+    import_table_name: Optional[str]
+    import_table_plenum_role: Optional[str]
+    plenum_default_structure: Optional[dict[str, Any]]
+
+    # Hierarchy confirmation (step 8, verify_hierarchy_node) — the person's own corrections
+    hierarchy_confirmed: bool
+    hierarchy_corrections: list[dict[str, Any]]
+    plenum_default_hierarchy_accepted: bool
+    el_m7_error: Optional[str]
+
+    # Outputs (step 9, output_generator_node) — read by the write step to store on the record
+    output_structure_md_url: Optional[str]
+    exported_artefacts: dict[str, Any]
+
+    # Ingest (step 1) and deterministic mapping (step 2)
+    overall_summary: Optional[dict[str, Any]]
+    json_mapper: Optional[dict[str, Any]]
+    mapping_source: Optional[str]      # "stored" | "generated" | ...
+    tier1_mappings: list[dict[str, Any]]
+
+    #: Appended to as the run goes; without it each step started from an empty list.
+    execution_logs: list[dict[str, Any]]
