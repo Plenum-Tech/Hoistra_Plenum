@@ -48,7 +48,15 @@ ENV VITE_OPS_INTELLIGENCE_BASE_URL=$VITE_OPS_INTELLIGENCE_BASE_URL \
     VITE_ORGANIZATION_ID=$VITE_ORGANIZATION_ID
 ARG VITE_TRACE_LAB=0
 ENV VITE_TRACE_LAB=$VITE_TRACE_LAB
-RUN npm run build
+# The build's own id, baked into the bundle and written beside it as version.json. A tab compares
+# the two and offers a reload when they differ, so nobody goes on running a build that was replaced
+# under them (the assets are content-hashed, so an old chunk otherwise loads forever, silently).
+# Default "dev": with no id there is nothing to compare and the notice can never appear.
+ARG VITE_BUILD_ID=dev
+ENV VITE_BUILD_ID=$VITE_BUILD_ID
+RUN npm run build \
+ && printf '{"build":"%s"}\n' "$VITE_BUILD_ID" > dist/version.json \
+ && printf '{"build":"%s"}\n' "$VITE_BUILD_ID" > dist/lab/version.json
 
 # ── hoist-engine: the Go engine a migration's row-heavy steps run on ──────────────────────
 # Its unit tests run here; the ones that need Postgres skip (svc-ai-schema-mapper/Dockerfile says

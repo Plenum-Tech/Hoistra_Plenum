@@ -31,6 +31,7 @@ import DetailDrawer from './components/shell/DetailDrawer.jsx';
 import VendorDrawer from './components/shell/VendorDrawer.jsx';
 import CommandPalette from './components/shell/CommandPalette.jsx';
 import Toast from './components/shell/Toast.jsx';
+import ReleaseBanner from './components/shell/ReleaseBanner.jsx';
 import ReportBuilder from './components/shell/ReportBuilder.jsx';
 import InstancePicker from './screens/InstancePicker.jsx';
 import HoistVendors from './screens/HoistVendors.jsx';
@@ -101,6 +102,7 @@ export default function App() {
       {vals.vendorDrawerOpen ? <VendorDrawer vals={vals} /> : null}
       {vals.paletteOpen ? <CommandPalette vals={vals} /> : null}
       {vals.toastOn ? <Toast vals={vals} /> : null}
+      <ReleaseBanner />
     </div>
   );
 }
