@@ -58,14 +58,28 @@ def _apply_column_dest_overrides(state: dict) -> dict:
         return renames
     by_lower = {str(t).lower(): {str(f).lower(): v for f, v in (cols or {}).items()}
                 for t, cols in overrides.items() if isinstance(cols, dict)}
+    # The rename map is read back with an exact key (preprocess_tables does
+    # mapping_dict_by_table.get(table_name)), so a key spelled the way the gate sent it rather
+    # than the way the sheet is named matches nothing and the rename is lost without a word.
+    # The tier loop below happened to re-register a renamed field under the real name, so this
+    # only ever bit a field no tier mapping named — which is exactly the field a person opens
+    # the gate to re-target. Resolve the real name once, here.
+    real_by_lower: dict[str, str] = {}
+    for _bucket in ("parsed_tables", "full_tables", "cleaned_tables",
+                    "tier1_mappings_by_table", "tier2_auto_by_table",
+                    "tier2_human_decisions_by_table"):
+        for _t in (state.get(_bucket) or {}):
+            real_by_lower.setdefault(str(_t).lower(), str(_t))
+
     for table, cols in overrides.items():
         if not isinstance(cols, dict):
             continue
+        key = real_by_lower.get(str(table).lower(), str(table))
         for field, choice in cols.items():
             if not choice:
                 continue
             target = _snake(field) if str(choice) == "__new__" else str(choice)
-            renames.setdefault(str(table), {})[str(field)] = target
+            renames.setdefault(key, {})[str(field)] = target
     for bucket in ("tier1_mappings_by_table", "tier2_auto_by_table", "tier2_human_decisions_by_table"):
         for table, maps in (state.get(bucket) or {}).items():
             for m in maps or []:
