@@ -165,6 +165,7 @@ from . import answer_presenter
 from . import lenient_json
 from .skills import fm_lens, prompt_doc
 from .context_budget import compact_context, make_hook as make_context_hook
+from .tool_call_repair import with_stopped_calls_answered
 from . import register_digest
 from ..services import skill_overlays
 from .migration_chooser import CHOICES as MIGRATION_CHOICES, CHOOSER_REPLY, is_bare_migration_request
@@ -876,8 +877,10 @@ class DeepAgentOrchestrator:
             model=self._llm,
             tools=[*ALL_TOOLS, compact_context],
             checkpointer=checkpointer,
-            pre_model_hook=make_context_hook(
-                agent="orchestrator", trim_max_tokens=settings.orchestrator_history_max_tokens),
+            # A turn stopped mid-tool must not leave its thread unable to answer again
+            # (agents/tool_call_repair.py, 29 Oct 2026).
+            pre_model_hook=with_stopped_calls_answered(make_context_hook(
+                agent="orchestrator", trim_max_tokens=settings.orchestrator_history_max_tokens)),
         )
         init_meta_tools(openai_api_key=openai_api_key, model=model)
         log.info(
@@ -1258,13 +1261,48 @@ class DeepAgentOrchestrator:
         )
         return any(p in msg for p in status_phrases)
 
+    #: The words a follow-up about THIS session's work order is made of (29 Oct 2026). Any
+    #: other word names something else - a building, a count, a description, another work
+    #: order ("orders", "many", "jasmeet", "boiler") - and the question goes to the agents.
+    _SESSION_WO_FOLLOWUP_WORDS = frozenset(
+        {
+            "what", "whats", "s", "where", "wheres", "who", "whos", "whose", "which", "when",
+            "how", "is", "are", "was", "were", "has", "have", "had", "been", "be", "being",
+            "will", "would", "did", "does", "do", "can", "could", "please", "tell", "show",
+            "give", "me", "i", "we", "you", "us", "check", "get", "see", "view", "track",
+            "tracking", "trace", "update", "updates", "latest", "current", "currently", "now",
+            "yet", "still", "so", "far", "up", "long", "the", "this", "that", "my", "our",
+            "its", "it", "of", "for", "on", "about", "to", "in", "at", "work", "order", "wo",
+            "status", "progress", "details", "detail", "lifecycle", "timeline", "stage",
+            "step", "steps", "chain", "approval", "approvals", "approved", "approver",
+            "approvers", "technician", "engineer", "assigned", "assignee", "hold", "pending",
+            "completed", "complete", "done", "finished", "closed", "open", "started",
+            "scheduled", "schedule", "due", "stand", "stands", "standing", "going", "doing",
+            "happening", "there", "right",
+        }
+    )
+
+    @classmethod
+    def _is_followup_on_this_sessions_wo(cls, msg: str) -> bool:
+        """Whether a status question names no work order of its own, so this session's is meant.
+
+        No digit (a code the 14-digit pattern does not know, such as the register's wo_code
+        WO-1042, a date or a count) and no word outside the follow-up vocabulary."""
+        from .name_match import words
+
+        ws = words(msg)
+        return (
+            bool(ws)
+            and not any(ch.isdigit() for ch in msg)
+            and all(w in cls._SESSION_WO_FOLLOWUP_WORDS for w in ws)
+        )
+
     async def _maybe_status_query_shortcut(
         self,
         user_message: str,
         session_id: str,
     ) -> dict[str, Any] | None:
         from .wo_engine_agent import (
-            _LAST_WORK_ORDER_ID as _GLOBAL_WO_ID,
             _SESSION_WORK_ORDER_MAP,
             extract_work_order_id_from_text,
             format_work_order_status_track,
@@ -1275,11 +1313,16 @@ class DeepAgentOrchestrator:
         if not self._is_wo_status_query(msg):
             return None
 
-        wo_id = (
-            extract_work_order_id_from_text(user_message)
-            or _SESSION_WORK_ORDER_MAP.get(session_id)
-            or _GLOBAL_WO_ID
-        )
+        # Only a work order the message or THIS session names (29 Oct 2026). "how many work
+        # orders were completed at JASMEET?" was answered with one unrelated work order's
+        # status; "status of WO-1042" (a wo_code, not the 14-digit id) with the session's open
+        # one; and with nothing in the session, with the last work order ANY session of any
+        # company had touched in this process. Everything else goes to the agents.
+        if len({m.upper() for m in re.findall(r"WO-\d{14,}", user_message or "", re.I)}) > 1:
+            return None
+        wo_id = extract_work_order_id_from_text(user_message)
+        if not wo_id and self._is_followup_on_this_sessions_wo(msg):
+            wo_id = _SESSION_WORK_ORDER_MAP.get(session_id)
         if not wo_id:
             return None
 
@@ -1526,7 +1569,10 @@ class DeepAgentOrchestrator:
                 "contractor",
             )
         )
-        status_or_verb = any(
+        # A compliance STATUS beside a scope. Generic verbs ("which", "show", "list", "summar…",
+        # "how many") used to count too, so "how many floors in jasmeet building" was answered
+        # from the certificate register before the router read it (29 Oct 2026).
+        compliance_status = any(
             w in msg
             for w in (
                 "blocked",
@@ -1539,14 +1585,9 @@ class DeepAgentOrchestrator:
                 "due",
                 "status",
                 "compliant",
-                "which",
-                "show",
-                "list",
-                "summar",
-                "how many",
             )
         )
-        return compliance_signal or (scope and status_or_verb)
+        return compliance_signal or (scope and compliance_status)
 
     @staticmethod
     def _prune_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -1631,6 +1672,39 @@ class DeepAgentOrchestrator:
             "vendor_is_compliant",
         }
     )
+
+    # Filters that NAME a building or a vendor (29 Oct 2026). The planner's
+    # {"field": "building_name", "op": "eq", "value": "Jasmeet Building"} was compiled to
+    # lower(c.building_name) = lower('Jasmeet Building') and found nothing: the building is
+    # "JASMEET". A name filter is looked up by name first (_resolve_spec_names), with the ladder
+    # every other path uses (agents/name_match.py), and then compares the stored names it found.
+    # Codes (building_reference, certificate_number, site_code, asset_code) are not names: they
+    # stay compared as written.
+    _BUILDING_KIND_WORDS: frozenset[str] = frozenset(
+        {"building", "buildings", "site", "sites", "property", "properties", "premises"}
+    )
+    _VENDOR_KIND_WORDS: frozenset[str] = frozenset(
+        {"vendor", "vendors", "contractor", "contractors", "supplier", "suppliers"}
+    )
+    _SPEC_NAME_FIELDS: dict[str, frozenset[str]] = {
+        "building_name": _BUILDING_KIND_WORDS,
+        "site_name": _BUILDING_KIND_WORDS,
+        "location_name": _BUILDING_KIND_WORDS,
+        "vendor_name": _VENDOR_KIND_WORDS,
+        "company_name": _VENDOR_KIND_WORDS,
+    }
+    _SPEC_NAME_OPS = frozenset({"eq", "neq", "in", "not_in", "contains"})
+    #: Distinct stored names one lookup reads; exact and letters-and-digits matches come first.
+    _NAME_LOOKUP_LIMIT = 5000
+    #: The joins a name field's expression needs - the same joins the register read makes.
+    _NAME_FIELD_JOINS: dict[str, str] = {
+        "v": "LEFT JOIN plenum_cafm.vendors v ON v.id::text = c.vendor_id::text",
+        "s": "LEFT JOIN plenum_cafm.sites s ON s.id::text = COALESCE(c.site_id::text, c.site_ref)",
+        "l": (
+            "LEFT JOIN plenum_cafm.assets a ON a.id::text = c.asset_id::text "
+            "LEFT JOIN plenum_cafm.locations l ON l.id::text = a.location_id::text"
+        ),
+    }
 
     _cert_columns_cache: set[str] | None = None
 
@@ -1768,6 +1842,27 @@ class DeepAgentOrchestrator:
                 parts.append(f"{col} {sqlop}")
                 continue
             p = f"p{i}"
+            if field in self._SPEC_NAME_FIELDS and "names" in f:
+                # Looked up by name (_resolve_spec_names): the stored names found, plus the text
+                # as typed, compared as stored. A phrase that names nothing ("the building")
+                # matches nothing - and excludes nothing.
+                params[p] = sorted(
+                    {str(n).lower() for n in [*(f.get("names") or []), *(f.get("named") or [])]}
+                )
+                if op in ("neq", "not_in"):
+                    parts.append(f"lower({col}::text) <> ALL(CAST(:{p} AS text[]))")
+                elif not f.get("named"):
+                    params.pop(p)
+                    parts.append("FALSE")
+                elif op == "contains":
+                    params[p + "l"] = f"%{f.get('value')}%"
+                    parts.append(
+                        f"(lower({col}::text) = ANY(CAST(:{p} AS text[])) "
+                        f"OR {col}::text ILIKE :{p}l)"
+                    )
+                else:
+                    parts.append(f"lower({col}::text) = ANY(CAST(:{p} AS text[]))")
+                continue
             if op in ("in", "not_in"):
                 vals = f.get("value")
                 vals = vals if isinstance(vals, list) else [vals]
@@ -1795,6 +1890,135 @@ class DeepAgentOrchestrator:
             return "", {}
         joiner = " OR " if str(logic).lower() == "or" else " AND "
         return "(" + joiner.join(parts) + ")", params
+
+    @classmethod
+    def _name_field_sql(cls, field: str) -> tuple[str, str]:
+        """A name field's expression, as the register read compares it, and the joins it needs."""
+        if field in cls._SPEC_JOIN_FIELDS:
+            col = cls._SPEC_JOIN_FIELDS[field]
+        elif field in cls._SPEC_META_FIELDS:
+            col = f"(c.raw_metadata->>'{field}')"  # a key from the fixed _SPEC_META_FIELDS set
+        else:
+            col = f"c.{field}"  # matched _SAFE_IDENT and the allow-list in _validate_query_spec
+        aliases = set(re.findall(r"\b([vsl])\.", col))
+        joins = " ".join(cls._NAME_FIELD_JOINS[a] for a in ("v", "s", "l") if a in aliases)
+        return col, joins
+
+    async def _stored_names(
+        self,
+        field: str,
+        typed: list[str],
+        kind: frozenset[str],
+        scope_sql: str,
+        scope_params: dict[str, Any],
+    ) -> list[str]:
+        """The distinct names in ``field`` on the certificates the caller may read.
+
+        Read within the same company and building scope as the register read itself, so a name
+        is only ever resolved to a record the caller could see. The exact and letters-and-digits
+        matches are read first, so a cap never drops the record the name is exactly."""
+        from sqlalchemy import text as _sql
+
+        from .. import database
+        from . import name_match
+
+        col, joins = self._name_field_sql(field)
+        exact = sorted(
+            {
+                t
+                for v in typed
+                for t in (name_match.clean(v), " ".join(name_match.meaningful(v, kind)))
+                if t
+            }
+        )
+        compact = sorted({name_match.compact(t) for t in exact if name_match.compact(t)})
+        sql = (
+            f"/* name lookup {field} */ SELECT n FROM ("
+            f"SELECT DISTINCT {col}::text AS n "
+            f"FROM plenum_cafm.compliance_certificates c {joins} "
+            f"WHERE {scope_sql} AND {col} IS NOT NULL AND btrim({col}::text) <> ''"
+            ") x ORDER BY (lower(n) = ANY(CAST(:nm_exact AS text[])) "
+            "OR regexp_replace(lower(n), '[^a-z0-9]+', '', 'g') "
+            "= ANY(CAST(:nm_compact AS text[]))) DESC, n "
+            "LIMIT :nm_limit"
+        )
+        params = {
+            **scope_params,
+            "nm_exact": exact,
+            "nm_compact": compact,
+            "nm_limit": self._NAME_LOOKUP_LIMIT,
+        }
+        if database.AsyncSessionLocal is None:
+            database.init_session_factory()
+        async with database.AsyncSessionLocal() as session:
+            result = await session.execute(_sql(sql), params)
+            names = [str(r["n"]) for r in result.mappings().all() if r["n"]]
+        if len(names) >= self._NAME_LOOKUP_LIMIT:
+            log.warning("compliance.stage1.name_lookup_capped", field=field, read=len(names))
+        return names
+
+    async def _resolve_spec_names(
+        self,
+        filters: list[dict[str, Any]],
+        company_sql: str,
+        company_params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Each filter that names a building or a vendor, looked up by name (29 Oct 2026).
+
+        The name is ranked against the stored names by agents/name_match.best_matches - exact,
+        letters and digits only, the phrase at a word start, every word in any order, one wrong
+        letter - so "Jasmeet Building" finds "JASMEET", "tower hussain" finds "hussain tower",
+        "B090765" finds "B-090765", and "Building 7" never finds "Building 70". Every stored name
+        at the best rung is kept: a shared name reads all its records, never one picked. A
+        phrase of kind words and fillers alone names nothing. The filter keeps its value, gains
+        "names" (what was found) and "named" (the typed values that name something), and
+        _spec_where_clause compares those. A lookup that fails leaves the filter as written."""
+        if not any(
+            isinstance(f, dict)
+            and f.get("field") in self._SPEC_NAME_FIELDS
+            and f.get("op") in self._SPEC_NAME_OPS
+            for f in filters
+        ):
+            return filters
+        from ..services.principal import certificate_clause
+        from . import name_match
+
+        bsql, bparams = certificate_clause("c")
+        out: list[dict[str, Any]] = []
+        for f in filters:
+            field, op = f.get("field"), f.get("op")
+            if field not in self._SPEC_NAME_FIELDS or op not in self._SPEC_NAME_OPS:
+                out.append(f)
+                continue
+            kind = self._SPEC_NAME_FIELDS[field]
+            vals = f.get("value") if isinstance(f.get("value"), list) else [f.get("value")]
+            typed = [str(v).strip() for v in vals if v is not None and str(v).strip()]
+            named = [v for v in typed if name_match.meaningful(v, kind)]
+            found: list[str] = []
+            if named:
+                try:
+                    stored = await self._stored_names(
+                        field, named, kind, company_sql + bsql, {**company_params, **bparams}
+                    )
+                except Exception as exc:  # noqa: BLE001 - the filter as written, as before
+                    log.warning("compliance.stage1.name_lookup_failed", field=field, error=str(exc)[:200])
+                    out.append(f)
+                    continue
+                rows = [(s_, s_) for s_ in stored]
+                for v in named:
+                    for n, _ in name_match.best_matches(v, rows, kind):
+                        if n not in found:
+                            found.append(n)
+            log.info(
+                "compliance.stage1.name_lookup",
+                field=field,
+                op=op,
+                typed=typed,
+                names=found[:20],
+                matched=len(found),
+            )
+            out.append({**f, "names": found, "named": named})
+        return out
 
     #: raw_metadata flags whose rows operations-intelligence leaves off the compliance page
     #: (engines/compliance/certificates.py list_certificates), so the chat counts what it counts.
@@ -1937,6 +2161,9 @@ class DeepAgentOrchestrator:
                 accepted = accepted + [
                     {"field": "cert_scope", "op": "eq", "value": scope}
                 ]
+            # A building or vendor named in a filter is looked up by name first, within the
+            # caller's company and buildings (29 Oct 2026).
+            accepted = await self._resolve_spec_names(accepted, company_sql, company_params)
             clause, where_params = self._spec_where_clause(
                 accepted, spec.get("logic") or "and"
             )
@@ -5668,7 +5895,6 @@ class DeepAgentOrchestrator:
         - "yes" after WO exists (or approval phrases) -> request_approval_chain
         """
         from .wo_engine_agent import (
-            _LAST_WORK_ORDER_ID as _GLOBAL_WO_ID,
             _PENDING_APPROVAL_CONFIRM as _GLOBAL_PENDING_APPROVAL,
             _SESSION_CREATE_ARGS_MAP,
             _SESSION_WORK_ORDER_MAP,
@@ -5681,10 +5907,11 @@ class DeepAgentOrchestrator:
         if not self._is_affirmative_message(msg) and not approval_followup:
             return None
 
+        # The id the user typed, else this session's own work order - never the process-wide
+        # last one, which may be another session's or company's (29 Oct 2026).
         wo_id = (
-            _SESSION_WORK_ORDER_MAP.get(session_id)
-            or _GLOBAL_WO_ID
-            or extract_work_order_id_from_text(user_message)
+            extract_work_order_id_from_text(user_message)
+            or _SESSION_WORK_ORDER_MAP.get(session_id)
         )
         has_draft = session_id in _SESSION_CREATE_ARGS_MAP
         awaiting_approval = _GLOBAL_PENDING_APPROVAL == session_id

@@ -15,6 +15,7 @@ Phase 2 Feature C:
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -23,11 +24,16 @@ from langchain_core.tools import tool
 
 from ..config import settings
 from ..http_client import request as _request
+from . import name_match
 
 log = structlog.get_logger(__name__)
 
 _TIMEOUT = 60.0
 _SERVICE = "operations_intelligence"
+
+#: Words that say a building is meant without being part of its name (29 Oct 2026): "JASMEET
+#: BUILDING" is the building JASMEET, "the Kew site" is Kew. agents/thread_scope.py reads these too.
+BUILDING_KIND_WORDS = frozenset({"building", "buildings", "site", "sites", "property", "properties", "premises"})
 
 
 def _base() -> str:
@@ -583,33 +589,155 @@ async def _resolve_building(
     """
     if building_id:
         return str(building_id), None
-    if not (building_name or "").strip():
+    asked = (building_name or "").strip()
+    if not asked:
         return None, {"error": "building_name or building_id is required"}
+    # How a name is compared (29 Oct 2026, "HOW MANY FLOORS IN JASMEET BUILDING"): the name went to
+    # the resolver once, as typed, and whatever came back was used. So "Kew building" missed Kew,
+    # "B090765" missed B-090765, "tower hussain" missed Hussain Tower, "Jasmet" missed JASMEET, and
+    # "Building 7" and "the building" were both answered as Building 70. The rungs are now the
+    # shared ladder's (agents/name_match.py), asked of the resolver one attempt at a time.
+    core_words = name_match.meaningful(asked, BUILDING_KIND_WORDS)
+    if not core_words:
+        return None, _not_resolved(
+            asked, "unmatched", "no_building_named", [],
+            f"'{asked}' names no building - only the kind of record. Do NOT substitute another "
+            "building; ask which building is meant.")
+    core = " ".join(core_words)
+    offered: list[dict] = []
     try:
-        resp = await _request(
-            "GET",
-            _base(),
-            "/api/energy/buildings/resolve",
-            service=_SERVICE,
-            timeout=_TIMEOUT,
-            params={"name": building_name},
-        )
-        body = resp.json()
+        # Exact: the text as typed, then its core ("JASMEET BUILDING" -> "jasmeet"), then the core as a
+        # code when it is one ("B090765", "building B-090765").
+        attempts = [{"name": asked}]
+        if core != _as_resolver_reads(asked):
+            attempts.append({"name": core})
+        code = name_match.compact(core)
+        if len(code) >= 2 and any(ch.isdigit() for ch in code) and all(map(name_match.exact_token, core_words)):
+            attempts.append({"code": code})
+        replies = []
+        for params in attempts:
+            body = await _ask_resolver(params)
+            replies.append(body)
+            if body.get("reason") in _EXACT_REASONS and body.get("outcome") == "resolved" and body.get("building_id"):
+                return str(body["building_id"]), None
+            if body.get("reason") in _EXACT_AMBIGUOUS:
+                return None, _ambiguous(asked, body.get("candidates") or [], body.get("reason"))
+        # What the resolver matched by part of the name, in attempt order, checked against the name.
+        for body in replies:
+            done = _judge(asked, body, offered)
+            if done:
+                return done
+        # Every word in any order, then a close spelling, from what the resolver finds for each word
+        # or each word's ends (its containment rule reads five letters or more).
+        words = [w for w in core_words if not name_match.exact_token(w) and len(w) >= _PROBE_MIN]
+        stages = []
+        if len(core_words) >= 2:
+            stages.append(words[:_MAX_PROBES])
+        ends = [e for w in words if len(w) > _PROBE_MIN for e in (w[:_PROBE_MIN], w[-_PROBE_MIN:])]
+        stages.append(list(dict.fromkeys(ends))[:_MAX_PROBES])
+        for probes in stages:
+            pool: dict[str, str] = {}
+            for probe in probes:
+                for bid, label in _offers(await _ask_resolver({"name": probe})):
+                    pool.setdefault(bid, label)
+            hits = name_match.best_matches(asked, list(pool.items()), BUILDING_KIND_WORDS)
+            if len(hits) == 1:
+                return hits[0][0], None
+            if hits:
+                return None, _ambiguous(asked, [{"building_id": k, "name": v} for k, v in hits], "ambiguous")
     except Exception as exc:
         return None, _err(exc, "resolve_building")
+    if offered:
+        names = ", ".join("'" + str(c.get("name")) + "'" for c in offered[:5])
+        return None, _not_resolved(
+            asked, "unmatched", "only_a_different_name", offered,
+            f"No building is named '{asked}'. The resolver offered {names}, which is a different name. "
+            "Do NOT substitute another building; ask which one is meant.")
+    last = replies[-1] if replies else {}
+    return None, _not_resolved(
+        asked, last.get("outcome") or "unmatched", last.get("reason"), _unique(
+            [c for b in replies for c in (b.get("candidates") or []) if isinstance(c, dict)]),
+        "No building matched that name well enough to answer about. Do NOT substitute "
+        "another building; ask which one is meant, using the candidates if any.")
+
+
+#: Resolver reasons (svc-operations-intelligence building_resolver) that are an exact match: a whole
+#: code, a whole normalised name, an asset already placed. Anything else matched by part of a name.
+_EXACT_REASONS = frozenset({"building_code", "name", "asset"})
+_EXACT_AMBIGUOUS = frozenset({"ambiguous_building_code", "ambiguous_name"})
+#: The resolver's containment rule ignores a name shorter than this, so no probe is shorter.
+_PROBE_MIN = 5
+_MAX_PROBES = 6
+
+
+def _as_resolver_reads(text: str) -> str:
+    """The resolver's normalize_name: lower case, punctuation as space, a leading "the" dropped."""
+    s = " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+    return s[4:] if s.startswith("the ") else s
+
+
+async def _ask_resolver(params: dict) -> dict:
+    resp = await _request("GET", _base(), "/api/energy/buildings/resolve", service=_SERVICE,
+                          timeout=_TIMEOUT, params=params)
+    body = resp.json()
+    return body if isinstance(body, dict) else {}
+
+
+def _offers(body: dict) -> list[tuple[str, str]]:
+    """(building_id, name) of every building a reply put forward: the one it resolved, or its candidates."""
     if body.get("outcome") == "resolved" and body.get("building_id"):
-        return str(body["building_id"]), None
-    return None, {
-        "error": "building_not_resolved",
-        "outcome": body.get("outcome"),
-        "reason": body.get("reason"),
-        "asked_for": building_name,
-        "candidates": body.get("candidates") or [],
-        "guidance": (
-            "No building matched that name well enough to answer about. Do NOT substitute "
-            "another building; ask which one is meant, using the candidates if any."
-        ),
-    }
+        return [(str(body["building_id"]), str(body.get("building") or ""))]
+    return [(str(c["building_id"]), str(c.get("name") or "")) for c in body.get("candidates") or []
+            if isinstance(c, dict) and c.get("building_id")]
+
+
+def _judge(asked: str, body: dict, offered: list[dict]) -> tuple[str | None, dict | None] | None:
+    """A reply matched by part of a name, as an answer: the building when its name is the one asked
+    about, every building when several are, None to keep looking. A building whose name is not the
+    one asked about ("Building 70" for "Building 7") goes to ``offered`` and is never used."""
+    if body.get("outcome") == "resolved" and body.get("building_id"):
+        label = body.get("building")
+        if not label or name_match.rung(asked, label, BUILDING_KIND_WORDS) is not None:
+            return str(body["building_id"]), None
+        offered.append({"building_id": str(body["building_id"]), "name": label})
+        return None
+    if body.get("outcome") != "review":
+        return None
+    cands = [c for c in body.get("candidates") or [] if isinstance(c, dict)]
+    if not cands:
+        return None, _ambiguous(asked, [], body.get("reason"))
+    rows = [(i, str(c.get("name") or "")) for i, c in enumerate(cands)]
+    hits = name_match.best_matches(asked, rows, BUILDING_KIND_WORDS)
+    if len(hits) == 1 and cands[hits[0][0]].get("building_id"):
+        return str(cands[hits[0][0]]["building_id"]), None
+    if hits:
+        return None, _ambiguous(asked, [cands[i] for i, _ in hits], body.get("reason"))
+    return None
+
+
+def _unique(cands: list[dict]) -> list[dict]:
+    seen, out = set(), []
+    for c in cands:
+        k = c.get("building_id") or c.get("name")
+        if k not in seen:
+            seen.add(k)
+            out.append(c)
+    return out
+
+
+def _not_resolved(asked: str, outcome, reason, candidates: list, guidance: str) -> dict:
+    return {"error": "building_not_resolved", "outcome": outcome, "reason": reason, "asked_for": asked,
+            "candidates": candidates, "guidance": guidance}
+
+
+def _ambiguous(asked: str, candidates: list[dict], reason) -> dict:
+    """Several buildings answer to the name: all of them, and none picked."""
+    candidates = _unique(candidates)
+    names = ", ".join("'" + str(c.get("name")) + "'" for c in candidates[:10] if c.get("name"))
+    return _not_resolved(
+        asked, "review", reason or "ambiguous", candidates,
+        f"Several buildings match '{asked}'" + (f": {names}" if names else "") + ". Do NOT substitute "
+        "another building or pick one; name them and ask which is meant.")
 
 
 @tool

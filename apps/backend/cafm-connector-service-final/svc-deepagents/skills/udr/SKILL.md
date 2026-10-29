@@ -1,7 +1,7 @@
 ---
 name: udr-database-query
 agent: udr
-description: Answers any question about data held in the plenum_cafm database when no specialist engine owns it — assets, locations, sites, vendors, spare parts, users, readings, inventory, purchase orders, categories — including questions that need two or more tables joined. Owns the ASSET REGISTER itself: an asset or piece of equipment (lift, boiler, AHU, chiller, pump, generator) by name or code, its condition grade, criticality, age, design life and replacement value, and assets listed by building or condition. Who maintains it and its job history are wo_engine's. The default skill for "how many", "list", "show me", "which", "who", and any cross-table lookup.
+description: Answers any question about data held in the plenum_cafm database when no specialist engine owns it — assets, locations, sites, vendors, spare parts, users, readings, inventory, purchase orders, categories — including questions that need two or more tables joined. Owns the ASSET REGISTER itself: an asset or piece of equipment (lift, boiler, AHU, chiller, pump, generator) by name or code, its condition grade, criticality, age, design life and replacement value, and assets listed by building or condition. Who maintains it and its job history are wo_engine's. Owns the BUILDING REGISTER too: a building by name or building ID, its country, state, use, floors, floor area, sections and spaces — "how many floors in X", "what is the floor area of X", "where is X" are this agent's, including a building added a moment ago. The default skill for "how many", "list", "show me", "which", "who", and any cross-table lookup.
 references:
   - buildings
   - assets

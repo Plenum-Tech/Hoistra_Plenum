@@ -100,12 +100,26 @@ async def answer_with_graph_context(question: str, depth: int = 1) -> dict:
         "relationships": plan.get("relationships", []),
         "primary_keys": plan.get("primary_keys", {}),
         "structured_records": records,
+        "records_answer": await _records_answer(question),
         "document_evidence": docs,
         "note": (
-            "Summarise the answer from structured_records + document_evidence; "
-            "relationships show how the entities connect (PK/FK)."
+            "Answer from records_answer - the records the question names, found however they are "
+            "named. structured_records are a few rows per related table, NOT filtered to the question: "
+            "never conclude a record is missing because it is not among them. relationships show how "
+            "the entities connect (PK/FK)."
         ),
     }
+
+
+async def _records_answer(question: str):
+    """The records engine's answer for the question (agents/ontology_qa.answer_question: the plan,
+    the resolution ladder, the caller's scope), or None when it cannot read (29 Oct 2026)."""
+    try:
+        from . import ontology_qa
+
+        return await ontology_qa.answer_question(question)
+    except Exception as exc:  # noqa: BLE001 - the graph bundle stands without it
+        return {"ok": False, "error": str(exc)[:200]}
 
 
 @tool
@@ -126,7 +140,10 @@ async def resolve_cross_source_links(
     vector = await query_docs.ainvoke({"query": f"{entity_hint} {query}", "top_k": 3})
     return {
         "entity_hint": entity_hint,
+        "records_answer": await _records_answer(f"{query} for {entity_hint}".strip()),
         "structured_sample": structured,
         "document_answer": vector,
-        "note": "Filter structured rows client-side by entity_hint; citations are in document_answer.",
+        "note": ("records_answer holds the record entity_hint names, found however it is named. "
+                 "structured_sample is the first rows of the table, NOT filtered: never conclude the "
+                 "entity is missing from it. Citations are in document_answer."),
     }

@@ -71,11 +71,16 @@ def test_a_miss_on_the_named_concept_sweeps_the_others_in_one_query_per_mode():
     r = _Reader(answer)
     concept, keys, labels, note = asyncio.run(oq.resolve_match(r, _Onto(), "WorkOrder", "grade-4"))
     assert (concept, keys) == ("Asset", ["a9"]) and "matched Asset instead" in note
-    # WorkOrder exact + search, then one exact union and one search union - 4, not 2 + 2 x 11
-    assert [c[0] for c in r.calls] == ["resolve WorkOrder (exact)", "resolve WorkOrder (search)",
-                                       "resolve 1 across 2 concepts (exact)", "resolve 1 across 2 concepts (search)"]
+    # Every rung of the ladder on WorkOrder (29 Oct 2026: exact, compact, search, words, fuzzy), then
+    # ONE union query per rung across the others until one finds it - never one query per concept.
+    # (exact is tried as typed, "grade-4", then on its words, "grade 4").
+    assert [c[0] for c in r.calls] == [
+        "resolve WorkOrder (exact)", "resolve WorkOrder (exact 2)", "resolve WorkOrder (compact)",
+        "resolve WorkOrder (search)", "resolve WorkOrder (words)", "resolve WorkOrder (fuzzy)",
+        "resolve 2 across 2 concepts (exact)", "resolve 1 across 2 concepts (compact)",
+        "resolve 1 across 2 concepts (search)"]
     asyncio.run(oq.resolve_match(r, _Onto(), "WorkOrder", "grade-4"))
-    assert len(r.calls) == 4                                  # remembered
+    assert len(r.calls) == 9                                  # remembered
 
 
 def test_a_uuid_match_on_its_own_concept_reads_the_key():

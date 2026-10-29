@@ -70,6 +70,12 @@ _PROMPT = (
     "if the page the user is on shows other things: also costs a second agent run, and a "
     "half-relevant one buries the answer under a paragraph nobody asked for. If nothing "
     "fits, return clarify.\n\n"
+    "You cannot see the data. CONTEXT describes the page the user is on — not the register: "
+    "the buildings, assets or vendors it names are what that page happens to show, and its "
+    "counts may be older than the records. Never decide that a building, asset, vendor or any "
+    "other record does or does not exist; finding it is the agent's job. A question naming "
+    "something CONTEXT does not mention goes to the agent whose register holds that kind of "
+    "record, never to clarify.\n\n"
     "Return JSON only: {\"agent\": \"<id or clarify>\", \"also\": [ids], "
     "\"reason\": \"one short sentence\"}."
 )

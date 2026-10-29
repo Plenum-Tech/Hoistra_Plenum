@@ -18,8 +18,6 @@ Phase 2 Feature B (B1–B3):
 """
 from __future__ import annotations
 
-import difflib
-import re
 import uuid as _uuid
 from datetime import date
 from typing import Any
@@ -30,6 +28,7 @@ from langchain_core.tools import tool
 
 from ..config import settings
 from ..http_client import request as _request
+from . import name_match as _nm
 
 log = structlog.get_logger(__name__)
 
@@ -59,31 +58,46 @@ _LEGAL_FORM_WORDS = frozenset({
 })
 
 
-def _name_words(name):
-    """The distinctive words of a company name, lowercased, legal forms dropped."""
-    return [
-        w for w in re.split(r"[^a-z0-9]+", str(name or "").lower())
-        if w and w not in _LEGAL_FORM_WORDS
-    ]
+#: Words that say what kind of record a name is, not which one (29 Oct 2026): "the contractor
+#: Acme" names Acme, "JASMEET BUILDING" names JASMEET. Legal forms are NOT here — "Ltd" is part
+#: of a company's name, and "Acme" still finds "Acme Facilities Ltd" at the phrase rung.
+_VENDOR_KIND_WORDS = frozenset({
+    "vendor", "vendors", "contractor", "contractors", "supplier", "suppliers",
+})
+_BUILDING_KIND_WORDS = frozenset({
+    "building", "buildings", "site", "sites", "property", "properties", "premises",
+})
+
+
+def _without_legal_forms(text) -> str:
+    return " ".join(w for w in _nm.words(text) if w not in _LEGAL_FORM_WORDS)
+
+
+def _vendor_hits(typed, rows) -> list[int]:
+    """Indexes of the rows whose vendor_name ``typed`` names, at the best rung any row reaches.
+
+    The ladder is agents/name_match.py's, the one ontology_qa runs in SQL (29 Oct 2026). Every
+    typed word used to have to be a whole word of the name, so "the contractor Acme" and "Acme
+    Fac" lost "Acme Facilities Ltd", while "SL100234" took "SL100235" for one wrong letter. A
+    name shared by several vendors returns all of them; a close spelling only the clearly
+    closest. Only when nothing matches are legal forms set aside ("Acme Limited" for "Acme
+    Facilities Ltd", "Apex Mechanical Services UK" for "Apex Mechanical Services Ltd"): they
+    never tell two companies apart, and never outrank a match on the name as written.
+    """
+    named = [(i, str(r.get("vendor_name"))) for i, r in enumerate(rows) if r.get("vendor_name")]
+    hits = _nm.best_matches(typed, named, _VENDOR_KIND_WORDS)
+    if not hits:
+        bare = _without_legal_forms(typed)
+        if _nm.meaningful(bare, _VENDOR_KIND_WORDS):
+            hits = _nm.best_matches(
+                bare, [(i, _without_legal_forms(t)) for i, t in named], _VENDOR_KIND_WORDS
+            )
+    return sorted({i for i, _ in hits})
 
 
 def _name_matches(typed, row_name) -> bool:
-    """Whether what the user typed names the company on this row.
-
-    Every distinctive word typed must appear on the row — so "Apex" matches both Apex
-    companies (the caller is told it is ambiguous rather than handed one), while "Apex Lifts"
-    matches only one. A close near-miss counts, so a single wrong letter does not lose it.
-    """
-    want, have = _name_words(typed), _name_words(row_name)
-    if not want or not have:
-        return False
-    for w in want:
-        if not any(
-            w == h or (len(w) > 3 and difflib.SequenceMatcher(None, w, h).ratio() >= 0.85)
-            for h in have
-        ):
-            return False
-    return True
+    """Whether what the user typed names the company on this row (one row: see _vendor_hits)."""
+    return bool(_vendor_hits(typed, [{"vendor_name": row_name}]))
 
 
 #: Words that appear where a company name is expected and name no company. A question says
@@ -105,7 +119,12 @@ def _names_a_company(typed) -> bool:
     holds nothing. So a value with no distinctive word in it is not treated as a filter: the
     set comes back and the answer is written from it.
     """
-    return any(w not in _NOT_A_COMPANY for w in _name_words(typed))
+    # Fillers and kind words name no company either: "details for the contractor" is not one
+    # (29 Oct 2026).
+    return any(
+        w not in _NOT_A_COMPANY and w not in _LEGAL_FORM_WORDS
+        for w in _nm.meaningful(typed, _VENDOR_KIND_WORDS)
+    )
 
 
 def _looks_like_uuid(value) -> bool:
@@ -123,8 +142,8 @@ def _match_by_name(rows, typed, kind):
     "that company is not on record" is the answer to a question about a company that is not on
     record; another vendor's figures never are.
     """
-    named = [r for r in rows if _name_matches(typed, r.get("vendor_name"))]
-    on_record = sorted({str(r.get("vendor_name")) for r in rows if r.get("vendor_name")})
+    named = [rows[i] for i in _vendor_hits(typed, rows)]
+    on_record =sorted({str(r.get("vendor_name")) for r in rows if r.get("vendor_name")})
     if not named:
         # The whole set comes back, never an empty one. An unmatched name used to return
         # nothing, and the answer became "there are no invoices recorded for a vendor named
@@ -150,6 +169,10 @@ def _match_by_name(rows, typed, kind):
             ),
         }
     distinct = sorted({str(r.get("vendor_name")) for r in named if r.get("vendor_name")})
+    # Two vendors can share one name; their ids tell them apart (29 Oct 2026).
+    ids = sorted({str(r.get("vendor_id")) for r in named if r.get("vendor_id")})
+    if len(distinct) == 1 and len(ids) > 1:
+        distinct = [f"{distinct[0]} (vendor_id {i})" for i in ids]
     if len(distinct) > 1:
         return {
             "vendor_match": "ambiguous",
@@ -161,6 +184,173 @@ def _match_by_name(rows, typed, kind):
             ),
         }
     return {"vendor_match": "one", "rows": named}
+
+
+# ── building names (29 Oct 2026) ──────────────────────────────────────────────────────
+# "HOW MANY FLOORS IN JASMEET BUILDING" found nothing: the building is "JASMEET". Here the
+# invoice tool passed a building name to the resolver once, as typed, and the contract tool had
+# no building filter at all, leaving the model to compare names itself. Both now go through the
+# shared ladder (agents/name_match.py).
+
+def _building_hits(typed, rows) -> list[int]:
+    """Indexes of the rows whose building ``typed`` names — by name or reference (B-090765 for
+    "B090765"), at the best rung any row reaches; every row of a shared name, never one."""
+    texts = [
+        (i, str(r.get(field)))
+        for i, r in enumerate(rows)
+        for field in ("building_name", "building_reference")
+        if r.get(field)
+    ]
+    return sorted({i for i, _ in _nm.best_matches(typed, texts, _BUILDING_KIND_WORDS)})
+
+
+def _building_key(row) -> str:
+    return str(row.get("building_id") or row.get("building_reference") or row.get("building_name"))
+
+
+def _match_by_building(rows, typed):
+    """Narrow contract rows to the building named, or say why that could not be done.
+
+    A miss returns every row, as a vendor miss does: a contract with no building_name is
+    unplaced and may well cover the building asked about, so "no contracts" is not the answer.
+    """
+    named = [rows[i] for i in _building_hits(typed, rows)]
+    if not named:
+        placed = sorted({str(r.get("building_name")) for r in rows if r.get("building_name")})
+        unplaced = sum(1 for r in rows if not r.get("building_name"))
+        return {
+            "building_match": "none",
+            "rows": rows,
+            "building_hint": (
+                f"No contract visible to this user is placed against a building matching "
+                f"{typed!r}. Do NOT say that building has no contracts or does not exist: "
+                f"{unplaced} contract(s) here are unplaced (no building_name) and may cover it, "
+                "and a building can hold contracts that were never linked to it. Answer from "
+                "these rows, naming each contract's building, and do NOT attribute any of them "
+                f"to {typed!r}. Buildings named on these contracts: "
+                + (", ".join(placed) or "none") + "."
+            ),
+        }
+    labels: dict[str, str] = {}
+    for r in named:
+        labels.setdefault(
+            _building_key(r),
+            " ".join(str(r.get(f)) for f in ("building_name", "building_reference") if r.get(f)),
+        )
+    if len(labels) > 1:
+        return {
+            "building_match": "ambiguous",
+            "rows": named,
+            "building_hint": (
+                f"{typed!r} matches more than one building: " + ", ".join(sorted(labels.values()))
+                + ". Ask which one is meant rather than choosing; say which building each "
+                "contract is on."
+            ),
+        }
+    return {"building_match": "one", "rows": named}
+
+
+def _names_the_building(typed, label) -> bool:
+    """Whether the resolver's pick is the building named. Its containment rule took "Building 7"
+    for "Building 70"; a pick the ladder only sees as a close spelling is not trusted either."""
+    r = _nm.rung(typed, label, _BUILDING_KIND_WORDS)
+    return r is not None and r <= 3
+
+
+def _not_resolved(building_name, outcome, candidates, reason=None) -> dict:
+    out = {
+        "error": "building_not_resolved",
+        "outcome": outcome,
+        "asked_for": building_name,
+        "candidates": candidates,
+        "guidance": (
+            "No building matched that name. Do NOT report another building's "
+            "invoices; ask which one is meant."
+        ),
+    }
+    if reason:
+        out["reason"] = reason
+    return out
+
+
+#: The resolver reports at most this many candidates; a list this long may be cut short.
+_RESOLVER_CANDIDATE_CAP = 10
+
+
+async def _resolve_invoice_building(building_name) -> dict:
+    """``{"building_id", "building"[, "building_note"]}`` for the building named, or a
+    ``building_not_resolved`` error. Never one building picked out of several.
+
+    1. The resolver, with the name as typed and then its core words ("Kew building" -> "Kew");
+       a containment pick must also pass the ladder ("Building 7" is not "Building 70").
+    2. A name with a digit, as a code ("B090765" -> B-090765).
+    3. The building names on the caller's own invoices (company-scoped), by the whole ladder:
+       word order ("tower hussain"), close spelling ("Jasmet").
+    """
+    typed = str(building_name).strip()
+    core = _nm.meaningful(typed, _BUILDING_KIND_WORDS)
+    if not core:
+        # "the building" names no building; looked up, it found whichever building has
+        # "building" in its name.
+        return _not_resolved(building_name, "unmatched", [], reason="names_no_building")
+
+    async def ask(**params):
+        resp = await _request(
+            "GET", _base(), "/api/energy/buildings/resolve",
+            service=_SERVICE, timeout=_TIMEOUT, params=params,
+        )
+        return resp.json() or {}
+
+    attempts = [{"name": v} for v in _nm.phrase_variants(typed, _BUILDING_KIND_WORDS)]
+    if any(ch.isdigit() for ch in "".join(core)):
+        attempts.append({"code": " ".join(core)})
+    for params in attempts:
+        body = await ask(**params)
+        outcome = body.get("outcome")
+        if outcome == "resolved" and body.get("building_id"):
+            if body.get("reason") == "name_contains" and not _names_the_building(
+                typed, body.get("building")
+            ):
+                continue
+            return {"building_id": body["building_id"], "building": body.get("building")}
+        if outcome == "review":
+            cands = list(body.get("candidates") or [])
+            if body.get("reason") == "ambiguous_name_contains":
+                kept = [c for c in cands if _names_the_building(typed, c.get("name"))]
+                if not kept:
+                    continue
+                if (len(kept) == 1 and len(cands) < _RESOLVER_CANDIDATE_CAP
+                        and kept[0].get("building_id")):
+                    return {"building_id": kept[0]["building_id"], "building": kept[0].get("name")}
+                cands = kept
+            return _not_resolved(building_name, "review", cands, reason=body.get("reason"))
+
+    listing = await _request(
+        "GET", _base(), "/api/contract-performance/invoices",
+        service=_SERVICE, timeout=_TIMEOUT, params={"limit": 500},
+    )
+    rows = [r for r in ((listing.json() or {}).get("invoices") or []) if r.get("building_id")]
+    found: dict[str, str] = {}
+    for i in _building_hits(typed, rows):
+        found.setdefault(str(rows[i]["building_id"]), str(rows[i].get("building_name") or ""))
+    if len(found) > 1:
+        return _not_resolved(
+            building_name, "review",
+            [{"building_id": k, "name": v} for k, v in sorted(found.items(), key=lambda x: x[1])],
+            reason="ambiguous_name",
+        )
+    if found:
+        (bid, label), = found.items()
+        return {
+            "building_id": bid,
+            "building": label,
+            "building_note": (
+                f"{building_name!r} was matched to {label!r} by the building names on this "
+                "user's invoices; the building register did not resolve it by name. Say which "
+                "building these invoices are filed against."
+            ),
+        }
+    return _not_resolved(building_name, "unmatched", [], reason="no_match")
 
 
 #: The statuses invoice verification actually writes. An unknown value returns 200 and an
@@ -491,6 +681,7 @@ async def list_contract_parameters(
     status: str | None = None,
     organization_id: str | None = None,
     vendor_name: str | None = None,
+    building_name: str | None = None,
 ) -> dict:
     """B1 — List extracted contract parameters: SLA response/completion targets by priority
     (P1/P2/P3/P4, in hours), labour day rate, overtime rate, call-out rate, payment terms,
@@ -510,6 +701,10 @@ async def list_contract_parameters(
     answer "what contracts are on <building>". A null building_name means that contract
     could not be placed against a property, NOT that it belongs to whichever building was
     asked about: say it is unplaced rather than attributing it.
+
+    For "what contracts are on <building>", pass the building as the user said it in
+    `building_name` — it is matched here (name or reference, any word order, one wrong
+    letter); `building_match` says one / ambiguous / none and `building_hint` what to say.
     """
     try:
         params: dict[str, Any] = {}
@@ -526,6 +721,14 @@ async def list_contract_parameters(
             params=params,
         )
         data = resp.json()
+        if building_name and not _nm.meaningful(building_name, _BUILDING_KIND_WORDS):
+            # "the building" names no building (29 Oct 2026): not a filter.
+            log.info("contract_performance.building_ignored", typed=str(building_name)[:60])
+            building_name = None
+        if building_name:
+            placed = _match_by_building(data.get("parameters") or [], building_name)
+            data = dict(data, parameters=placed.pop("rows"), **placed)
+            data["count"] = len(data["parameters"])
         rows_all = data.get("parameters") or []
         if vendor_name and not _names_a_company(vendor_name):
             log.info("contract_performance.name_ignored", typed=str(vendor_name)[:60], tool="contracts")
@@ -728,30 +931,15 @@ async def list_invoices(
     """
     try:
         params: dict[str, Any] = {"limit": limit}
+        building_note = None
         if building_id:
             params["building_id"] = building_id
         elif building_name:
-            resolved = await _request(
-                "GET",
-                _base(),
-                "/api/energy/buildings/resolve",
-                service=_SERVICE,
-                timeout=_TIMEOUT,
-                params={"name": building_name},
-            )
-            body = resolved.json()
-            if body.get("outcome") != "resolved" or not body.get("building_id"):
-                return {
-                    "error": "building_not_resolved",
-                    "outcome": body.get("outcome"),
-                    "asked_for": building_name,
-                    "candidates": body.get("candidates") or [],
-                    "guidance": (
-                        "No building matched that name. Do NOT report another building's "
-                        "invoices; ask which one is meant."
-                    ),
-                }
+            body = await _resolve_invoice_building(building_name)
+            if body.get("error"):
+                return body
             params["building_id"] = body["building_id"]
+            building_note = body.get("building_note")
         if invoice_ref:
             params["invoice_ref"] = invoice_ref
         if status:
@@ -811,6 +999,8 @@ async def list_invoices(
             matched = _match_by_name(out.get("invoices") or [], vendor_name, "invoice")
             rows = matched.pop("rows")
             out = dict(out, invoices=rows, count=len(rows), vendor_name_filter=vendor_name, **matched)
+        if building_note:
+            out = dict(out, building_note=building_note)
         # Which figure is the dispute. A flagged LINE is not a flagged AMOUNT — delta_gbp is
         # the gap between billed and contracted, not the line total. An invoice of £6,353.70
         # with all 23 lines flagged carried a claimed gap of £3,031.59, of which the Adversary

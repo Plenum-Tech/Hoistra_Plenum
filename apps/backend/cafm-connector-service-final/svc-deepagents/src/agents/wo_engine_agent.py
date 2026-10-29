@@ -23,6 +23,7 @@ Two categories of tools:
 """
 import json
 import re
+import uuid as _uuid
 from typing import Any
 
 import httpx
@@ -31,6 +32,7 @@ from langchain_core.tools import tool
 
 from ..config import settings
 from ..http_client import request as _request
+from . import name_match
 
 log = structlog.get_logger(__name__)
 
@@ -630,14 +632,15 @@ async def request_approval_chain(
     """
     resolved_wo_id = work_order_id
     if not resolved_wo_id:
-        sid = _resolve_wo_chat_session(session_id) or _LAST_WO_CHAT_SESSION_ID
+        # This session's own work order only. The process-wide _LAST_WORK_ORDER_ID and
+        # _LAST_WO_CHAT_SESSION_ID are whichever session touched one last - possibly another
+        # company's - and an approval or approver email must never go to it (29 Oct 2026).
+        sid = _resolve_wo_chat_session(session_id)
         orch = session_id or _orch_session_id()
         if orch:
             resolved_wo_id = _SESSION_WORK_ORDER_MAP.get(orch)
         if not resolved_wo_id and sid:
             resolved_wo_id = _SESSION_WORK_ORDER_MAP.get(sid)
-    if not resolved_wo_id:
-        resolved_wo_id = _LAST_WORK_ORDER_ID
     if not resolved_wo_id:
         return {
             "error": (
@@ -684,14 +687,15 @@ async def send_approval_request_email(
     """
     resolved_wo_id = work_order_id
     if not resolved_wo_id:
-        sid = _resolve_wo_chat_session(session_id) or _LAST_WO_CHAT_SESSION_ID
+        # This session's own work order only. The process-wide _LAST_WORK_ORDER_ID and
+        # _LAST_WO_CHAT_SESSION_ID are whichever session touched one last - possibly another
+        # company's - and an approval or approver email must never go to it (29 Oct 2026).
+        sid = _resolve_wo_chat_session(session_id)
         orch = session_id or _orch_session_id()
         if orch:
             resolved_wo_id = _SESSION_WORK_ORDER_MAP.get(orch)
         if not resolved_wo_id and sid:
             resolved_wo_id = _SESSION_WORK_ORDER_MAP.get(sid)
-    if not resolved_wo_id:
-        resolved_wo_id = _LAST_WORK_ORDER_ID
     if not resolved_wo_id:
         return {
             "error": (
@@ -752,17 +756,33 @@ async def get_work_order_status_track(work_order_id: str) -> dict:
     Use this (not get_work_order alone) when the user asks for status, progress, track, or where a WO stands.
 
     Args:
-        work_order_id: Work order ID (e.g. WO-202605271502250185).
+        work_order_id: Work order ID (e.g. WO-202605271502250185) or its register code (WO-1042).
     """
-    try:
+    async def _track(key: str):
         resp = await _request(
             "GET",
             settings.wo_management_base_url,
-            f"/api/work-orders/{work_order_id}/status-track",
+            f"/api/work-orders/{key}/status-track",
             service=_SERVICE,
             timeout=_TIMEOUT,
         )
-        track = resp.json()
+        return resp.json()
+
+    try:
+        try:
+            track = await _track(work_order_id)
+        except httpx.HTTPStatusError as exc:
+            # The track is keyed on the work order's id only. A register code people quote
+            # (WO-1042) is turned into that id by the work-order read, which takes either and
+            # checks the caller's building (29 Oct 2026). A code on no work order stays a 404.
+            if exc.response.status_code != 404:
+                raise
+            wo = (await _request("GET", settings.wo_management_base_url, f"/api/work-orders/{work_order_id}",
+                                 service=_SERVICE, timeout=_TIMEOUT)).json()
+            key = str((wo or {}).get("work_order_id") or "") if isinstance(wo, dict) else ""
+            if not key or key == str(work_order_id):
+                raise
+            track = await _track(key)
         if isinstance(track, dict) and track.get("found"):
             track["formatted_summary"] = format_work_order_status_track(track)
         return track
@@ -979,7 +999,8 @@ async def list_work_orders(
         status: Filter by status — one of: pending_approval, preparing, prepared, active, completed, closed.
         priority: Filter by priority — one of: low, medium, high, urgent, critical.
         source: Filter by source — one of: email, ppm, manual, tenant, internal, remediation.
-        asset: Filter to WOs for a specific asset (partial match on asset name/code).
+        asset: Filter to WOs for a specific asset — its name or code however it is typed (word
+            order, punctuation, a code without its hyphen, one letter wrong are all found).
         from_date: Start of date range in ISO format (YYYY-MM-DD).
         to_date: End of date range in ISO format (YYYY-MM-DD).
         page: Page number (default 1).
@@ -992,19 +1013,36 @@ async def list_work_orders(
         params["priority"] = priority
     if source:
         params["source"] = source
-    if asset:
-        params["asset"] = asset
     if from_date:
         params["from_date"] = from_date
     if to_date:
         params["to_date"] = to_date
 
-    try:
+    async def _read(term: str) -> list:
         resp = await _request(
             "GET", settings.wo_management_base_url, "/api/work-orders/",
-            service=_SERVICE, timeout=_TIMEOUT, params=params,
+            service=_SERVICE, timeout=_TIMEOUT, params={**params, "asset": term},
         )
-        return resp.json()
+        body = resp.json()
+        return body if isinstance(body, list) else []
+
+    try:
+        if not asset:
+            resp = await _request(
+                "GET", settings.wo_management_base_url, "/api/work-orders/",
+                service=_SERVICE, timeout=_TIMEOUT, params=params,
+            )
+            return resp.json()
+        # The route's `asset` is ILIKE '%text%' on the order's asset text: "Building 7" also
+        # matched "Building 70", and "RT5 Crossrail" missed "RT5, Crossrail". Orders on the asset
+        # are kept by the shared ladder instead, at any rung but close spelling — which is used only
+        # when nothing nearer is on an order (29 Oct 2026).
+        if not name_match.meaningful(asset, _ASSET_KIND_WORDS):
+            return [_names_nothing(asset, "asset")]
+        rows, top = await _find_named(asset, _read, lambda r: [r.get("asset")],
+                                      lambda r: str(r.get("work_order_id") or id(r)), _ASSET_KIND_WORDS,
+                                      keep="filter")
+        return _noted(rows[: min(limit, 200)], asset, top)
     except Exception as exc:
         return [_err(exc, "list")]
 
@@ -1111,6 +1149,148 @@ async def get_work_order_history(work_order_id: str) -> list[dict]:
 
 # ── Reference lookup tools ────────────────────────────────────────────────────
 
+# ── A name typed for an asset, a location or an order's asset (29 Oct 2026) ─────────────────
+#
+# "HOW MANY FLOORS IN JASMEET BUILDING" found nothing because every place that compares a typed
+# name with a stored one did it its own way. These routes take a substring (`q`, `asset`) and
+# compare it with ILIKE '%text%': "JASMEET BUILDING" missed "JASMEET", "tower hussain" missed
+# "Hussain Tower", "RT5 Crossrail" missed "RT5, Crossrail", "B090765" missed "B-090765", "Jasmet"
+# missed "JASMEET" — and "Building 7" found "Building 70" too. The tools now read candidates from
+# the route and rank them by the shared ladder (agents/name_match.py, the rungs ontology_qa runs in
+# SQL): exact, compact, phrase at a word start, every word in any order, close spelling only when
+# one record is clearly closest. A name several records share returns all of them, never one; a
+# phrase of kind words alone ("the asset", "the building") names nothing and reads nothing.
+
+_BUILDING_KIND_WORDS = frozenset({"building", "buildings", "site", "sites", "property", "properties", "premises"})
+_ASSET_KIND_WORDS = frozenset({"asset", "assets", "equipment"})
+_LOCATION_KIND_WORDS = _BUILDING_KIND_WORDS | {"location", "locations"}
+#: Rows read per candidate request before the ladder ranks them (the routes' own maximum).
+_CANDIDATE_LIMIT = 200
+#: Close-spelling candidate reads per name: one per three-letter piece of a word.
+_MAX_FRAGMENT_READS = 4
+
+
+def _looks_like_uuid(value) -> bool:
+    try:
+        _uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def _anchor_terms(core_words: list[str]) -> list[str]:
+    """Single pieces of a name to read candidates by when no substring of the phrase can find
+    them: the longest words, a code split into its letters and digits ("B090765" -> "090765"),
+    never a piece so short it is inside half the register."""
+    out: list[str] = []
+    for w in core_words:
+        for p in ([w] if (w.isalpha() or w.isdigit()) else re.findall(r"[a-z]+|[0-9]+", w)):
+            if (len(p) >= 3 or (p.isdigit() and len(p) >= 2)) and p not in out:
+                out.append(p)
+    return sorted(out, key=len, reverse=True)[:2]
+
+
+async def _find_named(query, fetch, texts_of, key_of, kind, *, keep: str = "best") -> tuple[list[dict], int | None]:
+    """The rows a substring route holds for ``query``, ranked by the shared ladder.
+
+    ``fetch(term)`` reads the route for one substring; ``texts_of(row)`` are the names and codes
+    a row is known by. Returns (rows, rung): the rows at the best rung any row reaches
+    (``keep="best"``), or for a filter over many rows on one name (``keep="filter"``, the orders
+    on an asset) every row at rungs 0-3. Close spelling (rung 4) only when nothing nearer exists,
+    and then only the clearly closest. ([], None) when the phrase names nothing or nothing matches.
+    Read paths only: a write never links a record by a close spelling."""
+    core = name_match.meaningful(query, kind)
+    if not core:
+        return [], None
+    pool: dict[str, dict] = {}
+    asked: set[str] = set()
+
+    async def read(term) -> None:
+        t = str(term or "").strip()
+        if not t or t.lower() in asked:
+            return
+        asked.add(t.lower())
+        for row in await fetch(t) or []:
+            if isinstance(row, dict):
+                pool.setdefault(key_of(row), row)
+
+    def ranked() -> tuple[list[dict], int | None]:
+        scored = []
+        for k, row in pool.items():
+            rs = [r for r in (name_match.rung(query, t, kind) for t in texts_of(row) if t) if r is not None]
+            if rs:
+                scored.append((min(rs), k, row))
+        if not scored:
+            return [], None
+        top = min(r for r, _, _ in scored)
+        if keep == "filter" and top <= 3:
+            return [row for r, _, row in scored if r <= 3], top
+        hits = [(k, row) for r, k, row in scored if r == top]
+        if top == 4:
+            q = " ".join(core)
+            sims = {k: max(name_match.similarity(q, t) for t in texts_of(row) if t) for k, row in hits}
+            best = max(sims.values())
+            hits = [(k, row) for k, row in hits if sims[k] >= best - name_match.FUZZY_TIE]
+        return [row for _, row in hits], top
+
+    # The phrase as typed, cleaned (a possessive, curly quotes), then without kind words and fillers.
+    for term in dict.fromkeys([*name_match.phrase_variants(query, kind), name_match.clean(query)]):
+        await read(term)
+    rows, top = ranked()
+    single = len(core) == 1 and (core[0].isalpha() or core[0].isdigit())
+    if top != 0 and not (top == 2 and single):
+        # Spellings no substring of the phrase reaches: another separator, another word order.
+        for term in _anchor_terms(core):
+            await read(term)
+        rows, top = ranked()
+    if top is None or top == 4:
+        for frag in name_match.fragments(" ".join(core))[:_MAX_FRAGMENT_READS]:
+            await read(frag)
+        rows, top = ranked()
+    return rows, top
+
+
+def _names_nothing(typed, what: str) -> dict:
+    return {"error": "names_nothing", "asked_for": typed,
+            "guidance": "'" + str(typed) + "' names no " + what + " - only words for the kind of record. "
+                        "Ask which " + what + " is meant; do not answer for every one."}
+
+
+def _noted(rows: list[dict], typed, top: int | None) -> list[dict]:
+    """A close-spelling match says so on each row, so the answer names the record it read."""
+    if top != 4:
+        return rows
+    note = ("'" + str(typed) + "' is not on the register as written; this is the closest spelling - "
+            "say so, and confirm it is the one meant before acting on it.")
+    return [dict(r, match_note=note) for r in rows]
+
+
+def _asset_texts(row: dict) -> list:
+    return [row.get("asset_name"), row.get("asset_code"), row.get("serial_number")]
+
+
+def _asset_key(row: dict) -> str:
+    return str(row.get("asset_id") or row.get("asset_code") or id(row))
+
+
+async def _read_assets(term: str) -> list:
+    resp = await _request(
+        "GET", settings.wo_management_base_url, "/api/assets",
+        service=_SERVICE, timeout=_TIMEOUT,
+        # The route reads `q` (a substring of name, code or serial). It read `search` here, which
+        # the route ignores, so every search returned the first page of the register unfiltered
+        # and "Lift Asset-4471" came back as "not found" (30 Sep 2026).
+        params={"q": term, "limit": _CANDIDATE_LIMIT},
+    )
+    body = resp.json()
+    return body if isinstance(body, list) else []
+
+
+async def find_assets(typed: str) -> tuple[list[dict], int | None]:
+    """The caller's assets named by ``typed``, by the shared ladder: (rows, rung). Read only."""
+    return await _find_named(typed, _read_assets, _asset_texts, _asset_key, _ASSET_KIND_WORDS)
+
+
 @tool
 async def search_assets(query: str, limit: int = 20) -> list[dict]:
     """Search for assets by name, code, category, or location.
@@ -1119,19 +1299,23 @@ async def search_assets(query: str, limit: int = 20) -> list[dict]:
     and make/model. Use this to find the correct asset before raising a work order.
 
     Args:
-        query: Search text — partial match on asset name, code, or description.
+        query: Search text — an asset's name, code or serial, however it is typed (word order,
+            punctuation, a code without its hyphen, one letter wrong). A name several assets
+            share returns all of them. A row carrying `match_note` is a close spelling: say so.
         limit: Maximum results to return (default 20, max 100).
     """
     try:
-        resp = await _request(
-            "GET", settings.wo_management_base_url, "/api/assets",
-            service=_SERVICE, timeout=_TIMEOUT,
-            # The route reads `q` (a substring of name, code or serial). It read `search` here, which
-            # the route ignores, so every search returned the first page of the register unfiltered
-            # and "Lift Asset-4471" came back as "not found" (30 Sep 2026).
-            params={"q": query, "limit": min(limit, 100)},
-        )
-        return resp.json()
+        if not str(query or "").strip():
+            resp = await _request(
+                "GET", settings.wo_management_base_url, "/api/assets",
+                service=_SERVICE, timeout=_TIMEOUT,
+                params={"q": query, "limit": min(limit, 100)},
+            )
+            return resp.json()
+        if not name_match.meaningful(query, _ASSET_KIND_WORDS):
+            return [_names_nothing(query, "asset")]
+        rows, top = await find_assets(query)
+        return _noted(rows[: min(limit, 100)], query, top)
     except Exception as exc:
         return [_err(exc, "search_assets")]
 
@@ -1142,16 +1326,38 @@ async def get_asset_details(asset_id: str) -> dict:
 
     Returns all asset fields including category, make, model, serial number,
     location, installation date, warranty information, and open work order count.
+    A code or name several assets share returns `asset_ambiguous` with the candidates: ask
+    which one is meant, never pick one.
 
     Args:
-        asset_id: Asset code (e.g. 'MOB-AHU-001') or UUID.
+        asset_id: Asset code (e.g. 'MOB-AHU-001'), name, or UUID.
     """
     try:
+        note = None
+        if not _looks_like_uuid(asset_id):
+            # The route reads a UUID only: a code - what the docstring always offered - was a 404.
+            if not name_match.meaningful(asset_id, _ASSET_KIND_WORDS):
+                return _names_nothing(asset_id, "asset")
+            rows, top = await find_assets(asset_id)
+            if not rows:
+                return {"error": "asset_not_found", "status_code": 404, "asked_for": asset_id,
+                        "guidance": "No asset on your register is named or coded '" + str(asset_id) + "'."}
+            if len(rows) > 1:
+                return {"error": "asset_ambiguous", "asked_for": asset_id,
+                        "candidates": [{k: r.get(k) for k in ("asset_id", "asset_code", "asset_name", "building_id")}
+                                       for r in rows[:20]],
+                        "guidance": "'" + str(asset_id) + "' names " + str(len(rows)) + " assets. Ask which "
+                                    "one is meant (by code or building); do not pick one."}
+            note = _noted(rows, asset_id, top)[0].get("match_note")
+            asset_id = str(rows[0].get("asset_id"))
         resp = await _request(
             "GET", settings.wo_management_base_url, f"/api/assets/{asset_id}",
             service=_SERVICE, timeout=_TIMEOUT,
         )
-        return resp.json()
+        out = resp.json()
+        if note and isinstance(out, dict):
+            out["match_note"] = note
+        return out
     except Exception as exc:
         return _err(exc, "get_asset")
 
@@ -1164,13 +1370,30 @@ async def search_locations(query: str | None = None) -> list[dict]:
     correct location value before creating a work order.
 
     Args:
-        query: Optional search text to filter locations by name (omit for full list).
+        query: Optional search text to filter locations by name (omit for full list) - found
+            however it is typed; a name several locations share returns all of them.
     """
     params: dict[str, Any] = {}
-    if query:
-        params["q"] = query  # the route's name filter; `search` was ignored, as on /api/assets
+
+    async def _read(term: str) -> list:
+        resp = await _request(
+            "GET", settings.wo_management_base_url, "/api/locations",
+            service=_SERVICE, timeout=_TIMEOUT, params={"q": term, "limit": _CANDIDATE_LIMIT},
+        )
+        body = resp.json()
+        return body if isinstance(body, list) else []
 
     try:
+        if query and str(query).strip():
+            # The route's name filter is `q` (`search` was ignored, as on /api/assets); its rows
+            # are ranked by the shared ladder rather than taken as a substring (29 Oct 2026).
+            if not name_match.meaningful(query, _LOCATION_KIND_WORDS):
+                return [_names_nothing(query, "location")]
+            rows, top = await _find_named(
+                query, _read,
+                lambda r: [r.get("name"), " ".join(str(x) for x in (r.get("building"), r.get("name")) if x)],
+                lambda r: str(r.get("location_id") or id(r)), _LOCATION_KIND_WORDS)
+            return _noted(rows, query, top)
         resp = await _request(
             "GET", settings.wo_management_base_url, "/api/locations",
             service=_SERVICE, timeout=_TIMEOUT, params=params,
@@ -1237,6 +1460,27 @@ async def get_dashboard_stats() -> dict:
 # are behind plan?" — could not be answered from the chat beside them.
 
 
+async def _maintenance_building(building_id, *, use_thread: bool = False) -> tuple[str | None, dict | None]:
+    """The building a Maintenance read is for: (building_id, problem), at most one set.
+
+    A building's NAME passed where its id goes ("JASMEET") reached the route as an id, which it
+    cannot read; it goes through the shared building resolver instead. A follow-up with no building
+    named takes the thread's (agents/thread_scope.py) — and when that name does not resolve
+    (ambiguous, or on no record) the resolver's refusal is the answer. It was dropped, and the
+    whole portfolio came back as if it were that building's (29 Oct 2026)."""
+    from .energy_intelligence_agent import _resolve_building
+
+    if building_id and not _looks_like_uuid(building_id):
+        return await _resolve_building(str(building_id), None)
+    if building_id or not use_thread:
+        return (str(building_id) if building_id else None), None
+    from .thread_scope import scope_building
+    name, bid = scope_building()
+    if name or bid:
+        return await _resolve_building(name, bid)
+    return None, None
+
+
 @tool
 async def list_maintenance_decisions(
     building_id: str | None = None,
@@ -1272,13 +1516,9 @@ async def list_maintenance_decisions(
     fold its estimate into a figure for committed spend.
     """
     try:
-        if not building_id:
-            # A follow-up with no building named: the thread's working set (agents/thread_scope.py).
-            from .energy_intelligence_agent import _resolve_building
-            from .thread_scope import scope_building
-            name, bid = scope_building()
-            if name or bid:
-                building_id, _problem = await _resolve_building(name, bid)
+        building_id, problem = await _maintenance_building(building_id, use_thread=True)
+        if problem:
+            return problem
         params: dict[str, Any] = {"limit": limit}
         for k, v in (("building_id", building_id), ("state", state),
                      ("source", source), ("group_by", group_by)):
@@ -1309,6 +1549,9 @@ async def get_inspection_intelligence(building_id: str | None = None) -> dict:
     person.
     """
     try:
+        building_id, problem = await _maintenance_building(building_id)
+        if problem:
+            return problem
         params = {"building_id": building_id} if building_id else None
         resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/inspection-intelligence",
                               service=_SERVICE, timeout=_TIMEOUT, params=params)
@@ -1337,6 +1580,9 @@ async def get_ppm_contracts(building_id: str | None = None) -> dict:
     lapse), and its missed visits accrue while it stays that way.
     """
     try:
+        building_id, problem = await _maintenance_building(building_id)
+        if problem:
+            return problem
         params = {"building_id": building_id} if building_id else None
         resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/ppm/contracts",
                               service=_SERVICE, timeout=_TIMEOUT, params=params)
@@ -1354,6 +1600,9 @@ async def get_maintenance_overview(building_id: str | None = None) -> dict:
     than one order. Follow it with `list_maintenance_decisions` for what to do next.
     """
     try:
+        building_id, problem = await _maintenance_building(building_id)
+        if problem:
+            return problem
         params = {"building_id": building_id} if building_id else None
         resp = await _request("GET", settings.wo_management_base_url, "/api/maintenance/overview",
                               service=_SERVICE, timeout=_TIMEOUT, params=params)

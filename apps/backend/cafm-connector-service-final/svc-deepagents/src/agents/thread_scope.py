@@ -31,6 +31,8 @@ from langchain_core.tools import tool
 
 from ..config import settings
 from ..http_client import request as _request
+from . import name_match
+from .energy_intelligence_agent import BUILDING_KIND_WORDS
 
 log = structlog.get_logger(__name__)
 
@@ -40,7 +42,9 @@ _FOLLOWUP = re.compile(r"\b(those|these|them|out of (?:those|these|them)|of (?:t
                        r"that list|the above|from (?:that|the) list|the ones?)\b", re.I)
 _NEW_SCOPE = re.compile(r"\b(all buildings|whole (?:estate|portfolio)|across the (?:estate|portfolio|company)|every building)\b", re.I)
 _WO = re.compile(r"\bWO-[A-Z0-9][A-Z0-9-]*\d\b")
-_BCODE = re.compile(r"\bB-\d{3}\b")
+# A building code of any length, hyphen or not: B-301, B-090765, B090765 (29 Oct 2026 - only three
+# digits after a hyphen were read, so JASMEET's B-090765 never reached the working set).
+_BCODE = re.compile(r"\bB-?\d{3,}\b", re.I)
 _MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 _MONTHS.update({m.lower(): i for i, m in enumerate(calendar.month_abbr) if m})
 _MONTHS["sept"] = 9
@@ -91,23 +95,186 @@ def derive(previous: dict[str, Any] | None, question: str, answer: str, tools: l
     A follow-up keeps the anchor (building, period, the work orders the anchor answer named) and
     records what this answer named as `last_mentioned`. A question with its own scope starts a
     new working set from what its tools were asked and its answer said."""
-    followup = is_followup(question) and bool(previous)
     inputs = _tool_inputs(tools)
-    building_name = next((str(i[k]) for i in inputs for k in ("building_name", "building") if i.get(k)), None)
-    building_id = next((str(i["building_id"]) for i in inputs if i.get("building_id")), None)
-    code = next(iter(_BCODE.findall((question or "") + " " + (answer or ""))), None)
+    # The building is the one the QUESTION names (29 Oct 2026): "HOW MANY FLOORS IN JASMEET BUILDING"
+    # after a Bishopsgate thread kept Bishopsgate, because the first tool input with a building won,
+    # and a building id from one tool was kept beside another tool's building name.
+    q_name, q_id, several = _question_buildings(question, inputs)
+    q_code = _code(question)
     period = parse_period(question, today) or next((parse_period(str(i["period"]), today) for i in inputs if i.get("period")), None)
     named = list(dict.fromkeys(_WO.findall(answer or "")))[:MAX_WO]
-    if followup:
+    if is_followup(question) and previous and _same_building(previous, q_name, q_code, several):
         ws = dict(previous or {})
         ws["last_mentioned"] = named
         ws["turns"] = int(ws.get("turns") or 1) + 1
+        if (q_name or q_code) and not (ws.get("building_name") or ws.get("building_code") or ws.get("building_id")):
+            ws.update(building_name=q_name, building_id=q_id, building_code=q_code)   # narrowed to a building
         return ws
-    if not (building_name or building_id or code or period or named):
+    if q_name or several:
+        building_name, building_id = q_name, q_id
+    else:
+        building_name, building_id = _first_building(inputs)
+    code = q_code or (None if several else _code(answer))
+    if not (building_name or building_id or code or period or named or several):
         return previous if previous and _NEW_SCOPE.search(question or "") is None else None
-    return {"building_name": building_name, "building_id": building_id, "building_code": code,
-            "period": period, "work_orders": named, "last_mentioned": named, "anchor_question": (question or "")[:300],
-            "turns": 1}
+    ws = {"building_name": building_name, "building_id": building_id, "building_code": code,
+          "period": period, "work_orders": named, "last_mentioned": named, "anchor_question": (question or "")[:300],
+          "turns": 1}
+    if several:
+        ws["buildings"] = several
+    return ws
+
+
+def _code(text: str | None) -> str | None:
+    return next((c.upper() for c in _BCODE.findall(text or "")), None)
+
+
+def _core(name: str) -> list[str]:
+    return name_match.meaningful(name, BUILDING_KIND_WORDS)
+
+
+def _first_building(inputs: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """The first tool input's building when the question names none - its name with ITS id only."""
+    for i in inputs:
+        name = next((str(i[k]) for k in ("building_name", "building") if i.get(k)), None)
+        if name:
+            return name, (str(i["building_id"]) if i.get("building_id") else None)
+    return None, next((str(i["building_id"]) for i in inputs if i.get("building_id")), None)
+
+
+def _named_tier(question: str, name: str) -> int | None:
+    """How the question names ``name``: 0 by its words (any order, a code without its hyphen),
+    1 by a close spelling of each word, None not at all."""
+    core = _core(name)
+    if not core:
+        return None
+    r = name_match.rung(name, question, BUILDING_KIND_WORDS)
+    if r is not None and r <= 3:
+        return 0
+    qw = name_match.words(question)
+    target = name_match.compact(" ".join(core))
+    if any("".join(qw[i:i + n]) == target for n in range(1, len(core) + 2) for i in range(len(qw) - n + 1)):
+        return 0
+    if all(any((q == w) if name_match.exact_token(w) else name_match.similarity(w, q) >= name_match.FUZZY_MIN
+               for q in qw) for w in core):
+        return 1
+    return None
+
+
+def _spans(question: str, name: str) -> set[tuple[int, int]]:
+    """Where the name's words stand in the question, in order (the last may be a prefix)."""
+    core, qw = _core(name), name_match.words(question)
+    n, out = len(core), set()
+    for i in range(len(qw) - n + 1):
+        win = qw[i:i + n]
+        last_ok = win[-1] == core[-1] if name_match.exact_token(core[-1]) else win[-1].startswith(core[-1])
+        if n and last_ok and all(win[j] == core[j] for j in range(n - 1)):
+            out.add((i, i + n))
+    return out
+
+
+# A phrase the question itself calls a building: "in JASMEET BUILDING", "at the Kew site".
+_PLACE_WORDS = frozenset({"at", "in", "for", "of", "on", "about"})
+_PLACE_END = frozenset({"last", "this", "next", "past", "since", "during", "between", "before", "after", "today",
+                        "yesterday", "and", "or", "but", "with", "that", "which", "who", "where", "when", "is", "are",
+                        "was", "were", "has", "have", "had", "do", "does", "did", "vs", "versus", "from", "to", "by",
+                        "per", *_PLACE_WORDS, *_MONTHS})
+_PLACE_BACK = frozenset({"those", "these", "them", "it", "its", "they", "each", "every", "all", "any", "my", "our",
+                         "their", "which", "what"})
+
+
+def _is_place(phrase: str) -> bool:
+    """A name with the kind word after it ("JASMEET BUILDING", "Harbour Point site"), or the kind word
+    and a number or code ("building 7", "building B-090765") - not "building services", "site office"."""
+    ws = name_match.words(phrase)
+    kinds = [i for i, w in enumerate(ws) if w in BUILDING_KIND_WORDS]
+    return bool(kinds and _core(phrase)) and (
+        ws[-1] in BUILDING_KIND_WORDS or all(name_match.exact_token(w) for w in ws[kinds[0] + 1:]))
+
+
+def _places(question: str) -> list[str]:
+    """Phrases after at/in/for/of/on/about that say they are a building ("JASMEET BUILDING") and
+    name one beside the kind word - never "the building" alone, never "those"."""
+    out: list[str] = []
+    cur: list[str] = []
+    open_ = False
+    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9'&-]*|[^\sA-Za-z0-9]", question or "") + ["."]:
+        low = tok.lower()
+        if not tok[0].isalnum() or low in _PLACE_END or re.fullmatch(r"20\d\d", low):
+            phrase = " ".join(cur)
+            if cur and _is_place(phrase):
+                out.append(phrase)
+            cur, open_ = [], low in _PLACE_WORDS
+            continue
+        if open_ and not cur and low in ("the", "a", "an"):
+            continue
+        if open_ and not cur and low in _PLACE_BACK:
+            open_ = False
+            continue
+        if open_:
+            cur.append(tok)
+    return out
+
+
+def _question_buildings(question: str, inputs: list[dict[str, Any]]) -> tuple[str | None, str | None, list[str]]:
+    """The building the question names: (name, its id when the same tool input carried it, []), or
+    (None, None, [names]) when it names several - all of them, none picked.
+
+    A tool input counts when the question names it (agents/name_match.py: any word order, a code
+    without its hyphen, a close spelling); a phrase the question calls a building counts on its own."""
+    pairs = []
+    for i in inputs:
+        name = next((str(i[k]) for k in ("building_name", "building") if i.get(k)), None)
+        if name and _core(name):
+            pairs.append((name, str(i["building_id"]) if i.get("building_id") else None, _named_tier(question, name)))
+    tiers = [t for _, _, t in pairs if t is not None]
+    groups: list[list[tuple[str, str | None]]] = []
+    for name, bid, t in pairs:
+        if t is None or t != min(tiers):
+            continue
+        key = name_match.compact(" ".join(_core(name)))
+        g = next((g for g in groups if name_match.compact(" ".join(_core(g[0][0]))) == key), None)
+        if g is None:
+            groups.append([(name, bid)])
+        else:
+            g.append((name, bid))
+    # A short form inside the longer name it stands in ("Bishopsgate" in "... at Bishopsgate Tower") is
+    # that building; a short form the question also names on its own ("Building 7 and Building 7 East") is not.
+    spans = [set().union(*(_spans(question, n) for n, _ in g)) for g in groups]
+    keep = [g for k, g in enumerate(groups)
+            if not (spans[k] and any(j != k and all(any(a >= c and b <= d and (a, b) != (c, d) for c, d in spans[j])
+                                                    for a, b in spans[k]) for j in range(len(groups))))]
+    for place in _places(question):
+        if not any(name_match.names_match(place, n, BUILDING_KIND_WORDS) or name_match.names_match(n, place, BUILDING_KIND_WORDS)
+                   for g in keep for n, _ in g):
+            keep.append([(place, None)])
+    if not keep:
+        return None, None, []
+    if len(keep) > 1:
+        return None, None, [max((n for n, _ in g), key=len) for g in keep]
+    g = keep[0]
+    name = max((n for n, _ in g), key=len)
+    return name, next((b for n, b in g if b and n == name), None) or next((b for _, b in g if b), None), []
+
+
+def _same_building(ws: dict[str, Any], name: str | None, code: str | None, several: list[str]) -> bool:
+    """Whether a follow-up's own building is the working set's (or it names none): the anchor is
+    kept unless a building the question names can be compared with it and differs."""
+    if several:
+        return False
+    if not (name or code):
+        return True
+    ws_name, ws_code = ws.get("building_name"), ws.get("building_code")
+    verdicts = []
+    if name and ws_name:
+        verdicts.append(name_match.names_match(name, ws_name, BUILDING_KIND_WORDS)
+                        or name_match.names_match(ws_name, name, BUILDING_KIND_WORDS))
+    if code and ws_code:
+        verdicts.append(name_match.compact(code) == name_match.compact(ws_code))
+    if name and not ws_name and ws.get("buildings"):
+        verdicts.append(any(name_match.names_match(name, b, BUILDING_KIND_WORDS)
+                            or name_match.names_match(b, name, BUILDING_KIND_WORDS) for b in ws["buildings"]))
+    return not verdicts or any(verdicts)
 
 
 def describe(ws: dict[str, Any] | None) -> str:
@@ -117,6 +284,8 @@ def describe(ws: dict[str, Any] | None) -> str:
     b = ws.get("building_name") or ws.get("building_code")
     if b:
         parts.append("building " + b + (f" ({ws['building_code']})" if ws.get("building_code") and ws.get("building_name") else ""))
+    elif ws.get("buildings"):
+        parts.append("buildings " + ", ".join(str(x) for x in ws["buildings"]))
     if ws.get("period"):
         parts.append("period " + ws["period"]["label"] + f" ({ws['period']['from']} to {ws['period']['to']}, end exclusive)")
     if ws.get("work_orders"):

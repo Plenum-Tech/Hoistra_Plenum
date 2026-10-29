@@ -9,6 +9,8 @@ import json
 import re
 from typing import Any
 
+from . import name_match
+
 
 def _as_dict(v: Any) -> dict[str, Any]:
     if isinstance(v, dict):
@@ -52,18 +54,41 @@ _COMPANY_NAME_STOPWORDS = {
 }
 
 
+#: Words a company's name shares with any question: the kind of record, the trade, the work
+#: (29 Oct 2026). "Which certificates does JASMEET BUILDING hold?" was taken for a question about
+#: "Building Compliance Services Ltd" because the two shared "building", and the building's own
+#: rows were dropped from the answer.
+_GENERIC_NAME_WORDS = frozenset({
+    "building", "buildings", "bldg", "site", "sites", "property", "properties", "premises",
+    "vendor", "vendors", "contractor", "contractors", "supplier", "suppliers",
+    "llc", "inc", "corp", "corporation", "group", "and", "certificate", "certificates",
+    "certification", "accreditation", "compliance", "fire", "safety", "electrical", "electric",
+    "gas", "lift", "lifts", "lifting", "hvac", "energy", "water", "security", "asbestos",
+    "insurance", "facilities", "facility", "maintenance", "management", "engineering",
+    "mechanical", "systems", "technical", "cleaning", "environmental", "inspection",
+    "inspections", "testing",
+})
+
+
 def _query_mentions_vendor(user_message: str, row: dict[str, Any]) -> bool:
-    """Match a named company in the question without treating generic suffixes as identity."""
-    vendor_name = str(row.get("vendor_name") or "").lower()
-    if not vendor_name:
+    """Whether the question names this row's company: by its whole name, or by a word of it that
+    no other kind of question would use. Generic suffixes, kind words ("building", "vendor") and
+    trade words ("fire", "electrical") are not identity: "Fire Safety Ltd" is named only by its
+    whole name; "Acme Facilities Ltd" by "Acme" (also "Acme's")."""
+    name_words = name_match.words(row.get("vendor_name") or "")
+    msg_words = name_match.words(user_message or "")
+    if not name_words or not msg_words:
         return False
-    query_tokens = set(re.findall(r"[a-z0-9]+", user_message.lower()))
-    name_tokens = {
+    if (" " + " ".join(name_words) + " ") in (" " + " ".join(msg_words) + " "):
+        return True
+    distinctive = {
         token
-        for token in re.findall(r"[a-z0-9]+", vendor_name)
-        if len(token) >= 3 and token not in _COMPANY_NAME_STOPWORDS
+        for token in name_words
+        if len(token) >= 3
+        and token not in _COMPANY_NAME_STOPWORDS
+        and token not in _GENERIC_NAME_WORDS
     }
-    return bool(query_tokens & name_tokens)
+    return bool(distinctive & set(msg_words))
 
 
 def _vendor_count_predicate(user_message: str) -> tuple[int, str] | None:
@@ -810,6 +835,14 @@ def build_deterministic_compliance_answer(
         elif name == "list_country_pack":
             country_pack = payload
 
+    # The vendor the tool was asked for is matched as the tool matched it (29 Oct 2026): a
+    # substring both ways lost "Acme Facilities Ltd" when "Acme Facilities Limited" was asked
+    # for, and every row when the tool was called with a vendor_id. A filter of kind words
+    # alone ("the supplier") names no vendor.
+    from .compliance_engine_agent import VENDOR_KIND_WORDS, match_names
+
+    if vendor_filter and not name_match.meaningful(vendor_filter, VENDOR_KIND_WORDS):
+        vendor_filter = None
     # A named-vendor question is entity-scoped even if the model also called the building
     # portfolio tool. Never leak unrelated building rows into that answer.
     matching_vendor_rows = [
@@ -817,12 +850,15 @@ def build_deterministic_compliance_answer(
     ]
     vendor_targeted = bool(vendor_filter or matching_vendor_rows)
     if vendor_filter:
-        target = vendor_filter.casefold()
+        _, named = match_names(
+            "vendor_name", vendor_filter, [str(row.get("vendor_name") or "") for row in vendor_rows]
+        )
+        keep = set(named)
         vendor_rows = [
             row
             for row in vendor_rows
-            if target in str(row.get("vendor_name") or "").casefold()
-            or str(row.get("vendor_name") or "").casefold() in target
+            if str(row.get("vendor_name") or "") in keep
+            or str(row.get("vendor_id") or "").strip().casefold() == vendor_filter.casefold()
         ]
     elif matching_vendor_rows:
         vendor_rows = matching_vendor_rows
@@ -1020,9 +1056,15 @@ def build_deterministic_compliance_answer(
             return _country_pack_answer(types, trade_bit)
 
     if vendor_targeted:
+        # Every vendor the name matched is named, never only the first row's (29 Oct 2026).
+        named_vendors = list(dict.fromkeys(
+            str(row.get("vendor_name") or "").strip()
+            for row in vendor_rows
+            if str(row.get("vendor_name") or "").strip()
+        ))
         target_name = (
-            str(vendor_rows[0].get("vendor_name") or "").strip()
-            if vendor_rows
+            " / ".join(named_vendors[:5])
+            if named_vendors
             else vendor_filter or "the requested vendor"
         )
         if not vendor_rows:

@@ -54,6 +54,8 @@ import structlog
 from langchain_core.tools import tool
 from sqlalchemy import text
 
+from . import name_match
+
 log = structlog.get_logger(__name__)
 
 # =============================================================================
@@ -1150,6 +1152,7 @@ async def get_ontology() -> Ontology:
             async with s.begin():
                 await s.execute(text("SET TRANSACTION READ ONLY"))
                 await onto.bind(s, SCOPED_SCHEMA)
+        add_named_code_columns(onto)
         links = add_certificate_links(onto)
         log.info("ontology.certificate_links", rules=links)
         _ONTOLOGY[fp] = onto
@@ -1373,6 +1376,9 @@ PLAN_GUIDE = """How to plan:
   description says to use it (e.g. blocking) and the rule BLOCKS.
 - Codes such as PT-B-301-A-BOILER-01 or WO-123 go in "match" of the concept that owns them. A name such as
   "Lift Asset-4471" goes in "match" whole.
+- "match" holds the record's OWN name or code, as the user wrote it - never the kind of record around it:
+  "how many floors in JASMEET BUILDING" -> Building match "JASMEET"; "the Bishopsgate site" -> match
+  "Bishopsgate". Never correct the spelling. A name goes in "match", never in a filter on name.
 - Dates in filters may be "today", "today+30d", "today-7d" or YYYY-MM-DD.
 - For a calendar period use op "within" with a period name - never invent a date word:
   {"attribute": "raised_at", "op": "within", "value": "last_month"}. Periods: today, yesterday, this_week, last_week, this_month, last_month, next_month, this_quarter, last_quarter, this_year, last_year, last_7_days, last_30_days, last_90_days, year_to_date.
@@ -1409,7 +1415,8 @@ def _concept_words(onto) -> dict[str, str]:
     """Words a question uses for each concept: its name split ("WorkOrder" -> "work order") and synonyms."""
     out: dict[str, str] = {}
     for name, c in onto.concepts.items():
-        words = [re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower(), *[str(s).lower() for s in c.synonyms]]
+        words = [re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower(),
+                 *[str(s).lower() for s in (getattr(c, "synonyms", None) or [])]]
         for w in words:
             w = w.strip()
             if w:
@@ -1768,84 +1775,362 @@ def _memo(r) -> dict:
     return m
 
 
-async def _lookup(r: ScopedReader, onto, concept, text_, mode):
-    cols = _exact_cols(concept, [text_]) if mode == "exact" else concept.search
+# ── the resolution ladder (29 Oct 2026) ──────────────────────────────────────────────────────
+# "HOW MANY FLOORS IN JASMEET BUILDING" found nothing: the planner's match was "JASMEET BUILDING",
+# the building is "JASMEET", and both comparisons took the whole phrase in order. A name is now
+# tried rung by rung, stopping at the first rung that finds a record, so a looser rung never runs
+# while a stricter one has an answer (agents/name_match.py holds the pure pieces):
+#   exact    a code or key, case-insensitive (lower(col) = lower(text))
+#   compact  letters and digits only: B090765 = B-090765, "RT5 Crossrail" = "RT5, Crossrail"
+#   search   the phrase as typed, then without the kind words and fillers ("JASMEET BUILDING" ->
+#            "jasmeet"), anywhere in a searched column
+#   words    every remaining word, in any order, each at the start of a word ("tower hussain")
+#   fuzzy    one wrong, missing or swapped letter in a word — never in a code or number, and only
+#            when one record is clearly closest
+# A phrase of kind words alone ("the building") names nothing and finds nothing.
+LADDER = ("exact", "compact", "search", "words", "fuzzy")
+#: Candidates read for the close-spelling rung, per concept.
+FUZZY_CANDIDATES = 500
+#: Kind words beyond the concepts' own names and synonyms.
+_GENERIC_KIND_WORDS = frozenset({"building", "buildings", "site", "sites", "property", "properties", "premises"})
+
+
+#: A column named as a code: building_code, vendor_code, wo_code, contract_ref, serial_number, barcode…
+_CODE_COL_RE = re.compile(r"(?:^|_)(code|ref|reference|number|no|num|barcode|tag|sku|mpan|mprn)$")
+#: Prefixes that make a code column a code of the row itself, whatever the table is called.
+_GENERIC_CODE_PREFIXES = frozenset({"serial", "inventory", "asset_tag", "barcode", "meter", "unique"})
+
+
+def add_named_code_columns(onto) -> list[str]:
+    """Code columns recognised by NAME as well as by value shape (29 Oct 2026).
+
+    The build treats a column as a code when its values carry a hyphen or underscore, so a code
+    column of "ACME01" or "BLD001" was neither compared exactly nor searched, and "vendor ACME01"
+    could not resolve. A text column named as a code OF THIS ROW (vendors.vendor_code, assets.
+    serial_number, work_orders.wo_code) is added to the concept's identifiers and searched columns.
+    Another record's code (assets.vendor_code) is not: it would answer a vendor's code with assets.
+    Applied at load, after bind, so only columns the scoped views have are used and no rebuild runs."""
+    col_types = getattr(onto, "col_types", {}) or {}
+    added = []
+    for c in onto.concepts.values():
+        tbl = str(c.table).lower()
+        parts = [w for w in tbl.split("_") if w]
+        # The row's own noun is the table's LAST word: asset_criticality.asset_code is the code of
+        # an asset, not of the criticality row; energy_meters.meter_ref is the meter's own.
+        own = {tbl, singular(tbl), parts[-1] if parts else tbl, singular(parts[-1]) if parts else tbl,
+               "".join(w[0] for w in parts)}
+        for col in dict.fromkeys((c.attributes or {}).values()):
+            col_l = str(col).lower()
+            m = _CODE_COL_RE.search(col_l)
+            if not m or col_types.get((c.table, col)) not in TEXT_TYPES:
+                continue
+            prefix = col_l[: m.start()].rstrip("_")
+            if prefix and prefix not in own and prefix not in _GENERIC_CODE_PREFIXES:
+                continue
+            if col not in c.identifiers:
+                c.identifiers.append(col)
+                added.append(c.name + "." + col)
+            if col not in c.search:
+                c.search.append(col)
+    if added:
+        log.info("ontology.code_columns_by_name", added=added)
+    return added
+
+
+def names_from_filters(onto, plan) -> list[str]:
+    """A name the planner put in a filter instead of a match goes to the match (29 Oct 2026).
+
+    `{"attribute": "name", "op": "eq", "value": "JASMEET BUILDING"}` was compiled to
+    lower(name) = 'jasmeet building' and found nothing; as the node's match it goes through the whole
+    resolution ladder. Only for a node with no match, and only one name filter per node."""
+    notes = []
+    for node in [plan.get("focus") or {}] + list(plan.get("constraints") or []):
+        c = onto.concepts.get(node.get("concept"))
+        if c is None or node.get("match"):
+            continue
+        name_cols = {c.label, *c.search, *c.identifiers}
+        for f in list(node.get("filters") or []):
+            if not isinstance(f, dict) or f.get("op") not in ("eq", "contains") or not isinstance(f.get("value"), str):
+                continue
+            try:
+                col = c.col(f.get("attribute"))
+            except OntologyError:
+                continue
+            if col in name_cols and f["value"].strip():
+                node["match"] = f["value"].strip()
+                node["filters"] = [x for x in node["filters"] if x is not f]
+                notes.append("The " + c.name + " named '" + node["match"] + "' is looked up by name, not compared letter for letter.")
+                break
+    return notes
+
+
+#: "in JASMEET", "at hussain tower", "for Bishopsgate" — a question naming its own place. Not
+#: "in it", "of them", "in September", "in the building": those refer back, or name a period.
+_OWN_PLACE_RE = re.compile(
+    r"\b(?:at|in|for|of|on|about)\s+(?!(?:the|this|that|these|those|it|its|them|they|each|every|all|any|my|our|"
+    r"their|last|next|past|today|yesterday|tomorrow|week|month|year|quarter|total|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|q[1-4]|\d{4})\b)[a-z0-9]", re.I)
+_A_CODE_RE = re.compile(r"\b[A-Za-z]{1,6}-?\d{2,}\b")
+
+
+def question_needs_scope_hint(question: str) -> bool:
+    """Whether a follow-up names no place of its own, so the thread's building may be carried in."""
+    q = question or ""
+    return not (_A_CODE_RE.search(q) or _OWN_PLACE_RE.search(q))
+
+
+def _kind_words(onto) -> set[str]:
+    """Single words that name a KIND of record ("building", "vendors", "engineer") — never part of
+    a record's own name when it is used to find one."""
+    words = {w for w in _concept_words(onto) if " " not in w}
+    return words | set(_GENERIC_KIND_WORDS)
+
+
+def _match_cols(concept, mode, texts) -> list[str]:
+    """Exact and compact compare codes AND names (an exact "Building 7" must beat "Building 70");
+    the looser rungs search the searched columns."""
+    if mode in ("exact", "compact"):
+        return list(dict.fromkeys([*_exact_cols(concept, texts), concept.label, *concept.search]))
+    return list(concept.search)
+
+
+def _core(text_, kind) -> str:
+    return " ".join(name_match.meaningful(text_, kind))
+
+
+def _search_pattern(variant: str) -> str:
+    """The phrase from the start of a word; to the end of a word when it ends in a code or number,
+    so "B-1" is not B-101 and "Building 7" is not "Building 70"."""
+    pat = loose_pattern(variant)
+    if not pat:
+        return ""
+    ws = name_match.words(variant)
+    return "\\m" + pat + ("\\M" if ws and name_match.exact_token(ws[-1]) else "")
+
+
+def _row_text(cols) -> str:
+    return "concat_ws(' ', " + ", ".join(qi(c) + "::text" for c in cols) + ")"
+
+
+def _word_pattern(w: str) -> str:
+    """A word at the start of a word; a code, a number or a one-/two-letter word whole."""
+    return "\\m" + w + ("\\M" if (len(w) <= 2 or any(ch.isdigit() for ch in w)) else "")
+
+
+def _rung_attempts(mode, text_, kind) -> list:
+    """What each attempt of a rung compares, in order; [] when the rung has nothing to try."""
+    core = _core(text_, kind)
+    if mode in ("search", "words", "fuzzy") and not core:
+        return []            # kind words alone ("the building") name only a record named exactly that
+    if mode == "exact":
+        # The text as typed, then its core: "JASMEET BUILDING" is exactly "JASMEET", which must be
+        # preferred to "Jasmeet Heights" before any looser rung reads both.
+        return [t for t in dict.fromkeys([text_, core]) if t]
+    if mode == "compact":
+        return [k for k in dict.fromkeys([name_match.compact(text_), name_match.compact(core)]) if k]
+    if mode == "search":
+        pats = [_search_pattern(v) for v in name_match.phrase_variants(text_, kind)]
+        return [pat for pat in dict.fromkeys(pats) if pat]     # "grade-4" and "grade 4" are one pattern
+    if mode == "words":
+        ws = name_match.meaningful(text_, kind)
+        return [ws] if len(ws) >= 2 else []   # one word was already searched for, anywhere, by search
+    if mode == "fuzzy":
+        frags = name_match.fragments(" ".join(name_match.meaningful(text_, kind)))
+        return ["(" + "|".join(frags) + ")"] if frags else []
+    return []
+
+
+def _rung_cond(cols, mode, attempt, p) -> str | None:
+    """The WHERE of one attempt over ``cols``; its parameters are added to ``p`` and nothing else."""
     if not cols:
+        return None
+    if mode == "exact":
+        v = p.add(attempt)
+        return " OR ".join("lower(" + qi(c) + "::text) = lower(" + v + ")" for c in cols)
+    if mode == "compact":
+        v = p.add(attempt)
+        return " OR ".join("regexp_replace(lower(" + qi(c) + "::text), '[^a-z0-9]+', '', 'g') = " + v for c in cols)
+    if mode == "search":
+        v = p.add(attempt)
+        return " OR ".join(qi(c) + "::text ~* " + v for c in cols)
+    if mode == "words":
+        row = _row_text(cols)
+        return " AND ".join(row + " ~* " + p.add(_word_pattern(w)) for w in attempt)
+    if mode == "fuzzy":
+        return _row_text(cols) + " ~* " + p.add(attempt)
+    return None
+
+
+def _texts_col(cols) -> str:
+    """The searched texts of a row as ONE text[] column, so a union over tables that search
+    different numbers of columns still lines up."""
+    return "ARRAY[" + ", ".join(qi(c) + "::text" for c in cols) + "]::text[] AS ts"
+
+
+def _closest(text_, kind, rows) -> list[dict]:
+    """The rows (fuzzy-rung candidates, with their searched texts in ``ts``) clearly closest to
+    the meaningful words of ``text_``."""
+    query = " ".join(name_match.meaningful(text_, kind))
+    best: dict[str, tuple] = {}
+    for x in rows:
+        texts = [x.get("l"), *(x.get("ts") or [])]
+        score = max((name_match.similarity(query, t) for t in texts if t), default=0.0)
+        k = str(x.get("c", "")) + "|" + str(x["k"])
+        if score >= name_match.FUZZY_MIN and (k not in best or score > best[k][0]):
+            best[k] = (score, x)
+    if not best:
         return []
+    top = max(sc for sc, _ in best.values())
+    return [x for sc, x in sorted(best.values(), key=lambda v: -v[0]) if sc >= top - name_match.FUZZY_TIE]
+
+
+async def _lookup(r: ScopedReader, onto, concept, text_, mode, kind=None):
+    kind = _kind_words(onto) if kind is None else kind
+    cols = _match_cols(concept, mode, [text_])
     memo = _memo(r)
     mk = ("one", concept.name, mode, str(text_).lower())
     if mk in memo:
         return memo[mk]
-    p = Params()
-    if mode == "exact":
-        cond = " OR ".join("lower(" + qi(c) + "::text) = lower(" + p.add(text_) + ")" for c in cols)
-    else:
-        cond = " OR ".join(qi(c) + "::text ~* " + p.add(loose_pattern(text_)) for c in cols)
-    sql = ("SELECT " + qi(concept.key) + "::text AS k, " + qi(concept.label) + "::text AS l FROM "
-           + qi(onto.schema) + "." + qi(concept.table) + " WHERE " + cond + " LIMIT " + str(MAX_MATCH_KEYS))
-    rows = await r.try_fetch(sql, p, "resolve " + concept.name + " (" + mode + ")")
+    rows: list[dict] = []
+    for i, attempt in enumerate(_rung_attempts(mode, text_, kind) if cols else []):
+        p = Params()
+        cond = _rung_cond(cols, mode, attempt, p)
+        extra = ", " + _texts_col(cols) if mode == "fuzzy" else ""
+        limit = FUZZY_CANDIDATES if mode == "fuzzy" else MAX_MATCH_KEYS
+        sql = ("SELECT " + qi(concept.key) + "::text AS k, " + qi(concept.label) + "::text AS l" + extra + " FROM "
+               + qi(onto.schema) + "." + qi(concept.table) + " WHERE " + cond + " LIMIT " + str(limit))
+        label = "resolve " + concept.name + " (" + mode + ("" if i == 0 else " " + str(i + 1)) + ")"
+        rows = await r.try_fetch(sql, p, label)
+        if mode == "fuzzy":
+            rows = [{"k": x["k"], "l": x["l"]} for x in _closest(text_, kind, rows)][:MAX_MATCH_KEYS]
+        if rows:
+            break
     memo[mk] = rows
     return rows
 
 
-async def _lookup_union(r: ScopedReader, onto, concepts, texts, mode) -> list[dict]:
+async def _lookup_union(r: ScopedReader, onto, concepts, texts, mode, kind=None) -> list[dict]:
     """One query across many concepts: rows {c (concept name), o (its order), v (the text it
-    matched), k, l}. Exact mode takes many texts at once (= ANY); search mode one text."""
+    matched), k, l}. Exact mode takes many texts at once (= ANY); every other rung one text."""
     texts = [str(t) for t in texts if str(t or "").strip()]
     if not texts or not concepts:
         return []
+    kind = _kind_words(onto) if kind is None else kind
     memo = _memo(r)
     mk = ("union", mode, tuple(c.name for c in concepts), tuple(sorted(t.lower() for t in texts)))
     if mk in memo:
         return memo[mk]
-    p = Params()
-    arr = p.add([t.lower() for t in texts], "text[]") if mode == "exact" else None
-    pat = p.add(loose_pattern(texts[0])) if mode == "search" else None
-    parts = []
-    for o, c in enumerate(concepts):
-        cols = _exact_cols(c, texts) if mode == "exact" else c.search
-        if not cols:
-            continue
-        # CAST, not ::text - SQLAlchemy does not read ":p1::text" as a bind parameter.
-        name = p.add(c.name, "text")
-        for col in cols:
-            if mode == "exact":
+    if mode == "exact":
+        p = Params()
+        arr = p.add([t.lower() for t in texts], "text[]")
+        parts = []
+        for o, c in enumerate(concepts):
+            cols = _match_cols(c, "exact", texts)
+            if not cols:
+                continue
+            # CAST, not ::text - SQLAlchemy does not read ":p1::text" as a bind parameter.
+            name = p.add(c.name, "text")
+            for col in cols:
                 cond, v = "lower(" + qi(col) + "::text) = ANY(" + arr + ")", "lower(" + qi(col) + "::text)"
-            else:
-                cond, v = qi(col) + "::text ~* " + pat, p.add(texts[0], "text")
-            parts.append("(SELECT " + name + " AS c, " + str(o) + " AS o, " + v + " AS v, " + qi(c.key) + "::text AS k, "
-                         + qi(c.label) + "::text AS l FROM " + qi(onto.schema) + "." + qi(c.table) + " WHERE " + cond
-                         + " LIMIT " + str(MAX_MATCH_KEYS) + ")")
-    if not parts:
-        return []
-    rows = await r.try_fetch(" UNION ALL ".join(parts), p, "resolve " + str(len(texts)) + " across " + str(len(concepts)) + " concepts (" + mode + ")")
+                parts.append("(SELECT " + name + " AS c, " + str(o) + " AS o, " + v + " AS v, " + qi(c.key) + "::text AS k, "
+                             + qi(c.label) + "::text AS l FROM " + qi(onto.schema) + "." + qi(c.table) + " WHERE " + cond
+                             + " LIMIT " + str(MAX_MATCH_KEYS) + ")")
+        rows = await r.try_fetch(" UNION ALL ".join(parts), p, "resolve " + str(len(texts)) + " across "
+                                 + str(len(concepts)) + " concepts (exact)") if parts else []
+        memo[mk] = rows
+        return rows
+    text_ = texts[0]
+    rows: list[dict] = []
+    # The attempts depend only on the text, not the concept: the same patterns for every table.
+    for i, attempt in enumerate(_rung_attempts(mode, text_, kind)):
+        p = Params()
+        parts = []
+        for o, c in enumerate(concepts):
+            cols = _match_cols(c, mode, texts)
+            cond = _rung_cond(cols, mode, attempt, p)
+            if not cond:
+                continue
+            # CAST, not ::text - SQLAlchemy does not read ":p1::text" as a bind parameter.
+            name = p.add(c.name, "text")
+            extra = ", " + _texts_col(cols) if mode == "fuzzy" else ""
+            limit = FUZZY_CANDIDATES if mode == "fuzzy" else MAX_MATCH_KEYS
+            parts.append("(SELECT " + name + " AS c, " + str(o) + " AS o, " + p.add(text_, "text") + " AS v, "
+                         + qi(c.key) + "::text AS k, " + qi(c.label) + "::text AS l" + extra + " FROM "
+                         + qi(onto.schema) + "." + qi(c.table) + " WHERE " + cond + " LIMIT " + str(limit) + ")")
+        if not parts:
+            continue
+        label = ("resolve " + str(len(texts)) + " across " + str(len(concepts)) + " concepts (" + mode
+                 + ("" if i == 0 else " " + str(i + 1)) + ")")
+        rows = await r.try_fetch(" UNION ALL ".join(parts), p, label)
+        if mode == "fuzzy" and rows:
+            rows = [{k: v for k, v in x.items() if k != "ts"} for x in _closest(text_, kind, rows)]
+        if rows:
+            break
     memo[mk] = rows
     return rows
 
 
+def _rung_note(text_, mode, labels) -> str | None:
+    """What the answer should know about how a name was matched; nothing for a plain match."""
+    notes = []
+    if mode == "fuzzy":
+        notes.append("'" + text_ + "' is not on the register as written; the closest name is "
+                     + ", ".join("'" + str(l) + "'" for l in labels[:5]) + ".")
+    if len(labels) >= MAX_MATCH_KEYS:
+        notes.append("'" + text_ + "' matches at least " + str(MAX_MATCH_KEYS) + " records; the first "
+                     + str(MAX_MATCH_KEYS) + " were used - say so, and ask for a more exact name or a code.")
+    return " ".join(notes) or None
+
+
 async def resolve_match(r, onto, concept_name, text_):
     concept = onto.concepts[concept_name]
-    for mode in ("exact", "search"):
-        rows = await _lookup(r, onto, concept, text_, mode)
+    kind = _kind_words(onto)
+    for mode in LADDER:
+        rows = await _lookup(r, onto, concept, text_, mode, kind)
         if rows:
-            return concept_name, [x["k"] for x in rows], [x["l"] for x in rows], None
+            labels = [x["l"] for x in rows]
+            note = _rung_note(text_, mode, labels)
+            if mode not in ("exact", "compact"):
+                # A loose match on the planned kind is kept - the planner read the question - but an
+                # EXACT namesake of another kind is named, so the answer can say which was meant
+                # (technician "Jasmeet Kaur" matched; building "JASMEET" is exactly that name).
+                others = [c for c in onto.concepts.values() if c.name != concept_name]
+                twins = {}
+                for x in await _lookup_union(r, onto, others, [_core(text_, kind) or text_], "exact", kind):
+                    twins.setdefault(x["c"], [])
+                    if x["l"] not in twins[x["c"]]:
+                        twins[x["c"]].append(x["l"])
+                if twins:
+                    note = ((note + " ") if note else "") + (
+                        "'" + text_ + "' matched " + concept_name + " " + ", ".join("'" + str(l) + "'" for l in labels[:5])
+                        + " by part of its name; it is EXACTLY the name of "
+                        + "; ".join(n + " " + ", ".join("'" + str(l) + "'" for l in ls[:3]) for n, ls in twins.items())
+                        + " - say which was read, and offer the other.")
+            return concept_name, [x["k"] for x in rows], labels, note
     candidates = []
     others = [c for c in onto.concepts.values() if c.name != concept_name]
-    for mode in ("exact", "search"):
+    target = name_match.clean(text_)
+    core = _core(text_, kind)
+    for rung, mode in enumerate(LADDER):
         hits: dict[str, list[dict]] = {}
-        for row in await _lookup_union(r, onto, others, [text_], mode):
+        texts = [t for t in dict.fromkeys([text_, core]) if t] if mode == "exact" else [text_]
+        for row in await _lookup_union(r, onto, others, texts, mode, kind):
             hits.setdefault(row["c"], []).append(row)
         for name, rows in hits.items():
-            exact_label = any((x["l"] or "").lower() == text_.lower() for x in rows)
-            candidates.append((0 if mode == "exact" else 1, 0 if exact_label else 1, len(rows), name, rows))
+            exact_label = any(name_match.clean(x["l"] or "") in (target, " ".join(name_match.meaningful(text_, kind)))
+                              for x in rows)
+            candidates.append((rung, 0 if exact_label else 1, len(rows), name, rows, mode))
         if candidates:
             break
     if not candidates:
         return concept_name, [], [], "'" + text_ + "' not found in " + concept_name + " or any other concept"
     candidates.sort(key=lambda x: x[:4])
-    _, _, _, name, rows = candidates[0]
-    return name, [x["k"] for x in rows], [x["l"] for x in rows], (
-        "'" + text_ + "' was not a " + concept_name + "; matched " + name + " instead")
+    _, _, _, name, rows, mode = candidates[0]
+    labels = [x["l"] for x in rows]
+    note = "'" + text_ + "' was not a " + concept_name + "; matched " + name + " instead"
+    extra = _rung_note(text_, mode, labels)
+    return name, [x["k"] for x in rows], labels, note + ("; " + extra if extra else "")
 
 
 async def add_missing_codes(r, onto, plan, question):
@@ -1875,7 +2160,58 @@ async def add_missing_codes(r, onto, plan, question):
     return plan
 
 
-async def resolve_plan(r, onto, plan):
+def _names_concept(onto, question: str | None, concept_name: str) -> bool:
+    """Whether the question uses a word for this concept ("technician", "work orders")."""
+    q = " " + re.sub(r"[^a-z0-9]+", " ", (question or "").lower()) + " "
+    return any(" " + w + " " in q for w, name in _concept_words(onto).items() if name == concept_name)
+
+
+def _reachable(onto, concept: str, include: dict) -> bool:
+    try:
+        onto.resolve_path(concept, include.get("concept"), include.get("via") or [])
+        return True
+    except OntologyError:
+        return False
+
+
+async def stated_count_notes(r, onto, plan) -> list[str]:
+    """For a count of records that a constraint also states as a figure of its own, that figure.
+
+    "How many floors in JASMEET" counts Floor records at the building; a building added by hand
+    has none, and its count is the building's own `floors` (89) — the Buildings page's "surveyed"
+    figure — so the answer was "no floor records" (29 Oct 2026). The figure is read here, in the
+    same scope, and goes to the answer beside the count. A figure is an attribute of the
+    constraint named after the focus's table (Building.floors for Floor)."""
+    agg = plan.get("aggregate") or {}
+    focus = plan.get("focus") or {}
+    if plan.get("question_type") != "count" or agg.get("count_by") or focus.get("match") \
+            or focus.get("states") or focus.get("filters"):
+        return []
+    fc = onto.concepts.get(focus.get("concept"))
+    if fc is None:
+        return []
+    notes: list[str] = []
+    for node in plan.get("constraints") or []:
+        c, keys = onto.concepts.get(node.get("concept")), node.get("keys") or []
+        if c is None or not keys:
+            continue
+        try:
+            col = c.col(fc.table)
+        except OntologyError:
+            continue
+        p = Params()
+        sql = ("SELECT " + qi(c.label) + "::text AS l, " + qi(col) + "::text AS v FROM " + qi(onto.schema) + "."
+               + qi(c.table) + " WHERE " + qi(c.key) + "::text = ANY(" + p.add([str(k) for k in keys], "text[]")
+               + ") LIMIT " + str(MAX_MATCH_KEYS))
+        for row in await r.try_fetch(sql, p, "stated " + fc.table + " on " + c.name):
+            if str(row.get("v") or "").strip():
+                notes.append(str(row.get("l") or c.name) + ": the " + c.name + " record itself states "
+                             + fc.table + " = " + str(row["v"]) + " (a figure on the record; the "
+                             + fc.name + " records counted here are entered one by one, and may be none).")
+    return notes
+
+
+async def resolve_plan(r, onto, plan, question: str | None = None):
     notes, unresolved = [], []
     for where, node in [("focus", plan["focus"])] + [("constraint", c) for c in list(plan["constraints"])]:
         node["keys"], node["labels"] = None, []
@@ -1888,6 +2224,18 @@ async def resolve_plan(r, onto, plan):
             unresolved.append(node["match"])
             continue
         if concept != node["concept"]:
+            if (where == "focus" and question is not None and not node["states"] and not node["filters"]
+                    and not _names_concept(onto, question, node["concept"])):
+                # The name WAS the subject: "Show all recorded details for Jasmeet" was planned about a
+                # Technician called Jasmeet, and Jasmeet is a building (29 Oct 2026). Kept as the
+                # focus, it answered "technicians at Jasmeet: none". A question that names its own
+                # records ("work orders at Bishopsgate") keeps them, below.
+                notes.append("'" + node["match"] + "' is a " + concept + ", not a " + node["concept"]
+                             + "; answered about that " + concept + ".")
+                plan["include"] = [i for i in plan["include"] if _reachable(onto, concept, i)]
+                node["concept"], node["via"] = concept, []
+                node["keys"], node["labels"] = keys, labels
+                continue
             if where == "focus":
                 notes.append("focus kept as " + node["concept"] + "; '" + node["match"] + "' used as a constraint on " + concept)
                 plan["constraints"].append(dict(normalise_node({"concept": concept, "match": node["match"]}),
@@ -2418,13 +2766,59 @@ async def pending_context(r: ScopedReader, onto, plan) -> dict | None:
     return out
 
 
+SQFT_PER_M2 = 10.7639104
+AREA_NOTE = ("Areas: the register stores floor area in square feet (gross_area_sqft); the *_m2 figure beside it "
+             "is the same area in square metres, the unit the Buildings page shows. Give the area in m² "
+             "(sq ft only if asked). An empty gross_internal_area_m2 is a separate column left unfilled, "
+             "not a missing area.")
+
+
+def with_area_in_m2(attrs: dict) -> "tuple[dict, bool]":
+    """``attrs`` with every numeric ``<x>_sqft`` area also given as ``<x>_m2`` (29 Oct 2026).
+
+    The Buildings form takes m² and building_create stores it converted in gross_area_sqft, so the
+    page shows 8,888 m² where the record holds 95,669.64 sq ft; an answer read from the record must
+    give the page's figure. An ``<x>_m2`` the record already holds is kept as it is."""
+    if not isinstance(attrs, dict):
+        return attrs, False
+    out, converted = dict(attrs), False
+    for k, v in attrs.items():
+        if not (isinstance(k, str) and k.endswith("_sqft")) or isinstance(v, bool):
+            continue
+        try:
+            sqft = float(v)
+        except (TypeError, ValueError):
+            continue
+        m2_key = k[: -len("_sqft")] + "_m2"
+        if out.get(m2_key) is None:
+            out[m2_key] = round(sqft / SQFT_PER_M2, 1)
+            converted = True
+    return out, converted
+
+
 def evidence(onto, question, plan, result, notes):
     if result["kind"] == "aggregate":
-        data = json.dumps(strip_nulls(result["rows"]), default=str)
+        rows = [with_area_in_m2(r) for r in result["rows"]]
+        if any(c for _, c in rows):
+            notes = [*notes, AREA_NOTE]
+        data = json.dumps(strip_nulls([r for r, _ in rows]), default=str)
         header = "Aggregated counts (" + str(len(result["rows"])) + " groups):"
     else:
-        payload = [{result["focus"]: rec["attributes"], "matched_context": rec["context"], "related": rec["related"]}
+        converted = False
+
+        def _m2(attrs):
+            nonlocal converted
+            attrs, c = with_area_in_m2(attrs)
+            converted = converted or c
+            return attrs
+
+        payload = [{result["focus"]: _m2(rec["attributes"]), "matched_context": rec["context"],
+                    "related": {name: [_m2(x) for x in rows] if isinstance(rows, list) else rows
+                                for name, rows in (rec["related"] or {}).items()}
+                    if isinstance(rec.get("related"), dict) else rec["related"]}
                    for rec in result["records"]]
+        if converted:
+            notes = [*notes, AREA_NOTE]
         data = json.dumps(strip_nulls(payload), default=str)
         header = (result["focus"] + " records: " + str(result["total"]) + " match"
                   + (" (showing " + str(len(result["records"])) + ")" if result["total"] > len(result["records"]) else ""))
@@ -2915,9 +3309,10 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(apply_pinned(onto, plan, pinned_filters.get()))
     grouped.extend(pin_live_vendors(onto, plan, question))
+    grouped.extend(names_from_filters(onto, plan))
     async with ScopedReader(principal) as r:
         plan = await add_missing_codes(r, onto, plan, question)
-        plan, notes, unresolved = await resolve_plan(r, onto, plan)
+        plan, notes, unresolved = await resolve_plan(r, onto, plan, question=question)
         if unresolved:
             return {"ok": True, "found": False, "question": question,
                     "answer_hint": "Could not find " + ", ".join("'" + u + "'" for u in unresolved)
@@ -2925,6 +3320,7 @@ async def answer_question(question: str, principal=None, llm=_call_llm) -> dict:
                                      "number, site code) or check the spelling.",
                     "notes": notes, "queries": r.queries}
         notes.extend(grouped)
+        notes.extend(await stated_count_notes(r, onto, plan))
         notes.extend(await fill_date_filters(r, onto, plan))
         notes.extend(finished_states_note(onto, plan))
         added =[] if plan.get("aggregate") else (ensure_status_includes(onto, plan)
@@ -2971,8 +3367,13 @@ async def answer_from_records(question: str) -> dict:
         from .thread_scope import scope_hint
         # A follow-up that names no building or period reads the thread's (agents/thread_scope.py).
         hint = scope_hint()
-        if hint and not re.search(r"\bB-\d{3}\b|\bat [A-Z]", question or ""):
-            question = question.rstrip(" ?.") + hint
+        # The thread's building is carried into a follow-up that names no place of its own, and
+        # only as a fallback: "how many floors in JASMEET" after a Bishopsgate question used to
+        # become "... (at Bishopsgate Tower)" and resolve neither (29 Oct 2026).
+        if hint and question_needs_scope_hint(question):
+            earlier = hint.strip().strip("()")
+            question = (question.rstrip(" ?.") + " (earlier in this conversation: " + earlier
+                        + "; apply it only if this question names no building or place of its own)")
         return await answer_question(question)
     except OntologyError as e:
         return {"ok": False, "error": "Could not plan this question against the ontology: " + str(e)[:800]}

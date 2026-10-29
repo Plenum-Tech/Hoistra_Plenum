@@ -41,6 +41,7 @@ from typing import Any
 import structlog
 from sqlalchemy import text
 
+from ..agents import name_match
 from ..http_client import caller_organization_id
 from .principal import Principal, caller_principal
 
@@ -196,6 +197,93 @@ def score(question: str, q_vec: list[float] | None, memory: dict[str, Any]) -> f
     return overlap(question, memory.get("text") or "") * 0.8
 
 
+# ── the names a memory gives (29 Oct 2026) ──────────────────────────────────────────────
+# "Call it Bishopsgate, not B-301" was not recalled for "how many floors in bishopsgate's tower
+# block, and who is the lift contractor?": cosine over the whole question sat far from that
+# sentence, word overlap was diluted by the rest of the question, and "B301" shared no word with
+# "B-301" nor "Bishopgate" with "Bishopsgate". A memory whose name - its subject, a quoted name, a
+# code, a capitalised name - is in the question, by the shared ladder (agents/name_match.py), is
+# recalled at RECALL_NAMED at least. Never by a code that is only close, never by kind words alone.
+
+#: The score a memory is recalled at, at least, when the question uses a name it gives.
+RECALL_NAMED = 0.60
+_NAME_KIND_WORDS = frozenset({"building", "buildings", "site", "sites", "property", "properties", "premises",
+                              "vendor", "vendors", "contractor", "contractors", "supplier", "suppliers",
+                              "asset", "assets", "equipment"})
+_CODE_RE = re.compile(r"(?<![\w-])(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?![\w-])")
+_ORDINAL_RE = re.compile(r"^\d+(?:st|nd|rd|th)$", re.I)
+_QUOTED_RE = re.compile(r"(?:^|(?<=[\s(]))['\"‘“]([^'\"‘’“”]{2,60})['\"’”](?=$|[\s.,;:!?)])")
+#: Capitalised words in a row, with a number or a single capital after them ("Building 7", "Tower A").
+_CAP_RUN_RE = re.compile(r"\b[A-Z][A-Za-z'’]*(?:[ \t]+(?:[A-Z][A-Za-z'’]*|\d+\b))*")
+
+
+def memory_names(memory: dict[str, Any]) -> list[str]:
+    """The names a memory gives records: its subject, quoted names, codes, capitalised names. A
+    capitalised word alone at the start of a sentence ("Call it ...", "The user ...") is not one."""
+    txt = str(memory.get("text") or "")
+    subject = str(memory.get("subject") or "")
+    out = [subject, *re.split(r"[,/;()|]", subject)] if subject.strip() else []
+    for src in (txt, subject):
+        out += [m.group(0) for m in _CODE_RE.finditer(src) if not _ORDINAL_RE.match(m.group(0))]
+    out += [m.group(1) for m in _QUOTED_RE.finditer(txt)]
+    bare = _CODE_RE.sub("|", txt)            # a code breaks a run: "B-301 Bishopsgate" is two names
+    for m in _CAP_RUN_RE.finditer(bare):
+        before = bare[: m.start()].rstrip()
+        if " " not in m.group(0).strip() and (not before or before[-1] in ".!?:"):
+            continue
+        out.append(m.group(0))
+    return [n.strip() for n in dict.fromkeys(out) if n and n.strip()]
+
+
+def _name_words(name: str) -> list[str]:
+    """The words a name is found by: without fillers and kind words, or - when that leaves only a
+    number or a letter ("Building 7") - with its kind words; nothing for kind words alone."""
+    core = name_match.meaningful(name, _NAME_KIND_WORDS)
+    if not core:
+        return []
+    if len("".join(core)) >= 3:
+        return core
+    full = [w for w in name_match.words(name) if w not in name_match.FILLERS and w not in name_match.ARTICLES]
+    return full if len("".join(full)) >= 3 else []
+
+
+class _QuestionNames:
+    """The question's words in every run of one to six, to look names up in."""
+
+    def __init__(self, question: str):
+        self.words = name_match.words(question)
+        self.exact: set[tuple] = set()
+        self.compact: set[str] = set()
+        self.unordered: set[tuple] = set()
+        for n in range(1, 7):
+            for i in range(len(self.words) - n + 1):
+                win = tuple(self.words[i:i + n])
+                self.exact.add(win)
+                self.compact.add("".join(win))
+                self.unordered.add(tuple(sorted(win)))
+
+    def uses(self, name: str) -> bool:
+        nw = _name_words(name)
+        if not nw:
+            return False
+        if tuple(nw) in self.exact or "".join(nw) in self.compact or (len(nw) > 1 and tuple(sorted(nw)) in self.unordered):
+            return True
+        if all(name_match.exact_token(w) for w in nw):
+            return False                     # a code or number is never "close enough"
+        target, n = " ".join(nw), len(nw)
+        for i in range(len(self.words) - n + 1):
+            win = " ".join(self.words[i:i + n])
+            if abs(len(win) - len(target)) <= 2 and name_match.similarity(win, target) >= name_match.FUZZY_MIN:
+                return True
+        return False
+
+
+def names_used(question: str, memory: dict[str, Any], _q: _QuestionNames | None = None) -> bool:
+    """Whether the question uses a name the memory gives."""
+    q = _q or _QuestionNames(question)
+    return any(q.uses(n) for n in memory_names(memory))
+
+
 # ── reading ───────────────────────────────────────────────────────────────────────────
 
 def _visible_sql(p: Principal, org: str | None, *, include_pending: bool = False) -> tuple[str, dict[str, Any]]:
@@ -265,7 +353,13 @@ async def recall(question: str, *, top: int = RECALL_TOP) -> list[dict[str, Any]
             return []
         vecs = await embed([question]) if any(m.get("embedding") for m in mems) else None
         q_vec = vecs[0] if vecs else None
-        ranked = sorted(((score(question, q_vec, m), m) for m in mems), key=lambda x: -x[0])
+        qn = _QuestionNames(question)
+
+        def ranked_score(m: dict[str, Any]) -> float:
+            s = score(question, q_vec, m)
+            return max(s, RECALL_NAMED) if s < RECALL_NAMED and names_used(question, m, qn) else s
+
+        ranked = sorted(((ranked_score(m), m) for m in mems), key=lambda x: -x[0])
         hits = [m | {"score": round(s, 3)} for s, m in ranked[:top] if s >= RECALL_MIN]
         if hits:
             from ..database import _get_engine

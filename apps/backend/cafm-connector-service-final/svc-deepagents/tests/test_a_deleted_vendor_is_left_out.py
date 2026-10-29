@@ -202,10 +202,11 @@ class TestQueryTableLeavesDeletedVendorsOut:
             f"SELECT * FROM plenum_cafm.vendors WHERE {LIVE_VENDORS} LIMIT 100"]
 
     def test_a_filter_on_another_column_still_leaves_it_out(self, vendors_table):
-        assert _query("vendors", {"vendor_name": "Brook Lifts (deleted)"}) == []
-        assert vendors_table == [
-            "SELECT * FROM plenum_cafm.vendors WHERE vendor_name = :p_vendor_name "
-            f"AND {LIVE_VENDORS} LIMIT 100"]
+        # A name filter goes through the resolution ladder (29 Oct 2026): several statements, one per
+        # rung tried. Every one of them keeps the live-vendors clause, and the deleted one never returns.
+        rows = _query("vendors", {"vendor_name": "Brook Lifts (deleted)"})
+        assert "V-02" not in [r["id"] for r in rows]
+        assert vendors_table and all(LIVE_VENDORS in sql for sql in vendors_table), vendors_table
 
     def test_asking_for_deleted_vendors_by_status_finds_them(self, vendors_table):
         rows = _query("vendors", {"status": "deleted"})
