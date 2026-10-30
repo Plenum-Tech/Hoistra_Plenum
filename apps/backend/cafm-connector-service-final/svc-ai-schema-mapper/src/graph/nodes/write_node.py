@@ -1499,7 +1499,50 @@ _COERCE_TYPE_MISMATCH = object()
 _NO_SYSTEM_DEFAULT = object()
 
 
-def _coerce_value_for_db_type(value: object, db_type: str) -> object:
+#: Where a sheet's own key goes when it will not fit the destination's uuid. The platform already
+#: keeps these columns for exactly this: a row that came from a workbook can be traced back to the
+#: line it came from, and a second import of the same sheet can find it again.
+_SOURCE_KEY_COLUMNS: dict[tuple, str] = {
+    ("buildings", "building_id"): "source_building_id",
+    ("buildings", "id"): "source_building_id",
+    ("buildings", "site_id"): "source_site_id",
+}
+
+
+def _is_uuid_like(text: str) -> bool:
+    """A value already in uuid form needs no register entry."""
+    try:
+        uuid.UUID(str(text))
+        return True
+    except Exception:
+        return False
+
+
+async def _enum_labels_for(session, udt_by_column: dict) -> dict:
+    """The allowed labels of each enum column, lowercased, keyed by column name.
+
+    A value the enum does not list used to take its whole row down — "Office" against
+    building_primary_use cost the building itself. With the vocabulary in hand the writer can
+    match case-insensitively first, and only set the field aside when it is genuinely not one of
+    them. Best-effort: an unreadable catalogue returns {} and the behaviour is as before.
+    """
+    if not udt_by_column:
+        return {}
+    try:
+        rs = await session.execute(
+            text("SELECT t.typname, e.enumlabel FROM pg_type t "
+                 "JOIN pg_enum e ON e.enumtypid = t.oid WHERE t.typname = ANY(:names)"),
+            {"names": sorted(set(udt_by_column.values()))})
+        by_type: dict[str, dict] = {}
+        for typname, label in rs.fetchall():
+            by_type.setdefault(str(typname), {})[str(label).strip().lower()] = str(label)
+        return {col: by_type[udt] for col, udt in udt_by_column.items() if udt in by_type}
+    except Exception:  # pragma: no cover — additive, never fatal
+        return {}
+
+
+def _coerce_value_for_db_type(value: object, db_type: str, *, max_len: int | None = None,
+                              enum_labels: dict | None = None) -> object:
     """
     Convert incoming values to the Python type asyncpg expects for ``db_type``.
 
@@ -1525,15 +1568,32 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
         if s == "":
             return None
 
+    # ── an enum: match the column's own vocabulary ──────────────────────────────────────
+    # Checked before the text branch, because an enum reports as USER-DEFINED and would
+    # otherwise fall through to the catch-all and be bound as a raw string.
+    if enum_labels:
+        want = (value if isinstance(value, str) else str(value)).strip().lower()
+        hit = enum_labels.get(want)
+        if hit is not None:
+            return hit
+        return _COERCE_TYPE_MISMATCH          # set the field aside; the row still goes in
+
     # ── text-ish: asyncpg requires a str ────────────────────────────────────────────────
     if "char" in t or "text" in t or t in {"name", "citext"}:
         if isinstance(value, str):
-            return value
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (datetime, _date)):
-            return value.isoformat()
-        return str(value)
+            out = value
+        elif isinstance(value, bool):
+            out = "true" if value else "false"
+        elif isinstance(value, (datetime, _date)):
+            out = value.isoformat()
+        else:
+            out = str(value)
+        # Too long is not a type mismatch. Postgres rejects the whole row for one over-long
+        # cell — 65 certificates were lost to a cert_scope of 20 characters — so the value is
+        # trimmed to what the column holds and the row is written.
+        if max_len and len(out) > max_len:
+            return out[:max_len]
+        return out
 
     # "interval" contains "int" — keep it away from the integer branch below.
     if t.startswith("interval"):
@@ -1620,13 +1680,22 @@ def _coerce_value_for_db_type(value: object, db_type: str) -> object:
 
     # ── json / jsonb: asyncpg wants serialised text ─────────────────────────────────────
     if "json" in t:
+        import json as _json
         if isinstance(value, str):
-            return value
+            # A spreadsheet cell is prose until proven otherwise. Passing it through unchecked
+            # reached Postgres as "invalid input syntax for type json" and took the whole row
+            # with it — 137 assets lost to one condition_provenance column. Valid json goes in
+            # as it stands; anything else is stored as a json string, which is still valid json
+            # and keeps what the person wrote.
+            try:
+                _json.loads(value)
+                return value
+            except Exception:
+                return _json.dumps(value)
         try:
-            import json as _json
             return _json.dumps(value, default=str)
         except Exception:
-            return str(value)
+            return _json.dumps(str(value))
 
     # ── uuid: accept the string form ────────────────────────────────────────────────────
     if t == "uuid":
@@ -1779,6 +1848,14 @@ def _system_default_for_db_type(col: str, db_type: str, org_id: str | None) -> o
     c = (col or "").lower()
     if c in {"org_id", "organization_id"} and org_id:
         return org_id
+    # Bookkeeping timestamps: the row is being created now, so now is the honest answer. These
+    # are NOT business dates — a reading_at or a period_start the file did not carry is still
+    # refused below, because inventing when a meter was read would be a fiction. 11,525
+    # relationship rows and 769 alarms were rejected for the want of a created_at.
+    if c in {"created_at", "updated_at", "inserted_at", "modified_at", "last_updated"} and (
+            "timestamp" in t or t == "date"):
+        now = datetime.utcnow()
+        return now.date() if t == "date" else now
     if "bool" in t:
         return False
     if "json" in t:
@@ -2292,6 +2369,13 @@ async def _apply_records_with_schema_alignment(
             if _write_order != [s for s, r in cleaned_tables.items() if isinstance(r, list) and r]:
                 logger.info(f"[Node 9] Write order (parents first): {_write_order}")
             _ordered_tables = [(s, cleaned_tables[s]) for s in _write_order]
+            #: The sheet's own keys, as this run mints real ids for them: "BLD-CDF-0001" → uuid.
+            #: A workbook keys its rows to itself, and the parents are created by this same run,
+            #: so no lookup against rows already in the database can find them. Without this every
+            #: child lost its parent — floors, spaces, meters and work orders all written with a
+            #: null building. A key two different rows claim maps to None and resolves to nothing,
+            #: because a floor under the wrong building is worse than a floor under none.
+            _run_key_ids: dict[str, str | None] = {}
             if beat is not None:  # a ProgressBeat, advanced by every batch _insert_rows sends
                 beat.total = sum(len(r) for _s, r in _ordered_tables if isinstance(r, list))
 
@@ -2346,7 +2430,8 @@ async def _apply_records_with_schema_alignment(
                 cols_rs = await session.execute(
                     text(
                         """
-                        SELECT column_name, data_type, is_nullable, column_default, numeric_scale
+                        SELECT column_name, data_type, is_nullable, column_default, numeric_scale,
+                               character_maximum_length, udt_name
                         FROM information_schema.columns
                         WHERE table_schema = :schema_name AND table_name = :table_name
                         """
@@ -2355,6 +2440,15 @@ async def _apply_records_with_schema_alignment(
                 )
                 _col_rows = cols_rs.fetchall()
                 db_col_type_map = {str(r[0]): str(r[1]) for r in _col_rows}
+                # Width and enum vocabulary, so a value that is merely too long or spelled
+                # differently is trimmed or set aside rather than taking its whole row down:
+                # cert_scope at 20 characters cost 65 certificates, and one "Office" that the
+                # building enum does not list cost the building itself.
+                db_col_maxlen = {str(r[0]): int(r[5]) for r in _col_rows
+                                 if len(r) > 5 and r[5] is not None}
+                db_enum_labels = await _enum_labels_for(
+                    session, {str(r[0]): str(r[6]) for r in _col_rows
+                              if len(r) > 6 and str(r[1]) == "USER-DEFINED" and r[6]})
                 db_numeric_scale = {
                     str(r[0]): int(r[4]) for r in _col_rows
                     if len(r) > 4 and str(r[1]) == "numeric" and r[4] is not None
@@ -2446,14 +2540,21 @@ async def _apply_records_with_schema_alignment(
                     cols_rs = await session.execute(
                         text(
                             """
-                            SELECT column_name, data_type
+                            SELECT column_name, data_type, is_nullable, column_default,
+                                   numeric_scale, character_maximum_length, udt_name
                             FROM information_schema.columns
                             WHERE table_schema = :schema_name AND table_name = :table_name
                             """
                         ),
                         {"schema_name": schema_name, "table_name": safe_table},
                     )
-                    db_col_type_map = {str(r[0]): str(r[1]) for r in cols_rs.fetchall()}
+                    _col_rows2 = cols_rs.fetchall()
+                    db_col_type_map = {str(r[0]): str(r[1]) for r in _col_rows2}
+                    db_col_maxlen = {str(r[0]): int(r[5]) for r in _col_rows2
+                                     if len(r) > 5 and r[5] is not None}
+                    db_enum_labels = await _enum_labels_for(
+                        session, {str(r[0]): str(r[6]) for r in _col_rows2
+                                  if len(r) > 6 and str(r[1]) == "USER-DEFINED" and r[6]})
                     db_cols = set(db_col_type_map.keys())
                     if not db_cols:
                         continue
@@ -2787,16 +2888,41 @@ async def _apply_records_with_schema_alignment(
                         and not (k == "id" and _id_is_serial)
                     }
 
-                    if "id" in db_cols and "id" not in filtered and not _id_is_serial:
-                        filtered["id"] = str(uuid.uuid4())
-
                     if not filtered:
                         continue
 
+                    # Coerce BEFORE minting the id. The other order rejected whole sheets: a row
+                    # arriving with id "WO-00001" kept that value, so the mint below was skipped as
+                    # "already has an id"; coercion then dropped it, because a work-order code is
+                    # not a uuid; and the row failed as "id is required and the file has no value
+                    # for it". 2,270 work-order lines, 1,803 work orders, 350 energy reports and
+                    # every vendor, contract and asset went that way in one run — the writer
+                    # refusing rows for the absence of a value it had just removed itself.
+                    # A reference this run has already created: swap the sheet's key for the
+                    # id it was given, before the uuid branch rejects it as "does not fit".
+                    for k in list(filtered.keys()):
+                        if str(db_col_type_map.get(k, "")).lower() != "uuid":
+                            continue
+                        _hit = _run_key_ids.get(str(filtered[k]).strip())
+                        if _hit:
+                            filtered[k] = _hit
+
+                    _own_key = str(filtered.get("id", "")).strip()
+
                     for k in list(filtered.keys()):
                         _dest_type = db_col_type_map.get(k, "")
-                        _coerced = _coerce_value_for_db_type(filtered[k], _dest_type)
+                        _coerced = _coerce_value_for_db_type(
+                            filtered[k], _dest_type,
+                            max_len=db_col_maxlen.get(k),
+                            enum_labels=db_enum_labels.get(k),
+                        )
                         if _coerced is _COERCE_TYPE_MISMATCH:
+                            # The sheet's own key is the one value worth keeping when it will not
+                            # fit: parked in the table's source_* column where there is one, so the
+                            # row can still be traced back to its line in the workbook.
+                            _src_col = _SOURCE_KEY_COLUMNS.get((safe_table, k))
+                            if _src_col and _src_col in db_cols and _src_col not in filtered:
+                                filtered[_src_col] = str(filtered[k])[:200]
                             # Drop just this field (keep the row) and remember the mismatch.
                             _prev = type_mismatch_by_col.get(k)
                             type_mismatch_by_col[k] = (
@@ -2807,6 +2933,14 @@ async def _apply_records_with_schema_alignment(
                             del filtered[k]
                         else:
                             filtered[k] = _coerced
+
+                    if "id" in db_cols and "id" not in filtered and not _id_is_serial:
+                        filtered["id"] = str(uuid.uuid4())
+                        # Remember what the sheet called this row, so its children can find it.
+                        # Claimed twice means ambiguous: both map to None and neither resolves.
+                        if _own_key and not _is_uuid_like(_own_key):
+                            _run_key_ids[_own_key] = (
+                                None if _own_key in _run_key_ids else filtered["id"])
 
                     if not filtered:
                         continue
