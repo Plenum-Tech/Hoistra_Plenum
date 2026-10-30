@@ -135,15 +135,16 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
                         "rejected_applied": applied.get("rejected_applied") or [],
                         "fk_candidates_removed": applied.get("fk_candidates_removed") or 0,
                         "fk_candidates_added": applied.get("fk_candidates_added") or 0,
-                        # The list as it stands AFTER the answer: the lookup tables the output
-                        # step will emit, including the ones this gate just created.
-                        "shared_attribute_tables": [
-                            {"table_name": t.get("table_name"), "pk_column": t.get("pk_column"),
-                             "from_group": t.get("from_group"),
-                             "distinct_count": t.get("distinct_count"),
-                             "create_ddl": t.get("create_ddl"), "fk_ddl": t.get("fk_ddl") or []}
-                            for t in (ci.get("shared_attribute_tables") or [])
-                        ],
+                        # The whole report as it stands AFTER the answer, under the key the
+                        # status endpoint reads. _udr_node_output_field (app.py) walks node_logs
+                        # and keeps the LAST entry carrying "udr_column_intelligence", so this
+                        # supersedes the step-3 snapshot that was built before the person
+                        # answered. Publishing a trimmed "shared_attribute_tables" list here
+                        # instead wrote a key nothing reads: the record landed and the page went
+                        # on showing the pre-answer list, which cannot contain the table just
+                        # asked for. The full report also keeps the fields the B22.1 panel
+                        # renders — sample_values, fk_rewrites, create_ddl, fk_ddl.
+                        "udr_column_intelligence": ci,
                     },
                     logs=[
                         f"Classification confirmed — "
