@@ -149,3 +149,68 @@ class TestDemotingStillWorks:
         assert ci["classification"][0]["verdict"] == "Shared Attribute"
         assert out["fk_candidates_removed"] == 1
         assert len(ci["shared_attribute_tables"]) == 1
+
+
+class TestABooleanGroupGetsNoReferenceTable:
+    """Reported 30 Oct: plenum_cafm.boolean_attr_G24, primary key "true"/"false".
+
+    ppm_schedules.statutory and bms_alarms.nuisance were grouped because both hold booleans, and
+    the run emitted a two-row table with both columns made foreign keys into it. The odd name was
+    the symptom; the table was the error. A yes/no column is not a vocabulary.
+    """
+
+    def _synth(self, rows_a, rows_b, canonical="flag"):
+        from udr.column_intelligence import synthesize_shared_attribute_table
+        tables = {
+            "ppm_schedules": {"rows": [{"statutory": v} for v in rows_a], "columns": ["statutory"]},
+            "bms_alarms": {"rows": [{"nuisance": v} for v in rows_b], "columns": ["nuisance"]},
+        }
+        return synthesize_shared_attribute_table(
+            tables, canonical_name=canonical, group_id="G24",
+            member_pairs=[("ppm_schedules", "statutory"), ("bms_alarms", "nuisance")])
+
+    @pytest.mark.parametrize("a,b", [
+        (["true", "false"], ["true", "false"]),
+        (["TRUE", "FALSE"], ["True", "False"]),
+        (["yes", "no"], ["Y", "N"]),
+        (["1", "0"], ["1", "0"]),
+        (["true"], ["true"]),
+    ])
+    def test_a_yes_no_group_is_refused(self, a, b):
+        assert self._synth(a, b) is None
+
+    @pytest.mark.parametrize("a,b", [
+        (["GBP", "USD"], ["AED", "GBP"]),                 # currency: a real vocabulary
+        (["open", "closed"], ["open", "closed"]),         # two values, but not boolean tokens
+        (["0", "1", "2"], ["1", "2"]),                    # a code that happens to start at zero
+    ])
+    def test_a_real_vocabulary_still_gets_its_table(self, a, b):
+        entry = self._synth(a, b, canonical="status")
+        assert entry is not None
+        assert entry["table_name"] and entry["pk_column"] == "status"
+        assert entry["create_ddl"].startswith("CREATE TABLE IF NOT EXISTS plenum_cafm.")
+
+    def test_the_boolean_check_itself(self):
+        from udr.column_intelligence import _is_boolean_vocabulary
+        assert _is_boolean_vocabulary(["true", "false"])
+        assert _is_boolean_vocabulary([" Yes ", "NO"])
+        assert not _is_boolean_vocabulary(["open", "closed"])
+        assert not _is_boolean_vocabulary(["true", "false", "unknown"])
+        assert _is_boolean_vocabulary(["yes", "no", "Y", "N"])   # one flag, spelled two ways
+        assert not _is_boolean_vocabulary([])
+
+    def test_the_promotion_path_also_declines_to_build_one(self):
+        """apply_classification_decisions builds the same table; a boolean group gets none."""
+        row = _shared_row()
+        row["members"] = ["ppm_schedules.statutory", "bms_alarms.nuisance"]
+        row["canonical_name"] = "flag"
+        ci = _ci(rows=[row])
+        tables = {
+            "ppm_schedules": {"rows": [{"statutory": "true"}, {"statutory": "false"}],
+                              "columns": ["statutory"]},
+            "bms_alarms": {"rows": [{"nuisance": "true"}], "columns": ["nuisance"]},
+        }
+        out = apply_classification_decisions(ci, tables, overrides={"G1": "fk"})
+        assert ci["shared_attribute_tables"] == []
+        assert out["lookup_tables_added"] == []
+        assert ci["classification"][0]["verdict"] == "Foreign Key relationship"

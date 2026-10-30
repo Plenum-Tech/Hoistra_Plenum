@@ -330,6 +330,27 @@ def canonical_name_for_group(
     return f"group_{h[:6]}"
 
 
+#: What a boolean column's distinct values look like, however the source spelled them.
+_BOOLEAN_TOKENS = frozenset({
+    "true", "false", "t", "f", "yes", "no", "y", "n", "1", "0",
+    "on", "off", "si", "oui", "non",
+})
+
+
+def _is_boolean_vocabulary(values: list) -> bool:
+    """True when these distinct values are a yes/no flag rather than a vocabulary.
+
+    The token set is the whole test: every value has to be a known boolean word. A status column
+    holding "open" and "closed" is two values and keeps its reference table; a code holding "0",
+    "1" and "2" keeps its own, because "2" is not a boolean word. Counting was tried as a second
+    condition and removed — two tables spelling the same flag differently ("yes"/"no" beside
+    "Y"/"N") give four distinct values and are still one flag. An empty list is not a flag; the
+    caller has already returned by then.
+    """
+    seen = {str(v).strip().lower() for v in values if str(v).strip()}
+    return bool(seen) and seen <= _BOOLEAN_TOKENS
+
+
 def synthesize_shared_attribute_table(
     tables: dict,
     *,
@@ -361,6 +382,14 @@ def synthesize_shared_attribute_table(
         return None
     # rows carry the PK under key `tname`; normalise to the canonical value list.
     values = [str(r.get(tname)) for r in ref["rows"]]
+    # A yes/no column is not a vocabulary, and normalising one produces a table whose primary key
+    # is "true" and "false". Reported 30 Oct: ppm_schedules.statutory and bms_alarms.nuisance were
+    # grouped because both hold booleans, and the run emitted plenum_cafm.boolean_attr_G24 with
+    # both columns made foreign keys into it. The name looked wrong, but the table was the error:
+    # two unrelated flags constrained to a shared two-row table that carries no meaning. Groups
+    # with a real vocabulary — currency, status — are untouched.
+    if _is_boolean_vocabulary(values):
+        return None
     create_ddl = (
         f"CREATE TABLE IF NOT EXISTS plenum_cafm.{_q(tname)} (\n"
         f"    {_q(pk)} TEXT PRIMARY KEY\n"

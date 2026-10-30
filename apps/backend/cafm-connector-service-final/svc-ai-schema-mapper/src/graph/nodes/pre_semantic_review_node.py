@@ -325,7 +325,18 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
     # exact-duplicate dedup of every table plus the table-resolution scan — was pure repeated work.
     # Skip the dedup entirely when nothing downstream still needs the deduped rows.
     _ci_cached = bool(state.get("pre_semantic_ci_built") and state.get("column_intelligence"))
-    _tr_cached = state.get("table_resolution_report") if _ci_cached else None
+    # The cached report is only good while the PK answers it was built from still stand. The gate
+    # runs before this node, and a person who changes a key then comes back here was being handed
+    # the report from the pass before their change — the key they removed still on screen, with
+    # nothing to say why. Keep a signature of the answers beside the report and rebuild when it
+    # moves. sorted() so a reordered dict is not mistaken for a change.
+    _pk_sig = repr(sorted(
+        (str(t), sorted(str(c) for c in (cols or [])))
+        for t, cols in (state.get("pk_confirmed_by_table") or {}).items()
+    ))
+    _tr_cached = (state.get("table_resolution_report")
+                  if _ci_cached and state.get("table_resolution_pk_signature") == _pk_sig
+                  else None)
 
     _analysis_tables: dict = {}
     if not (_ci_cached and _tr_cached):
@@ -352,6 +363,13 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 confidence_by_source=state.get("cafm_table_match_confidence") or {},
                 alias_resolver=_alias_resolver,
                 duplicate_column_report=state.get("duplicate_column_report") or {},
+                # The PK gate ran before this one, so its answers decide what this page shows.
+                # Without them the report re-detects from the data and a key the person removed
+                # comes back on screen, looking like the removal never registered. The other two
+                # callers of this builder (udr_node, unique_table_review_node) already pass it.
+                # An empty list is a real answer — "surrogate key", no source column — so it is
+                # passed through as it stands rather than filtered out as falsy.
+                pk_override_by_table=state.get("pk_confirmed_by_table") or {},
             )
     except Exception as exc:  # pragma: no cover — additive, never fatal
         logger.warning(f"[Pre-Semantic Gate] table resolution report failed: {exc}")
@@ -596,6 +614,7 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
         # re-deduping every table and re-running the resolution scan (see the fast-path above).
         if _table_resolution:
             state["table_resolution_report"] = _table_resolution
+            state["table_resolution_pk_signature"] = _pk_sig
         # Emit the TABLE analysis only. Column intelligence is NOT built yet — it is analysed against
         # the CONFIRMED destination table, so it runs after the human approves routing (below). This
         # is what lets the routing gate open immediately instead of waiting ~13s for column work.

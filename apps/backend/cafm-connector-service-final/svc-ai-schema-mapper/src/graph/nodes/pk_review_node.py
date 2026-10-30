@@ -74,6 +74,11 @@ async def pk_review_node(state: MigrationState) -> MigrationState:
                 # Node 1's identical-column merge — shown before B8.1 so the user can see the
                 # PK is being picked from the merged column list.
                 duplicate_column_report=state.get("duplicate_column_report") or {},
+                # Empty on the first pass, which is right: there is no answer yet and the page
+                # shows what was detected. It matters on a re-entry — somebody who answers, moves
+                # on and comes back was shown the detected key again, as though their change had
+                # not registered.
+                pk_override_by_table=state.get("pk_confirmed_by_table") or {},
             )
     except Exception as exc:  # pragma: no cover — additive, never fatal
         logger.warning(f"[PK Gate] table-resolution report failed: {exc}")

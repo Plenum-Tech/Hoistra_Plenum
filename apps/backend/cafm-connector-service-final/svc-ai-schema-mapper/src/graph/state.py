@@ -172,6 +172,8 @@ class MigrationState(TypedDict, total=False):
     # Cached B7.1→B12.1 table-resolution report from pass 1, reused on the pass-2 / resume
     # re-entry so the dedup + resolution scan don't run twice. Cleared with pre_semantic_ci_built.
     table_resolution_report: dict
+    #: The PK answers the cached report above was built from; a change rebuilds it.
+    table_resolution_pk_signature: str
     pending_table_overrides: dict[str, Any]
     # True once the pre-semantic gate has been ANSWERED in this run. The node checks it at the top
     # and skips a second interrupt(), so an already-decided gate can't re-open (e.g. a table-routing
