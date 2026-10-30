@@ -318,6 +318,26 @@ def canonical_name_for_group(
     if len(members) == 1:
         return best or _norm_col_name(members[0][1])
 
+    # Tier 4 — a shared base name under a relationship qualifier. A foreign key is normally
+    # spelled as the column it points at with something in front of it: work_orders
+    # .linked_alarm_id beside bms_alarms.alarm_id, work_orders.ppm_schedule_id beside
+    # ppm_schedules.schedule_id. Neither spelling is carried twice, so the consensus tiers above
+    # find nothing and the group used to fall straight through to a neutral `id_code_attr_G25` —
+    # a lookup table nobody could find under the name they were looking for.
+    #
+    # Strip the qualifier instead: when EVERY member's name ends in the same base, on an
+    # underscore boundary, that base names the group. Requiring *every* member is what keeps
+    # Tier 5's case out — (site_name, postcode, fault_description) share no base, and neither do
+    # (trading_name, vendor_name). A base that is itself generic ('id') names nothing, so it is
+    # left to fall through as before.
+    names = [_norm_col_name(c) for (_t, c) in members]
+    if len(names) > 1 and all(names):
+        base = min(names, key=len)
+        if base not in _GENERIC_PK_NAMES and all(
+            n == base or n.endswith(f"_{base}") for n in names
+        ):
+            return _fm_pref(base)
+
     # Tier 5 — heterogeneous multi-member group with no PK, no dest consensus,
     # no naming consensus, no FM hit. Pick a NEUTRAL synthetic name keyed by the
     # dominant format so we never mislead with an arbitrary member's name.
@@ -390,10 +410,28 @@ def synthesize_shared_attribute_table(
     # with a real vocabulary — currency, status — are untouched.
     if _is_boolean_vocabulary(values):
         return None
+    # Say on the table itself which columns it was made from. The gate's panel explains that,
+    # but the panel is not there when someone reads the schema a month later — and a bare
+    # lookup table whose rows came from two other tables is a puzzle without it. Asked for on
+    # 30 Oct: the lookup table should carry the names of every table sharing the column.
+    _sources = ", ".join(
+        f"{t}.{c}" for (t, c) in (
+            [tuple(str(m).split(".", 1)) for m in members_display]
+            if members_display and all("." in str(m) for m in members_display)
+            else member_pairs
+        )
+    )
+    _comment = (
+        "Shared attribute normalised into a lookup table"
+        f"{f' (group {group_id})' if group_id else ''}. "
+        f"Source columns, each now a foreign key into this table: {_sources}."
+    )
     create_ddl = (
         f"CREATE TABLE IF NOT EXISTS plenum_cafm.{_q(tname)} (\n"
         f"    {_q(pk)} TEXT PRIMARY KEY\n"
-        f");"
+        f");\n"
+        f"COMMENT ON TABLE plenum_cafm.{_q(tname)} IS "
+        f"'{_comment.replace(chr(39), chr(39) * 2)}';"
     )
     # FK ALTER targets the SOURCE table (assets, pm_templates) so the DDL matches the FK-rewrite
     # display and the B8.1 (2.2) primary keys — NOT the routed destination (which would surprise
@@ -1659,9 +1697,19 @@ def apply_classification_decisions(
         if not target:
             continue
         verdict = str(row.get("verdict") or "").lower()
-        if target == "shared" and "foreign" in verdict:
+        # Any verdict but "already shared" can be demoted. This guard used to read
+        # `"foreign" in verdict`, true for only one of the three verdicts a group can carry, so
+        # marking a "Primary Key group" shared — alarm_id, schedule_id — matched no branch at
+        # all: the verdict stayed, no lookup table was built, and nothing was recorded.
+        if target == "shared" and "shared" not in verdict:
+            label = "pk_to_shared" if "primary" in verdict else "fk_to_shared"
             row["verdict"] = "Shared Attribute"
-            row["human_override"] = "fk_to_shared"
+            row["human_override"] = label
+            # The column is no longer any table's key to own, so neither the enforcement into it
+            # nor the claim on it survives. Left in place, has_pk sends a later promotion down
+            # the branch that references the old owner instead of the new lookup table.
+            row["has_pk"] = None
+            row["canonical_has_pk"] = None
             _drop_fk_candidates(_member_keys(row))
             if tables and gid not in existing_lookup_groups:
                 pairs = _member_pairs(row)
@@ -1678,10 +1726,13 @@ def apply_classification_decisions(
                         shared_tables.append(entry)
                         existing_lookup_groups.add(gid)
                         result["lookup_tables_added"].append(entry["table_name"])
-            result["overrides_applied"][gid] = "fk_to_shared"
-        elif target == "fk" and "shared" in verdict:
+            result["overrides_applied"][gid] = label
+        # Likewise the other way: the gate enables "Foreign Key relationship" whenever the row
+        # has a primary-key member, which is exactly what a Primary Key group has.
+        elif target == "fk" and "foreign" not in verdict:
+            label = "pk_to_fk" if "primary" in verdict else "shared_to_fk"
             row["verdict"] = "Foreign Key relationship"
-            row["human_override"] = "shared_to_fk"
+            row["human_override"] = label
             pk_key = row.get("has_pk") or row.get("canonical_has_pk")
             if pk_key and "." in str(pk_key):
                 # A member of this group is some table's primary key, so the others point at it
@@ -1739,7 +1790,7 @@ def apply_classification_decisions(
                                       "shared attribute promoted to a foreign key on its reference table",
                         })
                         result["fk_candidates_added"] += 1
-            result["overrides_applied"][gid] = "shared_to_fk"
+            result["overrides_applied"][gid] = label
 
     # ── 2. De-selected groups — nothing of theirs is applied ───────────────────
     if rejected_set:
