@@ -69,6 +69,14 @@ def _norm_col_name(name) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_")
 
 
+def _looks_numeric(value) -> bool:
+    try:
+        float(str(value).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def _samples(rows, col, n=5) -> list[str]:
     out: list[str] = []
     for v in column_values(rows, col):
@@ -1320,6 +1328,84 @@ def build_column_intelligence(
         )
         if entry:
             shared_attribute_tables.append(entry)
+
+    # ── B20.2 — keys the FORMAT gate cannot see ───────────────────────────────
+    # Columns reach B20.1 only by being GROUPED, and grouping is gated on format agreement. The
+    # cardinality guard in column_format re-labels a near-all-distinct column `id_code` and leaves
+    # a repeating one `categorical` — and a small parent code table is all-distinct by
+    # construction, because it is the key, while the child that references it repeats. The two
+    # sides therefore score 0 on format precisely when they are a key and a reference to it, and
+    # the value evidence is never reached. Reported 30 Oct: work_orders.priority (P1-P4 over 1,803
+    # rows) against sla_matrix.priority (the key of a 4-row table) — 100% of values resolve, and
+    # no foreign key was produced. Priority, status codes, type codes: every small lookup parent.
+    #
+    # So resolve these from the keys themselves. Coincidence is kept out two ways: the names must
+    # be related, or the key's values must be codes rather than numbers — two integer columns
+    # sharing a range is a coincidence, not a reference — and a child's distinct values must fit
+    # inside the key's.
+    _claimed = {str(m).lower() for rec in classification_rows for m in (rec.get("members") or [])}
+    _by_parent: dict[tuple, list] = {}
+    for _pt, _pk_cols in pk_by_table.items():
+        if len(_pk_cols or []) != 1 or _is_dup_copy(_pt) or _pt not in tables:
+            continue
+        _pcol = _pk_cols[0]
+        _pvals = {str(v).strip().lower() for v in column_values(tables[_pt]["rows"], _pcol)
+                  if str(v).strip()}
+        if len(_pvals) < 2:
+            continue
+        _codes = not all(_looks_numeric(v) for v in _pvals)
+        _pnorm = _norm_col_name(_pcol)
+        for (_st, _scol) in nodes:
+            if _st == _pt or _is_dup_copy(_st) or _st not in tables:
+                continue
+            if _scol in (pk_by_table.get(_st) or []):
+                continue          # a table's own key is not a reference to someone else's
+            if f"{_st}.{_scol}".lower() in _claimed:
+                continue
+            _snorm = _norm_col_name(_scol)
+            if not (_snorm == _pnorm or _snorm.endswith("_" + _pnorm) or _codes):
+                continue
+            _svals = {str(v).strip().lower() for v in column_values(tables[_st]["rows"], _scol)
+                      if str(v).strip()}
+            if not _svals or len(_svals) > len(_pvals):
+                continue
+            if len(_svals & _pvals) / len(_svals) < RI_MIN:
+                continue
+            _by_parent.setdefault((_pt, _pcol), []).append((_st, _scol))
+            _claimed.add(f"{_st}.{_scol}".lower())
+
+    for (_pt, _pcol), _kids in _by_parent.items():
+        _key = _prefixed(_rep(_pt), _pcol)
+        _ris = {(t, c): referential_integrity(tables[t]["rows"], c, tables[_pt]["rows"], _pcol)
+                for (t, c) in _kids}
+        fk_groups += 1
+        classification_rows.append({
+            "group_id": f"KEY-{_rep(_pt)}-{_norm_col_name(_pcol)}",
+            "canonical_name": _norm_col_name(_pcol),
+            "members": [_prefixed(t, c) for (t, c) in _kids] + [_key],
+            "has_pk": _key,
+            "fk_column": _prefixed(*_kids[0]),
+            "canonical_has_pk": _canonical_key(_key),
+            "canonical_fk_column": _canonical_key(_prefixed(*_kids[0])),
+            "ri": max([r for r in _ris.values() if isinstance(r, (int, float))], default=None),
+            "verdict": "Foreign Key relationship",
+            "owned_by_destination": None,
+            # Says the grouping gates did not find this one; the key did.
+            "resolved_by_key": True,
+        })
+        for (t, c) in _kids:
+            _ri = _ris[(t, c)]
+            fk_candidates.append({
+                "src_table": t, "src_column": c,
+                "dst_table": _rep(_pt), "dst_column": _pcol,
+                "ri": _ri,
+                "confirmed": isinstance(_ri, (int, float)) and _ri >= RI_MIN,
+                "reason": (
+                    f"every value resolves into the primary key {_key} "
+                    f"({round((_ri or 0) * 100)}% of rows) — the format gate scored this pair "
+                    f"below its threshold, which a key and a reference to it routinely do"
+                ),
+            })
 
     # ── B20.1 completeness — add EVERY table's primary key as its own "Primary Key group" row ──
     # The group-based classification above only surfaces a PK when another table references it (it
