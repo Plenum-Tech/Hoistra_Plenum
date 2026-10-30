@@ -44,7 +44,7 @@ def _entry(canonical="alarm_id", gid="G25", members=None, tables=None):
 class TestTheTableRecordsWhereItCameFrom:
     def test_the_comment_names_every_contributing_column(self):
         ddl = _entry()["create_ddl"]
-        assert "COMMENT ON TABLE plenum_cafm.alarm_id IS" in ddl
+        assert "COMMENT ON TABLE plenum_cafm.shared_alarms IS" in ddl
         assert "work_orders.linked_alarm_id" in ddl
         assert "bms_alarms.alarm_id" in ddl
 
@@ -58,7 +58,7 @@ class TestTheTableRecordsWhereItCameFrom:
 
     def test_the_create_statement_itself_is_unchanged(self):
         ddl = _entry()["create_ddl"]
-        assert ddl.startswith("CREATE TABLE IF NOT EXISTS plenum_cafm.alarm_id (")
+        assert ddl.startswith("CREATE TABLE IF NOT EXISTS plenum_cafm.shared_alarms (")
         assert "alarm_id TEXT PRIMARY KEY" in ddl
 
     def test_a_quote_in_a_column_name_cannot_break_out_of_the_comment(self):
@@ -83,6 +83,6 @@ class TestWhatWasAlreadyThere:
 
     def test_the_fk_rewrites_read_source_to_lookup(self):
         assert _entry()["fk_rewrites"] == [
-            {"source": "work_orders.linked_alarm_id", "references": "alarm_id.alarm_id"},
-            {"source": "bms_alarms.alarm_id", "references": "alarm_id.alarm_id"},
+            {"source": "work_orders.linked_alarm_id", "references": "shared_alarms.alarm_id"},
+            {"source": "bms_alarms.alarm_id", "references": "shared_alarms.alarm_id"},
         ]

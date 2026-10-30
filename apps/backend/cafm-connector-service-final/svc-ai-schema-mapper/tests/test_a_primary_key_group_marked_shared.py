@@ -76,7 +76,7 @@ class TestAPrimaryKeyGroupDemotedToShared:
         # The reported bug: no table appeared under "New tables from shared attributes".
         ci = _ci()
         out = apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
-        assert out["lookup_tables_added"] == ["alarm_id"]
+        assert out["lookup_tables_added"] == ["shared_alarms"]
         assert len(ci["shared_attribute_tables"]) == 1
         assert ci["shared_attribute_tables"][0]["from_group"] == "G25"
 
@@ -84,6 +84,7 @@ class TestAPrimaryKeyGroupDemotedToShared:
         ci = _ci()
         apply_classification_decisions(ci, _tables(), overrides={"G25": "shared"})
         entry = ci["shared_attribute_tables"][0]
+        assert entry["table_name"] == "shared_alarms"
         assert set(entry["source_columns"]) == {
             "work_orders.linked_alarm_id", "bms_alarms.alarm_id"}
         named = " ".join(entry["fk_ddl"])

@@ -119,7 +119,7 @@ class TestAPersonCanStillAskForOne:
         e = _synth([("bms_alarms", "alarm_id", codes),
                     ("work_orders", "linked_alarm_id", codes[:119])],
                    "alarm_id", vocabulary_only=False)
-        assert e is not None and e["table_name"] == "alarm_id"
+        assert e is not None and e["table_name"] == "shared_alarms"
         assert e["distinct_count"] == 769
 
     def test_dates_too_when_asked_for(self):
@@ -148,7 +148,7 @@ class TestAPersonCanStillAskForOne:
             "fk_column": None, "ri": 1.0, "verdict": "Foreign Key relationship"}],
             "shared_attribute_tables": [], "fk_candidates": [], "summary": {}}
         out = apply_classification_decisions(ci, tables, overrides={"G25": "shared"})
-        assert out["lookup_tables_added"] == ["alarm_id"], (
+        assert out["lookup_tables_added"] == ["shared_alarms"], (
             "the person asked for this table; the automatic vocabulary rules must not veto it")
 
 

@@ -477,6 +477,41 @@ def _not_a_vocabulary(values: list, occurrences: int) -> str | None:
     return None
 
 
+def _pluralize(base: str) -> str:
+    """English plural of the last token — country→countries, status→statuses, asset→assets.
+
+    Mirrors schema_pluralize in graph/nodes/schema_pre_semantic_node.py; kept here rather than
+    imported so udr/ does not reach up into graph/.
+    """
+    if not base:
+        return base
+    head, _, last = base.rpartition("_")
+    prefix = f"{head}_" if head else ""
+    if last.endswith("y") and len(last) > 1 and last[-2] not in "aeiou":
+        return prefix + last[:-1] + "ies"
+    if last.endswith(("s", "x", "z", "ch", "sh")):
+        return prefix + (last if last.endswith("es") else last + "es")
+    return prefix + last + "s"
+
+
+def shared_table_name_for(canonical_name: str) -> str:
+    """What to call the lookup table synthesised from a shared attribute.
+
+    `shared_` and the plural of the thing. Naming it after the attribute — `alarm_id`, `status`,
+    `building_id` — reads as a column rather than a table, and drops a synthesised table into
+    plenum_cafm under a name nothing distinguishes from a real entity (plenum_cafm.alarm_id is
+    in the database from a run on 30 Oct). An attribute ending in _id names the entity it
+    identifies, so the suffix comes off and the entity is pluralised; a vocabulary is pluralised
+    as it stands. The PRIMARY KEY keeps the attribute's own name — that is what the foreign keys
+    reference and what the source columns are called.
+    """
+    name = _norm_col_name(canonical_name)
+    if not name:
+        return "shared_attribute"
+    base = name[:-3] if name.endswith("_id") and len(name) > 3 else name
+    return f"shared_{_pluralize(base)}"
+
+
 def synthesize_shared_attribute_table(
     tables: dict,
     *,
@@ -501,7 +536,9 @@ def synthesize_shared_attribute_table(
     from .reference_tables import build_reference_table
 
     pk = canonical_name                                   # the shared attribute becomes the PK
-    tname = pk if pk not in tables else f"{pk}_ref"       # no-clobber vs an existing table
+    tname = shared_table_name_for(canonical_name)
+    if tname in tables:                                   # no-clobber vs an existing table
+        tname = f"{tname}_ref"
     ref = build_reference_table(
         tables, tname, source_table=None, value_columns=[(t, c) for (t, c) in member_pairs]
     )
