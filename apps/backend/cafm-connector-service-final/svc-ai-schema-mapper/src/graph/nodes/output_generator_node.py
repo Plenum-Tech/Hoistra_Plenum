@@ -290,6 +290,32 @@ def sql_script_for(routed: dict, confirmed_hierarchies, ddl_blocks: "list[str]")
     return sql_script
 
 
+def lookup_records(state) -> "dict[str, list[dict]]":
+    """The rows of every shared-attribute lookup table this run creates, keyed by table name.
+
+    These are tables the migration builds, so they belong in the download beside the others. They
+    were reaching output.sql as a CREATE statement and nothing else: a table in the schema whose
+    data appeared in no export, no CSV, no sheet of the workbook.
+
+    One column, the attribute, which is what the source rows carry. The written table also has an
+    id and the owning company, but those are minted at write time and would be invented here.
+    """
+    ci = (state or {}).get("column_intelligence") or {}
+    if not isinstance(ci, dict):
+        return {}
+    out: "dict[str, list[dict]]" = {}
+    for entry in (ci.get("shared_attribute_tables") or []):
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("table_name") or "").strip()
+        pk = str(entry.get("pk_column") or "").strip()
+        values = entry.get("values")
+        if not name or not pk or not isinstance(values, list):
+            continue
+        out[name] = [{pk: v} for v in values]
+    return out
+
+
 def output_json_for(nested_json: dict, records_tables: dict, generated_at: str) -> str:
     """output.json: the nested hierarchy kept for older readers, and every table's records."""
     return json.dumps({
@@ -624,6 +650,14 @@ async def output_generator_node(state: MigrationState) -> MigrationState:
         # routed entity (build_intermediate_schema extends records per entity_type), so it is left on
         # the source-keyed set. Union keeps every row; a shared PK dedupes at insert.
         routed_records_tables = routed_records(records_tables, state.get("table_routing") or {}, log)
+
+        # The lookup tables this run creates are tables too, and the download should hold their
+        # rows. Both sets: the JSON and the workbook are built from records_tables, the CSVs and
+        # the SQL from the routed one. setdefault so a real destination of the same name wins.
+        for _lk_name, _lk_rows in lookup_records(state).items():
+            records_tables.setdefault(_lk_name, _lk_rows)
+            routed_records_tables.setdefault(_lk_name, _lk_rows)
+            log(f"  Lookup table '{_lk_name}': {len(_lk_rows):,} value(s) included in the export")
 
         # ── Step 2: Export to CSV — one file per DESTINATION table (duplicates merged) ──
         log(f"Exporting {len(routed_records_tables)} destination table(s) to CSV...")

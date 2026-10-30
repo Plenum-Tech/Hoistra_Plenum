@@ -444,6 +444,9 @@ _VOCABULARY_MAX_DISTINCT_RATIO = 0.5
 #: this the question cannot be answered from the data, so it is not asked.
 _VOCABULARY_MIN_OCCURRENCES = 20
 
+#: How many of a lookup table's values travel on the entry, for the export to write out.
+_MAX_LOOKUP_VALUES = 10000
+
 
 def _not_a_vocabulary(values: list, occurrences: int) -> str | None:
     """Why these values are not a vocabulary worth its own lookup table, or None if they are.
@@ -619,14 +622,24 @@ def synthesize_shared_attribute_table(
     # key. The statements that used to be emitted were never applied to anything.
     fk_rewrites = [{"src": t, "column": c} for (t, c) in member_pairs]
     fk_ddls: list = []
-    # The artefact block: the table as it will be built. Its ROWS are written by the migration,
-    # scoped to the company doing the writing, so they are not INSERTs with a company id this
-    # function cannot know.
-    _n = len(set(values))
-    ddl_block = create_ddl + (
-        f"\n-- {_n} value(s) are inserted by the migration's write step, against the"
-        f" company running it."
-    )
+    # The artefact block carries the rows as well as the table, so a download holds the lookup
+    # table's data and not only its shape. The write inserts them against the company running
+    # the migration; a script run by hand cannot know that company, so the id stays a bind
+    # variable rather than a zero uuid that would quietly insert nonsense.
+    _vals = sorted(set(values))[:_MAX_LOOKUP_VALUES]
+    ddl_block = create_ddl
+    if _vals:
+        _tick = chr(39)
+        _rows = ', '.join('(:org_id, {0}{1}{0})'.format(_tick, str(v).replace(_tick, _tick * 2))
+                          for v in _vals)
+        ddl_block = chr(10).join([
+            create_ddl,
+            '-- Rows are written by the migration against the company running it. To apply this',
+            '-- script by hand, supply that organisation uuid for :org_id',
+            'INSERT INTO plenum_cafm.{0} (organization_id, {1})'.format(_q(tname), _q(pk)),
+            'VALUES {0}'.format(_rows),
+            'ON CONFLICT (organization_id, {0}) DO NOTHING;'.format(_q(pk)),
+        ])
     return {
         "table_name": tname,
         "pk_column": pk,
@@ -635,6 +648,11 @@ def synthesize_shared_attribute_table(
         else [f"{t}.{c}" for (t, c) in member_pairs],
         "distinct_count": len(values),
         "sample_values": sorted(values)[:15],
+        # Every value, so the export can carry the table's rows. Without this the lookup table
+        # appeared in the run's output only as a CREATE statement in output.sql — a table in the
+        # schema with no data anywhere in the download. Capped so a table a person asked for by
+        # hand (alarm_id, 769 codes) travels while nothing unbounded rides in the gate payload.
+        "values": sorted(values)[:_MAX_LOOKUP_VALUES],
         "fk_rewrites": [
             {"source": f"{rw['src']}.{rw['column']}", "references": f"{tname}.{pk}"}
             for rw in fk_rewrites
