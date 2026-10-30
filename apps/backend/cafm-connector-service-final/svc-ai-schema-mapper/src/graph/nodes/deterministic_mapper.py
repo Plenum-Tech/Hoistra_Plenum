@@ -35,6 +35,9 @@ from ...matchers import (
 )
 from ..state import FieldMapping, MigrationState
 from ._timing import timed_node
+import time as _perf
+
+from ...udr import profiling
 from .mapping_cutoff import DETERMINISTIC_CUTOFF, partition_by_cutoff
 from .ontology_mapping import ontology_column_match, ontology_enabled
 
@@ -598,6 +601,11 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
     state["field_mapping_reviewed"] = False
     state["hierarchy_reviewed"] = False
     migration_id = state.get("migration_id")
+    # Phase timings for this node, under MIGRATION_PROFILE. Step 1 was measured at about half
+    # a second for a 22-sheet workbook; this step is the one that takes minutes, and nothing
+    # here was timed, so turning the switch on said nothing about it. Three phases: the two
+    # reads of the target schema, and the per-sheet matching loop.
+    _mid = str(migration_id or "node2")
     cmms_name = state.get("cmms_name", "Unknown")
     parsed_tables = state.get("parsed_tables", {})
     # Full ingested file records (set by Node 1). Used as the PREFERRED source for the
@@ -633,7 +641,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # against the routed target table's ACTUAL columns (not just the canonical list),
         # so table-specific columns (city, country, floors, gfa_sqm, …) map exactly.
         from ...db import get_plenum_cafm_columns_by_table
-        _columns_by_table = await get_plenum_cafm_columns_by_table()
+        with profiling.span(_mid, "analyse.read_target_columns"):
+            _columns_by_table = await get_plenum_cafm_columns_by_table()
         _db_tables = sorted(_columns_by_table.keys())
 
         # Node 1's table matcher (deterministic name match + Haiku fallback) — the best
@@ -662,9 +671,10 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         _dest_samples_by_table: dict = {}
         try:
             from ...db import get_plenum_cafm_sample_values_by_table
-            _dest_samples_by_table = await get_plenum_cafm_sample_values_by_table(
-                set(_ingest_table_matches.values()), allow=_columns_by_table
-            )
+            with profiling.span(_mid, "analyse.read_target_samples"):
+                _dest_samples_by_table = await get_plenum_cafm_sample_values_by_table(
+                    set(_ingest_table_matches.values()), allow=_columns_by_table
+                )
         except Exception:  # pragma: no cover — value gate is additive, never fatal
             _dest_samples_by_table = {}
 
@@ -686,6 +696,7 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         near_duplicate_columns_by_table: dict = {}
         all_confidences = []
 
+        _match_t0 = _perf.perf_counter()
         for table_name in sorted(parsed_tables.keys()):
             table_records = parsed_tables[table_name]
             # Prefer the FULL ingested rows for sample-value previews (real Excel/CSV data),
@@ -1288,6 +1299,8 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         # (_ingest_table_matches computed above — Node 1 name+LLM table match — also
         #  seeds table_routing below so the Step-1 gate defaults to that guess.)
         table_routing: dict[str, str] = {}
+        profiling.record(_mid, "analyse.match_all_sheets", (_perf.perf_counter() - _match_t0) * 1000)
+
         for table_name, mappings in tier1_mappings_by_table.items():
             table_lower = table_name.lower().strip()
             matched_entity: str | None = None
@@ -1386,6 +1399,10 @@ async def deterministic_mapper_node(state: MigrationState) -> MigrationState:
         })
 
         logger.info(f"[Node 2] Complete (MULTI-TABLE)")
+        # Print the phase table. Recording spans without this logs nothing, which is how
+        # turning the switch on produced no timings for this step at all. The run id is
+        # shared with step 1, so the table carries both steps' phases in one place.
+        profiling.emit_report(_mid, logger)
 
         migration_id = state.get("migration_id")
         if migration_id:
