@@ -78,6 +78,11 @@ services:
   schema-mapper-app:
     environment:
       <<: *db_env
+      # Phase timings for a migration run: every step logs its milliseconds and share of the
+      # total (udr/profiling.py). Off by default, because it logs a table per run. Turned on
+      # here and on the Container App on 30 Oct, to find where a run's first minute goes —
+      # reading the workbook was measured at about half a second, so it is somewhere else.
+      MIGRATION_PROFILE: "1"
 
   # The worker, not the app, runs the LangGraph nodes — including node 9, which is the one that
   # WRITES. It was missing from this overlay, so it kept the base file's DB_URL and pointed at
@@ -87,6 +92,8 @@ services:
   schema-mapper-worker:
     environment:
       <<: *db_env
+      # The worker runs the nodes, so this is the side that produces the timings.
+      MIGRATION_PROFILE: "1"
 
   svc-udr:
     environment:
