@@ -145,6 +145,13 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
                             for t in (ci.get("shared_attribute_tables") or [])
                         ],
                     },
+                    logs=[
+                        f"Classification confirmed — "
+                        f"{len(applied.get('overrides_applied') or {})} re-classified, "
+                        f"{len(applied.get('rejected_applied') or [])} excluded",
+                        f"Lookup tables created by this answer: "
+                        f"{', '.join(applied.get('lookup_tables_added') or []) or 'none'}",
+                    ],
                 )
             except Exception as _exc:  # pragma: no cover — the answer is applied regardless
                 logger.warning(f"[Classification Gate] could not record the confirmation: {_exc}")
