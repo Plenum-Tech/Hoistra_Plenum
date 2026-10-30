@@ -59,7 +59,9 @@ class TestTheTableRecordsWhereItCameFrom:
     def test_the_create_statement_itself_is_unchanged(self):
         ddl = _entry()["create_ddl"]
         assert ddl.startswith("CREATE TABLE IF NOT EXISTS plenum_cafm.shared_alarms (")
-        assert "alarm_id TEXT PRIMARY KEY" in ddl
+        assert "id UUID PRIMARY KEY DEFAULT gen_random_uuid()" in ddl
+        assert "alarm_id TEXT NOT NULL" in ddl
+        assert "UNIQUE (organization_id, alarm_id)" in ddl
 
     def test_a_quote_in_a_column_name_cannot_break_out_of_the_comment(self):
         tables = {"a'b": {"rows": [{"c'd": "X-1"}, {"c'd": "X-2"}], "columns": ["c'd"]}}
@@ -70,12 +72,10 @@ class TestTheTableRecordsWhereItCameFrom:
 
 
 class TestWhatWasAlreadyThere:
-    def test_every_source_table_gets_its_own_foreign_key(self):
-        entry = _entry()
-        assert len(entry["fk_ddl"]) == 2
-        named = " ".join(entry["fk_ddl"])
-        assert "ALTER TABLE plenum_cafm.work_orders" in named
-        assert "ALTER TABLE plenum_cafm.bms_alarms" in named
+    def test_no_foreign_key_statement_is_emitted(self):
+        """The unique backing the table is (organization_id, attribute); a composite unique
+        cannot back a single-column FK, and these statements were never applied to anything."""
+        assert _entry()["fk_ddl"] == []
 
     def test_the_entry_lists_the_source_columns_for_the_panel(self):
         assert _entry()["source_columns"] == [

@@ -87,10 +87,9 @@ class TestAPrimaryKeyGroupDemotedToShared:
         assert entry["table_name"] == "shared_alarms"
         assert set(entry["source_columns"]) == {
             "work_orders.linked_alarm_id", "bms_alarms.alarm_id"}
-        named = " ".join(entry["fk_ddl"])
+        named = " ".join(entry["source_columns"]) + entry["create_ddl"]
         assert "work_orders" in named and "bms_alarms" in named, (
-            "the emitted DDL must carry a foreign key from every contributing table")
-        assert len(entry["fk_ddl"]) == 2
+            "the entry and its COMMENT must name every contributing table")
 
     def test_its_rows_are_the_union_of_both_columns(self):
         ci = _ci()

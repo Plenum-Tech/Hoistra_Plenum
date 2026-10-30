@@ -594,40 +594,39 @@ def synthesize_shared_attribute_table(
     _comment = (
         "Shared attribute normalised into a lookup table"
         f"{f' (group {group_id})' if group_id else ''}. "
-        f"Source columns, each now a foreign key into this table: {_sources}."
+        f"Source columns whose values it holds: {_sources}."
     )
+    # The shape the WRITE actually creates (write_node._write_shared_attribute_lookups): a
+    # surrogate id, the company that owns the row, the attribute, and a per-company unique. What
+    # was emitted here instead — the attribute alone as PRIMARY KEY — was never what appeared in
+    # the database, so the gate showed a CREATE that is not run beside ALTERs that are not run
+    # either (the writer says so: "FK constraints are not added"). A panel that predicts the
+    # schema has to predict the one that is built.
     create_ddl = (
         f"CREATE TABLE IF NOT EXISTS plenum_cafm.{_q(tname)} (\n"
-        f"    {_q(pk)} TEXT PRIMARY KEY\n"
+        f"    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n"
+        f"    organization_id UUID NOT NULL,\n"
+        f"    {_q(pk)} TEXT NOT NULL,\n"
+        f"    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n"
+        f"    UNIQUE (organization_id, {_q(pk)})\n"
         f");\n"
         f"COMMENT ON TABLE plenum_cafm.{_q(tname)} IS "
         f"'{_comment.replace(chr(39), chr(39) * 2)}';"
     )
-    # FK ALTER targets the SOURCE table (assets, pm_templates) so the DDL matches the FK-rewrite
-    # display and the B8.1 (2.2) primary keys — NOT the routed destination (which would surprise
-    # the user with unrelated table names like maintenance_plans).
+    # Which source columns feed the table — shown in the panel, and the reason the COMMENT names
+    # them. No ALTER … ADD FOREIGN KEY is emitted: the unique that backs this table is
+    # (organization_id, attribute), and a composite unique cannot back a single-column foreign
+    # key. The statements that used to be emitted were never applied to anything.
     fk_rewrites = [{"src": t, "column": c} for (t, c) in member_pairs]
-    fk_ddls = [
-        f"ALTER TABLE plenum_cafm.{_q(rw['src'])} "
-        f"ADD CONSTRAINT {_q('fk_' + rw['src'] + '_' + rw['column'])} "
-        f"FOREIGN KEY ({_q(rw['column'])}) "
-        f"REFERENCES plenum_cafm.{_q(tname)} ({_q(pk)});"
-        for rw in fk_rewrites
-    ]
-    # Full block for the LIVE output SQL (applied to the DB): idempotent CREATE + INSERT, and
-    # each FK wrapped in a DO block that swallows errors so a constraint that can't apply (missing
-    # column, already exists) logs a NOTICE instead of aborting the whole migration transaction.
-    insert_ddls = [
-        f"INSERT INTO plenum_cafm.{_q(tname)} ({_q(pk)}) "
-        f"VALUES ('{str(v).replace(chr(39), chr(39) * 2)}') ON CONFLICT DO NOTHING;"
-        for v in sorted(set(values))
-    ]
-    safe_fk_ddls = [
-        "DO $$ BEGIN\n  " + d + "\nEXCEPTION WHEN others THEN "
-        "RAISE NOTICE 'skip FK (needs review): %', SQLERRM; END $$;"
-        for d in fk_ddls
-    ]
-    ddl_block = "\n".join([create_ddl, *insert_ddls, *safe_fk_ddls])
+    fk_ddls: list = []
+    # The artefact block: the table as it will be built. Its ROWS are written by the migration,
+    # scoped to the company doing the writing, so they are not INSERTs with a company id this
+    # function cannot know.
+    _n = len(set(values))
+    ddl_block = create_ddl + (
+        f"\n-- {_n} value(s) are inserted by the migration's write step, against the"
+        f" company running it."
+    )
     return {
         "table_name": tname,
         "pk_column": pk,

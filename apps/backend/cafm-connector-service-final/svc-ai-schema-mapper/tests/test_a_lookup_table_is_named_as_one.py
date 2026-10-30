@@ -74,8 +74,9 @@ class TestTheName:
         e = _synth("status", [("docs", "status", ["Valid", "Expired"]),
                               ("certs", "status", ["Valid"])])
         assert "CREATE TABLE IF NOT EXISTS plenum_cafm.shared_statuses (" in e["create_ddl"]
-        assert "status TEXT PRIMARY KEY" in e["create_ddl"]
-        assert all("REFERENCES plenum_cafm.shared_statuses (status)" in d for d in e["fk_ddl"])
+        assert "status TEXT NOT NULL" in e["create_ddl"]
+        assert "UNIQUE (organization_id, status)" in e["create_ddl"]
+        assert e["fk_ddl"] == []
 
     def test_the_fk_rewrites_point_at_the_new_name(self):
         e = _synth("status", [("docs", "status", ["Valid", "Expired"]),
