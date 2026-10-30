@@ -11,7 +11,21 @@ from src.engine.client import EngineError, engine_available, run_engine
 
 
 def _fake_engine(tmp_path, body: str) -> str:
-    """An executable that behaves like hoist-engine, written in Python."""
+    """An executable that behaves like hoist-engine, written in Python.
+
+    A `#!` line is read by the Unix kernel, which is why this was one file. Windows has no
+    shebang: executing it raises WinError 193, 'not a valid Win32 application', and these seven
+    tests failed for the harness rather than for the client they exercise. There the 'binary'
+    is a .cmd handing the same script to the same interpreter — create_subprocess_exec runs a
+    .cmd, and the client is exec'ing a path either way, which is the contract under test.
+    """
+    script = tmp_path / "fake-engine.py"
+    script.write_text(textwrap.dedent(body))
+    if os.name == "nt":
+        path = tmp_path / "fake-engine.cmd"
+        path.write_text(
+            '@echo off\r\n"' + sys.executable + '" "' + str(script) + '" %*\r\n')
+        return str(path)
     path = tmp_path / "fake-engine"
     path.write_text(f"#!{sys.executable}\n" + textwrap.dedent(body))
     path.chmod(path.stat().st_mode | stat.S_IEXEC)

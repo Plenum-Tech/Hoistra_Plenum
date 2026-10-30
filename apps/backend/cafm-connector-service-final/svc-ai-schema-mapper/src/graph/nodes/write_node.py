@@ -1951,9 +1951,34 @@ def _collect_approved_new_columns(state) -> dict[str, set[str]]:
     return out
 
 
+def _lookup_groups_to_write(ci: "dict | None") -> "list[dict]":
+    """The classification rows whose lookup table the write should create.
+
+    Every group that HAS one — not only the groups a person re-classified. The entry is the
+    decision: synthesize_shared_attribute_table returns None for anything that should not be
+    normalised (a yes/no flag, a date, contact data, an entity's alternate key), so a row with an
+    entry is one the classifier, or the person at the gate, asked for.
+
+    Detected shared attributes used to be "left to the SQL artifact" — a script the schema-aligned
+    write never applies — so shared_statuses and shared_currencies were shown at the gate, promised
+    in its DDL, and then never created. Requiring an entry also closes an older hole in the other
+    direction: a boolean group demoted by hand has no entry, and the previous condition would still
+    have built it a table whose primary key is "true" and "false".
+
+    A Shared Attribute promoted to FK keeps its reference table — it is what the members point at —
+    and has an entry for the same reason.
+    """
+    if not isinstance(ci, dict):
+        return []
+    entries = {str(t.get("from_group")) for t in (ci.get("shared_attribute_tables") or [])
+               if isinstance(t, dict)}
+    return [r for r in (ci.get("classification") or [])
+            if isinstance(r, dict) and str(r.get("group_id")) in entries]
+
+
 async def _write_shared_attribute_lookups(state) -> "list[dict]":
-    """The lookup table of every FK a person demoted to Shared Attribute at the classification
-    gate (B20.1), built from the rows just written. Returns ``[{"table", "values"}]``.
+    """The lookup table of every shared attribute that has one, built from the rows just
+    written. Returns ``[{"table", "values"}]``.
 
     A Shared Attribute promoted to FK gets the same table: it is what the members reference.
 
@@ -1963,7 +1988,7 @@ async def _write_shared_attribute_lookups(state) -> "list[dict]":
     carries the writing company (``UNIQUE (organization_id, <attribute>)``), its values are read
     back from that company's rows only, and a name already used by anything that is not such a
     lookup moves to ``<name>_ref`` (the B22.1 no-clobber rule) or is skipped. Detected shared
-    attributes nobody re-classified are left to the SQL artifact, as before. FK constraints are
+    attributes are created here too, rather than left to an artifact nothing applies. FK constraints are
     not added: the B22.1 block names the SOURCE sheets, which are not tables.
     """
     org = str(state.get("organization_id") or "").strip()
@@ -1971,12 +1996,7 @@ async def _write_shared_attribute_lookups(state) -> "list[dict]":
     entries = {str(t.get("from_group")): t for t in ((ci.get("shared_attribute_tables") or [])
                                                      if isinstance(ci, dict) else [])
                if isinstance(t, dict)}
-    # A Shared Attribute promoted to FK keeps a reference table for its members to point at
-    # (apply_classification_decisions), unless a member is some table's PK: then it has no entry.
-    demoted = [r for r in ((ci.get("classification") or []) if isinstance(ci, dict) else [])
-               if isinstance(r, dict) and (r.get("human_override") == "fk_to_shared"
-                                           or (r.get("human_override") == "shared_to_fk"
-                                               and str(r.get("group_id")) in entries))]
+    demoted = _lookup_groups_to_write(ci)
     if not org or not demoted:
         return []
     try:

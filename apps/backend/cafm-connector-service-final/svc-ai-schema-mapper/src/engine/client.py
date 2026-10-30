@@ -45,15 +45,28 @@ def engine_available() -> bool:
 
 
 def _kill(proc: asyncio.subprocess.Process) -> None:
+    """Kill the engine, and anything it started.
+
+    The engine is launched with start_new_session=True so it leads its own process group, and
+    killing the group is what stops a step that has spawned workers. os.killpg is POSIX-only —
+    on Windows it does not exist at all, so the attribute lookup raises AttributeError, which
+    this used to let through: a timeout or a cancellation surfaced as AttributeError instead of
+    killing anything. The engine runs on Linux in the container, so nothing was harmed in
+    production, but a kill path that raises on one platform is not a kill path.
+    """
     if proc.returncode is not None:
         return
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    killpg = getattr(os, "killpg", None)
+    if killpg is not None:
         try:
-            proc.kill()
-        except ProcessLookupError:
+            killpg(proc.pid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError):
             pass
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
 
 
 async def _reap(proc: asyncio.subprocess.Process, *streams) -> None:

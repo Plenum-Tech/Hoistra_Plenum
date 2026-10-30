@@ -18,6 +18,11 @@ from src.graph import migration_graph
 from src.graph.nodes import db_writer, schema_db_writer
 from src.graph.nodes import output_generator_node as og
 
+
+def _as_posix(path: str) -> str:
+    """A path as the assertion means it, whichever separator the OS used."""
+    return str(path).replace("\\", "/")
+
 MIGRATION = "7a3c2b10-1d4e-4f5a-8b6c-9d0e1f2a3b4c"
 RESULT_TABLES = [{"name": "Vendors", "rows": 2, "columns": ["vendor_code", "vendor_name"]},
                  {"name": "Suppliers", "rows": 1, "columns": ["vendor_code"]},
@@ -119,7 +124,8 @@ def test_the_engine_writes_the_files_and_the_node_uploads_them(env):
                                              "relationship_type": "FK", "source_column": "vendor_code",
                                              "target_column": "vendor_code"}]
     assert job["lookup_ddl_blocks"] == ["CREATE TABLE x (id int);"]
-    assert job["full_dir"].endswith(f"{MIGRATION}/full") and job["cleaned_dir"].endswith(f"{MIGRATION}/cleaned")
+    assert _as_posix(job["full_dir"]).endswith(f"{MIGRATION}/full")
+    assert _as_posix(job["cleaned_dir"]).endswith(f"{MIGRATION}/cleaned")
     assert job["generated_at"].endswith("Z") and job["schema"] == "plenum_cafm"
 
     up = rec["uploads"]

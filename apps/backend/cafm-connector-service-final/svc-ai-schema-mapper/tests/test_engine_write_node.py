@@ -19,6 +19,11 @@ from src.graph import migration_graph
 from src.graph.nodes import db_writer
 from src.graph.nodes import write_node as wn
 
+
+def _as_posix(path: str) -> str:
+    """A path as the assertion means it, whichever separator the OS used."""
+    return str(path).replace("\\", "/")
+
 MIGRATION = "5d1c2a90-0c4e-4d7e-9a35-2a8f3b1f2e11"
 ORG = "11111111-1111-4111-8111-111111111111"
 PLAN = {"tables": [{"source": "Vendors", "dest": "vendors", "rows": 2, "already_present": 1}],
@@ -153,7 +158,7 @@ def test_the_job_carries_what_the_writer_needs(env):
     assert job["approved_new_columns"] == {"vendors": ["colour"]}
     assert job["ddl_statements"] == [] and job["column_renames"] == []
     assert job["rules"]["write_chunk"] == 500 and job["schema"] == "plenum_cafm"
-    assert job["cleaned_dir"].endswith(f"{MIGRATION}/cleaned")
+    assert _as_posix(job["cleaned_dir"]).endswith(f"{MIGRATION}/cleaned")
     assert env_ == {"HOIST_ENGINE_DSN": "postgres://parity"}
     assert "HOIST_ENGINE_DSN" not in json.dumps(job)
 
