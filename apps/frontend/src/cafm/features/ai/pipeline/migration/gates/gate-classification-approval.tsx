@@ -127,6 +127,67 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
     );
   };
 
+  // ── Emitted DDL, under the choices as they stand right now ────────────────────────────
+  // The B22.1 "New tables from shared attributes" card is hidden while this gate is open, so
+  // until you approve there was nowhere to see what a Shared Attribute actually produces. Worse,
+  // the payload behind that card is built BEFORE the answer, so a group re-classified here could
+  // not appear in it at all. This panel is built from the live choices instead.
+  const q = (n: string) => (/^[a-z_][a-z0-9_]*$/.test(n) ? n : `"${String(n).replace(/"/g, '""')}"`);
+
+  // Every source table in the run — the backend appends "_ref" when a lookup would collide with
+  // one, so the preview has to apply the same rule or it names a table that never appears.
+  const sourceTables = new Set<string>();
+  cls.forEach((c) => (c.members ?? []).forEach((m) => {
+    const t = String(m).split(".")[0];
+    if (t) sourceTables.add(t);
+  }));
+
+  const previewDdl = (canonical: string, members: string[]) => {
+    const pk = canonical;
+    const table = sourceTables.has(pk) ? `${pk}_ref` : pk;
+    const pairs = members.map((m) => String(m).split(".")).filter((x) => x.length === 2);
+    const lines = [
+      `CREATE TABLE IF NOT EXISTS plenum_cafm.${q(table)} (`,
+      `    ${q(pk)} TEXT PRIMARY KEY`,
+      `);`,
+      `COMMENT ON TABLE plenum_cafm.${q(table)} IS 'Shared attribute normalised into a lookup ` +
+        `table. Source columns, each now a foreign key into this table: ` +
+        `${pairs.map(([t, c]) => `${t}.${c}`).join(", ")}.';`,
+    ];
+    pairs.forEach(([t, c]) => lines.push(
+      `ALTER TABLE plenum_cafm.${q(t)} ADD CONSTRAINT ${q(`fk_${t}_${c}`)} ` +
+      `FOREIGN KEY (${q(c)}) REFERENCES plenum_cafm.${q(table)} (${q(pk)});`));
+    return lines.join("\n");
+  };
+
+  const ddlEntries = [...fkRows, ...sharedRows]
+    .filter((c) => choices[c.group_id] === "shared")
+    .map((c) => {
+      const lk = lookupByGroup.get(c.group_id);
+      const changed = choices[c.group_id] !== defaultChoice(c);
+      if (lk && !changed) {
+        return {
+          gid: c.group_id, table: lk.table_name, preview: false,
+          meta: `${lk.distinct_count} values`,
+          ddl: [lk.create_ddl, ...(lk.fk_ddl ?? [])].filter(Boolean).join("\n"),
+        };
+      }
+      if (changed) {
+        const name = c.canonical_name ?? "";
+        if (!name) return null;
+        return {
+          gid: c.group_id, table: sourceTables.has(name) ? `${name}_ref` : name, preview: true,
+          meta: "row count known on submit",
+          ddl: previewDdl(name, (c.members ?? []).map(String)),
+        };
+      }
+      // An unchanged shared group with no lookup table is one the service declined to normalise
+      // (a yes/no column is not a vocabulary). Promising DDL for it here would be a lie.
+      return { gid: c.group_id, table: c.canonical_name ?? "", preview: false,
+               meta: "no lookup table — the values are not a vocabulary", ddl: "" };
+    })
+    .filter(Boolean) as Array<{ gid: string; table: string; preview: boolean; meta: string; ddl: string }>;
+
   const RowShell = ({
     row,
     children,
@@ -276,6 +337,41 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                 </RowShell>
               );
             })}
+          </div>
+        </div>
+      ) : null}
+
+      {ddlEntries.length ? (
+        <div className="mb-4">
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Emitted DDL — {ddlEntries.filter((e) => e.ddl).length} lookup table
+            {ddlEntries.filter((e) => e.ddl).length === 1 ? "" : "s"} under your current choices
+          </div>
+          <div className="mb-2 text-[11px] text-slate-500">
+            Every table that will be created, and the foreign key added to each table that shares the
+            column. This follows the buttons above, so a group you re-classify appears here straight
+            away &mdash; marked <b>preview</b>, because its rows are counted only once you submit.
+          </div>
+          <div className="space-y-2">
+            {ddlEntries.map((e) => (
+              <div key={e.gid}>
+                <div className="flex flex-wrap items-center gap-2 px-0.5 pb-1">
+                  <span className="font-mono text-[10px] text-slate-400">{e.gid}</span>
+                  <span className="font-mono text-[10.5px] font-semibold text-emerald-700">{e.table}</span>
+                  {e.preview ? (
+                    <span className="inline-flex items-center rounded-sm bg-indigo-100 px-1 text-[8.5px] font-semibold uppercase text-indigo-800">
+                      preview
+                    </span>
+                  ) : null}
+                  <span className="text-[10px] text-slate-400">{e.meta}</span>
+                </div>
+                {e.ddl ? (
+                  <pre className="overflow-x-auto rounded bg-slate-900 p-2.5 text-[10px] leading-relaxed text-slate-100">
+                    <code>{e.ddl}</code>
+                  </pre>
+                ) : null}
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
