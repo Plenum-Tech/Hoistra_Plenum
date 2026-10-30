@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"time"
 	"regexp"
 	"strings"
 
@@ -127,12 +128,29 @@ func AssetMatchCode(f *Filtered) (string, bool) {
 }
 
 // SystemDefault is write_node._system_default_for_db_type: a raw Python value, not coerced.
+//: The timestamps a source cannot carry because they describe the write itself.
+var bookkeepingTime = map[string]bool{
+	"created_at": true, "updated_at": true, "inserted_at": true,
+	"modified_at": true, "last_updated": true,
+}
+
 func SystemDefault(col, dbType, orgID string) (cell.Cell, bool) {
 	t := pystr.Lower(dbType)
 	c := pystr.Lower(col)
 	switch {
 	case (c == "org_id" || c == "organization_id") && orgID != "":
 		return cell.Of(orgID), true
+	// Bookkeeping timestamps: the row is being created now, so now is the honest answer. These
+	// are NOT business dates — a reading_at or a period_start the file did not carry is still
+	// refused below, because inventing when a meter was read would be a fiction. 769 alarm rows
+	// were refused for the want of an updated_at, because the switch below has no timestamp case
+	// at all and a required timestamp therefore gets nothing. Mirrors write_node.py.
+	case bookkeepingTime[c] && (strings.Contains(t, "timestamp") || t == "date"):
+		now := time.Now().UTC()
+		if t == "date" {
+			return cell.Of(now.Format("2006-01-02")), true
+		}
+		return cell.Of(now.Format("2006-01-02 15:04:05.000000")), true
 	case strings.Contains(t, "bool"):
 		return cell.OfBool(false), true
 	case strings.Contains(t, "json"):

@@ -339,6 +339,53 @@ func (w *writer) prepare(ctx context.Context, q pgschema.Querier, ddl *ddlSessio
 				p.widened = append(p.widened, c)
 			}
 		}
+		// Character columns too narrow for the data. Reported 30 Oct: cert_scope is
+		// varchar(20) and 65 certificate rows carry longer scope text, so Postgres answers
+		// "value too long for type character varying(20)" and the row is lost. Widening the
+		// column to what the data needs keeps the customer's text; the alternative — cutting it
+		// to fit — is a silent edit of their data. A column that cannot be altered (a view,
+		// constraint or index reads it) keeps its width, and insert.go then trims so the row is
+		// still written rather than refused.
+		for _, c := range typeOrder {
+			ci := p.colInfo[c]
+			if ci == nil || ci.MaxChars == nil || *ci.MaxChars <= 0 || p.discard[c] {
+				continue
+			}
+			need := 0
+			for i, rec := range p.norm {
+				if i >= w.spec.WidenScanCap {
+					break
+				}
+				val := rec.Get(c)
+				if val.IsNone() {
+					continue
+				}
+				if n := len([]rune(val.PyStr())); n > need {
+					need = n
+				}
+			}
+			if need <= *ci.MaxChars {
+				continue
+			}
+			done := false
+			if ddl != nil {
+				tx, err := ddl.tx(ctx)
+				if err != nil {
+					return nil, err
+				}
+				if done, err = w.widenCharColumn(ctx, tx, dest, c, *ci.MaxChars, need); err != nil {
+					return nil, err
+				}
+			}
+			if done {
+				wider := *ci
+				n := need
+				wider.MaxChars = &n
+				wider.FormatType = fmt.Sprintf("character varying(%d)", need)
+				p.colInfo[c] = &wider
+				v.cols[c].col = &wider
+			}
+		}
 		for c := range p.resolveCols {
 			p.cols[c] = true
 		}
@@ -578,4 +625,38 @@ func pyList(xs []string) string {
 		parts[i] = pyRepr(x)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// widenCharColumn grows a character column to the length the source actually needs, in a
+// savepoint, waiting at most five seconds for the lock — the same shape as the numeric → TEXT
+// widening above. A widening that fails is logged and the column keeps its width; insert.go
+// then trims to it, so the row is written either way.
+func (w *writer) widenCharColumn(ctx context.Context, tx pgx.Tx, table, col string, from, to int) (bool, error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return false, wrapDB(err)
+	}
+	_, err = sp.Exec(ctx, "SET LOCAL lock_timeout = '5s'")
+	if err == nil {
+		_, err = sp.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.%s ALTER COLUMN "%s" TYPE character varying(%d)`,
+			w.job.Schema, table, col, to))
+	}
+	if err == nil {
+		_, err = sp.Exec(ctx, "SET LOCAL lock_timeout = DEFAULT")
+	}
+	if err != nil {
+		_ = sp.Rollback(ctx)
+		if isConnLost(err) {
+			return false, connLost(err)
+		}
+		w.logf("warning", fmt.Sprintf("[Node 9] Could not widen %s.%s from varchar(%d) to varchar(%d): %v — "+
+			"values longer than %d are trimmed so the rows are still written", table, col, from, to, err, from))
+		return false, nil
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return false, wrapDB(err)
+	}
+	w.logf("warning", fmt.Sprintf("[Node 9] Widened %s.%s (varchar(%d) → varchar(%d)) — the source needs %d "+
+		"characters; rows kept instead of refused", table, col, from, to, to))
+	return true, nil
 }

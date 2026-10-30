@@ -80,19 +80,13 @@ func (w *writer) build(p *tablePlan, rows []*rules.Row, tally *mismatchTally) []
 			keys = append(keys, k)
 			raw = append(raw, v)
 		}
-		genID := false
-		if p.cols["id"] && !p.idSerial && !containsStr(keys, "id") {
-			keys = append(keys, "id")
-			raw = append(raw, cell.Of(w.ids.next()))
-			genID = true
-		}
-		b := &built{genID: genID}
+		b := &built{}
 		out[i] = b
 		if len(keys) == 0 {
 			b.skipped = true
 			continue
 		}
-		kept := &rules.Filtered{K: make([]string, 0, len(keys)), V: make([]coerce.Value, 0, len(keys))}
+		kept := &rules.Filtered{K: make([]string, 0, len(keys)+1), V: make([]coerce.Value, 0, len(keys)+1)}
 		for j, k := range keys {
 			dt := p.types[k]
 			v := coerce.ForType(raw[j], dt)
@@ -101,11 +95,22 @@ func (w *writer) build(p *tablePlan, rows []*rules.Row, tally *mismatchTally) []
 				continue
 			}
 			kept.K = append(kept.K, k)
-			kept.V = append(kept.V, v)
+			kept.V = append(kept.V, trimToColumn(v, p.colInfo[k]))
 		}
 		if len(kept.K) == 0 {
 			b.skipped = true
 			continue
+		}
+		// The id is drawn AFTER coercion, not before. The other order refused whole sheets: a row
+		// arriving with id "VEN-001" kept that value, so the draw was skipped as "already has an
+		// id"; coercion then dropped it, because a vendor code is not a uuid; and the row failed
+		// as "id is required and the file has no value for it". 4,099 rows of one workbook went
+		// exactly that way on 30 Oct. The Python writer was fixed the same morning (write_node.py,
+		// 40f7657) and this was not, and `write` is an engine step, so every Go run still lost them.
+		if p.cols["id"] && !p.idSerial && !hasKey(kept, "id") {
+			kept.K = append(kept.K, "id")
+			kept.V = append(kept.V, coerce.ForType(cell.Of(w.ids.next()), p.types["id"]))
+			b.genID = true
 		}
 		b.f = kept
 		if p.dest == "assets" {
@@ -837,4 +842,19 @@ func (w *writer) tryFetch(ctx context.Context, tx pgx.Tx, sql string, args ...an
 		return nil, false, wrapDB(err)
 	}
 	return out, true, nil
+}
+
+// trimToColumn cuts a value to the column's width instead of letting the insert fail on it.
+// Postgres answers "value too long for type character varying(20)" and the whole row is lost —
+// 65 certificate rows went that way for scope text a few characters over. The Python writer
+// trims; so does this. Only text is trimmed, and only when the column declares a width.
+func trimToColumn(v coerce.Value, col *pgschema.Column) coerce.Value {
+	if col == nil || col.MaxChars == nil || *col.MaxChars <= 0 || v.K != coerce.Text {
+		return v
+	}
+	r := []rune(v.S)
+	if len(r) <= *col.MaxChars {
+		return v
+	}
+	return coerce.Value{K: v.K, S: string(r[:*col.MaxChars])}
 }
