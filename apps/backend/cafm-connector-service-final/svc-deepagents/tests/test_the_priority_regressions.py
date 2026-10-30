@@ -64,20 +64,27 @@ def test_a_different_building_is_still_a_different_building():
 AMBIGUOUS = [(1, "Bishopsgate Tower"), (2, "Bishopsgate House"), (3, "Bishop Street Depot")]
 
 
-def test_an_ambiguous_name_returns_every_plausible_building():
-    """"Bishop" could be any of the three. Returning one is a silent guess."""
-    got = pick_closest("Bishop", AMBIGUOUS)
-    assert len(got) != 1, (
-        "picked %r silently out of %d plausible buildings -- the feedback asks for a question "
-        "back, which needs the candidates, not a winner" % (got, len(AMBIGUOUS)))
+def test_a_name_shared_by_two_buildings_returns_both():
+    """Already true, so a guard: "Bishopsgate" scores 0.970 against Tower and House alike, and
+    FUZZY_TIE keeps both. Clarification has the candidates it needs."""
+    assert {k for k, _ in pick_closest("Bishopsgate", AMBIGUOUS)} == {1, 2}
 
 
-def test_an_ambiguous_name_does_not_silently_pick_the_least_likely():
-    got = pick_closest("Bishop", AMBIGUOUS)
-    if len(got) == 1:
-        assert got[0][0] in (1, 2), (
-            "of three plausible buildings it chose %r, which shares only the weakest word with "
-            "the query" % (got[0][1],))
+def test_a_split_compound_is_ambiguous_rather_than_unmatched():
+    """The real fault behind the reported one. "Bishop Gate" matches NOTHING today -- 0.714
+    against the two Bishopsgate buildings, under the bar -- so there is no silent pick, there is
+    silence. Once a split compound is read as the same name it ties across both, and the tie
+    logic above asks."""
+    got = pick_closest("Bishop Gate", AMBIGUOUS)
+    assert {k for k, _ in got} == {1, 2}, (
+        "got %r: a person who types the building the way people say it should reach both "
+        "Bishopsgate buildings and be asked which" % (got,))
+
+
+def test_a_clear_winner_is_still_picked_alone():
+    """"Bishop" is a whole word of Bishop Street Depot (0.970) and only a fragment of the others
+    (0.685). That is a winner, not an ambiguity, and must not become a question."""
+    assert pick_closest("Bishop", AMBIGUOUS) == [(3, "Bishop Street Depot")]
 
 
 def test_an_unambiguous_name_still_resolves_to_one_building():

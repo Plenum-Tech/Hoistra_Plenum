@@ -33,6 +33,9 @@ FUZZY_MIN = 0.85
 FUZZY_TIE = 0.02
 #: A close spelling of PART of a longer name counts a little less than one of the whole name.
 WINDOW_WEIGHT = 0.97
+#: Below this many letters a name is too short to read as a split compound: "a b" must not fuzzily
+#: become any two-letter name, and short codes are compared exactly anyway.
+_COMPOUND_MIN_LETTERS = 6
 
 _QUOTES = str.maketrans({"‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
                          "“": '"', "”": '"', "„": '"', "″": '"',
@@ -120,7 +123,25 @@ def similarity(query, stored) -> float:
     n = len(q_rest)
     window = max((SequenceMatcher(None, a, " ".join(s_rest[i:i + n])).ratio()
                   for i in range(len(s_rest) - n + 1)), default=0.0) * WINDOW_WEIGHT if len(s_rest) > n else 0.0
-    return max(plain, ordered, window)
+    # The same name with the compound split, or joined: "Bishop Gate Tower" beside "Bishopsgate
+    # Tower", "saint pauls" beside "StPauls". Every comparison above comparesWORDS, and no word of
+    # "bishop gate" equals or prefixes "bishopsgate", so the pair scored 0.71 and the building was
+    # not found at all — not picked wrongly, not asked about, simply absent. Comparing the letters
+    # with the spaces taken out reads the two as one name again, against each run of the stored
+    # words so a dropped kind word ("Tower") costs nothing.
+    compacted = 0.0
+    qc = compact(a)
+    if len(qc) >= _COMPOUND_MIN_LETTERS:
+        for i in range(len(s_rest)):
+            for j in range(i + 1, len(s_rest) + 1):
+                sc_win = compact(" ".join(s_rest[i:j]))
+                if not sc_win:
+                    continue
+                r = SequenceMatcher(None, qc, sc_win).ratio()
+                if j - i != len(s_rest):
+                    r *= WINDOW_WEIGHT        # part of the name is worth a little less than all of it
+                compacted = max(compacted, r)
+    return max(plain, ordered, window, compacted)
 
 
 def pick_closest(query, rows) -> list[tuple]:
