@@ -428,6 +428,55 @@ def _is_boolean_vocabulary(values: list) -> bool:
     return bool(seen) and seen <= _BOOLEAN_TOKENS
 
 
+#: A value that is measured or belongs to one record, rather than chosen from a list.
+_DATE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}([ T].*)?$|^\d{1,2}[-/]\d{1,2}[-/]\d{4}")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_URL_RE = re.compile(r"^(https?://|www\.)", re.I)
+_PHONE_RE = re.compile(r"^\+?[\d][\d\s().-]{5,}$")
+
+#: Above this share of distinct-to-occurrences the values are an identifier, not a vocabulary.
+#: A vocabulary is re-used: status over 83 rows is 0.04, a name over 33 rows is 0.61.
+_VOCABULARY_MAX_DISTINCT_RATIO = 0.5
+
+#: …but only once there are enough rows for the ratio to mean anything. Over four rows every
+#: vocabulary looks like an identifier: two currencies in one table and two in another give
+#: three distinct values over four rows, which is the same 0.75 a serial number scores. Below
+#: this the question cannot be answered from the data, so it is not asked.
+_VOCABULARY_MIN_OCCURRENCES = 20
+
+
+def _not_a_vocabulary(values: list, occurrences: int) -> str | None:
+    """Why these values are not a vocabulary worth its own lookup table, or None if they are.
+
+    Normalising means the values are a closed, repeating set the schema does not already model.
+    Applied to anything two tables share, it produced a table of people's phone numbers, one of
+    their names, and one of 15 commissioning dates — each putting a foreign key on a per-record
+    attribute and a table of trivia into the customer's schema.
+
+    The tests are about what the values ARE, not what they look like: a multi-word vocabulary
+    ("Gas Safety Record") repeats and is kept, while a short code that barely repeats is an
+    identifier and is not. Only the automatic pass asks; a person re-classifying a group at the
+    gate has given an instruction.
+    """
+    seen = [str(v).strip() for v in values if str(v).strip()]
+    if not seen:
+        return "no values"
+    distinct = {v.lower() for v in seen}
+    if (occurrences >= _VOCABULARY_MIN_OCCURRENCES
+            and len(distinct) / occurrences > _VOCABULARY_MAX_DISTINCT_RATIO):
+        return (f"{len(distinct)} distinct values over {occurrences} rows — near one per row, "
+                f"so this identifies rows rather than classifying them")
+    if all(_DATE_RE.match(v) for v in seen):
+        return "dates are measured, not chosen from a list"
+    if all(_EMAIL_RE.match(v) for v in seen):
+        return "an email address belongs to its own record"
+    if all(_URL_RE.match(v) for v in seen):
+        return "a URL belongs to its own record"
+    if all(_PHONE_RE.match(v) for v in seen):
+        return "a phone number belongs to its own record"
+    return None
+
+
 def synthesize_shared_attribute_table(
     tables: dict,
     *,
@@ -435,6 +484,7 @@ def synthesize_shared_attribute_table(
     group_id: str,
     member_pairs: list,
     members_display: list | None = None,
+    vocabulary_only: bool = True,
 ) -> dict | None:
     """B22.1 — synthesize the lookup table + DDL for one SHARED-ATTRIBUTE group.
 
@@ -467,6 +517,32 @@ def synthesize_shared_attribute_table(
     # with a real vocabulary — currency, status — are untouched.
     if _is_boolean_vocabulary(values):
         return None
+    # The rest of "is this a vocabulary" — asked only of the automatic pass. A person who
+    # re-classifies a group at the gate has given an instruction, and alarm_id (769 near-unique
+    # codes) is exactly the table that was asked for; the machine should not have proposed it
+    # unprompted, and must not refuse it when told.
+    if vocabulary_only:
+        _occurrences = 0
+        for (_t, _c) in member_pairs:
+            if _t in tables:
+                _occurrences += sum(
+                    1 for _v in column_values(tables[_t]["rows"], _c) if str(_v).strip())
+        _why = _not_a_vocabulary(values, _occurrences)
+        if _why:
+            return None
+        # A column that identifies the rows of its OWN table is that entity's alternate key, and
+        # the same values elsewhere are a reference to the entity rather than a list shared with
+        # it. vendors.trading_name is unique across 13 vendors while vendor_certificates repeats
+        # it 5 times each: the union ratio reads as a vocabulary, the parent does not. The
+        # certificates already carry vendor_id, so the name is a denormalised copy and this would
+        # have built a second table of vendor names beside `vendors`.
+        for (_t, _c) in member_pairs:
+            if _t not in tables:
+                continue
+            _vals = [str(_v).strip() for _v in column_values(tables[_t]["rows"], _c)
+                     if str(_v).strip()]
+            if len(_vals) >= 5 and len({_v.lower() for _v in _vals}) / len(_vals) >= 0.9:
+                return None
     # Say on the table itself which columns it was made from. The gate's panel explains that,
     # but the panel is not there when someone reads the schema a month later — and a bare
     # lookup table whose rows came from two other tables is a puzzle without it. Asked for on
@@ -1884,6 +1960,7 @@ def apply_classification_decisions(
                         group_id=gid,
                         member_pairs=pairs,
                         members_display=row.get("members"),
+                        vocabulary_only=False,   # the person asked for this one
                     )
                     if entry:
                         shared_tables.append(entry)
@@ -1933,6 +2010,7 @@ def apply_classification_decisions(
                             group_id=gid,
                             member_pairs=pairs,
                             members_display=row.get("members"),
+                            vocabulary_only=False,   # the person asked for this one
                         )
                         if entry:
                             shared_tables.append(entry)
