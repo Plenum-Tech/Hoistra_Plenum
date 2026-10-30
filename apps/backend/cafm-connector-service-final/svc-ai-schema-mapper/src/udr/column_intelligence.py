@@ -155,6 +155,55 @@ def _prefixed(table: str, col: str) -> str:
 _GENERIC_PK_NAMES = {"id", "code", "key", "no", "number", "pk"}
 
 
+def destination_entity_for(
+    canonical,
+    dest_tables=None,
+    dest_pk_by_table=None,
+):
+    """The destination table that already owns ``canonical``, as ``(table, key_column)``.
+
+    A shared attribute is normalised into a new lookup table. That is right for a vocabulary the
+    database does not model — status, currency, utility — and wrong for a reference to an entity
+    it already has. The verdict is decided from the workbook alone, so an upload with no
+    `building` sheet makes building_id look ownerless and earns a brand-new plenum_cafm.building_id
+    beside the real buildings table, with every building_id column pointed at the copy.
+
+    Resolution is by ENTITY NAME first: strip a trailing ``_id`` and look for that table, singular
+    or plural. The primary-key name is only a fallback, because on its own it misfires —
+    plenum_cafm.chiller_design_specs is keyed on asset_id, so "which table has a PK called
+    asset_id" answers chiller_design_specs rather than assets. The fallback also has to be
+    unambiguous: two tables keyed on the same name means guessing, and a foreign key onto a guess
+    is worse than none.
+
+    The name match supplies the key column from the table it found, not from the canonical:
+    vendors is keyed on ``id``, so vendor_id must reference vendors(id).
+    """
+    name = _norm_col_name(canonical)
+    if not name or name in _GENERIC_PK_NAMES:
+        return None
+    pk_by = {str(t).lower(): list(cols or []) for t, cols in (dest_pk_by_table or {}).items()}
+    by_lower = {str(t).lower(): t for t in (dest_tables or ())}
+    for t in pk_by:                      # a table known only by its key still counts as present
+        by_lower.setdefault(t, t)
+    if not by_lower:
+        return None
+
+    def _key_of(lower: str) -> str:
+        cols = pk_by.get(lower) or []
+        return str(cols[0]) if len(cols) == 1 else name
+
+    base = name[:-3] if name.endswith("_id") and len(name) > 3 else name
+    if base:
+        for cand in (base, base + "s", base + "es"):
+            if cand in by_lower:
+                return (by_lower[cand], _key_of(cand))
+
+    owners = [t for t, cols in pk_by.items() if [str(c).lower() for c in cols] == [name]]
+    if len(owners) == 1:
+        return (by_lower[owners[0]], name)
+    return None
+
+
 def _singular(table: str) -> str:
     """Best-effort singular snake_case form of a source-table name.
 
@@ -488,6 +537,7 @@ def build_column_intelligence(
     canonical_overrides: dict[str, str] | None = None,
     dest_samples_by_table: dict[str, dict[str, list]] | None = None,
     dest_columns_by_table: dict[str, set] | None = None,
+    dest_pk_by_table: dict[str, list] | None = None,
     unresolved_suggest_by_source_col: dict[tuple[str, str], str] | None = None,
 ) -> dict:
     """Build the B13.1→B21.1 column-intelligence report.
@@ -504,6 +554,8 @@ def build_column_intelligence(
     map so every downstream node sees the same identifier.
     """
     tables = tables or {}
+    # Every table the destination schema has, however we came to hear of it.
+    _dest_table_names = set(dest_columns_by_table or {}) | set(dest_pk_by_table or {})
     dest_table_by_source = dest_table_by_source or {}
     dest_col_by_source_col = dest_col_by_source_col or {}
     conf_by_source_col = conf_by_source_col or {}
@@ -1203,25 +1255,50 @@ def build_column_intelligence(
             if (classification.get((t, c)) or {}).get("classification") == "FK"
         ]
         ri = max([r for r in ri_vals if isinstance(r, (int, float))], default=None)
+        _owner = None
         if pk_member and fk_member:
             verdict = "Foreign Key relationship"; fk_groups += 1
         elif pk_member:
             verdict = "Primary Key group"; pk_groups += 1
         else:
-            verdict = "Shared Attribute"; shared_groups += 1
+            # No member is a key — but the group is only ownerless as far as the WORKBOOK goes.
+            # An upload with no `building` sheet makes building_id look like a shared attribute
+            # and earns a new plenum_cafm.building_id beside the real buildings table, with every
+            # building_id column pointed at the copy. Ask the destination before deciding.
+            _owner = destination_entity_for(
+                rec["canonical_name"], _dest_table_names, dest_pk_by_table)
+            if _owner:
+                verdict = "Foreign Key relationship"; fk_groups += 1
+            else:
+                verdict = "Shared Attribute"; shared_groups += 1
+        _owner_key = f"{_owner[0]}.{_owner[1]}" if _owner else None
         classification_rows.append({
             "group_id": rec["group_id"],
             "canonical_name": rec["canonical_name"],
             "members": rec["members"],
-            "has_pk": _prefixed(*pk_member) if pk_member else None,
+            "has_pk": _prefixed(*pk_member) if pk_member else _owner_key,
             "fk_column": _prefixed(*fk_member) if fk_member else None,
             # Canonical-overridden form of has_pk / fk_column so B20.1 reads with
             # the same unified identifier as B13.1 / B14.1 / B19.1.
-            "canonical_has_pk": _canonical_key(_prefixed(*pk_member)) if pk_member else None,
+            "canonical_has_pk": (_canonical_key(_prefixed(*pk_member)) if pk_member
+                                 else _owner_key),
             "canonical_fk_column": _canonical_key(_prefixed(*fk_member)) if fk_member else None,
             "ri": ri,
             "verdict": verdict,
+            # Set only when the destination already owns the attribute, so the gate can say which
+            # table it is referencing rather than leaving "FK" unexplained on a group whose
+            # members are all source columns.
+            "owned_by_destination": _owner_key,
         })
+        if _owner:
+            for (_t, _c) in g:
+                fk_candidates.append({
+                    "src_table": _t, "src_column": _c,
+                    "dst_table": _owner[0], "dst_column": _owner[1],
+                    "ri": ri, "confirmed": True,
+                    "reason": f"{_owner[0]} already exists in the destination and owns this "
+                              f"attribute — referencing it instead of creating a lookup table",
+                })
 
     # ── B22.1 — synthesize a lookup table per SHARED-ATTRIBUTE group + DDL + FK rewrites ──
     # A shared attribute that is NOT any table's PK/FK (e.g. asset_type shared by assets +

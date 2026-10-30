@@ -275,9 +275,14 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
     # another round-trip. Best-effort — empty map just disables the live re-match.
     canonical_columns_by_table: dict[str, list[str]] = {}
     _cols_by_tbl: dict = {}  # destination columns by table — reused by the B21 value-check
+    # Destination primary keys, so B20.1 can tell a shared attribute from a reference to an
+    # entity the destination already has (building_id → buildings) and stop synthesising a
+    # second table of the same values beside the real one.
+    _pk_by_tbl: dict = {}
     try:
-        from ...db import get_plenum_cafm_columns_by_table
+        from ...db import get_plenum_cafm_columns_by_table, get_plenum_cafm_primary_keys
         _cols_by_tbl = await get_plenum_cafm_columns_by_table()
+        _pk_by_tbl = await get_plenum_cafm_primary_keys()
         for _t in existing_canonical_tables:
             _cols = _cols_by_tbl.get(_t.lower())
             if _cols:
@@ -476,6 +481,9 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 # Real destination columns so B21 can reject a match onto a column the
                 # routed table doesn't have (e.g. 'asset id' → 'asset_code' on 'sites').
                 dest_columns_by_table=_cols_by_tbl,
+                # Lets a group whose owning table is absent from the workbook reference the
+                # destination entity instead of becoming a new lookup table.
+                dest_pk_by_table=_pk_by_tbl,
                 # Unresolved best-guess suggestions → B21 mirrors Step 2 (lower-priority fallback).
                 unresolved_suggest_by_source_col=_unres_sg,
             )
@@ -506,6 +514,9 @@ async def pre_semantic_review_node(state: MigrationState) -> MigrationState:
                 review_items_by_table,        # display copy (reviewable rows)
                 auto_approved_by_table,        # display copy (auto-approved rows)
                 dest_columns_by_table=_cols_by_tbl,
+                # Lets a group whose owning table is absent from the workbook reference the
+                # destination entity instead of becoming a new lookup table.
+                dest_pk_by_table=_pk_by_tbl,
                 dest_table_by_source=_dest_table,
             )
             if _aligned:

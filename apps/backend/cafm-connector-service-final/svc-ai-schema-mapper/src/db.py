@@ -194,6 +194,43 @@ async def get_plenum_cafm_columns_by_table() -> dict[str, set[str]]:
     return out
 
 
+async def get_plenum_cafm_primary_keys() -> dict[str, list[str]]:
+    """Map each plenum_cafm base table → its primary-key columns, in key order (lowercased).
+
+    Lets the classifier ask whether the destination already owns an attribute before normalising
+    it into a new lookup table — plenum_cafm.buildings owns building_id, so an upload that has no
+    `building` sheet should reference it rather than create a second table of the same values.
+
+    Best-effort: {} on any failure, and the classifier then behaves exactly as it did before.
+    """
+    out: dict[str, list[str]] = {}
+    try:
+        session_factory = get_async_session_factory()
+        async with session_factory() as session:
+            res = await session.execute(text(
+                "SELECT tc.table_name, kcu.column_name "
+                "FROM information_schema.table_constraints tc "
+                "JOIN information_schema.key_column_usage kcu "
+                "  ON kcu.constraint_name = tc.constraint_name "
+                " AND kcu.table_schema = tc.table_schema "
+                "JOIN information_schema.tables t "
+                "  ON t.table_schema = tc.table_schema AND t.table_name = tc.table_name "
+                "WHERE tc.table_schema = 'plenum_cafm' "
+                "  AND tc.constraint_type = 'PRIMARY KEY' "
+                "  AND t.table_type = 'BASE TABLE' "
+                "ORDER BY tc.table_name, kcu.ordinal_position"
+            ))
+            for tbl, col in res.fetchall():
+                out.setdefault(str(tbl).lower(), []).append(str(col).lower())
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "[db] get_plenum_cafm_primary_keys failed — a shared attribute the destination "
+            "already owns will be normalised into a new lookup table instead of referencing it",
+            exc_info=True,
+        )
+    return out
+
+
 async def get_plenum_cafm_view_names() -> set[str]:
     """The names of plenum_cafm's views and materialized views (lowercased).
 

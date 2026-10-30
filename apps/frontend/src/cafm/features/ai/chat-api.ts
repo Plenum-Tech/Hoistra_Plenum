@@ -1408,6 +1408,10 @@ export type UdrGroupClassification = {
   canonical_fk_column?: string | null;
   ri?: number | null;
   verdict: string;
+  /** Set when no member of the group is a key in the WORKBOOK, but the destination schema
+   *  already owns the attribute ("buildings.building_id"). The group is a foreign key onto that
+   *  table rather than a shared attribute, and no lookup table is created for it. */
+  owned_by_destination?: string | null;
 };
 export type UdrColDestMap = {
   source: string;

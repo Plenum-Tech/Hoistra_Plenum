@@ -305,6 +305,14 @@ export default function GateClassificationApproval({ migrationId, payload, onSub
                     <span className="text-slate-300">→</span>
                     <span className="text-emerald-700">{pk}</span>
                   </div>
+                  {c.owned_by_destination ? (
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      No table in this file owns this column, but{" "}
+                      <b className="font-mono">{String(c.owned_by_destination).split(".")[0]}</b>{" "}
+                      already exists in the destination and does — so these columns reference it.
+                      Switching to Shared Attribute would create a second table of the same values.
+                    </div>
+                  ) : null}
                 </RowShell>
               );
             })}
