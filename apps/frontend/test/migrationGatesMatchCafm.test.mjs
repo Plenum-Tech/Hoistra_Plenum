@@ -92,7 +92,13 @@ test('classification: demote an FK and exclude a group — the button says what 
   assert.deepEqual(classificationBody(CLASS, dec), { rejected_groups: ['G3'], verdict_overrides: { G1: 'shared' } });
   const v = classificationView(CLASS, dec);
   assert.equal(v.submitLabel, 'Apply 2 changes & continue');
-  assert.equal(v.fk[0].note, 'Re-classified: FK will NOT be enforced — a lookup table is created instead.');
+  // The note is in the future tense on purpose, and says so about the panel beneath it. The old
+  // wording claimed the table "is created" while the Emitted DDL beside it — built before the
+  // answer and never rebuilt — could not list it. Two rounds were spent hunting an alarm_id and
+  // a schedule_id that had in fact been built, so the promise and its timing are pinned here.
+  assert.match(v.fk[0].note, /will not be enforced/);
+  assert.match(v.fk[0].note, /when you submit/);
+  assert.match(v.fk[0].note, /will not list it yet/);
   assert.equal(v.shared[0].lookup, null, 'an excluded group creates no lookup table');
 });
 

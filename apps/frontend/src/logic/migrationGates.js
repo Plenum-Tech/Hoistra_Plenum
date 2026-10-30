@@ -170,10 +170,15 @@ export function classificationView(payload, dec) {
       canonical: c.canonical_name || '',
       lookup: lk && chosen === 'shared' ? { table: lk.table_name, pk: lk.pk_column, values: num(lk.distinct_count) === null ? arr(lk.sample_values).length : lk.distinct_count } : null,
       members: members.join(' · '),
+      // Future tense, deliberately. Nothing here has happened yet: the gate's payload — the
+      // Emitted DDL panel included — is built before the person answers and is not rebuilt, so
+      // a card promising a table "is created" sat beside a list that could not contain it. That
+      // cost two rounds of hunting a missing alarm_id and schedule_id that had in fact been
+      // built. The confirmed outcome is recorded as a completed step once the gate is submitted.
       note: chosen === 'exclude' ? 'Excluded — nothing from this group will be applied.'
         : changed ? (chosen === 'shared'
-          ? 'Re-classified: FK will NOT be enforced — a lookup table is created instead.'
-          : 'Re-classified: treated as a Foreign Key — its lookup table will NOT be created.')
+          ? 'Re-classified: the FK will not be enforced. Its lookup table is created when you submit — the DDL below is what stands now, so it will not list it yet.'
+          : 'Re-classified: treated as a Foreign Key. Its lookup table will not be created when you submit — the DDL below is what stands now, so it may still list it.')
         : '',
       fkAllowed: canBeFk(c)
     };

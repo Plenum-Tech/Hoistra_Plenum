@@ -115,6 +115,40 @@ async def grouping_review_node(state: MigrationState) -> MigrationState:
         state["classification_overrides"] = applied.get("overrides_applied") or {}
         logger.info(f"[Classification Gate] Applied — {applied}")
 
+        # Record the answer as a completed step, the way the column-mapping gate does. The gate's
+        # own payload is built BEFORE the person answers and is cleared on resume, so the Emitted
+        # DDL panel beside the card could only ever show the tables that existed before the
+        # click — every one except the table they had just asked for. On 30 Oct that sent us
+        # hunting a missing alarm_id and schedule_id twice while the run's log said both had been
+        # built. Re-publishing the gate payload would park the run as awaiting input again, so
+        # the post-answer truth goes here instead, where a finished step is read from.
+        if migration_id:
+            try:
+                from .schema_db_writer import migration_append_node_log_auto
+                _now = datetime.utcnow()
+                await migration_append_node_log_auto(
+                    migration_id, 4, "Classification Confirmed", _now, _now,
+                    output={
+                        "classification_confirmed": True,
+                        "lookup_tables_added": applied.get("lookup_tables_added") or [],
+                        "overrides_applied": applied.get("overrides_applied") or {},
+                        "rejected_applied": applied.get("rejected_applied") or [],
+                        "fk_candidates_removed": applied.get("fk_candidates_removed") or 0,
+                        "fk_candidates_added": applied.get("fk_candidates_added") or 0,
+                        # The list as it stands AFTER the answer: the lookup tables the output
+                        # step will emit, including the ones this gate just created.
+                        "shared_attribute_tables": [
+                            {"table_name": t.get("table_name"), "pk_column": t.get("pk_column"),
+                             "from_group": t.get("from_group"),
+                             "distinct_count": t.get("distinct_count"),
+                             "create_ddl": t.get("create_ddl"), "fk_ddl": t.get("fk_ddl") or []}
+                            for t in (ci.get("shared_attribute_tables") or [])
+                        ],
+                    },
+                )
+            except Exception as _exc:  # pragma: no cover — the answer is applied regardless
+                logger.warning(f"[Classification Gate] could not record the confirmation: {_exc}")
+
     state["grouping_reviewed"] = True
     state["pre_semantic_review_payload"] = None
 
