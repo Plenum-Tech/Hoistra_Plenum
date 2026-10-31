@@ -247,6 +247,20 @@ async def bind_documents_to_building(
     """
     if not document_ids:
         return {"documents": 0, "certificates": 0, "created": 0}
+    # The caller's own boundary, checked here as well as where they checked it. Every caller
+    # today does check — workflow.py before an ingest, ingestion_cases.py before a reassign —
+    # so this changes nothing now. It is for the caller that comes later and does not: this
+    # function files somebody's document against a building, and inheriting no protection is
+    # how a document lands in another company's drawer. A background job with no caller set is
+    # unrestricted, the same rule building_clause follows (1 Nov 2026).
+    from .principal import caller_principal
+    _p = caller_principal.get()
+    if _p is not None and not _p.allows_building(building_id):
+        log.warning("building_binding.refused", building_id=str(building_id),
+                    user_id=str(getattr(_p, "user_id", "")), documents=len(document_ids))
+        raise PermissionError(
+            "This account is not allocated to building " + str(building_id)
+            + ", so documents cannot be filed against it.")
     async with database.AsyncSessionLocal() as session:
         has_org = await _documents_have(session, "organization_id")
         has_sens = await _documents_have(session, "sensitivity")
