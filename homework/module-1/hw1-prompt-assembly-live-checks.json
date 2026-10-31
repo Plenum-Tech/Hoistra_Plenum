@@ -1,0 +1,291 @@
+{
+  "scope": "Isolated fictional permission fixtures; one live OpenRouter read; no business mutations",
+  "checks": [
+    {
+      "check": "missing identity denied",
+      "status": 401,
+      "passed": true
+    },
+    {
+      "check": "manager tools exposed",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "scoped count and first page",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "stable second page",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "last page remains partial",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "complete bounded result",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "portfolio count excludes other organization",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "unassigned same-organization denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "cross-organization denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "mixed permitted and forbidden selection denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "general status summary allowed",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "general full inspection denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "compliance work-order read denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "compliance organization certificate reads",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "compliance invoice read denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "compliance generic building records denied",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "compliance supporting evidence allowed",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "manager asset model read",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "manager building energy record read",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "manager warranty document read",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "manager new document category read",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "mixed building document withheld",
+      "status": 404,
+      "passed": true
+    },
+    {
+      "check": "unknown scope document withheld",
+      "status": 404,
+      "passed": true
+    },
+    {
+      "check": "sensitive content document withheld",
+      "status": 404,
+      "passed": true
+    },
+    {
+      "check": "portfolio mixed document allowed",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "unknown record unavailable",
+      "status": 404,
+      "passed": true
+    },
+    {
+      "check": "restricted record unavailable",
+      "status": 404,
+      "passed": true
+    },
+    {
+      "check": "direct document route permitted",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "direct document route denied to general user",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "general usage limited to self",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "compliance usage limited to compliance",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "forbidden operation query_table",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "forbidden operation delete_document",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "forbidden operation create_work_order",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "forbidden operation block_vendor",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "forbidden operation unblock_vendor",
+      "status": 403,
+      "passed": true
+    },
+    {
+      "check": "forged identity arguments rejected",
+      "status": 422,
+      "passed": true
+    },
+    {
+      "check": "malformed input audited safely",
+      "status": 422,
+      "passed": true
+    },
+    {
+      "check": "legacy shortcut workflow blocked",
+      "status": 503,
+      "passed": true
+    },
+    {
+      "check": "legacy resume blocked",
+      "status": 503,
+      "passed": true
+    },
+    {
+      "check": "legacy download blocked",
+      "status": 503,
+      "passed": true
+    },
+    {
+      "check": "audit outage prevents data response",
+      "status": 503,
+      "passed": true
+    },
+    {
+      "check": "read restored after audit recovery",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "check": "live OpenRouter scoped read planner",
+      "status": 200,
+      "passed": true
+    }
+  ],
+  "passed": 44,
+  "audit_summary": {
+    "events": 181,
+    "allowed": 67,
+    "denied": 34,
+    "validation": 4,
+    "security": 9,
+    "raw_input_leaked": false,
+    "content_leaked": false,
+    "policy_versions": [
+      "hw1-point2-v1"
+    ]
+  },
+  "prompt_assembly": {
+    "bound_tools": [
+      "building_records",
+      "building_documents",
+      "asset_information",
+      "work_order_status",
+      "asset_conditions",
+      "certificate_status",
+      "inspection_reports",
+      "certificate_documents",
+      "compliance_evidence",
+      "contract_documents",
+      "invoice_documents",
+      "energy_findings",
+      "invoice_findings",
+      "vendor_performance",
+      "work_order_sla",
+      "usage_reports"
+    ],
+    "loaded_instructions": [
+      {
+        "id": "core",
+        "kind": "core",
+        "path": "orchestrator/SKILL.md",
+        "sha256": "2aecf7139aaa6f47fc2b0f6ac3c602bd71ee3ba750d797b0c44dae1c00176311"
+      },
+      {
+        "id": "permissions",
+        "kind": "shared",
+        "path": "policies/permissions.md",
+        "sha256": "4414e065e8996fb342a0834d22cd20bc478231fc043e3508aea4ec5658490813"
+      },
+      {
+        "id": "actions",
+        "kind": "shared",
+        "path": "policies/actions-and-evidence.md",
+        "sha256": "33b6cd822e79d2ea29482fe2f930bbde0436de864dbb6605fe87953783863f16"
+      },
+      {
+        "id": "responses",
+        "kind": "shared",
+        "path": "policies/responses-and-audit.md",
+        "sha256": "a9c9540f7720a9502cb849f2d0d1f8cede67d841af8b6aa68b718146002dc61d"
+      }
+    ],
+    "manifest_sha256": "6a87993a8033c501cea37c9e836ccf47666551cea5ca4dde996d9892950e288a",
+    "manifest_version": "1.0.0",
+    "policy_version": "hw1-point2-v1",
+    "profile": "hw1-read-only",
+    "rendered_prompt_sha256": "25a9ad874292ebb2f5a2185e50dc3aa0e87af1639566902094724f5d2a9f7cf8",
+    "selected_domain_skills": [],
+    "specification_version": "0.14.0"
+  }
+}

@@ -1,0 +1,23 @@
+# Homework Energy Intelligence
+
+Use only source-verified readings, meter units and authorized building floor area. Property Managers and Portfolio Managers have energy access only within assigned buildings. General Users and Compliance Officers have no energy tools.
+
+`energy_readings` returns the selected inclusive dates, source IDs, freshness and kWh only when meter units are compatible. `energy_eui` reports period consumption divided by positive verified m² area and, when requested by the caller's period, annualizes by `365 / inclusive_period_days`. State both units distinctly. A missing reading, area, unit or source is unavailable, never zero. A verified zero remains zero.
+
+For a source-verified building type and matching meter fuel, `energy_eui` also compares annualized EUI against the bundled legacy CIBSE TM46 indicative pack. It returns the pack label, deviation percentage, pro-rated benchmark excess kWh and, only when the meter source contains a valid tariff, excess cost. Unknown types and missing tariffs remain explicitly unavailable. `energy_benchmarks` lists the indicative reference categories; do not describe them as a live or client-calibrated benchmark feed.
+
+`energy_anomaly_scan` limits its scan to the 35 days ending on the requested date. It uses the existing Energy thresholds: weekend load above 130% of comparable complete weekends, 7-day baseline drift above 110% with the final 48 hours also above the matched profile, and (for sub-meters only) a 48-hour spike above 120%. Match readings by weekend status and hour of day; do not compare a weekend to a flat weekday average. An occupancy change in the 35-day window suppresses baseline drift. Require source-verified hourly readings and a known occupancy state. Findings include dates, excess kWh, annualized excess, source IDs and tariff-derived cost. If required readings, occupancy evidence, or cost tariff are missing, report `insufficient_comparable_evidence`; never describe the building as clear.
+
+`energy_anomaly_scan` persists newly identified findings with their immutable source references. Managers can review them with `energy_anomaly_list`. An explicit authenticated human API request can record `acknowledge`, `monitor`, or `mark_expected` through `energy_anomaly_act`; mark expected requires a reason and scoped evidence source IDs. The model cannot approve or invoke that disposition. Actions change only review state; repeated unchanged actions are idempotent.
+
+Select a supplied `meter_id` and optional `section_id` only within the authenticated building. Never combine incompatible units or interval types, duplicate timestamps or period readings from different reporting periods. Missing readings remain unavailable, not a fabricated zero.
+
+`energy_gap_scan` persists runs of at least two missing source-declared hourly periods. `energy_gap_retry` is an explicit manual/test-clock trigger of the isolated simulated DCC adapter: ten minutes between attempts, at most three known-failure retries, then configured manager escalation. Unknown outcomes require review without blind retries; unavailable simulation is a failure. The adapter never claims real DCC retrieval or invents readings.
+
+`energy_remediation_queue` requires source-backed condition <=2 and consumption strictly >15% over a compatible benchmark. Check inspection negation and expose conflicting narratives for review. Repair versus replace compares sourced costs and produces a queue recommendation only. `energy_monthly_report` persists a manual calendar-month snapshot with dates, freshness, EUI/benchmark/tariff calculations, ranked anomalies and recommendations. Overlapping anomaly costs cannot be summed or added to benchmark excess cost. Missing carbon factors remain unavailable. No scheduler, operational work order or real email is created.
+
+Anomaly `financial_gbp` is cost for its observed window; `annualized_financial_gbp` is a separately labelled extrapolation. Always show the window, excess kWh and the tariff evidence before quoting cost.
+
+`energy_get_monthly_report` retrieves a retained snapshot by report ID under the same manager/building controls. A report ID alone grants no access. Incomplete hourly calendar periods make full-period EUI unavailable; report the observed consumption, missing-hour count and freshness without treating absent hours as zero. No persisted anomaly evaluation means its aggregate cost is unavailable, not a clean zero.
+
+Do not invent meter joins, benchmark values, tariff, anomaly, occupancy or escalation data. Do not claim that monitoring or escalation ran unless a source-backed tool result provides it. This homework slice does not change readings, equipment or work orders.

@@ -1,0 +1,43 @@
+{
+  "milestone_id": "03-ingestion",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "recorded_at": "2026-10-27T04:19:47.892894+00:00",
+  "checks": [
+    {
+      "id": "portfolio_only_onboarding_and_assignment",
+      "passed": true,
+      "evidence": "Only Portfolio Manager preview/confirm creates a fictional building in its trusted own-org portfolio; other three roles403, client portfolio override422. Concurrent confirmation yields created/already_created for one ID. A competing stale portfolio preview409. Fresh trusted identity includes the new membership; Property Manager assignment remains unchanged. Building profile and immutable original are retained; no role/user administration."
+    },
+    {
+      "id": "typed_ingestion_with_immutable_originals",
+      "passed": true,
+      "evidence": "Actual APIs stage immutable originals at preview, exclude unconfirmed evidence from accepted search, and accept typed asset, inspection, meter-reading and external work-order report fixtures with the same source ID. Condition0, undeclared role field and arbitrary adapter422. No operational work order or unrestricted schema write is exposed. Protected source reads verify exact original retention without publishing source bodies. Non-superuser source update/delete denials checked; every pre-existing source fingerprint remains identical, while authorized new originals were appended."
+    },
+    {
+      "id": "duplicate_and_conflict_preservation",
+      "passed": true,
+      "evidence": "Same-building identical file reuses source and record (already_ingested); different extraction from that retained file409. The same file in authorized A2 creates a separately scoped source. Conflicting source cannot confirm through append (409), leaves accepted values unchanged, and an explicit keep_current decision preserves both accepted and unselected candidate originals."
+    },
+    {
+      "id": "authorized_current_version_selection",
+      "passed": true,
+      "evidence": "Explicit assigned-manager accept_incoming selects business version2 linked to prior record/source, retains immutable version1 original and candidate source, and updates the current search representation. Repeated exact decision is already_resolved; changed decision and competing stale-current preview409. No automatic conflict overwrite or source deletion."
+    },
+    {
+      "id": "manager_and_certificate_only_officer_corrections",
+      "passed": true,
+      "evidence": "Manager derived asset correction appends business version3 with before/after/reason/actor and retained original; General User/Compliance Officer generic corrections403. A separately staged fictional certificate is corrected by the Officer through the same guarded Compliance preview/confirmation adapter, preserving prior certificate source. Officer asset record/original retrieval404. Certificate-only scope never grants general ingestion, commercial, Energy or HOI access."
+    },
+    {
+      "id": "search_index_current_and_history_integrity",
+      "passed": true,
+      "evidence": "Append-only index returns one current asset at business version3 and retains three accepted asset versions. A term present only in superseded data returns0 current/1 historical match. Officer certificate select_version restores the original source as a new current business representation while retaining all certificate history; physical source version remains distinct. Officer index includes certificate entries only. No standalone index-removal tool (403); original evidence remains retrievable under role/scope checks."
+    },
+    {
+      "id": "scope_denials_stale_concurrent_and_idempotent_decisions",
+      "passed": true,
+      "evidence": "Live scope checks deny Property A2, Portfolio foreign-org building, General source search and foreign-organization record access. Concurrent same-file previews reuse one immutable source; concurrent confirmations yield one business record. Changed preview hash409 and stale/changed decisions were rejected. Genuine configured OpenRouter request via central agent selects ingestion_search with preview/read-only model tools; no model confirmation or conflict-resolution capability."
+    }
+  ]
+}

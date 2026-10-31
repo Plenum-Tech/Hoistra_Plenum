@@ -1,0 +1,24 @@
+[
+  {
+    "trace_id": "22fb242d31295711563155d6e92cc6ea",
+    "permalink": "http://127.0.0.1:3000/project/cmvwg1s6g0003nq07obk78agf/traces/22fb242d31295711563155d6e92cc6ea",
+    "prompt_version": "00e5a2e64767c7f5135b89cc1e8f45da298bdbeb58bcd3fbc00f4fa2ae0e170d",
+    "user_role": "property_manager",
+    "user_id": "hw1-property",
+    "tool_order": [
+      "energy_eui"
+    ],
+    "final_status": "completed"
+  },
+  {
+    "trace_id": "605b3ed7ece27d62f2477ec7c976cf96",
+    "permalink": "http://127.0.0.1:3000/project/cmvwg1s6g0003nq07obk78agf/traces/605b3ed7ece27d62f2477ec7c976cf96",
+    "prompt_version": "c09ecd324dfb5f5034bae597bff36da677790d2ae6c5d28e695f0f3101750559",
+    "user_role": "property_manager",
+    "user_id": "hw1-property",
+    "tool_order": [
+      "energy_eui"
+    ],
+    "final_status": "completed"
+  }
+]

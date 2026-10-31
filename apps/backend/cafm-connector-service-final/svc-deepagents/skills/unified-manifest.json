@@ -1,0 +1,50 @@
+{
+  "profile": "hw1-unified",
+  "specification_version": "0.37.0",
+  "policy_version": "hw1-unified-v1",
+  "instruction": {
+    "path": "orchestrator/unified.md",
+    "sha256": "84f545d06acf10f795273a06e885a386649b42ed33507afc3cecaa8c4c096f70"
+  },
+  "profiles": {
+    "reads": {
+      "path": "prompt-manifest.json",
+      "sha256": "741f1deb8a37fdcf731f346da33d14fe0cf2951ceb8a8c382ede8875d0f6c501",
+      "max_tool_calls": 1
+    },
+    "compliance": {
+      "path": "compliance-manifest.json",
+      "sha256": "f226241142c3a143752517ac5cace7e28d6d336b335e9dbdb5a8bf08a1ec8e99",
+      "max_tool_calls": 4
+    },
+    "contract_performance": {
+      "path": "contract-manifest.json",
+      "sha256": "12eaea3751916c06f980c543547bf119b887a3211ef9138f517671ea5d4f5f10",
+      "max_tool_calls": 4
+    },
+    "energy": {
+      "path": "energy-manifest.json",
+      "sha256": "c7f871dfe23428fc677ae76a8ac0557ab4f80ef141e0aa44c41c0d0583802f7e",
+      "max_tool_calls": 2
+    },
+    "ingestion": {
+      "path": "ingestion-manifest.json",
+      "sha256": "1774511a45717c0466f7ed4a6dcfb3786a5174dd3d5872c2d0871c8377786394",
+      "max_tool_calls": 2
+    },
+    "communications": {
+      "path": "communications-manifest.json",
+      "sha256": "00a5bf5143116cf09cbfdb0f2d34ab8f0ddba97c26f78f9a9f2bb2c60bc258e8",
+      "max_tool_calls": 2
+    },
+    "usage": {
+      "path": "usage-manifest.json",
+      "sha256": "a009ea97df7e1f5f35eb80995002632a372beef68692a21fb0a64b91b321afc3",
+      "max_tool_calls": 2
+    }
+  },
+  "answer_instruction": {
+    "path": "orchestrator/answer-synthesis.md",
+    "sha256": "60972a89ba5035aeef44c8e3cd98f870b4004bd2baee5fb6fca7a85a4ebb1a9e"
+  }
+}

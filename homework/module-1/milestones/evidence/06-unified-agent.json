@@ -1,0 +1,44 @@
+{
+  "milestone_id": "06-unified-agent",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "checks": [
+    {
+      "id": "hash_checked_enabled_domain_manifest",
+      "passed": true,
+      "evidence": "Actual unified status pins all seven enabled domain/read manifests plus unified control instruction at specification0.37.0. Live/local registry and every child SHA256 agree. Role-visible capabilities derive from each typed permission set. Regression tests reject changed child/instruction, unsafe path, duplicate JSON key and cross-principal request context; no fallback on drift."
+    },
+    {
+      "id": "role_aware_routing_and_permitted_clarification",
+      "passed": true,
+      "evidence": "Actual role-aware clarification gives General/Officer only permitted options and owned sessions with zero tools. Mixed Energy+certificate requests for restricted roles are denied before planning. Manager Energy+Contract request asks a next step with no data combined. Operational work-order creation/assignment is outside platform. Routing intent and actual execution remain distinct."
+    },
+    {
+      "id": "shared_source_compatibility_and_no_mental_joins",
+      "passed": true,
+      "evidence": "Actual typed shared adapter accepts only explicit same-building/entity/period/unit source metadata with version/digest lineage. Different units/entity/period or missing contract/certificate compatibility fields yield unavailable diagnostics, no arithmetic/join. General/Officer and out-of-building requests403. Existing Energy/Contract adapters continue their verified source period/unit and invoice/scoring separation checks; originals remain unchanged."
+    },
+    {
+      "id": "bounded_tools_without_model_commit_or_legacy_bypass",
+      "passed": true,
+      "evidence": "Direct API probes deny unrestricted SQL, model confirmation and legacy workflow/query paths. Registry declares per-profile budgets1/2/4. Every model loop rejects unbound tools; Energy human disposition is excluded from bound model tools. Real provider evaluations below check actual execution against role-bound tools and budgets; no specialist/identity fallback or model business commit exists."
+    },
+    {
+      "id": "owned_conversations_and_safe_trace_export",
+      "passed": true,
+      "evidence": "Actual clarification creates a principal-owned session and trace. Other General/Portfolio/foreign-org users cannot read or continue it (404); trace query also denies foreign ownership. Safe export contains intent/route/actual-tool/outcome/hash metadata, no messages/answers/source bodies. Owned evaluation metadata does not infer semantic correctness from tool success. Changed assignment scope requires a new conversation."
+    },
+    {
+      "id": "cross_domain_stale_concurrent_and_failure_cases",
+      "passed": true,
+      "evidence": "Actual concurrent source-preserving correction confirmations select one new record; an independently staged competing preview409 leaves condition4 current. Energy and Contract reversed periods422; no empty-success result or cross-domain calculation is returned. Unchanged-HOI/source-version trails are retained by existing guarded workflows. Raw sources and original history survive; real-provider mismatch and denied-scope cases are evaluated separately below."
+    },
+    {
+      "id": "at_least_ten_real_provider_hoistra_conversation_evaluations",
+      "passed": true,
+      "evidence": "Thirteen distinct genuine configured OpenRouter conversations across all four roles and seven enabled profiles plus typed compatibility: General status/count; Officer day0/compliance usage; manager EUI12/1200, spike240kWh, invoice2/1/2/1, current corrected source4, boundary2calls/30 fixture tokens and contacts; Portfolio config weights100 and canonical new-building HOI5. Each verifies provider-selected tool, route, independently expected result, actual bound-tool budget, assembled unified hash and owned trace parity. Sanitized JSONL records are public; full actual requests/results remain in an owner-only runtime file, never public receipts. No synthetic provider responses or blanket semantic-success judge."
+    }
+  ],
+  "recorded_at": "2026-10-27T04:26:19.241742+00:00",
+  "provider_conversations": 13
+}

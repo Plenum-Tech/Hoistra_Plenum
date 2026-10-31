@@ -1,0 +1,63 @@
+test_assigned_and_unassigned_building (test_homework_identity.IdentityTests.test_assigned_and_unassigned_building) ... ok
+test_client_role_and_chat_override_rejected (test_homework_identity.IdentityTests.test_client_role_and_chat_override_rejected) ... ok
+test_compliance_function_and_organization (test_homework_identity.IdentityTests.test_compliance_function_and_organization) ... ok
+test_expired_token (test_homework_identity.IdentityTests.test_expired_token) ... ok
+test_general_user_cannot_manage_certificates (test_homework_identity.IdentityTests.test_general_user_cannot_manage_certificates) ... ok
+test_identity_is_server_owned (test_homework_identity.IdentityTests.test_identity_is_server_owned) ... ok
+test_invalid_config_fails_closed (test_homework_identity.IdentityTests.test_invalid_config_fails_closed) ... ok
+test_legacy_tools_and_downloads_fail_closed (test_homework_identity.IdentityTests.test_legacy_tools_and_downloads_fail_closed) ... ok
+test_missing_invalid_session (test_homework_identity.IdentityTests.test_missing_invalid_session) ... ok
+test_portfolio_assignment (test_homework_identity.IdentityTests.test_portfolio_assignment) ... ok
+test_websocket_cannot_bypass_gate (test_homework_identity.IdentityTests.test_websocket_cannot_bypass_gate) ... ok
+test_actual_count_and_page_share_snapshot_during_concurrent_insert (test_homework_read_repository.RepositoryTests.test_actual_count_and_page_share_snapshot_during_concurrent_insert) ... ok
+test_database_role_is_read_only_and_audit_append_only (test_homework_read_repository.RepositoryTests.test_database_role_is_read_only_and_audit_append_only) ... ok
+test_projection_and_pagination (test_homework_read_repository.RepositoryTests.test_projection_and_pagination) ... ok
+test_unknown_sensitive_and_mixed_content_withheld (test_homework_read_repository.RepositoryTests.test_unknown_sensitive_and_mixed_content_withheld) ... ok
+test_audit_outage_prevents_read (test_homework_reads.ReadTests.test_audit_outage_prevents_read) ... ok
+test_audit_permission_before_fetch_and_execution_after (test_homework_reads.ReadTests.test_audit_permission_before_fetch_and_execution_after) ... ok
+test_default_scope_and_deduplication (test_homework_reads.ReadTests.test_default_scope_and_deduplication) ... ok
+test_document_route_cannot_expose_summary_tool (test_homework_reads.ReadTests.test_document_route_cannot_expose_summary_tool) ... ok
+test_entire_role_tool_matrix (test_homework_reads.ReadTests.test_entire_role_tool_matrix) ... ok
+test_execution_audit_outage_prevents_response (test_homework_reads.ReadTests.test_execution_audit_outage_prevents_response) ... ok
+test_generic_building_categories_for_managers (test_homework_reads.ReadTests.test_generic_building_categories_for_managers) ... ok
+test_inaccessible_record_uses_generic_error (test_homework_reads.ReadTests.test_inaccessible_record_uses_generic_error) ... ok
+test_invalid_arguments_rejected (test_homework_reads.ReadTests.test_invalid_arguments_rejected) ... ok
+test_model_cannot_choose_other_role_or_scope (test_homework_reads.ReadTests.test_model_cannot_choose_other_role_or_scope) ... ok
+test_model_forged_identity_rejected (test_homework_reads.ReadTests.test_model_forged_identity_rejected) ... ok
+test_model_output_cannot_invent_success (test_homework_reads.ReadTests.test_model_output_cannot_invent_success) ... ok
+test_parallel_calls_rejected_without_partial_execution (test_homework_reads.ReadTests.test_parallel_calls_rejected_without_partial_execution) ... ok
+test_partial_result_label (test_homework_reads.ReadTests.test_partial_result_label) ... ok
+test_prompt_has_no_credentials (test_homework_reads.ReadTests.test_prompt_has_no_credentials) ... ok
+test_read_failure_not_empty_success (test_homework_reads.ReadTests.test_read_failure_not_empty_success) ... ok
+test_scope_denial_precedes_fetch (test_homework_reads.ReadTests.test_scope_denial_precedes_fetch) ... ok
+test_unknown_and_mutation_tools_denied (test_homework_reads.ReadTests.test_unknown_and_mutation_tools_denied) ... ok
+test_anonymous_principal_rejected (test_prompt_assembly.PromptAssemblyTests.test_anonymous_principal_rejected) ... ok
+test_bad_assembly_prevents_model_call (test_prompt_assembly.PromptAssemblyTests.test_bad_assembly_prevents_model_call) ... ok
+test_domain_cannot_be_silently_enabled (test_prompt_assembly.PromptAssemblyTests.test_domain_cannot_be_silently_enabled) ... ok
+test_duplicate_instruction (test_prompt_assembly.PromptAssemblyTests.test_duplicate_instruction) ... ok
+test_duplicate_json_key (test_prompt_assembly.PromptAssemblyTests.test_duplicate_json_key) ... ok
+test_duplicate_tool (test_prompt_assembly.PromptAssemblyTests.test_duplicate_tool) ... ok
+test_empty_instruction (test_prompt_assembly.PromptAssemblyTests.test_empty_instruction) ... ok
+test_escalated_tool_declaration (test_prompt_assembly.PromptAssemblyTests.test_escalated_tool_declaration) ... ok
+test_instruction_order_is_explicit (test_prompt_assembly.PromptAssemblyTests.test_instruction_order_is_explicit) ... ok
+test_invalid_manifest_json (test_prompt_assembly.PromptAssemblyTests.test_invalid_manifest_json) ... ok
+test_legacy_specialist_and_shared_registry_unchanged (test_prompt_assembly.PromptAssemblyTests.test_legacy_specialist_and_shared_registry_unchanged) ... 2026-10-25 06:43:23 [info     ] skills.loaded                  count=9 path=/app/skills
+ok
+test_metadata_records_exact_files_and_bound_tools_without_identity (test_prompt_assembly.PromptAssemblyTests.test_metadata_records_exact_files_and_bound_tools_without_identity) ... ok
+test_missing_instruction (test_prompt_assembly.PromptAssemblyTests.test_missing_instruction) ... ok
+test_missing_manifest (test_prompt_assembly.PromptAssemblyTests.test_missing_manifest) ... ok
+test_modified_instruction_requires_manifest_hash_update (test_prompt_assembly.PromptAssemblyTests.test_modified_instruction_requires_manifest_hash_update) ... ok
+test_original_rendered_prompt_hashes_unchanged_for_all_roles (test_prompt_assembly.PromptAssemblyTests.test_original_rendered_prompt_hashes_unchanged_for_all_roles) ... ok
+test_path_traversal (test_prompt_assembly.PromptAssemblyTests.test_path_traversal) ... ok
+test_permission_sql_audit_code_is_unchanged (test_prompt_assembly.PromptAssemblyTests.test_permission_sql_audit_code_is_unchanged) ... ok
+test_removed_tool_declaration_also_rejected (test_prompt_assembly.PromptAssemblyTests.test_removed_tool_declaration_also_rejected) ... ok
+test_role_tools_equal_existing_python_permissions (test_prompt_assembly.PromptAssemblyTests.test_role_tools_equal_existing_python_permissions) ... ok
+test_symlink_outside_skills (test_prompt_assembly.PromptAssemblyTests.test_symlink_outside_skills) ... ok
+test_unknown_manifest_field (test_prompt_assembly.PromptAssemblyTests.test_unknown_manifest_field) ... ok
+test_unknown_role (test_prompt_assembly.PromptAssemblyTests.test_unknown_role) ... ok
+test_unsupported_version (test_prompt_assembly.PromptAssemblyTests.test_unsupported_version) ... ok
+
+----------------------------------------------------------------------
+Ran 57 tests in 0.761s
+
+OK

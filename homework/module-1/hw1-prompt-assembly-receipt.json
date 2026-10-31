@@ -1,0 +1,80 @@
+{
+  "created_at": "2026-10-25T06:44:54.702554+00:00",
+  "specification_version": "0.14.0",
+  "specification_sha256": "7c1601474b487bff77cc1c98c1b12933b7a355ae765fa88a5596980032d9c295",
+  "profile": "hw1-read-only",
+  "policy_version": "hw1-point2-v1",
+  "automated_tests_passed": 57,
+  "live_checks_passed": 44,
+  "rendered_prompt_unchanged_for_all_four_roles": true,
+  "permission_sql_audit_source_declarations_unchanged": 9,
+  "new_domain_skills_enabled": false,
+  "point_3_started": false,
+  "live_prompt_metadata": {
+    "bound_tools": [
+      "building_records",
+      "building_documents",
+      "asset_information",
+      "work_order_status",
+      "asset_conditions",
+      "certificate_status",
+      "inspection_reports",
+      "certificate_documents",
+      "compliance_evidence",
+      "contract_documents",
+      "invoice_documents",
+      "energy_findings",
+      "invoice_findings",
+      "vendor_performance",
+      "work_order_sla",
+      "usage_reports"
+    ],
+    "loaded_instructions": [
+      {
+        "id": "core",
+        "kind": "core",
+        "path": "orchestrator/SKILL.md",
+        "sha256": "2aecf7139aaa6f47fc2b0f6ac3c602bd71ee3ba750d797b0c44dae1c00176311"
+      },
+      {
+        "id": "permissions",
+        "kind": "shared",
+        "path": "policies/permissions.md",
+        "sha256": "4414e065e8996fb342a0834d22cd20bc478231fc043e3508aea4ec5658490813"
+      },
+      {
+        "id": "actions",
+        "kind": "shared",
+        "path": "policies/actions-and-evidence.md",
+        "sha256": "33b6cd822e79d2ea29482fe2f930bbde0436de864dbb6605fe87953783863f16"
+      },
+      {
+        "id": "responses",
+        "kind": "shared",
+        "path": "policies/responses-and-audit.md",
+        "sha256": "a9c9540f7720a9502cb849f2d0d1f8cede67d841af8b6aa68b718146002dc61d"
+      }
+    ],
+    "manifest_sha256": "6a87993a8033c501cea37c9e836ccf47666551cea5ca4dde996d9892950e288a",
+    "manifest_version": "1.0.0",
+    "policy_version": "hw1-point2-v1",
+    "profile": "hw1-read-only",
+    "rendered_prompt_sha256": "25a9ad874292ebb2f5a2185e50dc3aa0e87af1639566902094724f5d2a9f7cf8",
+    "selected_domain_skills": [],
+    "specification_version": "0.14.0"
+  },
+  "source_hashes": {
+    "apps/backend/cafm-connector-service-final/svc-deepagents/src/agents/homework_read_prompt.py": "c22e2c80f56fff3d87d465f0d3864a0f9a10b5b3df18e6a50adf389e3843fdf8",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/src/services/homework_reads.py": "902dafb795330b3f213b24ab7544c8653aec274de798e379487d05097238a0d1",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/src/api/main.py": "4b684162f19cb8b61d631128f93341f214b3b056258cb8c2fd77460c969d63ba",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/src/agents/prompt_assembly.py": "f7272d4272f6fc73a42dd01b1afc25e6a03a13a6e0c419ec59d7a763406ccb08",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/skills/prompt-manifest.json": "6a87993a8033c501cea37c9e836ccf47666551cea5ca4dde996d9892950e288a",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/skills/orchestrator/SKILL.md": "2aecf7139aaa6f47fc2b0f6ac3c602bd71ee3ba750d797b0c44dae1c00176311",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/skills/policies/permissions.md": "4414e065e8996fb342a0834d22cd20bc478231fc043e3508aea4ec5658490813",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/skills/policies/actions-and-evidence.md": "33b6cd822e79d2ea29482fe2f930bbde0436de864dbb6605fe87953783863f16",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/skills/policies/responses-and-audit.md": "a9c9540f7720a9502cb849f2d0d1f8cede67d841af8b6aa68b718146002dc61d",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/tests/test_prompt_assembly.py": "0e98d6eb065fde65c2c78293951ae3161503c476623a742ef2fdef7d2e07cfa7",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/tests/fixtures/homework_prompt_before_hashes.json": "03d90a71759717b5b738465747384068f207222a3120f4008be662e2e8562f45",
+    "apps/backend/cafm-connector-service-final/svc-deepagents/tests/fixtures/homework_permission_before_hashes.json": "8711b72e39dd95327002fd1467a02e42fd30f323cd1016adf4a8c9c3918f3fab"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "recorded_at": "2026-10-28T01:26:03.699905+00:00",
+  "specification_version": "0.37.0",
+  "change": "Shared tool-free final answer model; raw authorized results preserved; domain-neutral system prompt",
+  "verification": {
+    "full_tests_passed": 563,
+    "subtests_passed": 65,
+    "warnings": 18,
+    "candidate_provider_conversations": 11,
+    "candidate_routes": [
+      "communications",
+      "compatibility",
+      "compliance",
+      "contract_performance",
+      "energy",
+      "ingestion",
+      "reads",
+      "usage"
+    ],
+    "general_and_officer_energy_denied": true,
+    "role_tool_grants_unchanged": true,
+    "single_final_turn_persisted": true,
+    "injection_check_passed": true,
+    "same_evidence_prompt_replay_passed": true
+  },
+  "deployment": {
+    "active_image_id": "sha256:c95dac5d4312d32f2e7efe020c60dd0d2352a952a4f15f42f796001ad95d6e86",
+    "candidate_image_id": "sha256:c95dac5d4312d32f2e7efe020c60dd0d2352a952a4f15f42f796001ad95d6e86",
+    "active_started_at": "2026-10-28T01:25:41.633505834Z",
+    "rollback_image_id": "sha256:39574941dcd7e5af994c5f8957357ad2c67166f116890852c45b8417208b1ae8",
+    "rollback_tag": "hoistra-hw1-orchestrator:synthesis-before-39574941dcd7e5af",
+    "ports": [
+      18008,
+      18009
+    ]
+  },
+  "candidate_receipt": "homework/module-1/runtime/shared-synthesis/candidate-20261028T011706Z/receipt.json",
+  "active_receipt": {
+    "environment": "active",
+    "recorded_at": "2026-10-28T01:26:03.684689+00:00",
+    "observations": [
+      {
+        "case": "case1",
+        "user": "hw1-property",
+        "route": "energy",
+        "conversation_id": "83fb4b25-421a-432e-ac9d-456a25f7b3c8",
+        "trace_id": "11ff0b88-00e1-4b4a-8410-325e96b7bfcf",
+        "answer_generation": {
+          "status": "generated",
+          "prompt_sha256": "0ce9671cb6fa7834091401f8f68b0c28f2ed422638dd17d24e052bc48269f88d",
+          "tools_bound": [],
+          "evidence_sha256": "2a5a40586a034b7f1954a6326ad4ee6a7923cc4f8600522ca521a3bb9594177b",
+          "successful_responses": 1,
+          "token_usage": {
+            "input_tokens": 1900,
+            "output_tokens": 331,
+            "total_tokens": 2231,
+            "input_token_details": {
+              "audio": 0,
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "audio": 0,
+              "reasoning": 0
+            }
+          }
+        },
+        "evidence_file": "homework/module-1/runtime/shared-synthesis/active-20261028T012547Z/case1.json",
+        "passed": true
+      },
+      {
+        "case": "case2",
+        "user": "hw1-general",
+        "route": "reads",
+        "conversation_id": "2915fa1a-6814-43e9-b962-c05941b089ae",
+        "trace_id": "8c176532-2a02-4446-b36a-234847cdbc62",
+        "answer_generation": {
+          "status": "generated",
+          "prompt_sha256": "0ce9671cb6fa7834091401f8f68b0c28f2ed422638dd17d24e052bc48269f88d",
+          "tools_bound": [],
+          "evidence_sha256": "76e62fca9ff29719b7b6120564e5d1ebb6a8778b5e39eab229b4897734eec225",
+          "successful_responses": 1,
+          "token_usage": {
+            "input_tokens": 1473,
+            "output_tokens": 382,
+            "total_tokens": 1855,
+            "input_token_details": {
+              "audio": 0,
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "audio": 0,
+              "reasoning": 0
+            }
+          }
+        },
+        "evidence_file": "homework/module-1/runtime/shared-synthesis/active-20261028T012547Z/case2.json",
+        "passed": true
+      }
+    ],
+    "passed": true
+  },
+  "prompt_replay": "homework/module-1/runtime/shared-synthesis/prompt-replay.json",
+  "limits": "Representative grounding checks and observed prompt replay do not prove universal model correctness. Input/output bounds fail explicitly without silent evidence truncation. Original records retained."
+}

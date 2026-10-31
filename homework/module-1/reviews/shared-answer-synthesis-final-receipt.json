@@ -1,0 +1,106 @@
+{
+  "recorded_at": "2026-10-28T01:55:23.730154+00:00",
+  "specification_version": "0.37.0",
+  "supersedes_assessment": "shared-answer-synthesis-receipt.json; later manual wording review retained separately",
+  "answer_prompt_sha256": "60972a89ba5035aeef44c8e3cd98f870b4004bd2baee5fb6fca7a85a4ebb1a9e",
+  "verification": {
+    "tests_passed": 564,
+    "subtests_passed": 65,
+    "warnings": 18,
+    "candidate_live_conversations": 11,
+    "routes": [
+      "communications",
+      "compatibility",
+      "compliance",
+      "contract_performance",
+      "energy",
+      "ingestion",
+      "reads",
+      "usage"
+    ],
+    "single_final_turn_stored": true,
+    "four_role_tool_grants_unchanged": true,
+    "general_and_officer_energy_denied": true,
+    "foreign_trace_denied": true,
+    "injection_check_observed": true
+  },
+  "candidate_receipt": "homework/module-1/runtime/shared-synthesis/candidate-20261028T014904Z/receipt.json",
+  "active_receipt": {
+    "environment": "active",
+    "recorded_at": "2026-10-28T01:55:23.612152+00:00",
+    "observations": [
+      {
+        "case": "case1",
+        "user": "hw1-property",
+        "route": "energy",
+        "conversation_id": "a8af5244-c2d0-4bd3-b171-9d26b773f317",
+        "trace_id": "5aa47292-0358-4e4f-863c-9a2cc5c20fe8",
+        "answer_generation": {
+          "status": "generated",
+          "prompt_sha256": "60972a89ba5035aeef44c8e3cd98f870b4004bd2baee5fb6fca7a85a4ebb1a9e",
+          "tools_bound": [],
+          "evidence_sha256": "3e4d136af043c31c28c8439f7104c50b1d73f8b9bf74587927641072c4fa8427",
+          "successful_responses": 1,
+          "token_usage": {
+            "input_tokens": 1507,
+            "output_tokens": 397,
+            "total_tokens": 1904,
+            "input_token_details": {
+              "audio": 0,
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "audio": 0,
+              "reasoning": 0
+            }
+          }
+        },
+        "evidence_file": "homework/module-1/runtime/shared-synthesis/active-20261028T015507Z/case1.json",
+        "passed": true
+      },
+      {
+        "case": "case2",
+        "user": "hw1-general",
+        "route": "reads",
+        "conversation_id": "e47021fb-8969-4cea-b869-3231882a06f3",
+        "trace_id": "2aae2dd5-f283-4fd7-a708-6e1638b7367a",
+        "answer_generation": {
+          "status": "generated",
+          "prompt_sha256": "60972a89ba5035aeef44c8e3cd98f870b4004bd2baee5fb6fca7a85a4ebb1a9e",
+          "tools_bound": [],
+          "evidence_sha256": "0ad20b846481697b9b936199117ef34777b7abf274b74b60c8c186ae4862216f",
+          "successful_responses": 1,
+          "token_usage": {
+            "input_tokens": 1047,
+            "output_tokens": 283,
+            "total_tokens": 1330,
+            "input_token_details": {
+              "audio": 0,
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "audio": 0,
+              "reasoning": 0
+            }
+          }
+        },
+        "evidence_file": "homework/module-1/runtime/shared-synthesis/active-20261028T015507Z/case2.json",
+        "passed": true
+      }
+    ],
+    "passed": true
+  },
+  "deployment": {
+    "active_image_id": "sha256:7015197fe7af933f737f0bbc31826258c6af09e70d864da5858c0aceceba5f5b",
+    "candidate_image_id": "sha256:7015197fe7af933f737f0bbc31826258c6af09e70d864da5858c0aceceba5f5b",
+    "active_started_at": "2026-10-28T01:55:02.09420428Z",
+    "rollback_image_id": "sha256:c95dac5d4312d32f2e7efe020c60dd0d2352a952a4f15f42f796001ad95d6e86",
+    "rollback_tag": "hoistra-hw1-orchestrator:synthesis-review-before-c95dac5d4312d32f",
+    "ports": [
+      18008,
+      18009
+    ]
+  },
+  "history_preservation": "All original manual session rows and candidate failures retained; before hashes recorded in new rows; manual review correction appended instead of editing prior judgment.",
+  "limits": "Representative factual/trace checks and observed model answers; not a proof of universal semantic correctness. Oversized evidence fails explicitly. HOI history uses existing limit/offset with visible pagination. No source or history deletion."
+}

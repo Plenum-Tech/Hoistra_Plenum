@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "manifest_version": "1.2.0",
+  "profile": "hw1-read-only",
+  "policy_version": "hw1-point2-v1",
+  "specification_version": "0.37.0",
+  "max_tool_calls": 1,
+  "instructions": [
+    {
+      "id": "core",
+      "kind": "core",
+      "path": "orchestrator/SKILL.md",
+      "sha256": "1d4bfb017bd2ca39e698e8952dc2a925997c746c80e8121bf7fa8dcd45c3b8d5"
+    },
+    {
+      "id": "permissions",
+      "kind": "shared",
+      "path": "policies/permissions.md",
+      "sha256": "21c7ac68d01318a9a103cdf14c78dd497cfb7d9f7fb14c6a5bb319fdc4d3104f"
+    },
+    {
+      "id": "actions",
+      "kind": "shared",
+      "path": "policies/actions-and-evidence.md",
+      "sha256": "d4f1824110dd976e4fca707103fdd43d2c0da7aaea75d45ee51dccfe86e82eab"
+    },
+    {
+      "id": "responses",
+      "kind": "shared",
+      "path": "policies/responses-and-audit.md",
+      "sha256": "7966c09f8c54712f55557601e149b0549cb8bb35d07c0c6e71fd95d331eb0f23"
+    },
+    {
+      "id": "query_builder",
+      "kind": "shared",
+      "path": "query-builder/SKILL.md",
+      "sha256": "9106b7bd4743d81bec5027eb18112a2ffb2c73a127f4441883ce2cd828604daa"
+    }
+  ],
+  "role_tools": {
+    "general_user": [
+      "asset_conditions",
+      "certificate_status",
+      "usage_reports",
+      "work_order_status"
+    ],
+    "property_manager": [
+      "asset_conditions",
+      "asset_information",
+      "building_documents",
+      "building_records",
+      "certificate_documents",
+      "certificate_status",
+      "compliance_evidence",
+      "contract_documents",
+      "energy_findings",
+      "inspection_reports",
+      "invoice_documents",
+      "invoice_findings",
+      "usage_reports",
+      "vendor_performance",
+      "work_order_sla",
+      "work_order_status"
+    ],
+    "portfolio_manager": [
+      "asset_conditions",
+      "asset_information",
+      "building_documents",
+      "building_records",
+      "certificate_documents",
+      "certificate_status",
+      "compliance_evidence",
+      "contract_documents",
+      "energy_findings",
+      "inspection_reports",
+      "invoice_documents",
+      "invoice_findings",
+      "usage_reports",
+      "vendor_performance",
+      "work_order_sla",
+      "work_order_status"
+    ],
+    "compliance_officer": [
+      "certificate_documents",
+      "certificate_status",
+      "compliance_evidence",
+      "usage_reports"
+    ]
+  }
+}

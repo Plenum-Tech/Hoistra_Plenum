@@ -16,7 +16,7 @@ def test_classify_gas_safe_landlord_building():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "GAS_SAFE"
+    assert hit["certificate_type_code"] == "GAS_CP17"
     assert hit["cert_scope"] == "Building"
 
 
@@ -27,14 +27,14 @@ def test_classify_gas_safe_company_vendor():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "GAS_SAFE"
+    assert hit["certificate_type_code"] == "GASSAFE_COMPANY"
     assert hit["cert_scope"] == "Vendor"
 
 
 def test_classify_acs_vendor():
     hit = classify_compliance_certificate_doc("/tmp/engineer_ACS_CARD.pdf")
     assert hit is not None
-    assert hit["certificate_type_code"] == "ACS_CARD"
+    assert hit["certificate_type_code"] == "ACS_GAS_CARD"
     assert hit["cert_scope"] == "Vendor"
 
 
@@ -50,7 +50,7 @@ def test_classify_bpca_pestguard_not_eicr():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "BPCA"
+    assert hit["certificate_type_code"] == "BPCA_MEMBER"
     assert hit["cert_scope"] == "Vendor"
 
 
@@ -61,7 +61,7 @@ def test_classify_bafe_sp203_vendor():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "BAFE_SP203_1"
+    assert hit["certificate_type_code"] == "BAFE_SP203"
     assert hit["cert_scope"] == "Vendor"
 
 
@@ -72,7 +72,7 @@ def test_classify_napit_vendor():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "NAPIT"
+    assert hit["certificate_type_code"] == "NAPIT_REG"
     assert hit["cert_scope"] == "Vendor"
 
 
@@ -82,7 +82,7 @@ def test_classify_refcom_vendor():
         peek_file=False,
     )
     assert hit is not None
-    assert hit["certificate_type_code"] == "REFCOM"
+    assert hit["certificate_type_code"] == "REFCOM_COMPANY"
     assert hit["cert_scope"] == "Vendor"
 
 

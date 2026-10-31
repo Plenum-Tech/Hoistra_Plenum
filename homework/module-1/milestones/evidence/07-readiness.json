@@ -1,0 +1,99 @@
+{
+  "milestone_id": "07-readiness",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18008",
+  "checks": [
+    {
+      "id": "all_previous_milestone_gates_reverified",
+      "passed": true,
+      "evidence": "All six previous executable gates were freshly executed against rebuilt/provisioned candidate18009, exit0 and exact required identifiers passing: [{\"checks\": 6, \"milestone_id\": \"01-contract\", \"sha256\": \"3402a055cf52299ffc81a3576b032ac9192c993ce0b2054384bd3eb8d379dd36\"}, {\"checks\": 7, \"milestone_id\": \"02-energy\", \"sha256\": \"035c4739176cf9932b0725d4bb0801128386498c98775cbfbaa4184f52d27c3e\"}, {\"checks\": 7, \"milestone_id\": \"03-ingestion\", \"sha256\": \"018daa99c7eeebdbc39cc4b69617eb104908885511510ec15199f884a6c65a23\"}, {\"checks\": 8, \"milestone_id\": \"04-communications-hoi\", \"sha256\": \"3acc214ef7fe76b530fd02134b21a674639aeb150deca7bcf2e7238ae1649f66\"}, {\"checks\": 6, \"milestone_id\": \"05-usage-reports\", \"sha256\": \"339f0cfd2a5e31ea3061e7338076662f0a4678eae6e8ef3598870e0daf92214a\"}, {\"checks\": 7, \"milestone_id\": \"06-unified-agent\", \"sha256\": \"ba551e3f86b095a0c22eff5b95adacdc3e3b0fd5488bab1e2735c8e49e083426\"}]. Historical previous receipts copied privately; no calculation-only or stale-receipt substitution. Active image remained unchanged during verification."
+    },
+    {
+      "id": "canonical_spec_requirement_status_and_evidence_mapping",
+      "passed": true,
+      "evidence": "All178 historical v0.37 requirement IDs are covered by a separate current status/evidence register pinned to the actual canonical specification hash and fresh gate receipts. Owner policy, baseline adapter verification/adaptation and production deferrals are separate; legacy full-production/PDF-OCR/connector/subjective-evaluator conformance is not asserted. Original mapping/checklist history is preserved."
+    },
+    {
+      "id": "full_service_regression_passes",
+      "passed": true,
+      "evidence": "Actual complete service pytest run with private isolated DB environment (not dummy DB_URL): {\"passed\": 523, \"warnings\": 18, \"subtests\": 65}. Log retained owner-only; no tests skipped/rewritten to suppress failures. Meaningful readiness regressions verify unrelated/public-container refusal, exclusive private rollback snapshots and owned server-retained exact email previews."
+    },
+    {
+      "id": "complete_candidate_live_role_and_domain_matrix",
+      "passed": true,
+      "evidence": "Actual candidate four-role/six-domain API tool matrix (24 projections), unified seven-profile status for each role and operational-work-order refusals all pass. General no ingestion/commercial/Energy/HOI; Officer no commercial/Energy/HOI; scoped manager domains enabled. Prior gates additionally exercise each role/building/source projection, calculation, confirmation, failure and provider path."
+    },
+    {
+      "id": "rollback_ready_isolated_active_deployment",
+      "passed": true,
+      "evidence": "After all prior gates, full suite and candidate matrix passed, only hoistra-hw1 orchestrator was recreated on localhost18008 with the exact verified candidate image and all reviewed domain flags. Private mode0600 original container/environment snapshot and validated exact rollback Compose file plus immutable original image tag are retained; no database/source deletion. {\"active_image_id\": \"sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a\", \"active_started_at\": \"2026-10-27T04:26:55.789044243Z\", \"candidate_image_id\": \"sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a\", \"ports\": [18008, 18009], \"rollback_image_id\": \"sha256:d473d750734cbe355d7318bc8cfe8f10a99901544dc4a52a29a77a9482ecfef1\", \"rollback_tag\": \"hoistra-hw1-orchestrator:rollback-d473d750734cbe35\"}. No unrelated service/container or private runtime file was overwritten."
+    },
+    {
+      "id": "active_full_agent_status_and_real_provider_question",
+      "passed": true,
+      "evidence": "Active18008 four-role/domain status/denial matrix passes after exact candidate promotion. Genuine configured OpenRouter selects energy_eui with independently expected1200kWh/100m2=12; unified registry/rendered assembly and owned actual-tool trace agree. {\"conversation_id\": \"7fbb4052-dcd5-4ba9-bfad-a50f8b0a19d5\", \"expected_eui\": 12, \"manifest_sha256\": \"0e19a1178f04cdff0e7edf98cd76e0c1d3475f2fb89c89d6a7753c9cc9f46d32\", \"provider_responses\": 2, \"trace_id\": \"940a5002-5f6a-4023-a799-59082a74627a\"}. Candidate18009 remains available; all communications simulated."
+    },
+    {
+      "id": "homework_cli_commands_and_honest_remaining_boundaries",
+      "passed": true,
+      "evidence": "Executable private-session CLI help, active General status and scoped manual weekly report tested (Dubai fixture2 observations/30 tokens, explicitly fictional). Runbook contains first question, tools, reports, owned traces, exact preview/human confirmation and private rollback commands. Production transport/connectors/OCR/frontend/calendar scheduling, unmeasured pricing/adoption/quotas and course video/Git publication remain explicitly outside this fictional backend verification."
+    }
+  ],
+  "candidate_api_base": "http://127.0.0.1:18009",
+  "recorded_at": "2026-10-27T04:27:09.565605+00:00",
+  "full_service_suite": {
+    "passed": 523,
+    "warnings": 18,
+    "subtests": 65
+  },
+  "prior_milestones": [
+    {
+      "milestone_id": "01-contract",
+      "sha256": "3402a055cf52299ffc81a3576b032ac9192c993ce0b2054384bd3eb8d379dd36",
+      "checks": 6
+    },
+    {
+      "milestone_id": "02-energy",
+      "sha256": "035c4739176cf9932b0725d4bb0801128386498c98775cbfbaa4184f52d27c3e",
+      "checks": 7
+    },
+    {
+      "milestone_id": "03-ingestion",
+      "sha256": "018daa99c7eeebdbc39cc4b69617eb104908885511510ec15199f884a6c65a23",
+      "checks": 7
+    },
+    {
+      "milestone_id": "04-communications-hoi",
+      "sha256": "3acc214ef7fe76b530fd02134b21a674639aeb150deca7bcf2e7238ae1649f66",
+      "checks": 8
+    },
+    {
+      "milestone_id": "05-usage-reports",
+      "sha256": "339f0cfd2a5e31ea3061e7338076662f0a4678eae6e8ef3598870e0daf92214a",
+      "checks": 6
+    },
+    {
+      "milestone_id": "06-unified-agent",
+      "sha256": "ba551e3f86b095a0c22eff5b95adacdc3e3b0fd5488bab1e2735c8e49e083426",
+      "checks": 7
+    }
+  ],
+  "activation": {
+    "active_image_id": "sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a",
+    "candidate_image_id": "sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a",
+    "active_started_at": "2026-10-27T04:26:55.789044243Z",
+    "rollback_image_id": "sha256:d473d750734cbe355d7318bc8cfe8f10a99901544dc4a52a29a77a9482ecfef1",
+    "rollback_tag": "hoistra-hw1-orchestrator:rollback-d473d750734cbe35",
+    "ports": [
+      18008,
+      18009
+    ]
+  },
+  "active_provider_proof": {
+    "conversation_id": "7fbb4052-dcd5-4ba9-bfad-a50f8b0a19d5",
+    "trace_id": "940a5002-5f6a-4023-a799-59082a74627a",
+    "manifest_sha256": "0e19a1178f04cdff0e7edf98cd76e0c1d3475f2fb89c89d6a7753c9cc9f46d32",
+    "provider_responses": 2,
+    "expected_eui": 12
+  }
+}

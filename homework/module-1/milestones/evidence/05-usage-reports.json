@@ -1,0 +1,38 @@
+{
+  "milestone_id": "05-usage-reports",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "checks": [
+    {
+      "id": "source_events_for_provider_ingestion_onboarding_failure_and_backlog",
+      "passed": true,
+      "evidence": "Genuine configured OpenRouter selects usage_weekly_report through central agent with current manifest hash; fresh provider receipts increase measured calls. An actual typed source preview adds one backlog item; confirmation adds one accepted intake event and clears it. Actual invalid-condition422 appends exactly one durable failure event. API onboarding adds one source-backed building event in the Portfolio report. No telemetry injection tool is exposed."
+    },
+    {
+      "id": "unsupported_metrics_explicitly_unavailable",
+      "passed": true,
+      "evidence": "Actual report returns null for unmeasured full-platform active users/sessions, subscription charges, model cost without pricing, unconfigured limits and coverage trends. Observed provider population/token coverage, immutable event references, period source freshness and current backlog as-of are separately labelled; absent telemetry is never presented as zero total platform activity."
+    },
+    {
+      "id": "weekly_monthly_period_and_timezone_boundaries",
+      "passed": true,
+      "evidence": "Immutable explicitly fictional source-backed boundary observations exercise actual APIs: Monday Feb2 local00:00 equals Feb1 UTC20:00; include that instant and last second, exclude both adjacent boundaries. Weekly2 observations/30 fixture input tokens; February5/2131, ending Feb28 UTC20:00 exclusively. Invalid non-Monday and non-first-of-month422. Generation time is distinct from intended Monday09:00 cadence. These boundary fixtures are not live provider receipts."
+    },
+    {
+      "id": "four_role_recipient_and_building_scope",
+      "passed": true,
+      "evidence": "Actual reports and private safe event/contact metadata verify General own actor/contact only, Property assigned building, Portfolio assigned portfolio and Officer compliance-only events/recipients. Every digest contact covers its entire report scope. Cross-user, Officer commercial-report and foreign-org retrieval404; Property A2/Portfolio foreign building403; unsupported quota mutation403. No role or assignment edits occur."
+    },
+    {
+      "id": "manual_trigger_immutable_snapshot_and_idempotent_replay",
+      "passed": true,
+      "evidence": "Two concurrent manual triggers return byte-equivalent stored snapshot, generation time and delivery records. An actual new pending source proposal changes the snapshot fingerprint and increments version even with no period provider/intake event change. Prior report GET is unchanged; exact new-state replay is identical. Reports/history/source originals use append-only DB privileges."
+    },
+    {
+      "id": "digest_and_immediate_failure_delivery_outcomes",
+      "passed": true,
+      "evidence": "Actual configured digest contacts exercise simulated sent1, known failure2 (one retry), unknown1 and missing-address pending0. Exactly one outbox row per report event/recipient; requested content is never silently sent. Known/unknown manual review makes no extra attempt and does not mutate report. A genuine authenticated adapter422 creates an immediate manager processing-failure alert, while digest delivery failure creates safe nonrecursive manager fallback. No real delivery or scheduler."
+    }
+  ],
+  "recorded_at": "2026-10-27T04:24:37.095263+00:00"
+}

@@ -166,7 +166,7 @@ class TestAgentPrompts:
         for agent in AGENTS:
             prompt = agent_system_prompt(agent)
             assert prompt, f"{agent} has no system prompt"
-            assert "RESOLVE" in prompt, f"{agent} is missing the shared query loop"
+            assert "Step 1 — Understand the question and authorized scope" in prompt, f"{agent} is missing shared v0.37 scope instructions"
             assert skill_for_agent(agent).body[:200] in prompt
 
     def test_an_existing_contract_is_kept_and_ordered_before_the_skill(self):
@@ -180,7 +180,7 @@ class TestAgentPrompts:
 
     def test_an_unknown_agent_gets_the_shared_skill_not_a_crash(self):
         prompt = agent_system_prompt("no_such_agent")
-        assert prompt and "RESOLVE" in prompt
+        assert prompt and "Step 1 — Understand the question and authorized scope" in prompt
 
     def test_every_engine_prompt_carries_its_no_work_order_rule(self):
         # A/B/C engines are approvals and dashboards only — the rule has to reach the agent.
@@ -189,22 +189,19 @@ class TestAgentPrompts:
 
 
 class TestSchemaGuardrails:
-    """The live schema does not match the ORM. Every skill has to say so."""
+    """Model instructions do not expose arbitrary schema discovery or SQL."""
 
     def test_the_shared_skill_warns_about_live_schema_drift(self):
         shared = next(s for s in load_skills() if s.shared)
-        assert "get_schema()" in shared.body
-        assert "varchar(50)" in shared.body
+        body = " ".join(shared.body.split())
+        assert "Do not request unrestricted get_schema, arbitrary table discovery, raw SQL" in body
 
     def test_the_shared_skill_carries_the_join_key_map(self):
         shared = next(s for s in load_skills() if s.shared)
-        for key in ("asset_id", "vendor_id", "work_order_id", "meter_id", "document_id"):
-            assert key in shared.body
+        assert "Matching display names alone do not establish a cross-domain join" in shared.body
+        assert "Do not construct table or column names from user text" in shared.body
 
     def test_the_site_key_trap_is_documented_where_it_bites(self):
-        # site_id is UUID in the Phase 2 tables but varchar in the live sites table — the
-        # reason per-site compliance coverage once collapsed into one bucket.
+        # Caller-facing prompts rely on typed adapters, never a model-supplied key map.
         for agent in ("compliance", "energy_intelligence"):
-            assert "site_ref" in agent_system_prompt(agent) or "varchar" in (
-                agent_system_prompt(agent)
-            )
+            assert "raw SQL" in agent_system_prompt(agent)

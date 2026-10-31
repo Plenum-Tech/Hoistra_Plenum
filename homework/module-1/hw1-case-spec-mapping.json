@@ -1,0 +1,209 @@
+{
+  "schema_version": "1.0",
+  "status": "final_case_mapping",
+  "specification": {
+    "pointer": "SPEC.md",
+    "canonical_path": "specifications.md",
+    "version": "0.37.0",
+    "sha256": "4d6d010fe561657a97881a0a4f909c1aff9760b019920be1199d28572b10654b"
+  },
+  "source_log": {
+    "path": "homework/module-1/hw1-session.jsonl",
+    "sha256": "7785d52ea88cda94d1c897787df6139083ca1f3ee51cb3d1ffb44a12b15b4809",
+    "rows": 12,
+    "distinct_conversations": 11,
+    "authenticated_conversations": 10,
+    "policy": "append_only; this mapping records reviews and supersession without rewriting observed evidence"
+  },
+  "part_c": {
+    "requirement_ids": ["DOMAIN-02", "ENERGY-01", "ACCESS-05", "TRACE-01"],
+    "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+    "before": {
+      "case_id": "HW1-ENERGY-01-SYNTHESIS-REVIEW",
+      "trace_id": "11ff0b88-00e1-4b4a-8410-325e96b7bfcf",
+      "prompt_sha256": "0ce9671cb6fa7834091401f8f68b0c28f2ed422638dd17d24e052bc48269f88d",
+      "met_requirement": false,
+      "problem_source": "prompt"
+    },
+    "after": {
+      "case_id": "HW1-ENERGY-01-MODEL-SYNTHESIS-a8af5244",
+      "trace_id": "5aa47292-0358-4e4f-863c-9a2cc5c20fe8",
+      "prompt_sha256": "60972a89ba5035aeef44c8e3cd98f870b4004bd2baee5fb6fca7a85a4ebb1a9e",
+      "met_requirement": true,
+      "problem_source": null
+    },
+    "evidence": [
+      "homework/module-1/reviews/shared-answer-synthesis-review.md",
+      "homework/module-1/reviews/shared-answer-synthesis-receipt.json",
+      "homework/module-1/reviews/shared-answer-synthesis-final-receipt.json"
+    ]
+  },
+  "cases": [
+    {
+      "row": 1,
+      "case_id": "C01",
+      "session_id": "hw1-c01-0d1f6e8f4c0b",
+      "request": "Help me with my data.",
+      "source_request_sha256": "809a6209917697523d693ef12221e8940ee2be7fe6e8e03477a9cb89557e12db",
+      "source_expected_sha256": "640115ca2233ff12ef44b0235e69fae4ee24289e2db213e74226c0998232f643",
+      "expected": "Clarify the permitted data capability without starting a workflow.",
+      "primary_requirement": "ROUTE-02",
+      "related_requirements": ["DOMAIN-04"],
+      "disposition": "pending_review_preserved",
+      "met_requirement": null,
+      "note": "DOMAIN-04 requires this historical C01 evidence and unadjudicated status to remain unchanged."
+    },
+    {
+      "row": 2,
+      "case_id": "HW1-ENERGY-01",
+      "trace_id": "52192569-9ab4-41bc-8721-e17ce331c7e7",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Use verified 1200 kWh and 100 m2 to report 12 kWh/m2 for 31 days and 141.29 kWh/m2/year, with dates, formula, sources, coverage and benchmark basis.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "failed_tool_evidence",
+      "met_requirement": false
+    },
+    {
+      "row": 3,
+      "case_id": "HW1-ENERGY-01-AFTER",
+      "trace_id": "082d8922-a593-4f8d-9525-4f362519ff8a",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Use verified 1200 kWh and 100 m2 to report 12 kWh/m2 for 31 days and 141.29 kWh/m2/year, with dates, formula, sources, coverage and benchmark basis.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_after_tool_fix",
+      "met_requirement": true,
+      "supersedes_case": "HW1-ENERGY-01"
+    },
+    {
+      "row": 4,
+      "case_id": "HW1-WO-02",
+      "trace_id": "a6c05f53-1a21-436e-8a14-dc883a919524",
+      "request": "Show the work-order status summaries for my assigned building hw1-building-a1. Show two records and tell me whether more matching records remain.",
+      "source_request_sha256": "24472374db3a86c7cd99b3e903e3115d003ec24b1308acadbaa721eab6337ab3",
+      "source_expected_sha256": "af71817bed521b8e88cf5d8b1007e6698993813d900e9973418c7b4c77f1798d",
+      "expected": "Return two authorized A1 work-order summaries, total 25, returned 2, more results, source references, fictional/external-management limits and no mutation.",
+      "primary_requirement": "AUTH-04",
+      "related_requirements": ["AUTH-01", "WO-01", "WO-02", "WO-03", "DATA-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "failed_presentation_and_evidence",
+      "met_requirement": false
+    },
+    {
+      "row": 5,
+      "case_id": "HW1-ENERGY-01-MODEL-SYNTHESIS",
+      "trace_id": "11ff0b88-00e1-4b4a-8410-325e96b7bfcf",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Use verified 1200 kWh and 100 m2 to report 12 kWh/m2 for 31 days and 141.29 kWh/m2/year, with dates, formula, sources, coverage and benchmark basis.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "superseded_assessment",
+      "met_requirement": true,
+      "superseded_by_row": 7
+    },
+    {
+      "row": 6,
+      "case_id": "HW1-WO-02-MODEL-SYNTHESIS",
+      "trace_id": "8c176532-2a02-4446-b36a-234847cdbc62",
+      "request": "Show the work-order status summaries for my assigned building hw1-building-a1. Show two records and tell me whether more matching records remain.",
+      "source_request_sha256": "24472374db3a86c7cd99b3e903e3115d003ec24b1308acadbaa721eab6337ab3",
+      "source_expected_sha256": "af71817bed521b8e88cf5d8b1007e6698993813d900e9973418c7b4c77f1798d",
+      "expected": "Return two authorized A1 work-order summaries, total 25, returned 2, more results, source references, fictional/external-management limits and no mutation.",
+      "primary_requirement": "AUTH-04",
+      "related_requirements": ["AUTH-01", "WO-01", "WO-02", "WO-03", "DATA-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_model_synthesis",
+      "met_requirement": true,
+      "supersedes_case": "HW1-WO-02"
+    },
+    {
+      "row": 7,
+      "case_id": "HW1-ENERGY-01-SYNTHESIS-REVIEW",
+      "trace_id": "11ff0b88-00e1-4b4a-8410-325e96b7bfcf",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Correct arithmetic and sources without treating unknown coverage as proof that no hourly periods are missing.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "authoritative_review_correction",
+      "met_requirement": false,
+      "problem_source": "prompt",
+      "supersedes_row": 5
+    },
+    {
+      "row": 8,
+      "case_id": "HW1-ENERGY-01-MODEL-SYNTHESIS-a8af5244",
+      "trace_id": "5aa47292-0358-4e4f-863c-9a2cc5c20fe8",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Correct arithmetic and sources while stating that completeness cannot be established from unknown coverage.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_after_prompt_fix",
+      "met_requirement": true,
+      "supersedes_row": 7
+    },
+    {
+      "row": 9,
+      "case_id": "HW1-WO-02-MODEL-SYNTHESIS-e47021fb",
+      "trace_id": "2aae2dd5-f283-4fd7-a708-6e1638b7367a",
+      "request": "Show the work-order status summaries for my assigned building hw1-building-a1. Show two records and tell me whether more matching records remain.",
+      "source_request_sha256": "24472374db3a86c7cd99b3e903e3115d003ec24b1308acadbaa721eab6337ab3",
+      "source_expected_sha256": "af71817bed521b8e88cf5d8b1007e6698993813d900e9973418c7b4c77f1798d",
+      "expected": "Return two authorized A1 work-order summaries, total 25, returned 2, more results, source references, fictional/external-management limits and no mutation.",
+      "primary_requirement": "AUTH-04",
+      "related_requirements": ["AUTH-01", "WO-01", "WO-02", "WO-03", "DATA-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_final_model_synthesis",
+      "met_requirement": true,
+      "supersedes_row": 6
+    },
+    {
+      "row": 10,
+      "case_id": "HW1-WO-MULTI-READ-FAIL-01",
+      "trace_id": "e96bd492-a563-43e0-bd49-3e93c5276183",
+      "request": "Please check work order WO00000359 at MixedUse 038. What is its current status, did it meet its response SLA, and how has HVAC Vendor 0111 been performing at this building overall?",
+      "source_request_sha256": "b24b7a80da5ca3b784d782f2bf6828aef31f1ebf2dacaba12c1c4cf8e6e6c39d",
+      "source_expected_sha256": "99a3e748a223db4eefd859b13da5d1fec8a3f3c98a6cfd7ff0a5d5744a1097c3",
+      "expected": "Report InProgress; 60-minute response SLA breached by an actual 71-minute response; and building-scoped vendor performance of 5 work orders, 4 completed, 1 in progress and 4 SLA breaches.",
+      "primary_requirement": "ROUTE-05",
+      "related_requirements": ["WO-03", "DATA-01", "AUTH-05", "DOMAIN-01", "CONTRACT-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "observed_multi_domain_tool_failure",
+      "met_requirement": false,
+      "problem_source": "tool"
+    },
+    {
+      "row": 11,
+      "case_id": "HW1-COMPLIANCE-MULTI-TOOL-FAIL-01",
+      "trace_id": "f180675d-9f6d-436f-a9a9-53d3fecc3d33",
+      "request": "As of 31 October 2026, review all vendor certificates recorded for Vasiliki House. Tell me how many are valid, expired, and due to expire within the next 30 days. Identify each expired or actionable certificate with its certificate ID, vendor, certificate type, expiry date, and source evidence. If the stored status conflicts with the 30-day rule, flag the inconsistency rather than silently accepting it. Then prepare, but do not send, separate certificate-renewal email previews for each affected vendor and a summary notification for the authorized building contact. Show each recipient, subject, body, and proposed attachment or evidence reference. Wait for my confirmation before sending anything.",
+      "source_request_sha256": "029daf69ddf9c04e11f0558cc4f6fc524d52d3bf7be3887935384c7a2b2022ae",
+      "source_expected_sha256": "52c99609f9d28f0bcd3c2bca07b81f4df825d60519a04efd2c315b536e5b1495",
+      "expected": "Assess 65 Vasiliki House certificates, flag CRT-052 outside the inclusive 30-day window, and prepare without sending four vendor previews plus one authorized building-contact summary preview.",
+      "primary_requirement": "ROUTE-05",
+      "related_requirements": ["DATA-01", "ACT-05", "AUTH-07", "DOMAIN-03", "COMP-03", "COMP-04", "OUTBOX-03", "TRACE-01"],
+      "disposition": "observed_multi_domain_tool_failure",
+      "met_requirement": false,
+      "problem_source": "tool"
+    },
+    {
+      "row": 12,
+      "case_id": "HW1-ENERGY-01-FINAL-AUTHENTICATED",
+      "trace_id": "1b35cd4a-fc31-43ae-a878-d6ceeb8f38d2",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Use verified 1200 kWh and 100 m2 to report 12 kWh/m2 for 31 days and 141.29 kWh/m2/year, with dates, formula, sources, unknown-coverage limits and benchmark/tariff basis.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_final_authenticated_conversation",
+      "met_requirement": true
+    }
+  ]
+}

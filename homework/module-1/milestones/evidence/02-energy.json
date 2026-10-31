@@ -1,0 +1,43 @@
+{
+  "milestone_id": "02-energy",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "recorded_at": "2026-10-27T04:19:03.347557+00:00",
+  "checks": [
+    {
+      "id": "meter_section_unit_period_scope_validation",
+      "passed": true,
+      "evidence": "Live A1 condition meter/section returns1200kWh,100m2,31 inclusive days,EUI12. Wrong section404; Property Manager A2 scope403; m3 meter422; reversed dates422; a monthly source cannot be prorated into a partial period (422). Empty September consumption is null and EUI unavailable. Immutable fictional energy-fixtures-v1/m2 sources retained. Non-superuser/no-BYPASSRLS probes deny source UPDATE/DELETE and imported Energy meter/reading UPDATE; aggregate source fingerprint unchanged across all workflows."
+    },
+    {
+      "id": "matched_profile_anomaly_expected_case",
+      "passed": true,
+      "evidence": "Complete840-hour fixture uses weekday10/20kWh and weekend5kWh baseline; final48 weekend hours10kWh. Matched weekend/hour median=5, observed/expected=200%, excess48*(10-5)=240kWh. Source tariff0.20 gives windowGBP48 and separately labelled annualizedGBP8760. Asset spike persisted with scoped source IDs; repeat scan returns same immutable finding IDs."
+    },
+    {
+      "id": "occupancy_change_suppression_and_sparse_data",
+      "passed": true,
+      "evidence": "Drift fixture raises the matched weekly load1940->2910kWh (50%), with970kWh excess. Identical changed-occupancy fixture suppresses baseline drift using retained initial and change events; other supported finding types remain independently evaluated. Legacy sparse period readings yield insufficient_comparable_evidence with a reason, never a clean-building claim."
+    },
+    {
+      "id": "source_backed_benchmarks_tariffs_and_financial_outputs",
+      "passed": true,
+      "evidence": "Source-verified office100m2, electricity1200kWh and annual indicative TM46 benchmark95: pro-rated31-day expectation=95*100*31/365=806.849315...kWh; excess393.150684...kWh; tariff0.20 ->GBP78.63. Result distinguishes periodEUI12 from annualized141.290322... and includes pack SHA256 plus immutable meter tariff source/version. No period/annual benchmark mismatch."
+    },
+    {
+      "id": "missing_period_retry_and_escalation",
+      "passed": true,
+      "evidence": "Source-declared60-minute interval and22 retained readings identify exactly02:00/03:00 missing periods. Test-clock04:09 is rejected409; simulated known-failure retries occur04:10,04:20,04:30 (counts1/2/3); each replay reuses its event. Third failure persists escalated and produces two configured manager notification outcomes; later trigger stays at3. Separate source-backed unknown-outcome fixture stays at1 attempt on later trigger. No DCC network call or fabricated recovery reading; General User retry denied403."
+    },
+    {
+      "id": "condition_remediation_queue_and_monthly_report",
+      "passed": true,
+      "evidence": "Condition2 and exact consumption excess48.726655...% (>15%) create one persisted queue-only repair recommendation using sourced GBP100 repair versus1000 replace. Negated 'no failed fan/no corrosion' source is withheld for review. Manual October1\u201331 report snapshots EUI, indicative benchmark, tariff GBP78.63 excess, findings/queue/evidence/freshness and manager notifications. Replay returns same immutable report ID; partial calendar month422. Missing carbon measurement remains null; no operational work order is created."
+    },
+    {
+      "id": "role_denials_and_live_provider_integration",
+      "passed": true,
+      "evidence": "Fresh API and agent checks deny General User and Compliance Officer Energy tools403/empty projections; unauthenticated tools401. Genuine configured OpenRouter question through central /agent/ask selects Energy and energy_anomaly_scan on A1 spike meter; grounded result contains240kWh excess. Positive provider response count and selected tool names prevent fallback-only success. Six hash-checked shared/domain instructions loaded; model tools exclude human anomaly disposition. Other principal conversation404; scoped permissions preserved."
+    }
+  ]
+}

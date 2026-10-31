@@ -1,0 +1,41 @@
+site_id,site_name,site_type,country,city,floors,gfa_sqm,occupancy_profile,handover_date
+S001,Tower 001,Tower,UAE,Abu Dhabi,12,45000,9to6,2010-04-19
+S002,Tower 002,Tower,UAE,Abu Dhabi,50,20000,9to6,2008-09-01
+S003,Tower 003,Tower,UAE,Dubai,18,80000,24x7,2024-01-22
+S004,Tower 004,Tower,UAE,Abu Dhabi,25,20000,24x7,2008-02-23
+S005,Tower 005,Tower,UAE,Abu Dhabi,12,45000,9to6,2012-10-29
+S006,Tower 006,Tower,UAE,Ajman,18,20000,9to6,2015-09-18
+S007,Tower 007,Tower,UAE,Abu Dhabi,35,80000,9to6,2016-06-27
+S008,Tower 008,Tower,UAE,Dubai,18,80000,Mixed,2016-02-10
+S009,Tower 009,Tower,UAE,Abu Dhabi,35,20000,9to6,2014-06-28
+S010,Tower 010,Tower,UAE,Ajman,50,120000,9to6,2018-03-03
+S011,Tower 011,Tower,UAE,Abu Dhabi,18,45000,9to6,2013-12-27
+S012,Tower 012,Tower,UAE,Abu Dhabi,35,20000,24x7,2019-12-24
+S013,Tower 013,Tower,UAE,Abu Dhabi,12,45000,Mixed,2022-05-09
+S014,Tower 014,Tower,UAE,Abu Dhabi,18,45000,RetailPeak,2009-04-03
+S015,Tower 015,Tower,UAE,Dubai,12,45000,9to6,2012-09-24
+S016,Tower 016,Tower,UAE,Sharjah,25,80000,9to6,2019-03-13
+S017,Tower 017,Tower,UAE,Dubai,50,45000,9to6,2013-07-13
+S018,Tower 018,Tower,UAE,Abu Dhabi,25,80000,9to6,2021-02-01
+S019,Tower 019,Tower,UAE,Dubai,18,180000,9to6,2010-01-14
+S020,Tower 020,Tower,UAE,Abu Dhabi,50,20000,9to6,2023-04-06
+S021,Tower 021,Tower,UAE,Dubai,12,45000,Mixed,2019-11-13
+S022,Tower 022,Tower,UAE,Dubai,25,120000,24x7,2010-07-27
+S023,Tower 023,Tower,UAE,Abu Dhabi,25,45000,24x7,2010-07-02
+S024,Tower 024,Tower,UAE,Dubai,12,20000,RetailPeak,2024-02-21
+S025,Tower 025,Tower,UAE,Dubai,25,20000,Mixed,2022-01-09
+S026,MixedUse 026,MixedUse,UAE,Abu Dhabi,6,20000,RetailPeak,2020-02-05
+S027,OfficeCampus 027,OfficeCampus,UAE,Ajman,14,80000,9to6,2010-07-05
+S028,OfficeCampus 028,OfficeCampus,UAE,Sharjah,10,45000,9to6,2020-09-21
+S029,OfficeCampus 029,OfficeCampus,UAE,Dubai,4,20000,RetailPeak,2010-10-27
+S030,MixedUse 030,MixedUse,UAE,Dubai,6,45000,Mixed,2017-06-28
+S031,OfficeCampus 031,OfficeCampus,UAE,Ajman,10,80000,RetailPeak,2016-12-12
+S032,OfficeCampus 032,OfficeCampus,UAE,Abu Dhabi,4,45000,9to6,2013-01-14
+S033,MixedUse 033,MixedUse,UAE,Dubai,6,80000,9to6,2023-11-16
+S034,RetailPodium 034,RetailPodium,UAE,Dubai,14,120000,9to6,2013-05-03
+S035,MixedUse 035,MixedUse,UAE,Dubai,6,80000,Mixed,2020-12-03
+S036,MixedUse 036,MixedUse,UAE,Abu Dhabi,10,20000,9to6,2017-09-01
+S037,MixedUse 037,MixedUse,UAE,Dubai,10,20000,24x7,2022-06-29
+S038,MixedUse 038,MixedUse,UAE,Dubai,4,120000,9to6,2012-04-07
+S039,RetailPodium 039,RetailPodium,UAE,Dubai,2,45000,Mixed,2009-09-09
+S040,MixedUse 040,MixedUse,UAE,Sharjah,6,20000,Mixed,2008-04-30

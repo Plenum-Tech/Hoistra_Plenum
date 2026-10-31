@@ -1,0 +1,59 @@
+{
+  "status": "COMPLETE_VERIFIED",
+  "milestones": {
+    "01-contract": {
+      "title": "Contract Performance and invoice diagnostics",
+      "status": "PASSED",
+      "attempts": 2,
+      "verified_at": "2026-10-26T23:58:30+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/01-contract/attempt-002/controller-verification.json"
+    },
+    "02-energy": {
+      "title": "Energy anomalies, escalation and reporting",
+      "status": "PASSED",
+      "attempts": 1,
+      "verified_at": "2026-10-27T00:21:41+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/02-energy/attempt-001/controller-verification.json"
+    },
+    "03-ingestion": {
+      "title": "Building onboarding and source-preserving ingestion",
+      "status": "PASSED",
+      "attempts": 1,
+      "verified_at": "2026-10-27T00:59:04+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/03-ingestion/attempt-001/controller-verification.json"
+    },
+    "04-communications-hoi": {
+      "title": "Cross-domain communications and HOI change trails",
+      "status": "PASSED",
+      "attempts": 1,
+      "verified_at": "2026-10-27T01:22:42+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/04-communications-hoi/attempt-001/controller-verification.json"
+    },
+    "05-usage-reports": {
+      "title": "Measured usage and manual reporting",
+      "status": "PASSED",
+      "attempts": 1,
+      "verified_at": "2026-10-27T01:39:24+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/05-usage-reports/attempt-001/controller-verification.json"
+    },
+    "06-unified-agent": {
+      "title": "Unified agent routing, prompts and evaluations",
+      "status": "PASSED",
+      "attempts": 1,
+      "verified_at": "2026-10-27T02:05:27+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/06-unified-agent/attempt-001/controller-verification.json"
+    },
+    "07-readiness": {
+      "title": "Complete baseline verification and isolated activation",
+      "status": "PASSED",
+      "attempts": 5,
+      "last_problems": [
+        "Milestone gate execution failed; inspect private gate.log"
+      ],
+      "verified_at": "2026-10-27T08:27:35+04:00",
+      "verification": "/root/Hoistra_Plenum/homework/module-1/runtime/remote-codex/milestones/07-readiness/attempt-005/controller-verification.json"
+    }
+  },
+  "updated_at": "2026-10-27T08:27:35+04:00",
+  "blocker": "Remote Codex returned a usage-limit error; no duplicate coding run started. VPS also has severe memory pressure."
+}

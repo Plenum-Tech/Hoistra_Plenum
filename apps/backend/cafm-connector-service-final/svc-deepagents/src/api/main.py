@@ -64,6 +64,9 @@ def _configure_logging() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _configure_logging()
+    if getattr(app.state, 'hw1_compliance_enabled', False):
+        from ..services.compliance_hw1.store import runtime_store
+        await runtime_store().validate_schema()
 
     log.info(
         "svc-deepagents.startup",
@@ -110,25 +113,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             checkpointer = None
             _checkpointer_pool = None
 
-    # Build the singleton orchestrator
-    app.state.orchestrator = DeepAgentOrchestrator(
-        openai_api_key=settings.openai_api_key,
-        model=settings.openai_model,
-        checkpointer=checkpointer,
-    )
-    log.info("svc-deepagents.orchestrator.ready")
+    # Install tracing before constructing models so LangChain wrappers see every call.
+    from ..observability.homework import setup_homework_tracing
 
-    yield
+    tracing_runtime = setup_homework_tracing()
+    try:
+        # Build the singleton orchestrator
+        app.state.orchestrator = DeepAgentOrchestrator(
+            openai_api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            checkpointer=checkpointer,
+        )
+        log.info("svc-deepagents.orchestrator.ready")
 
-    # Shutdown — close the checkpointer pool if open
-    if _checkpointer_pool is not None:
-        try:
-            await _checkpointer_pool.close()
-            log.info("svc-deepagents.hitl.pool.closed")
-        except Exception as exc:
-            log.warning("svc-deepagents.hitl.pool.close_error", error=str(exc))
-
-    log.info("svc-deepagents.shutdown")
+        yield
+    finally:
+        # Shutdown must flush traces even when another service cleanup fails.
+        if _checkpointer_pool is not None:
+            try:
+                await _checkpointer_pool.close()
+                log.info("svc-deepagents.hitl.pool.closed")
+            except Exception as exc:
+                log.warning("svc-deepagents.hitl.pool.close_error", error=str(exc))
+        tracing_runtime.shutdown()
+        log.info("svc-deepagents.shutdown")
 
 
 app = FastAPI(
@@ -146,6 +154,102 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Explicit opt-in confines test identities to the isolated homework deployment.
+_homework_mode = os.environ.get("HW1_TEST_IDENTITY_ENABLED", "false").lower()
+if _homework_mode not in {"true", "false"}:
+    raise ValueError("HW1_TEST_IDENTITY_ENABLED must be true or false")
+if _homework_mode == "true":
+    from .homework_identity import HomeworkIdentityMiddleware, TestIdentityStore
+    from .routes.homework_identity import router as homework_identity_router
+    from .routes.homework_reads import router as homework_reads_router
+    from .routes.homework_agent import router as homework_agent_router
+    from .routes.homework_contract import router as homework_contract_router
+    from .routes.homework_energy import router as homework_energy_router
+    from .routes.homework_ingestion import router as homework_ingestion_router
+    from .routes.homework_usage import router as homework_usage_router
+    from .routes.homework_traces import router as homework_traces_router
+    from ..services.homework_reads import audit_boundary, runtime_dispatcher
+    from fastapi.exceptions import RequestValidationError
+
+    _identity_path = os.environ.get("HW1_TEST_IDENTITY_FILE", "")
+    if not _identity_path:
+        raise ValueError("HW1_TEST_IDENTITY_FILE is required in homework identity mode")
+    runtime_dispatcher()  # Validate the dedicated DB connection configuration at startup.
+    from ..agents.homework_read_prompt import validate_homework_prompt_configuration
+    validate_homework_prompt_configuration()  # Refuse startup on missing or drifted instructions.
+    app.add_middleware(HomeworkIdentityMiddleware, store=TestIdentityStore(_identity_path),
+                       audit_callback=audit_boundary)
+    app.include_router(homework_identity_router)
+    app.include_router(homework_reads_router)
+    app.include_router(homework_agent_router)
+    _compliance_mode = os.environ.get('HW1_COMPLIANCE_ENABLED','false').lower()
+    if _compliance_mode not in {'true','false'}:
+        raise ValueError('HW1_COMPLIANCE_ENABLED must be true or false')
+    app.state.hw1_compliance_enabled = _compliance_mode == 'true'
+    from .routes.homework_compliance import router as compliance_router
+    if app.state.hw1_compliance_enabled:
+        from ..services.compliance_hw1.store import runtime_store
+        from ..agents.compliance_prompt import validate as validate_compliance_prompt
+        runtime_store()
+        validate_compliance_prompt()
+    app.include_router(compliance_router)
+    app.state.hw1_communications_enabled=app.state.hw1_compliance_enabled
+    from .routes.homework_communications import router as communications_router
+    if app.state.hw1_communications_enabled:
+        from ..agents.communications_prompt import validate as validate_communications_prompt
+        validate_communications_prompt()
+    app.include_router(communications_router)
+
+    _contract_mode = os.environ.get("HW1_CONTRACT_ENABLED", "false").lower()
+    if _contract_mode not in {"true", "false"}:
+        raise ValueError("HW1_CONTRACT_ENABLED must be true or false")
+    app.state.hw1_contract_enabled = _contract_mode == "true"
+    if app.state.hw1_contract_enabled:
+        from ..agents.contract_prompt import validate as validate_contract_prompt
+        validate_contract_prompt()
+    app.include_router(homework_contract_router)
+
+    _energy_mode = os.environ.get("HW1_ENERGY_ENABLED", "false").lower()
+    if _energy_mode not in {"true", "false"}:
+        raise ValueError("HW1_ENERGY_ENABLED must be true or false")
+    app.state.hw1_energy_enabled = _energy_mode == "true"
+    if app.state.hw1_energy_enabled:
+        from ..agents.energy_prompt import validate as validate_energy_prompt
+        validate_energy_prompt()
+    app.include_router(homework_energy_router)
+
+    _ingestion_mode = os.environ.get("HW1_INGESTION_ENABLED", "false").lower()
+    if _ingestion_mode not in {"true", "false"}:
+        raise ValueError("HW1_INGESTION_ENABLED must be true or false")
+    app.state.hw1_ingestion_enabled = _ingestion_mode == "true"
+    if app.state.hw1_ingestion_enabled:
+        from ..agents.ingestion_prompt import validate as validate_ingestion_prompt
+        validate_ingestion_prompt()
+    app.include_router(homework_ingestion_router)
+
+    _usage_mode = os.environ.get("HW1_USAGE_ENABLED", "false").lower()
+    if _usage_mode not in {"true", "false"}:
+        raise ValueError("HW1_USAGE_ENABLED must be true or false")
+    app.state.hw1_usage_enabled = _usage_mode == "true"
+    if app.state.hw1_usage_enabled:
+        from ..agents.usage_prompt import validate as validate_usage_prompt
+        validate_usage_prompt()
+    app.include_router(homework_usage_router)
+    app.include_router(homework_traces_router)
+    from ..agents.unified_prompt import validate as validate_unified_registry,enabled_for
+    validate_unified_registry(enabled_for(app))
+
+
+    @app.exception_handler(RequestValidationError)
+    async def homework_validation_error(request: Request, exc: RequestValidationError):
+        # Never persist invalid input values: they may contain prompts or credentials.
+        try:
+            await audit_boundary(getattr(request.state, "test_principal", None),
+                request.state.request_id, "request_validation", "invalid_arguments", "validation")
+        except Exception:
+            return JSONResponse(status_code=503, content={"detail": "Audit store unavailable"})
+        return JSONResponse(status_code=422, content={"detail": "Invalid homework request arguments"})
 
 app.add_middleware(
     CORSMiddleware,

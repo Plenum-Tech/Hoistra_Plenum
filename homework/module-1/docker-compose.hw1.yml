@@ -1,0 +1,115 @@
+# A separate project/network/volume prevents homework from using Cartwheel data.
+services:
+  postgres:
+    image: postgres:16-alpine
+    # Default128MB shared buffers crowded the original160MB cgroup as immutable
+    # evidence grew. Bound PostgreSQL caches/work memory within this isolated limit.
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "work_mem=2MB", "-c", "maintenance_work_mem=32MB", "-c", "max_connections=40"]
+    environment:
+      POSTGRES_USER: hoistra_hw1
+      POSTGRES_DB: hoistra_hw1
+      POSTGRES_PASSWORD: ${HW1_POSTGRES_PASSWORD:?Run setup first}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - hw1_database:/var/lib/postgresql/data
+      - ./hw1-init.sql:/docker-entrypoint-initdb.d/01-homework.sql:ro
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hoistra_hw1 -d hoistra_hw1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  orchestrator: &hw1_orchestrator
+    image: ${HW1_IMAGE:-hoistra-hw1-orchestrator:latest}
+    build:
+      context: ../../apps/backend/cafm-connector-service-final/svc-deepagents
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        WORKDIR /app
+        COPY pyproject.toml ./
+        COPY src ./src
+        COPY skills ./skills
+        RUN pip install --no-cache-dir .
+        CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8008"]
+    environment: &hw1_environment
+      HW1_COMPLIANCE_ENABLED: ${HW1_COMPLIANCE_ENABLED:-false}
+      HW1_CONTRACT_ENABLED: "false"
+      HW1_ENERGY_ENABLED: "false"
+      HW1_INGESTION_ENABLED: "false"
+      HW1_USAGE_ENABLED: "false"
+      HW1_COMPLIANCE_DB_URL: ${HW1_COMPLIANCE_DB_URL:-}
+      HW1_TEST_IDENTITY_ENABLED: "true"
+      HW1_READ_DB_URL: ${HW1_READ_DB_URL:?Run setup-point-2.py first}
+      HW1_TEST_IDENTITY_FILE: /run/hoistra-hw1/test-identities.json
+      DB_URL: postgresql+asyncpg://hoistra_hw1:${HW1_POSTGRES_PASSWORD:?Run setup first}@postgres:5432/hoistra_hw1
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-openai/gpt-4o-mini}
+      # Use the existing OpenAI-compatible client against OpenRouter.
+      OPENAI_API_BASE: ${OPENAI_API_BASE:?Set the OpenRouter endpoint}
+      CLOUD_PROVIDER: openai
+      HITL_ENABLED: "true"
+      LANGSMITH_TRACING: "false"
+      HW2_TRACING_ENABLED: ${HW2_TRACING_ENABLED:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      # Inside Docker, localhost is this container rather than the VPS host.
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://host.docker.internal:3000}
+      TRACELOOP_TRACE_CONTENT: ${TRACELOOP_TRACE_CONTENT:-false}
+      OTEL_SERVICE_NAME: hoistra-homework-agent
+      OTEL_DEPLOYMENT_ENVIRONMENT: homework-2
+      DEBUG: "false"
+      ORCHESTRATOR_LLM_ROUTING: "0"
+      COMPLIANCE_SKILL_PATH: "0"
+      COMPLIANCE_SELECTIVE_SKILLS: "0"
+      # These point inside this container, where no downstream services run.
+      # Business workflows stay unavailable until isolated fixtures/services are added.
+      WO_MANAGEMENT_BASE_URL: http://127.0.0.1:8007
+      OPERATIONS_INTELLIGENCE_BASE_URL: http://127.0.0.1:8009
+      UDR_BASE_URL: http://127.0.0.1:8006
+      DOC_RAG_BASE_URL: http://127.0.0.1:8004
+      MIGRATION_BASE_URL: http://127.0.0.1:8003
+    volumes:
+      - ./runtime/test-identities.json:/run/hoistra-hw1/test-identities.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:18008:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 448m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+  compliance_candidate:
+    <<: *hw1_orchestrator
+    image: hoistra-hw1-orchestrator:compliance-candidate
+    # Reuse the locally verified isolated dependency base so source-only candidate
+    # iterations do not download and reinstall the full service dependency set.
+    build:
+      context: ../../apps/backend/cafm-connector-service-final/svc-deepagents
+      dockerfile_inline: |
+        FROM hoistra-hw1-orchestrator:compliance-v37
+        WORKDIR /app
+        COPY src ./src
+        COPY skills ./skills
+        CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8008"]
+    environment:
+      <<: *hw1_environment
+      HW1_COMPLIANCE_ENABLED: "true"
+      HW1_CONTRACT_ENABLED: "true"
+      HW1_ENERGY_ENABLED: "true"
+      HW1_INGESTION_ENABLED: "true"
+      HW1_USAGE_ENABLED: "true"
+    ports:
+      - "127.0.0.1:18009:8008"
+    restart: "no"
+    profiles: ["compliance-review"]
+volumes:
+  hw1_database:

@@ -37,10 +37,9 @@ class TestOnlyTheAnswerIsRequired:
 
     def test_the_prompt_tells_the_model_to_choose(self):
         p = O._ANALYST_PROMPT
-        assert "DECIDE THE SHAPE OF THE ANSWER" in p
-        assert "ONE FACT" in p
-        # The instruction that used to make groups unconditional is now conditioned.
-        assert "WHEN the question earns groups at all" in p
+        assert "Lead with the supported answer" in p
+        assert "Do not force dashboard tiles, groups or a next-action plan" in p
+        assert "Use the backend/API response contract actually provided" in p
 
     def test_a_narrative_only_answer_still_renders_as_text(self):
         # The chat message is built from the typed answer; with no groups it must fall back
@@ -199,19 +198,18 @@ class TestWhichOneQuestions:
 
     def test_the_prompt_names_the_superlative_case(self):
         p = O._ANALYST_PROMPT
-        assert "asks WHICH ONE" in p
-        assert "NAME IT in the first sentence" in p
+        assert "For a “which one” question" in p
+        assert "lead with the selected building or vendor" in p
 
     def test_it_forbids_the_dashboard_that_was_returned(self):
-        p = O._ANALYST_PROMPT
-        assert "do not open a group for every one of them" in p
-        assert "do not raise an action for each" in p
+        p = " ".join(O._ANALYST_PROMPT.split())
+        assert "does not turn a single-item answer into a dashboard" in p
+        assert "create one action for every candidate" in p
 
     def test_scanning_widely_does_not_make_it_a_portfolio_question(self):
         p = O._ANALYST_PROMPT
-        assert "judge the shape by the size of the ANSWER" in p
-        # And the portfolio rule now says what it is FOR, so the two do not overlap.
-        assert "characterise a set, not to pick from it" in p
+        assert "A broad scan may be needed" in p
+        assert "A portfolio summary describes a set; a ranking selects" in p
 
 
 class TestMagnitudeKpisAreNotBoundedByRowCount:

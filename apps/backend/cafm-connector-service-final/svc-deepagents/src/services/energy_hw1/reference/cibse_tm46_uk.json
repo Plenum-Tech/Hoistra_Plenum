@@ -1,0 +1,18 @@
+{
+  "pack": "CIBSE TM46 UK indicative benchmarks",
+  "unit": "kWh/m2/year",
+  "note": "Legacy Hoistra Phase 2 reference data; indicative category values, refine per client pack.",
+  "source_path": "svc-operations-intelligence/src/reference/cibse_tm46_uk.json",
+  "building_types": {
+    "office": {"electricity": 95, "gas": 117, "label": "General office"},
+    "hotel": {"electricity": 105, "gas": 330, "label": "Hotel"},
+    "school": {"electricity": 40, "gas": 150, "label": "School"},
+    "hospital": {"electricity": 90, "gas": 420, "label": "Hospital"},
+    "retail": {"electricity": 280, "gas": 0, "label": "Retail"},
+    "warehouse": {"electricity": 35, "gas": 160, "label": "Warehouse / storage"},
+    "sports": {"electricity": 150, "gas": 320, "label": "Sports centre"},
+    "university": {"electricity": 80, "gas": 180, "label": "University campus"},
+    "residential": {"electricity": 45, "gas": 140, "label": "Residential common"},
+    "industrial": {"electricity": 55, "gas": 200, "label": "Light industrial"}
+  }
+}
