@@ -17,6 +17,8 @@ the gap the third test in that group pins.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from src.agents.agent_router import resolve_phase2_engine
@@ -137,23 +139,97 @@ def test_a_work_order_question_can_never_end_up_on_compliance(question):
 
 # -- 4. An instance without compliance data never returns compliance results ------------
 
-@pytest.mark.skip(reason=(
-    "Needs a seam callable without a live instance. The scoping lives in svc-deepagents "
-    "principal/scope and is applied per tool against a real database, so 'this instance has no "
-    "compliance module, therefore no compliance tool may run' has nowhere to be asserted. Wire "
-    "a module-availability check the router consults, then this asserts: given an instance with "
-    "no compliance records, a compliance question returns that it has no compliance module and "
-    "no compliance tool is invoked."))
-def test_an_instance_without_compliance_returns_no_compliance_results():
-    raise AssertionError("unwired")
+# The seam these needed does exist and is pure: services/principal.py reads the caller from a
+# contextvar and narrows every building-keyed read to the buildings that caller is allocated.
+# building_clause gives the SQL, restrict_rows applies the same boundary to rows that came back
+# unfiltered. Neither needs a database, so both halves of the feedback can be asserted here.
+
+def _as(building_ids):
+    """Become a caller allocated to these buildings. None is an admin, () is allocated nothing."""
+    from src.services.principal import Principal, caller_principal
+    p = Principal(user_id=uuid.uuid4(), email="t@example.test", organization_id=uuid.uuid4(),
+                  role="user", can_ingest=False,
+                  building_ids=None if building_ids is None else tuple(building_ids))
+    return caller_principal.set(p)
 
 
-@pytest.mark.skip(reason=(
-    "Same seam, stronger half of the feedback: a row belonging to another instance never "
-    "appears, whatever the question. Needs two seeded instances and the scoped read path under "
-    "test; today it can only be checked against the live database."))
-def test_one_instance_never_sees_another_instances_rows():
-    raise AssertionError("unwired")
+MINE = uuid.UUID("11111111-1111-4111-8111-111111111111")
+THEIRS = uuid.UUID("22222222-2222-4222-8222-222222222222")
+
+
+class TestOneInstanceNeverSeesAnothersRows:
+    def test_a_row_from_another_instance_is_dropped(self):
+        from src.services.principal import caller_principal, restrict_rows
+        token = _as([MINE])
+        try:
+            rows = [{"building_id": str(MINE), "name": "mine"},
+                    {"building_id": str(THEIRS), "name": "theirs"}]
+            assert restrict_rows(rows, "building_id") == [{"building_id": str(MINE), "name": "mine"}]
+        finally:
+            caller_principal.reset(token)
+
+    def test_a_row_with_no_building_is_dropped_too(self):
+        """Absent is not the same as allowed; this is how a cross-instance row slips through."""
+        from src.services.principal import caller_principal, restrict_rows
+        token = _as([MINE])
+        try:
+            assert restrict_rows([{"building_id": None}, {"other": 1}], "building_id") == []
+        finally:
+            caller_principal.reset(token)
+
+    def test_the_sql_narrows_to_the_callers_buildings(self):
+        from src.services.principal import building_clause, caller_principal
+        token = _as([MINE])
+        try:
+            sql, params = building_clause("b.building_id")
+            assert "b.building_id = ANY" in sql
+            assert params["scope_buildings"] == [str(MINE)]
+        finally:
+            caller_principal.reset(token)
+
+    def test_a_caller_allocated_to_nothing_matches_no_row(self):
+        """The failure this exists to remove: an empty clause matches EVERY row."""
+        from src.services.principal import building_clause, caller_principal, restrict_rows
+        token = _as([])
+        try:
+            sql, params = building_clause("b.building_id")
+            assert sql.strip() == "AND FALSE" and params == {}
+            assert restrict_rows([{"building_id": str(MINE)}], "building_id") == []
+        finally:
+            caller_principal.reset(token)
+
+    def test_an_admin_is_not_narrowed(self):
+        from src.services.principal import building_clause, caller_principal, restrict_rows
+        token = _as(None)
+        try:
+            assert building_clause("b.building_id") == ("", {})
+            rows = [{"building_id": str(MINE)}, {"building_id": str(THEIRS)}]
+            assert restrict_rows(rows, "building_id") == rows
+        finally:
+            caller_principal.reset(token)
+
+    def test_with_no_caller_at_all_a_background_job_is_not_broken(self):
+        from src.services.principal import building_clause
+        assert building_clause("b.building_id") == ("", {})
+
+
+class TestAnInstanceWithoutComplianceReturnsNoComplianceResults:
+    """The module half, which the space gate answers: an Ops Brain question never reaches the
+    compliance engine at all, so there is nothing to filter afterwards."""
+
+    def test_the_compliance_engine_is_unreachable_from_ops_brain(self):
+        from src.agents.spaces import allows, refusal
+        assert allows("ops", "compliance") is False
+        assert "not part of Ops Brain" in refusal("ops", "compliance")
+
+    def test_the_router_never_offers_it_there(self):
+        from src.agents.agent_router import _catalogue
+        _, known = _catalogue("ops")
+        assert "compliance" not in known
+
+    def test_a_space_that_has_compliance_still_answers(self):
+        from src.agents.spaces import allows
+        assert allows("comp", "compliance") is True
 
 
 # -- 5. Frontend and backend runs share one orchestration -------------------------------
