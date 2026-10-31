@@ -1,0 +1,36 @@
+{
+  "recorded_at": "2026-10-27T17:47:59.618120+00:00",
+  "specification_version": "0.37.0",
+  "change": "Case 1 Python answer and trace evidence fix",
+  "verification": {
+    "focused_tests_passed": 41,
+    "full_tests_passed": 539,
+    "subtests_passed": 65,
+    "full_warnings": 18,
+    "candidate_case_passed": true,
+    "active_case_passed": true,
+    "other_user_trace_denied": true,
+    "four_role_status_projections_unchanged": true
+  },
+  "deployment": {
+    "active_image_id": "sha256:39574941dcd7e5af994c5f8957357ad2c67166f116890852c45b8417208b1ae8",
+    "candidate_image_id": "sha256:39574941dcd7e5af994c5f8957357ad2c67166f116890852c45b8417208b1ae8",
+    "active_started_at": "2026-10-27T17:47:49.404384186Z",
+    "rollback_image_id": "sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a",
+    "rollback_tag": "hoistra-hw1-orchestrator:case1-before-15ab138a300127ae",
+    "ports": [
+      18008,
+      18009
+    ]
+  },
+  "prompt_or_skill_changes": false,
+  "original_session_record_preserved": true,
+  "files": {
+    "src/agents/homework_energy_agent.py": "161854d4ff4214282ecd18aa7521bdbd3a1aa3ae1781223b26482f90215743ee",
+    "src/agents/energy_response.py": "35b3203a38d6a4f6db5cd0355c9bd039c0333262a4556e64b4851a9669ea80e5",
+    "src/agents/homework_router.py": "c73ed3a9bedf16a95a38683df294b0095f72e45c66767b5d273214c1495c75e9",
+    "src/services/trace_hw1/service.py": "ad39fdad8cac010d0ba14941f21eb0ce6f11760c668f53c1a93122090596502a",
+    "src/services/trace_hw1/energy.py": "600bd4915580f895ba4027986451b5d96679405a9e71b2ed9861e124c0ee1609",
+    "tests/test_case1_energy_evidence.py": "33aeafab1dae4685f408fd94c886467405634f061dbdf5514c8cfa7c23c808a5"
+  }
+}

@@ -1,0 +1,38 @@
+- 2026-10-26T21:41:36+04:00 — Milestone controller started. Completion requires executed gates and full regressions.
+- 2026-10-26T21:42:42+04:00 — START 01-contract: Contract Performance and invoice diagnostics (attempt 1).
+- 2026-10-26T21:44:56+04:00 — STOP 01-contract: Codex exited 1; private log saved. No completion claimed.
+- 2026-10-26T23:44:02+04:00 — Milestone controller started. Completion requires executed gates and full regressions.
+- 2026-10-26T23:44:02+04:00 — START 01-contract: Contract Performance and invoice diagnostics (attempt 2).
+- 2026-10-26T23:57:58+04:00 — CHECK 01-contract: executing milestone gate and full regression suite.
+- 2026-10-26T23:58:30+04:00 — PASS 01-contract: gate and full regressions passed; advancing automatically.
+- 2026-10-26T23:58:30+04:00 — START 02-energy: Energy anomalies, escalation and reporting (attempt 1).
+- 2026-10-27T00:21:20+04:00 — CHECK 02-energy: executing milestone gate and full regression suite.
+- 2026-10-27T00:21:41+04:00 — PASS 02-energy: gate and full regressions passed; advancing automatically.
+- 2026-10-27T00:21:41+04:00 — START 03-ingestion: Building onboarding and source-preserving ingestion (attempt 1).
+- 2026-10-27T00:58:35+04:00 — CHECK 03-ingestion: executing milestone gate and full regression suite.
+- 2026-10-27T00:59:04+04:00 — PASS 03-ingestion: gate and full regressions passed; advancing automatically.
+- 2026-10-27T00:59:04+04:00 — START 04-communications-hoi: Cross-domain communications and HOI change trails (attempt 1).
+- 2026-10-27T01:21:13+04:00 — CHECK 04-communications-hoi: executing milestone gate and full regression suite.
+- 2026-10-27T01:22:42+04:00 — PASS 04-communications-hoi: gate and full regressions passed; advancing automatically.
+- 2026-10-27T01:22:42+04:00 — START 05-usage-reports: Measured usage and manual reporting (attempt 1).
+- 2026-10-27T01:36:33+04:00 — CHECK 05-usage-reports: executing milestone gate and full regression suite.
+- 2026-10-27T01:39:24+04:00 — PASS 05-usage-reports: gate and full regressions passed; advancing automatically.
+- 2026-10-27T01:39:24+04:00 — START 06-unified-agent: Unified agent routing, prompts and evaluations (attempt 1).
+- 2026-10-27T02:03:50+04:00 — CHECK 06-unified-agent: executing milestone gate and full regression suite.
+- 2026-10-27T02:05:27+04:00 — PASS 06-unified-agent: gate and full regressions passed; advancing automatically.
+- 2026-10-27T02:05:27+04:00 — START 07-readiness: Complete baseline verification and isolated activation (attempt 1).
+- 2026-10-27T02:48:32+04:00 — CHECK 07-readiness: executing milestone gate and full regression suite.
+- 2026-10-27T03:00:20+04:00 — RETRY 07-readiness: 1 verification problem(s); returning them to Codex.
+- 2026-10-27T03:00:20+04:00 — START 07-readiness: Complete baseline verification and isolated activation (attempt 2).
+- 2026-10-27T03:14:13+04:00 — CHECK 07-readiness: executing milestone gate and full regression suite.
+- 2026-10-27T03:27:57+04:00 — RETRY 07-readiness: 2 verification problem(s); returning them to Codex.
+- 2026-10-27T03:27:57+04:00 — START 07-readiness: Complete baseline verification and isolated activation (attempt 3).
+- 2026-10-27T04:24:32+04:00 — CHECK 07-readiness: executing milestone gate and full regression suite.
+- 2026-10-27T04:51:14+04:00 — RETRY 07-readiness: 1 verification problem(s); returning them to Codex.
+- 2026-10-27T04:51:14+04:00 — START 07-readiness: Complete baseline verification and isolated activation (attempt 4).
+- 2026-10-27T07:39:28+04:00 — CHECK 07-readiness: executing milestone gate and full regression suite.
+- 2026-10-27T07:55:52+04:00 — RETRY 07-readiness: 1 verification problem(s); returning them to Codex.
+- 2026-10-27T07:55:52+04:00 — START 07-readiness: Complete baseline verification and isolated activation (attempt 5).
+- 2026-10-27T08:08:43+04:00 — CHECK 07-readiness: executing milestone gate and full regression suite.
+- 2026-10-27T08:27:35+04:00 — PASS 07-readiness: gate and full regressions passed; advancing automatically.
+- 2026-10-27T08:27:35+04:00 — COMPLETE: all seven milestone gates and their full regression checks passed. Read final report before use.

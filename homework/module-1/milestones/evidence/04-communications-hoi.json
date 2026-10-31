@@ -1,0 +1,48 @@
+{
+  "milestone_id": "04-communications-hoi",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "checks": [
+    {
+      "id": "requested_email_exact_preview_and_confirmation",
+      "passed": true,
+      "evidence": "Actual preview preserves exact recipient/address, subject/body and source digest/version attachment; no send before approval or after rejection. Wrong hash409, foreign principal404. Two concurrent confirmations produce one send and one replay; changed replay decision409. General User permitted team message succeeds; vendor recipient403. Retained outbox content equals the exact approved preview. No real transport or operational work-order action."
+    },
+    {
+      "id": "automatic_scoped_action_and_failure_notifications",
+      "passed": true,
+      "evidence": "A live authorized evidence correction automatically creates both scoped manager HOI notices, without user email approval. Missing manager address produces pending, plus an immediate safe manager failure alert containing outcome/reference only. Manual configured certificate evaluation produces certificate-only manager/Officer urgency notices. Alerts never authorize business actions and no real transport is used."
+    },
+    {
+      "id": "known_failure_retry_unknown_review_missing_contact_pending",
+      "passed": true,
+      "evidence": "Live requested messages exercise known failure=failed/2 attempts, first-known-failure recovery=simulated sent/2, unknown=unknown/1, missing contact=pending/0; each has a per-attempt trail. Manual review adds no third attempt or blind unknown retry; missing contact remains pending. General User recovery403. Failure alerts contain no source body and stop recursively at one fallback layer."
+    },
+    {
+      "id": "event_recipient_deduplication_and_recovery",
+      "passed": true,
+      "evidence": "Rerunning configured expiry/event drain preserves exactly the same outbox IDs and one event/recipient key each. A privately provisioned fictional missing manager address becomes available; two simultaneous recovery calls resume the original unsent automatic row once (simulated sent/1), then report already resolved. Unknown/exhausted outcomes remain review-only. All original/source fingerprints are checked separately; no source deletion."
+    },
+    {
+      "id": "canonical_fixed_ten_group_hoi_expected_arithmetic",
+      "passed": true,
+      "evidence": "Source-backed API-onboarded fictional building with fixed46 items and ten groups calculates100. Actual approved all-five-fields-empty asset correction makes four of five assets complete:asset80%, total98; restoration returns100. Two invoices include original two-line evidence, commercial group100. Formula/source versions/checklist are returned. Independent deterministic regressions additionally verify half-up97.5->98, fivegroups50, invoice7.5point contribution, duplicate/overlap and stale/source projection denials."
+    },
+    {
+      "id": "all_authorized_hoi_changes_trigger_recalculation",
+      "passed": true,
+      "evidence": "Actual accepted asset, inspection, external work-order-report and meter-reading APIs each automatically recalculate fixed HOI and retain unchanged100 trails, with no guessed fixed-slot credit. Explicit asset current-version replacement recalculates. Certificate acceptance creates and drains its event into HOI history. Direct fixed-item corrections change/recover arithmetic. Onboarding stores the initial trail; duplicate/no-op evidence cannot raise coverage or create business versions."
+    },
+    {
+      "id": "both_manager_trails_including_unchanged_score",
+      "passed": true,
+      "evidence": "For each newly accepted cross-domain event and fixed-evidence correction, API HOI history and exactly two scoped manager outbox records preserve equal previous/new scores when coverage is unchanged, source reference, actor and formula. Changed asset coverage also records100->98->100. The initial missing Portfolio Manager notice was recovered in place rather than discarded or resent. Property and Portfolio contacts receive the same event trail; no Officer or General recipient is included."
+    },
+    {
+      "id": "no_general_or_officer_hoi_leakage",
+      "passed": true,
+      "evidence": "General/Officer direct HOI tools403 and absent from their typed tool lists; restricted HOI-target/body email drafts403; alternate scoped outbox excludes HOI messages/breakdown. Property A2 and Portfolio foreign-org HOI403. Genuine configured OpenRouter central request executes communications_hoi with expected100 and current hash-checked profile; no model confirm/recovery tools. Officer agent binds no HOI tool and returns no HOI result. Source versions and all pre-existing original hashes remain intact."
+    }
+  ],
+  "recorded_at": "2026-10-27T04:23:18.074042+00:00"
+}

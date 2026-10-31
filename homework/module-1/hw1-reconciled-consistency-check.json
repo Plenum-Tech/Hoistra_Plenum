@@ -1,0 +1,132 @@
+{
+  "reviewed_at": "2026-10-25T07:51:08.820741+00:00",
+  "specification_version": "0.37.0",
+  "specification_sha256": "4d6d010fe561657a97881a0a4f909c1aff9760b019920be1199d28572b10654b",
+  "checks": [
+    {
+      "check": "18 named reconciliation decisions retained in change-log",
+      "passed": true
+    },
+    {
+      "check": "five approved scope decisions recorded",
+      "passed": true
+    },
+    {
+      "check": "no legacy DOC-02 deletion permission remains in canonical row",
+      "passed": true
+    },
+    {
+      "check": "external operational work-order boundary explicit",
+      "passed": true
+    },
+    {
+      "check": "approved ingestion checks unchanged batch and scope",
+      "passed": true
+    },
+    {
+      "check": "human unblock approval and all-reasons review retained",
+      "passed": true
+    },
+    {
+      "check": "day zero consistent and separate from block state",
+      "passed": true
+    },
+    {
+      "check": "manager derived correction and Officer limits explicit",
+      "passed": true
+    },
+    {
+      "check": "verified excerpts and full original distinguished",
+      "passed": true
+    },
+    {
+      "check": "validated adapters replace unrestricted schema discovery",
+      "passed": true
+    },
+    {
+      "check": "clarification is role/deployment-aware",
+      "passed": true
+    },
+    {
+      "check": "scope refusal contains scoring-config exception",
+      "passed": true
+    },
+    {
+      "check": "own-organization config does not broaden underlying data visibility",
+      "passed": true
+    },
+    {
+      "check": "HOI canonical formula and manager-only visibility explicit",
+      "passed": true
+    },
+    {
+      "check": "vendor configuration cannot edit HOI formula",
+      "passed": true
+    },
+    {
+      "check": "OPEN-09 resolved and four domain rules present",
+      "passed": true
+    },
+    {
+      "check": "date-specific cap and non-retroactive snapshots explicit",
+      "passed": true
+    },
+    {
+      "check": "remaining generic PROPOSED/OPEN row statuses removed",
+      "passed": true
+    },
+    {
+      "check": "no standalone vector removal permission",
+      "passed": true
+    },
+    {
+      "check": "backend-only scope and manual monthly/weekly reporting explicit",
+      "passed": true
+    },
+    {
+      "check": "real emails remain prohibited",
+      "passed": true
+    },
+    {
+      "check": "Officer renewal and related booking communications aligned",
+      "passed": true
+    },
+    {
+      "check": "invoice diagnostic not a sixth weighted component",
+      "passed": true
+    },
+    {
+      "check": "all forty upstream contract requirements retained",
+      "passed": true
+    },
+    {
+      "check": "FR-040/UI/scheduling applicability overlays retained",
+      "passed": true
+    },
+    {
+      "check": "runtime sources unchanged from last verified assembly receipt",
+      "passed": true
+    },
+    {
+      "check": "deployed manifest preserved at reviewed v0.14.0",
+      "passed": true
+    },
+    {
+      "check": "isolated health endpoint responds successfully",
+      "passed": true
+    }
+  ],
+  "checks_passed": 28,
+  "reviewed_contradictions_resolved": 18,
+  "reviewed_scope_clarifications_resolved": 5,
+  "unresolved_policy_items_in_reviewed_register": [],
+  "runtime_source_changes": [],
+  "deployed_specification_version": "0.14.0",
+  "last_runtime_verification": {
+    "automated_tests": 57,
+    "live_checks": 44,
+    "rerun_this_documentation_turn": false
+  },
+  "new_runtime_implementation_performed": false,
+  "review_limit": "Reviewed canonical specification, referenced contract applicability, recorded decisions and mapped code/skill change surface; not a new full production-code conformance audit."
+}

@@ -1,0 +1,38 @@
+{
+  "milestone_id": "01-contract",
+  "specification_version": "0.37.0",
+  "api_base": "http://127.0.0.1:18009",
+  "recorded_at": "2026-10-27T04:19:03.311045+00:00",
+  "checks": [
+    {
+      "id": "source_period_scope_compatibility",
+      "passed": true,
+      "evidence": "Candidate source-backed October scorecard has exact A1 scope, elapsed-hour SLA basis and source/version lineage. Partial-month input=422; unknown vendor=404; deliberately mismatched derived mirror=409. Working-day-only target, unknown accreditation expiry and same-signing-date contract tie each produce a visible exclusion and null score. Empty September score is null. Fixture refs: contract-fixtures-v3 and hw1-contract-edge-*. Non-superuser/no-BYPASSRLS DB probe denied original-source UPDATE/DELETE and source-report UPDATE; aggregate source fingerprint unchanged before/after every live workflow."
+    },
+    {
+      "id": "independent_scoring_and_date_cap",
+      "passed": true,
+      "evidence": "Independent five-component contributions 65,35,60 average to53 (half-up); exactly two contributions have evidenced date caps. Separate boundary fixture returns expiry day100 and following lapse day60 =>80. Cross-month same-asset recall returns65. PPM visit +6 days passes inclusive +/-7 tolerance (1/1=100%). Two concurrent same-key requests return one scorecard ID; changed-key payload=409."
+    },
+    {
+      "id": "portfolio_configuration_confirmation_and_snapshot",
+      "passed": true,
+      "evidence": "PM organization-wide preview shows before/after and changes nothing. Explicit Portfolio confirmation changes cap60->50; new score53->50 with exact new parameter version; prior53 score and snapshot remain byte-equivalent. Bad hash, stale version and changed confirmed retry=409; Property confirmation=403; sixth component and weights not totaling100=422. Concurrent confirm yields confirmed+already_confirmed. Original parameters restored through a new confirmed version; no source or prior scorecard rewritten."
+    },
+    {
+      "id": "invoice_diagnostic_separate_from_vendor_score",
+      "passed": true,
+      "evidence": "Separate persisted invoice diagnostic returns matched2/cleared1/flagged2/unmatched1 with overlap definitions and source versions. Independent mismatch=(90-80)*2=GBP20. Day-rate fixture uses640/8=80; (380-80)*2=GBP600 remains flagged and independent arithmetic gate agrees. Same-portfolio cross-building invoice reference is unmatched. New vendor score remains53 with exactly five components after diagnostics; no payment action offered."
+    },
+    {
+      "id": "role_and_building_denials",
+      "passed": true,
+      "evidence": "Fresh API checks: assigned Property and Portfolio Managers score53; General User/Compliance Officer tool projections empty, direct tools and scorecard route=403; Property org-config=403. A2/unknown mixed-building requests denied403; other-organization vendor unavailable404; raw schema tool403; unauthenticated tools401. No role or assignment changed."
+    },
+    {
+      "id": "skill_tool_agent_and_live_provider_integration",
+      "passed": true,
+      "evidence": "Two genuine configured OpenRouter questions via /api/homework/agent/ask selected Contract Performance: contract_vendor_performance returned53; separate contract_invoice_diagnostic returned matched2/flagged2 with grounded answer. API exposes positive provider-response count and selected model tool names (fallback alone cannot pass). Live manifest SHA256 equals local manifest, all six shared/domain files loaded, typed role tools exclude confirmation. Another principal's conversation=404; prohibited-role agent requests return forbidden with no tools."
+    }
+  ]
+}

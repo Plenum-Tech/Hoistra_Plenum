@@ -1,0 +1,136 @@
+{
+  "specification_version": "0.37.0",
+  "checkpoint": "declared-homework-backend-baseline-verified-and-isolated-active",
+  "updated_at": "2026-10-27T04:27:09.565605+00:00",
+  "policy_approval": {
+    "status": "owner-approved baseline",
+    "source": "specifications.md and remote-codex/TASK.md"
+  },
+  "domains": {
+    "contract_performance": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "01-contract"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/01-contract.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "energy": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "02-energy"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/02-energy.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "general_ingestion": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "03-ingestion"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/03-ingestion.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "communications_hoi": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "04-communications-hoi"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/04-communications-hoi.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "usage_reports": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "05-usage-reports"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/05-usage-reports.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "unified_agent": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "06-unified-agent"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/06-unified-agent.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    },
+    "homework_acceptance": {
+      "implementation": "verified declared fictional backend/API baseline",
+      "policy": "canonical0.37.0; no new role/business-action grants",
+      "tests": {
+        "milestones": [
+          "07-readiness"
+        ],
+        "receipts": [
+          "homework/module-1/milestones/evidence/07-readiness.json"
+        ]
+      },
+      "activation": "isolated active18008 and candidate18009; production conformance not claimed"
+    }
+  },
+  "verification": {
+    "all_seven_milestones": "passed",
+    "full_service_suite": {
+      "passed": 523,
+      "warnings": 18,
+      "subtests": 65
+    },
+    "readiness_receipt": "homework/module-1/milestones/evidence/07-readiness.json"
+  },
+  "runtime": {
+    "compose_project": "hoistra-hw1",
+    "active_api": "http://127.0.0.1:18008",
+    "candidate_api": "http://127.0.0.1:18009",
+    "active_profile": "hw1-unified / hw1-unified-v1",
+    "activation": {
+      "active_image_id": "sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a",
+      "candidate_image_id": "sha256:15ab138a300127ae27b0c5a6093f1cff4614810b7a405fdf2fe6614c3f50af8a",
+      "active_started_at": "2026-10-27T04:26:55.789044243Z",
+      "rollback_image_id": "sha256:d473d750734cbe355d7318bc8cfe8f10a99901544dc4a52a29a77a9482ecfef1",
+      "rollback_tag": "hoistra-hw1-orchestrator:rollback-d473d750734cbe35",
+      "ports": [
+        18008,
+        18009
+      ]
+    },
+    "unrelated_projects_touched": false
+  },
+  "previous_status_archive": "homework/module-1/baselines/pre-readiness-status/domain-status-e75536e74bc85bc5f01ea43ec81975325ff1feee970da15d902d6f98db7622f4.json",
+  "boundaries": [
+    "fictional structured backend only",
+    "no real transport, production connectors/identity, frontend or calendar scheduler",
+    "no source deletion, arbitrary schema/SQL, operational WO lifecycle or role/billing/quota administration",
+    "unmeasured pricing/adoption/coverage/limits unavailable; legacy full-production requirements not certified"
+  ]
+}
