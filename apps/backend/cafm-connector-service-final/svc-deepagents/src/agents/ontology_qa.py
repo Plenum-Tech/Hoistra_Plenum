@@ -44,6 +44,7 @@ import datetime
 import hashlib
 import json
 import os
+import datetime as _dt
 import re
 from contextvars import ContextVar
 import tempfile
@@ -1216,12 +1217,27 @@ def date_expr(value):
     return "(CURRENT_DATE " + ("+" if m.group(1) == "+" else "-") + " " + str(int(n)) + " * INTERVAL '1 day')"
 
 
+def _as_date(value):
+    """An ISO date or timestamp as the object the driver can encode, else None."""
+    text = str(value).strip()
+    try:
+        if ISO_DATE_RE.match(text):
+            return _dt.date.fromisoformat(text)
+        return _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def value_expr(value, p: Params, col_type: str = ""):
     d = date_expr(value) if isinstance(value, str) else None
     if d is not None:
         return d
     if isinstance(value, str) and ISO_DATE_RE.match(value):
-        return p.add(value, "date")
+        # A real date object, not the text of one. asyncpg encodes a parameter by its DECLARED
+        # type, so CAST(:p0 AS date) makes it ask the value for toordinal(); a str has none and
+        # the statement dies before Postgres sees it. That emptied both steps of the October
+        # hoist question on 30 Oct and read back as "the query failed".
+        return p.add(_as_date(value), "date")
     if col_type in NUMERIC_TYPES:
         try:
             return p.add(str(float(value)), "numeric")
@@ -1230,8 +1246,24 @@ def value_expr(value, p: Params, col_type: str = ""):
     if col_type == "boolean":
         return p.add(str(value).strip().lower() in ("true", "1", "yes", "t"), "boolean")
     if col_type in DATE_TYPES:
-        return p.add(str(value), "timestamptz")
+        return p.add(_as_date(value) or str(value), "timestamptz")
     return p.add(str(value))
+
+
+#: Column types a period can be compared against. An empty type means the types were not
+#: loaded, which is not the same as knowing the column is text, so it is left alone.
+_TEXT_TYPES = {"text", "character varying", "character"}
+
+
+def _needs_date_column(col: str, ctype: str, period) -> None:
+    """A period filter compiles to `col >= <timestamp>`, and Postgres has no such operator for a
+    text column: it answers "operator does not exist: character varying >= timestamp with time
+    zone", which tells the model nothing it can act on. Say which column and why instead, so the
+    step can be replanned onto one that holds a date."""
+    if ctype in _TEXT_TYPES:
+        raise OntologyError(
+            col + " is " + ctype + ", not a date column, so it cannot be filtered by the period "
+            + repr(period) + " - choose a column that holds a date")
 
 
 def compile_condition(onto, concept, alias, cond, p: Params) -> str:
@@ -1265,6 +1297,7 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
         per = period_of(v)
         if not per:
             raise OntologyError("within needs a period: " + ", ".join(PERIODS))
+        _needs_date_column(col, ctype, v)
         start, end = PERIODS[per[0]]
         return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
     if op == "between":
@@ -1272,6 +1305,7 @@ def compile_condition(onto, concept, alias, cond, p: Params) -> str:
             raise OntologyError("between needs [low, high]")
         a, b = period_of(v[0]), period_of(v[1])
         if a and b and a[0] == b[0] and not a[1] and not b[1]:      # ["last_month", "last_month"]
+            _needs_date_column(col, ctype, v)
             start, end = PERIODS[a[0]]
             return "(" + e + " >= " + start + " AND " + e + " < " + end + ")"
         return e + " BETWEEN " + value_expr(v[0], p, ctype) + " AND " + value_expr(v[1], p, ctype)
