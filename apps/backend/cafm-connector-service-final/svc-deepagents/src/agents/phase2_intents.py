@@ -127,6 +127,16 @@ WO_ENGINE_INTENT_KEYWORDS: tuple[str, ...] = (
     "serviced", "servicing", "service history", "last serviced", "looks after", "breakdown",
     "repair", "repairs", "technician", "backlog", "decisions owed", "needs my decision",
     "repair or replace", "end of life", "repurchase",
+    # An inspection REPORT's recommendations are work to be done, and Ops Brain counts them on
+    # its home page ("RECOMMENDATIONS OPEN - from 144 inspection reports"). The bare word
+    # "inspection" belongs to compliance, where a LOLER or EICR inspection is a statutory duty,
+    # so these are phrases rather than a word: the matcher scores a longer phrase higher, and
+    # "which inspection recommendations were never actioned" is maintenance, not a certificate.
+    # Without this the question is routed to compliance, which Ops Brain does not have, and the
+    # space refuses a chip it offers on its own home page (1 Nov 2026).
+    "inspection recommendation", "inspection recommendations",
+    "inspection report", "inspection reports", "recommendations were never actioned",
+    "recommendation was never actioned", "never actioned",
 )
 
 PHASE2_INTENT_BY_AGENT: dict[Phase2AgentId, tuple[str, ...]] = {

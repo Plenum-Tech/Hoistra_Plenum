@@ -180,3 +180,62 @@ class TestTheRouterIsGatedByTheSpace:
         from src.agents.agent_router import select_agent
         assert "space" in inspect.signature(select_agent).parameters, (
             "the caller has nothing to pass the active space in, so the gate never fires")
+
+
+# -- every space answers the questions it offers -------------------------------------------
+
+class TestASpaceNeverRefusesItsOwnChips:
+    """Found by checking the four role spaces after the gate went in (1 Nov 2026).
+
+    Ops Brain offers "Which inspection recommendations were never actioned?" on its own home
+    page, and it routed to the compliance engine, which Ops Brain does not have. The gate turned
+    a routing quirk into a dead button: a chip the space suggests, refused by the space.
+
+    "inspection" is a compliance keyword, rightly -- a LOLER or EICR inspection is a statutory
+    duty. An inspection REPORT's open recommendations are work to be done, which is what the Ops
+    Brain home card counts, so those are phrases that outscore the bare word.
+    """
+
+    #: The pinned chips and suggested asks, from logic/instances.js.
+    OWN_QUESTIONS = {
+        "ops": ["What needs my approval today?", "Which vendor is costing me money?",
+                "Which inspection recommendations were never actioned?",
+                "Is planned maintenance running to plan?",
+                "What is open across my buildings this week?", "What documents have I ingested?",
+                "Which assets are unaccounted for?", "Is each vendor inside its SLA?",
+                "What service credit can I claim?"],
+        "comp": ["Which buildings are out of compliance today?",
+                 "Which vendors are not eligible to work here?",
+                 "What certificates lapse in the next 30 days?",
+                 "Which certificates failed authenticity checks?",
+                 "What documents evidence each certificate?",
+                 "Which approvals expire this month?", "Who can replace a blocked vendor?"],
+        "assets": ["Which assets are losing value?", "What is energy telling me about asset health?",
+                   "Which assets should I remediate first?", "What will break in the next 90 days?"],
+        "full": ["Which buildings put me at risk this month?", "What needs my approval today?",
+                 "Which vendors are blocked right now?"],
+    }
+
+    @pytest.mark.parametrize("space,question", [
+        (s, q) for s, qs in OWN_QUESTIONS.items() for q in qs
+    ])
+    def test_a_space_answers_the_question_it_suggests(self, space, question):
+        from src.agents.phase2_intents import resolve_phase2_engine
+        engine = resolve_phase2_engine(user_message=question, context_note=None)
+        assert allows(space, engine), (
+            "%s suggests %r on its own page and then refuses it: the router sends it to %s, "
+            "which %s does not have" % (space, question, engine, space))
+
+    def test_an_inspection_report_recommendation_is_maintenance(self):
+        from src.agents.phase2_intents import resolve_phase2_engine as r
+        assert r(user_message="Which inspection recommendations were never actioned?",
+                 context_note=None) == "wo_engine"
+
+    @pytest.mark.parametrize("question", [
+        "When is the next LOLER inspection due?",
+        "Show the EICR inspection certificate",
+        "Which certificates lapse in the next 30 days?",
+    ])
+    def test_a_statutory_inspection_is_still_compliance(self, question):
+        from src.agents.phase2_intents import resolve_phase2_engine as r
+        assert r(user_message=question, context_note=None) == "compliance"
