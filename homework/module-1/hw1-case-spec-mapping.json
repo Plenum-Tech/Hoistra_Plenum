@@ -9,9 +9,10 @@
   },
   "source_log": {
     "path": "homework/module-1/hw1-session.jsonl",
-    "sha256": "77b5691e0f3e0bd2b01f6399e27fd1fe57c5b7efcb49593d9d35e25279ac6c0b",
-    "rows": 11,
-    "distinct_conversations": 10,
+    "sha256": "7785d52ea88cda94d1c897787df6139083ca1f3ee51cb3d1ffb44a12b15b4809",
+    "rows": 12,
+    "distinct_conversations": 11,
+    "authenticated_conversations": 10,
     "policy": "append_only; this mapping records reviews and supersession without rewriting observed evidence"
   },
   "part_c": {
@@ -190,6 +191,19 @@
       "disposition": "observed_multi_domain_tool_failure",
       "met_requirement": false,
       "problem_source": "tool"
+    },
+    {
+      "row": 12,
+      "case_id": "HW1-ENERGY-01-FINAL-AUTHENTICATED",
+      "trace_id": "1b35cd4a-fc31-43ae-a878-d6ceeb8f38d2",
+      "request": "Calculate Energy EUI for building_id hw1-building-a1, meter_id hw1-energy-m2-condition, period_start 2026-10-01, period_end 2026-10-31.",
+      "source_request_sha256": "097ad2dbe6dbc7caec8d3ddc15fdf2778ff967288e23bbe77354a3f16a42bef2",
+      "source_expected_sha256": "364fe393f4cfdad6f3922d26698118130348c5a98e85e6b489c4ceb37de4061a",
+      "expected": "Use verified 1200 kWh and 100 m2 to report 12 kWh/m2 for 31 days and 141.29 kWh/m2/year, with dates, formula, sources, unknown-coverage limits and benchmark/tariff basis.",
+      "primary_requirement": "DOMAIN-02",
+      "related_requirements": ["ENERGY-01", "ACCESS-05", "TRACE-01"],
+      "disposition": "verified_final_authenticated_conversation",
+      "met_requirement": true
     }
   ]
 }

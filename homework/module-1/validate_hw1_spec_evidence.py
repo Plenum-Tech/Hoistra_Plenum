@@ -162,6 +162,15 @@ def validate() -> list[str]:
     }
     if source_log.get("distinct_conversations") != len(conversation_ids):
         errors.append("case mapping distinct_conversations is incorrect")
+    authenticated_conversation_ids = {
+        row.get("conversation_id") or row.get("session_id")
+        for row in rows
+        if row.get("role") and (row.get("conversation_id") or row.get("session_id"))
+    }
+    if source_log.get("authenticated_conversations") != len(authenticated_conversation_ids):
+        errors.append("case mapping authenticated_conversations is incorrect")
+    if len(authenticated_conversation_ids) < 10:
+        errors.append("Homework 1 requires at least 10 distinct authenticated conversations")
 
     cases = mapping.get("cases")
     if not isinstance(cases, list):
